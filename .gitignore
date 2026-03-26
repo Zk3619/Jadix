@@ -1,0 +1,15 @@
+# Ignore everything by default
+*
+
+# Keep this file manageable in Git
+!.gitignore
+
+# Allow root Rust manifest/lock files
+!Cargo.toml
+!Cargo.lock
+
+# Allow the two main source directories and all contents
+!crates/
+!crates/**
+!examples/
+!examples/**

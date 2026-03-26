@@ -1,0 +1,10 @@
+[package]
+name = "rui_hot_reload_cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+notify = "8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+proc-macro2 = { workspace = true }

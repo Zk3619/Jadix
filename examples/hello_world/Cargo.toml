@@ -1,0 +1,15 @@
+[package]
+name = "hello_world"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rui = { path = "../../crates/rui" }
+winit = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+bytemuck = { workspace = true }
+taffy = { workspace = true }
+glyphon = { workspace = true }

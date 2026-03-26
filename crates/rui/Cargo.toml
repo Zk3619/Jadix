@@ -1,0 +1,21 @@
+[package]
+name = "rui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = { workspace = true }
+wgpu = { workspace = true }
+taffy = { workspace = true }
+palette = { workspace = true }
+euclid = { workspace = true }
+bytemuck = { workspace = true }
+glyphon = { workspace = true }
+pollster = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+rui_macros = { path = "../rui_macros" }
+clipboard-rs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }

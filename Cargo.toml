@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "crates/*",
+    "examples/*"
+]
+resolver = "2"
+
+[workspace.dependencies]
+winit = "0.30"
+accesskit = "0.16"
+accesskit_winit = "0.22"
+taffy = "0.6"
+pollster = "0.3"
+env_logger = "0.11"
+log = "0.4"
+palette = "0.7"
+euclid = "0.22"
+bytemuck = { version = "1.25", features = ["derive"] }
+glyphon = "0.6.0"
+wgpu = "22.1"
+clipboard-rs = "0.3"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
