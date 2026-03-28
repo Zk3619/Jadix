@@ -1,3 +1,7 @@
+//! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
+//!
+//! RSX：`VStack` / `HStack` / `Box` / `Rect` 由宏映射到 [`vstack`] / [`hstack`] / [`r#box`]。
+
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
 
 pub struct BoxBuilder {
@@ -196,10 +200,19 @@ impl BoxBuilder {
         self
     }
 
-    pub fn gap(mut self, g: impl IntoF32) -> Self {
+    pub fn gap(mut self, g: impl IntoDimension) -> Self {
         self.el = self.el.gap(g);
         self
     }
+    pub fn items(mut self, align: impl Into<String>) -> Self {
+        self.el.set_attr("items", align.into());
+        self
+    }
+    pub fn wrap(mut self, w: impl Into<String>) -> Self {
+        self.el.set_attr("wrap", w.into());
+        self
+    }
+
 
     pub fn flex_col(mut self) -> Self {
         self.el = self.el.flex_col();
@@ -228,6 +241,16 @@ impl BoxBuilder {
 
     pub fn items_center(mut self) -> Self {
         self.el = self.el.items_center();
+        self
+    }
+
+    pub fn absolute(mut self, abs: bool) -> Self {
+        if abs { self.el = self.el.absolute(); }
+        self
+    }
+
+    pub fn relative(mut self, rel: bool) -> Self {
+        if rel { self.el = self.el.relative(); }
         self
     }
 
@@ -274,12 +297,12 @@ impl BoxBuilder {
     }
 
     pub fn text_decoration(mut self, decoration: impl Into<String>) -> Self {
-        self.el = self.el.text_decoration(decoration);
+        self.el = self.el.text_decoration(decoration.into());
         self
     }
 
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
-        self.el = self.el.text_decoration_style(style);
+        self.el = self.el.text_decoration_style(style.into());
         self
     }
 

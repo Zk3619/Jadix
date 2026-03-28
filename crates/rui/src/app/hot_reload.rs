@@ -16,6 +16,9 @@ use serde::Deserialize;
 use winit::event_loop::EventLoopProxy;
 
 #[cfg(debug_assertions)]
+use super::RuiUserEvent;
+
+#[cfg(debug_assertions)]
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
 
 #[cfg(debug_assertions)]
@@ -27,7 +30,7 @@ pub(super) struct HotReloadState {
 #[cfg(debug_assertions)]
 impl HotReloadState {
     /// `wake`：TCP 线程收到补丁后唤醒主线程事件循环（`ControlFlow::Wait` 下否则可能一直阻塞到用户输入）。
-    pub(super) fn new(wake: EventLoopProxy<()>) -> Self {
+    pub(super) fn new(wake: EventLoopProxy<RuiUserEvent>) -> Self {
         let (tx, rx) = mpsc::channel();
         let pending_count = Arc::new(AtomicUsize::new(0));
         let pending_count_ref = Arc::clone(&pending_count);
@@ -64,7 +67,7 @@ impl HotReloadState {
                     if let Some(cmd) = parse_command(line.trim()) {
                         pending_count_ref.fetch_add(1, Ordering::Relaxed);
                         let _ = tx.send(cmd);
-                        let _ = wake_thread.send_event(());
+                        let _ = wake_thread.send_event(RuiUserEvent::HotReloadWake);
                     }
                 }
             }
@@ -268,14 +271,33 @@ fn normalize_template_id(id: &str) -> String {
 
 #[cfg(any(debug_assertions, test))]
 fn split_template_id_triple(id: &str) -> (String, usize, usize) {
-    let parts: Vec<&str> = id.split(':').collect();
+    let mut parts: Vec<String> = id.split(':').map(|s| s.to_string()).collect();
+    // Windows paths: `d:/projects/.../main.rs:188` splits as ["d", "/projects/.../main.rs", "188"].
+    // Or with a trailing index: `d:/.../main.rs:55:Show#0` → four segments before merge.
+    if parts.len() >= 3 {
+        let head = &parts[0];
+        if head.len() == 1
+            && head.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && parts[1].starts_with('/')
+        {
+            let mut tail = parts.split_off(2);
+            let drive = parts.remove(0);
+            let path_rest = parts.remove(0);
+            parts.push(format!("{drive}:{path_rest}"));
+            parts.append(&mut tail);
+        }
+    }
     if parts.len() >= 3 {
         let p = parts[..parts.len() - 2].join(":");
         let l = parts[parts.len() - 2].parse().unwrap_or(0);
         let i = parts[parts.len() - 1].parse().unwrap_or(usize::MAX);
         (p, l, i)
     } else if parts.len() == 2 {
-        (parts[0].to_string(), parts[1].parse().unwrap_or(0), usize::MAX)
+        (
+            parts[0].clone(),
+            parts[1].parse().unwrap_or(0),
+            usize::MAX,
+        )
     } else {
         (id.to_string(), 0, usize::MAX)
     }

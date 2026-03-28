@@ -2,10 +2,13 @@
 
 pub mod pipeline;
 pub mod prepare_text;
+pub(crate) mod text_prepare_debug;
 pub mod text;
 pub mod text_hit;
+pub mod textured_pipeline;
 
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
+pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 pub use prepare_text::prepare_text_frame;
 pub(crate) use prepare_text::caret_blink_phase;
 pub use text::RuiTextRenderer;
@@ -30,6 +33,35 @@ pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceI
             out.border_width *= scale;
             out.shadow_blur *= scale;
             out
+        })
+        .collect()
+}
+
+/// 布局收集阶段产出的纹理绘制实例（逻辑像素坐标）。
+#[derive(Clone, Debug)]
+pub struct TexturedDraw {
+    pub rect: [f32; 4],
+    pub texture_key: String,
+}
+
+/// 缩放至物理像素后的纹理绘制矩形。
+#[derive(Clone, Debug)]
+pub struct ScaledTexturedDraw {
+    pub rect: [f32; 4],
+    pub texture_key: String,
+}
+
+pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTexturedDraw> {
+    draws
+        .iter()
+        .map(|d| ScaledTexturedDraw {
+            rect: [
+                d.rect[0] * scale,
+                d.rect[1] * scale,
+                d.rect[2] * scale,
+                d.rect[3] * scale,
+            ],
+            texture_key: d.texture_key.clone(),
         })
         .collect()
 }

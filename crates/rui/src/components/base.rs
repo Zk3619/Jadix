@@ -2,7 +2,7 @@ use crate::core::tree::{Element, IntoDimension, IntoF32};
 use taffy::prelude::Dimension;
 
 pub struct BaseComponentBuilder {
-    pub(crate) el: Element,
+    pub el: Element,
     pub(crate) label: Option<String>,
     pub(crate) has_custom_w: bool,
     pub(crate) has_custom_h: bool,
@@ -126,20 +126,22 @@ impl BaseComponentBuilder {
         self.el = self.el.flex_shrink(shrink);
         self
     }
-    pub fn absolute(mut self) -> Self {
-        self.el = self.el.absolute();
-        self
-    }
-    pub fn relative(mut self) -> Self {
-        self.el = self.el.relative();
-        self
-    }
+
+
     pub fn top(mut self, val: impl IntoDimension) -> Self {
         self.el = self.el.top(val);
         self
     }
     pub fn right(mut self, val: impl IntoDimension) -> Self {
         self.el = self.el.right(val);
+        self
+    }
+    pub fn relative(mut self, r: bool) -> Self {
+        if r { self.el = self.el.relative(); }
+        self
+    }
+    pub fn absolute(mut self, a: bool) -> Self {
+        if a { self.el = self.el.absolute(); }
         self
     }
     pub fn bottom(mut self, val: impl IntoDimension) -> Self {
@@ -156,6 +158,180 @@ impl BaseComponentBuilder {
     }
     pub fn z_index(mut self, z: i32) -> Self {
         self.el = self.el.z_index(z);
+        self
+    }
+
+    // Logical spacing
+    pub fn mx(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.mx(val);
+        self
+    }
+    pub fn my(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.my(val);
+        self
+    }
+    pub fn px(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.px(val);
+        self
+    }
+    pub fn py(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.py(val);
+        self
+    }
+    pub fn pt(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.pt(val);
+        self
+    }
+    pub fn pr(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.pr(val);
+        self
+    }
+    pub fn pb(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.pb(val);
+        self
+    }
+    pub fn pl(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.pl(val);
+        self
+    }
+    pub fn mt(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.mt(val);
+        self
+    }
+    pub fn mr(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.mr(val);
+        self
+    }
+    pub fn mb(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.mb(val);
+        self
+    }
+    pub fn ml(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.ml(val);
+        self
+    }
+
+    // Text enhancements
+    pub fn leading(mut self, scale: impl IntoF32) -> Self {
+        self.el = self.el.text_leading(scale);
+        self
+    }
+    pub fn leading_none(mut self) -> Self {
+        self.el = self.el.text_leading_none();
+        self
+    }
+    pub fn leading_tight(mut self) -> Self {
+        self.el = self.el.text_leading_tight();
+        self
+    }
+    pub fn leading_normal(mut self) -> Self {
+        self.el = self.el.text_leading_normal();
+        self
+    }
+    pub fn leading_relaxed(mut self) -> Self {
+        self.el = self.el.text_leading_relaxed();
+        self
+    }
+    pub fn line_height(mut self, px: impl IntoF32) -> Self {
+        self.el = self.el.text_line_height(px);
+        self
+    }
+    pub fn text_color(mut self, color: [u8; 4]) -> Self {
+        self.el = self.el.text_color(color);
+        self
+    }
+    pub fn underline(mut self, u: bool) -> Self {
+        self.el = self.el.underline(u);
+        self
+    }
+    pub fn text_decoration(mut self, d: impl Into<String>) -> Self {
+        self.el.set_attr("text_decoration", d.into());
+        self
+    }
+    pub fn text_decoration_style(mut self, s: impl Into<String>) -> Self {
+        self.el.set_attr("text_decoration_style", s.into());
+        self
+    }
+    pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {
+        self.el = self.el.text_decoration_color(color);
+        self
+    }
+    pub fn text_decoration_thickness(mut self, t: impl IntoF32) -> Self {
+        self.el = self.el.text_decoration_thickness(t);
+        self
+    }
+    pub fn text_underline_offset(mut self, o: impl IntoF32) -> Self {
+        self.el = self.el.text_underline_offset(o);
+        self
+    }
+    pub fn text_center(mut self) -> Self {
+        self.el = self.el.text_center();
+        self
+    }
+
+
+    // Layout
+    pub fn items(mut self, align: impl Into<String>) -> Self {
+        self.el.set_attr("items", align.into());
+        self
+    }
+    pub fn wrap(mut self, w: impl Into<String>) -> Self {
+        self.el.set_attr("wrap", w.into());
+        self
+    }
+    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+        self.el = self.el.gap(g);
+        self
+    }
+
+    pub fn justify_center(mut self) -> Self {
+        self.el = self.el.justify_center();
+        self
+    }
+
+    pub fn items_center(mut self) -> Self {
+        self.el = self.el.items_center();
+        self
+    }
+
+    pub fn scroll_behavior(mut self, b: impl Into<String>) -> Self {
+        self.el.set_attr("scroll_behavior", b.into());
+        self
+    }
+    pub fn scrollbar_inset(mut self, i: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_inset", i.into());
+        self
+    }
+    pub fn scrollbar_inset_x(mut self, i: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_inset_x", i.into());
+        self
+    }
+    pub fn scrollbar_inset_y(mut self, i: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_inset_y", i.into());
+        self
+    }
+    pub fn scrollbar_visibility(mut self, v: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_visibility", v.into());
+        self
+    }
+    pub fn scrollbar_y_side(mut self, s: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_y_side", s.into());
+        self
+    }
+    pub fn scrollbar_x_side(mut self, s: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_x_side", s.into());
+        self
+    }
+    pub fn overflow_x(mut self, o: impl Into<String>) -> Self {
+        self.el.set_attr("overflow_x", o.into());
+        self
+    }
+    pub fn overflow_y(mut self, o: impl Into<String>) -> Self {
+        self.el.set_attr("overflow_y", o.into());
+        self
+    }
+    pub fn scrollbar_variant(mut self, v: impl Into<String>) -> Self {
+        self.el.set_attr("scrollbar_variant", v.into());
         self
     }
 }

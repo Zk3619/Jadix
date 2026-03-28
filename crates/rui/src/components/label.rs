@@ -1,13 +1,37 @@
 use crate::primitives::text::TextBuilder;
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
 use crate::components::text_node::apply_label_defaults;
+use rui_macros::component;
 
 pub struct LabelBuilder {
+    pub(crate) id: String,
     pub(crate) inner: TextBuilder,
 }
 
-pub fn label(_id: &str) -> LabelBuilder {
+/// Label / Text component.
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn Label(
+    id: String,
+    text: String,
+    size: Option<f32>,
+    color: Option<[u8; 4]>,
+    weight: Option<f32>,
+    center: bool,
+    children: Option<Element>,
+) -> Element {
+    let mut builder = label(&id).text(text);
+    if let Some(s) = size { builder = builder.size(s); }
+    if let Some(c) = color { builder = builder.color(c); }
+    if let Some(w) = weight { builder = builder.font_weight(w); }
+    if center { builder = builder.text_center(); }
+    if let Some(c) = children { builder = builder.child(c); }
+    builder.into()
+}
+
+pub fn label(id: &str) -> LabelBuilder {
     LabelBuilder {
+        id: id.to_string(),
         inner: TextBuilder {
             el: apply_label_defaults(Element::new()),
         },
@@ -203,7 +227,9 @@ impl LabelBuilder {
 
 impl From<LabelBuilder> for Element {
     fn from(builder: LabelBuilder) -> Element {
-        builder.inner.into()
+        let mut el: Element = builder.inner.into();
+        el.template_id = Some(builder.id);
+        el
     }
 }
 

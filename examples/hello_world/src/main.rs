@@ -1,15 +1,53 @@
 #![allow(non_snake_case)]
 
 use rui::component;
+use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
+use rui::components::*;
+use rui::primitives::{tabs_headless, vstack, TABSTRIP_FOCUS_PREFIX};
 use rui::core::reactivity::use_signal;
+use rui::core::tree::Element;
 use rui::ui;
+
+/// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
+const BUTTON_SHOWCASE_REACTIVE: &str = "examples/hello_world/ButtonShowcase:variants_block";
+const TOGGLE_SHOWCASE_REACTIVE: &str = "examples/hello_world/ToggleControlsShowcase:main";
+const SELECT_POPOVER_SHOWCASE_REACTIVE: &str = "examples/hello_world/SelectPopoverTabShowcase:block";
+const PRIMITIVES_VIRT_REACTIVE: &str = "examples/hello_world/PrimitivesShowcase:virt_list";
+
+fn checker_rgba_texture() -> (Vec<u8>, u32, u32) {
+    let w = 64u32;
+    let h = 64u32;
+    let mut v = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let dark = ((x / 8) + (y / 8)) % 2 == 0;
+            let (r, g, b) = if dark {
+                (240u8, 240, 245)
+            } else {
+                (90, 95, 115)
+            };
+            let i = ((y * w + x) * 4) as usize;
+            v[i..i + 4].copy_from_slice(&[r, g, b, 255]);
+        }
+    }
+    (v, w, h)
+}
+
+fn increment_count(count: rui::core::reactivity::Signal<i32>) {
+    count.set(count.get() + 1);
+}
+
+fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str) {
+    selected.set(variant.to_string());
+}
 
 #[component]
 fn MyCard(title: String, children: Option<rui::core::tree::Element>) -> rui::core::tree::Element {
+    let child = children.unwrap_or_else(|| rui::core::tree::Element::new());
     ui! {
         <VStack p="1rem" bg="secondary" rounded="0.5rem" gap="0.5rem">
             <Label text_size="1.25rem" font_weight="700">{ title }</Label>
-            { children.unwrap_or_else(|| rui::core::tree::Element::new()) }
+            { child }
         </VStack>
     }
 }
@@ -21,26 +59,30 @@ fn ButtonShowcase() -> rui::core::tree::Element {
 
     ui! {
         <MyCard title="1) Button Variants + State">
-            <VStack gap="0.75rem">
-                <HStack gap="0.5rem" items="center">
-                    <Button variant="default" on_click={move || count.set(count.get() + 1)}>
-                        { format!("Default ({})", count.get()) }
-                    </Button>
-                    <Button variant="secondary" on_click={move || selected.set("secondary".into())}>
-                        "Secondary"
-                    </Button>
-                    <Button variant="outline" on_click={move || selected.set("outline".into())}>
-                        "Outline"
-                    </Button>
-                    <Button variant="ghost">"Ghost"</Button>
-                    <Button variant="destructive">"Destructive"</Button>
-                    <Button variant="link">"Link"</Button>
-                    <Button variant="default" disabled=true>"Disabled"</Button>
-                </HStack>
-                <Label text_size="0.875rem" color="muted-foreground">
-                    { format!("Selected variant: {}", selected.get()) }
-                </Label>
-            </VStack>
+            <Reactive id={BUTTON_SHOWCASE_REACTIVE}>
+                <VStack gap="0.75rem">
+                    <HStack gap="0.5rem" items="center">
+                        <Button variant="default" on_click={move || increment_count(count)}>
+                            { format!("Default ({})", count.get()) }
+                        </Button>
+                        <Button variant="secondary" on_click={move || choose_variant(selected, "secondary")}>
+                            "Secondary"
+                        </Button>
+                        <Button variant="outline" on_click={move || choose_variant(selected, "outline")}>
+                            "Outline"
+                        </Button>
+                        <Button variant="ghost">"Ghost"</Button>
+                        <Button variant="destructive" on_click={move || choose_variant(selected, "default")}>"Destructive"</Button>
+                        <Button variant="link">"Link"</Button>
+                        <Button variant="default" disabled=true>"Disabled"</Button>
+                    </HStack>
+                    <Show when={selected.get() != "default"}>
+                        <Label text_size="0.875rem" color="muted-foreground">
+                            { format!("Selected variant: {}", selected.get()) }
+                        </Label>
+                    </Show>
+                </VStack>
+            </Reactive>
         </MyCard>
     }
 }
@@ -54,8 +96,8 @@ fn InputShowcase() -> rui::core::tree::Element {
                     "Click to focus, type text, Tab to move focus, Backspace to delete"
                 </Label>
                 <HStack gap="0.5rem" items="center" w="100%">
-                    <Input placeholder="Placeholder…" w="20rem" />
-                    <Input placeholder="Invalid" invalid=true w="12rem" />
+                    <Input id="hw-s2-input-a" placeholder="Placeholder…" w="20rem" />
+                    <Input id="hw-s2-input-b" placeholder="Invalid" invalid=true w="12rem" />
                 </HStack>
             </VStack>
         </MyCard>
@@ -105,210 +147,148 @@ fn ScrollShowcase() -> rui::core::tree::Element {
         <MyCard title="4) ScrollArea + Scrollbar">
             <VStack gap="1rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Defaults: inside overlay, vertical right / horizontal bottom, scrollbar_visibility auto, hover_mode scrollbar (track/thumb only)."
+                    "Minimal visual cases: inset (inside/outside/mixed), visibility (auto/always/never), and all 4 corner combos."
                 </Label>
-                <Rect w="28rem" h="15rem" bg="background" rounded="0.5rem" p="0.25rem" relative=true>
-                    <ScrollArea id="demo-scroll" w="100%" h="100%" bg="background" rounded="0.375rem" p="0.5rem" overflow_y="auto" overflow_x="hidden" scroll_behavior="smooth">
-                        <VStack gap="0.25rem" w="100%">
-                            { (1..=20).map(|i| ui! { <Label>{ format!("Scroll row {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                            <Rect bg="secondary" rounded="0.5rem" p="0.5rem" mt="0.5rem">
-                                <VStack gap="0.25rem">
-                                    <Label font_weight="700">"Nested ScrollArea"</Label>
-                                    <Rect bg="background" rounded="0.5rem" w="100%" h="6rem" p="0.25rem" relative=true>
-                                        <ScrollArea id="nested-scroll" w="100%" h="100%" p="0.5rem" overflow_y="auto" overflow_x="hidden">
-                                            <VStack gap="0.25rem" w="100%">
-                                                { (1..=12).map(|i| ui! { <Label>{ format!("Nested row {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                                            </VStack>
-                                        </ScrollArea>
-                                    </Rect>
-                                </VStack>
-                            </Rect>
-                        </VStack>
-                    </ScrollArea>
-                    { rui::core::tree::Element::new()
-                        .absolute()
-                        .top(8.0)
-                        .right(8.0)
-                        .z_index(2000)
-                        .bg(rui::core::tree::parse_color("destructive"))
-                        .rounded(10.0)
-                        .px(10.0)
-                        .py(6.0)
-                        .child(rui::core::tree::Element::new()
-                            .text("Overlay (z_index=2000)")
-                            .text_color([255, 255, 255, 255])
-                            .text_size(12.0)
-                        )
-                    }
-                </Rect>
-
-                <Label font_weight="700" text_size="0.875rem">"Outside + top bar + vertical left"</Label>
-                <Rect w="28rem" h="10rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-outside-sides" w="100%" h="100%" bg="background" rounded="0.375rem"
-                        scrollbar_inset="outside" scrollbar_x_side="top" scrollbar_y_side="left"
-                        overflow_y="auto" overflow_x="auto" p="0.5rem">
-                        <VStack gap="0.25rem" min_w="48rem">
-                            <Label>"Wide content → horizontal scroll; vertical track is outside on the left."</Label>
-                            { (1..=14).map(|i| ui! { <Label>{ format!("Row {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden (no horizontal bar) + scrollbar_visibility always"</Label>
-                <Rect w="28rem" h="6rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-vertical-only" w="100%" h="100%" p="0.5rem"
-                        overflow_y="auto" overflow_x="hidden" scrollbar_visibility="always">
-                        <VStack gap="0.25rem" w="100%">
-                            { (1..=18).map(|i| ui! { <Label>{ format!("Vertical-only {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                <Label font_weight="700" text_size="0.875rem">"hover_mode area + scrollbar_visibility always (both axes)"</Label>
-                <Rect w="28rem" h="6rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-area-hover" w="100%" h="100%" p="0.5rem"
-                        hover_mode="area" scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="auto">
-                        <HStack gap="2rem" items="start">
-                            <VStack gap="0.25rem" w="12rem">
-                                { (1..=10).map(|i| ui! { <Label>{ format!("Hover anywhere → bars stay on ({:02})", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
+                <Label font_weight="700" text_size="0.875rem">"A) Inset: inside / outside / mixed"</Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap">
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-inset-inside" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="inside" scrollbar_visibility="always"
+                            overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"inside"</Label>
+                                <For each={1..=8} key={*item}>
+                                    <Label>{ format!("row {:02}", item) }</Label>
+                                </For>
                             </VStack>
-                            <Rect min_w="24rem"><Label>"Long horizontal line to enable horizontal scrollbar when combined with overflow."</Label></Rect>
-                        </HStack>
-                    </ScrollArea>
-                </Rect>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-inset-outside" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="outside" scrollbar_visibility="always"
+                            overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"outside"</Label>
+                                <For each={1..=8} key={*item}>
+                                    <Label>{ format!("row {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-inset-mixed-x-out" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset_x="outside" scrollbar_inset_y="inside" scrollbar_visibility="always"
+                            overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"mixed x:outside y:inside"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("row {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-inset-mixed-y-out" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset_x="inside" scrollbar_inset_y="outside" scrollbar_visibility="always"
+                            overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"mixed x:inside y:outside"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("row {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                </HStack>
 
-                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
+                <Label font_weight="700" text_size="0.875rem">"B) Visibility: auto / always / never"</Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap">
+                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-vis-auto" w="100%" h="100%" p="0.5rem"
+                            scrollbar_visibility="auto" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"auto"</Label>
+                                <For each={1..=7}>
+                                    <Label>{ format!("hover/scroll {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-vis-always" w="100%" h="100%" p="0.5rem"
+                            scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"always"</Label>
+                                <For each={1..=7}>
+                                    <Label>{ format!("always on {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-vis-never" w="100%" h="100%" p="0.5rem"
+                            scrollbar_visibility="never" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"never"</Label>
+                                <For each={1..=7}>
+                                    <Label>{ format!("still scrollable {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                </HStack>
 
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
-
-                                <Label font_weight="700" text_size="0.875rem">"overflow_x hidden + scrollbar_visibility always (vertical only)"</Label>
-                <Rect w="28rem" h="5rem" bg="background" rounded="0.5rem" p="0.25rem">
-                    <ScrollArea id="scroll-override-x" w="100%" h="100%" p="0.5rem"
-                        scrollbar_visibility="always"
-                        overflow_y="auto" overflow_x="hidden">
-                        <VStack gap="0.25rem" min_w="40rem">
-                            <Label>"No horizontal scrollbar widget; wide content is clipped along X."</Label>
-                            { (1..=8).map(|i| ui! { <Label>{ format!("Line {:02}", i) }</Label> }).collect::<Vec<rui::core::tree::Element>>() }
-                        </VStack>
-                    </ScrollArea>
-                </Rect>
+                <Label font_weight="700" text_size="0.875rem">"C) Four corners: (left/right) x (top/bottom)"</Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap">
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-corner-lt" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="outside" scrollbar_y_side="left" scrollbar_x_side="top"
+                            scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"left + top"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("corner {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-corner-lb" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="outside" scrollbar_y_side="left" scrollbar_x_side="bottom"
+                            scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"left + bottom"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("corner {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-corner-rt" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="outside" scrollbar_y_side="right" scrollbar_x_side="top"
+                            scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"right + top"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("corner {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                        <ScrollArea id="sa-corner-rb" w="100%" h="100%" p="0.5rem"
+                            scrollbar_inset="outside" scrollbar_y_side="right" scrollbar_x_side="bottom"
+                            scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
+                            <VStack gap="0.25rem" min_w="18rem">
+                                <Label font_weight="700">"right + bottom (default sides)"</Label>
+                                <For each={1..=8}>
+                                    <Label>{ format!("corner {:02}", item) }</Label>
+                                </For>
+                            </VStack>
+                        </ScrollArea>
+                    </Rect>
+                </HStack>
             </VStack>
         </MyCard>
     }
@@ -358,7 +338,7 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                         <Label>"Accents: cafe cafe\u{0301} naive na\u{00EF}ve resume re\u{0301}sume\u{0301} fiance fianc\u{00E9}"</Label>
 
                         <Label font_weight="700">"Chinese / Japanese / Korean"</Label>
-                        <Label leading="normal">
+                        <Label id="hw-s6-label-cjk" leading="normal">
                             "中文测试：输入法、标点符号、全角半角、换行和字距表现。"
                         </Label>
                         <Label leading="normal">
@@ -414,6 +394,144 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
+fn ToggleControlsShowcase() -> rui::core::tree::Element {
+    let sw = use_signal("demo_switch_checked", || false);
+    let cb = use_signal("demo_checkbox_checked", || false);
+
+    ui! {
+        <MyCard title="8) Switch · Checkbox · Separator">
+            <Reactive id={TOGGLE_SHOWCASE_REACTIVE}>
+                <VStack gap="0.75rem" w="100%">
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "Tab to focus, Space/Enter toggles (same as buttons). Horizontal Separator uses full width; vertical divider uses programmatic separator().vertical(true)."
+                    </Label>
+
+                    <Separator />
+
+                    <Label font_weight="700" text_size="0.875rem">"Uncontrolled (internal state)"</Label>
+                    <HStack gap="0.75rem" items="center">
+                        <Label text_size="0.875rem">"Notifications"</Label>
+                        <Switch />
+                        <Label text_size="0.875rem">"Terms"</Label>
+                        <Checkbox />
+                        <Label text_size="0.875rem" color="muted-foreground">"Disabled"</Label>
+                        <Checkbox disabled=true />
+                    </HStack>
+
+                    <Separator />
+
+                    <Label font_weight="700" text_size="0.875rem">"Controlled (shared Signal + Flip)"</Label>
+                    <HStack gap="0.75rem" items="center">
+                        { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
+                        <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
+                        <Button variant="outline" size="sm" on_click={move || sw.set(!sw.get())}>
+                            "Flip switch"
+                        </Button>
+                    </HStack>
+                    <HStack gap="0.75rem" items="center">
+                        { Element::from(checkbox("hw_demo_checkbox").checked_signal(cb)) }
+                        <Label text_size="0.875rem">{ format!("checkbox = {}", cb.get()) }</Label>
+                    </HStack>
+
+                    <Separator />
+
+                    <Label font_weight="700" text_size="0.875rem">"Vertical separator in a row"</Label>
+                    <HStack gap="0.5rem" items="stretch" h="3rem" w="100%">
+                        <Label>"Panel A"</Label>
+                        { Element::from(separator().vertical(true)) }
+                        <Label>"Panel B"</Label>
+                        { Element::from(separator().vertical(true)) }
+                        <Label>"Panel C"</Label>
+                    </HStack>
+                </VStack>
+            </Reactive>
+        </MyCard>
+    }
+}
+
+#[component]
+fn RadioSliderShowcase() -> rui::core::tree::Element {
+    let tier = use_signal("hello_radio_tier", || "free".to_string());
+    let level = use_signal("hello_slider_level", || 0.4_f32);
+
+    ui! {
+        <MyCard title="9) Radio group · Slider">
+            <VStack gap="0.75rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Radio: click a pill. Slider: click track to step, or focus + ArrowLeft/ArrowRight."
+                </Label>
+                { Element::from(
+                    radio_group("hello_world:radio_tier")
+                        .selected_signal(tier)
+                        .default_value("free")
+                        .options(vec![
+                            ("free".to_string(), "Free".to_string()),
+                            ("pro".to_string(), "Pro".to_string()),
+                            ("team".to_string(), "Team".to_string()),
+                        ]),
+                ) }
+                <Label text_size="0.875rem">{ format!("Tier: {}", tier.get()) }</Label>
+                { Element::from(slider("hello_world:slider").value_signal(level)) }
+                <Label text_size="0.875rem">{ format!("Level: {:.2}", level.get()) }</Label>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
+    let tab_idx = use_signal("hello_tabs_idx", || 0usize);
+    let pop_open = use_signal("hello_popover_open", || false);
+    let select_val = use_signal("hello_select_plan", || "basic".to_string());
+
+    ui! {
+        <MyCard title="10) Select · Popover · Tab strip (AccessKit)">
+            <VStack gap="0.75rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Select / Popover: wrap in <Reactive> so `open` / menu updates subscribe. Tab strip: `tabs_headless` focus id uses prefix → TabList."
+                </Label>
+                <Reactive id={SELECT_POPOVER_SHOWCASE_REACTIVE}>
+                    <VStack gap="0.75rem" w="100%">
+                        { Element::from(
+                            select("hello_world:select_plan")
+                                .value_signal(select_val)
+                                .default_value("basic")
+                                .options(vec![
+                                    ("basic".to_string(), "Basic".to_string()),
+                                    ("pro".to_string(), "Pro".to_string()),
+                                    ("team".to_string(), "Team".to_string()),
+                                ]),
+                        ) }
+                        <Label text_size="0.875rem">{ format!("Selected plan: {}", select_val.get()) }</Label>
+                        <Button variant="outline" size="sm" on_click={move || pop_open.set(!pop_open.get())}>
+                            { if pop_open.get() { "Close popover" } else { "Open popover" } }
+                        </Button>
+                        <Popover open={pop_open}>
+                            <Label>"Popover panel — Escape closes (last-registered popup)."</Label>
+                        </Popover>
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            { format!(
+                                "Shared tab index: {}. Focus id `{}hello_tabs_demo` (Tab to focus order, then ← / →).",
+                                tab_idx.get(),
+                                TABSTRIP_FOCUS_PREFIX,
+                            ) }
+                        </Label>
+                        <HStack gap="0.35rem" items="center">
+                            <Button variant="ghost" size="sm" on_click={move || tab_idx.set(0)}>"0"</Button>
+                            <Button variant="ghost" size="sm" on_click={move || tab_idx.set(1)}>"1"</Button>
+                            <Button variant="ghost" size="sm" on_click={move || tab_idx.set(2)}>"2"</Button>
+                        </HStack>
+                        { Element::from(
+                            tabs_headless("hello_tabs_demo", 3).selected_signal(tab_idx),
+                        ) }
+                    </VStack>
+                </Reactive>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 fn UtilityClassShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="7) Utility Classes (class / tw / uno)">
@@ -458,7 +576,83 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
     }
 }
 
+#[component]
+fn PrimitivesShowcase() -> rui::core::tree::Element {
+    let overlay_open = use_signal("prim_overlay_open", || false);
+    let trap_on = use_signal("prim_trap_on", || false);
+
+    ui! {
+        <VStack w="100%" gap="0">
+            <MyCard title="11) Image · Portal · FocusTrap · VirtualList">
+                <VStack gap="0.75rem" w="100%">
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "GPU Image (queue_image_rgba8 + <Image>). Portal 提升浮层到根节点。FocusTrap 限制 Tab 顺序。VirtualList：Reactive + visible_item_range；完整滚动条需额外占位总高度（此处 200 行演示）。"
+                    </Label>
+                    <HStack gap="0.75rem" items="start" wrap="wrap">
+                        <VStack gap="0.25rem">
+                            <Label font_weight="700" text_size="0.75rem">"Texture quad"</Label>
+                            <Image id="demo-checker-img" texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
+                        </VStack>
+                        <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
+                            <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
+                            <HStack gap="0.5rem" wrap="wrap">
+                                <Button id="prim-overlay-toggle" variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
+                                    { if overlay_open.get() { "关闭 Portal 浮层" } else { "打开 Portal 浮层" } }
+                                </Button>
+                                <Button id="prim-trap-toggle" variant="secondary" on_click={move || trap_on.set(!trap_on.get())}>
+                                    { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
+                                </Button>
+                            </HStack>
+                            <FocusTrap id="prim-trap" active={trap_on.get()} order="trap-a,trap-b">
+                                <HStack gap="0.5rem" items="center" wrap="wrap">
+                                    <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
+                                    <Button id="trap-a" variant="default">"A"</Button>
+                                    <Button id="trap-b" variant="outline">"B"</Button>
+                                </HStack>
+                            </FocusTrap>
+                        </VStack>
+                    </HStack>
+                    <Label id="hw-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>
+                    <ScrollArea id="virt-demo" w="100%" h="11rem" overflow_y="auto" overflow_x="hidden" p="0.5rem" bg="muted" rounded="0.375rem">
+                        { rui::reactive!(PRIMITIVES_VIRT_REACTIVE, move || {
+                            let sy = use_signal(&scroll_offset_y_signal_key("virt-demo"), || 0.0_f32).get();
+                            let vh = use_signal(&scroll_viewport_h_signal_key("virt-demo"), || 160.0_f32).get();
+                            let (a, b) = rui::visible_item_range(sy, vh, 22.0, 200, 8);
+                            let mut col = vstack().w("100%").gap("2px");
+                            for i in a..b {
+                                let row: Element = label(&format!("virt-row-{i}"))
+                                    .text(format!("virtual row {i:04} (range {a}..{b})"))
+                                    .into();
+                                col = col.child(row);
+                            }
+                            Element::from(col)
+                        }) }
+                    </ScrollArea>
+                </VStack>
+            </MyCard>
+            <Portal id="prim-portal-root">
+                <Show when={overlay_open.get()}>
+                    <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
+                        <VStack gap="0.75rem" p="1.25rem" bg="secondary" rounded="0.75rem" max_w="22rem" m="1rem">
+                            <Label font_weight="700" text_size="1.125rem">"Portal 浮层"</Label>
+                            <Label text_size="0.875rem" color="muted-foreground">
+                                "此节点经 Portal 提升到根，盖在主内容之上。"
+                            </Label>
+                            <Button id="prim-overlay-close" variant="default" on_click={move || overlay_open.set(false)}>
+                                "关闭"
+                            </Button>
+                        </VStack>
+                    </Rect>
+                </Show>
+            </Portal>
+        </VStack>
+    }
+}
+
 fn main() {
+    let (rgba, w, h) = checker_rgba_texture();
+    rui::queue_image_rgba8("demo-checker", w, h, rgba);
+
     rui::app::run(move || {
         let show_extra = use_signal("show_extra", || false);
 
@@ -479,6 +673,10 @@ fn main() {
                             <LogicalShowcase />
                             <TextCompatibilityShowcase />
                             <UtilityClassShowcase />
+                            <ToggleControlsShowcase />
+                            <RadioSliderShowcase />
+                            <SelectPopoverTabShowcase />
+                            <PrimitivesShowcase />
 
                             <VStack items="center" gap="1rem" p="1rem">
                                 <Button variant="secondary" on_click={move || show_extra.set(!show_extra.get())}>

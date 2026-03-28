@@ -1,4 +1,26 @@
+//! 交互原语：包装任意 [`Element`]，为其注册指针/键盘/焦点行为（`on_click`、`on_hover`、`on_key_down`、`focusable` 等）。
+//!
+//! RSX：`<Interactive>` 从空节点起链；复合控件通常先 `r#box()` 搭视觉，再 `interactive(...)` 接事件。
+
+use std::cell::Cell;
+
 use crate::core::tree::Element;
+use winit::event::KeyEvent;
+
+thread_local! {
+    /// 按钮等控件用 `set_silent` 更新 hover 后需补一帧绘制（不再经由根 `create_effect`）。
+    static HOVER_PAINT_DIRTY: Cell<bool> = Cell::new(false);
+}
+
+#[inline]
+pub(crate) fn mark_hover_paint_dirty() {
+    HOVER_PAINT_DIRTY.set(true);
+}
+
+#[inline]
+pub(crate) fn take_hover_paint_dirty() -> bool {
+    HOVER_PAINT_DIRTY.replace(false)
+}
 
 pub struct InteractiveBuilder {
     pub(crate) el: Element,
@@ -16,6 +38,11 @@ impl InteractiveBuilder {
 
     pub fn on_hover(mut self, handler: impl FnMut(bool) + 'static) -> Self {
         self.el = self.el.on_hover(handler);
+        self
+    }
+
+    pub fn on_key_down(mut self, handler: impl FnMut(KeyEvent) -> bool + 'static) -> Self {
+        self.el = self.el.on_key_down(handler);
         self
     }
 

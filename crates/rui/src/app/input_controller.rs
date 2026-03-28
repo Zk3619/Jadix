@@ -100,9 +100,21 @@ impl super::App {
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
         if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
-                let mut ids = Vec::new();
-                if let Some(st) = (&*self.state.borrow()).as_ref() {
-                    collect_focusable_ids(&st.root_element, &mut ids);
+                let trap_ring =
+                    crate::core::reactivity::use_signal(crate::components::FOCUS_TRAP_RING_KEY, String::new);
+                let ring = trap_ring.get();
+                let mut ids: Vec<String> = if !ring.is_empty() {
+                    ring.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if ids.is_empty() {
+                    if let Some(st) = (&*self.state.borrow()).as_ref() {
+                        collect_focusable_ids(&st.root_element, &mut ids);
+                    }
                 }
                 if !ids.is_empty() {
                     let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
@@ -129,6 +141,28 @@ impl super::App {
                 let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                 let ime_active = crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
                 let fid = focused.get();
+
+                if event.state == ElementState::Pressed
+                    && matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                    && crate::primitives::popup::try_close_top_popup()
+                {
+                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                        st.window.request_redraw();
+                    }
+                    return true;
+                }
+
+                if !fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
+                    if let Some(st) = (&*self.state.borrow()).as_ref() {
+                        if super::tree_hit::dispatch_key_for_focused(&st.root_element, &fid, &event) {
+                            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                            return true;
+                        }
+                    }
+                }
+
                 if let Some(rest) = fid.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
                     let value_key = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&value_key, String::new);

@@ -7,8 +7,8 @@ resolver = "2"
 
 [workspace.dependencies]
 winit = "0.30"
-accesskit = "0.16"
-accesskit_winit = "0.22"
+accesskit = "0.22"
+accesskit_winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 taffy = "0.6"
 pollster = "0.3"
 env_logger = "0.11"

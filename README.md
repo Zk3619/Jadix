@@ -128,6 +128,45 @@ fn main() {
 
 ---
 
+## 细粒度原语（阶段 3/4）| Fine-grained Primitives (Stage 3/4)
+
+设计与热重载约定见 **[Docs/reactivity_and_hot_reload.md](Docs/reactivity_and_hot_reload.md)**。
+
+- **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
+  Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.
+- **`create_memo`**：派生只读值，依赖变化时重算；读者通过 `.get()` 订阅 memo 输出（见 `crates/rui/src/core/reactivity.rs`）。
+- **`show`**：条件渲染辅助（`when == false` 时返回空节点）。  
+  Conditional rendering helper that returns an empty element when false.
+- **`<For>` / `for_keyed!` / `for_keyed`**：列表渲染；推荐标签式 `<For>`，需要显式 key 时传 `key={...}`。  
+  List rendering with optional explicit keys (`key={...}`) for stable reconciliation.
+
+```rust
+use rui::core::reactivity::use_signal;
+use rui::ui;
+
+fn FineGrainedDemo() -> rui::core::tree::Element {
+    let selected = use_signal("selected", || "default".to_string());
+    let items = vec!["A", "B", "C"];
+
+    ui! {
+        <VStack gap="0.5rem">
+            <Reactive id="demo:panel">
+                <VStack gap="0.5rem">
+                    <Show when={selected.get() != "default"}>
+                        <Label>"Changed"</Label>
+                    </Show>
+                    <For each={items.clone()} key={*item}>
+                        <Label>{ *item }</Label>
+                    </For>
+                </VStack>
+            </Reactive>
+        </VStack>
+    }
+}
+```
+
+---
+
 ## 架构目标 | Architecture Goals
 
 - **中文**

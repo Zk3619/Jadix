@@ -7,13 +7,18 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutTree};
-use crate::renderer::{prepare_text_frame, scale_instances, RuiPipeline, RuiTextRenderer};
+use crate::renderer::{
+    prepare_text_frame, scale_instances, scale_textured_draws, RuiPipeline, RuiTextRenderer,
+    TexturedInstanceInput, TexturedQuadPipeline,
+};
 use crate::{
     components::{
         scroll_area::{
             scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-            scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
-            scroll_overflow_x_signal_key, scroll_overflow_y_signal_key, SCROLL_AREA_FOCUS_PREFIX,
+            scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
+            scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+            scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
+            scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_AREA_FOCUS_PREFIX,
         },
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX},
@@ -53,6 +58,10 @@ pub(super) struct AppState {
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     pub(super) pipeline: RuiPipeline,
+    textured_pipeline: TexturedQuadPipeline,
+    image_textures: std::collections::HashMap<String, super::image_registry::GpuImageTexture>,
+    textured_instance_buffer: wgpu::Buffer,
+    textured_instance_capacity: usize,
     pub(super) instance_buffer: wgpu::Buffer,
     instance_buffer_capacity: usize,
     pub(super) layout_tree: LayoutTree,
@@ -136,6 +145,8 @@ impl AppState {
         }
         a.iter().zip(b.iter()).all(|(x, y)| {
             x.text == y.text
+                && x.shape_suffix == y.shape_suffix
+                && x.template_id == y.template_id
                 && x.style == y.style
                 && Self::approx_clip_eq(x.clip_bounds, y.clip_bounds, TEXT_GEOM_EPS)
                 && Self::approx_eq(x.x, y.x, TEXT_GEOM_EPS)
@@ -151,6 +162,17 @@ impl AppState {
 
     pub(super) fn ui_scale(&self) -> f32 {
         self.window.scale_factor() as f32
+    }
+
+    /// Snapshot for [`accesskit_winit::Adapter::update_if_active`].
+    pub(super) fn accesskit_tree_update(&self) -> accesskit::TreeUpdate {
+        let focused = use_signal("__rui_button_focus_id", String::new).get();
+        let fid = if focused.is_empty() {
+            None
+        } else {
+            Some(focused.as_str())
+        };
+        crate::accesskit_bridge::tree_update_from_elements(&self.root_element, fid)
     }
 
     fn logical_size(&self) -> (f32, f32) {
@@ -224,11 +246,21 @@ impl AppState {
         surface.configure(&device, &config);
 
         let pipeline = RuiPipeline::new(&device, &config);
+        let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
+        let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
+        let textured_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Textured instance buffer"),
+            size: (tex_inst_stride * 256) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let mut layout_tree = LayoutTree::new();
         let scale = window.scale_factor() as f32;
         let logical_w = config.width as f32 / scale.max(1.0);
         let logical_h = config.height as f32 / scale.max(1.0);
+        recompute_scroll_viewport_flags(&mut root_element);
+        let _portal = crate::layout::layout_tree::hoist_portal_subtrees(&mut root_element);
         let render_result = layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
         let scaled_instances = scale_instances(&render_result.instances, scale);
         let num_instances = render_result.instances.len() as u32;
@@ -251,6 +283,10 @@ impl AppState {
             config,
             size,
             pipeline,
+            textured_pipeline,
+            image_textures: std::collections::HashMap::new(),
+            textured_instance_buffer,
+            textured_instance_capacity: 256,
             instance_buffer,
             instance_buffer_capacity: scaled_instances.len(),
             layout_tree,
@@ -313,9 +349,46 @@ impl AppState {
         #[cfg(not(debug_assertions))]
         let mut root_element = root_element;
 
+        log::warn!("[rebuild_ui] START new_children={} old_children={}", root_element.children.len(), self.root_element.children.len());
         let status = Self::reconcile_elements(&mut root_element, &mut self.root_element);
+        log::warn!("[rebuild_ui] END status={:?}", status);
         self.root_element = root_element;
+        recompute_scroll_viewport_flags(&mut self.root_element);
         self.layout_status = status;
+    }
+
+    pub(crate) fn reconcile_subtree(
+        &mut self,
+        anchor_id: &str,
+        mut new_fragment: Element,
+    ) -> crate::core::tree::LayoutStatus {
+        use crate::core::tree::LayoutStatus;
+
+        // Fine-grained anchors must resolve deterministically. `hot_reload::template_id_matches` is
+        // intentionally fuzzy (path suffix + line) for dev-time patches; using it here can match a
+        // *different* node earlier in DFS and replace the wrong subtree — e.g. sibling buttons +
+        // `<Show>` vanishing intermittently.
+        let want = normalize_anchor_template_id(anchor_id);
+        let status = if let Some(old_subtree) =
+            find_reactive_subtree_by_anchor_id_mut(&mut self.root_element, &want)
+        {
+            let status = Self::reconcile_elements(&mut new_fragment, old_subtree);
+            *old_subtree = new_fragment;
+            status
+        } else {
+            LayoutStatus::StructureChanged
+        };
+
+        recompute_scroll_viewport_flags(&mut self.root_element);
+        self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        status
+    }
+
+    fn merge_layout_status(
+        base: crate::core::tree::LayoutStatus,
+        incoming: crate::core::tree::LayoutStatus,
+    ) -> crate::core::tree::LayoutStatus {
+        base.merge(incoming)
     }
 
     fn reconcile_elements(
@@ -324,10 +397,35 @@ impl AppState {
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
-        let id_match = new_el.template_id == old_el.template_id && new_el.template_id.is_some();
+        let id_match = new_el.template_id == old_el.template_id;
 
         if id_match {
             new_el.layout_node = old_el.layout_node;
+            let is_reactive_placeholder = new_el.template_hash.as_deref()
+                == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
+            if is_reactive_placeholder {
+                // Root rebuilds emit a placeholder shell for reactive anchors; this shell is only a
+                // marker and must never overwrite already mounted fine-grained subtree content.
+                let old_is_placeholder = old_el.template_hash.as_deref()
+                    == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
+                if old_is_placeholder {
+                    // Still waiting for the anchor effect, or another placeholder: merge children only.
+                    new_el.children = std::mem::take(&mut old_el.children);
+                    new_el.text = old_el.text.clone();
+                    new_el.style = old_el.style.clone();
+                    new_el.text_style = old_el.text_style.clone();
+                } else {
+                    // Mounted subtree is the real reactive root (e.g. inner `VStack` with gap/flex).
+                    // Moving only `children` would flatten them under this shell and break layout
+                    // until the anchor effect runs again — but updates that only rerun the root
+                    // effect (e.g. unrelated `use_signal` in `main`) never rerun that anchor.
+                    let tid = new_el.template_id.clone();
+                    let promoted = std::mem::replace(old_el, Element::new());
+                    *new_el = promoted;
+                    new_el.template_id = tid;
+                }
+                return LayoutStatus::Clean;
+            }
             
             let mut status = if new_el.text != old_el.text {
                 LayoutStatus::LayoutChanged
@@ -335,30 +433,81 @@ impl AppState {
                 LayoutStatus::LayoutChanged
             } else if new_el.text_style != old_el.text_style {
                 LayoutStatus::StyleChanged
+            } else if new_el.image_texture != old_el.image_texture {
+                LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean
             };
 
-            if new_el.children.len() == old_el.children.len() {
+            let new_all_keyed = Self::children_all_keyed(&new_el.children);
+            let old_all_keyed = Self::children_all_keyed(&old_el.children);
+            if new_all_keyed && old_all_keyed {
+                status = Self::merge_layout_status(status, Self::reconcile_keyed_children(new_el, old_el));
+            } else if new_el.children.len() == old_el.children.len() {
                 for (n_child, o_child) in new_el.children.iter_mut().zip(old_el.children.iter_mut()) {
                     let child_status = Self::reconcile_elements(n_child, o_child);
-                    match (status, child_status) {
-                        (LayoutStatus::StructureChanged, _) => status = LayoutStatus::StructureChanged,
-                        (_, LayoutStatus::StructureChanged) => status = LayoutStatus::StructureChanged,
-                        (LayoutStatus::LayoutChanged, _) => {}
-                        (_, LayoutStatus::LayoutChanged) => status = LayoutStatus::LayoutChanged,
-                        (LayoutStatus::StyleChanged, _) => {}
-                        (_, LayoutStatus::StyleChanged) => status = LayoutStatus::StyleChanged,
-                        _ => {}
-                    }
+                    status = Self::merge_layout_status(status, child_status);
                 }
             } else {
+                log::warn!(
+                    "[reconcile] children len mismatch new={} old={} tid={:?} keyed=({},{})",
+                    new_el.children.len(), old_el.children.len(),
+                    new_el.template_id, new_all_keyed, old_all_keyed
+                );
                 status = LayoutStatus::StructureChanged;
             }
             status
         } else {
             LayoutStatus::StructureChanged
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn reconcile_elements_for_test(
+        new_el: &mut Element,
+        old_el: &mut Element,
+    ) -> crate::core::tree::LayoutStatus {
+        Self::reconcile_elements(new_el, old_el)
+    }
+
+    fn children_all_keyed(children: &[Element]) -> bool {
+        // `Iterator::all` is vacuously true on an empty slice; keyed reconciliation is only defined
+        // for non-empty child lists (empty vs empty uses the positional same-length branch).
+        !children.is_empty() && children.iter().all(|c| c.template_id.is_some())
+    }
+
+    fn reconcile_keyed_children(new_el: &mut Element, old_el: &mut Element) -> crate::core::tree::LayoutStatus {
+        use crate::core::tree::LayoutStatus;
+
+        let mut status = LayoutStatus::Clean;
+        let mut old_by_id: std::collections::HashMap<String, Element> = std::collections::HashMap::new();
+        for old_child in std::mem::take(&mut old_el.children) {
+            if let Some(id) = old_child.template_id.clone() {
+                old_by_id.insert(id, old_child);
+            }
+        }
+
+        let mut next_children = Vec::with_capacity(new_el.children.len());
+        for mut new_child in std::mem::take(&mut new_el.children) {
+            let Some(id) = new_child.template_id.clone() else {
+                status = LayoutStatus::StructureChanged;
+                next_children.push(new_child);
+                continue;
+            };
+            if let Some(mut old_child) = old_by_id.remove(&id) {
+                let child_status = Self::reconcile_elements(&mut new_child, &mut old_child);
+                status = Self::merge_layout_status(status, child_status);
+            } else {
+                status = LayoutStatus::StructureChanged;
+            }
+            next_children.push(new_child);
+        }
+
+        if !old_by_id.is_empty() {
+            status = LayoutStatus::StructureChanged;
+        }
+        new_el.children = next_children;
+        status
     }
 
     pub(super) fn update_scroll_offset_in_place(&mut self, target_id: &str, offset: [f32; 2]) {
@@ -456,6 +605,8 @@ impl AppState {
             self.surface.configure(&self.device, &self.config);
             self.pipeline
                 .update_resolution(&self.queue, self.config.width, self.config.height);
+            self.textured_pipeline
+                .update_resolution(&self.queue, self.config.width, self.config.height);
             self.layout_status = crate::core::tree::LayoutStatus::StructureChanged;
         }
     }
@@ -494,15 +645,50 @@ impl AppState {
             }
         }
 
+        // Chrome sync (hover/focus/input/switch) must not feed into scrollbar prepass or Taffy
+        // rebuild gates: merging it into `layout_status` forced `Full` scrollbar passes and
+        // `build_and_layout` every time a button shadow or hover border changed, which reset
+        // scrollbar styles/springs and broke auto hide + caused flicker.
+        let pre_chrome_layout_status = self.layout_status;
+
+        let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
+        crate::components::button::sync_button_hover_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::input::sync_input_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::switch::sync_switch_checked_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::checkbox::sync_checkbox_checked_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+
+        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+
+        let portal_moves = crate::layout::layout_tree::hoist_portal_subtrees(&mut self.root_element);
+
         // On `StructureChanged`, viewport signals from the *previous* frame are stale (e.g. first
         // frame after maximize). Feeding them into `update_scrollbar_elements` corrupts Taffy
         // styles before layout and produces a small “island” of UI on a large surface.
         let skip_scroll_preupdate = matches!(
-            self.layout_status,
+            pre_chrome_layout_status,
             crate::core::tree::LayoutStatus::StructureChanged
         );
+        let mut scrollbar_update_resolved = scrollbar_update;
         if !skip_scroll_preupdate {
-            let scrollbar_update = match self.layout_status {
+            // Only `LayoutChanged` / `StructureChanged` from the *element tree* (reconcile/rebuild)
+            // promote to a full scrollbar prepass — not per-frame chrome sync.
+            scrollbar_update_resolved = match pre_chrome_layout_status {
                 crate::core::tree::LayoutStatus::StructureChanged
                 | crate::core::tree::LayoutStatus::LayoutChanged => ScrollbarUpdateMode::Full,
                 crate::core::tree::LayoutStatus::StyleChanged
@@ -512,7 +698,7 @@ impl AppState {
                 &mut self.root_element,
                 &mut self.scrollbar_base_style,
                 &mut self.layout_tree,
-                scrollbar_update,
+                scrollbar_update_resolved,
                 active_drag_rest,
             );
         }
@@ -545,23 +731,35 @@ impl AppState {
         }
 
         let (logical_w, logical_h) = self.logical_size();
-        let status = self.layout_status;
-        let render_result = if status == crate::core::tree::LayoutStatus::StructureChanged 
-            || status == crate::core::tree::LayoutStatus::LayoutChanged
-            || self.layout_tree.root_node.is_none() 
-        {
+        let use_full_taffy_rebuild = self.layout_tree.root_node.is_none()
+            || portal_moves > 0
+            || matches!(
+                pre_chrome_layout_status,
+                crate::core::tree::LayoutStatus::StructureChanged
+                    | crate::core::tree::LayoutStatus::LayoutChanged
+            );
+        let render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(&mut self.root_element, logical_w, logical_h, mouse_pos)
         } else {
             // Scroll offsets do not affect Taffy sizing; skip full `compute_layout` when only
             // viewports were synced (no scrollbar thumb/style changes this frame).
-            let scroll_only = matches!(self.layout_status, crate::core::tree::LayoutStatus::Clean)
-                && scrollbar_update == ScrollbarUpdateMode::ViewportsOnly;
+            let scroll_only = matches!(
+                layout_for_build,
+                crate::core::tree::LayoutStatus::Clean
+            ) && scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly;
+            // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
+            // Chrome may still set `layout_for_build` to `StyleChanged`, forcing `!scroll_only` layout.
+            // Collect must keep using signal-derived scrollbar geometry in that case — otherwise
+            // draw uses stale Taffy sizes (thin/wrong tracks) until the next `Clean` frame.
+            let scrollbar_overlay_collect =
+                scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly;
             self.layout_tree.build_and_layout_fast(
                 &mut self.root_element,
                 logical_w,
                 logical_h,
                 mouse_pos,
                 scroll_only,
+                scrollbar_overlay_collect,
             )
         };
         #[cfg(debug_assertions)]
@@ -591,10 +789,28 @@ impl AppState {
         // mismatch if `configure` / layout / uniform updates reorder across events).
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
+        self.textured_pipeline
+            .update_resolution(&self.queue, self.config.width, self.config.height);
         #[cfg(debug_assertions)]
         let upload_done = Instant::now();
 
         let ui_scale = self.ui_scale();
+
+        for (id, rgba, w, h) in super::pending_images::take_pending() {
+            if self.image_textures.contains_key(&id) {
+                continue;
+            }
+            let gpu = super::image_registry::upload_rgba8(
+                &self.device,
+                &self.queue,
+                &self.textured_pipeline,
+                &rgba,
+                w,
+                h,
+            );
+            self.image_textures.insert(id, gpu);
+        }
+        let scaled_tex = scale_textured_draws(&render_result.textured_draws, ui_scale);
         let has_dynamic_text = self
             .text_nodes
             .iter()
@@ -673,6 +889,63 @@ impl AppState {
             if self.num_instances > 0 {
                 render_pass.draw_indexed(0..self.pipeline.num_indices, 0, 0..self.num_instances);
             }
+
+            if !scaled_tex.is_empty() {
+                let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
+                let mut ti = 0;
+                while ti < scaled_tex.len() {
+                    let key = scaled_tex[ti].texture_key.clone();
+                    let Some(gpu_img) = self.image_textures.get(&key) else {
+                        ti += 1;
+                        continue;
+                    };
+                    let run = scaled_tex[ti..]
+                        .iter()
+                        .take_while(|d| d.texture_key == key)
+                        .count();
+                    let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
+                        .iter()
+                        .map(|d| TexturedInstanceInput {
+                            rect_pos: [d.rect[0], d.rect[1]],
+                            rect_size: [d.rect[2], d.rect[3]],
+                            tint: [1.0, 1.0, 1.0, 1.0],
+                        })
+                        .collect();
+                    if !insts.is_empty() {
+                        if insts.len() > self.textured_instance_capacity {
+                            let new_cap = insts.len().max(256);
+                            self.textured_instance_buffer =
+                                self.device.create_buffer(&wgpu::BufferDescriptor {
+                                    label: Some("Textured instance buffer"),
+                                    size: (tex_stride * new_cap) as u64,
+                                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                                    mapped_at_creation: false,
+                                });
+                            self.textured_instance_capacity = new_cap;
+                        }
+                        self.queue.write_buffer(
+                            &self.textured_instance_buffer,
+                            0,
+                            bytemuck::cast_slice(&insts),
+                        );
+                        render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                        render_pass.set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            self.textured_pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        render_pass.draw_indexed(
+                            0..self.textured_pipeline.num_indices,
+                            0,
+                            0..insts.len() as u32,
+                        );
+                    }
+                    ti += run;
+                }
+            }
+
             if !underline_instances.is_empty() {
                 let underline_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Underline Instance Buffer"),
@@ -763,6 +1036,49 @@ struct ScrollbarBaseStyle {
 
 /// Minimum cross-axis size for an `auto` scrollbar at spring≈0 so track/thumb stay hittable.
 const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
+/// Scrollbar edge padding must match `components::scroll_area::SCROLLBAR_EDGE_PAD`.
+const SCROLLBAR_EDGE_PAD_RUNTIME: f32 = 2.0;
+
+/// Thickness encoded on the track via `max_w` / `max_h` in `scrollbar.rs`; must match default
+/// `ScrollbarBuilder::thickness` when ScrollArea does not override.
+const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
+
+fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
+    let self_is = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(SCROLL_AREA_FOCUS_PREFIX));
+    let mut any_child = false;
+    for child in &mut el.children {
+        if recompute_scroll_viewport_flags(child) {
+            any_child = true;
+        }
+    }
+    el.contains_scroll_viewport = self_is || any_child;
+    el.contains_scroll_viewport
+}
+
+fn normalize_anchor_template_id(id: &str) -> String {
+    id.replace('\\', "/").to_ascii_lowercase()
+}
+
+/// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.
+fn find_reactive_subtree_by_anchor_id_mut<'a>(
+    el: &'a mut Element,
+    want_normalized: &str,
+) -> Option<&'a mut Element> {
+    if let Some(tid) = el.template_id.as_deref() {
+        if normalize_anchor_template_id(tid) == want_normalized {
+            return Some(el);
+        }
+    }
+    for child in &mut el.children {
+        if let Some(hit) = find_reactive_subtree_by_anchor_id_mut(child, want_normalized) {
+            return Some(hit);
+        }
+    }
+    None
+}
 
 fn update_scrollbar_elements(
     el: &mut Element,
@@ -771,6 +1087,20 @@ fn update_scrollbar_elements(
     mode: ScrollbarUpdateMode,
     active_drag_rest: Option<&str>,
 ) {
+    fn subtree_contains_scroll_rest(el: &Element, target_rest: &str) -> bool {
+        if let Some(fid) = el.focus_id.as_deref() {
+            if fid
+                .strip_prefix(SCROLL_AREA_FOCUS_PREFIX)
+                .is_some_and(|rest| rest == target_rest)
+            {
+                return true;
+            }
+        }
+        el.children
+            .iter()
+            .any(|child| subtree_contains_scroll_rest(child, target_rest))
+    }
+
     #[cfg(debug_assertions)]
     {
         SCROLL_PREPASS_RECURSE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -785,6 +1115,9 @@ fn update_scrollbar_elements(
     }
 
     if mode == ScrollbarUpdateMode::ViewportsOnly {
+        if !el.contains_scroll_viewport {
+            return;
+        }
         // Fast path: once we hit a ScrollArea viewport node, sync only its offset and stop
         // descending into that subtree. This avoids walking large sibling lists every frame.
         if let Some(fid) = el.focus_id.as_deref() {
@@ -801,12 +1134,14 @@ fn update_scrollbar_elements(
         return;
     }
 
-    // Drag optimization: when actively dragging one scrollbar thumb, only keep Full-mode
-    // updates for that target scroll area subtree; other scroll areas just sync viewport offset.
+    // Drag optimization: when actively dragging one scrollbar thumb, keep Full-mode updates
+    // for the target subtree. For unrelated subtrees we only sync viewport offsets.
+    // NOTE: do not early-return on an ancestor of `target_rest`, otherwise nested target
+    // scrollbar geometry freezes during drag and jumps on release.
     if let Some(target_rest) = active_drag_rest {
         if let Some(fid) = el.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
-                if rest != target_rest {
+                if rest != target_rest && !subtree_contains_scroll_rest(el, target_rest) {
                     let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
                     let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
                     el.scroll_offset = [sx, sy];
@@ -854,20 +1189,20 @@ fn update_scrollbar_elements(
     let ch = use_signal(&scroll_content_h_signal_key(&rest), || 0.0_f32).peek();
     let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
     let sy = use_signal(&scroll_offset_y_signal_key(&rest), || 0.0_f32).peek();
-    
-    // Sync Taffy style if we are in a fast-path frame.
-    layout_tree.update_taffy_node_style(el);
 
     let overflow_x = use_signal(&scroll_overflow_x_signal_key(&rest), || "auto".to_string()).peek();
     let overflow_y = use_signal(&scroll_overflow_y_signal_key(&rest), || "auto".to_string()).peek();
-    let allow_axis = match axis {
-        "x" => !overflow_x.eq_ignore_ascii_case("hidden") && !overflow_x.eq_ignore_ascii_case("clip") && !overflow_x.eq_ignore_ascii_case("visible"),
-        _ => !overflow_y.eq_ignore_ascii_case("hidden") && !overflow_y.eq_ignore_ascii_case("clip") && !overflow_y.eq_ignore_ascii_case("visible"),
-    };
-    let can_scroll = match axis {
-        "x" => allow_axis && cw > vw + 1.0,
-        _ => allow_axis && ch > vh + 1.0,
-    };
+    let allow_x = !overflow_x.eq_ignore_ascii_case("hidden")
+        && !overflow_x.eq_ignore_ascii_case("clip")
+        && !overflow_x.eq_ignore_ascii_case("visible");
+    let allow_y = !overflow_y.eq_ignore_ascii_case("hidden")
+        && !overflow_y.eq_ignore_ascii_case("clip")
+        && !overflow_y.eq_ignore_ascii_case("visible");
+    // Use a softer threshold to avoid near-boundary flicker around 1px.
+    let can_scroll_x = allow_x && cw > vw + 0.5;
+    let can_scroll_y = allow_y && ch > vh + 0.5;
+    let axis_allows = if axis == "x" { allow_x } else { allow_y };
+    let scrollable = if axis == "x" { can_scroll_x } else { can_scroll_y };
 
     // Visibility mode: only Auto uses spring-driven show/hide.
     let vis = use_signal(
@@ -875,7 +1210,7 @@ fn update_scrollbar_elements(
         || "auto".to_string(),
     )
     .peek();
-    let vis = vis.to_ascii_lowercase();
+    let vis = vis.trim().to_ascii_lowercase();
     let v = if vis == "never" {
         0.0
     } else if vis == "always" {
@@ -886,20 +1221,22 @@ fn update_scrollbar_elements(
             .clamp(0.0, 1.0)
     };
 
-    // Recover base thickness from max_size if provided; else from current cross size.
+    // Recover base thickness from the track's max cross constraint only. Using `layout_bounds`
+    // here caused cross-axis jitter whenever unrelated flex reflows nudged the resolved size.
     let base_thickness = match axis {
         "x" => match el.style.max_size.height {
-            Dimension::Length(px) => px,
-            _ => el.layout_bounds[3].max(8.0),
+            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
+            _ => SCROLLBAR_DEFAULT_CROSS_PX,
         },
         _ => match el.style.max_size.width {
-            Dimension::Length(px) => px,
-            _ => el.layout_bounds[2].max(8.0),
+            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
+            _ => SCROLLBAR_DEFAULT_CROSS_PX,
         },
     };
 
-    // If cannot scroll, collapse so it doesn't steal pointer hits.
-    if !can_scroll {
+    // Collapse only when this axis is disallowed or explicitly hidden. For `auto`/`always`,
+    // keep a non-zero hit slab while `!scrollable` so hover can expand the bar; thumb fills track.
+    if !axis_allows || vis == "never" {
         el.style.size.width = Dimension::Length(0.0);
         el.style.size.height = Dimension::Length(0.0);
         el.style.border_width = 0.0;
@@ -907,30 +1244,79 @@ fn update_scrollbar_elements(
             thumb.style.size.width = Dimension::Length(0.0);
             thumb.style.size.height = Dimension::Length(0.0);
             thumb.style.border_width = 0.0;
+            layout_tree.update_taffy_node_style(thumb);
         }
+        // Keep Taffy node in lockstep with collapsed track style.
+        layout_tree.update_taffy_node_style(el);
         return;
     }
 
-    // Cross-size animates by v; main axis size matches viewport.
-    let inset = 1.0_f32;
-    let use_hit_slab = vis == "auto" && v < 0.01;
-    let cross = if use_hit_slab {
-        SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness * (0.15 + 0.85 * v)).max(2.0)
-    } else {
-        (base_thickness * (0.15 + 0.85 * v)).max(2.0)
+    // Dynamic inside-corner reservation:
+    // reserve only when the opposite axis is actually scrollable and both are inside.
+    let inset_x = use_signal(&scroll_scrollbar_inset_x_signal_key(&rest), || "inside".to_string()).peek();
+    let inset_y = use_signal(&scroll_scrollbar_inset_y_signal_key(&rest), || "inside".to_string()).peek();
+    let x_inside = !inset_x.eq_ignore_ascii_case("outside");
+    let y_inside = !inset_y.eq_ignore_ascii_case("outside");
+    let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(&rest), || "right".to_string()).peek();
+    let x_side = use_signal(&scroll_scrollbar_x_side_signal_key(&rest), || "bottom".to_string()).peek();
+    let y_is_left = y_side.eq_ignore_ascii_case("left");
+    let x_is_top = x_side.eq_ignore_ascii_case("top");
+    let corner_reserve = base_thickness + SCROLLBAR_EDGE_PAD_RUNTIME;
+
+    let mut reserve_left = 0.0_f32;
+    let mut reserve_right = 0.0_f32;
+    let mut reserve_top = 0.0_f32;
+    let mut reserve_bottom = 0.0_f32;
+    if axis == "x" && x_inside && y_inside && can_scroll_y {
+        if y_is_left {
+            reserve_left = corner_reserve;
+        } else {
+            reserve_right = corner_reserve;
+        }
+    }
+    if axis == "y" && x_inside && y_inside && can_scroll_x {
+        if x_is_top {
+            reserve_top = corner_reserve;
+        } else {
+            reserve_bottom = corner_reserve;
+        }
+    }
+
+    // Inside (absolute) scrollbar tracks have `top/bottom` (or `left/right`) insets set at
+    // build time in `scroll_area.rs`. Once we set an explicit `size`, Taffy ignores the far-side
+    // inset — so we must subtract the edge pads ourselves. Outside (relative) tracks have no
+    // absolute insets, so no subtraction is needed.
+    let this_inside = match axis {
+        "x" => x_inside,
+        _ => y_inside,
     };
+    let edge_pad_main = if this_inside { 2.0 * SCROLLBAR_EDGE_PAD_RUNTIME } else { 0.0 };
+
+    // Keep constant cross-size; show/hide is alpha-only (`v` = scrollbar spring current).
+    // Do not clamp alpha to 0 while 0 < v < 0.01: during spring fade-in `v` stays tiny for several
+    // frames — forcing zero here made `auto` scrollbars look like hover never worked. Hit testing
+    // uses `layout_bounds`, not multiplied alpha.
+    let inset = 1.0_f32;
+    let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);
 
     match axis {
         "x" => {
-            el.style.size.width = Dimension::Length(vw.max(1.0));
+            el.style.size.width =
+                Dimension::Length((vw - reserve_left - reserve_right - edge_pad_main).max(1.0));
             el.style.size.height = Dimension::Length(cross);
         }
         _ => {
             el.style.size.width = Dimension::Length(cross);
-            el.style.size.height = Dimension::Length(vh.max(1.0));
+            el.style.size.height =
+                Dimension::Length((vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0));
         }
     }
+    // The scrollbar builder sets `min_w / min_h` at build time to the initial viewport
+    // dimensions. These stale constraints override our runtime `size` — Taffy computes
+    // `max(min_size, size)`. Clear them so the explicit size above is authoritative.
+    el.style.min_size.width = Dimension::Auto;
+    el.style.min_size.height = Dimension::Auto;
 
     // Update thumb geometry (assumes first child is thumb).
     let Some(thumb) = el.children.first_mut() else {
@@ -940,11 +1326,31 @@ fn update_scrollbar_elements(
     // Cache base style once per scroll-area + axis (we will apply alpha every frame).
     let style_key = format!("{rest}:{axis}");
     if let Entry::Vacant(e) = base_style.entry(style_key.clone()) {
+        let mut track_bg = el.style.bg_color;
+        let mut thumb_bg = thumb.style.bg_color;
+        let mut track_border = el.style.border_color;
+        let mut thumb_border = thumb.style.border_color;
+        // `auto` may be initially built fully transparent (to avoid StructureChanged-frame flash).
+        // Base style must keep normalized alpha, otherwise later `* visible_alpha` stays 0 forever.
+        if vis == "auto" {
+            if track_bg[3] <= f32::EPSILON {
+                track_bg[3] = 1.0;
+            }
+            if thumb_bg[3] <= f32::EPSILON {
+                thumb_bg[3] = 1.0;
+            }
+            if track_border[3] <= f32::EPSILON {
+                track_border[3] = 1.0;
+            }
+            if thumb_border[3] <= f32::EPSILON {
+                thumb_border[3] = 1.0;
+            }
+        }
         e.insert(ScrollbarBaseStyle {
-            track_bg: el.style.bg_color,
-            thumb_bg: thumb.style.bg_color,
-            track_border: el.style.border_color,
-            thumb_border: thumb.style.border_color,
+            track_bg,
+            thumb_bg,
+            track_border,
+            thumb_border,
             track_border_width: el.style.border_width,
             thumb_border_width: thumb.style.border_width,
         });
@@ -954,7 +1360,7 @@ fn update_scrollbar_elements(
         let mut th = bs.thumb_bg;
         let mut tbc = bs.track_border;
         let mut thbc = bs.thumb_border;
-        let visible_alpha = if use_hit_slab { 0.0 } else { v };
+        let visible_alpha = v.clamp(0.0, 1.0);
         tc[3] *= visible_alpha;
         th[3] *= visible_alpha;
         tbc[3] *= visible_alpha;
@@ -968,37 +1374,61 @@ fn update_scrollbar_elements(
         thumb.style.border_width = bs.thumb_border_width * visible_alpha;
     }
 
-    match axis {
-        "x" => {
-            let track = vw.max(1.0);
-            let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-            let min_thumb = track.min(24.0);
-            let tw = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-            let max_offset = (cw - vw).max(0.0);
-            let t = if max_offset > 0.0 { sx / max_offset } else { 0.0 };
-            let ml = (track - tw).max(0.0) * t.clamp(0.0, 1.0);
-            thumb.style.size.width = Dimension::Length(tw);
-            thumb.style.size.height = Dimension::Length(thumb_cross);
-            thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(ml);
-            thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(0.0);
+    {
+        match axis {
+            "x" => {
+                let track = (vw - reserve_left - reserve_right - edge_pad_main).max(1.0);
+                let track_inner = (track - inset * 2.0).max(1.0);
+                let (tw, ml) = if scrollable {
+                    let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
+                    let min_thumb = track_inner.min(24.0);
+                    let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                    let max_offset = (cw - vw).max(0.0);
+                    let t = if max_offset > 1e-4 {
+                        (sx / max_offset).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let ml = (track_inner - tw).max(0.0) * t;
+                    (tw, ml)
+                } else {
+                    (track_inner, 0.0)
+                };
+                thumb.style.size.width = Dimension::Length(tw);
+                thumb.style.size.height = Dimension::Length(thumb_cross);
+                thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(ml);
+                thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(0.0);
+            }
+            _ => {
+                let track = (vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+                let track_inner = (track - inset * 2.0).max(1.0);
+                let (th, mt) = if scrollable {
+                    let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
+                    let min_thumb = track_inner.min(24.0);
+                    let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                    let max_offset = (ch - vh).max(0.0);
+                    let t = if max_offset > 1e-4 {
+                        (sy / max_offset).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let mt = (track_inner - th).max(0.0) * t;
+                    (th, mt)
+                } else {
+                    (track_inner, 0.0)
+                };
+                thumb.style.size.width = Dimension::Length(thumb_cross);
+                thumb.style.size.height = Dimension::Length(th);
+                thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(mt);
+                thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(0.0);
+            }
         }
-        _ => {
-            let track = vh.max(1.0);
-            let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-            let min_thumb = track.min(24.0);
-            let th = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-            let max_offset = (ch - vh).max(0.0);
-            let t = if max_offset > 0.0 { sy / max_offset } else { 0.0 };
-            let mt = (track - th).max(0.0) * t.clamp(0.0, 1.0);
-            thumb.style.size.width = Dimension::Length(thumb_cross);
-            thumb.style.size.height = Dimension::Length(th);
-            thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(mt);
-            thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(0.0);
-        }
+        layout_tree.update_taffy_node_style(thumb);
     }
-    
-    // Crucially: sync the thumb's Taffy node style since its position/size just changed.
-    layout_tree.update_taffy_node_style(thumb);
+
+    // Sync track style after all geometry mutations to avoid one-frame stale layout,
+    // which is especially visible in nested smooth-scroll scenarios.
+    layout_tree.update_taffy_node_style(el);
 }
 
 #[cfg(debug_assertions)]
@@ -1201,7 +1631,7 @@ pub(super) fn resolve_dev_asset_path(p: &str) -> Option<PathBuf> {
     None
 }
 
-fn find_by_template_id_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
+pub(super) fn find_by_template_id_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
     if let Some(current_id) = el.template_id.as_deref() {
         if crate::app::hot_reload::template_id_matches(id, current_id) {
             return Some(el);

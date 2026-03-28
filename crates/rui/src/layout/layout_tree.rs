@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use taffy::prelude::*;
 
-use crate::renderer::InstanceInput;
+use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 use crate::core::tree::Element;
 use crate::components::scrollbar::{
@@ -17,9 +17,35 @@ use crate::components::scrollbar::{
 use crate::components::scroll_area::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_AREA_FOCUS_PREFIX,
+    scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+    scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key, scroll_viewport_h_signal_key,
+    scroll_viewport_w_signal_key, SCROLL_AREA_FOCUS_PREFIX,
 };
 use crate::core::reactivity::use_signal;
+
+/// 将带 `rui_portal=1` 的子树从原父节点摘下并挂到 `root` 末尾（绘制顺序靠后，便于浮层）。
+/// 返回本帧提升的子树数；非 0 时应做完整 Taffy 重建（见 `AppState::render`）。
+pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
+    let mut lifted = Vec::new();
+    hoist_portal_rec(root, &mut lifted);
+    let n = lifted.len();
+    root.children.extend(lifted);
+    n
+}
+
+fn hoist_portal_rec(node: &mut Element, lifted: &mut Vec<Element>) {
+    let mut i = 0;
+    while i < node.children.len() {
+        hoist_portal_rec(&mut node.children[i], lifted);
+        if node.children[i].attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
+            let mut n = node.children.remove(i);
+            n.attrs.remove("rui_portal");
+            lifted.push(n);
+        } else {
+            i += 1;
+        }
+    }
+}
 
 fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
     let cap = (w.min(h) * 0.5).max(0.0);
@@ -34,6 +60,13 @@ fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
     out
 }
 
+/// Minimum cross-axis size for an `auto` scrollbar at spring≈0; must match `app::state`.
+const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
+/// Must match `components::scroll_area::SCROLLBAR_EDGE_PAD` / `state::SCROLLBAR_EDGE_PAD_RUNTIME`.
+const SCROLLBAR_EDGE_PAD_RUNTIME: f32 = 2.0;
+/// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
+const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
+
 /// One `peek()` batch per scroll-area id per collect pass; shared by x/y scrollbar tracks on that area.
 struct ScrollAreaSignalsCached {
     vw: f32,
@@ -44,10 +77,12 @@ struct ScrollAreaSignalsCached {
     sy: f32,
     overflow_x: String,
     overflow_y: String,
-    visibility_x: String,
-    visibility_y: String,
-    spring_x: f32,
-    spring_y: f32,
+    scrollbar_vis_x: String,
+    scrollbar_vis_y: String,
+    inset_x: String,
+    inset_y: String,
+    y_side: String,
+    x_side: String,
 }
 
 fn scroll_area_signals_cached<'a>(
@@ -57,6 +92,9 @@ fn scroll_area_signals_cached<'a>(
     match cache.entry(rest.to_string()) {
         Entry::Occupied(o) => o.into_mut(),
         Entry::Vacant(v) => {
+            // Raw metrics only: half-pixel snapping vw/vh/cw/ch independently can erase a tiny
+            // (ch - vh), making max_scroll 0 and snapping the thumb to the track start after idle.
+            // Post-render already gates signal writes with a 0.1px threshold (window_events).
             let vw = use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).peek();
             let vh = use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).peek();
             let cw = use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).peek();
@@ -67,16 +105,18 @@ fn scroll_area_signals_cached<'a>(
                 use_signal(&scroll_overflow_x_signal_key(rest), || "auto".to_string()).peek();
             let overflow_y =
                 use_signal(&scroll_overflow_y_signal_key(rest), || "auto".to_string()).peek();
-            let visibility_x =
+            let scrollbar_vis_x =
                 use_signal(&scrollbar_visibility_signal_key(rest, "x"), || "auto".to_string()).peek();
-            let visibility_y =
+            let scrollbar_vis_y =
                 use_signal(&scrollbar_visibility_signal_key(rest, "y"), || "auto".to_string()).peek();
-            let spring_x = crate::style::use_spring(&format!("scrollbar_spring_{rest}:x"), 0.0)
-                .peek()
-                .clamp(0.0, 1.0);
-            let spring_y = crate::style::use_spring(&format!("scrollbar_spring_{rest}:y"), 0.0)
-                .peek()
-                .clamp(0.0, 1.0);
+            let inset_x =
+                use_signal(&scroll_scrollbar_inset_x_signal_key(rest), || "inside".to_string()).peek();
+            let inset_y =
+                use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || "inside".to_string()).peek();
+            let y_side =
+                use_signal(&scroll_scrollbar_y_side_signal_key(rest), || "right".to_string()).peek();
+            let x_side =
+                use_signal(&scroll_scrollbar_x_side_signal_key(rest), || "bottom".to_string()).peek();
             v.insert(ScrollAreaSignalsCached {
                 vw,
                 vh,
@@ -86,10 +126,12 @@ fn scroll_area_signals_cached<'a>(
                 sy,
                 overflow_x,
                 overflow_y,
-                visibility_x,
-                visibility_y,
-                spring_x,
-                spring_y,
+                scrollbar_vis_x,
+                scrollbar_vis_y,
+                inset_x,
+                inset_y,
+                y_side,
+                x_side,
             })
         }
     }
@@ -98,6 +140,7 @@ fn scroll_area_signals_cached<'a>(
 /// 一次布局+收集的产出。
 pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
+    pub textured_draws: Vec<TexturedDraw>,
     pub text_nodes: Vec<TextLayoutInfo>,
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
     pub hover_cursor: Option<crate::core::tree::CursorKind>,
@@ -107,6 +150,10 @@ pub struct RenderResult {
 #[derive(Clone)]
 pub struct TextLayoutInfo {
     pub text: String,
+    /// 与 [`crate::core::tree::Element::text_shape_suffix`] 一致，参与 shaping，不参与逻辑光标。
+    pub shape_suffix: Option<String>,
+    /// 收集自 [`crate::core::tree::Element::template_id`]，供 `RUI_TEXT_DEBUG` 等过滤。
+    pub template_id: Option<String>,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -130,6 +177,7 @@ pub struct LayoutTree {
 struct TextMeasureMeta {
     size: f32,
     text: String,
+    shape_suffix: Option<String>,
     is_icon: bool,
     line_height_px: Option<f32>,
     line_height_scale: Option<f32>,
@@ -199,7 +247,19 @@ impl LayoutTree {
                         } else if is_icon {
                             size
                         } else {
-                            let max_chars = m.text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32;
+                            let max_chars = if let Some(suf) = &m.shape_suffix {
+                                format!("{}{}", m.text, suf)
+                                    .lines()
+                                    .map(|l| l.chars().count())
+                                    .max()
+                                    .unwrap_or(0) as f32
+                            } else {
+                                m.text
+                                    .lines()
+                                    .map(|l| l.chars().count())
+                                    .max()
+                                    .unwrap_or(0) as f32
+                            };
                             max_chars * size * 0.55
                         };
                         
@@ -212,7 +272,7 @@ impl LayoutTree {
                         } else if let Some(scale) = m.line_height_scale {
                             size * scale
                         } else {
-                            size * 1.2
+                            size * crate::style::tailwind_default_leading_scale(size)
                         };
                         let intrinsic_height = single_line_height * line_count;
 
@@ -229,6 +289,7 @@ impl LayoutTree {
             .unwrap();
 
         let mut instances = Vec::new();
+        let mut textured_draws = Vec::new();
         let mut text_nodes = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
@@ -242,9 +303,11 @@ impl LayoutTree {
             None,
             mouse_pos,
             &mut instances,
+            &mut textured_draws,
             &mut text_nodes,
             &mut scroll_metrics,
             &mut hover_cursor,
+            false,
             false,
             None,
             &mut None,
@@ -252,6 +315,7 @@ impl LayoutTree {
 
         RenderResult {
             instances,
+            textured_draws,
             text_nodes,
             scroll_metrics,
             hover_cursor,
@@ -262,6 +326,10 @@ impl LayoutTree {
     /// not participate in flex/grid sizing (only affects collect-time drawing). Use after
     /// `update_scrollbar_elements` synced only `scroll:` offsets and no scrollbar styles changed
     /// — avoids O(nested) full layout each frame when many `ScrollArea`s are nested.
+    ///
+    /// When `scrollbar_overlay_collect` is true, track/thumb draw rects use live scroll signals
+    /// (same contract as a `ViewportsOnly` prepass without Full). Use whenever that prepass did not
+    /// push geometry into Taffy, even if chrome sync forces `!scroll_only` layout for other nodes.
     pub fn build_and_layout_fast(
         &mut self,
         root: &mut Element,
@@ -269,6 +337,7 @@ impl LayoutTree {
         height: f32,
         mouse_pos: [f32; 2],
         scroll_only: bool,
+        scrollbar_overlay_collect: bool,
     ) -> RenderResult {
         let root_node = self.root_node.expect("fast path requires existing root_node");
 
@@ -296,9 +365,24 @@ impl LayoutTree {
                         if let Some(m) = self.text_measurements.get(&node_id) {
                             let size = m.size;
                             let line_count = m.text.split('\n').count().max(1) as f32;
-                            let single_line_height = if m.is_icon { size } else if let Some(lh) = m.line_height_px { lh } else if let Some(scale) = m.line_height_scale { size * scale } else { size * 1.2 };
+                            let single_line_height = if m.is_icon { size } else if let Some(lh) = m.line_height_px { lh } else if let Some(scale) = m.line_height_scale { size * scale } else { size * crate::style::tailwind_default_leading_scale(size) };
                             let intrinsic_height = single_line_height * line_count;
-                            let width = if let Some(w) = known_dimensions.width { w } else if m.is_icon { size } else { (m.text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32) * size * 0.55 };
+                            let width = if let Some(w) = known_dimensions.width { w } else if m.is_icon { size } else {
+                                let max_chars = if let Some(suf) = &m.shape_suffix {
+                                    format!("{}{}", m.text, suf)
+                                        .lines()
+                                        .map(|l| l.chars().count())
+                                        .max()
+                                        .unwrap_or(0) as f32
+                                } else {
+                                    m.text
+                                        .lines()
+                                        .map(|l| l.chars().count())
+                                        .max()
+                                        .unwrap_or(0) as f32
+                                };
+                                max_chars * size * 0.55
+                            };
                             let height = match known_dimensions.height { Some(h) => intrinsic_height.max(h), None => intrinsic_height };
                             taffy::geometry::Size { width, height }
                         } else {
@@ -310,13 +394,14 @@ impl LayoutTree {
         }
 
         let mut instances = Vec::new();
+        let mut textured_draws = Vec::new();
         let mut text_nodes = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
 
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
         let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
-            if scroll_only {
+            if scroll_only || scrollbar_overlay_collect {
                 Some(&mut scroll_signal_cache)
             } else {
                 None
@@ -331,15 +416,23 @@ impl LayoutTree {
             None,
             mouse_pos,
             &mut instances,
+            &mut textured_draws,
             &mut text_nodes,
             &mut scroll_metrics,
             &mut hover_cursor,
             scroll_only,
+            scrollbar_overlay_collect,
             None,
             &mut scroll_cache_slot,
         );
 
-        RenderResult { instances, text_nodes, scroll_metrics, hover_cursor }
+        RenderResult {
+            instances,
+            textured_draws,
+            text_nodes,
+            scroll_metrics,
+            hover_cursor,
+        }
     }
 
     fn build_taffy_node_mut(&mut self, element: &mut Element) -> NodeId {
@@ -395,6 +488,7 @@ impl LayoutTree {
                     TextMeasureMeta {
                         size,
                         text: text_clone,
+                        shape_suffix: element.text_shape_suffix.clone(),
                         is_icon,
                         line_height_px: element.text_style.line_height_px,
                         line_height_scale: element.text_style.line_height_scale,
@@ -419,10 +513,12 @@ impl LayoutTree {
         ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
         instances: &mut Vec<InstanceInput>,
+        textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
         hover_cursor: &mut Option<crate::core::tree::CursorKind>,
         scroll_only: bool,
+        scrollbar_overlay_collect: bool,
         thumb_geometry_override: Option<[f32; 4]>,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     ) -> [f32; 2] {
@@ -435,7 +531,7 @@ impl LayoutTree {
 
         let (abs_x, abs_y, lay_w, lay_h) = if let Some(r) = thumb_geometry_override {
             (r[0], r[1], r[2], r[3])
-        } else if scroll_only {
+        } else if scrollbar_overlay_collect {
             if let Some(cache) = scroll_signals_cache.as_mut() {
                 if let Some(fid) = element.focus_id.as_deref() {
                     if let Some(rest_axis) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
@@ -519,9 +615,21 @@ impl LayoutTree {
             });
         }
 
+        if let Some(tex_key) = element.image_texture.as_ref() {
+            if !tex_key.is_empty() && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
+                textured_draws.push(TexturedDraw {
+                    rect: draw_rect,
+                    texture_key: tex_key.clone(),
+                });
+            }
+        }
+
         if let Some(text) = &element.text {
             text_nodes.push(TextLayoutInfo {
-                text: text.clone(), x: render_x, y: render_y,
+                text: text.clone(),
+                shape_suffix: element.text_shape_suffix.clone(),
+                template_id: element.template_id.clone(),
+                x: render_x, y: render_y,
                 width: lay_w, height: lay_h,
                 clip_bounds: clip, style: element.text_style.clone(),
             });
@@ -567,10 +675,12 @@ impl LayoutTree {
                     pass_to_children,
                     mouse_pos,
                     instances,
+                    textured_draws,
                     text_nodes,
                     scroll_metrics,
                     hover_cursor,
                     scroll_only,
+                    scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
                 );
@@ -604,10 +714,12 @@ impl LayoutTree {
                     pass_to_children,
                     mouse_pos,
                     instances,
+                    textured_draws,
                     text_nodes,
                     scroll_metrics,
                     hover_cursor,
                     scroll_only,
+                    scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
                 );
@@ -642,18 +754,18 @@ impl LayoutTree {
 }
 
 /// Mirrors [`crate::app::state::update_scrollbar_elements`] geometry using live signals so the
-/// scroll-only path can skip `compute_layout` while keeping thumb/track rects correct.
+/// `ViewportsOnly` prepass can skip pushing track/thumb sizes into Taffy while collect still draws
+/// correct rects (including when chrome sync forces a full `compute_layout` the same frame).
 /// Signals are read once per scroll-area id per frame via [`scroll_area_signals_cached`].
 fn scrollbar_track_overlay_abs(
     track_el: &Element,
     base_abs_x: f32,
     base_abs_y: f32,
-    layout_w: f32,
-    layout_h: f32,
+    _layout_w: f32,
+    _layout_h: f32,
     axis: &str,
     sig: &ScrollAreaSignalsCached,
 ) -> ([f32; 4], [f32; 4]) {
-    const HIT_SLAB: f32 = 8.0;
     let vw = sig.vw;
     let vh = sig.vh;
     let cw = sig.cw;
@@ -661,93 +773,144 @@ fn scrollbar_track_overlay_abs(
     let sx = sig.sx;
     let sy = sig.sy;
 
-    let allow_axis = match axis {
-        "x" => {
-            !sig.overflow_x.eq_ignore_ascii_case("hidden")
-                && !sig.overflow_x.eq_ignore_ascii_case("clip")
-                && !sig.overflow_x.eq_ignore_ascii_case("visible")
-        }
-        _ => {
-            !sig.overflow_y.eq_ignore_ascii_case("hidden")
-                && !sig.overflow_y.eq_ignore_ascii_case("clip")
-                && !sig.overflow_y.eq_ignore_ascii_case("visible")
-        }
-    };
-    let can_scroll = match axis {
-        "x" => allow_axis && cw > vw + 1.0,
-        _ => allow_axis && ch > vh + 1.0,
-    };
-
-    let vis = match axis {
-        "x" => sig.visibility_x.as_str(),
-        _ => sig.visibility_y.as_str(),
-    };
-    let vis = vis.to_ascii_lowercase();
-    let v = if vis == "never" {
-        0.0
-    } else if vis == "always" {
-        1.0
+    let allow_x = !sig.overflow_x.eq_ignore_ascii_case("hidden")
+        && !sig.overflow_x.eq_ignore_ascii_case("clip")
+        && !sig.overflow_x.eq_ignore_ascii_case("visible");
+    let allow_y = !sig.overflow_y.eq_ignore_ascii_case("hidden")
+        && !sig.overflow_y.eq_ignore_ascii_case("clip")
+        && !sig.overflow_y.eq_ignore_ascii_case("visible");
+    let can_scroll_x = allow_x && cw > vw + 0.5;
+    let can_scroll_y = allow_y && ch > vh + 0.5;
+    let allow_axis = if axis == "x" { allow_x } else { allow_y };
+    let scrollable = if axis == "x" { can_scroll_x } else { can_scroll_y };
+    let vis_trim = if axis == "x" {
+        sig.scrollbar_vis_x.trim()
     } else {
-        match axis {
-            "x" => sig.spring_x,
-            _ => sig.spring_y,
-        }
+        sig.scrollbar_vis_y.trim()
     };
-
-    let base_thickness = match axis {
-        "x" => match track_el.style.max_size.height {
-            Dimension::Length(px) => px,
-            _ => layout_h.max(8.0),
-        },
-        _ => match track_el.style.max_size.width {
-            Dimension::Length(px) => px,
-            _ => layout_w.max(8.0),
-        },
-    };
-
-    if !can_scroll {
+    if !allow_axis || vis_trim.eq_ignore_ascii_case("never") {
         return (
             [base_abs_x, base_abs_y, 0.0, 0.0],
             [base_abs_x, base_abs_y, 0.0, 0.0],
         );
     }
 
-    let inset = 1.0_f32;
-    let use_hit_slab = vis == "auto" && v < 0.01;
-    let cross = if use_hit_slab {
-        HIT_SLAB.max(base_thickness * (0.15 + 0.85 * v)).max(2.0)
-    } else {
-        (base_thickness * (0.15 + 0.85 * v)).max(2.0)
+    let base_thickness = match axis {
+        "x" => match track_el.style.max_size.height {
+            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
+            _ => SCROLLBAR_DEFAULT_CROSS_PX,
+        },
+        _ => match track_el.style.max_size.width {
+            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
+            _ => SCROLLBAR_DEFAULT_CROSS_PX,
+        },
     };
+
+    let x_inside = !sig.inset_x.eq_ignore_ascii_case("outside");
+    let y_inside = !sig.inset_y.eq_ignore_ascii_case("outside");
+    let y_is_left = sig.y_side.eq_ignore_ascii_case("left");
+    let x_is_top = sig.x_side.eq_ignore_ascii_case("top");
+    let corner_reserve = base_thickness + SCROLLBAR_EDGE_PAD_RUNTIME;
+
+    let mut reserve_left = 0.0_f32;
+    let mut reserve_right = 0.0_f32;
+    let mut reserve_top = 0.0_f32;
+    let mut reserve_bottom = 0.0_f32;
+    if axis == "x" && x_inside && y_inside && can_scroll_y {
+        if y_is_left {
+            reserve_left = corner_reserve;
+        } else {
+            reserve_right = corner_reserve;
+        }
+    }
+    if axis == "y" && x_inside && y_inside && can_scroll_x {
+        if x_is_top {
+            reserve_top = corner_reserve;
+        } else {
+            reserve_bottom = corner_reserve;
+        }
+    }
+
+    let this_inside = match axis {
+        "x" => x_inside,
+        _ => y_inside,
+    };
+    let edge_pad_main = if this_inside {
+        2.0 * SCROLLBAR_EDGE_PAD_RUNTIME
+    } else {
+        0.0
+    };
+
+    let inset = 1.0_f32;
+    let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);
 
     let (track_w, track_h) = match axis {
-        "x" => (vw.max(1.0), cross),
-        _ => (cross, vh.max(1.0)),
+        "x" => (
+            (vw - reserve_left - reserve_right - edge_pad_main).max(1.0),
+            cross,
+        ),
+        _ => (
+            cross,
+            (vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
+        ),
     };
 
     let track_rect = [base_abs_x, base_abs_y, track_w, track_h];
 
+    // Overlay path bypasses Taffy for the thumb and must match [`components::scrollbar`] track
+    // `.p("0.0625rem")` (~1px): the thumb is laid out inside the track **content** box, i.e.
+    // border-box origin + `inset` on each axis. Omitting this shifts the thumb up-left vs Full mode.
     let thumb_rect = match axis {
         "x" => {
-            let track = vw.max(1.0);
-            let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-            let min_thumb = track.min(24.0);
-            let tw = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-            let max_offset = (cw - vw).max(0.0);
-            let t = if max_offset > 0.0 { sx / max_offset } else { 0.0 };
-            let ml = (track - tw).max(0.0) * t.clamp(0.0, 1.0);
-            [base_abs_x + ml, base_abs_y, tw, thumb_cross]
+            let track = (vw - reserve_left - reserve_right - edge_pad_main).max(1.0);
+            let track_inner = (track - inset * 2.0).max(1.0);
+            let (tw, ml) = if scrollable {
+                let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
+                let min_thumb = track_inner.min(24.0);
+                let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                let max_offset = (cw - vw).max(0.0);
+                let t = if max_offset > 1e-4 {
+                    (sx / max_offset).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let ml = (track_inner - tw).max(0.0) * t;
+                (tw, ml)
+            } else {
+                (track_inner, 0.0)
+            };
+            [
+                base_abs_x + inset + ml,
+                base_abs_y + inset,
+                tw,
+                thumb_cross,
+            ]
         }
         _ => {
-            let track = vh.max(1.0);
-            let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-            let min_thumb = track.min(24.0);
-            let th = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-            let max_offset = (ch - vh).max(0.0);
-            let t = if max_offset > 0.0 { sy / max_offset } else { 0.0 };
-            let mt = (track - th).max(0.0) * t.clamp(0.0, 1.0);
-            [base_abs_x, base_abs_y + mt, thumb_cross, th]
+            let track = (vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+            let track_inner = (track - inset * 2.0).max(1.0);
+            let (th, mt) = if scrollable {
+                let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
+                let min_thumb = track_inner.min(24.0);
+                let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
+                let max_offset = (ch - vh).max(0.0);
+                let t = if max_offset > 1e-4 {
+                    (sy / max_offset).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let mt = (track_inner - th).max(0.0) * t;
+                (th, mt)
+            } else {
+                (track_inner, 0.0)
+            };
+            [
+                base_abs_x + inset,
+                base_abs_y + inset + mt,
+                thumb_cross,
+                th,
+            ]
         }
     };
 

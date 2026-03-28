@@ -5,6 +5,7 @@ use crate::components::scroll_area::{
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, IntoDimension, IntoF32};
 use taffy::prelude::*;
+use rui_macros::component;
 
 // TODO(scrollbar-overlay):
 // 仅记录方案，不在当前提交中实现：
@@ -79,6 +80,34 @@ pub fn scrollbar(id: &str) -> ScrollbarBuilder {
 // Alias for macro lowercase mapping: <Scrollbar> -> components::scrollbar(...)
 pub fn scrollbarbuilder() -> ScrollbarBuilder {
     scrollbar("scrollbar")
+}
+
+/// Scrollbar component for fine-grained scroll control.
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn Scrollbar(
+    target: String,
+    orientation: String,
+    visibility: Option<String>,
+    thickness: Option<f32>,
+    children: Option<Element>,
+) -> Element {
+    let mut builder = scrollbar("scrollbar").target(target);
+    
+    if orientation.to_ascii_lowercase() == "horizontal" {
+        builder = builder.orientation(ScrollbarOrientation::Horizontal);
+    } else {
+        builder = builder.orientation(ScrollbarOrientation::Vertical);
+    }
+    
+    if let Some(v) = visibility { builder = builder.visibility(v); }
+    if let Some(t) = thickness { builder = builder.thickness(t); }
+
+    if let Some(c) = children {
+        builder = builder.child(c);
+    }
+
+    builder.into()
 }
 
 impl ScrollbarBuilder {
@@ -205,32 +234,29 @@ impl ScrollbarBuilder {
 
 impl From<ScrollbarBuilder> for Element {
     fn from(builder: ScrollbarBuilder) -> Element {
-        let (vw, vh, cw, ch, sx, sy, can_scroll) = if let Some(id) = builder.target_id.as_ref() {
+        let (vw, vh, cw, ch, sx, sy) = if let Some(id) = builder.target_id.as_ref() {
             let vw = use_signal(&scroll_viewport_w_signal_key(id), || 0.0_f32).peek();
             let vh = use_signal(&scroll_viewport_h_signal_key(id), || 0.0_f32).peek();
             let cw = use_signal(&scroll_content_w_signal_key(id), || 0.0_f32).peek();
             let ch = use_signal(&scroll_content_h_signal_key(id), || 0.0_f32).peek();
             let sx = use_signal(&scroll_offset_x_signal_key(id), || 0.0_f32).peek();
             let sy = use_signal(&scroll_offset_y_signal_key(id), || 0.0_f32).peek();
-            let can = match builder.orientation {
-                ScrollbarOrientation::Horizontal => cw > vw + 0.5,
-                ScrollbarOrientation::Vertical => ch > vh + 0.5,
-            };
-            (vw, vh, cw, ch, sx, sy, can)
+            (vw, vh, cw, ch, sx, sy)
         } else {
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, false)
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         };
 
         if builder.visibility == ScrollbarVisibility::Never {
             return Element::new().w(0.0).h(0.0);
         }
 
-        if builder.visibility == ScrollbarVisibility::Auto && !can_scroll {
-            return Element::new().w(0.0).h(0.0);
-        }
+        // IMPORTANT:
+        // Do not short-circuit `auto && !can_scroll` at build time.
+        // First frame metrics are often still zero; collapsing here makes the track node disappear,
+        // then later hover/scroll updates cannot drive visibility/geometry until an unrelated rebuild.
+        // Runtime path (`update_scrollbar_elements`) owns can_scroll gating.
 
         // Persist visibility mode for runtime updates (avoid rebuild dependency).
-        let spring_id = builder.target_id.clone().unwrap_or_else(|| "none".to_string());
         let axis = match builder.orientation {
             ScrollbarOrientation::Horizontal => "x",
             ScrollbarOrientation::Vertical => "y",
@@ -245,24 +271,26 @@ impl From<ScrollbarBuilder> for Element {
             use_signal(&vk, || raw.to_string()).set(raw.to_string());
         }
 
-        // Animation: spring for visibility
-        let spring = crate::style::use_spring(&format!("scrollbar_spring_{}:{}", spring_id, axis), 0.0);
-        let v = spring.peek().clamp(0.0, 1.0);
-
         // Auto + can_scroll: keep a real track in the tree even when v≈0 so hit-testing and
         // `update_scrollbar_elements` can attach a hit-slab each frame (see `state.rs`).
+        let initial_alpha = match builder.visibility {
+            ScrollbarVisibility::Always => 1.0_f32,
+            ScrollbarVisibility::Auto | ScrollbarVisibility::Never => 0.0_f32,
+        };
+        let mut track_color = builder.track_color;
+        track_color[3] *= initial_alpha;
+        let mut thumb_color = builder.thumb_color;
+        thumb_color[3] *= initial_alpha;
+        let mut thumb_border_color = crate::core::tree::parse_color("background");
+        thumb_border_color[3] *= initial_alpha;
+        let mut track_border_color = crate::core::tree::parse_color("input");
+        track_border_color[3] *= initial_alpha;
 
         let inset = 1.0_f32;
-        // Overlay scrollbar: animation should feel like native (fade first, thickness only subtly).
-        // We still scale cross-size a bit so it doesn't "pop", but keep it very restrained.
         let base_cross = builder.thickness.max(2.0);
-        let cross_scale = 0.85 + 0.15 * v;
-        let track_cross = base_cross * cross_scale;
+        // Keep constant cross size; visibility is alpha-only.
+        let track_cross = base_cross;
         let thumb_cross = (track_cross - inset * 2.0).max(1.0);
-        let mut track_color = builder.track_color;
-        let mut thumb_color = builder.thumb_color;
-        track_color[3] *= v;
-        thumb_color[3] *= v;
         let (track_w_px, track_h_px, thumb_w, thumb_h, thumb_ml, thumb_mt) =
             match builder.orientation {
                 ScrollbarOrientation::Horizontal => {
@@ -311,7 +339,7 @@ impl From<ScrollbarBuilder> for Element {
             .mt(thumb_mt)
             .rounded(thumb_radius)
             .bg(thumb_color)
-            .border(crate::core::tree::parse_color("background"), 1.0 * v)
+            .border(thumb_border_color, 1.0)
             .cursor_kind(crate::core::tree::CursorKind::Pointer);
         if let Some(fid) = thumb_focus {
             thumb = thumb.focus_id(fid);
@@ -323,7 +351,7 @@ impl From<ScrollbarBuilder> for Element {
             .p("0.0625rem")
             .rounded(track_radius)
             .bg(track_color)
-            .border(crate::core::tree::parse_color("input"), 1.0 * v);
+            .border(track_border_color, 1.0);
         match builder.orientation {
             ScrollbarOrientation::Horizontal => {
                 let w = if track_w_px > 0.0 { track_w_px } else { 120.0 };

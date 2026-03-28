@@ -1,13 +1,34 @@
 use crate::core::tree::Element;
+use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
+
+/// Wakes the event loop for hot reload (debug) and delivers [`accesskit_winit`] messages.
+#[derive(Debug)]
+pub(super) enum RuiUserEvent {
+    #[cfg(debug_assertions)]
+    HotReloadWake,
+    AccessKit(#[allow(dead_code)] accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for RuiUserEvent {
+    fn from(e: accesskit_winit::Event) -> Self {
+        RuiUserEvent::AccessKit(e)
+    }
+}
 
 mod input_controller;
 mod hot_reload;
 mod lifecycle;
+pub mod runtime;
+pub mod reactive;
 mod scroll_support;
 mod state;
 mod tree_hit;
 mod window_events;
+pub mod pending_images;
+mod image_registry;
+#[cfg(test)]
+mod reactive_tests;
 
 use scroll_support::ScrollbarDragState;
 use state::AppState;
@@ -48,6 +69,8 @@ struct App {
     scroll_metrics_cache: std::collections::HashMap<String, ScrollMetrics>,
     /// Stable signal key strings per scroll-area id (avoids per-frame `format!` in nested scroll).
     scroll_signal_key_cache: std::collections::HashMap<String, ScrollAreaSignalKeys>,
+    event_loop_proxy: EventLoopProxy<RuiUserEvent>,
+    accesskit_adapter: Option<accesskit_winit::Adapter>,
     #[cfg(debug_assertions)]
     hot_reload: hot_reload::HotReloadState,
 }

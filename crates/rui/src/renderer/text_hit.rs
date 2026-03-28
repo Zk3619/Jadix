@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::style::TextStyle;
+use crate::style::{tailwind_default_leading_scale, TextStyle};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct MeasureKey {
@@ -252,7 +252,10 @@ fn line_height_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
     if let Some(lh) = style.line_height_px {
         lh * ui_scale
     } else {
-        scaled_size_for_style(style, ui_scale) * style.line_height_scale.unwrap_or(1.2)
+        let scale = style
+            .line_height_scale
+            .unwrap_or_else(|| tailwind_default_leading_scale(style.size));
+        scaled_size_for_style(style, ui_scale) * scale
     }
 }
 

@@ -15,12 +15,6 @@ impl super::App {
         format!("{rest}:{a}")
     }
 
-    fn bump_scrollbar_visible_until(&mut self, rest: &str, now: std::time::Instant) {
-        // Back-compat helper: bump both axes.
-        self.bump_scrollbar_visible_until_axis(rest, super::scroll_support::ScrollAxis::X, now);
-        self.bump_scrollbar_visible_until_axis(rest, super::scroll_support::ScrollAxis::Y, now);
-    }
-
     fn bump_scrollbar_visible_until_axis(
         &mut self,
         rest: &str,
@@ -114,11 +108,10 @@ impl super::App {
         let mut hover_rest: Option<String> = None;
         let mut hover_axis: Option<(String, super::scroll_support::ScrollAxis)> = None;
         if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
-            if let Some((rest, _, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
-                hover_rest = Some(rest);
-                if let Some((rest2, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
-                    hover_axis = Some((rest2, axis));
-                }
+            if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
+                // Hovering scrollbar track/thumb should only affect that axis.
+                // Do not set area-hover here, otherwise both axes are treated as hovered.
+                hover_axis = Some((rest, axis));
             }
         }
         if hover_rest.is_none() {
@@ -216,15 +209,17 @@ impl super::App {
 
         // Apply hover state after releasing the state borrow.
         // 1) Clear previous axis-hover if changed
+        let mut hover_state_changed = false;
         if self.hover_scroll_axis != hover_axis {
             if let Some((prev_rest, prev_axis)) = self.hover_scroll_axis.take() {
                 let k = Self::hover_key(&prev_rest, prev_axis);
                 crate::core::reactivity::use_signal(&k, || false).set(false);
+                hover_state_changed = true;
             }
             if let Some((r, a)) = hover_axis.clone() {
                 let k = Self::hover_key(&r, a);
                 crate::core::reactivity::use_signal(&k, || false).set(true);
-                self.bump_scrollbar_visible_until_axis(&r, a, std::time::Instant::now());
+                hover_state_changed = true;
             }
             self.hover_scroll_axis = hover_axis;
         } else if let Some((r, a)) = hover_axis.as_ref() {
@@ -237,12 +232,12 @@ impl super::App {
             if let Some(prev) = self.hover_scroll_rest.take() {
                 let k = format!("__rui_scroll_hover_{}", prev);
                 crate::core::reactivity::use_signal(&k, || false).set(false);
+                hover_state_changed = true;
             }
             if let Some(rest) = hover_rest.clone() {
                 let k = format!("__rui_scroll_hover_{}", rest);
                 crate::core::reactivity::use_signal(&k, || false).set(true);
-                // Hover should keep both scrollbars eligible to show, but each axis still obeys can_scroll.
-                self.bump_scrollbar_visible_until(&rest, std::time::Instant::now());
+                hover_state_changed = true;
                 if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
@@ -252,7 +247,14 @@ impl super::App {
             // Keep it latched on while hovering.
             let k = format!("__rui_scroll_hover_{}", rest);
             crate::core::reactivity::use_signal(&k, || false).set(true);
-            self.bump_scrollbar_visible_until(rest, std::time::Instant::now());
+        }
+
+        // Hover-driven visibility must trigger at least one redraw; otherwise scrollbar spring
+        // won't advance from hidden alpha until another unrelated redraw happens.
+        if hover_state_changed {
+            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                st.window.request_redraw();
+            }
         }
 
         if let Some((rest, axis, new_offset)) = scrollbar_drag_update {
@@ -290,9 +292,37 @@ impl super::App {
         for (cb, is_hover) in to_run {
             (&mut *cb.borrow_mut())(is_hover);
         }
+        if crate::primitives::interactive::take_hover_paint_dirty() {
+            window.request_redraw();
+        }
         match cursor_pick {
             Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),
             None => window.set_cursor(CursorIcon::Default),
+        }
+    }
+
+    pub(super) fn handle_cursor_left(&mut self, id: WindowId) {
+        let mut state_borrow = self.state.borrow_mut();
+        let state = match (&mut *state_borrow).as_mut() {
+            Some(s) if s.window.id() == id => s,
+            _ => return,
+        };
+        let window = state.window.clone();
+        drop(state_borrow);
+
+        let mut changed = false;
+        if let Some((prev_rest, prev_axis)) = self.hover_scroll_axis.take() {
+            let k = Self::hover_key(&prev_rest, prev_axis);
+            crate::core::reactivity::use_signal(&k, || false).set(false);
+            changed = true;
+        }
+        if let Some(prev) = self.hover_scroll_rest.take() {
+            let k = format!("__rui_scroll_hover_{}", prev);
+            crate::core::reactivity::use_signal(&k, || false).set(false);
+            changed = true;
+        }
+        if changed {
+            window.request_redraw();
         }
     }
 
@@ -449,6 +479,9 @@ impl super::App {
             drop(state_borrow);
             let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
             focus_visible.set(false);
+            // Focus chrome is applied in render via `peek`; without a redraw, click-to-clear / click-to-focus
+            // would lag until the next unrelated frame.
+            let mut need_paint_sync_redraw = true;
 
             if let Some(cb) = cb_to_run {
                 (&mut *cb.borrow_mut())();
@@ -463,6 +496,13 @@ impl super::App {
                 self.input_drag_rest = Some(rest);
                 self.input_drag_anchor = caret_ix;
                 self.left_button_down = true;
+                need_paint_sync_redraw = true;
+            }
+
+            if need_paint_sync_redraw {
+                if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
+                }
             }
         } else {
             self.left_button_down = false;
@@ -915,9 +955,20 @@ impl super::App {
         let hx = self.cursor_pos.x as f32 / state.window.scale_factor() as f32;
         let hy = self.cursor_pos.y as f32 / state.window.scale_factor() as f32;
 
-        // Keep ViewportsOnly on high-frequency drag/wheel frames so we avoid expensive full-tree
-        // scrollbar prepass in large UIs. Thumb/track geometry is resolved in instance collection.
-        let scrollbar_pass = ScrollbarUpdateMode::ViewportsOnly;
+        // Idle frames use ViewportsOnly so `update_scrollbar_elements` only syncs `scroll:` offsets
+        // (plus subtree pruning via `Element::contains_scroll_viewport`). Full pass is needed while
+        // dragging, smoothing scroll, coalescing wheel delta, or — crucially — spring-animating
+        // scrollbar fade-in/out (hover show / auto-hide). Without this, ViewportsOnly skips the
+        // alpha/color multiplication and tracks stay frozen (invisible on hover, opaque after idle).
+        let scrollbar_pass = if self.scrollbar_drag.is_some()
+            || smooth_scroll_animating
+            || !self.scroll_accum.is_empty()
+            || animations_running
+        {
+            ScrollbarUpdateMode::Full
+        } else {
+            ScrollbarUpdateMode::ViewportsOnly
+        };
         let text_force_fast_mode =
             self.scrollbar_drag.is_some() || smooth_scroll_animating || !self.scroll_accum.is_empty();
 
@@ -929,6 +980,10 @@ impl super::App {
             text_force_fast_mode,
         ) {
             Ok(_) => {
+                if let Some(adapter) = &mut self.accesskit_adapter {
+                    let update = state.accesskit_tree_update();
+                    adapter.update_if_active(|| update);
+                }
                 let scroll_metrics: Vec<_> = state.last_render_scroll_metrics.drain(..).collect();
                 self.scroll_metrics_cache = scroll_metrics
                     .iter()
@@ -963,6 +1018,7 @@ impl super::App {
 
                 // Post-render: low-pass scroll extents, viewport/content metrics, overlay scrollbar visibility.
                 // Offsets were integrated before `render()` using metrics cached from the previous frame.
+                let mut scrollbar_fade_animating = false;
                 for (rest, bounds, [max_x, max_y], [content_w, content_h]) in scroll_metrics.iter() {
                     let keys = crate::components::scroll_area::signal_keys_for_rest_cached(
                         rest,
@@ -1039,10 +1095,6 @@ impl super::App {
                         .copied()
                         .unwrap_or(now);
 
-                    // Animation state per axis.
-                    let anim_x = (target_x - new_sx).abs() >= 0.2;
-                    let anim_y = (target_y - new_sy).abs() >= 0.2;
-
                     let is_dragging_x = self
                         .scrollbar_drag
                         .as_ref()
@@ -1056,15 +1108,12 @@ impl super::App {
                     // - hover over content: allow both
                     // - hover over scrollbar: only that axis
                     // - wheel: axis-specific visible_until
-                    // - animating: keep that axis visible
                     let keep_visible_x = (is_hover || is_hover_x)
                         || is_dragging_x
-                        || now < visible_until_x
-                        || (anim_x && raw_max_x > 0.5);
+                        || now < visible_until_x;
                     let keep_visible_y = (is_hover || is_hover_y)
                         || is_dragging_y
-                        || now < visible_until_y
-                        || (anim_y && raw_max_y > 0.5);
+                        || now < visible_until_y;
 
                     // Keep the old activity signal (used elsewhere) as “any axis visible”.
                     let keep_visible = is_hover || is_dragging || now < visible_until_x || now < visible_until_y || !at_target;
@@ -1087,30 +1136,72 @@ impl super::App {
 
                     if axis_x_enabled {
                         let spring_x = crate::style::use_spring(keys.spring_x.as_str(), 0.0);
+                        // `raw_max_*` can sit at 0 briefly (stale metrics / sub-pixel) while the axis is
+                        // still hoverable. Never force the spring to 0 when that axis is actively hovered,
+                        // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
+                        // appear after scrolling bumps `raw_max` above the threshold.
+                        let spring_eligible_x = raw_max_x > 0.5
+                            || is_hover_x
+                            || is_dragging_x
+                            || now < visible_until_x;
+                        let target_x_vis = match vis_x.as_str() {
+                            "never" => 0.0,
+                            "always" => 1.0,
+                            _ => {
+                                if spring_eligible_x && keep_visible_x {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
+                            }
+                        };
                         match vis_x.as_str() {
                             "never" => spring_x.set(0.0),
                             "always" => spring_x.set(1.0),
                             _ => {
-                                if raw_max_x > 0.5 {
+                                if spring_eligible_x {
                                     spring_x.set(if keep_visible_x { 1.0 } else { 0.0 });
                                 } else {
                                     spring_x.set(0.0);
                                 }
                             }
                         }
+                        // Match spring settle tolerance (~0.01): smaller eps misses near-end frames and
+                        // can stop requesting redraws while `v` is still slightly > 0.
+                        if (spring_x.peek() - target_x_vis).abs() > 0.002 {
+                            scrollbar_fade_animating = true;
+                        }
                     }
                     if axis_y_enabled {
                         let spring_y = crate::style::use_spring(keys.spring_y.as_str(), 0.0);
+                        let spring_eligible_y = raw_max_y > 0.5
+                            || is_hover_y
+                            || is_dragging_y
+                            || now < visible_until_y;
+                        let target_y_vis = match vis_y.as_str() {
+                            "never" => 0.0,
+                            "always" => 1.0,
+                            _ => {
+                                if spring_eligible_y && keep_visible_y {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
+                            }
+                        };
                         match vis_y.as_str() {
                             "never" => spring_y.set(0.0),
                             "always" => spring_y.set(1.0),
                             _ => {
-                                if raw_max_y > 0.5 {
+                                if spring_eligible_y {
                                     spring_y.set(if keep_visible_y { 1.0 } else { 0.0 });
                                 } else {
                                     spring_y.set(0.0);
                                 }
                             }
+                        }
+                        if (spring_y.peek() - target_y_vis).abs() > 0.002 {
+                            scrollbar_fade_animating = true;
                         }
                     }
 
@@ -1118,24 +1209,48 @@ impl super::App {
                     let new_vh = bounds[3].max(0.0);
                     let new_cw = content_w.max(0.0);
                     let new_ch = content_h.max(0.0);
-                    
-                    // PERFORMANCE GUARD: Only update layout signals if metrics changed significantly.
-                    // This is critical to avoid accidental UI rebuilds due to 0.001px layout noise.
-                    if (new_vw - vw.peek()).abs() > 0.1 { vw.set_silent(new_vw); }
-                    if (new_vh - vh.peek()).abs() > 0.1 { vh.set_silent(new_vh); }
-                    if (new_cw - cw.peek()).abs() > 0.1 { cw.set_silent(new_cw); }
-                    if (new_ch - ch.peek()).abs() > 0.1 { ch.set_silent(new_ch); }
+
+                    // Update vw/vh/cw/ch **atomically** when any one crosses the noise threshold.
+                    // Per-field updates let e.g. vh refresh while ch stays stale → `ch - vh` becomes 0,
+                    // thumb jumps to the track start and `!can_scroll` collapses hit targets.
+                    let pv = vw.peek();
+                    let ph = vh.peek();
+                    let pcw = cw.peek();
+                    let pch = ch.peek();
+                    let dirty = (new_vw - pv).abs() > 0.1
+                        || (new_vh - ph).abs() > 0.1
+                        || (new_cw - pcw).abs() > 0.1
+                        || (new_ch - pch).abs() > 0.1;
+                    if dirty {
+                        vw.set_silent(new_vw);
+                        vh.set_silent(new_vh);
+                        cw.set_silent(new_cw);
+                        ch.set_silent(new_ch);
+                    }
                 }
                 self.scroll_metrics_cache = scroll_metrics
                     .into_iter()
                     .map(|(rest, b, max, content)| (rest, (b, max, content)))
                     .collect();
-                if smooth_scroll_animating {
+                // Keep the redraw pump alive when:
+                // - a scrollbar spring is still settling (fade-in / fade-out animation)
+                // - a `visible_until` timer is still ticking (scroll ended < 1500ms ago):
+                //   once it expires we need one more frame to flip the spring target to 0
+                //   and start the fade-out. Without this, the event loop goes idle and the
+                //   scrollbar stays opaque until an unrelated input event triggers a redraw.
+                let scrollbar_visibility_pending = self
+                    .scrollbar_visible_until
+                    .values()
+                    .any(|&until| now < until);
+                if smooth_scroll_animating || scrollbar_fade_animating || scrollbar_visibility_pending {
                     window.request_redraw();
                 }
 
                 for (cb, is_hover) in hover_to_run {
                     (&mut *cb.borrow_mut())(is_hover);
+                }
+                if crate::primitives::interactive::take_hover_paint_dirty() {
+                    window.request_redraw();
                 }
                 match hover_cursor_pick {
                     Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),

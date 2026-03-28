@@ -13,7 +13,7 @@ pub struct TextNodeConfig {
     pub font_family: Option<String>,
 }
 
-/// ShadCN Label 默认文本样式（text-sm / font-medium / leading-none / foreground）。
+/// Label 默认：对齐 shadcn/ui `Label`（`text-sm font-medium leading-none` → 14px / 500）。
 pub fn apply_label_defaults(el: Element) -> Element {
     el.text_size(0.875 * 16.0)
         .font_weight(500.0)
@@ -23,7 +23,7 @@ pub fn apply_label_defaults(el: Element) -> Element {
 
 /// 构建一个用于组件内嵌文本的节点，统一行高/对齐/下划线逻辑。
 pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Element {
-    // Lucide 图标字体仅有 Regular（OS/2 usWeightClass=400）。若沿用按钮的 font-medium(500)，
+    // Lucide 图标字体仅有 Regular（OS/2 usWeightClass=400）。若沿用 Label/Button 的 font-medium(500)，
     // fontdb 选不到对应 face 时会整段回退到系统字体，PUA 码位会错成 Segoe 等里的别的符号。
     if cfg.font_family.as_deref() == Some("lucide") {
         cfg.weight = 400;

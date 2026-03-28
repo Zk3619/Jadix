@@ -1,4 +1,8 @@
 use taffy::prelude::*;
+use winit::event::KeyEvent;
+
+
+use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
     IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, CSS_ROOT_FONT_SIZE_PX,
@@ -15,6 +19,26 @@ pub enum CursorKind {
     NotAllowed,
 }
 
+/// [`Element::button_hover_paint`]：用于无整树重建的按钮 hover / focus 环同步（见 `components/button.rs`）。
+#[derive(Debug, Clone)]
+pub struct ButtonHoverPaint {
+    pub variant: String,
+    pub disabled: bool,
+}
+
+/// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。
+#[derive(Debug, Clone)]
+pub struct InputPaintSync {
+    pub base_id: String,
+    pub placeholder: String,
+    pub invalid: bool,
+    pub disabled: bool,
+    pub text_size_px: f32,
+    pub font_weight: u16,
+    pub line_height_px: Option<f32>,
+    pub leading_scale: Option<f32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutStatus {
     /// No changes needed.
@@ -27,21 +51,182 @@ pub enum LayoutStatus {
     StructureChanged,
 }
 
+impl LayoutStatus {
+    /// Strongest-wins composition for merging per-frame sync sources (hover paint, toggles, etc.).
+    pub fn merge(self, other: Self) -> Self {
+        use LayoutStatus::*;
+        match (self, other) {
+            (StructureChanged, _) | (_, StructureChanged) => StructureChanged,
+            (LayoutChanged, _) | (_, LayoutChanged) => LayoutChanged,
+            (StyleChanged, _) | (_, StyleChanged) => StyleChanged,
+            _ => Clean,
+        }
+    }
+}
+
 pub struct Element {
     pub style: crate::style::Style,
     pub children: Vec<Element>,
     pub text: Option<String>,
+    /// 仅参与 glyph 排版（`set_text` / 宽度估计），不计入 `text` 的字节长度；用于减轻纯中文 IME 下 cosmic-text 行高随拼音 bbox 抖动。
+    pub text_shape_suffix: Option<String>,
     pub text_style: TextStyle,
     pub layout_bounds: [f32; 4],
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
+    /// Keyboard on focused node. Return `true` if the event is consumed.
+    pub on_key_down: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
     pub focus_id: Option<String>,
     pub focusable: bool,
     pub cursor: Option<CursorKind>,
     pub scroll_offset: [f32; 2],
+    /// True if this node or any descendant is a ScrollArea viewport (`scroll:` focus id).
+    /// Used to skip whole subtrees in the ViewportsOnly scrollbar prepass.
+    pub contains_scroll_viewport: bool,
     pub template_hash: Option<String>,
     pub template_id: Option<String>,
+    /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
+    pub button_hover_paint: Option<ButtonHoverPaint>,
+    /// 若存在，则每帧由 [`crate::components::input::sync_input_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
+    pub input_paint_sync: Option<InputPaintSync>,
+    /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and updates track bg + thumb alignment.
+    pub switch_checked_sync: Option<Signal<bool>>,
+    /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.
+    pub checkbox_sync: Option<Signal<bool>>,
+    /// GPU 贴图资源键（见 [`crate::queue_image_rgba8`]）；布局收集时生成纹理四边形实例。
+    pub image_texture: Option<String>,
     pub(crate) layout_node: Option<taffy::prelude::NodeId>,
+    pub attrs: std::collections::HashMap<String, String>,
+}
+
+/// A wrapper for event handlers to allow them to be passed as props in functional components.
+pub struct Handler<T = ()>(pub Box<dyn FnMut(T)>);
+
+impl<T> Handler<T> {
+    pub fn new(f: impl FnMut(T) + 'static) -> Self {
+        Self(Box::new(f))
+    }
+    pub fn call(&mut self, arg: T) {
+        (self.0)(arg);
+    }
+}
+
+pub trait IntoHandler<T> {
+    fn into_handler(self) -> Handler<T>;
+}
+
+impl<T, F> From<F> for Handler<T>
+where
+    F: FnMut(T) + 'static,
+{
+    fn from(f: F) -> Self {
+        Self::new(f)
+    }
+}
+
+pub struct ZeroArgFn<F>(pub F);
+impl<F> From<ZeroArgFn<F>> for Handler<()>
+where
+    F: FnMut() + 'static,
+{
+    fn from(mut f: ZeroArgFn<F>) -> Self {
+        Handler::new(move |_| (f.0)())
+    }
+}
+
+impl Default for Handler<()> {
+    fn default() -> Self {
+        Self(Box::new(|_| {}))
+    }
+}
+
+impl From<Box<dyn FnMut()>> for Handler<()> {
+    fn from(mut f: Box<dyn FnMut()>) -> Self {
+        Self(Box::new(move |_| f()))
+    }
+}
+
+/// A wrapper for key event handlers.
+pub struct KeyHandler(pub Box<dyn FnMut(KeyEvent) -> bool>);
+
+impl KeyHandler {
+    pub fn new(f: impl FnMut(KeyEvent) -> bool + 'static) -> Self {
+        Self(Box::new(f))
+    }
+    pub fn call(&mut self, ev: KeyEvent) -> bool {
+        (self.0)(ev)
+    }
+}
+
+impl<F> From<F> for KeyHandler
+where
+    F: FnMut(KeyEvent) -> bool + 'static,
+{
+    fn from(f: F) -> Self {
+        Self::new(f)
+    }
+}
+
+impl Default for KeyHandler {
+    fn default() -> Self {
+        Self(Box::new(|_| false))
+    }
+}
+
+pub trait IntoElement {
+    fn into_element(self) -> Element;
+}
+
+impl IntoElement for Element {
+    fn into_element(self) -> Element {
+        self
+    }
+}
+
+impl IntoElement for String {
+    fn into_element(self) -> Element {
+        Element::new().text(self)
+    }
+}
+
+impl IntoElement for &str {
+    fn into_element(self) -> Element {
+        Element::new().text(self.to_string())
+    }
+}
+
+pub trait IntoElementList {
+    fn into_element_list(self) -> Vec<Element>;
+}
+
+impl IntoElementList for Element {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self]
+    }
+}
+
+impl IntoElementList for Vec<Element> {
+    fn into_element_list(self) -> Vec<Element> {
+        self
+    }
+}
+
+impl IntoElementList for Option<Element> {
+    fn into_element_list(self) -> Vec<Element> {
+        self.map(|e| vec![e]).unwrap_or_default()
+    }
+}
+
+impl IntoElementList for String {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![Element::new().text(self)]
+    }
+}
+
+impl IntoElementList for &str {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![Element::new().text(self.to_string())]
+    }
 }
 
 impl Element {
@@ -69,18 +254,42 @@ impl Element {
             style: crate::style::Style::default(),
             children: Vec::new(),
             text: None,
+            text_shape_suffix: None,
             text_style: TextStyle::default(),
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
             on_click: None,
             on_hover: None,
+            on_key_down: None,
             focus_id: None,
             focusable: false,
             cursor: None,
             scroll_offset: [0.0, 0.0],
+            contains_scroll_viewport: false,
             template_hash: None,
             template_id: None,
+            button_hover_paint: None,
+            input_paint_sync: None,
+            switch_checked_sync: None,
+            checkbox_sync: None,
+            image_texture: None,
             layout_node: None,
+            attrs: std::collections::HashMap::new(),
         }
+    }
+
+    /// 绑定已上传的贴图键；矩形区域由布局样式（`w`/`h` 等）决定。
+    pub fn image_texture(mut self, key: impl Into<String>) -> Self {
+        self.image_texture = Some(key.into());
+        self
+    }
+
+    pub fn set_attr(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        self.attrs.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn get_attr(&self, key: &str) -> Option<&String> {
+        self.attrs.get(key)
     }
 
     pub fn template_hash(mut self, hash: impl Into<String>) -> Self {
@@ -128,6 +337,10 @@ impl Element {
         self.on_hover = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
     }
+    pub fn on_key_down(mut self, handler: impl FnMut(KeyEvent) -> bool + 'static) -> Self {
+        self.on_key_down = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
     pub fn focus_id(mut self, id: impl Into<String>) -> Self {
         self.focus_id = Some(id.into());
         self
@@ -140,11 +353,16 @@ impl Element {
         self.scroll_offset = [x.max(0.0), y.max(0.0)];
         self
     }
-    pub fn gap(mut self, g: impl IntoF32) -> Self {
-        let val = g.into_f32();
+    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+        let dim = g.into_dimension();
+        let lp = match dim {
+            Dimension::Length(v) => taffy::style::LengthPercentage::Length(v),
+            Dimension::Percent(v) => taffy::style::LengthPercentage::Percent(v),
+            Dimension::Auto => taffy::style::LengthPercentage::Percent(0.0), // gap doesn't support auto in taffy easily, map to 0
+        };
         self.style.gap = taffy::geometry::Size {
-            width: taffy::style::LengthPercentage::Length(val),
-            height: taffy::style::LengthPercentage::Length(val),
+            width: lp.clone(),
+            height: lp,
         };
         self
     }
@@ -322,6 +540,14 @@ impl Element {
     }
     pub fn justify_center(mut self) -> Self {
         self.style.justify_content = Some(JustifyContent::Center);
+        self
+    }
+    pub fn justify_start(mut self) -> Self {
+        self.style.justify_content = Some(JustifyContent::FlexStart);
+        self
+    }
+    pub fn justify_end(mut self) -> Self {
+        self.style.justify_content = Some(JustifyContent::FlexEnd);
         self
     }
     pub fn items_center(mut self) -> Self {
@@ -530,33 +756,5 @@ impl From<Option<Element>> for Element {
             Some(v) => v,
             None => Element::new(),
         }
-    }
-}
-
-pub trait IntoElementList {
-    fn into_element_list(self) -> Vec<Element>;
-}
-
-impl IntoElementList for Element {
-    fn into_element_list(self) -> Vec<Element> {
-        vec![self]
-    }
-}
-
-impl IntoElementList for Vec<Element> {
-    fn into_element_list(self) -> Vec<Element> {
-        self
-    }
-}
-
-impl IntoElementList for String {
-    fn into_element_list(self) -> Vec<Element> {
-        vec![Element::from(self)]
-    }
-}
-
-impl IntoElementList for &str {
-    fn into_element_list(self) -> Vec<Element> {
-        vec![Element::from(self)]
     }
 }

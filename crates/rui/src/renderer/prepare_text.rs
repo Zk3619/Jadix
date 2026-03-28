@@ -1,12 +1,15 @@
 //! 将布局得到的 `TextLayoutInfo` 转为 glyphon 文本区与下划线实例，并执行 `prepare`。
+//!
+//! 调试：设置环境变量 `RUI_TEXT_DEBUG`（见 [`super::text_prepare_debug`]）。
 
+use std::borrow::Cow;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::hash::{Hash, Hasher};
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
 
-use crate::style::TextDecorationStyle;
+use crate::style::{tailwind_default_leading_scale, TextDecorationStyle};
 use crate::core::tree::TextLayoutInfo;
 
 use super::text::RuiTextRenderer;
@@ -133,7 +136,10 @@ fn input_line_height(style: &crate::style::TextStyle, scaled_size: f32, ui_scale
     if let Some(lh) = style.line_height_px {
         lh * ui_scale
     } else {
-        scaled_size * style.line_height_scale.unwrap_or(1.2)
+        let scale = style
+            .line_height_scale
+            .unwrap_or_else(|| tailwind_default_leading_scale(style.size));
+        scaled_size * scale
     }
 }
 
@@ -223,7 +229,10 @@ pub fn prepare_text_frame(
         } else if let Some(line_height_px) = st.line_height_px {
             line_height_px * ui_scale
         } else {
-            scaled_size * st.line_height_scale.unwrap_or(1.2)
+            let scale = st
+                .line_height_scale
+                .unwrap_or_else(|| tailwind_default_leading_scale(st.size));
+            scaled_size * scale
         };
 
         let scaled_w = info.width * ui_scale;
@@ -275,8 +284,12 @@ pub fn prepare_text_frame(
         } else {
             shaping
         };
+        let shape_text: Cow<'_, str> = match info.shape_suffix.as_deref() {
+            Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", info.text, s)),
+            _ => Cow::Borrowed(info.text.as_str()),
+        };
         let key_hash = node_shape_hash(
-            &info.text,
+            shape_text.as_ref(),
             scaled_size,
             line_height,
             scaled_w,
@@ -293,7 +306,8 @@ pub fn prepare_text_frame(
                 .push(make_dummy_cache_entry(&mut text_renderer.font_system));
         }
         let entry = &mut text_renderer.shaped_cache[i];
-        let measured_text_w = if entry.key_hash == key_hash {
+        let cache_hit = entry.key_hash == key_hash;
+        let measured_text_w = if cache_hit {
             entry.measured_text_w
         } else {
             let mut buffer = glyphon::Buffer::new(
@@ -307,7 +321,7 @@ pub fn prepare_text_frame(
             );
             buffer.set_text(
                 &mut text_renderer.font_system,
-                &info.text,
+                shape_text.as_ref(),
                 glyphon::Attrs::new()
                     .family(family)
                     .weight(glyphon::fontdb::Weight(font_weight)),
@@ -326,6 +340,28 @@ pub fn prepare_text_frame(
             entry.measured_text_w = measured;
             measured
         };
+
+        if super::text_prepare_debug::enabled()
+            && super::text_prepare_debug::should_log(
+                info.template_id.as_deref(),
+                st.input_caret.is_some(),
+            )
+            && (!super::text_prepare_debug::reshape_only() || !cache_hit)
+        {
+            let lh_log = line_height / ui_scale.max(0.001);
+            super::text_prepare_debug::log_line(
+                i,
+                info,
+                family,
+                font_weight,
+                lh_log,
+                st.input_caret.is_some(),
+                &entry.buffer,
+                &text_renderer.font_system,
+                cache_hit,
+                shaping,
+            );
+        }
 
         let dy = 0.0;
         frame_meta.push(Some(FrameTextNodeMeta {

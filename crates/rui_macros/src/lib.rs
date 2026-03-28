@@ -1,7 +1,12 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, Ident, Token, braced};
+
+/// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
+static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 struct RsxElement {
     name: Ident,
@@ -36,7 +41,13 @@ impl Parse for RsxNode {
 
         let mut attributes = Vec::new();
         while !input.peek(Token![>]) && !input.peek(Token![/]) {
-            let attr_name: Ident = input.parse().map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?;
+            let attr_name: Ident = if input.peek(Token![in]) {
+                input.parse::<Token![in]>()
+                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at keyword attr_name {}", e)))?;
+                syn::Ident::new("in", proc_macro2::Span::call_site())
+            } else {
+                input.parse().map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?
+            };
             input.parse::<Token![=]>().map_err(|e| syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name)))?;
             
             let attr_value: Expr = if input.peek(syn::token::Brace) {
@@ -133,23 +144,64 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mut fields = Vec::new();
     let mut field_names = Vec::new();
+    let mut field_unwrapping = Vec::new();
+
+    let mut crate_path = quote! { rui };
+    let attr_str = _attr.to_string();
+    if attr_str.contains("crate_path") {
+        if let Ok(meta) = syn::parse::<syn::Meta>(_attr) {
+            if let syn::Meta::NameValue(nv) = meta {
+                if nv.path.is_ident("crate_path") {
+                    if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = nv.value {
+                        let path: syn::Path = s.parse().unwrap();
+                        crate_path = quote! { #path };
+                    }
+                }
+            }
+        }
+    }
 
     for arg in &input.sig.inputs {
         if let syn::FnArg::Typed(pat_type) = arg {
             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                let field_name = pat_ident.ident.clone();
-                let field_ty = &pat_type.ty;
-                fields.push(quote! { pub #field_name: #field_ty });
-                field_names.push(field_name);
+                let name = &pat_ident.ident;
+                let ty = &pat_type.ty;
+                let name_str = name.to_string();
+                let ty_str = quote!(#ty).to_string();
+                let is_already_option = ty_str.starts_with("Option");
+                
+                field_names.push(name.clone());
+                
+                if name_str == "id" {
+                    // id is always a String, never optional
+                    fields.push(quote! { pub #name: String });
+                    field_unwrapping.push(quote! { let #name = #name; });
+                } else if is_already_option {
+                    // Already Option<T>, keep as-is
+                    fields.push(quote! { pub #name: #ty });
+                    let mut_tok = if pat_ident.mutability.is_some() { quote! { mut } } else { quote! {} };
+                    field_unwrapping.push(quote! { let #mut_tok #name = #name; });
+                } else {
+                    // Wrap in Option<T>
+                    fields.push(quote! { pub #name: Option<#ty> });
+                    let mut_tok = if pat_ident.mutability.is_some() { quote! { mut } } else { quote! {} };
+                    field_unwrapping.push(quote! { let #mut_tok #name = #name.unwrap_or_default(); });
+                }
             }
         }
     }
 
     // Add children if not present
-    if !field_names.iter().any(|n| n == "children") {
-        fields.push(quote! { pub children: Option<rui::core::tree::Element> });
+    if !field_names.iter().any(|n| n.to_string() == "children") {
+        fields.push(quote! { pub children: Option<#crate_path::core::tree::Element> });
         field_names.push(syn::Ident::new("children", proc_macro2::Span::call_site()));
+        field_unwrapping.push(quote! { let children = children; });
     }
+
+    // Add base prop for styling/layout
+    fields.push(quote! { pub base: Option<Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>> });
+    field_names.push(syn::Ident::new("base", proc_macro2::Span::call_site()));
+    field_unwrapping.push(quote! { let base = base; });
 
     let body = &input.block;
 
@@ -159,10 +211,16 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#fields),*
         }
 
-        #vis fn #name(props: #props_name) -> rui::core::tree::Element {
+        #vis fn #name(props: #props_name) -> #crate_path::core::tree::Element {
             #vis use #props_name;
             let #props_name { #(#field_names),* } = props;
-            #body
+            #(#field_unwrapping)*
+            let mut __el = { #body };
+            if let Some(base_fn) = base {
+                let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                __el = base_fn(builder).el;
+            }
+            __el
         }
     };
 
@@ -207,19 +265,356 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
         }
         RsxNode::Element(el) => {
             let name_str = el.name.to_string();
+            if name_str == "Reactive" || name_str == "Show" || name_str == "Popover" || name_str == "ForKeyed" || name_str == "For" {
+                let get_attr = |name: &str| -> Option<&Expr> {
+                    el.attributes
+                        .iter()
+                        .find(|(k, _)| k == &syn::Ident::new(name, proc_macro2::Span::call_site()))
+                        .map(|(_, v)| v)
+                };
+
+                if name_str == "Reactive" {
+                    let Some(id_expr) = get_attr("id") else {
+                        return quote! { compile_error!("<Reactive> requires `id={...}` attribute"); };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::reactive!(#id_expr, move || { #child_el })
+                    };
+                }
+
+                if name_str == "Show" {
+                    let Some(when_expr) = get_attr("when") else {
+                        return quote! { compile_error!("<Show> requires `when={...}` attribute"); };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    return quote! {
+                        rui::app::reactive::show_scoped(
+                            format!("{}:{}:Show#{}", file!(), line!(), #idx),
+                            #when_expr,
+                            || { #child_el }
+                        )
+                    };
+                }
+
+                if name_str == "Popover" {
+                    let Some(open_expr) = get_attr("open") else {
+                        return quote! { compile_error!("<Popover> requires `open={...}` (`rui::Signal<bool>`)"); };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::core::tree::Element::from(
+                            rui::components::popover_panel(#open_expr).child(#child_el)
+                        )
+                    };
+                }
+
+                // For / ForKeyed
+                let scope_ts = if let Some(scope_expr) = get_attr("scope") {
+                    quote! { #scope_expr }
+                } else {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    quote! { format!("{}:{}:For#{}", file!(), line!(), #idx) }
+                };
+                let each_expr_opt = get_attr("each").or_else(|| get_attr("of")).or_else(|| get_attr("in"));
+                let Some(each_expr) = each_expr_opt else {
+                    return quote! { compile_error!("<For>/<ForKeyed> requires `each={...}` (or `in={...}` / `of={...}`) attribute"); };
+                };
+                let maybe_key_ts = get_attr("key").map(|e| quote! { #e });
+                let maybe_fallback_ts = get_attr("fallback").map(|e| quote! { #e });
+                let maybe_item_ident = get_attr("item").map(|expr| match expr {
+                    syn::Expr::Path(p) if p.path.segments.len() == 1 && p.qself.is_none() => {
+                        Ok(p.path.segments[0].ident.clone())
+                    }
+                    _ => Err(()),
+                });
+                if let Some(Err(())) = maybe_item_ident {
+                    return quote! { compile_error!("<For item={...}> expects an identifier, e.g. item={i}"); };
+                }
+
+                let item_ident_for_render = maybe_item_ident
+                    .as_ref()
+                    .and_then(|v| v.as_ref().ok())
+                    .cloned()
+                    .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())));
+                let render_ts = if let Some(item_ident) = item_ident_for_render {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    quote! {
+                        |__rui_for_item| {
+                            let #item_ident = __rui_for_item;
+                            #child_el
+                        }
+                    }
+                } else {
+                    if el.children.len() != 1 {
+                        return quote! { compile_error!("<For> without `item={...}` must contain exactly one closure child `{ |item| ... }`"); };
+                    }
+                    match &el.children[0] {
+                        RsxNode::Expr(e) => quote! { #e },
+                        _ => {
+                            return quote! { compile_error!("<For> without `item` expects closure child expression"); };
+                        }
+                    }
+                };
+
+                if let Some(key_ts) = maybe_key_ts {
+                    if let Some(item_ident) = maybe_item_ident
+                        .as_ref()
+                        .and_then(|v| v.as_ref().ok())
+                        .cloned()
+                        .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())))
+                    {
+                        let base = quote! {
+                            rui::app::reactive::for_keyed_iter(
+                                #scope_ts,
+                                #each_expr,
+                                |__rui_for_item| {
+                                    let #item_ident = __rui_for_item;
+                                    #key_ts
+                                },
+                                #render_ts,
+                            )
+                        };
+                        if let Some(fallback_ts) = maybe_fallback_ts.clone() {
+                            return quote! {{
+                                use rui::core::tree::IntoElementList;
+                                let __out = #base;
+                                if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
+                            }};
+                        }
+                        return quote! {{ #base }};
+                    } else {
+                        let base = quote! { rui::app::reactive::for_keyed_iter(#scope_ts, #each_expr, #key_ts, #render_ts) };
+                        if let Some(fallback_ts) = maybe_fallback_ts.clone() {
+                            return quote! {{
+                                use rui::core::tree::IntoElementList;
+                                let __out = #base;
+                                if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
+                            }};
+                        }
+                        return quote! {{ #base }};
+                    }
+                } else {
+                    let base = quote! { rui::app::reactive::for_each_iter(#scope_ts, #each_expr, #render_ts) };
+                    if let Some(fallback_ts) = maybe_fallback_ts {
+                        return quote! {{
+                            use rui::core::tree::IntoElementList;
+                            let __out = #base;
+                            if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
+                        }};
+                    }
+                    return quote! {{ #base }};
+                }
+            }
             let is_custom = name_str.chars().next().map_or(false, |c| c.is_uppercase()) 
-                && !["VStack", "HStack", "Rect", "Icon", "Box", "Text", "Interactive", "Label", "Button", "Input", "ScrollArea", "Scrollbar"].contains(&name_str.as_str());
+                && !["VStack", "HStack", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
 
             let mut element = if is_custom {
                 let name_ident = &el.name;
                 let props_ident = syn::Ident::new(&format!("{}Props", name_str), name_ident.span());
                 
-                let mut attr_names = Vec::new();
-                let mut attr_values = Vec::new();
+                let mut prop_names = Vec::new();
+                let mut prop_values = Vec::new();
+                let mut base_calls = Vec::new();
+
                 for (attr, value) in &el.attributes {
-                    attr_names.push(attr);
-                    attr_values.push(value);
+                    let attr_str = attr.to_string();
+                    let mut attr_name = attr_str.as_str();
+                    if attr_name.starts_with("el.") {
+                        attr_name = &attr_name[3..];
+                    }
+                    
+                    let is_base = match attr_name {
+                        "w" | "width" | "max_w" | "maxWidth" | "max_width" | "min_w" | "minWidth" | "min_width" |
+                        "h" | "height" | "max_h" | "maxHeight" | "max_height" | "min_h" | "minHeight" | "min_height" |
+                        "p" | "padding" | "mx" | "my" | "px" | "py" | "pt" | "pr" | "pb" | "pl" | "mt" | "mr" | "mb" | "ml" |
+                        "rounded" | "bg" | "color" | "text_color" | "font_weight" | "text_weight" |
+                        "flex_grow" | "flex_shrink" | "grow" | "shrink" | "absolute" | "relative" | "top" | "right" | "bottom" | "left" | "inset" | "z_index" |
+                        "text_size" | "leading" | "text_leading" | "line_height" | "lineHeight" | "underline" | 
+                        "text_decoration" | "text_decoration_style" |
+                        "items" | "wrap" | "gap" |
+                        "class" | "className" | "tw" | "uno" => true,
+                        _ => false,
+                    };
+
+                    if is_base {
+                        if attr_name == "class" || attr_name == "className" || attr_name == "tw" || attr_name == "uno" {
+                            let calls = parse_utility_calls(value);
+                            for call in calls {
+                                // Replace __rui_el with b for component base context
+                                let call_str = call.to_string().replace("__rui_el", "b");
+                                let call_tokens: proc_macro2::TokenStream = call_str.parse().unwrap();
+                                base_calls.push(call_tokens);
+                            }
+                        } else if matches!(attr_name, "leading" | "text_leading") {
+                            // 与原生节点分支一致：`leading="normal"` 等不能走 `IntoF32 for &str`（会按 CSS 长度解析失败 → 0 → 行高≈0，文本被裁掉）。
+                            let s = if let syn::Expr::Lit(expr_lit) = value {
+                                if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                                    Some(lit_str.value())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            let call = match s.as_deref() {
+                                Some("none") => quote! { b = b.leading_none(); },
+                                Some("tight") => quote! { b = b.leading_tight(); },
+                                Some("normal") => quote! { b = b.leading_normal(); },
+                                Some("relaxed") => quote! { b = b.leading_relaxed(); },
+                                _ => quote! { b = b.leading(rui::core::tree::IntoF32::into_f32(#value)); },
+                            };
+                            base_calls.push(call);
+                        } else {
+                            let method = match attr_name {
+                                "width" => "w",
+                                "maxWidth" | "max_width" => "max_w",
+                                "minWidth" | "min_width" => "min_w",
+                                "height" => "h",
+                                "maxHeight" | "max_height" => "max_h",
+                                "minHeight" | "min_height" => "min_h",
+                                "padding" => "p",
+                                "color" | "text_color" => "text_color",
+                                "text_weight" => "font_weight",
+                                "lineHeight" => "line_height",
+                                "grow" => "flex_grow",
+                                "shrink" => "flex_shrink",
+                                "scroll_behavior" | "scrollBehavior" => "scroll_behavior",
+                                _ => attr_name,
+                            };
+                            let method_ident = syn::Ident::new(method, attr.span());
+                            let final_value = match method {
+                                "bg" | "border" | "shadow" => {
+                                    quote! { rui::core::tree::parse_color(#value) }
+                                }
+                                "text_color" => {
+                                    quote! { rui::core::tree::parse_text_color(#value) }
+                                }
+                                _ => quote! { #value },
+                            };
+                            base_calls.push(quote! { b = b.#method_ident(#final_value); });
+                        }
+                    } else {
+                        let final_attr = match attr_str.as_str() {
+                            "onClick" => syn::Ident::new("on_click", attr.span()),
+                            "onChange" => syn::Ident::new("on_change", attr.span()),
+                            _ => attr.clone(),
+                        };
+                        let final_value = if attr_str == "id" {
+                            // RSX string attrs are `&str`; component `id` is `String`.
+                            quote! { (#value).into() }
+                        } else if attr_name == "children" {
+                            quote! { #value }
+                        } else if matches!(attr_name, "on_click" | "onClick" | "on_change" | "onChange") {
+                            quote! { Some(rui::core::tree::Handler::from(rui::core::tree::ZeroArgFn(#value))) }
+                        } else {
+                            quote! { Some((#value).into()) }
+                        };
+                        prop_names.push(final_attr);
+                        prop_values.push(final_value);
+                    }
                 }
+
+                if name_str == "Input" && !prop_names.iter().any(|p| p.to_string() == "id") {
+                    let seq = INPUT_RSX_ANON_SEQ.fetch_add(1, Ordering::Relaxed);
+                    prop_names.push(syn::Ident::new("id", name_ident.span()));
+                    prop_values.push(quote! {
+                        format!("__rui_input_auto_{}", #seq)
+                    });
+                }
+
+                let base_expr = if base_calls.is_empty() {
+                    quote! { None }
+                } else {
+                    quote! { Some(Box::new(|mut b: rui::components::base::BaseComponentBuilder| { #(#base_calls)* b })) }
+                };
                 
                 let mut children_expr = quote! { None };
                 if !el.children.is_empty() {
@@ -255,8 +650,9 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
 
                 return quote! {
                     #name_ident(#props_ident {
-                        #(#attr_names: #attr_values.into(),)*
+                        base: #base_expr,
                         children: #children_expr,
+                        #(#prop_names: #prop_values,)*
                         ..Default::default()
                     })
                 };
@@ -267,36 +663,6 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "Box" | "Rect" => quote! { rui::primitives::r#box() },
                     "Interactive" => quote! { rui::primitives::interactive(rui::core::tree::Element::new()) },
                     "Text" => quote! { rui::primitives::text("") },
-                    "Label" => {
-                        let idx = *node_counter;
-                        *node_counter += 1;
-                        // Make auto-generated ids stable and globally unique across multiple `ui!{}` expansions.
-                        quote! { rui::components::label(&format!("{}:{}:Label#{}", file!(), line!(), #idx)) }
-                    },
-                    "Button" => {
-                        let idx = *node_counter;
-                        *node_counter += 1;
-                        // Make auto-generated ids stable and globally unique across multiple `ui!{}` expansions.
-                        quote! { rui::components::button(&format!("{}:{}:Button#{}", file!(), line!(), #idx)) }
-                    },
-                    "Input" => {
-                        let idx = *node_counter;
-                        *node_counter += 1;
-                        // Make auto-generated ids stable and globally unique across multiple `ui!{}` expansions.
-                        quote! { rui::components::input(&format!("{}:{}:Input#{}", file!(), line!(), #idx)) }
-                    },
-                    "ScrollArea" => {
-                        let idx = *node_counter;
-                        *node_counter += 1;
-                        // Make auto-generated ids stable and globally unique across multiple `ui!{}` expansions.
-                        quote! { rui::components::scroll_area(&format!("{}:{}:ScrollArea#{}", file!(), line!(), #idx)) }
-                    },
-                    "Scrollbar" => {
-                        let idx = *node_counter;
-                        *node_counter += 1;
-                        // Make auto-generated ids stable and globally unique across multiple `ui!{}` expansions.
-                        quote! { rui::components::scrollbar(&format!("{}:{}:Scrollbar#{}", file!(), line!(), #idx)) }
-                    },
                     _ => quote! { rui::core::tree::Element::new() },
                 }
             };
@@ -365,6 +731,18 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     },
                     "text_decoration" | "textDecoration" | "decoration" => {
                         element = quote! { #element.text_decoration(#value) }
+                    },
+                    "text_size" | "textSize" | "size" if name_str == "Label" => {
+                        element = quote! { #element.text_size(#value) }
+                    },
+                    "gap" => {
+                        element = quote! { #element.gap(#value) }
+                    },
+                    "items" | "justify" | "align" => {
+                        element = quote! { #element.items(#value) }
+                    },
+                    "wrap" => {
+                        element = quote! { #element.wrap(#value) }
                     },
                     "text_decoration_style" | "textDecorationStyle" => {
                         element = quote! { #element.text_decoration_style(#value) }
@@ -480,12 +858,6 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                             element = quote! { #element.text_center() }
                         }
                     },
-                    "justify" => {
-                        element = quote! { #element.justify_center() }
-                    },
-                    "items" => {
-                        element = quote! { #element.items_center() }
-                    },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
                     "variant" | "type" => element = quote! { #element.variant(#value) },
                     "show" | "visibility" | "display_mode" => {
@@ -504,7 +876,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "disabled" => element = quote! { #element.disabled(#value) },
                     "placeholder" => element = quote! { #element.placeholder(#value) },
                     "invalid" => element = quote! { #element.invalid(#value) },
-                    "gap" => element = quote! { #element.gap(rui::core::tree::IntoF32::into_f32(#value)) },
+
                     "grow" | "flex_grow" | "flexGrow" => {
                         element = quote! { #element.flex_grow(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }
                     },
@@ -528,7 +900,12 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     }
                     RsxNode::Element(_) => {
                         let expanded_child = expand_node(child, node_counter);
-                        element = quote! { #element.child(rui::core::tree::Element::from(#expanded_child)) };
+                        element = quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                #element.children((#expanded_child).into_element_list())
+                            }
+                        };
                     }
                 }
             }

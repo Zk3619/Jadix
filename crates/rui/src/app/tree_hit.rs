@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use winit::event::{ElementState, KeyEvent};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::CursorIcon;
 
 use crate::core::tree::{CursorKind, Element};
@@ -368,4 +370,43 @@ pub(super) fn find_click(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> 
         }
     }
     None
+}
+
+pub(super) fn find_element_by_focus_id<'a>(el: &'a Element, focus_id: &str) -> Option<&'a Element> {
+    if el.focus_id.as_deref() == Some(focus_id) {
+        return Some(el);
+    }
+    for c in &el.children {
+        if let Some(n) = find_element_by_focus_id(c, focus_id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Routes a key to the focused [`Element`] (by `focus_id`): `on_key_down` first, then Space/Enter
+/// activates `on_click` when `focusable` (no repeat).
+pub(super) fn dispatch_key_for_focused(el: &Element, focus_id: &str, event: &KeyEvent) -> bool {
+    let Some(node) = find_element_by_focus_id(el, focus_id) else {
+        return false;
+    };
+    if let Some(cb) = &node.on_key_down {
+        if cb.borrow_mut()(event.clone()) {
+            return true;
+        }
+    }
+    if event.state != ElementState::Pressed || event.repeat {
+        return false;
+    }
+    let activate = matches!(
+        event.logical_key,
+        Key::Named(NamedKey::Space) | Key::Named(NamedKey::Enter)
+    );
+    if activate && node.focusable {
+        if let Some(cb) = &node.on_click {
+            cb.borrow_mut()();
+            return true;
+        }
+    }
+    false
 }
