@@ -43,6 +43,17 @@ pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {
 pub const SCROLLBAR_THUMB_FOCUS_PREFIX: &str = "scrollbar-thumb:";
 pub const SCROLLBAR_TRACK_FOCUS_PREFIX: &str = "scrollbar-track:";
 
+/// 沿轨道方向的最小滑块长度。
+///
+/// 旧实现用 `track_inner.min(24)`：当嵌套在小盒子里 `track_inner < 24` 时，`min_thumb == track_inner`，
+/// `clamp` 后滑块恒为满轨，比例严重失真。
+#[inline]
+pub(crate) fn scrollbar_min_thumb_along_track(track_inner: f32) -> f32 {
+    let t = track_inner.max(1.0);
+    let cap = (t * 0.18).min(20.0);
+    cap.max(3.0).min(t * 0.9)
+}
+
 pub struct ScrollbarBuilder {
     _id: String,
     orientation: ScrollbarOrientation,
@@ -296,7 +307,7 @@ impl From<ScrollbarBuilder> for Element {
                 ScrollbarOrientation::Horizontal => {
                     let track = if vw > 1.0 { vw } else { 120.0 };
                     let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-                    let min_thumb = track.min(24.0);
+                    let min_thumb = scrollbar_min_thumb_along_track(track);
                     let tw = (track * ratio).clamp(min_thumb, track.max(min_thumb));
                     let max_offset = (cw - vw).max(0.0);
                     let t = if max_offset > 0.0 { sx / max_offset } else { 0.0 };
@@ -306,7 +317,7 @@ impl From<ScrollbarBuilder> for Element {
                 ScrollbarOrientation::Vertical => {
                     let track = if vh > 1.0 { vh } else { 120.0 };
                     let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-                    let min_thumb = track.min(24.0);
+                    let min_thumb = scrollbar_min_thumb_along_track(track);
                     let th = (track * ratio).clamp(min_thumb, track.max(min_thumb));
                     let max_offset = (ch - vh).max(0.0);
                     let t = if max_offset > 0.0 { sy / max_offset } else { 0.0 };

@@ -176,6 +176,11 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         .filter_level(log::LevelFilter::Warn)
         .filter_module("wgpu_hal::vulkan::instance", log::LevelFilter::Off)
         .filter_module("fontdb", log::LevelFilter::Error)
+        .format(|buf, record| {
+            use std::io::Write;
+            let ts = buf.timestamp();
+            writeln!(buf, "[{} {:<5} {}] {}", ts, record.level(), record.target(), record.args())
+        })
         .init();
 
     crate::init();
@@ -205,7 +210,9 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         smooth_active_until: std::collections::HashMap::new(),
         scroll_max_lowpass: std::collections::HashMap::new(),
         scroll_metrics_cache: std::collections::HashMap::new(),
+        scroll_metric_duplicate_warned: std::collections::HashSet::new(),
         scroll_signal_key_cache: std::collections::HashMap::new(),
+        scroll_diag_last_log: std::collections::HashMap::new(),
         event_loop_proxy: event_loop_proxy.clone(),
         accesskit_adapter: None,
         #[cfg(debug_assertions)]

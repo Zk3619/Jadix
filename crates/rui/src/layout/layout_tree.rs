@@ -12,7 +12,8 @@ use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 use crate::core::tree::Element;
 use crate::components::scrollbar::{
-    scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    scrollbar_min_thumb_along_track, scrollbar_visibility_signal_key,
+    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
 use crate::components::scroll_area::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
@@ -62,8 +63,6 @@ fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
 
 /// Minimum cross-axis size for an `auto` scrollbar at spring≈0; must match `app::state`.
 const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
-/// Must match `components::scroll_area::SCROLLBAR_EDGE_PAD` / `state::SCROLLBAR_EDGE_PAD_RUNTIME`.
-const SCROLLBAR_EDGE_PAD_RUNTIME: f32 = 2.0;
 /// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
@@ -733,7 +732,15 @@ impl LayoutTree {
             if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
                 let content_w = (max_right - abs_x).max(layout.size.width);
                 let content_h = (max_bottom - abs_y).max(layout.size.height);
-                scroll_metrics.push((rest.to_string(), [abs_x, abs_y, layout.size.width, layout.size.height], [content_w - layout.size.width, content_h - layout.size.height], [content_w, content_h]));
+                scroll_metrics.push((
+                    rest.to_string(),
+                    [abs_x, abs_y, layout.size.width, layout.size.height],
+                    [
+                        (content_w - layout.size.width).max(0.0),
+                        (content_h - layout.size.height).max(0.0),
+                    ],
+                    [content_w, content_h],
+                ));
             }
         }
 
@@ -766,6 +773,10 @@ fn scrollbar_track_overlay_abs(
     axis: &str,
     sig: &ScrollAreaSignalsCached,
 ) -> ([f32; 4], [f32; 4]) {
+    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| match *v {
+        taffy::style::LengthPercentageAuto::Length(px) if px.is_finite() => px.max(0.0),
+        _ => 0.0,
+    };
     let vw = sig.vw;
     let vh = sig.vh;
     let cw = sig.cw;
@@ -779,8 +790,24 @@ fn scrollbar_track_overlay_abs(
     let allow_y = !sig.overflow_y.eq_ignore_ascii_case("hidden")
         && !sig.overflow_y.eq_ignore_ascii_case("clip")
         && !sig.overflow_y.eq_ignore_ascii_case("visible");
+    let vis_x_trim = sig.scrollbar_vis_x.trim().to_ascii_lowercase();
+    let vis_y_trim = sig.scrollbar_vis_y.trim().to_ascii_lowercase();
+    let show_track_x = allow_x && vis_x_trim != "never";
+    let show_track_y = allow_y && vis_y_trim != "never";
     let can_scroll_x = allow_x && cw > vw + 0.5;
     let can_scroll_y = allow_y && ch > vh + 0.5;
+    let reserve_for_x = show_track_x
+        && match vis_x_trim.as_str() {
+            "always" => true,
+            "never" => false,
+            _ => can_scroll_x,
+        };
+    let reserve_for_y = show_track_y
+        && match vis_y_trim.as_str() {
+            "always" => true,
+            "never" => false,
+            _ => can_scroll_y,
+        };
     let allow_axis = if axis == "x" { allow_x } else { allow_y };
     let scrollable = if axis == "x" { can_scroll_x } else { can_scroll_y };
     let vis_trim = if axis == "x" {
@@ -788,7 +815,10 @@ fn scrollbar_track_overlay_abs(
     } else {
         sig.scrollbar_vis_y.trim()
     };
-    if !allow_axis || vis_trim.eq_ignore_ascii_case("never") {
+    if !allow_axis
+        || vis_trim.eq_ignore_ascii_case("never")
+        || (!vis_trim.eq_ignore_ascii_case("always") && !scrollable)
+    {
         return (
             [base_abs_x, base_abs_y, 0.0, 0.0],
             [base_abs_x, base_abs_y, 0.0, 0.0],
@@ -810,20 +840,21 @@ fn scrollbar_track_overlay_abs(
     let y_inside = !sig.inset_y.eq_ignore_ascii_case("outside");
     let y_is_left = sig.y_side.eq_ignore_ascii_case("left");
     let x_is_top = sig.x_side.eq_ignore_ascii_case("top");
-    let corner_reserve = base_thickness + SCROLLBAR_EDGE_PAD_RUNTIME;
+    // Keep identical with `app::state`: reserve only opposite lane thickness.
+    let corner_reserve = base_thickness;
 
     let mut reserve_left = 0.0_f32;
     let mut reserve_right = 0.0_f32;
     let mut reserve_top = 0.0_f32;
     let mut reserve_bottom = 0.0_f32;
-    if axis == "x" && x_inside && y_inside && can_scroll_y {
+    if axis == "x" && x_inside && y_inside && reserve_for_y {
         if y_is_left {
             reserve_left = corner_reserve;
         } else {
             reserve_right = corner_reserve;
         }
     }
-    if axis == "y" && x_inside && y_inside && can_scroll_x {
+    if axis == "y" && x_inside && y_inside && reserve_for_x {
         if x_is_top {
             reserve_top = corner_reserve;
         } else {
@@ -831,28 +862,35 @@ fn scrollbar_track_overlay_abs(
         }
     }
 
-    let this_inside = match axis {
-        "x" => x_inside,
-        _ => y_inside,
-    };
-    let edge_pad_main = if this_inside {
-        2.0 * SCROLLBAR_EDGE_PAD_RUNTIME
-    } else {
-        0.0
-    };
+    // Keep same track-length semantics as `app::state`: only corner reserve affects main-axis length.
+    // Do not additionally subtract edge pads, otherwise inside tracks become 4px shorter.
+    let edge_pad_main = 0.0_f32;
 
     let inset = 1.0_f32;
     let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);
 
+    let main_available = match axis {
+        "x" => {
+            let inset_l = inset_len_px(&track_el.style.inset.left);
+            let inset_r = inset_len_px(&track_el.style.inset.right);
+            (vw - inset_l - inset_r).max(1.0)
+        }
+        _ => {
+            let inset_t = inset_len_px(&track_el.style.inset.top);
+            let inset_b = inset_len_px(&track_el.style.inset.bottom);
+            (vh - inset_t - inset_b).max(1.0)
+        }
+    };
+
     let (track_w, track_h) = match axis {
         "x" => (
-            (vw - reserve_left - reserve_right - edge_pad_main).max(1.0),
+            (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0),
             cross,
         ),
         _ => (
             cross,
-            (vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
+            (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
         ),
     };
 
@@ -863,11 +901,11 @@ fn scrollbar_track_overlay_abs(
     // border-box origin + `inset` on each axis. Omitting this shifts the thumb up-left vs Full mode.
     let thumb_rect = match axis {
         "x" => {
-            let track = (vw - reserve_left - reserve_right - edge_pad_main).max(1.0);
+            let track = (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
             let track_inner = (track - inset * 2.0).max(1.0);
             let (tw, ml) = if scrollable {
                 let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-                let min_thumb = track_inner.min(24.0);
+                let min_thumb = scrollbar_min_thumb_along_track(track_inner);
                 let tw = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
                 let max_offset = (cw - vw).max(0.0);
                 let t = if max_offset > 1e-4 {
@@ -888,11 +926,11 @@ fn scrollbar_track_overlay_abs(
             ]
         }
         _ => {
-            let track = (vh - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+            let track = (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
             let track_inner = (track - inset * 2.0).max(1.0);
             let (th, mt) = if scrollable {
                 let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-                let min_thumb = track_inner.min(24.0);
+                let min_thumb = scrollbar_min_thumb_along_track(track_inner);
                 let th = (track_inner * ratio).clamp(min_thumb, track_inner.max(min_thumb));
                 let max_offset = (ch - vh).max(0.0);
                 let t = if max_offset > 1e-4 {

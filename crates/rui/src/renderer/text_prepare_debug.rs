@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
+use std::sync::Mutex;
 
 use glyphon::{Buffer, Family, FontSystem, Shaping};
 
@@ -16,6 +17,8 @@ enum TextDebugFilter {
 
 static FILTER: OnceLock<Option<TextDebugFilter>> = OnceLock::new();
 static RESHAPE_ONLY: OnceLock<bool> = OnceLock::new();
+static WARN_MISMATCH: OnceLock<bool> = OnceLock::new();
+static WARNED_MISMATCH_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn filter() -> &'static Option<TextDebugFilter> {
     FILTER.get_or_init(|| {
@@ -108,6 +111,99 @@ fn resolved_face_families(buffer: &Buffer, font_system: &FontSystem) -> String {
         }
     }
     names.join(" | ")
+}
+
+fn resolved_face_families_vec(buffer: &Buffer, font_system: &FontSystem) -> Vec<String> {
+    let db = font_system.db();
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
+    for run in buffer.layout_runs() {
+        for g in run.glyphs.iter() {
+            if seen.insert(g.font_id) {
+                names.push(face_primary_name(db, g.font_id));
+            }
+        }
+    }
+    names
+}
+
+fn warn_mismatch_enabled() -> bool {
+    *WARN_MISMATCH.get_or_init(|| {
+        std::env::var("RUI_TEXT_WARN_MISMATCH")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
+/// 运行时字体家族不匹配告警：
+/// - 请求家族（`req`）与 shaping 后实际字面族名（`resolved`）不一致时打印 warn。
+/// - 默认关闭，设置 `RUI_TEXT_WARN_MISMATCH=1` 启用。
+/// - 同一组 `(tid, req, resolved)` 仅打印一次，避免每帧刷屏。
+pub(crate) fn maybe_log_family_mismatch(
+    info: &TextLayoutInfo,
+    attrs_family: Family<'_>,
+    weight: u16,
+    buffer: &Buffer,
+    font_system: &FontSystem,
+) {
+    if !warn_mismatch_enabled() {
+        return;
+    }
+
+    let req = info
+        .style
+        .font_family
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| match attrs_family {
+            Family::Name(n) => n,
+            Family::SansSerif => "sans-serif",
+            Family::Serif => "serif",
+            Family::Monospace => "monospace",
+            Family::Cursive => "cursive",
+            Family::Fantasy => "fantasy",
+        });
+
+    let resolved = resolved_face_families_vec(buffer, font_system);
+    if resolved.is_empty() {
+        return;
+    }
+
+    let req_l = req.to_ascii_lowercase();
+    let matched = resolved
+        .iter()
+        .any(|n| n.to_ascii_lowercase() == req_l);
+    if matched {
+        return;
+    }
+
+    let tid = info.template_id.as_deref().unwrap_or("-");
+    let resolved_join = resolved.join(" | ");
+    let key = format!("{tid}|{req}|{resolved_join}");
+    let warned = WARNED_MISMATCH_KEYS
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .ok()
+        .map(|mut set| !set.insert(key))
+        .unwrap_or(false);
+    if warned {
+        return;
+    }
+
+    let preview: String = info
+        .text
+        .chars()
+        .take(48)
+        .collect::<String>()
+        .replace('\n', "↵");
+    log::warn!(
+        "text-family-mismatch tid={tid} req={req} w={} attrs={} resolved=[{}] {:?}",
+        weight,
+        family_display(attrs_family),
+        resolved_join,
+        preview,
+    );
 }
 
 /// 仅统计 **簇内至少有一个 CJK/全角等相关码位** 的 glyph 所用字面，便于与 `=> […]` 全量列表对照
@@ -246,8 +342,8 @@ pub(crate) fn log_line(
     let shape_extra = shape_suffix_codes(info);
     let sh = shaping_tag(shaping);
     // `=>` 全量字面顺序随 glyph 遍历；`cjk=>` 只看 CJK 相关簇，便于对比 Input(400) 与 Label(500) 的中文 fallback
-    eprintln!(
-        "[RUI_TEXT_DEBUG] i={idx} tid={tid} kind={kind}{suffix}{caret_sep}{caret} shape={sh} extra={shape_extra} w={} sz={:.1} lh={:.1} lh_src={} hit={hit} req={} attrs={} => [{}] cjk=>[{}] {:?}",
+    log::warn!(
+        "i={idx} tid={tid} kind={kind}{suffix}{caret_sep}{caret} shape={sh} extra={shape_extra} w={} sz={:.1} lh={:.1} lh_src={} hit={hit} req={} attrs={} => [{}] cjk=>[{}] {:?}",
         weight,
         info.style.size,
         line_height_logical,

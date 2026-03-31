@@ -99,13 +99,19 @@ impl BaseComponentBuilder {
     }
 
     pub fn text_size(mut self, size: impl IntoF32) -> Self {
-        self.explicit_text_size_px = Some(size.into_f32());
+        let px = size.into_f32();
+        self.explicit_text_size_px = Some(px);
+        // 与 `font_weight` 相同：RSX `text_size` 走 `base` 时必须写回根节点，否则仅 `explicit_*` 无消费者。
+        self.el = self.el.text_size(px);
         self
     }
 
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
         let w = weight.into_f32().round().clamp(100.0, 900.0) as u16;
         self.explicit_text_weight = Some(w);
+        // RSX 将 `font_weight` 作用在 `base` 回调上；必须写回根节点的 `text_style`，否则
+        // `resolved_text_weight` 从未被消费时字重会丢失（例如 `<Label font_weight="700">`）。
+        self.el = self.el.font_weight(w as f32);
         self
     }
 
@@ -245,11 +251,15 @@ impl BaseComponentBuilder {
         self
     }
     pub fn text_decoration(mut self, d: impl Into<String>) -> Self {
-        self.el.set_attr("text_decoration", d.into());
+        self.el = self.el.text_decoration(d.into());
+        self
+    }
+    pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
+        self.el = self.el.text_decoration_line(line.into());
         self
     }
     pub fn text_decoration_style(mut self, s: impl Into<String>) -> Self {
-        self.el.set_attr("text_decoration_style", s.into());
+        self.el = self.el.text_decoration_style(s.into());
         self
     }
     pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {

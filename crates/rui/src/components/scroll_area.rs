@@ -2,7 +2,9 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use crate::components::base::BaseComponentBuilder;
-use crate::components::scrollbar::{scrollbar, scrollbar_visibility_signal_key, ScrollbarBuilder, ScrollbarOrientation};
+use crate::components::scrollbar::{
+    scrollbar, scrollbar_visibility_signal_key, ScrollbarBuilder, ScrollbarOrientation,
+};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, Element, IntoDimension, IntoF32};
 use rui_macros::component;
@@ -132,19 +134,45 @@ pub fn ScrollArea(
     children: Option<Element>,
 ) -> Element {
     let mut builder = scroll_area(&id);
-    if let Some(b) = base_builder { builder.base = b(builder.base); }
-    if let Some(o) = overflow { builder = builder.overflow(o); }
-    if let Some(ox) = overflow_x { builder = builder.overflow_x(ox); }
-    if let Some(oy) = overflow_y { builder = builder.overflow_y(oy); }
-    if let Some(sb) = scroll_behavior { builder = builder.scroll_behavior(sb); }
-    if let Some(v) = scrollbar_visibility { builder = builder.scrollbar_visibility(v); }
-    if let Some(i) = scrollbar_inset { builder = builder.scrollbar_inset(i); }
-    if let Some(ix) = scrollbar_inset_x { builder = builder.scrollbar_inset_x(ix); }
-    if let Some(iy) = scrollbar_inset_y { builder = builder.scrollbar_inset_y(iy); }
-    if let Some(v) = scrollbar_variant { builder = builder.scrollbar_variant(v); }
-    if let Some(s) = scrollbar_y_side { builder = builder.scrollbar_y_side(s); }
-    if let Some(s) = scrollbar_x_side { builder = builder.scrollbar_x_side(s); }
-    if let Some(c) = children { builder = builder.child(c); }
+    if let Some(b) = base_builder {
+        builder.base = b(builder.base);
+    }
+    if let Some(o) = overflow {
+        builder = builder.overflow(o);
+    }
+    if let Some(ox) = overflow_x {
+        builder = builder.overflow_x(ox);
+    }
+    if let Some(oy) = overflow_y {
+        builder = builder.overflow_y(oy);
+    }
+    if let Some(sb) = scroll_behavior {
+        builder = builder.scroll_behavior(sb);
+    }
+    if let Some(v) = scrollbar_visibility {
+        builder = builder.scrollbar_visibility(v);
+    }
+    if let Some(i) = scrollbar_inset {
+        builder = builder.scrollbar_inset(i);
+    }
+    if let Some(ix) = scrollbar_inset_x {
+        builder = builder.scrollbar_inset_x(ix);
+    }
+    if let Some(iy) = scrollbar_inset_y {
+        builder = builder.scrollbar_inset_y(iy);
+    }
+    if let Some(v) = scrollbar_variant {
+        builder = builder.scrollbar_variant(v);
+    }
+    if let Some(s) = scrollbar_y_side {
+        builder = builder.scrollbar_y_side(s);
+    }
+    if let Some(s) = scrollbar_x_side {
+        builder = builder.scrollbar_x_side(s);
+    }
+    if let Some(c) = children {
+        builder = builder.child(c);
+    }
     builder.into()
 }
 
@@ -405,28 +433,48 @@ impl From<ScrollAreaBuilder> for Element {
 
         let sx = use_signal(&sx_key, || 0.0_f32).peek();
         let sy = use_signal(&sy_key, || 0.0_f32).peek();
-        use_signal(&behavior_key, || builder.scroll_behavior.clone()).set(builder.scroll_behavior.clone());
+        use_signal(&behavior_key, || builder.scroll_behavior.clone())
+            .set(builder.scroll_behavior.clone());
         use_signal(&hover_mode_key, || builder.hover_mode.clone()).set(builder.hover_mode.clone());
         use_signal(&overflow_x_key, || builder.overflow_x.clone()).set(builder.overflow_x.clone());
         use_signal(&overflow_y_key, || builder.overflow_y.clone()).set(builder.overflow_y.clone());
         // Keep legacy combined inset signal for compatibility.
-        use_signal(&inset_key, || builder.scrollbar_inset_y.clone()).set(builder.scrollbar_inset_y.clone());
-        use_signal(&inset_x_key, || builder.scrollbar_inset_x.clone()).set(builder.scrollbar_inset_x.clone());
-        use_signal(&inset_y_key, || builder.scrollbar_inset_y.clone()).set(builder.scrollbar_inset_y.clone());
-        use_signal(&yside_key, || builder.scrollbar_y_side.clone()).set(builder.scrollbar_y_side.clone());
-        use_signal(&xside_key, || builder.scrollbar_x_side.clone()).set(builder.scrollbar_x_side.clone());
+        use_signal(&inset_key, || builder.scrollbar_inset_y.clone())
+            .set(builder.scrollbar_inset_y.clone());
+        use_signal(&inset_x_key, || builder.scrollbar_inset_x.clone())
+            .set(builder.scrollbar_inset_x.clone());
+        use_signal(&inset_y_key, || builder.scrollbar_inset_y.clone())
+            .set(builder.scrollbar_inset_y.clone());
+        use_signal(&yside_key, || builder.scrollbar_y_side.clone())
+            .set(builder.scrollbar_y_side.clone());
+        use_signal(&xside_key, || builder.scrollbar_x_side.clone())
+            .set(builder.scrollbar_x_side.clone());
 
         let show_v = scroll_overflow_allows_scrollbar(&builder.overflow_y);
         let show_h = scroll_overflow_allows_scrollbar(&builder.overflow_x);
 
         let vis = builder.scrollbar_visibility.trim().to_ascii_lowercase();
-        let inset_outside_x = builder.scrollbar_inset_x.trim().eq_ignore_ascii_case("outside");
-        let inset_outside_y = builder.scrollbar_inset_y.trim().eq_ignore_ascii_case("outside");
+        let inset_outside_x = builder
+            .scrollbar_inset_x
+            .trim()
+            .eq_ignore_ascii_case("outside");
+        let inset_outside_y = builder
+            .scrollbar_inset_y
+            .trim()
+            .eq_ignore_ascii_case("outside");
         let v_right = !builder.scrollbar_y_side.trim().eq_ignore_ascii_case("left");
         let h_top = builder.scrollbar_x_side.trim().eq_ignore_ascii_case("top");
         let base_thickness = builder.scrollbar_thickness.unwrap_or(10.0).max(2.0);
-        let vis_x = if vis == "auto" && inset_outside_x { "always" } else { vis.as_str() };
-        let vis_y = if vis == "auto" && inset_outside_y { "always" } else { vis.as_str() };
+        let vis_x = if vis == "auto" && inset_outside_x {
+            "always"
+        } else {
+            vis.as_str()
+        };
+        let vis_y = if vis == "auto" && inset_outside_y {
+            "always"
+        } else {
+            vis.as_str()
+        };
 
         let z_overlay = 1000_i32;
         let mut v_scroll = apply_scrollbar_appearance(
@@ -449,18 +497,23 @@ impl From<ScrollAreaBuilder> for Element {
         if inset_outside_y {
             v_scroll = v_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
-            v_scroll = v_scroll.absolute().top(SCROLLBAR_EDGE_PAD).bottom(SCROLLBAR_EDGE_PAD);
+            v_scroll = v_scroll
+                .absolute()
+                .top(SCROLLBAR_EDGE_PAD)
+                .bottom(SCROLLBAR_EDGE_PAD);
             if v_right {
                 v_scroll = v_scroll.right(SCROLLBAR_EDGE_PAD);
             } else {
                 v_scroll = v_scroll.left(SCROLLBAR_EDGE_PAD);
             }
-
         }
         if inset_outside_x {
             h_scroll = h_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
-            h_scroll = h_scroll.absolute().left(SCROLLBAR_EDGE_PAD).right(SCROLLBAR_EDGE_PAD);
+            h_scroll = h_scroll
+                .absolute()
+                .left(SCROLLBAR_EDGE_PAD)
+                .right(SCROLLBAR_EDGE_PAD);
             if h_top {
                 h_scroll = h_scroll.top(SCROLLBAR_EDGE_PAD);
             } else {
@@ -514,19 +567,11 @@ impl From<ScrollAreaBuilder> for Element {
         viewport.style.padding = padding;
         // Inside scrollbar must reserve a transparent slot so hidden bars don't overlap
         // content hit-testing (buttons should never accidentally hit scrollbar tracks).
-        if show_v && !inset_outside_y {
-            if v_right {
-                add_padding(&mut viewport.style.padding.right, inside_reserve);
-            } else {
-                add_padding(&mut viewport.style.padding.left, inside_reserve);
-            }
+        if show_v && !inset_outside_y && !v_right {
+            add_padding(&mut viewport.style.padding.left, inside_reserve);
         }
-        if show_h && !inset_outside_x {
-            if h_top {
-                add_padding(&mut viewport.style.padding.top, inside_reserve);
-            } else {
-                add_padding(&mut viewport.style.padding.bottom, inside_reserve);
-            }
+        if show_h && !inset_outside_x && h_top {
+            add_padding(&mut viewport.style.padding.top, inside_reserve);
         }
         viewport.style.gap = gap;
         viewport.style.flex_direction = flex_direction;
@@ -544,7 +589,14 @@ impl From<ScrollAreaBuilder> for Element {
                 .min_w(0.0)
                 .min_h(0.0)
                 .w("100%");
-            let vp = viewport.flex_grow(1.0).min_h(0.0).min_w(0.0);
+            // Keep viewport lane pinned to start in outside mode.
+            inner_col.style.justify_content = Some(taffy::style::JustifyContent::FlexStart);
+            inner_col.style.align_items = Some(taffy::style::AlignItems::Stretch);
+            let vp = viewport
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .min_h(0.0)
+                .min_w(0.0);
             let mut h_left = if inset_outside_x { h_opt.take() } else { None };
             if show_h && inset_outside_x && h_top {
                 if let Some(h) = h_left.take() {

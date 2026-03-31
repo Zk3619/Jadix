@@ -301,6 +301,11 @@ impl BoxBuilder {
         self
     }
 
+    pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
+        self.el = self.el.text_decoration_line(line.into());
+        self
+    }
+
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
         self.el = self.el.text_decoration_style(style.into());
         self

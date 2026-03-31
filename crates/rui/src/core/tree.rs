@@ -81,8 +81,12 @@ pub struct Element {
     pub cursor: Option<CursorKind>,
     pub scroll_offset: [f32; 2],
     /// True if this node or any descendant is a ScrollArea viewport (`scroll:` focus id).
-    /// Used to skip whole subtrees in the ViewportsOnly scrollbar prepass.
+    /// Used to prune subtrees in the ViewportsOnly scrollbar prepass (see
+    /// [`scroll_viewport_subtree_count`] for nested viewports).
     pub contains_scroll_viewport: bool,
+    /// Count of `scroll:` viewport nodes in this subtree (including self). Nested ScrollAreas need
+    /// scrollbar geometry prepass to recurse past ancestor viewports when this is > 1 on a viewport.
+    pub scroll_viewport_subtree_count: u32,
     pub template_hash: Option<String>,
     pub template_id: Option<String>,
     /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
@@ -265,6 +269,7 @@ impl Element {
             cursor: None,
             scroll_offset: [0.0, 0.0],
             contains_scroll_viewport: false,
+            scroll_viewport_subtree_count: 0,
             template_hash: None,
             template_id: None,
             button_hover_paint: None,
@@ -409,10 +414,28 @@ impl Element {
         let raw = decoration.into().to_lowercase();
         if raw.contains("none") {
             self.text_style.underline = false;
+            self.text_style.overline = false;
+            self.text_style.line_through = false;
             return self;
         }
-        if raw.contains("underline") {
-            self.text_style.underline = true;
+        let has_line_token = raw.contains("underline")
+            || raw.contains("overline")
+            || raw.contains("line-through")
+            || raw.contains("linethrough")
+            || raw.contains("strikethrough");
+        if has_line_token {
+            self.text_style.underline = false;
+            self.text_style.overline = false;
+            self.text_style.line_through = false;
+            if raw.contains("underline") {
+                self.text_style.underline = true;
+            }
+            if raw.contains("overline") {
+                self.text_style.overline = true;
+            }
+            if raw.contains("line-through") || raw.contains("linethrough") || raw.contains("strikethrough") {
+                self.text_style.line_through = true;
+            }
         }
         if raw.contains("double") {
             self.text_style.decoration_style = TextDecorationStyle::Double;
@@ -427,8 +450,27 @@ impl Element {
         }
         self
     }
+    pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
+        let raw = line.into().to_lowercase();
+        if raw.contains("none") {
+            self.text_style.underline = false;
+            self.text_style.overline = false;
+            self.text_style.line_through = false;
+            return self;
+        }
+        if raw.contains("underline") {
+            self.text_style.underline = true;
+        }
+        if raw.contains("overline") {
+            self.text_style.overline = true;
+        }
+        if raw.contains("line-through") || raw.contains("linethrough") || raw.contains("strikethrough") {
+            self.text_style.line_through = true;
+        }
+        self
+    }
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
-        let s = style.into().to_lowercase();
+        let s = style.into().trim().to_lowercase();
         self.text_style.decoration_style = match s.as_str() {
             "double" => TextDecorationStyle::Double,
             "dotted" => TextDecorationStyle::Dotted,

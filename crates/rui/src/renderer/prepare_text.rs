@@ -27,6 +27,8 @@ struct FrameTextNodeMeta {
     align: glyphon::cosmic_text::Align,
     measured_text_w: f32,
     underline: bool,
+    overline: bool,
+    line_through: bool,
     decoration_style: TextDecorationStyle,
     decoration_color: Option<[u8; 4]>,
     decoration_thickness: f32,
@@ -212,17 +214,22 @@ pub fn prepare_text_frame(
     for (i, info) in text_nodes.iter().enumerate() {
         let st = &info.style;
         let family = if let Some(f) = &st.font_family {
-            glyphon::Family::Name(f)
+            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
             best
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
-        let font_weight = if is_icon {
+        let requested_weight = if is_icon {
             400
         } else {
             st.weight
         };
+        let font_weight = crate::utils::font::normalize_weight_for_family(
+            text_renderer.font_system.db(),
+            family,
+            requested_weight,
+        );
         let scaled_size = st.size * ui_scale;
         let line_height = if is_icon {
             scaled_size
@@ -362,6 +369,13 @@ pub fn prepare_text_frame(
                 shaping,
             );
         }
+        super::text_prepare_debug::maybe_log_family_mismatch(
+            info,
+            family,
+            font_weight,
+            &entry.buffer,
+            &text_renderer.font_system,
+        );
 
         let dy = 0.0;
         frame_meta.push(Some(FrameTextNodeMeta {
@@ -374,6 +388,8 @@ pub fn prepare_text_frame(
             align: st.align,
             measured_text_w,
             underline: st.underline,
+            overline: st.overline,
+            line_through: st.line_through,
             decoration_style: st.decoration_style,
             decoration_color: st.decoration_color,
             decoration_thickness: st.decoration_thickness,
@@ -453,7 +469,7 @@ pub fn prepare_text_frame(
         let Some(tb) = maybe_tb.as_ref() else {
             continue;
         };
-        if tb.underline {
+        if tb.underline || tb.overline || tb.line_through {
             let ul_h = if tb.decoration_thickness > 0.0 {
                 tb.decoration_thickness
             } else {
@@ -465,7 +481,6 @@ pub fn prepare_text_frame(
                 glyphon::cosmic_text::Align::Right => tb.x + (tb.box_w - ul_w),
                 _ => tb.x,
             };
-            let ul_y = tb.y + tb.box_h - ul_h - (tb.underline_offset * ui_scale);
             let dc = tb.decoration_color.unwrap_or(tb.color);
             let line_color = [
                 dc[0] as f32 / 255.0,
@@ -492,21 +507,26 @@ pub fn prepare_text_frame(
                     _padding: 0.0,
                 });
             };
-            match tb.decoration_style {
+            let mut draw_at = |line_y: f32| match tb.decoration_style {
                 TextDecorationStyle::Solid => {
-                    push_line(ul_x, ul_y, ul_w, ul_h);
+                    push_line(ul_x, line_y, ul_w, ul_h);
                 }
                 TextDecorationStyle::Double => {
                     let gap = (ul_h * 0.8).max(1.0);
-                    push_line(ul_x, ul_y - gap, ul_w, ul_h);
-                    push_line(ul_x, ul_y + gap, ul_w, ul_h);
+                    push_line(ul_x, line_y - gap, ul_w, ul_h);
+                    push_line(ul_x, line_y + gap, ul_w, ul_h);
                 }
                 TextDecorationStyle::Dotted => {
-                    let step = (ul_h * 2.5).max(2.0);
-                    let dot_w = ul_h.max(1.0);
+                    // 明显留出间隔，避免细线 + 密集采样看起来像 solid
+                    let dot_w = ((ul_h * 1.35).max(2.0)).min(ul_w.max(1.0));
+                    let gap = (ul_h * 1.1).max(2.0);
+                    let step = dot_w + gap;
                     let mut cx = ul_x;
                     while cx < ul_x + ul_w {
-                        push_line(cx, ul_y, dot_w.min(ul_x + ul_w - cx), ul_h);
+                        let w = dot_w.min(ul_x + ul_w - cx);
+                        if w > 0.0 {
+                            push_line(cx, line_y, w, ul_h);
+                        }
                         cx += step;
                     }
                 }
@@ -515,7 +535,7 @@ pub fn prepare_text_frame(
                     let gap = (ul_h * 2.0).max(2.0);
                     let mut cx = ul_x;
                     while cx < ul_x + ul_w {
-                        push_line(cx, ul_y, dash.min(ul_x + ul_w - cx), ul_h);
+                        push_line(cx, line_y, dash.min(ul_x + ul_w - cx), ul_h);
                         cx += dash + gap;
                     }
                 }
@@ -527,12 +547,25 @@ pub fn prepare_text_frame(
                     let mut cx = ul_x;
                     while cx < ul_x + ul_w {
                         let t = ((cx - ul_x) / wavelength) * std::f32::consts::TAU;
-                        let y = ul_y + amp * t.sin();
+                        let y = line_y + amp * t.sin();
                         let w = step.min(ul_x + ul_w - cx);
                         push_line(cx, y, w, ul_h);
                         cx += step;
                     }
                 }
+            };
+            if tb.underline {
+                // Keep underline visually closer to the text bottom edge.
+                let y = tb.y + tb.box_h - (ul_h * 0.45) - (tb.underline_offset * ui_scale);
+                draw_at(y);
+            }
+            if tb.overline {
+                let y = tb.y + (tb.underline_offset * ui_scale);
+                draw_at(y);
+            }
+            if tb.line_through {
+                let y = tb.y + (tb.box_h - ul_h) * 0.5;
+                draw_at(y);
             }
         }
     }
@@ -587,10 +620,17 @@ pub fn prepare_text_frame(
         let st = &info.style;
 
         let family = if let Some(f) = &st.font_family {
-            glyphon::Family::Name(f)
+            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
             best
         };
+        let is_icon = st.font_family.as_deref() == Some("lucide");
+        let requested_weight = if is_icon { 400 } else { st.weight };
+        let font_weight = crate::utils::font::normalize_weight_for_family(
+            text_renderer.font_system.db(),
+            family,
+            requested_weight,
+        );
         let line_height = input_line_height(st, scaled_size, ui_scale);
 
         let prefix_to_sel = measure_prefix_width(
@@ -598,7 +638,7 @@ pub fn prepare_text_frame(
             &display[..s],
             scaled_size,
             line_height,
-            st.weight,
+            font_weight,
             family,
             box_w,
         );
@@ -607,7 +647,7 @@ pub fn prepare_text_frame(
             &display[s..e],
             scaled_size,
             line_height,
-            st.weight,
+            font_weight,
             family,
             box_w,
         );
@@ -696,10 +736,17 @@ pub fn prepare_text_frame(
         let prefix = &display[..ix];
 
         let family = if let Some(f) = &st.font_family {
-            glyphon::Family::Name(f)
+            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
             best
         };
+        let is_icon = st.font_family.as_deref() == Some("lucide");
+        let requested_weight = if is_icon { 400 } else { st.weight };
+        let font_weight = crate::utils::font::normalize_weight_for_family(
+            text_renderer.font_system.db(),
+            family,
+            requested_weight,
+        );
         let line_height = input_line_height(st, scaled_size, ui_scale);
 
         let prefix_w = measure_prefix_width(
@@ -707,7 +754,7 @@ pub fn prepare_text_frame(
             prefix,
             scaled_size,
             line_height,
-            st.weight,
+            font_weight,
             family,
             box_w,
         );

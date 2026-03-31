@@ -67,8 +67,12 @@ struct App {
     scroll_max_lowpass: std::collections::HashMap<String, [f32; 2]>,
     /// 上一帧 `collect_scroll_area_metrics` 的哈希快照，用于本帧在 `render()` 之前积分平滑滚动。
     scroll_metrics_cache: std::collections::HashMap<String, ScrollMetrics>,
+    /// Duplicate `ScrollArea id` detector: warn once per `id`.
+    scroll_metric_duplicate_warned: std::collections::HashSet<String>,
     /// Stable signal key strings per scroll-area id (avoids per-frame `format!` in nested scroll).
     scroll_signal_key_cache: std::collections::HashMap<String, ScrollAreaSignalKeys>,
+    /// Throttle for optional scrollbar diagnostics (`RUI_SCROLLBAR_DIAG`).
+    scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
     accesskit_adapter: Option<accesskit_winit::Adapter>,
     #[cfg(debug_assertions)]

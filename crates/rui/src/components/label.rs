@@ -177,6 +177,10 @@ impl LabelBuilder {
         self.inner.el = self.inner.el.text_decoration(decoration);
         self
     }
+    pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
+        self.inner.el = self.inner.el.text_decoration_line(line);
+        self
+    }
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
         self.inner.el = self.inner.el.text_decoration_style(style);
         self

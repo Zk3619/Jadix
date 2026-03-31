@@ -145,6 +145,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut fields = Vec::new();
     let mut field_names = Vec::new();
     let mut field_unwrapping = Vec::new();
+    let mut has_base_builder_arg = false;
 
     let mut crate_path = quote! { rui };
     let attr_str = _attr.to_string();
@@ -169,6 +170,9 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let name_str = name.to_string();
                 let ty_str = quote!(#ty).to_string();
                 let is_already_option = ty_str.starts_with("Option");
+                if name_str == "base_builder" {
+                    has_base_builder_arg = true;
+                }
                 
                 field_names.push(name.clone());
                 
@@ -205,6 +209,32 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let body = &input.block;
 
+    let merge_base_stmt = if has_base_builder_arg {
+        quote! {
+            let base_builder = match (base_builder, base) {
+                (Some(inner), Some(outer)) => Some(Box::new(move |b: #crate_path::components::base::BaseComponentBuilder| {
+                    let b = inner(b);
+                    outer(b)
+                }) as Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>),
+                (Some(inner), None) => Some(inner),
+                (None, Some(outer)) => Some(outer),
+                (None, None) => None,
+            };
+        }
+    } else {
+        quote! {}
+    };
+    let post_apply_base_stmt = if has_base_builder_arg {
+        quote! {}
+    } else {
+        quote! {
+            if let Some(base_fn) = base {
+                let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                __el = base_fn(builder).el;
+            }
+        }
+    };
+
     let expanded = quote! {
         #[derive(Default)]
         #vis struct #props_name {
@@ -215,11 +245,9 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #vis use #props_name;
             let #props_name { #(#field_names),* } = props;
             #(#field_unwrapping)*
+            #merge_base_stmt
             let mut __el = { #body };
-            if let Some(base_fn) = base {
-                let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
-                __el = base_fn(builder).el;
-            }
+            #post_apply_base_stmt
             __el
         }
     };
@@ -518,7 +546,11 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                         "rounded" | "bg" | "color" | "text_color" | "font_weight" | "text_weight" |
                         "flex_grow" | "flex_shrink" | "grow" | "shrink" | "absolute" | "relative" | "top" | "right" | "bottom" | "left" | "inset" | "z_index" |
                         "text_size" | "leading" | "text_leading" | "line_height" | "lineHeight" | "underline" | 
-                        "text_decoration" | "text_decoration_style" |
+                        "text_decoration" | "textDecoration" |
+                        "text_decoration_line" | "textDecorationLine" |
+                        "text_decoration_style" | "textDecorationStyle" |
+                        "text_decoration_color" | "textDecorationColor" |
+                        "text_decoration_thickness" | "textDecorationThickness" |
                         "items" | "wrap" | "gap" |
                         "class" | "className" | "tw" | "uno" => true,
                         _ => false,
@@ -563,6 +595,11 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 "padding" => "p",
                                 "color" | "text_color" => "text_color",
                                 "text_weight" => "font_weight",
+                                "textDecoration" => "text_decoration",
+                                "textDecorationLine" => "text_decoration_line",
+                                "textDecorationStyle" => "text_decoration_style",
+                                "textDecorationColor" => "text_decoration_color",
+                                "textDecorationThickness" => "text_decoration_thickness",
                                 "lineHeight" => "line_height",
                                 "grow" => "flex_grow",
                                 "shrink" => "flex_shrink",
@@ -574,8 +611,17 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 "bg" | "border" | "shadow" => {
                                     quote! { rui::core::tree::parse_color(#value) }
                                 }
-                                "text_color" => {
-                                    quote! { rui::core::tree::parse_text_color(#value) }
+                                "text_color" | "text_decoration_color" => {
+                                    // 字面量走 parse；`{ ... }` 表达式假定已是 `[u8; 4]`（避免双重 parse）
+                                    if let syn::Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(lit),
+                                        ..
+                                    }) = value
+                                    {
+                                        quote! { rui::core::tree::parse_text_color(#lit) }
+                                    } else {
+                                        quote! { #value }
+                                    }
                                 }
                                 _ => quote! { #value },
                             };
@@ -732,6 +778,9 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "text_decoration" | "textDecoration" | "decoration" => {
                         element = quote! { #element.text_decoration(#value) }
                     },
+                    "text_decoration_line" | "textDecorationLine" => {
+                        element = quote! { #element.text_decoration_line(#value) }
+                    }
                     "text_size" | "textSize" | "size" if name_str == "Label" => {
                         element = quote! { #element.text_size(#value) }
                     },

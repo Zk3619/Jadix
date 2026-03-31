@@ -5,8 +5,59 @@ use winit::{
 };
 
 use super::state::ScrollbarUpdateMode;
+use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 
 impl super::App {
+    fn fmt_lp(v: taffy::prelude::LengthPercentage) -> String {
+        match v {
+            taffy::prelude::LengthPercentage::Length(px) => format!("{px:.1}px"),
+            taffy::prelude::LengthPercentage::Percent(p) => format!("{:.1}%", p * 100.0),
+        }
+    }
+
+    fn fmt_padding_rect(rect: taffy::prelude::Rect<taffy::prelude::LengthPercentage>) -> String {
+        format!(
+            "l={},r={},t={},b={}",
+            Self::fmt_lp(rect.left),
+            Self::fmt_lp(rect.right),
+            Self::fmt_lp(rect.top),
+            Self::fmt_lp(rect.bottom)
+        )
+    }
+
+    fn fmt_lp_auto(v: taffy::prelude::LengthPercentageAuto) -> String {
+        match v {
+            taffy::prelude::LengthPercentageAuto::Auto => "auto".to_string(),
+            taffy::prelude::LengthPercentageAuto::Length(px) => format!("{px:.1}px"),
+            taffy::prelude::LengthPercentageAuto::Percent(p) => format!("{:.1}%", p * 100.0),
+        }
+    }
+
+    fn fmt_inset_rect(rect: taffy::prelude::Rect<taffy::prelude::LengthPercentageAuto>) -> String {
+        format!(
+            "l={},r={},t={},b={}",
+            Self::fmt_lp_auto(rect.left),
+            Self::fmt_lp_auto(rect.right),
+            Self::fmt_lp_auto(rect.top),
+            Self::fmt_lp_auto(rect.bottom)
+        )
+    }
+
+    fn find_element_by_template_id<'a>(
+        el: &'a crate::core::tree::Element,
+        template_id: &str,
+    ) -> Option<&'a crate::core::tree::Element> {
+        if el.template_id.as_deref() == Some(template_id) {
+            return Some(el);
+        }
+        for child in &el.children {
+            if let Some(found) = Self::find_element_by_template_id(child, template_id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     fn scrollbar_axis_key(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
         let a = match axis {
             super::scroll_support::ScrollAxis::X => "x",
@@ -554,12 +605,14 @@ impl super::App {
                 .copied()
         };
 
-        if target_rests.is_empty() {
-            if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
-                if let Some((rest, _, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
-                    if metrics_for_rest(&rest).is_some() {
-                        target_rests.push(rest);
-                    }
+        // When wheel happens over a scrollbar track/thumb, prioritize that target scroll area.
+        // This fixes cases where hit-chain returns an unrelated ancestor (or none), causing
+        // wheel input to be ignored while cursor is on the scrollbar itself.
+        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
+            if let Some((rest, _, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
+                if metrics_for_rest(&rest).is_some() {
+                    target_rests.retain(|r| r != &rest);
+                    target_rests.insert(0, rest);
                 }
             }
         }
@@ -985,6 +1038,74 @@ impl super::App {
                     adapter.update_if_active(|| update);
                 }
                 let scroll_metrics: Vec<_> = state.last_render_scroll_metrics.drain(..).collect();
+                let mut diag_track_bounds: std::collections::HashMap<String, ([f32; 4], [f32; 4])> =
+                    std::collections::HashMap::new();
+                let mut diag_thumb_bounds: std::collections::HashMap<String, ([f32; 4], [f32; 4])> =
+                    std::collections::HashMap::new();
+                let mut diag_track_inset: std::collections::HashMap<String, (String, String)> =
+                    std::collections::HashMap::new();
+                let mut diag_padding: std::collections::HashMap<String, (String, String)> =
+                    std::collections::HashMap::new();
+                if std::env::var("RUI_SCROLLBAR_DIAG").ok().is_some() {
+                    for (rest, _, _, _) in scroll_metrics.iter() {
+                        let fx = format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{rest}:x");
+                        let fy = format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{rest}:y");
+                        let viewport_fid =
+                            format!("{}{}", crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX, rest);
+                        let thx = format!("{}{}:x", crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX, rest);
+                        let thy = format!("{}{}:y", crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX, rest);
+                        let bx = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fx, [0.0, 0.0])
+                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let by = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fy, [0.0, 0.0])
+                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let th_bx = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &thx, [0.0, 0.0])
+                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let th_by = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &thy, [0.0, 0.0])
+                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let inset_x = super::tree_hit::find_element_by_focus_id(&state.root_element, &fx)
+                            .map(|e| Self::fmt_inset_rect(e.style.inset))
+                            .unwrap_or_else(|| "n/a".to_string());
+                        let inset_y = super::tree_hit::find_element_by_focus_id(&state.root_element, &fy)
+                            .map(|e| Self::fmt_inset_rect(e.style.inset))
+                            .unwrap_or_else(|| "n/a".to_string());
+                        let viewport_padding =
+                            super::tree_hit::find_element_by_focus_id(&state.root_element, &viewport_fid)
+                                .map(|e| Self::fmt_padding_rect(e.style.padding))
+                                .unwrap_or_else(|| "n/a".to_string());
+                        let outer_padding = Self::find_element_by_template_id(&state.root_element, rest)
+                            .map(|e| Self::fmt_padding_rect(e.style.padding))
+                            .unwrap_or_else(|| "n/a".to_string());
+                        diag_track_bounds.insert(rest.clone(), (bx, by));
+                        diag_thumb_bounds.insert(rest.clone(), (th_bx, th_by));
+                        diag_track_inset.insert(rest.clone(), (inset_x, inset_y));
+                        diag_padding.insert(rest.clone(), (viewport_padding, outer_padding));
+                    }
+                }
+                // Duplicate `ScrollArea id` => metrics/signals collide by key, causing some
+                // instances to use another area's viewport/content sizes (track length mismatch).
+                // Warn once per duplicated id to surface this root cause directly.
+                {
+                    let mut counts: std::collections::HashMap<&str, usize> =
+                        std::collections::HashMap::new();
+                    for (rest, _, _, _) in scroll_metrics.iter() {
+                        *counts.entry(rest.as_str()).or_insert(0) += 1;
+                    }
+                    for (rest, n) in counts {
+                        if n > 1 && self.scroll_metric_duplicate_warned.insert(rest.to_string()) {
+                            log::error!(
+                                "Detected duplicated ScrollArea id '{}' ({} instances). \
+All scroll signals/metrics use this id as key, so instances overwrite each other and \
+scrollbar track length can become incorrect. Please make each ScrollArea id unique.",
+                                rest,
+                                n
+                            );
+                        }
+                    }
+                }
                 self.scroll_metrics_cache = scroll_metrics
                     .iter()
                     .map(|(rest, b, max, content)| (rest.clone(), (*b, *max, *content)))
@@ -1069,6 +1190,87 @@ impl super::App {
                         crate::components::scroll_area::scroll_overflow_allows_scrollbar(overflow_x.as_str());
                     let axis_y_enabled =
                         crate::components::scroll_area::scroll_overflow_allows_scrollbar(overflow_y.as_str());
+                    let can_scroll_x = axis_x_enabled && *content_w > bounds[2] + 0.5;
+                    let can_scroll_y = axis_y_enabled && *content_h > bounds[3] + 0.5;
+
+                    // Optional deep diagnostics:
+                    // set env `RUI_SCROLLBAR_DIAG=1` (all) or `RUI_SCROLLBAR_DIAG=<id-substring>` (filtered).
+                    if let Ok(diag) = std::env::var("RUI_SCROLLBAR_DIAG") {
+                        let diag = diag.trim();
+                        if !diag.is_empty() && (diag == "1" || rest.contains(diag)) {
+                            let key = rest.clone();
+                            let now_log = std::time::Instant::now();
+                            let should_log = self
+                                .scroll_diag_last_log
+                                .get(&key)
+                                .map_or(true, |t| now_log.duration_since(*t).as_millis() >= 600);
+                            if should_log {
+                                self.scroll_diag_last_log.insert(key, now_log);
+                                let (tx, ty) = diag_track_bounds
+                                    .get(rest)
+                                    .copied()
+                                    .unwrap_or(([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]));
+                                let (ix, iy) = diag_track_inset
+                                    .get(rest)
+                                    .cloned()
+                                    .unwrap_or_else(|| ("n/a".to_string(), "n/a".to_string()));
+                                let (vp_pad, outer_pad) = diag_padding
+                                    .get(rest)
+                                    .cloned()
+                                    .unwrap_or_else(|| ("n/a".to_string(), "n/a".to_string()));
+                                let inset_mode_x = crate::core::reactivity::use_signal(
+                                    &crate::components::scroll_area::scroll_scrollbar_inset_x_signal_key(rest),
+                                    || "inside".to_string(),
+                                )
+                                .peek();
+                                let inset_mode_y = crate::core::reactivity::use_signal(
+                                    &crate::components::scroll_area::scroll_scrollbar_inset_y_signal_key(rest),
+                                    || "inside".to_string(),
+                                )
+                                .peek();
+                                let side_x = crate::core::reactivity::use_signal(
+                                    &crate::components::scroll_area::scroll_scrollbar_x_side_signal_key(rest),
+                                    || "bottom".to_string(),
+                                )
+                                .peek();
+                                let side_y = crate::core::reactivity::use_signal(
+                                    &crate::components::scroll_area::scroll_scrollbar_y_side_signal_key(rest),
+                                    || "right".to_string(),
+                                )
+                                .peek();
+                                log::warn!(
+                                    "scrollbar diag rest='{}' viewport=({:.1},{:.1}) content=({:.1},{:.1}) max=({:.1},{:.1}) overflow=({}, {}) can_scroll=({}, {}) inset_mode=({}, {}) side=({}, {}) track_x=({:.1},{:.1},{:.1},{:.1}) track_y=({:.1},{:.1},{:.1},{:.1}) track_style_inset_x={} track_style_inset_y={} viewport_padding={} outer_padding={}",
+                                    rest,
+                                    bounds[2],
+                                    bounds[3],
+                                    content_w,
+                                    content_h,
+                                    max_x,
+                                    max_y,
+                                    overflow_x,
+                                    overflow_y,
+                                    can_scroll_x,
+                                    can_scroll_y,
+                                    inset_mode_x,
+                                    inset_mode_y,
+                                    side_x,
+                                    side_y,
+                                    tx[0],
+                                    tx[1],
+                                    tx[2],
+                                    tx[3],
+                                    ty[0],
+                                    ty[1],
+                                    ty[2],
+                                    ty[3],
+                                    ix,
+                                    iy,
+                                    vp_pad,
+                                    outer_pad
+                                );
+                            }
+                        }
+                    }
 
                     // Handle activity/hover: keep visible while hovering, scrolling, or animating.
                     let activity = crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32);

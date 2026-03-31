@@ -25,6 +25,8 @@ pub fn input_overwrite_signal_key(id: &str) -> String { format!("__rui_input_ove
 pub fn input_ime_anchor_signal_key(id: &str) -> String { format!("__rui_input_ime_anchor_{}", id) }
 
 /// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
+///
+/// 仅在聚焦编辑时挂到 `text_shape_suffix`：失焦且纯 ASCII 走 Basic shaping 时该字位易缺字形，会被画成「乱码框」。
 pub const INPUT_LINE_SHAPE_SUFFIX: &str = "\u{2009}";
 
 fn focus_id_for_input(id: &str) -> String { format!("{INPUT_FOCUS_PREFIX}{id}") }
@@ -282,7 +284,11 @@ impl From<InputBuilder> for Element {
             leading_scale: builder.leading_scale,
             font_family: None,
         }).w("100%");
-        text_el.text_shape_suffix = Some(INPUT_LINE_SHAPE_SUFFIX.to_string());
+        text_el.text_shape_suffix = if is_focused {
+            Some(INPUT_LINE_SHAPE_SUFFIX.to_string())
+        } else {
+            None
+        };
         text_el.template_id = Some(format!("__rui_input:{}:text", field_id));
 
         if is_focused {
@@ -477,7 +483,11 @@ fn sync_one_input_paint(
             text_el.text = Some(display_text.clone());
             text_layout = true;
         }
-        let want_suffix = Some(INPUT_LINE_SHAPE_SUFFIX.to_string());
+        let want_suffix = if is_focused {
+            Some(INPUT_LINE_SHAPE_SUFFIX.to_string())
+        } else {
+            None
+        };
         if text_el.text_shape_suffix != want_suffix {
             text_el.text_shape_suffix = want_suffix;
             text_layout = true;

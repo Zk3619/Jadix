@@ -107,21 +107,8 @@ pub fn measure_prefix_width(
 
 pub fn best_font_family(font_system: &glyphon::FontSystem) -> glyphon::Family<'static> {
     let db = font_system.db();
-    let preferred = ["Inter", "Segoe UI", "Roboto", "Helvetica Neue", "Arial"];
-    for &name in &preferred {
-        if db
-            .query(&glyphon::fontdb::Query {
-                families: &[glyphon::fontdb::Family::Name(name)],
-                weight: glyphon::fontdb::Weight::NORMAL,
-                stretch: glyphon::fontdb::Stretch::Normal,
-                style: glyphon::fontdb::Style::Normal,
-            })
-            .is_some()
-        {
-            return glyphon::Family::Name(name);
-        }
-    }
-    glyphon::Family::SansSerif
+    let preferred = "Noto Sans CJK, Noto Serif CJK, sans-serif";
+    crate::utils::font::resolve_family(db, preferred)
 }
 
 /// 在水平方向命中：返回 UTF-8 字节下标（落在某字符簇边界，与光标语义一致）。
@@ -212,12 +199,15 @@ pub fn hit_test_input_text_index(
     let _my = my.clamp(y, y + h.max(0.0));
     let scaled_size = style.size * ui_scale;
     let line_height = line_height_for_style(style, ui_scale);
-    let family_owned = style.font_family.clone();
-    let family = if let Some(ref f) = family_owned {
-        glyphon::Family::Name(f.as_str())
+    let family = if let Some(ref f) = style.font_family {
+        crate::utils::font::resolve_family(font_system.db(), f)
     } else {
         best_font_family(font_system)
     };
+    let is_icon = style.font_family.as_deref() == Some("lucide");
+    let requested_weight = if is_icon { 400 } else { style.weight };
+    let font_weight =
+        crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
     let rel_in_box = (mx - x) * ui_scale;
     let measured = measure_prefix_width(
@@ -225,7 +215,7 @@ pub fn hit_test_input_text_index(
         display,
         scaled_size,
         line_height,
-        style.weight,
+        font_weight,
         family,
         box_w,
     );
@@ -242,7 +232,7 @@ pub fn hit_test_input_text_index(
         rel_x,
         scaled_size,
         line_height,
-        style.weight,
+        font_weight,
         family,
         box_w,
     )

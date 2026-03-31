@@ -135,6 +135,22 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                         <Label text_decoration="underline" text_decoration_style="dashed">"Dashed"</Label>
                         <Label text_decoration="underline" text_decoration_style="wavy">"Wavy"</Label>
                     </HStack>
+                    <Label text_size="0.875rem" font_weight="700">"Decoration Line"</Label>
+                    <HStack gap="1rem" items="center" wrap="wrap">
+                        <Label text_decoration_line="underline">"Underline"</Label>
+                        <Label text_decoration_line="overline">"Overline"</Label>
+                        <Label text_decoration_line="line-through">"Line Through"</Label>
+                        <Label text_decoration_line="underline line-through">"Underline + Line Through"</Label>
+                    </HStack>
+                    <Label text_size="0.875rem" font_weight="700">"Decoration Color / Thickness / Style"</Label>
+                    <HStack gap="1rem" items="center" wrap="wrap">
+                        <Label text_decoration_line="underline" text_decoration_color="red-500">"Red"</Label>
+                        <Label text_decoration_line="underline" text_decoration_color="emerald-500">"Green"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="1">"Thin"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="2">"Medium"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="3" text_decoration_style="dashed">"Thick Dashed"</Label>
+                        <Label text_decoration_line="underline" text_decoration_style="wavy" text_decoration_color="violet-500">"Wavy Violet"</Label>
+                    </HStack>
                 </VStack>
             </VStack>
         </MyCard>
@@ -661,7 +677,7 @@ fn main() {
                 <ScrollArea id="root-scroll" h="100%" overflow_y="auto" overflow_x="auto" grow="1" scroll_behavior="smooth">
                     <VStack items="center" gap="1.5rem" p="2rem" w="100%">
                         <VStack items="center" gap="0.5rem">
-                            <Label text_size="2.5rem" font_weight="800">"RUI Framework"</Label>
+                            <Label text_size="2.5rem" font_weight="900">"RUI Framework"</Label>
                             <Label text_size="1rem" color="muted-foreground">"Layered Architecture • Functional Components • Hot Reload"</Label>
                         </VStack>
 
