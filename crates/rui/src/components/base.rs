@@ -87,6 +87,84 @@ impl BaseComponentBuilder {
         self
     }
 
+    pub fn box_shadow(mut self, spec: impl AsRef<str>) -> Self {
+        self.el = self.el.box_shadow(spec);
+        self
+    }
+
+    pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {
+        self.el = self.el.text_shadow(spec);
+        self
+    }
+
+    pub fn box_shadow_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.box_shadow_color(color);
+        self
+    }
+    pub fn box_shadow_blur(mut self, blur: f32) -> Self {
+        self.el = self.el.box_shadow_blur(blur);
+        self
+    }
+    pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
+        self.el = self.el.box_shadow_offset_x(dx);
+        self
+    }
+    pub fn box_shadow_offset_y(mut self, dy: f32) -> Self {
+        self.el = self.el.box_shadow_offset_y(dy);
+        self
+    }
+    pub fn box_shadow_spread(mut self, spread: f32) -> Self {
+        self.el = self.el.box_shadow_spread(spread);
+        self
+    }
+    pub fn box_shadow_inset(mut self, inset: bool) -> Self {
+        self.el = self.el.box_shadow_inset(inset);
+        self
+    }
+
+    pub fn text_shadow_color(mut self, color: [u8; 4]) -> Self {
+        self.el = self.el.text_shadow_color(color);
+        self
+    }
+    pub fn text_shadow_blur(mut self, blur: f32) -> Self {
+        self.el = self.el.text_shadow_blur(blur);
+        self
+    }
+    pub fn text_shadow_offset_x(mut self, dx: f32) -> Self {
+        self.el = self.el.text_shadow_offset_x(dx);
+        self
+    }
+    pub fn text_shadow_offset_y(mut self, dy: f32) -> Self {
+        self.el = self.el.text_shadow_offset_y(dy);
+        self
+    }
+
+    pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
+        self.el = self.el.border_style(style);
+        self
+    }
+    pub fn border_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_color(color);
+        self
+    }
+    pub fn border_width(mut self, width: f32) -> Self {
+        self.el = self.el.border_width(width);
+        self
+    }
+
+    pub fn outline_style(mut self, style: impl AsRef<str>) -> Self {
+        self.el = self.el.outline_style(style);
+        self
+    }
+    pub fn outline_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.outline_color(color);
+        self
+    }
+    pub fn outline_width(mut self, width: f32) -> Self {
+        self.el = self.el.outline_width(width);
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.el = self.el.child(child);
         self
@@ -278,15 +356,34 @@ impl BaseComponentBuilder {
         self.el = self.el.text_center();
         self
     }
+    pub fn text_align(mut self, align: impl Into<String>) -> Self {
+        let s = align.into();
+        if s.eq_ignore_ascii_case("left") || s.eq_ignore_ascii_case("start") {
+            self.el = self.el.text_left();
+        } else if s.eq_ignore_ascii_case("center") {
+            self.el = self.el.text_center();
+        } else if s.eq_ignore_ascii_case("right") || s.eq_ignore_ascii_case("end") {
+            self.el = self.el.text_right();
+        }
+        self
+    }
 
 
     // Layout
     pub fn items(mut self, align: impl Into<String>) -> Self {
-        self.el.set_attr("items", align.into());
+        let s = align.into();
+        self.el = self.el.flex_items(&s);
         self
     }
     pub fn wrap(mut self, w: impl Into<String>) -> Self {
-        self.el.set_attr("wrap", w.into());
+        let s = w.into();
+        self.el = self.el.flex_wrap_kw(&s);
+        self
+    }
+
+    pub fn justify(mut self, keyword: impl Into<String>) -> Self {
+        let s = keyword.into();
+        self.el = self.el.justify(&s);
         self
     }
     pub fn gap(mut self, g: impl IntoDimension) -> Self {

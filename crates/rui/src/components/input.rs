@@ -279,6 +279,7 @@ impl From<InputBuilder> for Element {
             weight: builder.font_weight,
             color: text_color,
             underline: false,
+            underline_offset_px: None,
             center: false,
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,

@@ -36,6 +36,8 @@ struct FrameTextNodeMeta {
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
     shadow_col: Option<[u8; 4]>,
+    shadow_dx: f32,
+    shadow_dy: f32,
     shadow_blur: f32,
 }
 
@@ -396,7 +398,9 @@ pub fn prepare_text_frame(
             underline_offset: st.underline_offset,
             color: st.color,
             shadow_col: st.shadow_color,
-            shadow_blur: st.shadow_blur,
+            shadow_dx: st.shadow_offset[0] * ui_scale,
+            shadow_dy: st.shadow_offset[1] * ui_scale,
+            shadow_blur: st.shadow_blur * ui_scale,
             clip_bounds: scaled_clip,
         }));
     }
@@ -431,7 +435,12 @@ pub fn prepare_text_frame(
                     let dx = angle.cos() * radius;
                     let shadow_dy = angle.sin() * radius;
                     let shadow_alpha = (sc[3] as f32 * 0.4) as u8;
-                    let shadow_rect = [tb.x + dx, tb.y + tb.dy + shadow_dy, tb.box_w, tb.box_h];
+                    let shadow_rect = [
+                        tb.x + tb.shadow_dx + dx,
+                        tb.y + tb.dy + tb.shadow_dy + shadow_dy,
+                        tb.box_w,
+                        tb.box_h,
+                    ];
                     let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds) else {
                         continue;
                     };
@@ -441,8 +450,8 @@ pub fn prepare_text_frame(
                     let bounds = text_bounds_from_clip(tb.clip_bounds, config);
                     text_areas.push(glyphon::TextArea {
                         buffer: &entry.buffer,
-                        left: tb.x + dx,
-                        top: tb.y + tb.dy + shadow_dy,
+                        left: tb.x + tb.shadow_dx + dx,
+                        top: tb.y + tb.dy + tb.shadow_dy + shadow_dy,
                         scale: 1.0,
                         bounds,
                         default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], shadow_alpha),
@@ -503,8 +512,11 @@ pub fn prepare_text_frame(
                     radii: [0.0, 0.0, 0.0, 0.0],
                     border_width: 0.0,
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
+                    shadow_offset: [0.0, 0.0],
                     shadow_blur: 0.0,
-                    _padding: 0.0,
+                    shadow_spread: 0.0,
+                    shadow_inset: 0.0,
+                    _padding: [0.0; 2],
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {
@@ -685,8 +697,11 @@ pub fn prepare_text_frame(
                     radii: [0.0, 0.0, 0.0, 0.0],
                     border_width: 0.0,
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
+                    shadow_offset: [0.0, 0.0],
                     shadow_blur: 0.0,
-                    _padding: 0.0,
+                    shadow_spread: 0.0,
+                    shadow_inset: 0.0,
+                    _padding: [0.0; 2],
                 });
             }
         }
@@ -792,8 +807,11 @@ pub fn prepare_text_frame(
                 radii: [0.0, 0.0, 0.0, 0.0],
                 border_width: 0.0,
                 shadow_color: [0.0, 0.0, 0.0, 0.0],
+                shadow_offset: [0.0, 0.0],
                 shadow_blur: 0.0,
-                _padding: 0.0,
+                shadow_spread: 0.0,
+                shadow_inset: 0.0,
+                _padding: [0.0; 2],
             });
         }
     }

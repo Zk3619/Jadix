@@ -9,7 +9,7 @@ pub use crate::layout::dimension::{
 };
 pub use crate::layout::layout_tree::{LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::Style;
-pub use crate::style::{parse_color, parse_text_color, TextDecorationStyle, TextStyle};
+pub use crate::style::{parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextStyle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorKind {
@@ -24,6 +24,8 @@ pub enum CursorKind {
 pub struct ButtonHoverPaint {
     pub variant: String,
     pub disabled: bool,
+    /// `"spring"`（欠阻尼弹簧）或 `"cubic"`（`cubic-bezier` 时长型过渡）。
+    pub hover_easing: String,
 }
 
 /// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。
@@ -387,23 +389,29 @@ impl Element {
     }
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
+        // 与 CSS 中文本节点类似：不在 flex 行内被 shrink 压窄，避免盒宽小于实际 glyph 宽而裁字。
+        self.style.flex_shrink = 0.0;
         self
     }
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
         self.text_style.font_family = Some(family.into());
+        self.attrs.insert("font_family".to_string(), "1".to_string());
         self
     }
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.color = color;
+        self.attrs.insert("text_color".to_string(), "1".to_string());
         self
     }
     pub fn text_size(mut self, size: f32) -> Self {
         self.text_style.size = size;
+        self.attrs.insert("text_size".to_string(), "1".to_string());
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
         let w = weight.into_f32().round().clamp(100.0, 900.0) as u16;
         self.text_style.weight = w;
+        self.attrs.insert("font_weight".to_string(), "1".to_string());
         self
     }
     pub fn underline(mut self, underline: bool) -> Self {
@@ -412,6 +420,8 @@ impl Element {
     }
     pub fn text_decoration(mut self, decoration: impl Into<String>) -> Self {
         let raw = decoration.into().to_lowercase();
+        self.attrs.insert("text_decoration_line".to_string(), "1".to_string());
+        self.attrs.insert("text_decoration_style".to_string(), "1".to_string());
         if raw.contains("none") {
             self.text_style.underline = false;
             self.text_style.overline = false;
@@ -452,6 +462,7 @@ impl Element {
     }
     pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
         let raw = line.into().to_lowercase();
+        self.attrs.insert("text_decoration_line".to_string(), "1".to_string());
         if raw.contains("none") {
             self.text_style.underline = false;
             self.text_style.overline = false;
@@ -471,6 +482,7 @@ impl Element {
     }
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
         let s = style.into().trim().to_lowercase();
+        self.attrs.insert("text_decoration_style".to_string(), "1".to_string());
         self.text_style.decoration_style = match s.as_str() {
             "double" => TextDecorationStyle::Double,
             "dotted" => TextDecorationStyle::Dotted,
@@ -482,52 +494,90 @@ impl Element {
     }
     pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.decoration_color = Some(color);
+        self.attrs.insert("text_decoration_color".to_string(), "1".to_string());
         self
     }
     pub fn text_decoration_thickness(mut self, thickness: impl IntoF32) -> Self {
         self.text_style.decoration_thickness = thickness.into_f32().max(0.0);
+        self.attrs.insert("text_decoration_thickness".to_string(), "1".to_string());
         self
     }
     pub fn text_underline_offset(mut self, offset: impl IntoF32) -> Self {
         self.text_style.underline_offset = offset.into_f32();
+        self.attrs.insert("text_underline_offset".to_string(), "1".to_string());
         self
     }
-    pub fn text_shadow(mut self, color: [u8; 4], blur_radius: f32) -> Self {
+    pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {
+        let (c, offset, blur) = crate::style::parse_text_shadow(spec);
+        self.text_style.shadow_color = c;
+        self.text_style.shadow_offset = offset;
+        self.text_style.shadow_blur = blur;
+        self
+    }
+    pub fn text_shadow_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.shadow_color = Some(color);
-        self.text_style.shadow_blur = blur_radius;
+        self
+    }
+    pub fn text_shadow_blur(mut self, blur: f32) -> Self {
+        self.text_style.shadow_blur = blur.max(0.0);
+        self
+    }
+    pub fn text_shadow_offset_x(mut self, dx: f32) -> Self {
+        self.text_style.shadow_offset[0] = dx;
+        self
+    }
+    pub fn text_shadow_offset_y(mut self, dy: f32) -> Self {
+        self.text_style.shadow_offset[1] = dy;
         self
     }
     pub fn text_center(mut self) -> Self {
         self.text_style.align = glyphon::cosmic_text::Align::Center;
+        self.attrs.insert("text_align".to_string(), "center".to_string());
+        self
+    }
+    pub fn text_left(mut self) -> Self {
+        self.text_style.align = glyphon::cosmic_text::Align::Left;
+        self.attrs.insert("text_align".to_string(), "left".to_string());
+        self
+    }
+    pub fn text_right(mut self) -> Self {
+        self.text_style.align = glyphon::cosmic_text::Align::Right;
+        self.attrs.insert("text_align".to_string(), "right".to_string());
         self
     }
     pub fn text_line_height(mut self, line_height: impl IntoF32) -> Self {
         self.text_style.line_height_px = Some(line_height.into_f32().max(1.0));
+        self.attrs.insert("line_height".to_string(), "1".to_string());
         self
     }
     pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(scale.into_f32().max(0.01));
+        self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
     pub fn text_leading_none(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.0);
+        self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
     pub fn text_leading_tight(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.25);
+        self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
     pub fn text_leading_normal(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.5);
+        self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
     pub fn text_leading_relaxed(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.625);
+        self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
     pub fn bg(mut self, color: [f32; 4]) -> Self {
@@ -535,8 +585,40 @@ impl Element {
         self
     }
     pub fn border(mut self, color: [f32; 4], width: f32) -> Self {
+        self.style.border_style = LineStyle::Solid;
         self.style.border_color = color;
         self.style.border_width = width;
+        self
+    }
+    pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.border_style = LineStyle::from_css_keyword(style.as_ref());
+        self
+    }
+    pub fn border_color(mut self, color: [f32; 4]) -> Self {
+        self.style.border_color = color;
+        self
+    }
+    pub fn border_width(mut self, width: f32) -> Self {
+        self.style.border_width = width;
+        self
+    }
+
+    pub fn outline(mut self, color: [f32; 4], width: f32) -> Self {
+        self.style.outline_style = LineStyle::Solid;
+        self.style.outline_color = color;
+        self.style.outline_width = width;
+        self
+    }
+    pub fn outline_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.outline_style = LineStyle::from_css_keyword(style.as_ref());
+        self
+    }
+    pub fn outline_color(mut self, color: [f32; 4]) -> Self {
+        self.style.outline_color = color;
+        self
+    }
+    pub fn outline_width(mut self, width: f32) -> Self {
+        self.style.outline_width = width;
         self
     }
     pub fn rounded(mut self, radius: impl IntoF32) -> Self {
@@ -552,6 +634,39 @@ impl Element {
     pub fn shadow(mut self, color: [f32; 4], blur: f32) -> Self {
         self.style.shadow_color = color;
         self.style.shadow_blur = blur;
+        self
+    }
+    pub fn box_shadow(mut self, shadow: impl AsRef<str>) -> Self {
+        let s = crate::style::parse_box_shadow(shadow);
+        self.style.shadow_color = s.color;
+        self.style.shadow_offset = s.offset;
+        self.style.shadow_blur = s.blur;
+        self.style.shadow_spread = s.spread;
+        self.style.shadow_inset = s.inset;
+        self
+    }
+    pub fn box_shadow_color(mut self, color: [f32; 4]) -> Self {
+        self.style.shadow_color = color;
+        self
+    }
+    pub fn box_shadow_blur(mut self, blur: f32) -> Self {
+        self.style.shadow_blur = blur.max(0.0);
+        self
+    }
+    pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
+        self.style.shadow_offset[0] = dx;
+        self
+    }
+    pub fn box_shadow_offset_y(mut self, dy: f32) -> Self {
+        self.style.shadow_offset[1] = dy;
+        self
+    }
+    pub fn box_shadow_spread(mut self, spread: f32) -> Self {
+        self.style.shadow_spread = spread;
+        self
+    }
+    pub fn box_shadow_inset(mut self, inset: bool) -> Self {
+        self.style.shadow_inset = inset;
         self
     }
     pub fn w(mut self, width: impl IntoDimension) -> Self {
@@ -592,6 +707,48 @@ impl Element {
         self.style.justify_content = Some(JustifyContent::FlexEnd);
         self
     }
+
+    /// `justify-content`，与 CSS / Tailwind `justify-*` 一致（区别于 [`Self::flex_items`] / `align-items`）。
+    pub fn justify(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.justify_content = Some(match s.as_str() {
+            "center" => JustifyContent::Center,
+            "start" | "flex-start" => JustifyContent::FlexStart,
+            "end" | "flex-end" => JustifyContent::FlexEnd,
+            "between" | "space-between" => JustifyContent::SpaceBetween,
+            "around" | "space-around" => JustifyContent::SpaceAround,
+            "evenly" | "space-evenly" => JustifyContent::SpaceEvenly,
+            _ => JustifyContent::FlexStart,
+        });
+        self
+    }
+
+    /// `align-items`，与 RSX `items` / `align`、Tailwind `items-*` 一致。
+    pub fn flex_items(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.align_items = Some(match s.as_str() {
+            "center" => AlignItems::Center,
+            "start" | "flex-start" => AlignItems::FlexStart,
+            "end" | "flex-end" => AlignItems::FlexEnd,
+            "stretch" => AlignItems::Stretch,
+            "baseline" => AlignItems::Baseline,
+            _ => AlignItems::Stretch,
+        });
+        self
+    }
+
+    /// `flex-wrap`：`wrap` / `nowrap` / `wrap-reverse`。
+    pub fn flex_wrap_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.flex_wrap = match s.as_str() {
+            "wrap" => FlexWrap::Wrap,
+            "wrap-reverse" | "wrap_reverse" => FlexWrap::WrapReverse,
+            "nowrap" | "no-wrap" | "none" => FlexWrap::NoWrap,
+            _ => FlexWrap::NoWrap,
+        };
+        self
+    }
+
     pub fn items_center(mut self) -> Self {
         self.style.align_items = Some(AlignItems::Center);
         self

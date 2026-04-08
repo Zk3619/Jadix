@@ -390,7 +390,10 @@ where
     Memo { signal }
 }
 
-pub use crate::style::{tick_animations, use_spring, Spring, SpringState};
+pub use crate::style::{
+    tick_animations, use_spring, use_ui_transition_cubic, use_ui_transition_spring, CubicTween, CubicTweenState,
+    Spring, SpringState,
+};
 
 #[cfg(test)]
 mod tests {

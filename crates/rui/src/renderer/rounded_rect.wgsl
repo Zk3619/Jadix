@@ -13,7 +13,10 @@ struct InstanceInput {
     @location(6) radii: vec4<f32>, // top-right, bottom-right, top-left, bottom-left
     @location(7) border_width: f32,
     @location(8) shadow_color: vec4<f32>,
-    @location(9) shadow_blur: f32,
+    @location(9) shadow_offset: vec2<f32>,
+    @location(10) shadow_blur: f32,
+    @location(11) shadow_spread: f32,
+    @location(12) shadow_inset: f32,
 };
 
 struct VertexOutput {
@@ -24,8 +27,11 @@ struct VertexOutput {
     @location(3) radii: vec4<f32>,
     @location(4) border_width: f32,
     @location(5) shadow_color: vec4<f32>,
-    @location(6) shadow_blur: f32,
-    @location(7) p: vec2<f32>, // physical point relative to rect center
+    @location(6) shadow_offset: vec2<f32>,
+    @location(7) shadow_blur: f32,
+    @location(8) shadow_spread: f32,
+    @location(9) shadow_inset: f32,
+    @location(10) p: vec2<f32>, // physical point relative to rect center
 };
 
 struct Globals {
@@ -44,9 +50,17 @@ fn vs_main(
     
     let center = instance.rect_pos + instance.rect_size * 0.5;
     
-    // Extend the generated vertex bounds to accommodate shadow blur
-    let expand = instance.shadow_blur * 2.0 + instance.border_width;
-    let expand_offset = (model.position - 0.5) * 2.0 * expand;
+    // Extend quad: outset needs extra for blur/offset/spread; inset shadow lives inside the rect.
+    let spread = max(0.0, instance.shadow_spread);
+    var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
+        + vec2<f32>(instance.shadow_blur * 2.0 + instance.border_width + spread);
+    if (instance.shadow_inset > 0.5) {
+        // Inset ring can extend inward with positive spread; keep margin for blur + spread sampling.
+        ext = vec2<f32>(
+            instance.shadow_blur * 2.0 + instance.border_width + abs(instance.shadow_spread)
+        );
+    }
+    let expand_offset = (model.position - 0.5) * 2.0 * ext;
     
     let physical_pos = instance.rect_pos + model.position * instance.rect_size + expand_offset;
     
@@ -62,7 +76,10 @@ fn vs_main(
     out.radii = instance.radii;
     out.border_width = instance.border_width;
     out.shadow_color = instance.shadow_color;
+    out.shadow_offset = instance.shadow_offset;
     out.shadow_blur = instance.shadow_blur;
+    out.shadow_spread = instance.shadow_spread;
+    out.shadow_inset = instance.shadow_inset;
     
     return out;
 }
@@ -100,18 +117,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Compute shadow factor
     var shadow_alpha = 0.0;
     if (in.shadow_blur > 0.0) {
-        shadow_alpha = smoothstep(in.shadow_blur, 0.0, max(0.0, d)) * in.shadow_color.a;
+        let blur = max(in.shadow_blur, 1e-4);
+        let spread_signed = in.shadow_spread;
+        if (in.shadow_inset > 0.5) {
+            // Inset (CSS): shadow in the ring between the border box and an inner rounded rect
+            // shrunk by spread; offset moves the inner boundary. Positive spread expands shadow inward.
+            let inner_b = max(b - vec2<f32>(spread_signed), vec2<f32>(0.0));
+            let inner_r = max(in.radii - vec4<f32>(spread_signed), vec4<f32>(0.0));
+            let d_inner = sd_round_box(in.p - in.shadow_offset, inner_b, inner_r);
+            // Fade from outer edge inward, and from inner shadow boundary outward.
+            let from_outer = smoothstep(-blur, 0.0, d);
+            let from_inner = smoothstep(0.0, blur, d_inner);
+            shadow_alpha = (from_outer * from_inner) * in.shadow_color.a;
+        } else {
+            // Outset: only outside the rect (expanded shadow shape).
+            let d_shadow = sd_round_box(
+                in.p - in.shadow_offset,
+                b + vec2<f32>(spread_signed),
+                in.radii + vec4<f32>(spread_signed)
+            );
+            shadow_alpha = smoothstep(blur, 0.0, max(0.0, d_shadow)) * in.shadow_color.a;
+        }
     }
 
-    // Blend: Shadow behind, rect in front
-    // We treat shadow contribution only outside the rect
-    let s_a = shadow_alpha * (1.0 - alpha_bg);
+    // Blend: composite shadow over fill; `s_a` is gated to inside/outside depending on inset.
     let fill_alpha = final_color.a * alpha_bg;
-    
-    let out_a = fill_alpha + s_a * (1.0 - fill_alpha);
+    let s_a = shadow_alpha * select((1.0 - alpha_bg), alpha_bg, in.shadow_inset > 0.5);
+    let out_a = s_a + fill_alpha * (1.0 - s_a);
     var out_rgb = vec3<f32>(0.0);
     if (out_a > 0.0) {
-        out_rgb = (final_color.rgb * fill_alpha + in.shadow_color.rgb * s_a * (1.0 - fill_alpha)) / out_a;
+        out_rgb = (in.shadow_color.rgb * s_a + final_color.rgb * fill_alpha * (1.0 - s_a)) / out_a;
     }
     
     return vec4<f32>(out_rgb, out_a);

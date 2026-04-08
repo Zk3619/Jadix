@@ -5,6 +5,7 @@ use crate::core::reactivity::{use_signal, Signal};
 
 thread_local! {
     static ANIMATIONS: RefCell<Vec<Weak<RefCell<SpringState>>>> = RefCell::new(Vec::new());
+    static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = RefCell::new(Vec::new());
 }
 
 pub struct SpringState {
@@ -20,13 +21,23 @@ pub struct SpringState {
 pub struct Spring(Rc<RefCell<SpringState>>);
 
 impl Spring {
+    /// 默认参数偏「跟手」；UI 短过渡（对标 CSS `transition` ~150ms）见 [`Self::new_ui_transition`].
     pub fn new(initial: f32) -> Self {
+        Self::new_with_params(initial, 170.0, 20.0)
+    }
+
+    /// 近似 **欠阻尼临界** 附近，避免明显过冲，时长接近浏览器 `transition-all` + `ease` 的常见观感。
+    pub fn new_ui_transition(initial: f32) -> Self {
+        Self::new_with_params(initial, 280.0, 38.0)
+    }
+
+    pub fn new_with_params(initial: f32, stiffness: f32, damping: f32) -> Self {
         let state = Rc::new(RefCell::new(SpringState {
             target: initial,
             current: initial,
             velocity: 0.0,
-            stiffness: 170.0,
-            damping: 20.0,
+            stiffness,
+            damping,
             signal: Signal::new(initial),
         }));
 
@@ -61,6 +72,110 @@ pub fn use_spring(id_str: &str, initial: f32) -> Spring {
     // Peek: the stored `Spring` is stable; subscribing the root `create_effect` here would be
     // pointless and risks accidental coupling if the wrapper signal were ever updated.
     spring_sig.peek()
+}
+
+/// 与 [`use_spring`] 相同，但使用 [`Spring::new_ui_transition`]（适合按钮 hover 等短过渡）。
+pub fn use_ui_transition_spring(id_str: &str, initial: f32) -> Spring {
+    let spring_sig = use_signal(id_str, move || Spring::new_ui_transition(initial));
+    spring_sig.peek()
+}
+
+/// CSS `cubic-bezier(p1x, p1y, p2x, p2y)`：给定归一化时间 `x∈[0,1]`，求曲线上对应 `y`（用于对标 `transition-timing-function`）。
+#[inline]
+pub fn cubic_bezier_y_at_x(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    fn bezier_x(u: f32, x1: f32, x2: f32) -> f32 {
+        let u = u.clamp(0.0, 1.0);
+        let inv = 1.0 - u;
+        3.0 * inv * inv * u * x1 + 3.0 * inv * u * u * x2 + u * u * u
+    }
+    fn bezier_y(u: f32, y1: f32, y2: f32) -> f32 {
+        let u = u.clamp(0.0, 1.0);
+        let inv = 1.0 - u;
+        3.0 * inv * inv * u * y1 + 3.0 * inv * u * u * y2 + u * u * u
+    }
+    let mut lo = 0.0f32;
+    let mut hi = 1.0f32;
+    for _ in 0..28 {
+        let mid = (lo + hi) * 0.5;
+        if bezier_x(mid, x1, x2) < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let u = (lo + hi) * 0.5;
+    bezier_y(u, y1, y2)
+}
+
+pub struct CubicTweenState {
+    pub target: f32,
+    pub value: f32,
+    pub from_value: f32,
+    pub elapsed: f32,
+    pub duration: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub active: bool,
+    pub signal: Signal<f32>,
+}
+
+#[derive(Clone)]
+pub struct CubicTween(Rc<RefCell<CubicTweenState>>);
+
+impl CubicTween {
+    /// 默认 `cubic-bezier(0.4, 0, 0.2, 1)`，时长约 150ms，对标常见 `transition`。
+    pub fn new_ui_transition(initial: f32) -> Self {
+        Self::new_with_curve(initial, 0.15, (0.4, 0.0, 0.2, 1.0))
+    }
+
+    pub fn new_with_curve(initial: f32, duration_secs: f32, ctrl: (f32, f32, f32, f32)) -> Self {
+        let (x1, y1, x2, y2) = ctrl;
+        let state = Rc::new(RefCell::new(CubicTweenState {
+            target: initial,
+            value: initial,
+            from_value: initial,
+            elapsed: 0.0,
+            duration: duration_secs.max(1e-6),
+            x1,
+            y1,
+            x2,
+            y2,
+            active: false,
+            signal: Signal::new(initial),
+        }));
+        CUBIC_TWEENS.with(|anim| {
+            anim.borrow_mut().push(Rc::downgrade(&state));
+        });
+        Self(state)
+    }
+
+    pub fn set(&self, target: f32) {
+        let mut s = self.0.borrow_mut();
+        if (s.target - target).abs() < 1e-5 && !s.active {
+            return;
+        }
+        s.from_value = s.value;
+        s.target = target;
+        s.elapsed = 0.0;
+        s.active = (s.value - target).abs() >= 1e-5;
+        s.signal.set_silent(s.value);
+    }
+
+    pub fn get(&self) -> f32 {
+        self.0.borrow().signal.get()
+    }
+
+    pub fn peek(&self) -> f32 {
+        self.0.borrow().signal.peek()
+    }
+}
+
+pub fn use_ui_transition_cubic(id_str: &str, initial: f32) -> CubicTween {
+    let sig = use_signal(id_str, move || CubicTween::new_ui_transition(initial));
+    sig.peek()
 }
 
 pub fn tick_animations(dt: f32) -> bool {
@@ -105,5 +220,36 @@ pub fn tick_animations(dt: f32) -> bool {
         sig.set(val);
     }
 
-    any_running
+    let mut cubic_running = false;
+    let mut cubic_updates = Vec::new();
+    CUBIC_TWEENS.with(|anim| {
+        let mut list = anim.borrow_mut();
+        let mut i = 0;
+        while i < list.len() {
+            if let Some(tw) = list[i].upgrade() {
+                let mut s = tw.borrow_mut();
+                if s.active {
+                    s.elapsed += dt;
+                    let linear_t = (s.elapsed / s.duration).min(1.0);
+                    let eased = cubic_bezier_y_at_x(linear_t, s.x1, s.y1, s.x2, s.y2);
+                    s.value = s.from_value + (s.target - s.from_value) * eased;
+                    if linear_t >= 1.0 - 1e-6 {
+                        s.value = s.target;
+                        s.active = false;
+                    } else {
+                        cubic_running = true;
+                    }
+                    cubic_updates.push((s.signal.clone(), s.value));
+                }
+                i += 1;
+            } else {
+                list.remove(i);
+            }
+        }
+    });
+    for (sig, val) in cubic_updates {
+        sig.set(val);
+    }
+
+    any_running || cubic_running
 }

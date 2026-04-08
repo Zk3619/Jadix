@@ -552,6 +552,16 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                         "text_decoration_color" | "textDecorationColor" |
                         "text_decoration_thickness" | "textDecorationThickness" |
                         "items" | "wrap" | "gap" |
+                        "border_style" | "borderStyle" | "border_color" | "borderColor" | "border_width" | "borderWidth" |
+                        "outline_style" | "outlineStyle" | "outline_color" | "outlineColor" | "outline_width" | "outlineWidth" |
+                        "shadow" | "box_shadow" | "boxShadow" | "box-shadow" |
+                        "box_shadow_color" | "boxShadowColor" | "box_shadow_blur" | "boxShadowBlur" |
+                        "box_shadow_offset_x" | "boxShadowOffsetX" | "box_shadow_offset_y" | "boxShadowOffsetY" |
+                        "box_shadow_spread" | "boxShadowSpread" | "box_shadow_inset" | "boxShadowInset" |
+                        "text_shadow" | "textShadow" | "text-shadow" |
+                        "text_shadow_color" | "textShadowColor" | "text_shadow_blur" | "textShadowBlur" |
+                        "text_shadow_offset_x" | "textShadowOffsetX" | "text_shadow_offset_y" | "textShadowOffsetY" |
+                        "text_align" |
                         "class" | "className" | "tw" | "uno" => true,
                         _ => false,
                     };
@@ -604,6 +614,24 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 "grow" => "flex_grow",
                                 "shrink" => "flex_shrink",
                                 "scroll_behavior" | "scrollBehavior" => "scroll_behavior",
+                                "borderStyle" => "border_style",
+                                "borderColor" => "border_color",
+                                "borderWidth" => "border_width",
+                                "outlineStyle" => "outline_style",
+                                "outlineColor" => "outline_color",
+                                "outlineWidth" => "outline_width",
+                                "boxShadow" | "box-shadow" => "box_shadow",
+                                "boxShadowColor" => "box_shadow_color",
+                                "boxShadowBlur" => "box_shadow_blur",
+                                "boxShadowOffsetX" => "box_shadow_offset_x",
+                                "boxShadowOffsetY" => "box_shadow_offset_y",
+                                "boxShadowSpread" => "box_shadow_spread",
+                                "boxShadowInset" => "box_shadow_inset",
+                                "textShadow" | "text-shadow" => "text_shadow",
+                                "textShadowColor" => "text_shadow_color",
+                                "textShadowBlur" => "text_shadow_blur",
+                                "textShadowOffsetX" => "text_shadow_offset_x",
+                                "textShadowOffsetY" => "text_shadow_offset_y",
                                 _ => attr_name,
                             };
                             let method_ident = syn::Ident::new(method, attr.span());
@@ -611,7 +639,10 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 "bg" | "border" | "shadow" => {
                                     quote! { rui::core::tree::parse_color(#value) }
                                 }
-                                "text_color" | "text_decoration_color" => {
+                                "border_color" | "outline_color" | "box_shadow_color" => {
+                                    quote! { rui::core::tree::parse_color(#value) }
+                                }
+                                "text_color" | "text_decoration_color" | "text_shadow_color" => {
                                     // 字面量走 parse；`{ ... }` 表达式假定已是 `[u8; 4]`（避免双重 parse）
                                     if let syn::Expr::Lit(syn::ExprLit {
                                         lit: syn::Lit::Str(lit),
@@ -622,6 +653,9 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                     } else {
                                         quote! { #value }
                                     }
+                                }
+                                "box_shadow" | "text_shadow" | "border_style" | "outline_style" => {
+                                    quote! { #value }
                                 }
                                 _ => quote! { #value },
                             };
@@ -766,6 +800,24 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "bg" => {
                         element = quote! { #element.bg(rui::core::tree::parse_color(#value)) }
                     },
+                    "border_style" | "borderStyle" => {
+                        element = quote! { #element.border_style(#value) }
+                    }
+                    "border_color" | "borderColor" => {
+                        element = quote! { #element.border_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "border_width" | "borderWidth" => {
+                        element = quote! { #element.border_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "outline_style" | "outlineStyle" => {
+                        element = quote! { #element.outline_style(#value) }
+                    }
+                    "outline_color" | "outlineColor" => {
+                        element = quote! { #element.outline_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "outline_width" | "outlineWidth" => {
+                        element = quote! { #element.outline_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
                     "color" => {
                         element = quote! { #element.text_color(rui::core::tree::parse_text_color(#value)) }
                     },
@@ -787,8 +839,11 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "gap" => {
                         element = quote! { #element.gap(#value) }
                     },
-                    "items" | "justify" | "align" => {
+                    "items" | "align" => {
                         element = quote! { #element.items(#value) }
+                    },
+                    "justify" => {
+                        element = quote! { #element.justify(#value) }
                     },
                     "wrap" => {
                         element = quote! { #element.wrap(#value) }
@@ -899,13 +954,47 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "shadow" => {
                         element = quote! { #element.shadow([0.0, 0.0, 0.0, 0.5], rui::core::tree::IntoF32::into_f32(#value)) }
                     },
+                    "box_shadow" | "boxShadow" | "box-shadow" => {
+                        element = quote! { #element.box_shadow(#value) }
+                    }
+                    "box_shadow_color" | "boxShadowColor" => {
+                        element = quote! { #element.box_shadow_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "box_shadow_blur" | "boxShadowBlur" => {
+                        element = quote! { #element.box_shadow_blur(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "box_shadow_offset_x" | "boxShadowOffsetX" => {
+                        element = quote! { #element.box_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "box_shadow_offset_y" | "boxShadowOffsetY" => {
+                        element = quote! { #element.box_shadow_offset_y(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "box_shadow_spread" | "boxShadowSpread" => {
+                        element = quote! { #element.box_shadow_spread(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "box_shadow_inset" | "boxShadowInset" => {
+                        element = quote! { #element.box_shadow_inset(#value) }
+                    }
                     "text_shadow" => {
-                        element = quote! { #element.text_shadow([0, 200, 255, 255], 3.0) }
+                        element = quote! { #element.text_shadow(#value) }
+                    },
+                    "textShadow" | "text-shadow" => {
+                        element = quote! { #element.text_shadow(#value) }
+                    },
+                    "text_shadow_color" | "textShadowColor" => {
+                        element = quote! { #element.text_shadow_color(rui::core::tree::parse_text_color(#value)) }
+                    },
+                    "text_shadow_blur" | "textShadowBlur" => {
+                        element = quote! { #element.text_shadow_blur(rui::core::tree::IntoF32::into_f32(#value)) }
+                    },
+                    "text_shadow_offset_x" | "textShadowOffsetX" => {
+                        element = quote! { #element.text_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }
+                    },
+                    "text_shadow_offset_y" | "textShadowOffsetY" => {
+                        element = quote! { #element.text_shadow_offset_y(rui::core::tree::IntoF32::into_f32(#value)) }
                     },
                     "text_align" => {
-                        if quote::quote!(#value).to_string().contains("center") {
-                            element = quote! { #element.text_center() }
-                        }
+                        element = quote! { #element.text_align(#value) }
                     },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
                     "variant" | "type" => element = quote! { #element.variant(#value) },

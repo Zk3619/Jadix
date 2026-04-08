@@ -45,7 +45,7 @@ fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str
 fn MyCard(title: String, children: Option<rui::core::tree::Element>) -> rui::core::tree::Element {
     let child = children.unwrap_or_else(|| rui::core::tree::Element::new());
     ui! {
-        <VStack p="1rem" bg="secondary" rounded="0.5rem" gap="0.5rem">
+        <VStack w="100%" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
             <Label text_size="1.25rem" font_weight="700">{ title }</Label>
             { child }
         </VStack>
@@ -60,8 +60,8 @@ fn ButtonShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1) Button Variants + State">
             <Reactive id={BUTTON_SHOWCASE_REACTIVE}>
-                <VStack gap="0.75rem">
-                    <HStack gap="0.5rem" items="center">
+                <VStack w="100%" gap="0.75rem">
+                    <HStack gap="0.5rem" items="center" wrap="wrap">
                         <Button variant="default" on_click={move || increment_count(count)}>
                             { format!("Default ({})", count.get()) }
                         </Button>
@@ -88,16 +88,33 @@ fn ButtonShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
+fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1b) Hover：弹簧 vs cubic-bezier">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "默认 hover_easing=\"spring\"；设为 \"cubic\" 时对标 CSS transition + cubic-bezier(0.4, 0, 0.2, 1)"
+                </Label>
+                <HStack gap="0.5rem" items="center" wrap="wrap">
+                    <Button id="hw-hover-spring" variant="ghost" hover_easing="spring">"Ghost · spring"</Button>
+                    <Button id="hw-hover-cubic" variant="ghost" hover_easing="cubic">"Ghost · cubic"</Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 fn InputShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="2) Input (ShadCN-style)">
-            <VStack gap="0.75rem">
-                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Click to focus, type text, Tab to move focus, Backspace to delete"
                 </Label>
-                <HStack gap="0.5rem" items="center" w="100%">
-                    <Input id="hw-s2-input-a" placeholder="Placeholder…" w="20rem" />
-                    <Input id="hw-s2-input-b" placeholder="Invalid" invalid=true w="12rem" />
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <Input id="hw-s2-input-a" placeholder="Placeholder…" flex_grow="1" />
+                    <Input id="hw-s2-input-b" placeholder="Invalid" invalid=true flex_grow="1" />
                 </HStack>
             </VStack>
         </MyCard>
@@ -108,8 +125,8 @@ fn InputShowcase() -> rui::core::tree::Element {
 fn TypographyShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="3) Button Sizes + Icon + Custom Text Leading">
-            <VStack gap="0.75rem">
-                <HStack gap="0.5rem" items="center">
+            <VStack w="100%" gap="0.75rem">
+                <HStack gap="0.5rem" items="center" wrap="wrap">
                     <Button variant="outline" size="xs">"XS"</Button>
                     <Button variant="outline" size="sm">"SM"</Button>
                     <Button variant="outline" size="default">"Default"</Button>
@@ -119,7 +136,7 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                     <Button variant="default" size="icon"><Icon name="rocket" color="primary-foreground" size="1rem" /></Button>
                     <Button variant="default" size="icon-lg"><Icon name="sparkles" color="primary-foreground" size="1.125rem" /></Button>
                 </HStack>
-                <HStack gap="0.5rem" items="center">
+                <HStack gap="0.5rem" items="center" wrap="wrap">
                     <Button variant="default" leading="none">"Leading None"</Button>
                     <Button variant="default" leading="tight">"Leading Tight"</Button>
                     <Button variant="default" leading="normal">"Leading Normal"</Button>
@@ -128,7 +145,7 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                 </HStack>
                 <VStack gap="0.5rem">
                     <Label text_size="1rem" font_weight="700">"Label Decoration"</Label>
-                    <HStack gap="1rem">
+                    <HStack gap="1rem" items="center" wrap="wrap">
                         <Label text_decoration="underline" text_decoration_style="solid">"Solid"</Label>
                         <Label text_decoration="underline" text_decoration_style="double">"Double"</Label>
                         <Label text_decoration="underline" text_decoration_style="dotted">"Dotted"</Label>
@@ -152,6 +169,133 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                         <Label text_decoration_line="underline" text_decoration_style="wavy" text_decoration_color="violet-500">"Wavy Violet"</Label>
                     </HStack>
                 </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn ShadowShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="12) Box-shadow & Text-shadow">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "box-shadow：圆角矩形 SDF（outset 用扩张形状；inset 用外框与内缩圆角环 + blur）。text-shadow：glyphon 预绘制。GPU 盒阴影需 blur > 0。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"Box-shadow — outset"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0.25rem 0.25rem 0.75rem 0 ring" />
+                        <Label text_size="0.6rem" color="muted-foreground">"blur + ring"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
+                            box_shadow="-0.25rem 0.25rem 0.5rem 0 destructive" />
+                        <Label text_size="0.6rem" color="muted-foreground">"dx&lt;0"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0 0 0.5rem -0.125rem border" />
+                        <Label text_size="0.6rem" color="muted-foreground">"spread&lt;0"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" box_shadow="0 0.125rem 0.25rem 0.25rem muted-foreground" />
+                        <Label text_size="0.6rem" color="muted-foreground">"spread&gt;0"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="0" box_shadow="0.125rem 0.125rem 0.5rem 0 primary" />
+                        <Label text_size="0.6rem" color="muted-foreground">"直角"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="1.25rem" box_shadow="0 0.375rem 1rem 0 ring" />
+                        <Label text_size="0.6rem" color="muted-foreground">"大圆角"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem"
+                            box_shadow_color="primary"
+                            box_shadow_offset_x="0.375"
+                            box_shadow_offset_y="0.375"
+                            box_shadow_blur="0.625"
+                            box_shadow_spread="0"
+                            box_shadow_inset={false} />
+                        <Label text_size="0.6rem" color="muted-foreground">"子属性"</Label>
+                    </VStack>
+                </HStack>
+                <Label font_weight="700" text_size="0.875rem">"Box-shadow — inset"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="0.5rem" box_shadow="inset 0 0 0.75rem 0 black" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset 均匀"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="0.5rem" box_shadow="inset 0.125rem 0.125rem 0.5rem 0 ring" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset+offset"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="inset 0 0 0.5rem 0.25rem destructive" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset+正 spread"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
+                            box_shadow="inset -0.125rem -0.125rem 0.5rem -0.0625 border" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset 负 offset+负 spread"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0" box_shadow="inset 0 0.25rem 0.75rem 0 muted-foreground" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset 直角"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="6.5rem" h="3.75rem" bg="primary" rounded="1rem" box_shadow="inset 0 0 1rem 0.125rem primary" />
+                        <Label text_size="0.6rem" color="muted-foreground">"inset 大圆角"</Label>
+                    </VStack>
+                </HStack>
+                <Label font_weight="700" text_size="0.875rem">"Text-shadow（glyphon）"</Label>
+                <HStack gap="1rem" wrap="wrap" items="start">
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="1.1rem" font_weight="800" color="foreground"
+                            text_shadow="0.125rem 0.125rem 0.25rem muted-foreground">
+                            "简写 dx/dy/blur"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"简写 + 语义色"</Label>
+                    </VStack>
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="1.1rem" font_weight="800" color="primary-foreground"
+                            text_shadow_color="foreground"
+                            text_shadow_offset_x={0.1875}
+                            text_shadow_offset_y={0.1875}
+                            text_shadow_blur={0.375}>
+                            "子属性覆盖"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"color + offset + blur"</Label>
+                    </VStack>
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="1.1rem" font_weight="800" color="destructive"
+                            text_shadow="-0.0625rem -0.0625rem 0.125rem muted-foreground">
+                            "负偏移"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"左上浅影"</Label>
+                    </VStack>
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="1.1rem" font_weight="800" color="secondary-foreground"
+                            text_shadow="0 0.25rem 0.75rem border">
+                            "重模糊"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"仅 dy + 大 blur"</Label>
+                    </VStack>
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="1.1rem" font_weight="800" color="accent-foreground"
+                            text_shadow="0.25rem 0 0 ring">
+                            "横向偏移"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"blur=0"</Label>
+                    </VStack>
+                    <VStack gap="0.35rem" items="start">
+                        <Label text_size="0.95rem" font_weight="700" color="foreground" leading="tight"
+                            text_shadow="0.0625rem 0.0625rem 0.1875rem muted-foreground">
+                            "多行 Label\n第二行仍应有阴影"
+                        </Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"换行"</Label>
+                    </VStack>
+                </HStack>
             </VStack>
         </MyCard>
     }
@@ -327,7 +471,7 @@ fn LogicalShowcase() -> rui::core::tree::Element {
                         "px/py + inline-size + block-size + auto-height"
                     </Label>
                 </Rect>
-                <HStack gap="0.5rem">
+                <HStack gap="0.5rem" wrap="wrap">
                     <Rect bg="background" rounded="0.4rem" px="0.75rem" py="0.5rem"><Label>"px/py"</Label></Rect>
                     <Rect bg="background" rounded="0.4rem" pt="0.75rem" pr="1rem" pb="0.25rem" pl="0.5rem"><Label>"pt/pr/pb/pl"</Label></Rect>
                     <Rect bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></Rect>
@@ -341,65 +485,65 @@ fn LogicalShowcase() -> rui::core::tree::Element {
 fn TextCompatibilityShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="6) Text Compatibility Stress Test">
-            <VStack gap="0.75rem">
-                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Use this section to verify multilingual shaping, emoji fallback, combining marks, punctuation width, and bidirectional text."
                 </Label>
                 <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%">
                     <VStack gap="0.5rem" w="100%">
-                        <Label font_weight="700">"English / Latin"</Label>
-                        <Label leading="normal">
+                        <Label w="100%" font_weight="700">"English / Latin"</Label>
+                        <Label w="100%" leading="normal">
                             "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. 0123456789"
                         </Label>
-                        <Label>"Accents: cafe cafe\u{0301} naive na\u{00EF}ve resume re\u{0301}sume\u{0301} fiance fianc\u{00E9}"</Label>
+                        <Label w="100%">"Accents: cafe cafe\u{0301} naive na\u{00EF}ve resume re\u{0301}sume\u{0301} fiance fianc\u{00E9}"</Label>
 
-                        <Label font_weight="700">"Chinese / Japanese / Korean"</Label>
-                        <Label id="hw-s6-label-cjk" leading="normal">
+                        <Label w="100%" font_weight="700">"Chinese / Japanese / Korean"</Label>
+                        <Label w="100%" id="hw-s6-label-cjk" leading="normal">
                             "中文测试：输入法、标点符号、全角半角、换行和字距表现。"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "日本語テスト：こんにちは世界。漢字・かな・カタカナ・句読点「」『』の表示確認。"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "한국어 테스트: 안녕하세요 세계. 받침, 조사, 기호와 줄바꿈 렌더링 확인."
                         </Label>
 
-                        <Label font_weight="700">"Other Scripts"</Label>
-                        <Label leading="normal">
+                        <Label w="100%" font_weight="700">"Other Scripts"</Label>
+                        <Label w="100%" leading="normal">
                             "Arabic: مرحبا بالعالم، هذا اختبار لاتجاه الكتابة والمحاذاة وعرض الحروف."
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Hindi: नमस्ते दुनिया। संयुक्ताक्षर, मात्रा, और देवनागरी रेंडरिंग परीक्षण।"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Thai: สวัสดีชาวโลก ทดสอบการจัดวรรณยุกต์และระยะบรรทัด"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Russian: Привет, мир! Проверка кириллицы, знаков препинания и переносов."
                         </Label>
 
-                        <Label font_weight="700">"Emoji / Symbols / Math"</Label>
-                        <Label leading="normal">
+                        <Label w="100%" font_weight="700">"Emoji / Symbols / Math"</Label>
+                        <Label w="100%" leading="normal">
                             "Emoji: 😀 😁 😂 🤣 😅 🥲 🧠 🧪 🚀 🌍 🔥 ✅ ❌ 💡 🧩 👨‍👩‍👧‍👦 🧑‍💻 🏳️‍🌈"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Currency & units: $ € £ ¥ ₹ ₽ ₩ ₫ ₺ 10km/h 23°C 5ms 1GiB"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Math & operators: +-*/ = != <= >= ≈ ≠ ≤ ≥ ∑ ∏ √ ∞ ∫ ∂ ∇ → ← ↔"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Box/shape symbols: ■ □ ▲ △ ● ○ ◆ ◇ ★ ☆ ※ ◎ ◉"
                         </Label>
 
-                        <Label font_weight="700">"Edge Cases"</Label>
-                        <Label leading="normal">
+                        <Label w="100%" font_weight="700">"Edge Cases"</Label>
+                        <Label w="100%" leading="normal">
                             "Zero-width joiner: 👩‍🚀 👨‍🔬 👩‍💻 | Combining marks: A\u{0301} e\u{0301} o\u{0302} n\u{0303}"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789"
                         </Label>
-                        <Label leading="normal">
+                        <Label w="100%" leading="normal">
                             "Punctuation width: ,.;:!? 。，；：！？ () [] {} <> 《》【】"
                         </Label>
                     </VStack>
@@ -425,7 +569,7 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
                     <Separator />
 
                     <Label font_weight="700" text_size="0.875rem">"Uncontrolled (internal state)"</Label>
-                    <HStack gap="0.75rem" items="center">
+                    <HStack gap="0.75rem" items="center" wrap="wrap">
                         <Label text_size="0.875rem">"Notifications"</Label>
                         <Switch />
                         <Label text_size="0.875rem">"Terms"</Label>
@@ -437,14 +581,14 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
                     <Separator />
 
                     <Label font_weight="700" text_size="0.875rem">"Controlled (shared Signal + Flip)"</Label>
-                    <HStack gap="0.75rem" items="center">
+                    <HStack gap="0.75rem" items="center" wrap="wrap">
                         { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
                         <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
                         <Button variant="outline" size="sm" on_click={move || sw.set(!sw.get())}>
                             "Flip switch"
                         </Button>
                     </HStack>
-                    <HStack gap="0.75rem" items="center">
+                    <HStack gap="0.75rem" items="center" wrap="wrap">
                         { Element::from(checkbox("hw_demo_checkbox").checked_signal(cb)) }
                         <Label text_size="0.875rem">{ format!("checkbox = {}", cb.get()) }</Label>
                     </HStack>
@@ -532,7 +676,7 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                                 TABSTRIP_FOCUS_PREFIX,
                             ) }
                         </Label>
-                        <HStack gap="0.35rem" items="center">
+                        <HStack gap="0.35rem" items="center" wrap="wrap">
                             <Button variant="ghost" size="sm" on_click={move || tab_idx.set(0)}>"0"</Button>
                             <Button variant="ghost" size="sm" on_click={move || tab_idx.set(1)}>"1"</Button>
                             <Button variant="ghost" size="sm" on_click={move || tab_idx.set(2)}>"2"</Button>
@@ -565,7 +709,7 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
 
                 <VStack gap="0.5rem">
                     <Label font_weight="700">"B) tw=..."</Label>
-                    <HStack tw="gap-3 items-center">
+                    <HStack tw="gap-3 items-center flex-wrap">
                         <Rect tw="w-24 h-12 rounded-md bg-secondary" />
                         <Rect tw="w-[120px] h-[48px] rounded-xl bg-muted" />
                         <Rect tw="w-20 h-12 rounded-full bg-accent" />
@@ -676,15 +820,29 @@ fn main() {
             <HStack w="100%" h="100%" bg="background" gap="0" relative=true>
                 <ScrollArea id="root-scroll" h="100%" overflow_y="auto" overflow_x="auto" grow="1" scroll_behavior="smooth">
                     <VStack items="center" gap="1.5rem" p="2rem" w="100%">
-                        <VStack items="center" gap="0.5rem">
-                            <Label text_size="2.5rem" font_weight="900">"RUI Framework"</Label>
-                            <Label text_size="1rem" color="muted-foreground">"Layered Architecture • Functional Components • Hot Reload"</Label>
+                        <VStack
+                            items="center"
+                            text_align="center"
+                            text_color="muted-foreground"
+                            text_size="1rem"
+                            leading="normal"
+                            gap="0.5rem"
+                            w="100%"
+                            max_w="48rem"
+                            px="1rem"
+                        >
+                            <Label w="100%" text_size="2.5rem" font_weight="900">"RUI Framework"</Label>
+                            <Label w="100%" text_color="foreground" font_weight="500">
+                                "Layered Architecture • Functional Components • Hot Reload"
+                            </Label>
                         </VStack>
 
                         <VStack max_w="70rem" w="100%" gap="1rem">
                             <ButtonShowcase />
+                            <ButtonHoverEasingShowcase />
                             <InputShowcase />
                             <TypographyShowcase />
+                            <ShadowShowcase />
                             <ScrollShowcase />
                             <LogicalShowcase />
                             <TextCompatibilityShowcase />

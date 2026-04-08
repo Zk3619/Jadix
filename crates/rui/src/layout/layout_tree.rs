@@ -66,6 +66,54 @@ const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
+/// Cascades inheritable text style fields from parent to descendants.
+/// Child explicit declarations (tracked in `attrs`) always win over inherited values.
+fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextStyle>) {
+    if let Some(parent) = parent_style {
+        if !node.attrs.contains_key("text_align") {
+            node.text_style.align = parent.align;
+        }
+        if !node.attrs.contains_key("text_color") {
+            node.text_style.color = parent.color;
+        }
+        if !node.attrs.contains_key("font_family") {
+            node.text_style.font_family = parent.font_family.clone();
+        }
+        if !node.attrs.contains_key("font_weight") {
+            node.text_style.weight = parent.weight;
+        }
+        if !node.attrs.contains_key("text_size") {
+            node.text_style.size = parent.size;
+        }
+        if !node.attrs.contains_key("line_height") && !node.attrs.contains_key("leading") {
+            node.text_style.line_height_px = parent.line_height_px;
+            node.text_style.line_height_scale = parent.line_height_scale;
+        }
+        if !node.attrs.contains_key("text_decoration_line") {
+            node.text_style.underline = parent.underline;
+            node.text_style.overline = parent.overline;
+            node.text_style.line_through = parent.line_through;
+        }
+        if !node.attrs.contains_key("text_decoration_style") {
+            node.text_style.decoration_style = parent.decoration_style;
+        }
+        if !node.attrs.contains_key("text_decoration_color") {
+            node.text_style.decoration_color = parent.decoration_color;
+        }
+        if !node.attrs.contains_key("text_decoration_thickness") {
+            node.text_style.decoration_thickness = parent.decoration_thickness;
+        }
+        if !node.attrs.contains_key("text_underline_offset") {
+            node.text_style.underline_offset = parent.underline_offset;
+        }
+    }
+
+    let next_style = Some(node.text_style.clone());
+    for child in &mut node.children {
+        cascade_inheritable_text_style(child, next_style.clone());
+    }
+}
+
 /// One `peek()` batch per scroll-area id per collect pass; shared by x/y scrollbar tracks on that area.
 struct ScrollAreaSignalsCached {
     vw: f32,
@@ -180,6 +228,101 @@ struct TextMeasureMeta {
     is_icon: bool,
     line_height_px: Option<f32>,
     line_height_scale: Option<f32>,
+    weight: u16,
+}
+
+/// 单字符宽度启发式：拉丁字母约 0.58em（0.52 对常见 UI 字重偏窄，会导致盒宽 < 实际 glyph 宽而**右侧裁字**）；
+/// CJK/阿拉伯/天城文等接近 1em；旧逻辑统一 0.6em 会**低估** CJK 行宽。
+fn char_intrinsic_width_em(c: char) -> f32 {
+    if c.is_ascii_whitespace() {
+        return 0.35;
+    }
+    if c.is_ascii() {
+        return 0.58;
+    }
+    let u = c as u32;
+    // 组合用附加符号（不占整格）
+    if (0x0300..=0x036F).contains(&u) || (0x1AB0..=0x1AFF).contains(&u) {
+        return 0.2;
+    }
+    // 其余（含 CJK、RTL、天城文、泰文、emoji 等）按接近全角宽估
+    0.95
+}
+
+fn segment_intrinsic_width(seg: &str, size: f32, weight: u16) -> f32 {
+    let mut w = 0.0;
+    for c in seg.chars() {
+        w += char_intrinsic_width_em(c) * size;
+    }
+    // 字重 >400 略增宽；再乘小系数补偿字距/rounding，与 glyphon 实测宽度对齐。
+    let wf = 1.0 + ((weight as f32 - 400.0).max(0.0)) * 0.0003;
+    (w * wf * 1.03).max(size * 0.5)
+}
+
+/// 文本叶子的 flex 测量：在 Taffy 给出确定宽度时按「约略换行」估高，避免盒高过矮裁切多行；
+/// 宽度未定时用按字符累加的启发式（优于统一 0.6×字符数）。
+fn measured_text_leaf_size(
+    m: &TextMeasureMeta,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+) -> taffy::geometry::Size<f32> {
+    let size = m.size;
+    let is_icon = m.is_icon;
+
+    let width = if let Some(w) = known_dimensions.width {
+        w
+    } else if is_icon {
+        size
+    } else {
+        let blob = if let Some(suf) = &m.shape_suffix {
+            format!("{}{}", m.text, suf)
+        } else {
+            m.text.clone()
+        };
+        blob
+            .split('\n')
+            .map(|seg| segment_intrinsic_width(seg, size, m.weight))
+            .fold(0.0_f32, f32::max)
+    };
+
+    let single_line_height = if is_icon {
+        size
+    } else if let Some(lh) = m.line_height_px {
+        lh
+    } else if let Some(scale) = m.line_height_scale {
+        size * scale
+    } else {
+        size * crate::style::tailwind_default_leading_scale(size)
+    };
+
+    let avail_for_wrap = known_dimensions.width.unwrap_or(width).max(1.0);
+
+    let mut line_blocks = 0.0_f32;
+    for seg in m.text.split('\n') {
+        let line_w = if is_icon {
+            size
+        } else {
+            segment_intrinsic_width(seg, size, m.weight)
+        };
+        if is_icon {
+            line_blocks += 1.0;
+            continue;
+        }
+        // 需要换行时：ceil(line_w / avail)；与 +0.5 阈值相比，避免「略宽于容器」仍算一行
+        if line_w <= avail_for_wrap {
+            line_blocks += 1.0;
+        } else {
+            line_blocks += (line_w / avail_for_wrap).ceil().max(1.0);
+        }
+    }
+    line_blocks = line_blocks.max(1.0);
+
+    let intrinsic_height = single_line_height * line_blocks;
+    let height = match known_dimensions.height {
+        Some(h) => intrinsic_height.max(h),
+        None => intrinsic_height,
+    };
+
+    taffy::geometry::Size { width, height }
 }
 
 impl LayoutTree {
@@ -209,6 +352,7 @@ impl LayoutTree {
     ) -> RenderResult {
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
+        cascade_inheritable_text_style(root, None);
 
         self.text_measurements.clear();
         self.visited_nodes.clear();
@@ -238,48 +382,7 @@ impl LayoutTree {
                 available_space,
                 |known_dimensions, _available_space, node_id, _context, _style| {
                     if let Some(m) = self.text_measurements.get(&node_id) {
-                        let size = m.size;
-                        let is_icon = m.is_icon;
-                        let line_count = m.text.split('\n').count().max(1) as f32;
-                        let width = if let Some(w) = known_dimensions.width {
-                            w
-                        } else if is_icon {
-                            size
-                        } else {
-                            let max_chars = if let Some(suf) = &m.shape_suffix {
-                                format!("{}{}", m.text, suf)
-                                    .lines()
-                                    .map(|l| l.chars().count())
-                                    .max()
-                                    .unwrap_or(0) as f32
-                            } else {
-                                m.text
-                                    .lines()
-                                    .map(|l| l.chars().count())
-                                    .max()
-                                    .unwrap_or(0) as f32
-                            };
-                            max_chars * size * 0.55
-                        };
-                        
-                        // 行高必须参与测量。若 flex 传入偏小的 definite height，旧逻辑会完全采用 h，
-                        // 叶节点布局盒过矮，prepare 里 buffer.set_size 会按矮盒裁切，leading/line_height 看似「无效」。
-                        let single_line_height = if is_icon {
-                            size
-                        } else if let Some(lh) = m.line_height_px {
-                            lh
-                        } else if let Some(scale) = m.line_height_scale {
-                            size * scale
-                        } else {
-                            size * crate::style::tailwind_default_leading_scale(size)
-                        };
-                        let intrinsic_height = single_line_height * line_count;
-
-                        let height = match known_dimensions.height {
-                            Some(h) => intrinsic_height.max(h),
-                            None => intrinsic_height,
-                        };
-                        taffy::geometry::Size { width, height }
+                        measured_text_leaf_size(m, known_dimensions)
                     } else {
                         taffy::geometry::Size::ZERO
                     }
@@ -346,6 +449,7 @@ impl LayoutTree {
         // island in the corner while the swapchain is full-window.
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
+        cascade_inheritable_text_style(root, None);
         self.update_taffy_node_style(root);
 
         if !scroll_only {
@@ -362,28 +466,7 @@ impl LayoutTree {
                     available_space,
                     |known_dimensions, _available_space, node_id, _context, _style| {
                         if let Some(m) = self.text_measurements.get(&node_id) {
-                            let size = m.size;
-                            let line_count = m.text.split('\n').count().max(1) as f32;
-                            let single_line_height = if m.is_icon { size } else if let Some(lh) = m.line_height_px { lh } else if let Some(scale) = m.line_height_scale { size * scale } else { size * crate::style::tailwind_default_leading_scale(size) };
-                            let intrinsic_height = single_line_height * line_count;
-                            let width = if let Some(w) = known_dimensions.width { w } else if m.is_icon { size } else {
-                                let max_chars = if let Some(suf) = &m.shape_suffix {
-                                    format!("{}{}", m.text, suf)
-                                        .lines()
-                                        .map(|l| l.chars().count())
-                                        .max()
-                                        .unwrap_or(0) as f32
-                                } else {
-                                    m.text
-                                        .lines()
-                                        .map(|l| l.chars().count())
-                                        .max()
-                                        .unwrap_or(0) as f32
-                                };
-                                max_chars * size * 0.55
-                            };
-                            let height = match known_dimensions.height { Some(h) => intrinsic_height.max(h), None => intrinsic_height };
-                            taffy::geometry::Size { width, height }
+                            measured_text_leaf_size(m, known_dimensions)
                         } else {
                             taffy::geometry::Size::ZERO
                         }
@@ -491,6 +574,7 @@ impl LayoutTree {
                         is_icon,
                         line_height_px: element.text_style.line_height_px,
                         line_height_scale: element.text_style.line_height_scale,
+                        weight: element.text_style.weight,
                     },
                 );
             }
@@ -601,17 +685,66 @@ impl LayoutTree {
             }
         }
 
-        // Collect instance
-        if (element.style.bg_color[3] > 0.0 || element.style.border_width > 0.0 || element.style.shadow_color[3] > 0.0)
+        // Collect main instance
+        let border_w = if element.style.border_style == crate::style::LineStyle::None {
+            0.0
+        } else {
+            element.style.border_width
+        };
+        if (element.style.bg_color[3] > 0.0 || border_w > 0.0 || element.style.shadow_color[3] > 0.0)
             && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
             let resolved_radii = resolve_corner_radii(element.style.radii, draw_rect[2], draw_rect[3]);
             instances.push(InstanceInput {
                 rect_pos: [draw_rect[0], draw_rect[1]], rect_size: [draw_rect[2], draw_rect[3]],
                 color: element.style.bg_color, border_color: element.style.border_color,
-                radii: resolved_radii, border_width: element.style.border_width,
-                shadow_color: element.style.shadow_color, shadow_blur: element.style.shadow_blur,
-                _padding: 0.0,
+                radii: resolved_radii, border_width: border_w,
+                shadow_color: element.style.shadow_color,
+                shadow_offset: element.style.shadow_offset,
+                shadow_blur: element.style.shadow_blur,
+                shadow_spread: element.style.shadow_spread,
+                shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
+                _padding: [0.0; 2],
             });
+        }
+
+        // Collect outline as an overlay (drawn outside; does not affect layout).
+        let outline_w = if element.style.outline_style == crate::style::LineStyle::None {
+            0.0
+        } else {
+            element.style.outline_width
+        };
+        if outline_w > 0.0 && lay_w > 0.0 && lay_h > 0.0 {
+            // Outline should not be clipped by element's own overflow; only parent clip applies.
+            let outline_rect = [
+                render_x - outline_w,
+                render_y - outline_w,
+                lay_w + outline_w * 2.0,
+                lay_h + outline_w * 2.0,
+            ];
+            let outline_draw = intersect_rect(parent_clip, outline_rect);
+            if outline_draw[2] > 0.0 && outline_draw[3] > 0.0 {
+                let mut outline_radii = element.style.radii;
+                for r in &mut outline_radii {
+                    if *r >= 0.0 {
+                        *r += outline_w;
+                    }
+                }
+                let resolved_radii = resolve_corner_radii(outline_radii, outline_draw[2], outline_draw[3]);
+                instances.push(InstanceInput {
+                    rect_pos: [outline_draw[0], outline_draw[1]],
+                    rect_size: [outline_draw[2], outline_draw[3]],
+                    color: [0.0, 0.0, 0.0, 0.0],
+                    border_color: element.style.outline_color,
+                    radii: resolved_radii,
+                    border_width: outline_w,
+                    shadow_color: [0.0, 0.0, 0.0, 0.0],
+                    shadow_offset: [0.0, 0.0],
+                    shadow_blur: 0.0,
+                    shadow_spread: 0.0,
+                    shadow_inset: 0.0,
+                    _padding: [0.0; 2],
+                });
+            }
         }
 
         if let Some(tex_key) = element.image_texture.as_ref() {

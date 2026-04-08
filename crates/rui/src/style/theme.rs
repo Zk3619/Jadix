@@ -1,5 +1,7 @@
-//! 设计令牌与主题系统（ShadCN 风格）。
+//! 设计令牌与主题系统（ShadCN v4 风格 OKLCH → display sRGB）。
 use std::sync::OnceLock;
+
+use super::color_space::oklch_to_display_srgba;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DesignTokens {
@@ -17,6 +19,7 @@ pub struct DesignTokens {
     pub foreground: [f32; 4],
     pub border: [f32; 4],
     pub input: [f32; 4],
+    /// 焦点环色；含 alpha 以贴近 `ring-ring/50` 观感。
     pub ring: [f32; 4],
     pub radius: f32,
 }
@@ -27,25 +30,25 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        // Default Light Theme (ShadCN style)
+        // 与 shadcn-ui `apps/v4/app/globals.css` 中 `:root` 对齐（浅色）。
         Self {
             colors: DesignTokens {
-                primary: [0.09, 0.09, 0.09, 1.0],
-                primary_foreground: [0.98, 0.98, 0.98, 1.0],
-                secondary: [0.96, 0.96, 0.96, 1.0],
-                secondary_foreground: [0.09, 0.09, 0.09, 1.0],
-                accent: [0.96, 0.96, 0.96, 1.0],
-                accent_foreground: [0.09, 0.09, 0.09, 1.0],
-                muted: [0.96, 0.96, 0.96, 1.0],
-                muted_foreground: [0.45, 0.45, 0.45, 1.0],
-                destructive: [0.94, 0.27, 0.27, 1.0],
-                destructive_foreground: [0.98, 0.98, 0.98, 1.0], // Fixed from analysis
-                background: [1.0, 1.0, 1.0, 1.0],
-                foreground: [0.09, 0.09, 0.09, 1.0],
-                border: [0.90, 0.90, 0.90, 1.0],
-                input: [0.90, 0.90, 0.90, 1.0],
-                ring: [0.09, 0.09, 0.09, 0.5],
-                radius: 0.5, // rem
+                background: oklch_to_display_srgba(1.0, 0.0, 0.0, 1.0),
+                foreground: oklch_to_display_srgba(0.145, 0.0, 0.0, 1.0),
+                primary: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
+                primary_foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
+                secondary: oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0),
+                secondary_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
+                muted: oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0),
+                muted_foreground: oklch_to_display_srgba(0.556, 0.0, 0.0, 1.0),
+                accent: oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0),
+                accent_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
+                destructive: oklch_to_display_srgba(0.577, 0.245, 27.325, 1.0),
+                destructive_foreground: oklch_to_display_srgba(0.97, 0.01, 17.0, 1.0),
+                border: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
+                input: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
+                ring: oklch_to_display_srgba(0.708, 0.0, 0.0, 0.5),
+                radius: 0.625,
             },
         }
     }

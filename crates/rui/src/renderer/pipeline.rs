@@ -46,8 +46,11 @@ pub struct InstanceInput {
     pub radii: [f32; 4],
     pub border_width: f32,
     pub shadow_color: [f32; 4],
+    pub shadow_offset: [f32; 2],
     pub shadow_blur: f32,
-    pub _padding: f32,
+    pub shadow_spread: f32,
+    pub shadow_inset: f32,
+    pub _padding: [f32; 2],
 }
 
 impl InstanceInput {
@@ -64,7 +67,10 @@ impl InstanceInput {
                 wgpu::VertexAttribute { offset: 48, shader_location: 6, format: wgpu::VertexFormat::Float32x4 },
                 wgpu::VertexAttribute { offset: 64, shader_location: 7, format: wgpu::VertexFormat::Float32 },
                 wgpu::VertexAttribute { offset: 68, shader_location: 8, format: wgpu::VertexFormat::Float32x4 },
-                wgpu::VertexAttribute { offset: 84, shader_location: 9, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 84, shader_location: 9, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 92, shader_location: 10, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 96, shader_location: 11, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 100, shader_location: 12, format: wgpu::VertexFormat::Float32 },
             ],
         }
     }

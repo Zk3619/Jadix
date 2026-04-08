@@ -7,6 +7,8 @@ pub struct TextNodeConfig {
     pub weight: u16,
     pub color: [u8; 4],
     pub underline: bool,
+    /// 与 CSS `text-underline-offset` 一致（逻辑像素）；`None` 用引擎默认。
+    pub underline_offset_px: Option<f32>,
     pub center: bool,
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
@@ -19,6 +21,8 @@ pub fn apply_label_defaults(el: Element) -> Element {
         .font_weight(500.0)
         .text_leading_none()
         .text_color(parse_text_color("foreground"))
+        // 与 CSS flex 子项 `min-width: 0` 类似：允许在列布局中收缩到容器宽，便于 `w="100%"` 换行。
+        .min_w("0")
 }
 
 /// 构建一个用于组件内嵌文本的节点，统一行高/对齐/下划线逻辑。
@@ -47,6 +51,10 @@ pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Elem
 
     if let Some(family) = cfg.font_family {
         el = el.font_family(family);
+    }
+
+    if let Some(off) = cfg.underline_offset_px {
+        el = el.text_underline_offset(off);
     }
 
     el

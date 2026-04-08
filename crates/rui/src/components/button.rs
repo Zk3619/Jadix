@@ -2,13 +2,21 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::{
     parse_color, parse_text_color, ButtonHoverPaint, Element, IntoDimension, IntoF32, LayoutStatus,
 };
-use crate::tokens;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::components::text_node::{build_text_node, TextNodeConfig};
+use crate::style::{
+    lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow, use_ui_transition_cubic,
+    use_ui_transition_spring,
+};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// Tailwind v4 `shadow-xs`（shadcn 文档站 Button demo：`0 1px 2px 0 rgb(0 0 0 / 0.05)`）。
+const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
+/// 引擎坐标下正值会把下划线抬高；这里取负值让 link 下划线向下偏移。
+const LINK_UNDERLINE_OFFSET_PX: f32 = -4.0;
 
 trait ColorExt {
     fn with_alpha(self, alpha: f32) -> [f32; 4];
@@ -17,6 +25,139 @@ impl ColorExt for [f32; 4] {
     fn with_alpha(mut self, alpha: f32) -> [f32; 4] {
         self[3] = alpha;
         self
+    }
+}
+
+/// `shadow-xs` 与 `focus-visible:ring` / `ring-destructive/20` 的合成（单槽 `box-shadow`）。
+fn button_shadow_style_for_sync(is_focused: bool, disabled: bool, variant: &str) -> (f32, [f32; 4], [f32; 2], f32) {
+    let xs = matches!(variant, "default" | "secondary" | "outline" | "destructive");
+    if is_focused && !disabled {
+        let c = if variant == "destructive" {
+            parse_color("destructive").with_alpha(0.2)
+        } else {
+            parse_color("ring")
+        };
+        return (3.0, c, [0.0, 0.0], 0.0);
+    }
+    if xs && !disabled {
+        let s = parse_box_shadow(SHADOW_XS);
+        return (s.blur, s.color, s.offset, s.spread);
+    }
+    (0.0, [0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 0.0)
+}
+
+/// 与 `From` / `paint` 共用，保证与 [`use_ui_transition_spring`] 同一 key。
+fn btn_hover_spring_key(id: &str) -> String {
+    format!("rui:btn_hover_blend:{id}")
+}
+
+fn btn_hover_cubic_key(id: &str) -> String {
+    format!("rui:btn_hover_cubic:{id}")
+}
+
+fn btn_focus_spring_key(id: &str) -> String {
+    format!("rui:btn_focus_blend:{id}")
+}
+
+fn lerp_shadow_params(
+    a: (f32, [f32; 4], [f32; 2], f32),
+    b: (f32, [f32; 4], [f32; 2], f32),
+    t: f32,
+) -> (f32, [f32; 4], [f32; 2], f32) {
+    let t = t.clamp(0.0, 1.0);
+    let col = lerp_display_srgb_linear(a.1, b.1, t);
+    let blur = a.0 * (1.0 - t) + b.0 * t;
+    let off = [
+        a.2[0] * (1.0 - t) + b.2[0] * t,
+        a.2[1] * (1.0 - t) + b.2[1] * t,
+    ];
+    let spread = a.3 * (1.0 - t) + b.3 * t;
+    (blur, col, off, spread)
+}
+
+fn hover_t_for_id(id: &str, easing: &str) -> f32 {
+    let t = if easing == "cubic" {
+        use_ui_transition_cubic(&btn_hover_cubic_key(id), 0.0).peek()
+    } else {
+        use_ui_transition_spring(&btn_hover_spring_key(id), 0.0).peek()
+    };
+    t.clamp(0.0, 1.0)
+}
+
+fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    let af = [
+        a[0] as f32 / 255.0,
+        a[1] as f32 / 255.0,
+        a[2] as f32 / 255.0,
+        a[3] as f32 / 255.0,
+    ];
+    let bf = [
+        b[0] as f32 / 255.0,
+        b[1] as f32 / 255.0,
+        b[2] as f32 / 255.0,
+        b[3] as f32 / 255.0,
+    ];
+    let o = lerp_display_srgb_linear(af, bf, t);
+    [
+        (o[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        (o[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+/// `hover_t`：0=静止，1=悬停；由弹簧驱动，对标浏览器 `transition` 的平滑插值（颜色在线性 sRGB 下 lerp）。
+fn button_chrome_for_variant(variant: &str, hover_t: f32) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
+    let t = hover_t.clamp(0.0, 1.0);
+    match variant {
+        "default" => {
+            let rest = parse_color("primary");
+            let hover = parse_color("primary").with_alpha(0.9);
+            let bg = lerp_display_srgb_linear(rest, hover, t);
+            (bg, parse_text_color("primary-foreground"), None)
+        }
+        "secondary" => {
+            let rest = parse_color("secondary");
+            let hover = parse_color("secondary").with_alpha(0.8);
+            let bg = lerp_display_srgb_linear(rest, hover, t);
+            (bg, parse_text_color("secondary-foreground"), None)
+        }
+        "outline" => {
+            let rest_bg = parse_color("background");
+            let hover_bg = parse_color("accent");
+            let bg = lerp_display_srgb_linear(rest_bg, hover_bg, t);
+            let tc = lerp_text_rgba(
+                parse_text_color("foreground"),
+                parse_text_color("accent-foreground"),
+                t,
+            );
+            // Tailwind `border` 类，与 shadcn 文档站 outline 按钮一致（浅色主题常与 `input` 同色）。
+            (bg, tc, Some(parse_color("border")))
+        }
+        "ghost" => {
+            let rest_bg = [0.0, 0.0, 0.0, 0.0];
+            let hover_bg = parse_color("accent");
+            let bg = lerp_premultiplied_display_srgba(rest_bg, hover_bg, t);
+            let tc = lerp_text_rgba(
+                parse_text_color("foreground"),
+                parse_text_color("accent-foreground"),
+                t,
+            );
+            (bg, tc, None)
+        }
+        "destructive" => {
+            let rest = parse_color("destructive");
+            let hover = parse_color("destructive").with_alpha(0.9);
+            let bg = lerp_display_srgb_linear(rest, hover, t);
+            (bg, parse_text_color("white"), None)
+        }
+        "link" => ([0.0; 4], parse_text_color("primary"), None),
+        _ => {
+            let rest = parse_color("primary");
+            let hover = parse_color("primary").with_alpha(0.9);
+            let bg = lerp_display_srgb_linear(rest, hover, t);
+            (bg, parse_text_color("primary-foreground"), None)
+        }
     }
 }
 
@@ -168,6 +309,8 @@ pub struct ButtonBuilder {
     id: String,
     variant: ButtonVariant,
     size: ButtonSize,
+    /// `"spring"` 或 `"cubic"`（`cubic-bezier` 时长过渡）。
+    hover_easing: String,
     disabled: bool,
     on_click: Option<Box<dyn FnMut()>>,
     container: BoxBuilder,
@@ -190,23 +333,34 @@ pub fn Button(
     variant: ButtonVariant,
     size: ButtonSize,
     disabled: bool,
+    hover_easing: String,
     #[prop(default = "Handler::default()")]
     mut on_click: crate::core::tree::Handler,
     #[prop(default = "KeyHandler::default()")]
     mut on_key_down: crate::core::tree::KeyHandler,
     children: Option<Element>,
 ) -> Element {
+    let hover_easing = if hover_easing.is_empty() || (hover_easing != "spring" && hover_easing != "cubic") {
+        "spring".to_string()
+    } else {
+        hover_easing
+    };
     let mut builder = button(&id)
         .variant(&variant.as_paint_key())
+        .hover_easing(&hover_easing)
         .disabled(disabled);
     
     builder.size = size;
     builder.container = builder.container.gap(size.gap());
     builder.text_style.size_px = IntoF32::into_f32(size.text_size());
     if size.is_icon() {
-        builder.container = builder.container.h(size.height()).w(size.height());
+        builder.container = builder
+            .container
+            .h(size.height())
+            .w(size.height())
+            .flex_shrink(0.0);
     } else {
-        builder.container = builder.container.min_h(size.height());
+        builder.container = builder.container.min_h(size.height()).flex_shrink(0.0);
     }
 
     if let Some(c) = children {
@@ -245,19 +399,22 @@ pub fn button(id: &str) -> ButtonBuilder {
         id,
         variant: ButtonVariant::Default,
         size,
+        hover_easing: "spring".to_string(),
         disabled: false,
         on_click: None,
         container: hstack()
             .rounded(size.corner_radius())
             .gap(size.gap())
             .justify_center()
-            .items_center(),
+            .items_center()
+            .flex_shrink(0.0),
         content: Vec::new(),
         text_style: TextNodeConfig {
             size_px: IntoF32::into_f32(size.text_size()),
             weight: 500,
             color: [255, 255, 255, 255],
             underline: false,
+            underline_offset_px: None,
             center: true,
             line_height_px: None,
             leading_scale: None,
@@ -267,6 +424,11 @@ pub fn button(id: &str) -> ButtonBuilder {
 }
 
 impl ButtonBuilder {
+    pub fn hover_easing(mut self, e: &str) -> Self {
+        self.hover_easing = e.to_string();
+        self
+    }
+
     pub fn variant(mut self, v: &str) -> Self {
         self.variant = ButtonVariant::from_str(v);
         self
@@ -282,14 +444,16 @@ impl ButtonBuilder {
                 .container
                 .min_h("auto")
                 .h(self.size.height())
-                .w(self.size.height());
+                .w(self.size.height())
+                .flex_shrink(0.0);
         } else {
             // Text buttons are content-sized but follow standard min-height.
             self.container = self
                 .container
                 .min_h(self.size.height())
                 .h("auto")
-                .w("auto");
+                .w("auto")
+                .flex_shrink(0.0);
         }
         self
     }
@@ -417,6 +581,18 @@ impl From<ButtonBuilder> for Element {
         let is_hovered = hovered.peek() && !builder.disabled;
         let is_focused = focused.peek() == builder.id && focus_visible.peek() && !builder.disabled;
 
+        let hover_t = if builder.disabled {
+            0.0
+        } else {
+            hover_t_for_id(&builder.id, &builder.hover_easing)
+        };
+        let t = hover_t;
+        let focus_spring = use_ui_transition_spring(
+            &btn_focus_spring_key(&builder.id),
+            if is_focused { 1.0 } else { 0.0 },
+        );
+        let focus_t = focus_spring.peek().clamp(0.0, 1.0);
+
         // Apply size-based padding if not specified
         let mut container = builder.container;
         if !builder.size.is_icon() {
@@ -425,54 +601,29 @@ impl From<ButtonBuilder> for Element {
                 .py(builder.size.padding_v());
         }
 
-        // Apply variant styling
-        let (bg, text_color, border) = match builder.variant {
-            ButtonVariant::Default => (
-                if is_hovered {
-                    tokens::primary().with_alpha(0.9)
-                } else {
-                    tokens::primary()
-                },
-                parse_text_color("primary-foreground"),
-                None
-            ),
-            ButtonVariant::Secondary => (
-                if is_hovered { parse_color("secondary").with_alpha(0.8) } else { parse_color("secondary") },
-                parse_text_color("secondary-foreground"),
-                None
-            ),
-            ButtonVariant::Outline => (
-                if is_hovered { parse_color("accent") } else { parse_color("background") },
-                if is_hovered { parse_text_color("accent-foreground") } else { parse_text_color("foreground") },
-                Some(parse_color("border"))
-            ),
-            ButtonVariant::Ghost => (
-                if is_hovered { parse_color("accent") } else { [0.0; 4] },
-                if is_hovered { parse_text_color("accent-foreground") } else { parse_text_color("foreground") },
-                None
-            ),
-            ButtonVariant::Destructive => (
-                if is_hovered { parse_color("destructive").with_alpha(0.9) } else { parse_color("destructive") },
-                parse_text_color("primary-foreground"),
-                None
-            ),
-            ButtonVariant::Link => (
-                [0.0; 4],
-                parse_text_color("primary"),
-                None
-            ),
-        };
-
-        let mut bg = bg;
+        let (mut bg, text_color, border) = button_chrome_for_variant(builder.variant.as_paint_key(), t);
         if builder.disabled {
             bg[3] *= 0.5;
         }
         container = container.bg(bg);
-        if let Some(b_color) = border {
+        if let Some(mut b_color) = border {
+            if builder.disabled && builder.variant == ButtonVariant::Outline {
+                b_color[3] *= 0.5;
+            }
             container = container.border(b_color, 1.0);
         }
-        if is_focused {
-            container = container.shadow(parse_color("ring"), 3.0);
+        let vkey = builder.variant.as_paint_key();
+        let rest_sh = button_shadow_style_for_sync(false, builder.disabled, vkey);
+        let ring_sh = button_shadow_style_for_sync(true, builder.disabled, vkey);
+        let (sh_blur, sh_col, sh_off, sh_spread) = lerp_shadow_params(rest_sh, ring_sh, focus_t);
+        if sh_blur > 0.0 || sh_col[3] > 0.0 {
+            container = container
+                .box_shadow_color(sh_col)
+                .box_shadow_blur(sh_blur)
+                .box_shadow_offset_x(sh_off[0])
+                .box_shadow_offset_y(sh_off[1])
+                .box_shadow_spread(sh_spread)
+                .box_shadow_inset(false);
         }
 
         let mut el: Element = container.into();
@@ -480,6 +631,7 @@ impl From<ButtonBuilder> for Element {
         el.button_hover_paint = Some(ButtonHoverPaint {
             variant: builder.variant.as_paint_key().to_string(),
             disabled: builder.disabled,
+            hover_easing: builder.hover_easing.clone(),
         });
         
         for mut child in builder.content {
@@ -498,6 +650,11 @@ impl From<ButtonBuilder> for Element {
                 let text_node = build_text_node(text_content, TextNodeConfig {
                     color,
                     underline,
+                    underline_offset_px: if builder.variant == ButtonVariant::Link {
+                        Some(LINK_UNDERLINE_OFFSET_PX)
+                    } else {
+                        builder.text_style.underline_offset_px
+                    },
                     font_family: child.text_style.font_family.clone(),
                     size_px,
                     ..builder.text_style
@@ -511,11 +668,20 @@ impl From<ButtonBuilder> for Element {
         let mut on_click = builder.on_click;
         let disabled = builder.disabled;
         let focus_id = builder.id.clone();
+        let hover_spring_cb = use_ui_transition_spring(&btn_hover_spring_key(&builder.id), 0.0);
+        let cubic_cb = use_ui_transition_cubic(&btn_hover_cubic_key(&builder.id), 0.0);
+        let hover_easing = builder.hover_easing.clone();
 
         interactive(el)
             .focus_id(builder.id)
             .focusable(!disabled)
             .on_hover(move |h| {
+                let v = if disabled { 0.0 } else if h { 1.0 } else { 0.0 };
+                if hover_easing == "cubic" {
+                    cubic_cb.set(v);
+                } else {
+                    hover_spring_cb.set(v);
+                }
                 let v = if disabled { false } else { h };
                 if hovered.peek() != v {
                     hovered.set_silent(v);
@@ -532,69 +698,26 @@ impl From<ButtonBuilder> for Element {
     }
 }
 
-fn button_chrome_for_variant(variant: &str, is_hovered: bool) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
-    match variant {
-        "default" => (
-            if is_hovered {
-                parse_color("primary").with_alpha(0.9)
-            } else {
-                parse_color("primary")
-            },
-            parse_text_color("primary-foreground"),
-            None,
-        ),
-        "secondary" => (
-            if is_hovered {
-                parse_color("secondary").with_alpha(0.8)
-            } else {
-                parse_color("secondary")
-            },
-            parse_text_color("secondary-foreground"),
-            None,
-        ),
-        "outline" => (
-            if is_hovered { parse_color("accent") } else { parse_color("background") },
-            if is_hovered {
-                parse_text_color("accent-foreground")
-            } else {
-                parse_text_color("foreground")
-            },
-            Some(parse_color("border")),
-        ),
-        "ghost" => (
-            if is_hovered { parse_color("accent") } else { [0.0; 4] },
-            if is_hovered {
-                parse_text_color("accent-foreground")
-            } else {
-                parse_text_color("foreground")
-            },
-            None,
-        ),
-        "destructive" => (
-            if is_hovered {
-                parse_color("destructive").with_alpha(0.9)
-            } else {
-                parse_color("destructive")
-            },
-            parse_text_color("primary-foreground"),
-            None,
-        ),
-        "link" => ([0.0; 4], parse_text_color("primary"), None),
-        _ => button_chrome_for_variant("default", is_hovered),
-    }
-}
-
 fn paint_button_root_from_hover(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     desc: &ButtonHoverPaint,
+    focus_id: &str,
     is_hovered: bool,
     impact: &mut LayoutStatus,
 ) {
-    let (mut bg, text_color, border) = button_chrome_for_variant(&desc.variant, is_hovered);
+    let hover_t = hover_t_for_id(focus_id, &desc.hover_easing);
+    let t = if desc.disabled { 0.0 } else { hover_t };
+    let (mut bg, text_color, border) = button_chrome_for_variant(&desc.variant, t);
     if desc.disabled {
         bg[3] *= 0.5;
     }
+    let border = border.map(|mut c| {
+        if desc.disabled && desc.variant == "outline" {
+            c[3] *= 0.5;
+        }
+        c
+    });
     let underline = desc.variant == "link" && is_hovered;
     let target_bw = if border.is_some() { 1.0_f32 } else { 0.0_f32 };
     let root_color_ok = match border {
@@ -612,7 +735,15 @@ fn paint_button_root_from_hover(
         if desc.disabled {
             c[3] = ((c[3] as f32) * 0.5).round() as u8;
         }
-        if child.text_style.underline != underline || child.text_style.color != c {
+        let want_uo = if desc.variant == "link" {
+            LINK_UNDERLINE_OFFSET_PX
+        } else {
+            child.text_style.underline_offset
+        };
+        if child.text_style.underline != underline
+            || child.text_style.color != c
+            || (child.text_style.underline_offset - want_uo).abs() > 0.01
+        {
             text_children_ok = false;
             break;
         }
@@ -649,11 +780,17 @@ fn paint_button_root_from_hover(
         if desc.disabled {
             color[3] = ((color[3] as f32) * 0.5).round() as u8;
         }
+        let prev_uo = child.text_style.underline_offset;
         child.text_style.color = color;
         child.text_style.underline = underline;
+        if desc.variant == "link" {
+            child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
+        }
         if prev_u != underline {
             layout_hit = true;
         } else if child.text_style.color != old_tc {
+            style_hit = true;
+        } else if (prev_uo - child.text_style.underline_offset).abs() > 0.01 {
             style_hit = true;
         }
         if child.layout_node.is_some() {
@@ -672,27 +809,39 @@ fn sync_button_focus_ring_shadow(
     layout_tree: &mut LayoutTree,
     disabled: bool,
     is_focused: bool,
+    variant: &str,
+    focus_id: &str,
     impact: &mut LayoutStatus,
 ) {
-    let want_blur = if is_focused && !disabled { 3.0 } else { 0.0 };
-    let want_color = if is_focused && !disabled {
-        parse_color("ring")
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
+    let focus_spring = use_ui_transition_spring(
+        &btn_focus_spring_key(focus_id),
+        if is_focused { 1.0 } else { 0.0 },
+    );
+    focus_spring.set(if is_focused { 1.0 } else { 0.0 });
+    let focus_t = focus_spring.peek().clamp(0.0, 1.0);
+    let rest_sh = button_shadow_style_for_sync(false, disabled, variant);
+    let ring_sh = button_shadow_style_for_sync(true, disabled, variant);
+    let (want_blur, want_color, want_off, want_spread) =
+        lerp_shadow_params(rest_sh, ring_sh, focus_t);
+    let want_inset = false;
     let blur_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01;
     let color_ok = (el.style.shadow_color[0] - want_color[0]).abs() <= 0.001
         && (el.style.shadow_color[1] - want_color[1]).abs() <= 0.001
         && (el.style.shadow_color[2] - want_color[2]).abs() <= 0.001
         && (el.style.shadow_color[3] - want_color[3]).abs() <= 0.001;
-    if blur_ok && color_ok {
+    let off_ok = (el.style.shadow_offset[0] - want_off[0]).abs() <= 0.01
+        && (el.style.shadow_offset[1] - want_off[1]).abs() <= 0.01;
+    let spread_ok = (el.style.shadow_spread - want_spread).abs() <= 0.01;
+    let inset_ok = el.style.shadow_inset == want_inset;
+    if blur_ok && color_ok && off_ok && spread_ok && inset_ok {
         return;
     }
     el.style.shadow_color = want_color;
     el.style.shadow_blur = want_blur;
+    el.style.shadow_offset = want_off;
+    el.style.shadow_spread = want_spread;
+    el.style.shadow_inset = want_inset;
     layout_tree.update_taffy_node_style(el);
-    // Shadow is paint/chrome; `LayoutChanged` here was forcing full scrollbar prepass + Taffy rebuild
-    // on every focus/hover frame and fighting auto scrollbar fade.
     *impact = impact.merge(LayoutStatus::StyleChanged);
 }
 
@@ -706,12 +855,20 @@ pub(crate) fn sync_button_hover_paint_subtree(
         if let Some(fid) = el.focus_id.clone() {
             let key = format!("{}_hover", fid);
             let is_hovered = use_signal(&key, || false).peek() && !desc.disabled;
-            paint_button_root_from_hover(el, layout_tree, &desc, is_hovered, impact);
+            paint_button_root_from_hover(el, layout_tree, &desc, &fid, is_hovered, impact);
             let focused = use_signal("__rui_button_focus_id", String::new);
             let focus_visible = use_signal("__rui_focus_visible", || false);
             let is_focused =
                 !desc.disabled && focus_visible.peek() && focused.peek() == fid;
-            sync_button_focus_ring_shadow(el, layout_tree, desc.disabled, is_focused, impact);
+            sync_button_focus_ring_shadow(
+                el,
+                layout_tree,
+                desc.disabled,
+                is_focused,
+                &desc.variant,
+                &fid,
+                impact,
+            );
         }
     }
     for child in &mut el.children {

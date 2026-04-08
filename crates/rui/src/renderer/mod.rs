@@ -31,7 +31,10 @@ pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceI
                 out.radii[3] * scale,
             ];
             out.border_width *= scale;
+            out.shadow_offset[0] *= scale;
+            out.shadow_offset[1] *= scale;
             out.shadow_blur *= scale;
+            out.shadow_spread *= scale;
             out
         })
         .collect()

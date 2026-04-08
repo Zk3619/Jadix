@@ -39,6 +39,7 @@ pub struct TextStyle {
     pub decoration_thickness: f32,
     pub underline_offset: f32,
     pub shadow_color: Option<[u8; 4]>,
+    pub shadow_offset: [f32; 2],
     pub shadow_blur: f32,
     /// 绝对行高（逻辑像素）。
     pub line_height_px: Option<f32>,
@@ -64,6 +65,7 @@ impl Default for TextStyle {
             decoration_thickness: 0.0,
             underline_offset: 1.0,
             shadow_color: None,
+            shadow_offset: [0.0, 0.0],
             shadow_blur: 0.0,
             line_height_px: None,
             line_height_scale: None,
@@ -71,4 +73,55 @@ impl Default for TextStyle {
             input_caret: None,
         }
     }
+}
+
+fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(v) = t.parse::<f32>() {
+        return Some(v);
+    }
+    if let Some(raw) = t.strip_suffix("px") {
+        return raw.trim().parse::<f32>().ok();
+    }
+    if let Some(raw) = t.strip_suffix("rem") {
+        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+    }
+    None
+}
+
+/// 解析单个 `text-shadow`（不支持逗号多阴影）。
+///
+/// 语义参考 MDN：`<color>? && <length>{2,3}`。
+/// `color` 与本项目语义色系统对齐（`parse_text_color`）。
+pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32) {
+    let raw = s.as_ref().trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+        return (None, [0.0, 0.0], 0.0);
+    }
+
+    // Keep in sync with `CSS_ROOT_FONT_SIZE_PX`.
+    let root_font_size_px = 16.0_f32;
+
+    let mut lens: Vec<f32> = Vec::with_capacity(3);
+    let mut color: Option<[u8; 4]> = None;
+    for tok in raw.split_whitespace() {
+        if let Some(v) = parse_css_len_px(tok, root_font_size_px) {
+            lens.push(v);
+        } else {
+            color = Some(super::parse_text_color(tok));
+        }
+    }
+
+    let mut offset = [0.0, 0.0];
+    let mut blur = 0.0;
+    if lens.len() >= 2 {
+        offset = [lens[0], lens[1]];
+    }
+    if lens.len() >= 3 {
+        blur = lens[2].max(0.0);
+    }
+    (color, offset, blur)
 }
