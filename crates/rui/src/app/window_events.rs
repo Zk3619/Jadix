@@ -242,6 +242,26 @@ impl super::App {
                 None
             };
 
+        if self.left_button_down && self.scrollbar_drag.is_none() {
+            if let Some(drag) = self.drag_reorder.as_mut() {
+                // 指针不在本列表任一拖拽手柄上时，回到「源行」下标，避免 hover 卡在最后一根有效行。
+                let mut new_hover = drag.from_index;
+                if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
+                    if let Some((lid, idx)) = crate::utils::drag_reorder::parse_drag_item_focus_id(&fid) {
+                        if lid == drag.list_id {
+                            new_hover = idx;
+                        }
+                    }
+                }
+                if drag.hover_index != Some(new_hover) {
+                    drag.hover_index = Some(new_hover);
+                    let hk = crate::utils::drag_reorder::drag_hover_signal_key(&drag.list_id);
+                    crate::core::reactivity::use_signal(&hk, || None::<usize>).set(Some(new_hover));
+                    window.request_redraw();
+                }
+            }
+        }
+
         let cursor_pick = super::tree_hit::pick_cursor(&state.root_element, x, y, [0.0, 0.0]);
         let mut to_run = Vec::new();
         super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
@@ -526,6 +546,28 @@ impl super::App {
                     }
                 }
             }
+            if self.scrollbar_drag.is_none() && self.drag_reorder.is_none() {
+                if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
+                    if let Some((list_id, idx)) = crate::utils::drag_reorder::parse_drag_item_focus_id(&fid) {
+                        drop(state_borrow);
+                        self.drag_reorder = Some(crate::utils::drag_reorder::DragReorderState {
+                            list_id: list_id.clone(),
+                            from_index: idx,
+                            hover_index: Some(idx),
+                        });
+                        let hk = crate::utils::drag_reorder::drag_hover_signal_key(&list_id);
+                        crate::core::reactivity::use_signal(&hk, || None::<usize>).set(Some(idx));
+                        let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+                        focus_visible.set(false);
+                        self.left_button_down = true;
+                        if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                            st.window.request_redraw();
+                        }
+                        return;
+                    }
+                }
+            }
+
             let cb_to_run = super::tree_hit::find_click(&state.root_element, x, y, [0.0, 0.0]);
             drop(state_borrow);
             let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -558,6 +600,19 @@ impl super::App {
         } else {
             self.left_button_down = false;
             self.scrollbar_drag = None;
+            if let Some(st_drag) = self.drag_reorder.take() {
+                let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
+                crate::core::reactivity::use_signal(&hk, || None::<usize>).set(None);
+                let h = st_drag.hover_index.unwrap_or(st_drag.from_index);
+                if h != st_drag.from_index {
+                    let ck = crate::utils::drag_reorder::drag_commit_signal_key(&st_drag.list_id);
+                    crate::core::reactivity::use_signal(&ck, || None::<(usize, usize)>)
+                        .set(Some((st_drag.from_index, h)));
+                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                        st.window.request_redraw();
+                    }
+                }
+            }
             drop(state_borrow);
             if let Some(rest) = self.input_drag_rest.take() {
                 let sk = crate::components::input::input_selection_signal_key(&rest);

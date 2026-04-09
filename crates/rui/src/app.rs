@@ -32,6 +32,7 @@ mod reactive_tests;
 
 use scroll_support::ScrollbarDragState;
 use state::AppState;
+use crate::utils::drag_reorder::DragReorderState;
 
 use crate::components::scroll_area::ScrollAreaSignalKeys;
 
@@ -47,6 +48,7 @@ struct App {
     modifiers: ModifiersState,
     left_button_down: bool,
     scrollbar_drag: Option<ScrollbarDragState>,
+    drag_reorder: Option<DragReorderState>,
     /// 正在拖选文本的 input `rest`（`input:{rest}` 中的 id）。
     input_drag_rest: Option<String>,
     /// 拖选锚点（UTF-8 字节）。

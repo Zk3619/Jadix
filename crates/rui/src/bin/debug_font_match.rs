@@ -71,8 +71,8 @@ fn main() -> std::io::Result<()> {
         db.load_font_data(include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf").to_vec());
         db.load_font_data(include_bytes!("../../assets/NotoSansMath-Regular.ttf").to_vec());
         db.load_font_data(include_bytes!("../../assets/NotoMusic-Regular.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoEmoji-wght.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoColorEmoji-Regular.ttf").to_vec());
+        db.load_font_data(include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf").to_vec());
+        db.load_font_data(include_bytes!("../../assets/NotoColorEmoji.ttf").to_vec());
         db.set_sans_serif_family("Noto Sans CJK SC");
         db.set_serif_family("Noto Serif CJK SC");
     }

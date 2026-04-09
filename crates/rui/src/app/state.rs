@@ -53,6 +53,12 @@ pub(super) enum ScrollbarUpdateMode {
     ViewportsOnly,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextRendererBackend {
+    Gpu,
+    CpuFallback,
+}
+
 pub(super) struct AppState {
     pub(super) window: Arc<Window>,
     pub(super) surface: wgpu::Surface<'static>,
@@ -81,6 +87,7 @@ pub(super) struct AppState {
     last_applied_template_hash: HashMap<String, String>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
     pub(super) last_hover_cursor: Option<crate::core::tree::CursorKind>,
+    pub(super) text_backend: TextRendererBackend,
     /// Latest `WindowEvent::Resized` size. `inner_size()` can briefly lag during maximize; merging
     /// avoids a one-frame swapchain smaller than the DWM client area (black letterboxing at edges).
     last_resized_event: Option<PhysicalSize<u32>>,
@@ -188,6 +195,9 @@ impl AppState {
 
     pub(super) async fn new(window: Arc<Window>, mut root_element: Element) -> Self {
         let size = window.inner_size();
+        let force_software = std::env::var("RUI_FORCE_SOFTWARE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -195,14 +205,31 @@ impl AppState {
 
         let surface = instance.create_surface(window.clone()).unwrap();
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
+        let primary_adapter = if force_software {
+            None
+        } else {
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::default(),
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                })
+                .await
+        };
+        let (adapter, text_backend) = if let Some(adapter) = primary_adapter {
+            (adapter, TextRendererBackend::Gpu)
+        } else {
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: true,
+                })
+                .await
+                .expect("no compatible GPU or software adapter found");
+            (adapter, TextRendererBackend::CpuFallback)
+        };
+        log::warn!("text renderer backend: {:?}", text_backend);
 
         let (device, queue) = adapter
             .request_device(
@@ -309,6 +336,7 @@ impl AppState {
             last_applied_template_hash: HashMap::new(),
             last_render_scroll_metrics,
             last_hover_cursor,
+            text_backend,
             last_resized_event: None,
             #[cfg(debug_assertions)]
             scroll_prepass_log_last: Instant::now(),
@@ -658,6 +686,7 @@ impl AppState {
         active_drag_rest: Option<&str>,
         text_force_fast_mode: bool,
     ) -> Result<(), wgpu::SurfaceError> {
+        let _text_backend = self.text_backend;
         #[cfg(debug_assertions)]
         let render_begin = Instant::now();
         let inner = self.window.inner_size();

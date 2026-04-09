@@ -200,6 +200,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         modifiers: ModifiersState::default(),
         left_button_down: false,
         scrollbar_drag: None,
+        drag_reorder: None,
         input_drag_rest: None,
         input_drag_anchor: 0,
         scroll_accum: std::collections::HashMap::new(),

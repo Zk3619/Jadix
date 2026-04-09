@@ -21,3 +21,7 @@ serde_json = { workspace = true }
 windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging"] }
 accesskit = { workspace = true }
 accesskit_winit = { workspace = true }
+swash = { workspace = true }
+fontdb = { workspace = true }
+ttf-parser = { workspace = true }
+unicode-segmentation = { workspace = true }

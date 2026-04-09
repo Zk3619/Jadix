@@ -3,6 +3,7 @@
 
 pub mod base;
 pub mod button;
+pub mod card;
 pub mod checkbox;
 pub mod dialog;
 pub mod dropdown;
@@ -25,6 +26,7 @@ pub mod focus_trap;
 
 pub use base::BaseComponentBuilder;
 pub use button::{button, Button, ButtonBuilder, ButtonProps};
+pub use card::{Card, CardProps};
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use dialog::{dialog_panel, DialogBuilder};
 pub use dropdown::{dropdown, DropdownBuilder};

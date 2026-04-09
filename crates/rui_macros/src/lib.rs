@@ -8,6 +8,17 @@ use syn::{Expr, Ident, Token, braced};
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
+fn expr_as_u16(value: &Expr) -> Option<u16> {
+    match value {
+        Expr::Lit(l) => match &l.lit {
+            syn::Lit::Int(i) => i.base10_parse().ok(),
+            syn::Lit::Str(s) => s.value().parse().ok(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 struct RsxElement {
     name: Ident,
     attributes: Vec<(Ident, Expr)>,
@@ -522,7 +533,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 }
             }
             let is_custom = name_str.chars().next().map_or(false, |c| c.is_uppercase()) 
-                && !["VStack", "HStack", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
+                && !["VStack", "HStack", "Grid", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
 
             let mut element = if is_custom {
                 let name_ident = &el.name;
@@ -544,7 +555,8 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                         "h" | "height" | "max_h" | "maxHeight" | "max_height" | "min_h" | "minHeight" | "min_height" |
                         "p" | "padding" | "mx" | "my" | "px" | "py" | "pt" | "pr" | "pb" | "pl" | "mt" | "mr" | "mb" | "ml" |
                         "rounded" | "bg" | "color" | "text_color" | "font_weight" | "text_weight" |
-                        "flex_grow" | "flex_shrink" | "grow" | "shrink" | "absolute" | "relative" | "top" | "right" | "bottom" | "left" | "inset" | "z_index" |
+                        "flex_grow" | "flex_shrink" | "grow" | "shrink" | "flex_basis" | "absolute" | "relative" | "top" | "right" | "bottom" | "left" | "inset" | "z_index" |
+                        "cols" | "grid_cols" | "rows" | "grid_rows" | "col_span" | "grid_column_span" | "row_span" | "grid_row_span" | "align_self" |
                         "text_size" | "leading" | "text_leading" | "line_height" | "lineHeight" | "underline" | 
                         "text_decoration" | "textDecoration" |
                         "text_decoration_line" | "textDecorationLine" |
@@ -594,6 +606,26 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 _ => quote! { b = b.leading(rui::core::tree::IntoF32::into_f32(#value)); },
                             };
                             base_calls.push(call);
+                        } else if matches!(attr_name, "cols" | "grid_cols") {
+                            if let Some(n) = expr_as_u16(value) {
+                                base_calls.push(quote! { b = b.grid_cols_equal(#n); });
+                            }
+                        } else if matches!(attr_name, "rows" | "grid_rows") {
+                            if let Some(n) = expr_as_u16(value) {
+                                base_calls.push(quote! { b = b.grid_rows_equal(#n); });
+                            }
+                        } else if matches!(attr_name, "col_span" | "grid_column_span" | "colSpan") {
+                            if let Some(n) = expr_as_u16(value) {
+                                base_calls.push(quote! { b = b.grid_column_span(#n); });
+                            }
+                        } else if matches!(attr_name, "row_span" | "grid_row_span" | "rowSpan") {
+                            if let Some(n) = expr_as_u16(value) {
+                                base_calls.push(quote! { b = b.grid_row_span(#n); });
+                            }
+                        } else if matches!(attr_name, "align_self") {
+                            base_calls.push(quote! { b = b.align_self_kw(#value); });
+                        } else if matches!(attr_name, "flex_basis") {
+                            base_calls.push(quote! { b = b.flex_basis(#value); });
                         } else {
                             let method = match attr_name {
                                 "width" => "w",
@@ -740,6 +772,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 match name_str.as_str() {
                     "VStack" => quote! { rui::primitives::vstack() },
                     "HStack" => quote! { rui::primitives::hstack() },
+                    "Grid" => quote! { rui::primitives::gstack() },
                     "Box" | "Rect" => quote! { rui::primitives::r#box() },
                     "Interactive" => quote! { rui::primitives::interactive(rui::core::tree::Element::new()) },
                     "Text" => quote! { rui::primitives::text("") },
@@ -1021,6 +1054,32 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "shrink" | "flex_shrink" | "flexShrink" => {
                         element = quote! { #element.flex_shrink(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }
                     },
+                    "cols" | "grid_cols" => {
+                        if let Some(n) = expr_as_u16(value) {
+                            element = quote! { #element.grid_cols_equal(#n) };
+                        }
+                    }
+                    "rows" | "grid_rows" => {
+                        if let Some(n) = expr_as_u16(value) {
+                            element = quote! { #element.grid_rows_equal(#n) };
+                        }
+                    }
+                    "col_span" | "grid_column_span" | "colSpan" => {
+                        if let Some(n) = expr_as_u16(value) {
+                            element = quote! { #element.grid_column_span(#n) };
+                        }
+                    }
+                    "row_span" | "grid_row_span" | "rowSpan" => {
+                        if let Some(n) = expr_as_u16(value) {
+                            element = quote! { #element.grid_row_span(#n) };
+                        }
+                    }
+                    "align_self" => {
+                        element = quote! { #element.align_self_kw(#value) }
+                    }
+                    "flex_basis" => {
+                        element = quote! { #element.flex_basis(#value) }
+                    }
                     _ => {}
                 }
             }
@@ -1090,6 +1149,7 @@ fn utility_token_to_call(token: &str) -> Option<proc_macro2::TokenStream> {
         "flex" => return Some(quote! { __rui_el = __rui_el.flex_row(); }),
         "flex-col" => return Some(quote! { __rui_el = __rui_el.flex_col(); }),
         "flex-row" => return Some(quote! { __rui_el = __rui_el.flex_row(); }),
+        "grid" => return Some(quote! { __rui_el = __rui_el.display_grid(); }),
         "items-center" => return Some(quote! { __rui_el = __rui_el.items_center(); }),
         "justify-center" => return Some(quote! { __rui_el = __rui_el.justify_center(); }),
         "grow" => return Some(quote! { __rui_el = __rui_el.flex_grow(1.0); }),
@@ -1100,6 +1160,35 @@ fn utility_token_to_call(token: &str) -> Option<proc_macro2::TokenStream> {
         "overflow-auto" => return Some(quote! { __rui_el = __rui_el.overflow("auto"); }),
         "overflow-scroll" => return Some(quote! { __rui_el = __rui_el.overflow("scroll"); }),
         _ => {}
+    }
+
+    if let Some(raw) = token.strip_prefix("grid-cols-") {
+        if let Ok(n) = raw.parse::<u16>() {
+            if n > 0 {
+                return Some(quote! {
+                    __rui_el = __rui_el.display_grid().grid_template_columns(rui::layout::cols_equal_fr(#n));
+                });
+            }
+        }
+    }
+
+    if let Some(raw) = token.strip_prefix("grid-rows-") {
+        if let Ok(n) = raw.parse::<u16>() {
+            if n > 0 {
+                return Some(quote! {
+                    __rui_el = __rui_el.display_grid().grid_template_rows(rui::layout::cols_equal_fr(#n));
+                });
+            }
+        }
+    }
+
+    if let Some(v) = parse_tailwind_value(token, "gap-x-") {
+        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
+        return Some(quote! { __rui_el = __rui_el.gap_x(#lit); });
+    }
+    if let Some(v) = parse_tailwind_value(token, "gap-y-") {
+        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
+        return Some(quote! { __rui_el = __rui_el.gap_y(#lit); });
     }
 
     if let Some(v) = parse_tailwind_value(token, "w-") {
@@ -1239,6 +1328,29 @@ fn utility_token_to_call(token: &str) -> Option<proc_macro2::TokenStream> {
         let lit = syn::LitStr::new(rest, proc_macro2::Span::call_site());
         return Some(quote! { __rui_el = __rui_el.overflow_y(#lit); });
     }
+
+    match token {
+        "self-auto" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("auto"); });
+        }
+        "self-center" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("center"); });
+        }
+        "self-start" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("start"); });
+        }
+        "self-end" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("end"); });
+        }
+        "self-stretch" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("stretch"); });
+        }
+        "self-baseline" => {
+            return Some(quote! { __rui_el = __rui_el.align_self_kw("baseline"); });
+        }
+        _ => {}
+    }
+
     None
 }
 

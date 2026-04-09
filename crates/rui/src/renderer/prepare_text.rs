@@ -3,9 +3,11 @@
 //! 调试：设置环境变量 `RUI_TEXT_DEBUG`（见 [`super::text_prepare_debug`]）。
 
 use std::borrow::Cow;
+use std::collections::hash_map::Entry;
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::hash::{Hash, Hasher};
+use unicode_segmentation::UnicodeSegmentation;
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
 
@@ -16,7 +18,7 @@ use super::text::RuiTextRenderer;
 use super::text_hit::{best_font_family, measure_prefix_width};
 use super::InstanceInput;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct FrameTextNodeMeta {
     x: f32,
     y: f32,
@@ -39,6 +41,7 @@ struct FrameTextNodeMeta {
     shadow_dx: f32,
     shadow_dy: f32,
     shadow_blur: f32,
+    emoji_cache_key: Option<super::text::EmojiCacheKey>,
 }
 
 fn align_to_u8(align: glyphon::cosmic_text::Align) -> u8 {
@@ -182,6 +185,36 @@ fn text_bounds_from_clip(clip: Option<[f32; 4]>, config: &SurfaceConfiguration) 
     }
 }
 
+fn contains_emoji_grapheme(text: &str) -> bool {
+    text.graphemes(true).any(|g| {
+        g.chars().any(|c| {
+            let cp = c as u32;
+            (0x1F300..=0x1FAFF).contains(&cp)
+                || (0x2600..=0x27BF).contains(&cp)
+                || (0xFE00..=0xFE0F).contains(&cp)
+        })
+    })
+}
+
+/// 文本阴影层会把整块 buffer 平移；若仍用正文同款 `TextBounds`，glyphon 会按边界裁字，
+/// 多圈模糊采样时会出现缺块/不对称。对阴影扩大裁剪并与视口求交。
+fn shadow_clip_for_glyphon(
+    node_clip: Option<[f32; 4]>,
+    outset: f32,
+    viewport: [f32; 4],
+) -> Option<[f32; 4]> {
+    let Some(c) = node_clip else {
+        return None;
+    };
+    let expanded = [
+        c[0] - outset,
+        c[1] - outset,
+        c[2] + 2.0 * outset,
+        c[3] + 2.0 * outset,
+    ];
+    clip_rect_to_bounds(expanded, Some(viewport))
+}
+
 /// 排版文本、构建下划线 `InstanceInput`，并调用 glyphon `prepare`。
 pub fn prepare_text_frame(
     text_renderer: &mut RuiTextRenderer,
@@ -215,7 +248,17 @@ pub fn prepare_text_frame(
 
     for (i, info) in text_nodes.iter().enumerate() {
         let st = &info.style;
-        let family = if let Some(f) = &st.font_family {
+        let has_emoji = contains_emoji_grapheme(info.text.as_str())
+            || info
+                .shape_suffix
+                .as_deref()
+                .is_some_and(|s| !s.is_empty() && contains_emoji_grapheme(s));
+        let family = if has_emoji {
+            crate::utils::font::resolve_family(
+                text_renderer.font_system.db(),
+                "Noto Emoji, Noto Color Emoji, Noto Sans CJK SC, sans-serif",
+            )
+        } else if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
             best
@@ -380,6 +423,22 @@ pub fn prepare_text_frame(
         );
 
         let dy = 0.0;
+        let emoji_cache_key = if has_emoji || contains_emoji_grapheme(shape_text.as_ref()) {
+            Some(super::text::EmojiCacheKey {
+                sequence: shape_text.to_string(),
+                pixel_size: scaled_size.round().clamp(1.0, u16::MAX as f32) as u16,
+                scale_bits: ui_scale.to_bits(),
+                color_mode: 1,
+            })
+        } else {
+            None
+        };
+        if let Some(key) = emoji_cache_key.clone() {
+            if let Entry::Vacant(v) = text_renderer.emoji_cache.entries.entry(key) {
+                // MVP: reserve custom-glyph slot for emoji runs; later phase fills atlas textures.
+                v.insert(Vec::new());
+            }
+        }
         frame_meta.push(Some(FrameTextNodeMeta {
             x,
             y,
@@ -402,6 +461,7 @@ pub fn prepare_text_frame(
             shadow_dy: st.shadow_offset[1] * ui_scale,
             shadow_blur: st.shadow_blur * ui_scale,
             clip_bounds: scaled_clip,
+            emoji_cache_key,
         }));
     }
 
@@ -413,50 +473,89 @@ pub fn prepare_text_frame(
         if let Some(sc) = tb.shadow_col {
             let radius = tb.shadow_blur;
             let alpha = sc[3];
-            // Scrolling frames aggressively reduce shadow overdraw.
-            let (min_radius, min_alpha, steps) = if force_fast_mode {
-                (2.2_f32, 36_u8, 1_u32)
+            if alpha == 0 {
+                // skip
             } else {
-                match perf_mode {
-                    TextPerfMode::HighQuality => {
-                        let s = if radius <= 1.5 { 3 } else if radius <= 3.0 { 5 } else if radius <= 6.0 { 6 } else { 8 };
-                        (0.35_f32, 6_u8, s)
-                    }
-                    TextPerfMode::Balanced => {
-                        let s = if radius <= 2.0 { 2 } else if radius <= 4.0 { 3 } else { 4 };
-                        (0.8_f32, 20_u8, s)
-                    }
-                    TextPerfMode::Fast => (f32::INFINITY, u8::MAX, 0),
-                }
-            };
-            if radius > min_radius && alpha > min_alpha {
-                for k in 0..steps {
-                    let angle = (k as f32) / (steps as f32) * std::f32::consts::TAU;
-                    let dx = angle.cos() * radius;
-                    let shadow_dy = angle.sin() * radius;
-                    let shadow_alpha = (sc[3] as f32 * 0.4) as u8;
-                    let shadow_rect = [
-                        tb.x + tb.shadow_dx + dx,
-                        tb.y + tb.dy + tb.shadow_dy + shadow_dy,
-                        tb.box_w,
-                        tb.box_h,
-                    ];
-                    let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds) else {
-                        continue;
+                // 阴影质量勿随滚动 `force_fast_mode` 降级：与 shaping 分离，仅按 `RUI_TEXT_PERF`。
+                let shadow_perf = text_perf_mode();
+                if !matches!(shadow_perf, TextPerfMode::Fast) {
+                    let (min_radius, min_alpha, base_samples, radial_scale, max_samples) = match shadow_perf {
+                        TextPerfMode::HighQuality => (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize),
+                        TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
+                        TextPerfMode::Fast => (0.0, 0, 0, 0.0, 0),
                     };
-                    if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
-                        continue;
+                    // 小于此模糊半径（已乘 ui_scale）视为无模糊：只画偏移后的单层阴影。
+                    const SHARP_BLUR_EPS: f32 = 0.75;
+                    let shadow_bounds_clip = shadow_clip_for_glyphon(
+                        tb.clip_bounds,
+                        radius + tb.shadow_dx.abs() + tb.shadow_dy.abs() + 3.0,
+                        viewport_clip,
+                    );
+                    let bounds = text_bounds_from_clip(shadow_bounds_clip, config);
+
+                    let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
+                        if layer_alpha == 0 {
+                            return;
+                        }
+                        let shadow_rect = [left, top, tb.box_w, tb.box_h];
+                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds) else {
+                            return;
+                        };
+                        if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
+                            return;
+                        }
+                        text_areas.push(glyphon::TextArea {
+                            buffer: &entry.buffer,
+                            left,
+                            top,
+                            scale: 1.0,
+                            bounds,
+                            default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], layer_alpha),
+                            custom_glyphs: tb
+                                .emoji_cache_key
+                                .as_ref()
+                                .and_then(|k| text_renderer.emoji_cache.entries.get(k))
+                                .map_or(&[], |v| v.as_slice()),
+                        });
+                    };
+
+                    // 高密度圆盘采样（Vogel spiral）：比固定少点核更接近连续模糊，减少“多重字影”。
+                    let center_left = tb.x + tb.shadow_dx;
+                    let center_top = tb.y + tb.dy + tb.shadow_dy;
+                    let draw_blur = radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
+                    if !draw_blur {
+                        push_shadow_layer(center_left, center_top, alpha);
+                    } else {
+                        const GOLDEN_ANGLE: f32 = 2.399_963_1;
+                        let sample_count = (base_samples as f32 + radius * radial_scale)
+                            .round()
+                            .clamp(base_samples as f32, max_samples as f32)
+                            as usize;
+                        let sigma = (radius * 0.58).max(0.75);
+                        let two_sigma2 = 2.0 * sigma * sigma;
+
+                        let mut weight_sum = 1.0_f32; // center sample
+                        for idx in 0..sample_count {
+                            let t = (idx as f32 + 0.5) / (sample_count as f32);
+                            let r = radius * t.sqrt();
+                            let w = (-(r * r) / two_sigma2).exp();
+                            weight_sum += w;
+                        }
+                        let inv = 1.0 / weight_sum.max(0.001);
+                        let center_alpha = ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
+                        push_shadow_layer(center_left, center_top, center_alpha);
+
+                        for idx in 0..sample_count {
+                            let t = (idx as f32 + 0.5) / (sample_count as f32);
+                            let r = radius * t.sqrt();
+                            let theta = idx as f32 * GOLDEN_ANGLE;
+                            let rx = theta.cos() * r;
+                            let ry = theta.sin() * r;
+                            let w = (-(r * r) / two_sigma2).exp();
+                            let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
+                            push_shadow_layer(center_left + rx, center_top + ry, wa);
+                        }
                     }
-                    let bounds = text_bounds_from_clip(tb.clip_bounds, config);
-                    text_areas.push(glyphon::TextArea {
-                        buffer: &entry.buffer,
-                        left: tb.x + tb.shadow_dx + dx,
-                        top: tb.y + tb.dy + tb.shadow_dy + shadow_dy,
-                        scale: 1.0,
-                        bounds,
-                        default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], shadow_alpha),
-                        custom_glyphs: &[],
-                    });
                 }
             }
         }
@@ -469,7 +568,11 @@ pub fn prepare_text_frame(
             scale: 1.0,
             bounds,
             default_color: glyphon::Color::rgba(tb.color[0], tb.color[1], tb.color[2], tb.color[3]),
-            custom_glyphs: &[],
+            custom_glyphs: tb
+                .emoji_cache_key
+                .as_ref()
+                .and_then(|k| text_renderer.emoji_cache.entries.get(k))
+                .map_or(&[], |v| v.as_slice()),
         });
     }
 

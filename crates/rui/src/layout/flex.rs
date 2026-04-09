@@ -1,9 +1,3 @@
-//! Flex layout utilities placeholder.
-//!
-//! This module is reserved for future flex-specific layout helpers.
+//! Flex 相关类型再导出（布局由 Taffy 计算，见 [`super::layout_tree`]）。
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlexDirection {
-    Row,
-    Column,
-}
+pub use taffy::prelude::{AlignContent, AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};

@@ -3,7 +3,8 @@
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
-use rui::primitives::{tabs_headless, vstack, TABSTRIP_FOCUS_PREFIX};
+use rui::primitives::{hstack, r#box, tabs_headless, vstack, TABSTRIP_FOCUS_PREFIX};
+use rui::style::parse_color;
 use rui::core::reactivity::use_signal;
 use rui::core::tree::Element;
 use rui::ui;
@@ -13,6 +14,35 @@ const BUTTON_SHOWCASE_REACTIVE: &str = "examples/hello_world/ButtonShowcase:vari
 const TOGGLE_SHOWCASE_REACTIVE: &str = "examples/hello_world/ToggleControlsShowcase:main";
 const SELECT_POPOVER_SHOWCASE_REACTIVE: &str = "examples/hello_world/SelectPopoverTabShowcase:block";
 const PRIMITIVES_VIRT_REACTIVE: &str = "examples/hello_world/PrimitivesShowcase:virt_list";
+const GRID_DRAG_REACTIVE: &str = "examples/hello_world/GridAndDragShowcase:main";
+const HW_GRID_SORT_COMMIT: &str = "__rui_drag_commit:hw-grid-sort";
+const HW_GRID_SORT_HOVER: &str = "__rui_drag_hover:hw-grid-sort";
+const HW_GRID_LIST_ID: &str = "hw-grid-sort";
+
+fn hw_grid_sort_row(row_label: &String, i: usize, _items: &[String], hl: bool) -> Element {
+    let z_boost = rui::primitives::drag_indicator_z_boost();
+    let grip: Element = r#box()
+        .drag_reorder_handle(HW_GRID_LIST_ID, i)
+        .p("0.25rem")
+        .rounded(4.0)
+        .bg(parse_color("secondary"))
+        .into();
+    let mut caption_el: Element = label(&format!("hw-grid-sort-{i}"))
+        .text(row_label.as_str())
+        .into();
+    caption_el = caption_el.flex_grow(1.0);
+    Element::from(
+        hstack()
+            .w("100%")
+            .p("0.5rem")
+            .gap("0.5rem")
+            .items("center")
+            .bg(parse_color(if hl { "accent" } else { "muted" }))
+            .children([grip, caption_el]),
+    )
+    .z_index(if hl { z_boost } else { 0 })
+    .rounded(6.0)
+}
 
 fn checker_rgba_texture() -> (Vec<u8>, u32, u32) {
     let w = 64u32;
@@ -45,8 +75,8 @@ fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str
 fn MyCard(title: String, children: Option<rui::core::tree::Element>) -> rui::core::tree::Element {
     let child = children.unwrap_or_else(|| rui::core::tree::Element::new());
     ui! {
-        <VStack w="100%" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
-            <Label text_size="1.25rem" font_weight="700">{ title }</Label>
+        <VStack w="100%" min_w="0" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
+            <Label w="100%" text_size="1.25rem" font_weight="700" leading="normal">{ title }</Label>
             { child }
         </VStack>
     }
@@ -60,8 +90,8 @@ fn ButtonShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1) Button Variants + State">
             <Reactive id={BUTTON_SHOWCASE_REACTIVE}>
-                <VStack w="100%" gap="0.75rem">
-                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                <VStack w="100%" min_w="0" gap="0.75rem">
+                    <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
                         <Button variant="default" on_click={move || increment_count(count)}>
                             { format!("Default ({})", count.get()) }
                         </Button>
@@ -77,7 +107,7 @@ fn ButtonShowcase() -> rui::core::tree::Element {
                         <Button variant="default" disabled=true>"Disabled"</Button>
                     </HStack>
                     <Show when={selected.get() != "default"}>
-                        <Label text_size="0.875rem" color="muted-foreground">
+                        <Label w="100%" text_size="0.875rem" color="muted-foreground" leading="normal">
                             { format!("Selected variant: {}", selected.get()) }
                         </Label>
                     </Show>
@@ -91,11 +121,11 @@ fn ButtonShowcase() -> rui::core::tree::Element {
 fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1b) Hover：弹簧 vs cubic-bezier">
-            <VStack w="100%" gap="0.75rem">
+            <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "默认 hover_easing=\"spring\"；设为 \"cubic\" 时对标 CSS transition + cubic-bezier(0.4, 0, 0.2, 1)"
                 </Label>
-                <HStack gap="0.5rem" items="center" wrap="wrap">
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
                     <Button id="hw-hover-spring" variant="ghost" hover_easing="spring">"Ghost · spring"</Button>
                     <Button id="hw-hover-cubic" variant="ghost" hover_easing="cubic">"Ghost · cubic"</Button>
                 </HStack>
@@ -125,8 +155,8 @@ fn InputShowcase() -> rui::core::tree::Element {
 fn TypographyShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="3) Button Sizes + Icon + Custom Text Leading">
-            <VStack w="100%" gap="0.75rem">
-                <HStack gap="0.5rem" items="center" wrap="wrap">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
                     <Button variant="outline" size="xs">"XS"</Button>
                     <Button variant="outline" size="sm">"SM"</Button>
                     <Button variant="outline" size="default">"Default"</Button>
@@ -136,31 +166,31 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                     <Button variant="default" size="icon"><Icon name="rocket" color="primary-foreground" size="1rem" /></Button>
                     <Button variant="default" size="icon-lg"><Icon name="sparkles" color="primary-foreground" size="1.125rem" /></Button>
                 </HStack>
-                <HStack gap="0.5rem" items="center" wrap="wrap">
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
                     <Button variant="default" leading="none">"Leading None"</Button>
                     <Button variant="default" leading="tight">"Leading Tight"</Button>
                     <Button variant="default" leading="normal">"Leading Normal"</Button>
                     <Button variant="default" leading="relaxed">"Leading Relaxed"</Button>
                     <Button variant="default" line_height="1.5rem">"LineHeight\n1.5rem (24px)"</Button>
                 </HStack>
-                <VStack gap="0.5rem">
-                    <Label text_size="1rem" font_weight="700">"Label Decoration"</Label>
-                    <HStack gap="1rem" items="center" wrap="wrap">
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label w="100%" text_size="1rem" font_weight="700">"Label Decoration"</Label>
+                    <HStack w="100%" min_w="0" gap="1rem" items="center" wrap="wrap">
                         <Label text_decoration="underline" text_decoration_style="solid">"Solid"</Label>
                         <Label text_decoration="underline" text_decoration_style="double">"Double"</Label>
                         <Label text_decoration="underline" text_decoration_style="dotted">"Dotted"</Label>
                         <Label text_decoration="underline" text_decoration_style="dashed">"Dashed"</Label>
                         <Label text_decoration="underline" text_decoration_style="wavy">"Wavy"</Label>
                     </HStack>
-                    <Label text_size="0.875rem" font_weight="700">"Decoration Line"</Label>
-                    <HStack gap="1rem" items="center" wrap="wrap">
+                    <Label w="100%" text_size="0.875rem" font_weight="700">"Decoration Line"</Label>
+                    <HStack w="100%" min_w="0" gap="1rem" items="center" wrap="wrap">
                         <Label text_decoration_line="underline">"Underline"</Label>
                         <Label text_decoration_line="overline">"Overline"</Label>
                         <Label text_decoration_line="line-through">"Line Through"</Label>
                         <Label text_decoration_line="underline line-through">"Underline + Line Through"</Label>
                     </HStack>
-                    <Label text_size="0.875rem" font_weight="700">"Decoration Color / Thickness / Style"</Label>
-                    <HStack gap="1rem" items="center" wrap="wrap">
+                    <Label w="100%" text_size="0.875rem" font_weight="700">"Decoration Color / Thickness / Style"</Label>
+                    <HStack w="100%" min_w="0" gap="1rem" items="center" wrap="wrap">
                         <Label text_decoration_line="underline" text_decoration_color="red-500">"Red"</Label>
                         <Label text_decoration_line="underline" text_decoration_color="emerald-500">"Green"</Label>
                         <Label text_decoration_line="underline" text_decoration_thickness="1">"Thin"</Label>
@@ -258,11 +288,12 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.65rem" color="muted-foreground">"简写 + 语义色"</Label>
                     </VStack>
                     <VStack gap="0.35rem" items="start">
+                        // text_shadow_* 子属性与简写统一：裸数默认按 rem 解释，建议显式写 rem/px 提升可读性。
                         <Label text_size="1.1rem" font_weight="800" color="primary-foreground"
                             text_shadow_color="foreground"
-                            text_shadow_offset_x={0.1875}
-                            text_shadow_offset_y={0.1875}
-                            text_shadow_blur={0.375}>
+                            text_shadow_offset_x="0.1875rem"
+                            text_shadow_offset_y="0.1875rem"
+                            text_shadow_blur="0.375rem">
                             "子属性覆盖"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"color + offset + blur"</Label>
@@ -709,6 +740,12 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
 
                 <VStack gap="0.5rem">
                     <Label font_weight="700">"B) tw=..."</Label>
+                    <Rect tw="grid grid-cols-2 grid-rows-2 gap-x-3 gap-y-2 w-full min-h-20 p-2 bg-muted rounded-md">
+                        <Rect tw="bg-secondary rounded-md h-8" />
+                        <Rect tw="bg-secondary rounded-md h-8" />
+                        <Label tw="self-end text-xs text-muted-foreground">"grid-rows-2 + gap-x/y + self-end"</Label>
+                        <Rect tw="bg-secondary rounded-md h-8" />
+                    </Rect>
                     <HStack tw="gap-3 items-center flex-wrap">
                         <Rect tw="w-24 h-12 rounded-md bg-secondary" />
                         <Rect tw="w-[120px] h-[48px] rounded-xl bg-muted" />
@@ -721,6 +758,9 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
 
                 <VStack gap="0.5rem">
                     <Label font_weight="700">"C) uno=..."</Label>
+                    <Card>
+                        <Label text_size="0.875rem">"components::Card（tokens 间距 + 圆角）"</Label>
+                    </Card>
                     <Rect uno="p-3 rounded-md bg-secondary">
                         <VStack uno="gap-2">
                             <Label uno="text-sm">"uno=\"...\" works the same way as class/tw"</Label>
@@ -731,6 +771,69 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
                         </VStack>
                     </Rect>
                 </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn GridAndDragShowcase() -> Element {
+    let order = use_signal("hw_grid_sort_order", || {
+        ["Alpha", "Bravo", "Charlie", "Delta"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+    });
+    let commit = use_signal(HW_GRID_SORT_COMMIT, || None::<(usize, usize)>);
+    let hover = use_signal(HW_GRID_SORT_HOVER, || None::<usize>);
+
+    // `for_keyed!` 闭包含 `{}`，不能放在 `ui!` 的单层 `{ ... }` 表达式里（会与 RSX 花括号扫描冲突）。
+    let sort_list = rui::reactive!(GRID_DRAG_REACTIVE, move || {
+        if let Some((from, to)) = commit.get() {
+            let mut v = order.get();
+            rui::primitives::apply_reorder_vec(&mut v, from, to);
+            order.set(v);
+            commit.set(None);
+        }
+        let hover_ix = hover.get();
+        let items = order.get();
+        let rows = rui::for_keyed!(
+            "hw-grid-sort-list",
+            items.as_slice(),
+            |s: &String| s.clone(),
+            |row_label: &String| {
+                let i = items.iter().position(|x| x == row_label).unwrap_or(0);
+                let hl = hover_ix == Some(i);
+                hw_grid_sort_row(row_label, i, items.as_slice(), hl)
+            }
+        );
+        Element::from(vstack().w("100%").gap("0.375rem").children(rows))
+    });
+
+    ui! {
+        <MyCard title="Grid + drag-reorder (ShadCN Card: rui::components::Card)">
+            <VStack w="100%" gap="0.5rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Grid（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"
+                </Label>
+                <Grid cols="3" rows="2" gap="0.5rem" w="100%" min_h="7rem">
+                    <Rect col_span="2" p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
+                        <Label>"col_span = 2"</Label>
+                    </Rect>
+                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                        <Label>"侧栏"</Label>
+                    </Rect>
+                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                        <Label>"(2,2)"</Label>
+                    </Rect>
+                    <Rect p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
+                        <Label>"(3,2)"</Label>
+                    </Rect>
+                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                        <Label>"(3,3)"</Label>
+                    </Rect>
+                </Grid>
+                { sort_list }
             </VStack>
         </MyCard>
     }
@@ -850,6 +953,7 @@ fn main() {
                             <ToggleControlsShowcase />
                             <RadioSliderShowcase />
                             <SelectPopoverTabShowcase />
+                            <GridAndDragShowcase />
                             <PrimitivesShowcase />
 
                             <VStack items="center" gap="1rem" p="1rem">

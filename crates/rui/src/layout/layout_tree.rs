@@ -264,13 +264,17 @@ fn segment_intrinsic_width(seg: &str, size: f32, weight: u16) -> f32 {
 fn measured_text_leaf_size(
     m: &TextMeasureMeta,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
 ) -> taffy::geometry::Size<f32> {
     let size = m.size;
     let is_icon = m.is_icon;
 
-    let width = if let Some(w) = known_dimensions.width {
-        w
-    } else if is_icon {
+    let avail_width = match available_space.width {
+        taffy::style::AvailableSpace::Definite(w) => Some(w.max(1.0)),
+        _ => None,
+    };
+
+    let intrinsic_width = if is_icon {
         size
     } else {
         let blob = if let Some(suf) = &m.shape_suffix {
@@ -284,6 +288,15 @@ fn measured_text_leaf_size(
             .fold(0.0_f32, f32::max)
     };
 
+    let width = if let Some(w) = known_dimensions.width {
+        w
+    } else if let Some(w) = avail_width {
+        // 宽度未定时优先受容器可用宽度约束，这样压缩布局会触发换行而不是保持“单行固有宽”。
+        intrinsic_width.min(w)
+    } else {
+        intrinsic_width
+    };
+
     let single_line_height = if is_icon {
         size
     } else if let Some(lh) = m.line_height_px {
@@ -294,7 +307,11 @@ fn measured_text_leaf_size(
         size * crate::style::tailwind_default_leading_scale(size)
     };
 
-    let avail_for_wrap = known_dimensions.width.unwrap_or(width).max(1.0);
+    let avail_for_wrap = known_dimensions
+        .width
+        .or(avail_width)
+        .unwrap_or(width)
+        .max(1.0);
 
     let mut line_blocks = 0.0_f32;
     for seg in m.text.split('\n') {
@@ -380,9 +397,9 @@ impl LayoutTree {
             .compute_layout_with_measure(
                 root_node,
                 available_space,
-                |known_dimensions, _available_space, node_id, _context, _style| {
+                |known_dimensions, available_space, node_id, _context, _style| {
                     if let Some(m) = self.text_measurements.get(&node_id) {
-                        measured_text_leaf_size(m, known_dimensions)
+                        measured_text_leaf_size(m, known_dimensions, available_space)
                     } else {
                         taffy::geometry::Size::ZERO
                     }
@@ -464,9 +481,9 @@ impl LayoutTree {
                 .compute_layout_with_measure(
                     root_node,
                     available_space,
-                    |known_dimensions, _available_space, node_id, _context, _style| {
+                    |known_dimensions, available_space, node_id, _context, _style| {
                         if let Some(m) = self.text_measurements.get(&node_id) {
-                            measured_text_leaf_size(m, known_dimensions)
+                            measured_text_leaf_size(m, known_dimensions, available_space)
                         } else {
                             taffy::geometry::Size::ZERO
                         }

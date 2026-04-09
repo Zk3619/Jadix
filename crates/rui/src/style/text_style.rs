@@ -81,12 +81,16 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
         return None;
     }
     if let Ok(v) = t.parse::<f32>() {
-        return Some(v);
+        // Unsuffixed numeric values default to rem (align with IntoF32/IntoDimension).
+        return Some(v * root_font_size_px);
     }
     if let Some(raw) = t.strip_suffix("px") {
         return raw.trim().parse::<f32>().ok();
     }
     if let Some(raw) = t.strip_suffix("rem") {
+        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+    }
+    if let Some(raw) = t.strip_suffix("em") {
         return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
     }
     None
@@ -124,4 +128,29 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
         blur = lens[2].max(0.0);
     }
     (color, offset, blur)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_text_shadow;
+
+    fn approx_eq(a: f32, b: f32) {
+        assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");
+    }
+
+    #[test]
+    fn text_shadow_unsuffixed_defaults_to_rem() {
+        let (_, offset, blur) = parse_text_shadow("1 0.5 0.25");
+        approx_eq(offset[0], 16.0);
+        approx_eq(offset[1], 8.0);
+        approx_eq(blur, 4.0);
+    }
+
+    #[test]
+    fn text_shadow_supports_px_rem_em_conversion() {
+        let (_, offset, blur) = parse_text_shadow("4px 0.5rem 0.25em");
+        approx_eq(offset[0], 4.0);
+        approx_eq(offset[1], 8.0);
+        approx_eq(blur, 4.0);
+    }
 }

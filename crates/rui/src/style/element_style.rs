@@ -29,12 +29,16 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
         return None;
     }
     if let Ok(v) = t.parse::<f32>() {
-        return Some(v);
+        // Unsuffixed numeric values default to rem (align with IntoF32/IntoDimension).
+        return Some(v * root_font_size_px);
     }
     if let Some(raw) = t.strip_suffix("px") {
         return raw.trim().parse::<f32>().ok();
     }
     if let Some(raw) = t.strip_suffix("rem") {
+        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+    }
+    if let Some(raw) = t.strip_suffix("em") {
         return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
     }
     None
@@ -94,6 +98,33 @@ pub fn parse_box_shadow(s: impl AsRef<str>) -> BoxShadow {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_box_shadow;
+
+    fn approx_eq(a: f32, b: f32) {
+        assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");
+    }
+
+    #[test]
+    fn box_shadow_unsuffixed_defaults_to_rem() {
+        let sh = parse_box_shadow("1 0.5 0.25 0.125");
+        approx_eq(sh.offset[0], 16.0);
+        approx_eq(sh.offset[1], 8.0);
+        approx_eq(sh.blur, 4.0);
+        approx_eq(sh.spread, 2.0);
+    }
+
+    #[test]
+    fn box_shadow_supports_px_rem_em_conversion() {
+        let sh = parse_box_shadow("4px 0.5rem 0.25em 2px");
+        approx_eq(sh.offset[0], 4.0);
+        approx_eq(sh.offset[1], 8.0);
+        approx_eq(sh.blur, 4.0);
+        approx_eq(sh.spread, 2.0);
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineStyle {
     None,
@@ -127,11 +158,20 @@ pub struct Style {
     pub flex_wrap: FlexWrap,
     pub justify_content: Option<JustifyContent>,
     pub align_items: Option<AlignItems>,
+    /// Flex 子项 / Grid 子项交叉轴对齐（覆盖父级 `align_items`）。
+    pub align_self: Option<AlignSelf>,
+    /// Grid 子项行向对齐（覆盖父级 `justify_items`）。
+    pub justify_self: Option<AlignSelf>,
+    /// 多行 Flex / Grid 容器：`align-content`。
+    pub align_content: Option<AlignContent>,
+    /// Grid 容器：单元格内子项的默认行向对齐。
+    pub justify_items: Option<AlignItems>,
     pub size: Size<Dimension>,
     pub min_size: Size<Dimension>,
     pub max_size: Size<Dimension>,
     pub flex_grow: f32,
     pub flex_shrink: f32,
+    pub flex_basis: Dimension,
     pub padding: Rect<LengthPercentage>,
     pub margin: Rect<LengthPercentageAuto>,
     pub gap: taffy::geometry::Size<taffy::style::LengthPercentage>,
@@ -139,6 +179,20 @@ pub struct Style {
     pub position: Position,
     pub inset: Rect<LengthPercentageAuto>,
     pub z_index: i32,
+
+    /// Grid 容器：显式列轨（`grid-template-columns`）。
+    pub grid_template_columns: Vec<TrackSizingFunction>,
+    /// Grid 容器：显式行轨（`grid-template-rows`）。
+    pub grid_template_rows: Vec<TrackSizingFunction>,
+    /// Grid 隐式行尺寸。
+    pub grid_auto_rows: Vec<NonRepeatedTrackSizingFunction>,
+    /// Grid 隐式列尺寸。
+    pub grid_auto_columns: Vec<NonRepeatedTrackSizingFunction>,
+    pub grid_auto_flow: GridAutoFlow,
+    /// Grid 子项：行占位。
+    pub grid_row: Line<GridPlacement>,
+    /// Grid 子项：列占位。
+    pub grid_column: Line<GridPlacement>,
 
     // Visual properties (not passed to Taffy)
     pub bg_color: [f32; 4],
@@ -164,6 +218,10 @@ impl Default for Style {
             flex_wrap: FlexWrap::NoWrap,
             justify_content: None,
             align_items: None,
+            align_self: None,
+            justify_self: None,
+            align_content: None,
+            justify_items: None,
             size: Size::auto(),
             min_size: Size {
                 width: Dimension::Auto,
@@ -175,6 +233,7 @@ impl Default for Style {
             },
             flex_grow: 0.0,
             flex_shrink: 1.0,
+            flex_basis: Dimension::Auto,
             padding: Rect::zero(),
             margin: Rect::zero(),
             gap: taffy::geometry::Size {
@@ -188,6 +247,19 @@ impl Default for Style {
             position: Position::Relative,
             inset: Rect::auto(),
             z_index: 0,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_rows: Vec::new(),
+            grid_auto_columns: Vec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_row: Line {
+                start: GridPlacement::Auto,
+                end: GridPlacement::Auto,
+            },
+            grid_column: Line {
+                start: GridPlacement::Auto,
+                end: GridPlacement::Auto,
+            },
             bg_color: [0.0, 0.0, 0.0, 0.0],
             border_style: LineStyle::None,
             border_color: [0.0, 0.0, 0.0, 0.0],
@@ -213,17 +285,29 @@ impl Style {
             flex_wrap: self.flex_wrap,
             justify_content: self.justify_content,
             align_items: self.align_items,
+            align_self: self.align_self,
+            justify_self: self.justify_self,
+            align_content: self.align_content,
+            justify_items: self.justify_items,
             size: self.size,
             min_size: self.min_size,
             max_size: self.max_size,
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
+            flex_basis: self.flex_basis,
             padding: self.padding,
             margin: self.margin,
             gap: self.gap,
             overflow: self.overflow,
             position: self.position,
             inset: self.inset,
+            grid_template_columns: self.grid_template_columns.clone(),
+            grid_template_rows: self.grid_template_rows.clone(),
+            grid_auto_rows: self.grid_auto_rows.clone(),
+            grid_auto_columns: self.grid_auto_columns.clone(),
+            grid_auto_flow: self.grid_auto_flow,
+            grid_row: self.grid_row,
+            grid_column: self.grid_column,
             ..Default::default()
         }
     }

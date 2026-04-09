@@ -1,6 +1,8 @@
 //! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
 //!
-//! RSX：`VStack` / `HStack` / `Box` / `Rect` 由宏映射到 [`vstack`] / [`hstack`] / [`r#box`]。
+//! RSX：`VStack` / `HStack` / `Box` / `Rect` / `Grid` 由宏映射到 [`vstack`] / [`hstack`] / [`r#box`] / [`gstack`]。
+
+use taffy::prelude::TrackSizingFunction;
 
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
 
@@ -233,6 +235,20 @@ impl BoxBuilder {
         self.el = self.el.gap(g);
         self
     }
+    pub fn gap_x(mut self, g: impl IntoDimension) -> Self {
+        self.el = self.el.gap_x(g);
+        self
+    }
+    pub fn gap_y(mut self, g: impl IntoDimension) -> Self {
+        self.el = self.el.gap_y(g);
+        self
+    }
+
+    pub fn drag_reorder_handle(mut self, list_id: impl AsRef<str>, index: usize) -> Self {
+        self.el = self.el.drag_reorder_handle(list_id, index);
+        self
+    }
+
     pub fn items(mut self, align: impl Into<String>) -> Self {
         let s = align.into();
         self.el = self.el.flex_items(&s);
@@ -258,6 +274,59 @@ impl BoxBuilder {
 
     pub fn flex_row(mut self) -> Self {
         self.el = self.el.flex_row();
+        self
+    }
+
+    pub fn display_grid(mut self) -> Self {
+        self.el = self.el.display_grid();
+        self
+    }
+
+    pub fn grid_template_columns(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+        self.el = self.el.grid_template_columns(tracks);
+        self
+    }
+
+    pub fn grid_template_rows(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+        self.el = self.el.grid_template_rows(tracks);
+        self
+    }
+
+    /// `grid-cols-{n}`：等分 `fr` 列。
+    pub fn grid_cols_equal(mut self, n: u16) -> Self {
+        self.el = self
+            .el
+            .grid_template_columns(crate::layout::cols_equal_fr(n));
+        self
+    }
+
+    /// `grid-rows-{n}`：等分 `fr` 行。
+    pub fn grid_rows_equal(mut self, n: u16) -> Self {
+        self.el = self
+            .el
+            .display_grid()
+            .grid_template_rows(crate::layout::cols_equal_fr(n));
+        self
+    }
+
+    pub fn grid_column_span(mut self, n: u16) -> Self {
+        self.el = self.el.grid_column_span(n);
+        self
+    }
+
+    pub fn grid_row_span(mut self, n: u16) -> Self {
+        self.el = self.el.grid_row_span(n);
+        self
+    }
+
+    pub fn align_self_kw(mut self, kw: impl Into<String>) -> Self {
+        let s = kw.into();
+        self.el = self.el.align_self_kw(&s);
+        self
+    }
+
+    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
+        self.el = self.el.flex_basis(basis);
         self
     }
 
@@ -445,15 +514,15 @@ impl BoxBuilder {
         self.el = self.el.text_shadow_color(color);
         self
     }
-    pub fn text_shadow_blur(mut self, blur: f32) -> Self {
+    pub fn text_shadow_blur(mut self, blur: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_blur(blur);
         self
     }
-    pub fn text_shadow_offset_x(mut self, dx: f32) -> Self {
+    pub fn text_shadow_offset_x(mut self, dx: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_offset_x(dx);
         self
     }
-    pub fn text_shadow_offset_y(mut self, dy: f32) -> Self {
+    pub fn text_shadow_offset_y(mut self, dy: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_offset_y(dy);
         self
     }
@@ -495,4 +564,8 @@ pub fn hstack() -> BoxBuilder {
 pub fn vstack() -> BoxBuilder {
     // 与 CSS column flex 默认一致：交叉轴 stretch，子项（含文本）易获得父级宽度以便换行。
     BoxBuilder::new().flex_col().items("stretch")
+}
+
+pub fn gstack() -> BoxBuilder {
+    BoxBuilder::new().display_grid()
 }

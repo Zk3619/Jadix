@@ -81,6 +81,22 @@ fn resolved_default_serif_family(db: &Database) -> &'static str {
     "Noto Serif CJK SC"
 }
 
+fn resolved_emoji_family(db: &Database) -> Option<&'static str> {
+    // Prefer bundled Noto Color Emoji family names.
+    const CANDIDATES: &[&str] = &[
+        "Noto Color Emoji",
+        "Noto Color Emoji Windows Compatible",
+        "NotoColorEmoji",
+    ];
+    for &name in CANDIDATES {
+        if db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)) {
+            return Some(name);
+        }
+    }
+    // Fallback: pick any family containing "emoji" and "noto".
+    None
+}
+
 /// 将 `requested_weight` 归一到同一字体家族可用的“最接近权重”，以避免
 /// `fontdb` 在找不到精确权重时跨家族回退（典型问题：`Segoe UI` 的 500 回退到 `Dubai`）。
 pub fn normalize_weight_for_family<'a>(
@@ -201,6 +217,7 @@ pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
         let alias = match lower.as_str() {
             "noto sans cjk" => Some(resolved_default_sans_family(db)),
             "noto serif cjk" => Some(resolved_default_serif_family(db)),
+            "noto emoji" | "noto color emoji" | "emoji" => resolved_emoji_family(db),
             "noto sans cjk sc" => Some("Noto Sans CJK SC"),
             "noto sans cjk tc" => Some("Noto Sans CJK TC"),
             "noto sans cjk hk" => Some("Noto Sans CJK HK"),

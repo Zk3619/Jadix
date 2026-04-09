@@ -126,15 +126,15 @@ impl BaseComponentBuilder {
         self.el = self.el.text_shadow_color(color);
         self
     }
-    pub fn text_shadow_blur(mut self, blur: f32) -> Self {
+    pub fn text_shadow_blur(mut self, blur: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_blur(blur);
         self
     }
-    pub fn text_shadow_offset_x(mut self, dx: f32) -> Self {
+    pub fn text_shadow_offset_x(mut self, dx: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_offset_x(dx);
         self
     }
-    pub fn text_shadow_offset_y(mut self, dy: f32) -> Self {
+    pub fn text_shadow_offset_y(mut self, dy: impl IntoF32) -> Self {
         self.el = self.el.text_shadow_offset_y(dy);
         self
     }
@@ -388,6 +388,48 @@ impl BaseComponentBuilder {
     }
     pub fn gap(mut self, g: impl IntoDimension) -> Self {
         self.el = self.el.gap(g);
+        self
+    }
+
+    pub fn display_grid(mut self) -> Self {
+        self.el = self.el.display_grid();
+        self
+    }
+
+    pub fn grid_cols_equal(mut self, n: u16) -> Self {
+        self.el = self
+            .el
+            .display_grid()
+            .grid_template_columns(crate::layout::cols_equal_fr(n));
+        self
+    }
+
+    pub fn grid_rows_equal(mut self, n: u16) -> Self {
+        self.el = self
+            .el
+            .display_grid()
+            .grid_template_rows(crate::layout::cols_equal_fr(n));
+        self
+    }
+
+    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
+        self.el = self.el.flex_basis(basis);
+        self
+    }
+
+    pub fn align_self_kw(mut self, kw: impl Into<String>) -> Self {
+        let s = kw.into();
+        self.el = self.el.align_self_kw(&s);
+        self
+    }
+
+    pub fn grid_column_span(mut self, n: u16) -> Self {
+        self.el = self.el.grid_column_span(n);
+        self
+    }
+
+    pub fn grid_row_span(mut self, n: u16) -> Self {
+        self.el = self.el.grid_row_span(n);
         self
     }
 

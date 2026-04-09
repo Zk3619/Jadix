@@ -360,19 +360,36 @@ impl Element {
         self.scroll_offset = [x.max(0.0), y.max(0.0)];
         self
     }
-    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+    fn gap_lp(g: impl IntoDimension) -> taffy::style::LengthPercentage {
         let dim = g.into_dimension();
-        let lp = match dim {
+        match dim {
             Dimension::Length(v) => taffy::style::LengthPercentage::Length(v),
             Dimension::Percent(v) => taffy::style::LengthPercentage::Percent(v),
-            Dimension::Auto => taffy::style::LengthPercentage::Percent(0.0), // gap doesn't support auto in taffy easily, map to 0
-        };
+            Dimension::Auto => taffy::style::LengthPercentage::Percent(0.0),
+        }
+    }
+
+    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+        let lp = Self::gap_lp(g);
         self.style.gap = taffy::geometry::Size {
             width: lp.clone(),
             height: lp,
         };
         self
     }
+
+    /// `column-gap` / Tailwind `gap-x-*`。
+    pub fn gap_x(mut self, g: impl IntoDimension) -> Self {
+        self.style.gap.width = Self::gap_lp(g);
+        self
+    }
+
+    /// `row-gap` / Tailwind `gap-y-*`。
+    pub fn gap_y(mut self, g: impl IntoDimension) -> Self {
+        self.style.gap.height = Self::gap_lp(g);
+        self
+    }
+
     pub fn overflow(mut self, mode: impl AsRef<str>) -> Self {
         let o = Self::parse_overflow_mode(mode.as_ref());
         self.style.overflow.x = o;
@@ -518,16 +535,16 @@ impl Element {
         self.text_style.shadow_color = Some(color);
         self
     }
-    pub fn text_shadow_blur(mut self, blur: f32) -> Self {
-        self.text_style.shadow_blur = blur.max(0.0);
+    pub fn text_shadow_blur(mut self, blur: impl IntoF32) -> Self {
+        self.text_style.shadow_blur = blur.into_f32().max(0.0);
         self
     }
-    pub fn text_shadow_offset_x(mut self, dx: f32) -> Self {
-        self.text_style.shadow_offset[0] = dx;
+    pub fn text_shadow_offset_x(mut self, dx: impl IntoF32) -> Self {
+        self.text_style.shadow_offset[0] = dx.into_f32();
         self
     }
-    pub fn text_shadow_offset_y(mut self, dy: f32) -> Self {
-        self.text_style.shadow_offset[1] = dy;
+    pub fn text_shadow_offset_y(mut self, dy: impl IntoF32) -> Self {
+        self.text_style.shadow_offset[1] = dy.into_f32();
         self
     }
     pub fn text_center(mut self) -> Self {
@@ -883,6 +900,142 @@ impl Element {
         self.style.flex_shrink = shrink.into_f32_raw();
         self
     }
+
+    pub fn display_grid(mut self) -> Self {
+        self.style.display = Display::Grid;
+        self
+    }
+
+    pub fn display_flex(mut self) -> Self {
+        self.style.display = Display::Flex;
+        self
+    }
+
+    /// `flex-basis`（主轴初始尺寸）。
+    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
+        self.style.flex_basis = basis.into_dimension();
+        self
+    }
+
+    /// `align-self`，与 Tailwind `self-*` 一致；`auto` / 未知关键字清除为继承父级 `align-items`。
+    pub fn align_self_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.align_self = match s.as_str() {
+            "" | "auto" => None,
+            "center" => Some(AlignSelf::Center),
+            "start" | "flex-start" => Some(AlignSelf::FlexStart),
+            "end" | "flex-end" => Some(AlignSelf::FlexEnd),
+            "stretch" => Some(AlignSelf::Stretch),
+            "baseline" => Some(AlignSelf::Baseline),
+            _ => None,
+        };
+        self
+    }
+
+    /// `align-content`（多行 flex / grid 轴上分布）。
+    pub fn align_content_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.align_content = Some(match s.as_str() {
+            "start" | "flex-start" => AlignContent::FlexStart,
+            "end" | "flex-end" => AlignContent::FlexEnd,
+            "center" => AlignContent::Center,
+            "stretch" => AlignContent::Stretch,
+            "space-between" | "between" => AlignContent::SpaceBetween,
+            "space-around" | "around" => AlignContent::SpaceAround,
+            "space-evenly" | "evenly" => AlignContent::SpaceEvenly,
+            _ => AlignContent::Stretch,
+        });
+        self
+    }
+
+    /// Grid 容器 `justify-items`。
+    pub fn justify_items_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.justify_items = Some(match s.as_str() {
+            "center" => AlignItems::Center,
+            "start" | "flex-start" => AlignItems::FlexStart,
+            "end" | "flex-end" => AlignItems::FlexEnd,
+            "stretch" => AlignItems::Stretch,
+            "baseline" => AlignItems::Baseline,
+            _ => AlignItems::Stretch,
+        });
+        self
+    }
+
+    /// Grid 子项 `justify-self`；`auto` / 未知清除为继承父级 `justify-items`。
+    pub fn justify_self_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.style.justify_self = match s.as_str() {
+            "" | "auto" => None,
+            "center" => Some(AlignSelf::Center),
+            "start" | "flex-start" => Some(AlignSelf::FlexStart),
+            "end" | "flex-end" => Some(AlignSelf::FlexEnd),
+            "stretch" => Some(AlignSelf::Stretch),
+            "baseline" => Some(AlignSelf::Baseline),
+            _ => None,
+        };
+        self
+    }
+
+    pub fn grid_template_columns(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+        self.style.grid_template_columns = tracks;
+        self
+    }
+
+    pub fn grid_template_rows(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+        self.style.grid_template_rows = tracks;
+        self
+    }
+
+    pub fn grid_auto_flow(mut self, flow: GridAutoFlow) -> Self {
+        self.style.grid_auto_flow = flow;
+        self
+    }
+
+    pub fn grid_row(mut self, placement: Line<GridPlacement>) -> Self {
+        self.style.grid_row = placement;
+        self
+    }
+
+    pub fn grid_column(mut self, placement: Line<GridPlacement>) -> Self {
+        self.style.grid_column = placement;
+        self
+    }
+
+    /// `grid-row: <n>`（单条网格线起始）。
+    pub fn grid_row_line(mut self, line_index: i16) -> Self {
+        self.style.grid_row = line(line_index);
+        self
+    }
+
+    /// `grid-column: <n>`。
+    pub fn grid_column_line(mut self, line_index: i16) -> Self {
+        self.style.grid_column = line(line_index);
+        self
+    }
+
+    /// `grid-column: span <n>`。
+    pub fn grid_column_span(mut self, n: u16) -> Self {
+        self.style.grid_column = span(n);
+        self
+    }
+
+    /// `grid-row: span <n>`。
+    pub fn grid_row_span(mut self, n: u16) -> Self {
+        self.style.grid_row = span(n);
+        self
+    }
+
+    /// 列表项拖拽手柄：`focus_id` 供运行时识别；`list_id` 中勿含 `:`。
+    pub fn drag_reorder_handle(mut self, list_id: impl AsRef<str>, index: usize) -> Self {
+        self.focus_id = Some(crate::utils::drag_reorder::drag_item_focus_id(
+            list_id.as_ref(),
+            index,
+        ));
+        self.cursor = Some(CursorKind::Pointer);
+        self
+    }
+
     pub fn absolute(mut self) -> Self {
         self.style.position = Position::Absolute;
         self
