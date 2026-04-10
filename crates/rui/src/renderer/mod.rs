@@ -2,6 +2,12 @@
 
 pub mod pipeline;
 pub mod prepare_text;
+pub mod emoji_svg;
+pub mod twemoji_name;
+pub mod emoji_detect;
+pub mod emoji_matrix;
+pub mod emoji_layout;
+pub mod cpu_text;
 pub(crate) mod text_prepare_debug;
 pub mod text;
 pub mod text_hit;

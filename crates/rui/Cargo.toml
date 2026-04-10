@@ -25,3 +25,6 @@ swash = { workspace = true }
 fontdb = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
+regex = "1.11"
+png = "0.18.1"
+resvg = "0.45.1"

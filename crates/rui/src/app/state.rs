@@ -8,8 +8,8 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
-    prepare_text_frame, scale_instances, scale_textured_draws, RuiPipeline, RuiTextRenderer,
-    TexturedInstanceInput, TexturedQuadPipeline,
+    cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
+    RuiPipeline, RuiTextRenderer, TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -29,10 +29,10 @@ use crate::{
     core::reactivity::use_signal,
 };
 use std::collections::hash_map::Entry;
+use std::sync::OnceLock;
+use std::time::Instant;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(debug_assertions)]
-use std::time::Instant;
 use taffy::prelude::Dimension;
 
 #[cfg(debug_assertions)]
@@ -56,7 +56,7 @@ pub(super) enum ScrollbarUpdateMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextRendererBackend {
     Gpu,
-    CpuFallback,
+    CpuTextHybrid,
 }
 
 pub(super) struct AppState {
@@ -122,9 +122,19 @@ pub(super) struct AppState {
     last_text_surface_size: [u32; 2],
     last_underline_instances: Vec<crate::renderer::InstanceInput>,
     last_caret_blink_phase: u128,
+    cpu_text_profiler: CpuTextProfiler,
 }
 
 impl AppState {
+    fn cpu_hybrid_text_only() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("RUI_CPU_TEXT_HYBRID_TEXT_ONLY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        })
+    }
+
     #[inline]
     fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
         (a - b).abs() <= eps
@@ -227,7 +237,7 @@ impl AppState {
                 })
                 .await
                 .expect("no compatible GPU or software adapter found");
-            (adapter, TextRendererBackend::CpuFallback)
+            (adapter, TextRendererBackend::CpuTextHybrid)
         };
         log::warn!("text renderer backend: {:?}", text_backend);
 
@@ -369,6 +379,7 @@ impl AppState {
             last_text_surface_size: [0, 0],
             last_underline_instances: Vec::new(),
             last_caret_blink_phase: 0,
+            cpu_text_profiler: CpuTextProfiler::new(),
         }
     }
 
@@ -917,6 +928,7 @@ impl AppState {
         let underline_instances = if text_cache_valid {
             self.last_underline_instances.clone()
         } else {
+            let text_prepare_begin = Instant::now();
             let new_underlines = prepare_text_frame(
                 &mut self.text_renderer,
                 &self.device,
@@ -931,6 +943,12 @@ impl AppState {
             self.last_text_surface_size = [self.config.width, self.config.height];
             self.last_underline_instances = new_underlines.clone();
             self.last_caret_blink_phase = caret_phase;
+            if self.text_backend == TextRendererBackend::CpuTextHybrid {
+                self.cpu_text_profiler.record(
+                    (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
+                    self.text_nodes.len(),
+                );
+            }
             new_underlines
         };
         #[cfg(debug_assertions)]
@@ -982,11 +1000,13 @@ impl AppState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
-            if self.num_instances > 0 {
+            let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
+                && Self::cpu_hybrid_text_only());
+            if allow_primitives && self.num_instances > 0 {
                 render_pass.draw_indexed(0..self.pipeline.num_indices, 0, 0..self.num_instances);
             }
 
-            if !scaled_tex.is_empty() {
+            if allow_primitives && !scaled_tex.is_empty() {
                 let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
                 let mut ti = 0;
                 while ti < scaled_tex.len() {

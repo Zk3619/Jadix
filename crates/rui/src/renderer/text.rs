@@ -1,7 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
-use glyphon::{FontSystem, SwashCache, TextArea, TextAtlas, TextRenderer, Viewport};
+use glyphon::{
+    ContentType, FontSystem, RasterizeCustomGlyphRequest, RasterizedCustomGlyph, SwashCache,
+    TextArea, TextAtlas, TextRenderer, Viewport,
+};
 use wgpu::{Device, Queue, SurfaceConfiguration, RenderPass};
 
 pub(crate) struct ShapedTextEntry {
@@ -18,20 +23,155 @@ pub(crate) struct EmojiCacheKey {
     pub color_mode: u8,
 }
 
-#[derive(Default)]
 pub(crate) struct EmojiGlyphCache {
-    pub entries: HashMap<EmojiCacheKey, Vec<glyphon::CustomGlyph>>,
+    pub entries: HashMap<EmojiCacheKey, EmojiGlyphEntry>,
+    entry_lru: VecDeque<EmojiCacheKey>,
+    pub raster_entries: HashMap<EmojiRasterCacheKey, EmojiRaster>,
+    raster_lru: VecDeque<EmojiRasterCacheKey>,
+    pub next_custom_id: u16,
+    pub stats: EmojiCacheStats,
 }
 
-pub struct RuiTextRenderer {
-    pub font_system: FontSystem,
-    pub swash_cache: SwashCache,
-    pub text_atlas: TextAtlas,
-    pub text_renderer: TextRenderer,
-    pub viewport: Viewport,
-    pub(crate) shaped_cache: Vec<ShapedTextEntry>,
-    pub(crate) text_area_capacity_hint: usize,
-    pub(crate) emoji_cache: EmojiGlyphCache,
+impl Default for EmojiGlyphCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            entry_lru: VecDeque::new(),
+            raster_entries: HashMap::new(),
+            raster_lru: VecDeque::new(),
+            next_custom_id: 0,
+            stats: EmojiCacheStats::default(),
+        }
+    }
+}
+
+fn emoji_raster_cache_max() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("RUI_EMOJI_RASTER_CACHE_MAX")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(2048)
+    })
+}
+
+fn emoji_node_cache_max() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("RUI_EMOJI_NODE_CACHE_MAX")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(128)
+    })
+}
+
+impl EmojiGlyphCache {
+    pub(crate) fn get_raster_cached(&mut self, key: &EmojiRasterCacheKey) -> Option<EmojiRaster> {
+        let v = self.raster_entries.get(key).cloned()?;
+        if let Some(pos) = self.raster_lru.iter().position(|k| *k == *key) {
+            let k = self.raster_lru.remove(pos).unwrap();
+            self.raster_lru.push_back(k);
+        }
+        Some(v)
+    }
+
+    pub(crate) fn insert_raster(&mut self, key: EmojiRasterCacheKey, value: EmojiRaster) {
+        let max = emoji_raster_cache_max();
+        if self.raster_entries.contains_key(&key) {
+            self.raster_entries.insert(key.clone(), value);
+            if let Some(pos) = self.raster_lru.iter().position(|k| *k == key) {
+                let k = self.raster_lru.remove(pos).unwrap();
+                self.raster_lru.push_back(k);
+            }
+            return;
+        }
+        while self.raster_entries.len() >= max {
+            if let Some(old) = self.raster_lru.pop_front() {
+                self.raster_entries.remove(&old);
+            } else {
+                break;
+            }
+        }
+        self.raster_lru.push_back(key.clone());
+        self.raster_entries.insert(key, value);
+    }
+
+    pub(crate) fn insert_emoji_node(&mut self, key: EmojiCacheKey, entry: EmojiGlyphEntry) {
+        let max = emoji_node_cache_max();
+        if self.entries.contains_key(&key) {
+            self.entries.insert(key.clone(), entry);
+            if let Some(pos) = self.entry_lru.iter().position(|k| *k == key) {
+                let k = self.entry_lru.remove(pos).unwrap();
+                self.entry_lru.push_back(k);
+            }
+            return;
+        }
+        while self.entries.len() >= max {
+            if let Some(old) = self.entry_lru.pop_front() {
+                self.entries.remove(&old);
+            } else {
+                break;
+            }
+        }
+        self.entry_lru.push_back(key.clone());
+        self.entries.insert(key, entry);
+    }
+
+    pub fn rasterize(&self, input: RasterizeCustomGlyphRequest) -> Option<RasterizedCustomGlyph> {
+        for entry in self.entries.values() {
+            if let Some(r) = entry.rasters.get(&input.id) {
+                if r.width == input.width && r.height == input.height {
+                    return Some(RasterizedCustomGlyph {
+                        data: (*r.rgba).to_vec(),
+                        content_type: ContentType::Color,
+                    });
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub(crate) struct EmojiRasterCacheKey {
+    pub sequence: String,
+    pub pixel_size: u16,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub(crate) struct EmojiCacheStats {
+    pub lookups: u64,
+    pub hits: u64,
+    pub uploads: u64,
+    pub upload_bytes: u64,
+    pub svg_attempts: u64,
+    pub svg_hits: u64,
+    pub svg_raster_ms: f64,
+    pub svg_fallback_to_png: u64,
+}
+
+pub(crate) struct EmojiGlyphEntry {
+    pub glyphs: Vec<glyphon::CustomGlyph>,
+    pub rasters: HashMap<u16, EmojiRaster>,
+}
+
+#[derive(Clone)]
+pub(crate) struct EmojiRaster {
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Arc<[u8]>,
+}
+
+impl EmojiRaster {
+    pub(crate) fn new(width: u16, height: u16, rgba: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            rgba: Arc::from(rgba.into_boxed_slice()),
+        }
+    }
 }
 
 fn load_system_emoji_fonts(db: &mut glyphon::fontdb::Database) {
@@ -94,6 +234,17 @@ fn log_color_font_capabilities(db: &glyphon::fontdb::Database) {
     log::info!("detected {} color-font capable faces", color_faces);
 }
 
+pub struct RuiTextRenderer {
+    pub font_system: FontSystem,
+    pub swash_cache: SwashCache,
+    pub text_atlas: TextAtlas,
+    pub text_renderer: TextRenderer,
+    pub viewport: Viewport,
+    pub(crate) shaped_cache: Vec<ShapedTextEntry>,
+    pub(crate) text_area_capacity_hint: usize,
+    pub(crate) emoji_cache: EmojiGlyphCache,
+}
+
 impl RuiTextRenderer {
     pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {
         let mut font_system = FontSystem::new();
@@ -114,7 +265,7 @@ impl RuiTextRenderer {
             db.load_font_data(include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf").to_vec());
             db.load_font_data(include_bytes!("../../assets/NotoColorEmoji.ttf").to_vec());
             load_system_emoji_fonts(db);
-            
+
             // Prefer a single CJK+Latin family first for cross-language consistency.
             db.set_sans_serif_family("Noto Sans CJK SC");
             db.set_serif_family("Noto Serif CJK SC");
@@ -156,7 +307,7 @@ impl RuiTextRenderer {
         );
 
         self.text_renderer
-            .prepare(
+            .prepare_with_custom(
                 device,
                 queue,
                 &mut self.font_system,
@@ -164,6 +315,7 @@ impl RuiTextRenderer {
                 &self.viewport,
                 text_areas,
                 &mut self.swash_cache,
+                |input| self.emoji_cache.rasterize(input),
             )
             .unwrap();
     }

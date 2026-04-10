@@ -574,8 +574,38 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                         <Label w="100%" leading="normal">
                             "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789"
                         </Label>
+                        <Label w="100%" leading="normal" id="hw-rtl-emoji-mixed">
+                            "RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例"
+                        </Label>
+                        <Label w="8rem" leading="normal" id="hw-narrow-multiline-emoji">
+                            "Narrow wrap: Mixed: Rust 👩‍💻 + 中文 + عربي 🔥 second line 456"
+                        </Label>
                         <Label w="100%" leading="normal">
                             "Punctuation width: ,.;:!? 。，；：！？ () [] {} <> 《》【】"
+                        </Label>
+                    </VStack>
+                </Rect>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="6b) Windows Emoji Realtime Regression">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "实时输入回归：输入法候选上屏、粘贴、退格与替换后，Emoji 应在当帧或下一帧可见。"
+                </Label>
+                <Input id="hw-emoji-regression-input" placeholder="输入或粘贴: 😀 👨‍👩‍👧‍👦 👍🏽 🇨🇳 1️⃣" w="100%" />
+                <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%">
+                    <VStack gap="0.5rem" w="100%">
+                        <Label w="100%" font_weight="700">"固定样例（视觉比对）"</Label>
+                        <Label w="100%" leading="normal">"Family: 👨‍👩‍👧‍👦  Profession: 🧑‍💻"</Label>
+                        <Label w="100%" leading="normal">"Skin tone: 👍🏽  Flags: 🇨🇳 🇺🇸"</Label>
+                        <Label w="100%" leading="normal">
+                            "Hello 😀 😁 😭  Keycap: 1️⃣ 2️⃣ 9️⃣  Mixed: Rust 👩‍💻 + 中文 + عربي"
                         </Label>
                     </VStack>
                 </Rect>
@@ -949,6 +979,7 @@ fn main() {
                             <ScrollShowcase />
                             <LogicalShowcase />
                             <TextCompatibilityShowcase />
+                            <EmojiRealtimeRegressionShowcase />
                             <UtilityClassShowcase />
                             <ToggleControlsShowcase />
                             <RadioSliderShowcase />
