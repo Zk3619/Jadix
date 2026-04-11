@@ -56,6 +56,235 @@ struct FrameTextNodeMeta {
     emoji_cache_key: Option<super::text::EmojiCacheKey>,
 }
 
+/// 预渲染一帧需要上传的阴影位图。
+#[derive(Clone)]
+pub struct ShadowNewBitmap {
+    pub cache_key: u64,
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// 相对于文本节点 (x,y) 的绘制偏移与尺寸 [dx, dy, w, h]。
+    pub draw_rect: [f32; 4],
+}
+
+/// 需要在纹理绘制阶段渲染的阴影项。
+#[derive(Clone)]
+pub struct ShadowTexDraw {
+    pub cache_key: u64,
+    /// 屏幕矩形 [x, y, w, h]，物理像素。
+    pub rect: [f32; 4],
+}
+
+/// `prepare_text_frame` 的完整输出。
+pub struct PrepareTextOutput {
+    pub underline_instances: Vec<InstanceInput>,
+    pub shadow_new_bitmaps: Vec<ShadowNewBitmap>,
+    pub shadow_tex_draws: Vec<ShadowTexDraw>,
+    pub needs_warmup: bool,
+}
+
+fn shadow_cache_key(
+    shape_hash: u64,
+    shadow_col: [u8; 4],
+    shadow_dx: f32,
+    shadow_dy: f32,
+    shadow_blur: f32,
+) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    shape_hash.hash(&mut h);
+    shadow_col.hash(&mut h);
+    shadow_dx.to_bits().hash(&mut h);
+    shadow_dy.to_bits().hash(&mut h);
+    shadow_blur.to_bits().hash(&mut h);
+    h.finish()
+}
+
+/// 阴影位图生成结果。
+struct ShadowBitmapOutput {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    /// 绘制矩形相对于文本节点 (x, y) 的偏移与尺寸。
+    draw_rect: [f32; 4],
+}
+
+/// 使用 swash 将文本阴影栅格化为 RGBA 位图（Vogel spiral 多采样）。
+/// 仅在缓存未命中时调用（每个唯一阴影文本仅一次）。
+fn generate_shadow_bitmap(
+    buffer: &glyphon::Buffer,
+    font_system: &mut glyphon::FontSystem,
+    swash_cache: &mut glyphon::SwashCache,
+    shadow_color: [u8; 4],
+    shadow_dx: f32,
+    shadow_dy: f32,
+    shadow_blur: f32,
+) -> Option<ShadowBitmapOutput> {
+    let radius = shadow_blur;
+
+    struct GlyphEntry {
+        px: i32,
+        py: i32,
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        is_color: bool,
+    }
+    let mut glyph_entries: Vec<GlyphEntry> = Vec::new();
+    for run in buffer.layout_runs() {
+        let line_y_px = run.line_y.round() as i32;
+        for g in run.glyphs.iter() {
+            let physical = g.physical((0.0, 0.0), 1.0);
+            let img = match swash_cache.get_image_uncached(font_system, physical.cache_key) {
+                Some(img) => img,
+                None => continue,
+            };
+            glyph_entries.push(GlyphEntry {
+                px: physical.x + img.placement.left,
+                py: line_y_px + physical.y - img.placement.top,
+                data: img.data,
+                width: img.placement.width,
+                height: img.placement.height,
+                is_color: matches!(img.content, glyphon::SwashContent::Color),
+            });
+        }
+    }
+    if glyph_entries.is_empty() {
+        return None;
+    }
+
+    // 根据实际字形位置计算内容边界（字形可能超出 [0, box_h] 范围）
+    let mut content_min_x = i32::MAX;
+    let mut content_min_y = i32::MAX;
+    let mut content_max_x = i32::MIN;
+    let mut content_max_y = i32::MIN;
+    for ge in &glyph_entries {
+        content_min_x = content_min_x.min(ge.px);
+        content_min_y = content_min_y.min(ge.py);
+        content_max_x = content_max_x.max(ge.px + ge.width as i32);
+        content_max_y = content_max_y.max(ge.py + ge.height as i32);
+    }
+
+    let blur_pad = (radius + 4.0).ceil() as i32;
+    let offset_pad = shadow_dx.abs().max(shadow_dy.abs()).ceil() as i32 + 1;
+    let pad = blur_pad + offset_pad;
+
+    let bmp_x0 = content_min_x - pad;
+    let bmp_y0 = content_min_y - pad;
+    let bw = ((content_max_x + pad - bmp_x0) as u32).max(1);
+    let bh = ((content_max_y + pad - bmp_y0) as u32).max(1);
+    let pixel_count = bw as usize * bh as usize;
+    let mut alpha_buf = vec![0u16; pixel_count];
+
+    let perf = text_perf_mode();
+    let (base_samples, radial_scale, max_samples) = match perf {
+        TextPerfMode::HighQuality => (20_usize, 9.0_f32, 72_usize),
+        TextPerfMode::Balanced => (12_usize, 6.5_f32, 48_usize),
+        TextPerfMode::Fast => (4_usize, 3.0_f32, 16_usize),
+    };
+
+    let alpha = shadow_color[3];
+    const SHARP_BLUR_EPS: f32 = 0.75;
+    let draw_blur = radius > SHARP_BLUR_EPS && alpha > 6;
+
+    let mut stamp = |ox: f32, oy: f32, sample_alpha: u8| {
+        if sample_alpha == 0 {
+            return;
+        }
+        for ge in &glyph_entries {
+            let px0 = ge.px - bmp_x0 + ox.round() as i32;
+            let py0 = ge.py - bmp_y0 + oy.round() as i32;
+            for row in 0..ge.height as i32 {
+                let by = py0 + row;
+                if by < 0 || by >= bh as i32 {
+                    continue;
+                }
+                let row_off = (row as u32 * ge.width) as usize;
+                let dst_row = by as usize * bw as usize;
+                for col in 0..ge.width as i32 {
+                    let bx = px0 + col;
+                    if bx < 0 || bx >= bw as i32 {
+                        continue;
+                    }
+                    let src_a = if ge.is_color {
+                        ge.data[(row_off + col as usize) * 4 + 3]
+                    } else {
+                        ge.data[row_off + col as usize]
+                    };
+                    let src = (src_a as u16 * sample_alpha as u16) / 255;
+                    let dst = alpha_buf[dst_row + bx as usize];
+                    alpha_buf[dst_row + bx as usize] =
+                        src + dst - (src * dst) / 255;
+                }
+            }
+        }
+    };
+
+    if !draw_blur {
+        stamp(shadow_dx, shadow_dy, alpha);
+    } else {
+        const GOLDEN_ANGLE: f32 = 2.399_963_1;
+        let sample_count = (base_samples as f32 + radius * radial_scale)
+            .round()
+            .clamp(base_samples as f32, max_samples as f32) as usize;
+        let sigma = (radius * 0.58).max(0.75);
+        let two_sigma2 = 2.0 * sigma * sigma;
+        let mut weight_sum = 1.0_f32;
+        for idx in 0..sample_count {
+            let t = (idx as f32 + 0.5) / sample_count as f32;
+            let r = radius * t.sqrt();
+            weight_sum += (-(r * r) / two_sigma2).exp();
+        }
+        let inv = 1.0 / weight_sum.max(0.001);
+        let ca = ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
+        stamp(shadow_dx, shadow_dy, ca);
+        for idx in 0..sample_count {
+            let t = (idx as f32 + 0.5) / sample_count as f32;
+            let r = radius * t.sqrt();
+            let theta = idx as f32 * GOLDEN_ANGLE;
+            let w = (-(r * r) / two_sigma2).exp();
+            let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
+            stamp(
+                shadow_dx + theta.cos() * r,
+                shadow_dy + theta.sin() * r,
+                wa,
+            );
+        }
+    }
+
+    let [sr, sg, sb] = [shadow_color[0], shadow_color[1], shadow_color[2]];
+    let mut rgba = vec![0u8; pixel_count * 4];
+    // 纹理管线 UV 映射 Y 轴翻转（quad 顶部 → V=1 → 纹理底行），
+    // 写入时直接反转行序使最终显示正确。
+    for src_y in 0..bh as usize {
+        let dst_y = bh as usize - 1 - src_y;
+        let src_row = src_y * bw as usize;
+        let dst_row = dst_y * bw as usize;
+        for x in 0..bw as usize {
+            let a = alpha_buf[src_row + x].min(255) as u8;
+            if a > 0 {
+                let di = (dst_row + x) * 4;
+                rgba[di] = sr;
+                rgba[di + 1] = sg;
+                rgba[di + 2] = sb;
+                rgba[di + 3] = a;
+            }
+        }
+    }
+
+    let draw_rect = [
+        bmp_x0 as f32,
+        bmp_y0 as f32,
+        bw as f32,
+        bh as f32,
+    ];
+    Some(ShadowBitmapOutput {
+        rgba,
+        width: bw,
+        height: bh,
+        draw_rect,
+    })
+}
+
 fn align_to_u8(align: glyphon::cosmic_text::Align) -> u8 {
     match align {
         glyphon::cosmic_text::Align::Left => 0,
@@ -138,6 +367,26 @@ fn text_perf_mode() -> TextPerfMode {
             "high" | "quality" => TextPerfMode::HighQuality,
             _ => TextPerfMode::Balanced,
         }
+    })
+}
+
+fn preshape_margin() -> f32 {
+    static MARGIN: OnceLock<f32> = OnceLock::new();
+    *MARGIN.get_or_init(|| {
+        std::env::var("RUI_TEXT_PRESHAPE_MARGIN")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(768.0)
+    })
+}
+
+fn preshape_budget() -> usize {
+    static BUDGET: OnceLock<usize> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("RUI_TEXT_PRESHAPE_BUDGET")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(4)
     })
 }
 
@@ -552,7 +801,9 @@ pub fn prepare_text_frame(
     text_nodes: &[TextLayoutInfo],
     ui_scale: f32,
     force_fast_mode: bool,
-) -> Vec<InstanceInput> {
+    shadow_cached_keys: &std::collections::HashSet<u64>,
+    shadow_cached_rects: &std::collections::HashMap<u64, [f32; 4]>,
+) -> PrepareTextOutput {
     let perf_mode = if force_fast_mode {
         TextPerfMode::Fast
     } else {
@@ -560,8 +811,17 @@ pub fn prepare_text_frame(
     };
     if text_nodes.is_empty() {
         text_renderer.prepare(device, queue, config, std::iter::empty());
-        return Vec::new();
+        return PrepareTextOutput {
+            underline_instances: Vec::new(),
+            shadow_new_bitmaps: Vec::new(),
+            shadow_tex_draws: Vec::new(),
+            needs_warmup: false,
+        };
     }
+
+    let mut shadow_new_bitmaps: Vec<ShadowNewBitmap> = Vec::new();
+    let mut shadow_tex_draws: Vec<ShadowTexDraw> = Vec::new();
+    let mut shadow_skip_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     let mut frame_meta: Vec<Option<FrameTextNodeMeta>> = Vec::with_capacity(text_nodes.len());
     let best = best_font_family(&text_renderer.font_system);
@@ -574,8 +834,87 @@ pub fn prepare_text_frame(
         text_renderer.shaped_cache.truncate(text_nodes.len());
     }
 
+    let initial_preshape = text_renderer.shaped_cache.len() < text_nodes.len();
+    let effective_margin = if initial_preshape {
+        f32::MAX
+    } else {
+        preshape_margin()
+    };
+    let effective_budget = if initial_preshape {
+        usize::MAX
+    } else {
+        preshape_budget()
+    };
+
+    let mut preshape_miss_count = 0usize;
+    let mut preshape_warmup: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
+
+    let _t0 = std::time::Instant::now();
+    let mut _shape_misses = 0usize;
+    let mut _emoji_misses = 0usize;
+
     for (i, info) in text_nodes.iter().enumerate() {
         let st = &info.style;
+
+        // Coordinate scaling + early visibility / margin check.
+        // Runs before expensive emoji-detection and font-resolution so that
+        // nodes completely outside the pre-shape margin are skipped cheaply.
+        let scaled_w = info.width * ui_scale;
+        let scaled_h = info.height * ui_scale;
+        let x = info.x * ui_scale;
+        let y = info.y * ui_scale;
+        let scaled_clip = info.clip_bounds.map(|b| {
+            [
+                b[0] * ui_scale,
+                b[1] * ui_scale,
+                b[2] * ui_scale,
+                b[3] * ui_scale,
+            ]
+        });
+        let node_rect = [x, y, scaled_w.max(0.0), scaled_h.max(0.0)];
+        let visible = clip_rect_to_bounds(node_rect, scaled_clip)
+            .and_then(|c| clip_rect_to_bounds(c, Some(viewport_clip)))
+            .is_some();
+        let preshape_only = if !visible {
+            let margin = effective_margin;
+            if margin <= 0.0 {
+                frame_meta.push(None);
+                continue;
+            }
+            let expanded_clip = scaled_clip.map(|c| [
+                c[0] - margin,
+                c[1] - margin,
+                c[2] + 2.0 * margin,
+                c[3] + 2.0 * margin,
+            ]);
+            let expanded_vp = [
+                -margin,
+                -margin,
+                config.width as f32 + 2.0 * margin,
+                config.height as f32 + 2.0 * margin,
+            ];
+            let in_margin = clip_rect_to_bounds(node_rect, expanded_clip)
+                .and_then(|c| clip_rect_to_bounds(c, Some(expanded_vp)))
+                .is_some();
+            if !in_margin {
+                frame_meta.push(None);
+                continue;
+            }
+            true
+        } else {
+            false
+        };
+
+        if preshape_only && initial_preshape && info.text.is_ascii() {
+            while text_renderer.shaped_cache.len() <= i {
+                text_renderer
+                    .shaped_cache
+                    .push(make_dummy_cache_entry(&mut text_renderer.font_system));
+            }
+            frame_meta.push(None);
+            continue;
+        }
+
         let has_emoji = emoji_detect::text_contains_emoji(info.text.as_str())
             || info
                 .shape_suffix
@@ -615,28 +954,6 @@ pub fn prepare_text_frame(
             scaled_size * scale
         };
 
-        let scaled_w = info.width * ui_scale;
-        let scaled_h = info.height * ui_scale;
-        let x = info.x * ui_scale;
-        let y = info.y * ui_scale;
-        let scaled_clip = info.clip_bounds.map(|b| {
-            [
-                b[0] * ui_scale,
-                b[1] * ui_scale,
-                b[2] * ui_scale,
-                b[3] * ui_scale,
-            ]
-        });
-        let node_rect = [x, y, scaled_w.max(0.0), scaled_h.max(0.0)];
-        let Some(clipped) = clip_rect_to_bounds(node_rect, scaled_clip) else {
-            frame_meta.push(None);
-            continue;
-        };
-        if clip_rect_to_bounds(clipped, Some([0.0, 0.0, config.width as f32, config.height as f32])).is_none()
-        {
-            frame_meta.push(None);
-            continue;
-        }
         let is_ascii_basic = st.input_caret.is_none() && info.text.is_ascii();
         let shaping = match perf_mode {
             // Editing/caret keeps advanced shaping for cursor fidelity.
@@ -680,6 +997,18 @@ pub fn prepare_text_frame(
             shaping,
         );
 
+        if preshape_only {
+            let will_miss = text_renderer.shaped_cache.len() <= i
+                || text_renderer.shaped_cache[i].key_hash != key_hash;
+            if will_miss {
+                preshape_miss_count += 1;
+                if preshape_miss_count > effective_budget {
+                    frame_meta.push(None);
+                    continue;
+                }
+            }
+        }
+
         while text_renderer.shaped_cache.len() <= i {
             text_renderer
                 .shaped_cache
@@ -691,6 +1020,7 @@ pub fn prepare_text_frame(
             let measured_text_w = if cache_hit {
                 entry.measured_text_w
             } else {
+                _shape_misses += 1;
                 let mut buffer = glyphon::Buffer::new(
                     &mut text_renderer.font_system,
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
@@ -724,42 +1054,9 @@ pub fn prepare_text_frame(
             (measured_text_w, cache_hit)
         };
 
-        if super::text_prepare_debug::enabled()
-            && super::text_prepare_debug::should_log(
-                info.template_id.as_deref(),
-                st.input_caret.is_some(),
-            )
-            && (!super::text_prepare_debug::reshape_only() || !cache_hit)
-        {
-            let lh_log = line_height / ui_scale.max(0.001);
-            super::text_prepare_debug::log_line(
-                i,
-                info,
-                family,
-                font_weight,
-                lh_log,
-                st.input_caret.is_some(),
-                &text_renderer.shaped_cache[i].buffer,
-                &text_renderer.font_system,
-                cache_hit,
-                shaping,
-            );
-        }
-        super::text_prepare_debug::maybe_log_family_mismatch(
-            info,
-            family,
-            font_weight,
-            &text_renderer.shaped_cache[i].buffer,
-            &text_renderer.font_system,
-        );
-
-        let dy = 0.0;
-        let emoji_cache_key = if emoji_custom_glyph_enabled()
-            && (has_emoji || emoji_detect::text_contains_emoji(shape_text.as_ref()))
-        {
+        let emoji_cache_key = if emoji_custom_glyph_enabled() && has_emoji {
             Some(super::text::EmojiCacheKey {
                 sequence: shape_text.to_string(),
-                // `ceil`：HiDPI 下避免 round 偏小导致 SVG/PNG 再放大发糊，与物理像素对齐更稳。
                 pixel_size: scaled_size.ceil().clamp(1.0, u16::MAX as f32) as u16,
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
@@ -772,6 +1069,7 @@ pub fn prepare_text_frame(
             if text_renderer.emoji_cache.entries.contains_key(&key) {
                 text_renderer.emoji_cache.stats.hits += 1;
             } else {
+                _emoji_misses += 1;
                 let mut next_custom_id = text_renderer.emoji_cache.next_custom_id;
                 let segments = split_text_with_emoji(shape_text.as_ref());
                 let mut glyphs = Vec::new();
@@ -850,6 +1148,99 @@ pub fn prepare_text_frame(
                 text_renderer.emoji_cache.next_custom_id = next_custom_id;
             }
         }
+
+        if preshape_only {
+            if !cache_hit && !info.text.is_ascii() {
+                if initial_preshape {
+                    text_renderer.pending_warmup.push(i);
+                } else {
+                    preshape_warmup.push((i, x, y, scaled_w, scaled_h));
+                }
+            }
+            frame_meta.push(None);
+            continue;
+        }
+
+        if super::text_prepare_debug::enabled()
+            && super::text_prepare_debug::should_log(
+                info.template_id.as_deref(),
+                st.input_caret.is_some(),
+            )
+            && (!super::text_prepare_debug::reshape_only() || !cache_hit)
+        {
+            let lh_log = line_height / ui_scale.max(0.001);
+            super::text_prepare_debug::log_line(
+                i,
+                info,
+                family,
+                font_weight,
+                lh_log,
+                st.input_caret.is_some(),
+                &text_renderer.shaped_cache[i].buffer,
+                &text_renderer.font_system,
+                cache_hit,
+                shaping,
+            );
+        }
+        super::text_prepare_debug::maybe_log_family_mismatch(
+            info,
+            family,
+            font_weight,
+            &text_renderer.shaped_cache[i].buffer,
+            &text_renderer.font_system,
+        );
+
+        let dy = 0.0;
+        let sdx = st.shadow_offset[0] * ui_scale;
+        let sdy = st.shadow_offset[1] * ui_scale;
+        let sblur = st.shadow_blur * ui_scale;
+        let has_shadow = st.shadow_color.is_some() && sblur > 0.0;
+
+        if has_shadow {
+            let sc = st.shadow_color.unwrap();
+            let skey = shadow_cache_key(key_hash, sc, sdx, sdy, sblur);
+            if shadow_cached_keys.contains(&skey) {
+                if let Some(cached_rect) = shadow_cached_rects.get(&skey) {
+                    shadow_tex_draws.push(ShadowTexDraw {
+                        cache_key: skey,
+                        rect: [x + cached_rect[0], y + cached_rect[1], cached_rect[2], cached_rect[3]],
+                    });
+                }
+                shadow_skip_indices.insert(i);
+            } else {
+                let entry = &text_renderer.shaped_cache[i];
+                if let Some(bmp) = generate_shadow_bitmap(
+                    &entry.buffer,
+                    &mut text_renderer.font_system,
+                    &mut text_renderer.swash_cache,
+                    sc,
+                    sdx,
+                    sdy,
+                    sblur,
+                ) {
+                    shadow_tex_draws.push(ShadowTexDraw {
+                        cache_key: skey,
+                        rect: [
+                            x + bmp.draw_rect[0],
+                            y + bmp.draw_rect[1],
+                            bmp.draw_rect[2],
+                            bmp.draw_rect[3],
+                        ],
+                    });
+                    shadow_new_bitmaps.push(ShadowNewBitmap {
+                        cache_key: skey,
+                        rgba: bmp.rgba,
+                        width: bmp.width,
+                        height: bmp.height,
+                        draw_rect: bmp.draw_rect,
+                    });
+                    shadow_skip_indices.insert(i);
+                }
+                // 如果 generate_shadow_bitmap 返回 None（无法栅格化字形），
+                // 不加入 shadow_skip_indices，回退到 glyphon TextArea 渲染。
+            }
+        }
+
         frame_meta.push(Some(FrameTextNodeMeta {
             x,
             y,
@@ -868,13 +1259,15 @@ pub fn prepare_text_frame(
             underline_offset: st.underline_offset,
             color: st.color,
             shadow_col: st.shadow_color,
-            shadow_dx: st.shadow_offset[0] * ui_scale,
-            shadow_dy: st.shadow_offset[1] * ui_scale,
-            shadow_blur: st.shadow_blur * ui_scale,
+            shadow_dx: sdx,
+            shadow_dy: sdy,
+            shadow_blur: sblur,
             clip_bounds: scaled_clip,
             emoji_cache_key,
         }));
     }
+
+    let _t1 = std::time::Instant::now();
 
     let mut underline_instances: Vec<InstanceInput> = Vec::new();
     for (i, tb) in frame_meta.iter().enumerate() {
@@ -883,20 +1276,20 @@ pub fn prepare_text_frame(
         };
         let entry = &text_renderer.shaped_cache[i];
         if let Some(sc) = tb.shadow_col {
-            let radius = tb.shadow_blur;
-            let alpha = sc[3];
-            if alpha == 0 {
-                // skip
+            if shadow_skip_indices.contains(&i) {
+                // 阴影已通过纹理缓存渲染，跳过 glyphon TextArea
             } else {
-                // 阴影质量勿随滚动 `force_fast_mode` 降级：与 shaping 分离，仅按 `RUI_TEXT_PERF`。
-                let shadow_perf = text_perf_mode();
-                if !matches!(shadow_perf, TextPerfMode::Fast) {
+                let radius = tb.shadow_blur;
+                let alpha = sc[3];
+                if alpha > 0 {
+                    let shadow_perf = text_perf_mode();
+                    let center_left = tb.x + tb.shadow_dx;
+                    let center_top = tb.y + tb.dy + tb.shadow_dy;
                     let (min_radius, min_alpha, base_samples, radial_scale, max_samples) = match shadow_perf {
                         TextPerfMode::HighQuality => (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize),
                         TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
-                        TextPerfMode::Fast => (0.0, 0, 0, 0.0, 0),
+                        TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
                     };
-                    // 小于此模糊半径（已乘 ui_scale）视为无模糊：只画偏移后的单层阴影。
                     const SHARP_BLUR_EPS: f32 = 0.75;
                     let shadow_bounds_clip = shadow_clip_for_glyphon(
                         tb.clip_bounds,
@@ -931,9 +1324,6 @@ pub fn prepare_text_frame(
                         });
                     };
 
-                    // 高密度圆盘采样（Vogel spiral）：比固定少点核更接近连续模糊，减少“多重字影”。
-                    let center_left = tb.x + tb.shadow_dx;
-                    let center_top = tb.y + tb.dy + tb.shadow_dy;
                     let draw_blur = radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
                     if !draw_blur {
                         push_shadow_layer(center_left, center_top, alpha);
@@ -1387,6 +1777,22 @@ pub fn prepare_text_frame(
         }
     }
 
+    const WARMUP_BATCH_SIZE: usize = 4;
+    if !initial_preshape && !text_renderer.pending_warmup.is_empty() {
+        let batch_end = WARMUP_BATCH_SIZE.min(text_renderer.pending_warmup.len());
+        for &idx in &text_renderer.pending_warmup[..batch_end] {
+            if idx < text_nodes.len() && idx < text_renderer.shaped_cache.len() {
+                let info = &text_nodes[idx];
+                let sw = info.width * ui_scale;
+                let sh = info.height * ui_scale;
+                preshape_warmup.push((idx, 0.0, 0.0, sw, sh));
+            }
+        }
+        text_renderer.pending_warmup.drain(..batch_end);
+    }
+
+    let _t2 = std::time::Instant::now();
+
     text_renderer.viewport.update(
         queue,
         glyphon::Resolution {
@@ -1394,6 +1800,44 @@ pub fn prepare_text_frame(
             height: config.height,
         },
     );
+
+    let _warmup_count = preshape_warmup.len();
+    if !preshape_warmup.is_empty() {
+        let mut warmup_areas: Vec<glyphon::TextArea> = Vec::with_capacity(preshape_warmup.len());
+        for &(idx, _px, _py, pw, ph) in &preshape_warmup {
+            let entry = &text_renderer.shaped_cache[idx];
+            let bw = pw.ceil().min(config.width as f32) as i32;
+            let bh = ph.ceil().min(config.height as f32) as i32;
+            warmup_areas.push(glyphon::TextArea {
+                buffer: &entry.buffer,
+                left: 0.0,
+                top: 0.0,
+                scale: 1.0,
+                bounds: glyphon::TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: bw.max(1),
+                    bottom: bh.max(1),
+                },
+                default_color: glyphon::Color::rgba(0, 0, 0, 0),
+                custom_glyphs: &[],
+            });
+        }
+        text_renderer
+            .text_renderer
+            .prepare_with_custom(
+                device,
+                queue,
+                &mut text_renderer.font_system,
+                &mut text_renderer.text_atlas,
+                &text_renderer.viewport,
+                warmup_areas.into_iter(),
+                &mut text_renderer.swash_cache,
+                |input| text_renderer.emoji_cache.rasterize(input),
+            )
+            .unwrap();
+    }
+
     let text_area_count = text_areas.len();
     text_renderer
         .text_renderer
@@ -1411,5 +1855,28 @@ pub fn prepare_text_frame(
     emoji_metrics_log_tick(text_renderer.emoji_cache.stats);
     text_renderer.text_area_capacity_hint = text_area_count;
 
-    underline_instances
+    let _t3 = std::time::Instant::now();
+    let _total_ms = (_t3 - _t0).as_secs_f64() * 1000.0;
+    if _total_ms > 4.0 {
+        log::warn!(
+            "prepare_text_frame {:.1}ms | loop={:.1}ms areas={:.1}ms gpu={:.1}ms | nodes={} shape_miss={} emoji_miss={} areas={} warmup={} preshape={}",
+            _total_ms,
+            (_t1 - _t0).as_secs_f64() * 1000.0,
+            (_t2 - _t1).as_secs_f64() * 1000.0,
+            (_t3 - _t2).as_secs_f64() * 1000.0,
+            text_nodes.len(),
+            _shape_misses,
+            _emoji_misses,
+            text_area_count,
+            _warmup_count,
+            initial_preshape,
+        );
+    }
+
+    PrepareTextOutput {
+        underline_instances,
+        shadow_new_bitmaps,
+        shadow_tex_draws,
+        needs_warmup: !text_renderer.pending_warmup.is_empty(),
+    }
 }

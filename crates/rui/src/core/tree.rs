@@ -7,7 +7,7 @@ use crate::core::reactivity::Signal;
 pub use crate::layout::dimension::{
     IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, CSS_ROOT_FONT_SIZE_PX,
 };
-pub use crate::layout::layout_tree::{LayoutTree, RenderResult, TextLayoutInfo};
+pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::Style;
 pub use crate::style::{parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextStyle};
 

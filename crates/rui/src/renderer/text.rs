@@ -243,6 +243,7 @@ pub struct RuiTextRenderer {
     pub(crate) shaped_cache: Vec<ShapedTextEntry>,
     pub(crate) text_area_capacity_hint: usize,
     pub(crate) emoji_cache: EmojiGlyphCache,
+    pub(crate) pending_warmup: Vec<usize>,
 }
 
 impl RuiTextRenderer {
@@ -288,6 +289,7 @@ impl RuiTextRenderer {
             shaped_cache: Vec::new(),
             text_area_capacity_hint: 0,
             emoji_cache: EmojiGlyphCache::default(),
+            pending_warmup: Vec::new(),
         }
     }
 

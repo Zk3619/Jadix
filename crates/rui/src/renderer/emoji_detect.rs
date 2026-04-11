@@ -57,6 +57,9 @@ pub fn grapheme_is_emoji(g: &str) -> bool {
 
 /// 整段文本是否包含 emoji grapheme。
 pub fn text_contains_emoji(text: &str) -> bool {
+    if text.is_ascii() {
+        return false;
+    }
     text.graphemes(true).any(|g| grapheme_is_emoji(g))
 }
 

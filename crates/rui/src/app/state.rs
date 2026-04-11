@@ -103,6 +103,15 @@ pub(super) struct AppState {
     render_prof_pre_ms: f32,
     #[cfg(debug_assertions)]
     render_prof_layout_ms: f32,
+    /// `RenderResult.prof`：`build_and_layout` 建/剪 Taffy（与总 `layout` 互补读）。
+    #[cfg(debug_assertions)]
+    render_prof_layout_rebuild_ms: f32,
+    #[cfg(debug_assertions)]
+    render_prof_layout_setup_ms: f32,
+    #[cfg(debug_assertions)]
+    render_prof_layout_taffy_ms: f32,
+    #[cfg(debug_assertions)]
+    render_prof_layout_collect_ms: f32,
     #[cfg(debug_assertions)]
     render_prof_draw_ms: f32,
     #[cfg(debug_assertions)]
@@ -123,6 +132,9 @@ pub(super) struct AppState {
     last_underline_instances: Vec<crate::renderer::InstanceInput>,
     last_caret_blink_phase: u128,
     cpu_text_profiler: CpuTextProfiler,
+    shadow_tex_cache: std::collections::HashMap<u64, super::image_registry::GpuImageTexture>,
+    shadow_rect_cache: std::collections::HashMap<u64, [f32; 4]>,
+    last_shadow_tex_draws: Vec<crate::renderer::prepare_text::ShadowTexDraw>,
 }
 
 impl AppState {
@@ -158,8 +170,8 @@ impl AppState {
         a: &[crate::core::tree::TextLayoutInfo],
         b: &[crate::core::tree::TextLayoutInfo],
     ) -> bool {
-        // Tolerate tiny layout jitter so text-frame cache is stable across frames.
-        const TEXT_GEOM_EPS: f32 = 0.25;
+        // 略放宽：flex/滚动条亚像素抖动不应每帧打穿文本缓存触发整帧 prepare。
+        const TEXT_GEOM_EPS: f32 = 0.5;
         if a.len() != b.len() {
             return false;
         }
@@ -361,6 +373,14 @@ impl AppState {
             #[cfg(debug_assertions)]
             render_prof_layout_ms: 0.0,
             #[cfg(debug_assertions)]
+            render_prof_layout_rebuild_ms: 0.0,
+            #[cfg(debug_assertions)]
+            render_prof_layout_setup_ms: 0.0,
+            #[cfg(debug_assertions)]
+            render_prof_layout_taffy_ms: 0.0,
+            #[cfg(debug_assertions)]
+            render_prof_layout_collect_ms: 0.0,
+            #[cfg(debug_assertions)]
             render_prof_draw_ms: 0.0,
             #[cfg(debug_assertions)]
             render_prof_acquire_ms: 0.0,
@@ -380,6 +400,9 @@ impl AppState {
             last_underline_instances: Vec::new(),
             last_caret_blink_phase: 0,
             cpu_text_profiler: CpuTextProfiler::new(),
+            shadow_tex_cache: std::collections::HashMap::new(),
+            shadow_rect_cache: std::collections::HashMap::new(),
+            last_shadow_tex_draws: Vec::new(),
         }
     }
 
@@ -696,6 +719,9 @@ impl AppState {
         scrollbar_update: ScrollbarUpdateMode,
         active_drag_rest: Option<&str>,
         text_force_fast_mode: bool,
+        // 无拇指拖拽时：overlay 弹簧或平滑滚会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
+        // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
+        scrollbar_skip_flex_layout: bool,
     ) -> Result<(), wgpu::SurfaceError> {
         let _text_backend = self.text_backend;
         #[cfg(debug_assertions)]
@@ -841,14 +867,30 @@ impl AppState {
         } else {
             // Scroll offsets do not affect Taffy sizing; skip full `compute_layout` when only
             // viewports were synced (no scrollbar thumb/style changes this frame).
-            let scroll_only = matches!(layout_for_build, crate::core::tree::LayoutStatus::Clean)
-                && scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly;
+            // `StyleChanged` from per-frame chrome（颜色/阴影等）不改变 flex 几何时可与 `Clean` 一样走
+            // scroll-only；`LayoutChanged`（如边框宽度、下划线开关）仍必须跑 `compute_layout`。
+            // Full + overlay 淡入淡出 / 平滑滚：预更新已写滚动条样式，flex 树在 Clean 下与上一帧同构。
+            let scroll_only = (scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
+                && matches!(
+                    layout_for_build,
+                    crate::core::tree::LayoutStatus::Clean
+                        | crate::core::tree::LayoutStatus::StyleChanged
+                ))
+                || (scrollbar_skip_flex_layout
+                    && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                    && matches!(
+                        layout_for_build,
+                        crate::core::tree::LayoutStatus::Clean
+                            | crate::core::tree::LayoutStatus::StyleChanged
+                    ));
             // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
-            // Chrome may still set `layout_for_build` to `StyleChanged`, forcing `!scroll_only` layout.
-            // Collect must keep using signal-derived scrollbar geometry in that case — otherwise
-            // draw uses stale Taffy sizes (thin/wrong tracks) until the next `Clean` frame.
+            // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
+            // 避免仅 hover 颜色每帧全量 Taffy。
             let scrollbar_overlay_collect =
-                scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly;
+                scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
+                    || (scrollbar_skip_flex_layout
+                        && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                        && scroll_only);
             self.layout_tree.build_and_layout_fast(
                 &mut self.root_element,
                 logical_w,
@@ -864,6 +906,14 @@ impl AppState {
         let scaled_instances = scale_instances(&render_result.instances, self.ui_scale());
         self.num_instances = render_result.instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
+        #[cfg(debug_assertions)]
+        {
+            let p = &render_result.prof;
+            self.render_prof_layout_rebuild_ms += p.rebuild_ms;
+            self.render_prof_layout_setup_ms += p.setup_ms;
+            self.render_prof_layout_taffy_ms += p.taffy_compute_ms;
+            self.render_prof_layout_collect_ms += p.collect_ms;
+        }
 
         // Export collected metrics and hover state for window_events.rs to avoid redundant traversals.
         self.last_render_scroll_metrics = render_result.scroll_metrics;
@@ -924,12 +974,18 @@ impl AppState {
         let text_cache_valid = self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
             && self.last_text_surface_size == [self.config.width, self.config.height]
             && Self::text_nodes_equal(&self.text_nodes, &self.last_text_nodes_cache)
-            && (!has_dynamic_text || self.last_caret_blink_phase == caret_phase);
-        let underline_instances = if text_cache_valid {
-            self.last_underline_instances.clone()
+            && (!has_dynamic_text || self.last_caret_blink_phase == caret_phase)
+            && self.text_renderer.pending_warmup.is_empty();
+        let shadow_cached_keys: std::collections::HashSet<u64> =
+            self.shadow_tex_cache.keys().copied().collect();
+        let (underline_instances, shadow_tex_draws) = if text_cache_valid {
+            (
+                self.last_underline_instances.clone(),
+                self.last_shadow_tex_draws.clone(),
+            )
         } else {
             let text_prepare_begin = Instant::now();
-            let new_underlines = prepare_text_frame(
+            let prep_out = prepare_text_frame(
                 &mut self.text_renderer,
                 &self.device,
                 &self.queue,
@@ -937,11 +993,26 @@ impl AppState {
                 &self.text_nodes,
                 ui_scale,
                 text_force_fast_mode,
+                &shadow_cached_keys,
+                &self.shadow_rect_cache,
             );
+            for bm in &prep_out.shadow_new_bitmaps {
+                let gpu = super::image_registry::upload_rgba8(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &bm.rgba,
+                    bm.width,
+                    bm.height,
+                );
+                self.shadow_tex_cache.insert(bm.cache_key, gpu);
+                self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
+            }
             self.last_text_nodes_cache = self.text_nodes.clone();
             self.last_text_ui_scale = ui_scale;
             self.last_text_surface_size = [self.config.width, self.config.height];
-            self.last_underline_instances = new_underlines.clone();
+            self.last_underline_instances = prep_out.underline_instances.clone();
+            self.last_shadow_tex_draws = prep_out.shadow_tex_draws.clone();
             self.last_caret_blink_phase = caret_phase;
             if self.text_backend == TextRendererBackend::CpuTextHybrid {
                 self.cpu_text_profiler.record(
@@ -949,7 +1020,10 @@ impl AppState {
                     self.text_nodes.len(),
                 );
             }
-            new_underlines
+            if prep_out.needs_warmup {
+                self.window.request_redraw();
+            }
+            (prep_out.underline_instances, prep_out.shadow_tex_draws)
         };
         #[cfg(debug_assertions)]
         let text_done = Instant::now();
@@ -1064,7 +1138,38 @@ impl AppState {
                 }
             }
 
+            for sd in &shadow_tex_draws {
+                let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
+                    continue;
+                };
+                let inst = TexturedInstanceInput {
+                    rect_pos: [sd.rect[0], sd.rect[1]],
+                    rect_size: [sd.rect[2], sd.rect[3]],
+                    tint: [1.0, 1.0, 1.0, 1.0],
+                };
+                let shadow_inst_buf =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Shadow instance"),
+                            contents: bytemuck::cast_slice(&[inst]),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                render_pass
+                    .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
+                render_pass.set_index_buffer(
+                    self.textured_pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
+            }
+
             if !underline_instances.is_empty() {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                 let underline_buffer =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1073,6 +1178,10 @@ impl AppState {
                             usage: wgpu::BufferUsages::VERTEX,
                         });
                 render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
                 render_pass.draw_indexed(
                     0..self.pipeline.num_indices,
                     0,
@@ -1113,12 +1222,16 @@ impl AppState {
             if elapsed >= std::time::Duration::from_secs(1) {
                 let f = self.render_prof_frames.max(1) as f32;
                 log::warn!(
-                    "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",
+                    "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [layout_tree: rebuild={:.2} setup={:.2} taffy={:.2} collect={:.2}] [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",
                     elapsed.as_millis() as f32,
                     f / elapsed.as_secs_f32().max(0.001),
                     self.render_prof_pre_ms / f,
                     self.render_prof_layout_ms / f,
                     self.render_prof_draw_ms / f,
+                    self.render_prof_layout_rebuild_ms / f,
+                    self.render_prof_layout_setup_ms / f,
+                    self.render_prof_layout_taffy_ms / f,
+                    self.render_prof_layout_collect_ms / f,
                     self.render_prof_upload_ms / f,
                     self.render_prof_acquire_ms / f,
                     self.render_prof_text_ms / f,
@@ -1130,6 +1243,10 @@ impl AppState {
                 self.render_prof_frames = 0;
                 self.render_prof_pre_ms = 0.0;
                 self.render_prof_layout_ms = 0.0;
+                self.render_prof_layout_rebuild_ms = 0.0;
+                self.render_prof_layout_setup_ms = 0.0;
+                self.render_prof_layout_taffy_ms = 0.0;
+                self.render_prof_layout_collect_ms = 0.0;
                 self.render_prof_draw_ms = 0.0;
                 self.render_prof_acquire_ms = 0.0;
                 self.render_prof_submit_ms = 0.0;
@@ -1289,8 +1406,18 @@ fn update_scrollbar_elements(
     }
 
     // Update children first so nested scrollbars also work.
+    // Full 模式剪枝：无 ScrollArea 子树且子节点本身也不是 scroll/scrollbar 焦点时，不再下降
+    // （避免对纯静态 UI 大子树做 612 次无意义递归；轨道/拇指仍由「本节点」在下方逻辑处理。）
     for child in &mut el.children {
-        update_scrollbar_elements(child, base_style, layout_tree, mode, active_drag_rest);
+        let descend = child.scroll_viewport_subtree_count > 0
+            || child.focus_id.as_deref().is_some_and(|f| {
+                f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
+                    || f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
+                    || f.starts_with(SCROLL_AREA_FOCUS_PREFIX)
+            });
+        if descend {
+            update_scrollbar_elements(child, base_style, layout_tree, mode, active_drag_rest);
+        }
     }
 
     let Some(fid) = el.focus_id.as_deref() else {
@@ -1384,7 +1511,7 @@ fn update_scrollbar_elements(
     } else if vis == "always" {
         1.0
     } else {
-        crate::style::use_spring(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
+        crate::style::use_scrollbar_visibility_spring(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
             .peek()
             .clamp(0.0, 1.0)
     };
@@ -1559,9 +1686,9 @@ fn update_scrollbar_elements(
         thumb.style.bg_color = th;
         el.style.border_color = tbc;
         thumb.style.border_color = thbc;
-        // Fade border width as well to avoid “outline pops”.
-        el.style.border_width = bs.track_border_width * visible_alpha;
-        thumb.style.border_width = bs.thumb_border_width * visible_alpha;
+        // 边框宽不参与 alpha：否则每帧改变盒模型，无法在无 Taffy compute 的 overlay-only 帧保持几何稳定。
+        el.style.border_width = bs.track_border_width;
+        thumb.style.border_width = bs.thumb_border_width;
     }
 
     {

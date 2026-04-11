@@ -912,9 +912,10 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                             let vh = use_signal(&scroll_viewport_h_signal_key("virt-demo"), || 160.0_f32).get();
                             let (a, b) = rui::visible_item_range(sy, vh, 22.0, 200, 8);
                             let mut col = vstack().w("100%").gap("2px");
+                            // 行文案勿夹每帧变化的 window 边界，否则滚动时整窗 text 全变、glyphon 每帧重跑。
                             for i in a..b {
                                 let row: Element = label(&format!("virt-row-{i}"))
-                                    .text(format!("virtual row {i:04} (range {a}..{b})"))
+                                    .text(format!("virtual row {i:04}"))
                                     .into();
                                 col = col.child(row);
                             }

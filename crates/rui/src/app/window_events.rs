@@ -138,7 +138,7 @@ impl super::App {
         if Self::peek_scrollbar_visibility(rest, axis) != "auto" {
             return;
         }
-        crate::style::use_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
+        crate::style::use_scrollbar_visibility_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
     }
 
     pub(super) fn handle_cursor_moved(&mut self, id: WindowId, position: winit::dpi::PhysicalPosition<f64>) {
@@ -902,8 +902,8 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
 
-        let animations_running = crate::style::tick_animations(dt);
-        if animations_running {
+        let anim_tick = crate::style::tick_animations(dt);
+        if anim_tick.any {
             window.request_redraw();
         }
         let mut smooth_scroll_animating = false;
@@ -1071,14 +1071,22 @@ impl super::App {
         let scrollbar_pass = if self.scrollbar_drag.is_some()
             || smooth_scroll_animating
             || !self.scroll_accum.is_empty()
-            || animations_running
+            || anim_tick.scrollbar_overlay
         {
             ScrollbarUpdateMode::Full
         } else {
             ScrollbarUpdateMode::ViewportsOnly
         };
-        let text_force_fast_mode =
-            self.scrollbar_drag.is_some() || smooth_scroll_animating || !self.scroll_accum.is_empty();
+        // `scrollbar_overlay` 与 Full 滚动条预更新同帧时，文本用 Fast 路径降低 prepare/GPU 压力。
+        let text_force_fast_mode = self.scrollbar_drag.is_some()
+            || smooth_scroll_animating
+            || !self.scroll_accum.is_empty()
+            || anim_tick.scrollbar_overlay;
+
+        // `scroll_accum` 在本函数开头已 drain，此处恒空；平滑滚仍会使 `scrollbar_pass == Full`，
+        // 与 overlay 弹簧一样可在 `Clean` 下跳过整树 Taffy（collect 用信号画滚动条）。
+        let scrollbar_skip_flex_layout =
+            self.scrollbar_drag.is_none() && (anim_tick.scrollbar_overlay || smooth_scroll_animating);
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(
@@ -1086,6 +1094,7 @@ impl super::App {
             scrollbar_pass,
             active_drag_rest,
             text_force_fast_mode,
+            scrollbar_skip_flex_layout,
         ) {
             Ok(_) => {
                 if let Some(adapter) = &mut self.accesskit_adapter {
@@ -1392,7 +1401,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .to_ascii_lowercase();
 
                     if axis_x_enabled {
-                        let spring_x = crate::style::use_spring(keys.spring_x.as_str(), 0.0);
+                        let spring_x =
+                            crate::style::use_scrollbar_visibility_spring(keys.spring_x.as_str(), 0.0);
                         // `raw_max_*` can sit at 0 briefly (stale metrics / sub-pixel) while the axis is
                         // still hoverable. Never force the spring to 0 when that axis is actively hovered,
                         // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
@@ -1430,7 +1440,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         }
                     }
                     if axis_y_enabled {
-                        let spring_y = crate::style::use_spring(keys.spring_y.as_str(), 0.0);
+                        let spring_y =
+                            crate::style::use_scrollbar_visibility_spring(keys.spring_y.as_str(), 0.0);
                         let spring_eligible_y = raw_max_y > 0.5
                             || is_hover_y
                             || is_dragging_y
@@ -1542,7 +1553,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         state.resize(inner);
                     }
                     state.recover_surface();
-                    let _ = state.render([0.0, 0.0], ScrollbarUpdateMode::Full, None, false);
+                    let _ = state.render([0.0, 0.0], ScrollbarUpdateMode::Full, None, false, false);
                     state.window.request_redraw();
                     self.force_redraw_count = 3;
                 }

@@ -14,8 +14,9 @@ mod text_style;
 mod tailwind_leading;
 
 pub use animation::{
-    cubic_bezier_y_at_x, tick_animations, use_spring, use_ui_transition_cubic, use_ui_transition_spring,
-    CubicTween, CubicTweenState, Spring, SpringState,
+    cubic_bezier_y_at_x, tick_animations, use_scrollbar_visibility_spring, use_spring,
+    use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState,
+    Spring, SpringState,
 };
 pub use color::{parse_color, parse_text_color};
 pub use color_space::{

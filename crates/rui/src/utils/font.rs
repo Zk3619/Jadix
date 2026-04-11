@@ -174,11 +174,59 @@ pub fn normalize_weight_for_family<'a>(
     effective
 }
 
+#[derive(Clone, Copy)]
+enum ResolvedFamilyCached {
+    Named(&'static str),
+    SansSerif,
+    Serif,
+    Monospace,
+    Cursive,
+    Fantasy,
+}
+
+thread_local! {
+    static RESOLVE_FAMILY_CACHE: RefCell<HashMap<String, ResolvedFamilyCached>> = RefCell::new(HashMap::new());
+}
+
 /// Parses a comma-separated font family list (e.g., "Noto Sans CJK SC, Segoe UI, sans-serif")
 /// and returns the first available font family in the database.
 ///
 /// If no font in the list is found, it returns `Family::SansSerif` by default.
 pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
+    let cached = RESOLVE_FAMILY_CACHE.with(|c| c.borrow().get(family_list).copied());
+    if let Some(entry) = cached {
+        return match entry {
+            ResolvedFamilyCached::Named(s) => Family::Name(s),
+            ResolvedFamilyCached::SansSerif => Family::SansSerif,
+            ResolvedFamilyCached::Serif => Family::Serif,
+            ResolvedFamilyCached::Monospace => Family::Monospace,
+            ResolvedFamilyCached::Cursive => Family::Cursive,
+            ResolvedFamilyCached::Fantasy => Family::Fantasy,
+        };
+    }
+
+    let result = resolve_family_uncached(db, family_list);
+    let to_cache = match result {
+        Family::Name(name) => {
+            ResolvedFamilyCached::Named(Box::leak(name.to_string().into_boxed_str()))
+        }
+        Family::SansSerif => ResolvedFamilyCached::SansSerif,
+        Family::Serif => ResolvedFamilyCached::Serif,
+        Family::Monospace => ResolvedFamilyCached::Monospace,
+        Family::Cursive => ResolvedFamilyCached::Cursive,
+        Family::Fantasy => ResolvedFamilyCached::Fantasy,
+    };
+    RESOLVE_FAMILY_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > 256 {
+            cache.clear();
+        }
+        cache.insert(family_list.to_string(), to_cache);
+    });
+    result
+}
+
+fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
     #[cfg(debug_assertions)]
     if std::env::var("RUI_TEXT_DEBUG").is_ok() {
         // Only print once or twice to avoid spam

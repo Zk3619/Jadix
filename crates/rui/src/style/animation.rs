@@ -15,6 +15,8 @@ pub struct SpringState {
     pub stiffness: f32,
     pub damping: f32,
     pub signal: Signal<f32>,
+    /// 为真时，未 settle 的弹簧会拉高 [`AnimationTick::scrollbar_overlay`]，用于滚动条 Full 预遍历门控。
+    pub affects_scrollbar_prepass: bool,
 }
 
 #[derive(Clone)]
@@ -31,7 +33,21 @@ impl Spring {
         Self::new_with_params(initial, 280.0, 38.0)
     }
 
+    /// 滚动条 `auto` 模式显示/隐藏弹簧（与默认 [`Self::new`] 相同力学参数，但参与 [`AnimationTick::scrollbar_overlay`]）。
+    pub fn new_scrollbar_visibility(initial: f32) -> Self {
+        Self::new_with_params_flag(initial, 170.0, 20.0, true)
+    }
+
     pub fn new_with_params(initial: f32, stiffness: f32, damping: f32) -> Self {
+        Self::new_with_params_flag(initial, stiffness, damping, false)
+    }
+
+    fn new_with_params_flag(
+        initial: f32,
+        stiffness: f32,
+        damping: f32,
+        affects_scrollbar_prepass: bool,
+    ) -> Self {
         let state = Rc::new(RefCell::new(SpringState {
             target: initial,
             current: initial,
@@ -39,6 +55,7 @@ impl Spring {
             stiffness,
             damping,
             signal: Signal::new(initial),
+            affects_scrollbar_prepass,
         }));
 
         ANIMATIONS.with(|anim| {
@@ -77,6 +94,12 @@ pub fn use_spring(id_str: &str, initial: f32) -> Spring {
 /// 与 [`use_spring`] 相同，但使用 [`Spring::new_ui_transition`]（适合按钮 hover 等短过渡）。
 pub fn use_ui_transition_spring(id_str: &str, initial: f32) -> Spring {
     let spring_sig = use_signal(id_str, move || Spring::new_ui_transition(initial));
+    spring_sig.peek()
+}
+
+/// 与 [`use_spring`] 相同存储方式，但弹簧标记为影响滚动条 overlay 预遍历（`scrollbar_spring_*` key）。
+pub fn use_scrollbar_visibility_spring(id_str: &str, initial: f32) -> Spring {
+    let spring_sig = use_signal(id_str, move || Spring::new_scrollbar_visibility(initial));
     spring_sig.peek()
 }
 
@@ -178,10 +201,19 @@ pub fn use_ui_transition_cubic(id_str: &str, initial: f32) -> CubicTween {
     sig.peek()
 }
 
-pub fn tick_animations(dt: f32) -> bool {
+/// [`tick_animations`] 的返回值：`any` 决定是否继续 `request_redraw`；`scrollbar_overlay` 决定是否对滚动条做 Full 预遍历。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationTick {
+    pub any: bool,
+    /// 有未 settle 且标记为 `affects_scrollbar_prepass` 的弹簧（滚动条 auto 淡入淡出等）。
+    pub scrollbar_overlay: bool,
+}
+
+pub fn tick_animations(dt: f32) -> AnimationTick {
     const SPRING_SETTLE_POS_EPS: f32 = 0.01;
     const SPRING_SETTLE_VEL_EPS: f32 = 0.01;
-    let mut any_running = false;
+    let mut spring_any_running = false;
+    let mut scrollbar_overlay = false;
     let mut signals_to_update = Vec::new();
 
     ANIMATIONS.with(|anim| {
@@ -199,13 +231,23 @@ pub fn tick_animations(dt: f32) -> bool {
                 s.velocity += acceleration * dt;
                 s.current += s.velocity * dt;
 
-                if displacement.abs() < SPRING_SETTLE_POS_EPS
-                    && s.velocity.abs() < SPRING_SETTLE_VEL_EPS
+                // 用积分后的状态判断 settle，避免旧位移 + 新速度混用导致长期微振、scrollbar_overlay 误报。
+                let disp_after = s.current - s.target;
+                if disp_after.abs() < SPRING_SETTLE_POS_EPS && s.velocity.abs() < SPRING_SETTLE_VEL_EPS
                 {
                     s.current = s.target;
                     s.velocity = 0.0;
                 } else {
-                    any_running = true;
+                    spring_any_running = true;
+                    // 尾段几乎不可见时仍 tick/redraw，但不再强迫滚动条 Full 预遍历 → 更多帧可走 scroll_only、跳过 taffy compute。
+                    const SCROLLBAR_OVERLAY_POS: f32 = 0.022;
+                    const SCROLLBAR_OVERLAY_VEL: f32 = 0.028;
+                    if s.affects_scrollbar_prepass
+                        && (disp_after.abs() > SCROLLBAR_OVERLAY_POS
+                            || s.velocity.abs() > SCROLLBAR_OVERLAY_VEL)
+                    {
+                        scrollbar_overlay = true;
+                    }
                 }
 
                 signals_to_update.push((s.signal.clone(), s.current));
@@ -251,5 +293,8 @@ pub fn tick_animations(dt: f32) -> bool {
         sig.set(val);
     }
 
-    any_running || cubic_running
+    AnimationTick {
+        any: spring_any_running || cubic_running,
+        scrollbar_overlay,
+    }
 }

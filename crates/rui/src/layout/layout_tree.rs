@@ -3,8 +3,11 @@
 //! 命名说明：本模块**不是** [`crate::renderer`]（wgpu/glyphon），只做 **布局与遍历**；
 //! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆。
 
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::time::Instant;
 
 use taffy::prelude::*;
 
@@ -184,6 +187,19 @@ fn scroll_area_signals_cached<'a>(
     }
 }
 
+/// 一次布局+收集的 CPU 细分（毫秒）；见 `AppState` debug `render profile`。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LayoutProfileMs {
+    /// `build_and_layout`：建/剪 Taffy 子树（含 cascade、clear）；`fast` 路径为 0。
+    pub rebuild_ms: f32,
+    /// `build_and_layout_fast`：根尺寸、cascade、`update_taffy_node_style(root)`；整树重建路径为 0。
+    pub setup_ms: f32,
+    /// `compute_layout_with_measure`；`scroll_only` 跳过则为 0。
+    pub taffy_compute_ms: f32,
+    /// `collect_instances_mut`（整树展开实例与 `TextLayoutInfo`）。
+    pub collect_ms: f32,
+}
+
 /// 一次布局+收集的产出。
 pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
@@ -191,6 +207,7 @@ pub struct RenderResult {
     pub text_nodes: Vec<TextLayoutInfo>,
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
     pub hover_cursor: Option<crate::core::tree::CursorKind>,
+    pub prof: LayoutProfileMs,
 }
 
 /// 单段文本在布局后的几何与样式快照（供 glyphon 使用）。
@@ -214,6 +231,8 @@ pub struct LayoutTree {
     pub taffy: TaffyTree<()>,
     pub(crate) root_node: Option<NodeId>,
     text_measurements: HashMap<taffy::NodeId, TextMeasureMeta>,
+    /// 单次 `compute_layout` 内文本叶测量结果（与 `text_measurements` 生命周期对齐，每帧 compute 前清空）。
+    measure_layout_cache: RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
     /// Track nodes visited in the current build pass for pruning.
     visited_nodes: std::collections::HashSet<NodeId>,
     /// Track all nodes currently in the taffy tree.
@@ -261,6 +280,65 @@ fn segment_intrinsic_width(seg: &str, size: f32, weight: u16) -> f32 {
 
 /// 文本叶子的 flex 测量：在 Taffy 给出确定宽度时按「约略换行」估高，避免盒高过矮裁切多行；
 /// 宽度未定时用按字符累加的启发式（优于统一 0.6×字符数）。
+/// 单次 `compute_layout` 内对 `measured_text_leaf_size` 的 memo（Taffy 会对同一叶多次探测）。
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
+struct TextMeasureCacheKey {
+    node: NodeId,
+    kw: u32,
+    kh: u32,
+    aw: u64,
+    ah: u64,
+}
+
+impl TextMeasureCacheKey {
+    fn new(
+        node: NodeId,
+        kd: taffy::geometry::Size<Option<f32>>,
+        av: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    ) -> Self {
+        Self {
+            node,
+            kw: kd.width.map(|w| w.to_bits()).unwrap_or(u32::MAX),
+            kh: kd.height.map(|h| h.to_bits()).unwrap_or(u32::MAX),
+            aw: pack_avail_space(av.width),
+            ah: pack_avail_space(av.height),
+        }
+    }
+}
+
+#[inline]
+fn pack_avail_space(d: taffy::style::AvailableSpace) -> u64 {
+    match d {
+        taffy::style::AvailableSpace::Definite(v) => {
+            // 高 2 bit 作 tag，低 62 bit 存 f32::to_bits（布局里极少用到极大指数）
+            (3u64 << 62) | ((v.to_bits() as u64) & ((1u64 << 62) - 1))
+        }
+        taffy::style::AvailableSpace::MinContent => 1u64 << 62,
+        taffy::style::AvailableSpace::MaxContent => 2u64 << 62,
+    }
+}
+
+#[inline]
+fn measure_leaf_cached(
+    cache: &RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
+    tm: &HashMap<NodeId, TextMeasureMeta>,
+    node_id: NodeId,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+) -> taffy::geometry::Size<f32> {
+    let key = TextMeasureCacheKey::new(node_id, known_dimensions, available_space);
+    if let Some(v) = cache.borrow().get(&key) {
+        return *v;
+    }
+    let out = if let Some(m) = tm.get(&node_id) {
+        measured_text_leaf_size(m, known_dimensions, available_space)
+    } else {
+        taffy::geometry::Size::ZERO
+    };
+    cache.borrow_mut().insert(key, out);
+    out
+}
+
 fn measured_text_leaf_size(
     m: &TextMeasureMeta,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
@@ -277,10 +355,9 @@ fn measured_text_leaf_size(
     let intrinsic_width = if is_icon {
         size
     } else {
-        let blob = if let Some(suf) = &m.shape_suffix {
-            format!("{}{}", m.text, suf)
-        } else {
-            m.text.clone()
+        let blob: Cow<str> = match m.shape_suffix.as_deref() {
+            Some(suf) if !suf.is_empty() => Cow::Owned(format!("{}{}", m.text, suf)),
+            _ => Cow::Borrowed(m.text.as_str()),
         };
         blob
             .split('\n')
@@ -348,6 +425,7 @@ impl LayoutTree {
             taffy: TaffyTree::new(),
             root_node: None,
             text_measurements: HashMap::new(),
+            measure_layout_cache: RefCell::new(HashMap::new()),
             visited_nodes: std::collections::HashSet::new(),
             total_nodes: std::collections::HashSet::new(),
         }
@@ -367,6 +445,7 @@ impl LayoutTree {
         height: f32,
         mouse_pos: [f32; 2],
     ) -> RenderResult {
+        let t_rebuild_begin = Instant::now();
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
         cascade_inheritable_text_style(root, None);
@@ -387,25 +466,27 @@ impl LayoutTree {
             self.total_nodes.remove(&node_id);
             self.text_measurements.remove(&node_id);
         }
+        let rebuild_ms = t_rebuild_begin.elapsed().as_secs_f32() * 1000.0;
 
         let available_space = Size {
             width: AvailableSpace::Definite(width),
             height: AvailableSpace::Definite(height),
         };
 
+        let t_compute_begin = Instant::now();
+        self.measure_layout_cache.borrow_mut().clear();
+        let tm = &self.text_measurements;
+        let mcache = &self.measure_layout_cache;
         self.taffy
             .compute_layout_with_measure(
                 root_node,
                 available_space,
                 |known_dimensions, available_space, node_id, _context, _style| {
-                    if let Some(m) = self.text_measurements.get(&node_id) {
-                        measured_text_leaf_size(m, known_dimensions, available_space)
-                    } else {
-                        taffy::geometry::Size::ZERO
-                    }
+                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
                 },
             )
             .unwrap();
+        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0;
 
         let mut instances = Vec::new();
         let mut textured_draws = Vec::new();
@@ -413,6 +494,7 @@ impl LayoutTree {
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
 
+        let t_collect_begin = Instant::now();
         self.collect_instances_mut(
             root,
             root_node,
@@ -431,6 +513,7 @@ impl LayoutTree {
             None,
             &mut None,
         );
+        let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
 
         RenderResult {
             instances,
@@ -438,6 +521,12 @@ impl LayoutTree {
             text_nodes,
             scroll_metrics,
             hover_cursor,
+            prof: LayoutProfileMs {
+                rebuild_ms,
+                setup_ms: 0.0,
+                taffy_compute_ms,
+                collect_ms,
+            },
         }
     }
 
@@ -464,17 +553,23 @@ impl LayoutTree {
         // viewport. Otherwise `compute_layout` still sees stale definite sizes from the last full
         // build (e.g. after maximize / restore while status is `Clean`) and the UI stays a small
         // island in the corner while the swapchain is full-window.
+        let t_setup_begin = Instant::now();
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
         cascade_inheritable_text_style(root, None);
         self.update_taffy_node_style(root);
+        let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
 
-        if !scroll_only {
+        let taffy_compute_ms = if !scroll_only {
             let available_space = Size {
                 width: AvailableSpace::Definite(width),
                 height: AvailableSpace::Definite(height),
             };
 
+            let t_compute_begin = Instant::now();
+            self.measure_layout_cache.borrow_mut().clear();
+            let tm = &self.text_measurements;
+            let mcache = &self.measure_layout_cache;
             // Note: We assume the caller has updated any necessary styles (like scrollbar thumbs)
             // using update_taffy_node_style before calling this.
             self.taffy
@@ -482,15 +577,14 @@ impl LayoutTree {
                     root_node,
                     available_space,
                     |known_dimensions, available_space, node_id, _context, _style| {
-                        if let Some(m) = self.text_measurements.get(&node_id) {
-                            measured_text_leaf_size(m, known_dimensions, available_space)
-                        } else {
-                            taffy::geometry::Size::ZERO
-                        }
+                        measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
                     },
                 )
                 .unwrap();
-        }
+            t_compute_begin.elapsed().as_secs_f32() * 1000.0
+        } else {
+            0.0
+        };
 
         let mut instances = Vec::new();
         let mut textured_draws = Vec::new();
@@ -506,6 +600,7 @@ impl LayoutTree {
                 None
             };
 
+        let t_collect_begin = Instant::now();
         self.collect_instances_mut(
             root,
             root_node,
@@ -524,6 +619,7 @@ impl LayoutTree {
             None,
             &mut scroll_cache_slot,
         );
+        let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
 
         RenderResult {
             instances,
@@ -531,6 +627,12 @@ impl LayoutTree {
             text_nodes,
             scroll_metrics,
             hover_cursor,
+            prof: LayoutProfileMs {
+                rebuild_ms: 0.0,
+                setup_ms,
+                taffy_compute_ms,
+                collect_ms,
+            },
         }
     }
 
