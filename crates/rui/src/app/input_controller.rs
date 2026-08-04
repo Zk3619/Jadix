@@ -7,6 +7,18 @@ use crate::utils::clipboard::{
 };
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{caret_move_left, caret_move_right, delete_char_forward};
+use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
+
+fn input_type_for(rest: &str) -> InputType {
+    let key = input_type_signal_key(rest);
+    let raw = crate::core::reactivity::use_signal(&key, || InputType::Text.as_str().to_string()).peek();
+    InputType::parse(&raw)
+}
+
+/// 按字段 `type` 过滤将要插入的文本；空串表示全部被拒。
+fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
+    filter_insert_for_type(input_type_for(rest), existing, text)
+}
 
 impl super::App {
     pub(super) fn handle_ime_event(&mut self, ime: Ime) {
@@ -70,12 +82,19 @@ impl super::App {
                     let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
                     let mut anchor = ime_anchor_sig.get().unwrap_or(v.len()).min(v.len());
                     anchor = v.floor_char_boundary(anchor);
-                    let mut new = String::new();
-                    new.push_str(&v[..anchor]);
-                    new.push_str(&s);
-                    new.push_str(&v[anchor..]);
-                    let new_caret = anchor + s.len();
-                    val_sig.set(new);
+                    let filtered = filter_typed_insert(rest, &v[..anchor], &s);
+                    let new_caret = if filtered.is_empty() && !s.is_empty() {
+                        // 全部被 type 过滤：仍清 preedit，不改 value。
+                        anchor
+                    } else {
+                        let mut new = String::new();
+                        new.push_str(&v[..anchor]);
+                        new.push_str(&filtered);
+                        new.push_str(&v[anchor..]);
+                        let new_caret = anchor + filtered.len();
+                        val_sig.set(new);
+                        new_caret
+                    };
                     let pk = crate::components::input::input_preedit_signal_key(rest);
                     let sk = crate::components::input::input_preedit_sel_signal_key(rest);
                     let tsk = crate::components::input::input_selection_signal_key(rest);
@@ -144,12 +163,15 @@ impl super::App {
 
                 if event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
-                    && crate::primitives::popup::try_close_top_popup()
                 {
-                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
-                        st.window.request_redraw();
+                    let closed = crate::app::portal_overlay::try_close_top()
+                        || crate::app::navigator::try_pop_active();
+                    if closed {
+                        if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                            st.window.request_redraw();
+                        }
+                        return true;
                     }
-                    return true;
                 }
 
                 if super::window_keys::try_dispatch_window_key(&event) {
@@ -209,17 +231,23 @@ impl super::App {
                                                 }
                                                 let mut insert_at = lo.min(s.len());
                                                 insert_at = s.floor_char_boundary(insert_at);
-                                                s.insert_str(insert_at, &text);
-                                                val_sig.set(s);
-                                                text_sel_sig.set(None);
-                                                caret_sig.set(Some(insert_at + text.len()));
+                                                let text = filter_typed_insert(rest, &s, &text);
+                                                if !text.is_empty() {
+                                                    s.insert_str(insert_at, &text);
+                                                    val_sig.set(s);
+                                                    text_sel_sig.set(None);
+                                                    caret_sig.set(Some(insert_at + text.len()));
+                                                }
                                             } else {
                                                 let mut insert_at = caret_sig.get().unwrap_or(s.len());
                                                 insert_at = insert_at.min(s.len());
                                                 insert_at = s.floor_char_boundary(insert_at);
-                                                s.insert_str(insert_at, &text);
-                                                val_sig.set(s);
-                                                caret_sig.set(Some(insert_at + text.len()));
+                                                let text = filter_typed_insert(rest, &s, &text);
+                                                if !text.is_empty() {
+                                                    s.insert_str(insert_at, &text);
+                                                    val_sig.set(s);
+                                                    caret_sig.set(Some(insert_at + text.len()));
+                                                }
                                             }
                                         }
                                     }
@@ -376,31 +404,39 @@ impl super::App {
                                     }
                                     let mut insert_at = lo.min(s.len());
                                     insert_at = s.floor_char_boundary(insert_at);
-                                    s.insert_str(insert_at, t);
-                                    val_sig.set(s);
-                                    text_sel_sig.set(None);
-                                    caret_sig.set(Some(insert_at + t.len()));
+                                    let text = filter_typed_insert(rest, &s, t);
+                                    if !text.is_empty() {
+                                        s.insert_str(insert_at, &text);
+                                        val_sig.set(s);
+                                        text_sel_sig.set(None);
+                                        caret_sig.set(Some(insert_at + text.len()));
+                                    }
                                 } else {
                                     let mut insert_at = caret_sig.get().unwrap_or(s.len());
                                     insert_at = insert_at.min(s.len());
                                     insert_at = s.floor_char_boundary(insert_at);
-                                    let ow_key = crate::components::input::input_overwrite_signal_key(rest);
-                                    let overwrite_sig = crate::core::reactivity::use_signal(&ow_key, || false);
-                                    let overwrite = overwrite_sig.get();
-                                    if overwrite
-                                        && text_sel_sig.get().is_none()
-                                        && insert_at < s.len()
-                                        && t.chars().count() == 1
-                                    {
-                                        let first = s[insert_at..].chars().next().unwrap();
-                                        let olen = first.len_utf8();
-                                        s.replace_range(insert_at..insert_at + olen, t);
-                                        val_sig.set(s);
-                                        caret_sig.set(Some(insert_at + t.len()));
+                                    let text = filter_typed_insert(rest, &s, t);
+                                    if text.is_empty() {
+                                        // rejected by type filter
                                     } else {
-                                        s.insert_str(insert_at, t);
-                                        val_sig.set(s);
-                                        caret_sig.set(Some(insert_at + t.len()));
+                                        let ow_key = crate::components::input::input_overwrite_signal_key(rest);
+                                        let overwrite_sig = crate::core::reactivity::use_signal(&ow_key, || false);
+                                        let overwrite = overwrite_sig.get();
+                                        if overwrite
+                                            && text_sel_sig.get().is_none()
+                                            && insert_at < s.len()
+                                            && text.chars().count() == 1
+                                        {
+                                            let first = s[insert_at..].chars().next().unwrap();
+                                            let olen = first.len_utf8();
+                                            s.replace_range(insert_at..insert_at + olen, &text);
+                                            val_sig.set(s);
+                                            caret_sig.set(Some(insert_at + text.len()));
+                                        } else {
+                                            s.insert_str(insert_at, &text);
+                                            val_sig.set(s);
+                                            caret_sig.set(Some(insert_at + text.len()));
+                                        }
                                     }
                                 }
                             }

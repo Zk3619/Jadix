@@ -78,4 +78,4 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
 }
 
-pub use primitives::visible_item_range;
+pub use utils::visible_item_range;

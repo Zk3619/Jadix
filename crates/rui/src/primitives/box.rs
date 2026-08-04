@@ -1,6 +1,7 @@
 //! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
 //!
-//! RSX：`VStack` / `HStack` / `Box` / `Rect` / `Grid` 由宏映射到 [`vstack`] / [`hstack`] / [`r#box`] / [`gstack`]。
+//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` / `Rect` 由宏映射到
+//! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]。
 
 use taffy::prelude::TrackSizingFunction;
 
@@ -294,18 +295,13 @@ impl BoxBuilder {
 
     /// `grid-cols-{n}`：等分 `fr` 列。
     pub fn grid_cols_equal(mut self, n: u16) -> Self {
-        self.el = self
-            .el
-            .grid_template_columns(crate::layout::cols_equal_fr(n));
+        self.el = self.el.grid_cols_equal(n);
         self
     }
 
     /// `grid-rows-{n}`：等分 `fr` 行。
     pub fn grid_rows_equal(mut self, n: u16) -> Self {
-        self.el = self
-            .el
-            .display_grid()
-            .grid_template_rows(crate::layout::cols_equal_fr(n));
+        self.el = self.el.grid_rows_equal(n);
         self
     }
 

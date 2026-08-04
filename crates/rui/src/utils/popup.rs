@@ -1,38 +1,9 @@
-//! Headless popup helpers: Escape 关闭栈、`open` 信号注册、全屏点击 underlay。
-use std::cell::RefCell;
+//! 浮层几何与 Portal 辅助（非组件）：锚点放置、遮罩、portal 标记。
 
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
-use crate::primitives::r#box::r#box;
 use crate::primitives::interactive::interactive;
-
-thread_local! {
-    /// Last-registered popup `open` signal (Escape closes the most recently registered).
-    static LAST_POPUP_OPEN: RefCell<Option<Signal<bool>>> = RefCell::new(None);
-}
-
-/// Call when building a dialog/dropdown so [`try_close_top_popup`] can clear `open`.
-pub fn register_last_popup_for_escape(open: Signal<bool>) {
-    LAST_POPUP_OPEN.with(|s| {
-        *s.borrow_mut() = Some(open);
-    });
-}
-
-/// Sets `open` to false if it was true. Returns whether a popup was closed.
-pub fn try_close_top_popup() -> bool {
-    LAST_POPUP_OPEN.with(|s| {
-        let borrow = s.borrow();
-        let Some(sig) = borrow.as_ref() else {
-            return false;
-        };
-        if sig.get() {
-            sig.set(false);
-            true
-        } else {
-            false
-        }
-    })
-}
+use crate::primitives::r#box::r#box;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PopupPlacement {
@@ -43,7 +14,7 @@ pub enum PopupPlacement {
     TopEnd,
 }
 
-/// 根据触发器矩形与视口，计算浮层左上角与可用高度（优先右下 / BottomStart，空间不足则翻转）。
+/// 根据触发器矩形与视口，计算浮层左上角与可用高度（优先 BottomStart，空间不足则翻转）。
 pub fn compute_anchored_placement(
     trigger: [f32; 4],
     viewport: [f32; 2],
@@ -84,19 +55,29 @@ pub fn compute_anchored_placement(
     (x, y, max_h, !place_below)
 }
 
-/// Full-viewport underlay: click closes popup. Absolute + portal so it does not affect layout.
-pub fn underlay_close_on_click(open: Signal<bool>) -> Element {
-    let mut el: Element = interactive(r#box().into())
-        .on_click(move || open.set(false))
-        .into();
-    el = el.absolute().inset(0.0).w("100%").h("100%");
-    el.style.z_index = 900;
+/// 标记 `rui_portal=1`，布局时提升到根末尾。
+pub fn mark_portal(mut el: Element) -> Element {
     el.set_attr("rui_portal", "1");
     el
 }
 
-/// Panel wrapper that stops hit-test from reaching underlay (`on_click` noop).
-pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
+/// 设置 z-index 并 portal 提升（浮层面板）。
+pub fn portal_panel(mut inner: Element, z: i32) -> Element {
     inner.style.z_index = z;
-    inner.on_click(|| {})
+    mark_portal(inner)
+}
+
+/// 全屏 underlay：点击将 `open` 设为 false；绝对定位 + portal。
+pub fn underlay_close_on_click(open: Signal<bool>, z: i32) -> Element {
+    let mut el: Element = interactive(r#box().into())
+        .on_click(move || open.set(false))
+        .into();
+    el = el.absolute().inset(0.0).w("100%").h("100%");
+    portal_panel(el, z)
+}
+
+/// 面板包装：吞掉点击，避免穿透到 underlay；并 portal 提升。
+pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
+    inner = inner.on_click(|| {});
+    portal_panel(inner, z)
 }

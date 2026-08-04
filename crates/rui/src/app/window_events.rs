@@ -903,7 +903,8 @@ impl super::App {
         drop(state_borrow);
 
         let anim_tick = crate::style::tick_animations(dt);
-        if anim_tick.any {
+        let nav_animating = crate::app::navigator::tick_active(dt);
+        if anim_tick.any || nav_animating {
             window.request_redraw();
         }
         let mut smooth_scroll_animating = false;

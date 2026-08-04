@@ -294,6 +294,33 @@ where
     });
 }
 
+/// Drop all effects (and their captures). Used during app shutdown so GPU/`AppState`
+/// is not kept alive until thread-local `Runtime` teardown (after the window is gone).
+pub fn clear_effects() {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        rt.effects.borrow_mut().clear();
+        rt.effect_deps.borrow_mut().clear();
+        rt.signal_subscribers.borrow_mut().clear();
+        rt.pending_effects.borrow_mut().clear();
+        rt.pending_effect_set.borrow_mut().clear();
+        rt.deferred_effects.borrow_mut().clear();
+        *rt.current_effect.borrow_mut() = None;
+    });
+}
+
+/// Remove a named signal binding and drop its value storage (e.g. Navigator Host 卸载).
+pub fn remove_named_signal(id_str: &str) {
+    let _ = RUNTIME.try_with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let Some(signal_id) = rt.named_signals.borrow_mut().remove(id_str) else {
+            return;
+        };
+        rt.signals.borrow_mut().remove(&signal_id);
+        rt.signal_subscribers.borrow_mut().remove(&signal_id);
+    });
+}
+
 /// Run `f` without tracking the current effect: `get()` inside `f` will not subscribe.
 pub fn untrack<F, R>(f: F) -> R
 where

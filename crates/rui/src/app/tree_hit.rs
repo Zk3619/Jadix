@@ -11,6 +11,11 @@ thread_local! {
         RefCell::new(Vec::new());
 }
 
+#[inline]
+fn pointer_events_blocked(el: &Element) -> bool {
+    !el.pointer_events_enabled()
+}
+
 fn hit_test_child_indices(el: &Element) -> Vec<usize> {
     // Topmost child wins.
     // Order rule:
@@ -45,6 +50,9 @@ pub(super) fn input_display_text(committed: &str, preedit: &str, ime_anchor: Opt
 }
 
 pub(super) fn pick_cursor(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Option<CursorKind> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
     let b = el.layout_bounds;
     // `layout_bounds` is stable unscrolled absolute space.
     // To match screen coordinates (x, y), we must subtract parent scroll accumulation.
@@ -118,6 +126,9 @@ pub(super) fn find_bounds_by_focus_id(el: &Element, focus_id: &str, scroll_acc: 
 }
 
 pub(super) fn find_focus_id_at(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Option<String> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -198,6 +209,9 @@ pub(super) fn find_input_text_at(
     y: f32,
     scroll_acc: [f32; 2],
 ) -> Option<(String, [f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -284,6 +298,9 @@ fn pick_hover_target(
     y: f32,
     scroll_acc: [f32; 2],
 ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -331,6 +348,9 @@ fn pick_hover_target(
 }
 
 pub(super) fn find_click(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];

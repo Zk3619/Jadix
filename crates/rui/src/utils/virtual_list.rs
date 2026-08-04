@@ -1,4 +1,4 @@
-//! 虚拟列表辅助：在 [`Reactive`](crate::reactive!) 或 `create_effect` 内根据滚动量算可见行区间。
+//! 虚拟列表：根据滚动偏移计算可见行区间。
 
 /// 根据垂直滚动偏移、视口高度、行高与总行数，返回 `[start, end)` 行索引（不含 `end`）。
 pub fn visible_item_range(

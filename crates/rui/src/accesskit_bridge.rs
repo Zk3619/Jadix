@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use crate::components::input::{input_value_signal_key, INPUT_FOCUS_PREFIX};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
-use crate::primitives::tabs::TABSTRIP_FOCUS_PREFIX;
+use crate::components::tabs::TABSTRIP_FOCUS_PREFIX;
 
 const ROOT_ID: NodeId = NodeId(1);
 

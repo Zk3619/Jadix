@@ -27,6 +27,8 @@ mod state;
 mod tree_hit;
 mod window_events;
 pub mod pending_images;
+pub mod portal_overlay;
+pub mod navigator;
 mod image_registry;
 #[cfg(test)]
 mod reactive_tests;

@@ -39,6 +39,8 @@ pub struct InputPaintSync {
     pub font_weight: u16,
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
+    /// HTML 风格 `type`（`text` / `password` / `email` / …），影响显示掩码与输入过滤。
+    pub input_type: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +68,33 @@ impl LayoutStatus {
     }
 }
 
+/// 挂在 [`Element::on_unmount`]：最后一个 `Rc` 释放时执行一次（树节点丢弃即卸载）。
+pub struct UnmountHook {
+    f: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
+}
+
+impl UnmountHook {
+    pub fn new(f: impl FnOnce() + 'static) -> std::rc::Rc<Self> {
+        std::rc::Rc::new(Self {
+            f: std::cell::RefCell::new(Some(Box::new(f))),
+        })
+    }
+
+    /// 取消回调（例如已手动 [`Navigator::dispose`](crate::app::navigator::Navigator::dispose)）。
+    pub fn disarm(&self) {
+        *self.f.borrow_mut() = None;
+    }
+}
+
+impl Drop for UnmountHook {
+    fn drop(&mut self) {
+        if let Some(f) = self.f.borrow_mut().take() {
+            // TLS may already be torn down at thread exit; ignore panics from AccessError.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        }
+    }
+}
+
 pub struct Element {
     pub style: crate::style::Style,
     pub children: Vec<Element>,
@@ -78,6 +107,8 @@ pub struct Element {
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// Keyboard on focused node. Return `true` if the event is consumed.
     pub on_key_down: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
+    /// 节点从树中丢弃且 `Rc` 计数归零时触发（用于 Navigator Host dispose 等）。
+    pub on_unmount: Option<std::rc::Rc<UnmountHook>>,
     pub focus_id: Option<String>,
     pub focusable: bool,
     pub cursor: Option<CursorKind>,
@@ -266,6 +297,7 @@ impl Element {
             on_click: None,
             on_hover: None,
             on_key_down: None,
+            on_unmount: None,
             focus_id: None,
             focusable: false,
             cursor: None,
@@ -339,6 +371,27 @@ impl Element {
     pub fn on_click(mut self, handler: impl FnMut() + 'static) -> Self {
         self.on_click = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
+    }
+
+    /// 节点从 UI 树移除且钩子 `Rc` 归零时调用一次。
+    pub fn on_unmount(mut self, f: impl FnOnce() + 'static) -> Self {
+        self.on_unmount = Some(UnmountHook::new(f));
+        self
+    }
+
+    pub fn on_unmount_hook(mut self, hook: std::rc::Rc<UnmountHook>) -> Self {
+        self.on_unmount = Some(hook);
+        self
+    }
+
+    /// `rui_pointer_events=none`：跳过命中（埋层页面等）。
+    pub fn pointer_events_none(mut self) -> Self {
+        self.set_attr("rui_pointer_events", "none");
+        self
+    }
+
+    pub fn pointer_events_enabled(&self) -> bool {
+        self.attrs.get("rui_pointer_events").map(|s| s.as_str()) != Some("none")
     }
     pub fn on_hover(mut self, handler: impl FnMut(bool) + 'static) -> Self {
         self.on_hover = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
@@ -985,6 +1038,29 @@ impl Element {
     pub fn grid_template_rows(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
         self.style.grid_template_rows = tracks;
         self
+    }
+
+    /// `grid-cols-{n}`：等分 `fr` 列，并启用 `display: grid`。
+    pub fn grid_cols_equal(self, n: u16) -> Self {
+        self.display_grid()
+            .grid_template_columns(crate::layout::cols_equal_fr(n))
+    }
+
+    /// `grid-rows-{n}`：等分 `fr` 行，并启用 `display: grid`。
+    pub fn grid_rows_equal(self, n: u16) -> Self {
+        self.display_grid()
+            .grid_template_rows(crate::layout::cols_equal_fr(n))
+    }
+
+    /// 展开宏打成的 `rui_fragment` 多子节点；否则保留 0/1 个根。
+    pub fn unpack_fragment_children(children: Option<Element>) -> Vec<Element> {
+        match children {
+            Some(mut c) if c.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") => {
+                std::mem::take(&mut c.children)
+            }
+            Some(c) => vec![c],
+            None => Vec::new(),
+        }
     }
 
     pub fn grid_auto_flow(mut self, flow: GridAutoFlow) -> Self {

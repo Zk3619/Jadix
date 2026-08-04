@@ -12,6 +12,24 @@ use winit::{
 
 use crate::core::tree::Element;
 
+impl super::App {
+    /// Drop GPU resources while the window / event loop are still valid.
+    ///
+    /// The root `create_effect` captures `Rc<RefCell<Option<AppState>>>`. If we leave
+    /// teardown to thread-local `Runtime` destructors after `main` returns, winit has
+    /// already torn down and wgpu-hal's GLES/WGL path panics inside `make_current`
+    /// (`unwrap` on OS error 2004).
+    fn shutdown_renderer(&mut self) {
+        crate::app::runtime::clear_app_runtime();
+        self.accesskit_adapter = None;
+        // Take AppState out first so wgpu Surface/Device drop while the HWND is still
+        // alive (field drop order keeps `window` until after `surface`).
+        let _ = self.state.borrow_mut().take();
+        // Drop effect closures that captured the state `Rc` (root UI rebuild effect).
+        crate::core::reactivity::clear_effects();
+    }
+}
+
 struct AccessKitBootstrap;
 
 impl accesskit::ActivationHandler for AccessKitBootstrap {
@@ -110,6 +128,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         self.is_suspended = true;
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.shutdown_renderer();
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if let Some(adapter) = &mut self.accesskit_adapter {
             if let Some(st) = (*self.state.borrow()).as_ref() {
@@ -119,7 +141,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.shutdown_renderer();
+                event_loop.exit();
+            }
+            WindowEvent::Destroyed => {
+                self.shutdown_renderer();
+            }
             WindowEvent::CursorMoved { position, .. } => self.handle_cursor_moved(id, position),
             WindowEvent::CursorLeft { .. } => self.handle_cursor_left(id),
             WindowEvent::MouseInput {
@@ -227,5 +255,8 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         #[cfg(debug_assertions)]
         hot_reload: super::hot_reload::HotReloadState::new(event_loop_proxy),
     };
-    event_loop.run_app(&mut app).unwrap();
+    let _ = event_loop.run_app(&mut app);
+    // Belt-and-suspenders: if exit skipped `exiting` / CloseRequested, still drop GPU
+    // before thread-local reactive Runtime destructors run.
+    app.shutdown_renderer();
 }
