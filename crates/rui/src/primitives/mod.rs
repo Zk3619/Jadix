@@ -24,8 +24,8 @@ pub use drag::{
 pub use drag_visual::{drag_indicator_z_boost, DRAG_INDICATOR_Z_BOOST};
 pub use interactive::{interactive, InteractiveBuilder};
 pub use popup::{
-    panel_block_clicks, register_last_popup_for_escape, try_close_top_popup, underlay_close_on_click,
-    PopupPlacement,
+    compute_anchored_placement, panel_block_clicks, register_last_popup_for_escape,
+    try_close_top_popup, underlay_close_on_click, PopupPlacement,
 };
 pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
 pub use tabs::{tabs_headless, TabsHeadlessBuilder, TABSTRIP_FOCUS_PREFIX};

@@ -647,6 +647,8 @@ impl From<ButtonBuilder> for Element {
                 } else {
                     builder.text_style.size_px
                 };
+                // Button caption text should occupy the button content box width to avoid
+                // accidental over-shrink clipping in flex contexts (e.g. "MC"/"CE" -> "M"/"C").
                 let text_node = build_text_node(text_content, TextNodeConfig {
                     color,
                     underline,
@@ -658,7 +660,11 @@ impl From<ButtonBuilder> for Element {
                     font_family: child.text_style.font_family.clone(),
                     size_px,
                     ..builder.text_style
-                });
+                })
+                .w("100%")
+                .text_center()
+                .min_w("0")
+                .flex_shrink(1.0);
                 el = el.child(text_node);
             } else {
                 el = el.child(child);

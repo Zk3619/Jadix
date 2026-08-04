@@ -7,6 +7,8 @@ pub mod card;
 pub mod checkbox;
 pub mod dialog;
 pub mod dropdown;
+pub mod flex;
+pub mod grid;
 pub mod input;
 pub mod label;
 pub mod scroll_area;
@@ -30,6 +32,8 @@ pub use card::{Card, CardProps};
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use dialog::{dialog_panel, DialogBuilder};
 pub use dropdown::{dropdown, DropdownBuilder};
+pub use flex::{Flex, FlexProps};
+pub use grid::{Grid, GridProps};
 pub use input::{
     input, Input, InputBuilder, InputProps, IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX, input_caret_signal_key,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_selection_signal_key,

@@ -66,6 +66,16 @@ impl BaseComponentBuilder {
         self
     }
 
+    pub fn min_w(mut self, w: impl IntoDimension) -> Self {
+        self.el = self.el.min_w(w);
+        self
+    }
+
+    pub fn min_h(mut self, h: impl IntoDimension) -> Self {
+        self.el = self.el.min_h(h);
+        self
+    }
+
     pub fn p(mut self, p: impl IntoDimension) -> Self {
         self.el = self.el.p(p);
         self

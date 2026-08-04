@@ -533,7 +533,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 }
             }
             let is_custom = name_str.chars().next().map_or(false, |c| c.is_uppercase()) 
-                && !["VStack", "HStack", "Grid", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
+                && !["VStack", "HStack", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
 
             let mut element = if is_custom {
                 let name_ident = &el.name;
@@ -734,7 +734,20 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter));
                     }
-                    if expanded_children.len() == 1 {
+                    // Flex/Grid：多子节点打成 fragment，避免被包进 VStack 破坏网格/弹性子项。
+                    if name_str == "Grid" || name_str == "Flex" {
+                        children_expr = quote! {
+                            Some({
+                                use rui::core::tree::IntoElementList;
+                                let mut __list = Vec::<rui::core::tree::Element>::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag = __frag.children(__list);
+                                __frag
+                            })
+                        };
+                    } else if expanded_children.len() == 1 {
                         let first = &expanded_children[0];
                         children_expr = quote! { 
                             Some({
@@ -772,7 +785,6 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 match name_str.as_str() {
                     "VStack" => quote! { rui::primitives::vstack() },
                     "HStack" => quote! { rui::primitives::hstack() },
-                    "Grid" => quote! { rui::primitives::gstack() },
                     "Box" | "Rect" => quote! { rui::primitives::r#box() },
                     "Interactive" => quote! { rui::primitives::interactive(rui::core::tree::Element::new()) },
                     "Text" => quote! { rui::primitives::text("") },
