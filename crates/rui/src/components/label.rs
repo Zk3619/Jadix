@@ -1,6 +1,25 @@
+//! # Label
+//!
+//! 文本 / 标签节点：字号、字重、颜色、行高、装饰与常用布局透传。
+//! RSX 标签为 `<Label>`；Builder 入口为 [`label`]，旧别名 [`text_node`]（re-export 为 `text`）。
+//!
+//! ## 用来做什么
+//! 界面文案、标题、表单旁注等静态或轻量文本，不是可编辑输入。
+//!
+//! ## 用法
+//! ```ignore
+//! <Label text_size="0.875rem" font_weight="600">"标题"</Label>
+//! <Label id="hint" text_color="#888">"说明文字"</Label>
+//! // Element::from(label("t").text("Hello").size(14.0))
+//! ```
+//!
+//! ## 注意
+//! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
+//! 约 14px / weight 500 / leading-none / `min_w=0`。`template_id` 取自 `id`。
+
 use crate::primitives::text::TextBuilder;
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
-use crate::components::text_node::apply_label_defaults;
+use crate::utils::text_node::apply_label_defaults;
 use rui_macros::component;
 
 pub struct LabelBuilder {
@@ -8,7 +27,7 @@ pub struct LabelBuilder {
     pub(crate) inner: TextBuilder,
 }
 
-/// Label / Text component.
+/// RSX `<Label>`：见模块文档。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Label(

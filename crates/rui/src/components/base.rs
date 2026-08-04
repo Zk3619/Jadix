@@ -1,3 +1,23 @@
+//! # BaseComponentBuilder
+//!
+//! 组件根节点的共享样式 / 布局 fluent API。`ui!` 宏把标签上的布局属性
+//!（`w` / `gap` / `cols` / `rounded` 等）编译进 `base` 回调，再应用到组件产出的 [`Element`]。
+//!
+//! ## 用来做什么
+//! - 给任意组件统一挂尺寸、间距、背景、边框、阴影、定位、grid/flex 辅助属性。
+//! - 在自定义 `w`/`h` 时推算 `auto_text_size`（约边长 × 0.44，夹在 12–14px），供按钮等内嵌文字默认字号。
+//!
+//! ## 怎么用
+//! 应用代码一般不必直接 `new`；在 RSX 上写属性即可：
+//! ```ignore
+//! <Button w="8rem" rounded="0.5rem" gap="0.5rem">"OK"</Button>
+//! <GStack cols="3" gap="0.25rem">…</GStack>
+//! ```
+//! 程序化拼装时：`BaseComponentBuilder::new(el).p("1rem").bg(...)`。
+//!
+//! ## 注意
+//! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
+
 use crate::core::tree::{Element, IntoDimension, IntoF32};
 use taffy::prelude::Dimension;
 
@@ -407,18 +427,12 @@ impl BaseComponentBuilder {
     }
 
     pub fn grid_cols_equal(mut self, n: u16) -> Self {
-        self.el = self
-            .el
-            .display_grid()
-            .grid_template_columns(crate::layout::cols_equal_fr(n));
+        self.el = self.el.grid_cols_equal(n);
         self
     }
 
     pub fn grid_rows_equal(mut self, n: u16) -> Self {
-        self.el = self
-            .el
-            .display_grid()
-            .grid_template_rows(crate::layout::cols_equal_fr(n));
+        self.el = self.el.grid_rows_equal(n);
         self
     }
 

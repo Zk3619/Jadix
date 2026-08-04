@@ -1,13 +1,30 @@
+//! # Select
+//!
+//! ShadCN 式下拉选择：outline 触发器 + Portal 浮层选项菜单（锚点定位、点遮罩关闭、Esc LIFO）。
+//!
+//! ## 用法
+//! ```ignore
+//! <Select id="mode" value={mode} default_value="standard"
+//!   options={vec![("standard".into(),"标准".into()), ("sci".into(),"科学".into())]}
+//!   placeholder="模式" w="7rem" />
+//! // 或 Element::from(select("mode").value_signal(mode).options(…).placement(…))
+//! ```
+//!
+//! ## 注意
+//! - **打开态须包在 `<Reactive>` 内**，否则菜单开闭不刷新。
+//! - 菜单 / underlay 走 `rui_portal` + [`crate::app::portal_overlay`] 栈分配 z；不占文档流。
+//! - 选项为 `(value, label)`；受控用 `Signal<String>`。
+
+use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::components::button::button;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
-use crate::primitives::popup::{
-    compute_anchored_placement, panel_block_clicks, register_last_popup_for_escape,
-    underlay_close_on_click, PopupPlacement,
-};
 use crate::primitives::r#box::vstack;
 use crate::tokens;
+use crate::utils::popup::{
+    compute_anchored_placement, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+};
 use rui_macros::component;
 
 pub struct SelectBuilder {
@@ -168,7 +185,9 @@ impl From<SelectBuilder> for Element {
             .unwrap_or_else(|| use_signal(val_key.as_str(), move || default_initial.clone()));
         let place = use_signal(place_key.as_str(), SelectPlace::default);
 
-        register_last_popup_for_escape(open);
+        // 订阅 open，保证菜单开闭触发 rebuild；栈用 peek 对齐。
+        let _ = open.get();
+        let overlay_z = portal_sync(&builder.id, open, OverlayKind::Menu, OverlayMode::Stacked);
 
         let current = val.get();
         let label = builder
@@ -199,9 +218,9 @@ impl From<SelectBuilder> for Element {
             if builder.match_trigger { "1" } else { "0" },
         );
 
-        if open.get() {
+        if let Some(oz) = overlay_z {
             let p = place.peek();
-            root = root.child(underlay_close_on_click(open));
+            root = root.child(underlay_close_on_click(open, oz.underlay));
 
             let mut rows: Element = vstack().gap("2px").p("4px").into();
             for (idx, (opt_v, opt_l)) in builder.options.into_iter().enumerate() {
@@ -243,8 +262,6 @@ impl From<SelectBuilder> for Element {
                 .absolute()
                 .left(p.x)
                 .top(p.y);
-            menu.style.z_index = 960;
-            menu.set_attr("rui_portal", "1");
             menu.set_attr("rui_select_menu", builder.id.as_str());
             menu.set_attr("rui_select_trigger", trigger_id.as_str());
             menu.set_attr(
@@ -264,7 +281,7 @@ impl From<SelectBuilder> for Element {
                     PopupPlacement::TopEnd => "top-end",
                 },
             );
-            menu = panel_block_clicks(menu, 960);
+            menu = panel_block_clicks(menu, oz.panel);
             root = root.child(menu);
         }
 

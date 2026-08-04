@@ -56,6 +56,11 @@ impl Parse for RsxNode {
                 input.parse::<Token![in]>()
                     .map_err(|e| syn::Error::new(e.span(), format!("Failed at keyword attr_name {}", e)))?;
                 syn::Ident::new("in", proc_macro2::Span::call_site())
+            } else if input.peek(Token![type]) {
+                // HTML-like `type="password"`；`type` 是关键字，需单独吃掉 token。
+                input.parse::<Token![type]>()
+                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at keyword attr type: {}", e)))?;
+                syn::Ident::new("type", proc_macro2::Span::call_site())
             } else {
                 input.parse().map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?
             };
@@ -533,7 +538,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 }
             }
             let is_custom = name_str.chars().next().map_or(false, |c| c.is_uppercase()) 
-                && !["VStack", "HStack", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
+                && !["VStack", "HStack", "GStack", "Grid", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
 
             let mut element = if is_custom {
                 let name_ident = &el.name;
@@ -694,10 +699,15 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                             base_calls.push(quote! { b = b.#method_ident(#final_value); });
                         }
                     } else {
-                        let final_attr = match attr_str.as_str() {
-                            "onClick" => syn::Ident::new("on_click", attr.span()),
-                            "onChange" => syn::Ident::new("on_change", attr.span()),
-                            _ => attr.clone(),
+                        let final_attr = if name_str == "Input" && attr_str == "type" {
+                            // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
+                            syn::Ident::new("input_type", attr.span())
+                        } else {
+                            match attr_str.as_str() {
+                                "onClick" => syn::Ident::new("on_click", attr.span()),
+                                "onChange" => syn::Ident::new("on_change", attr.span()),
+                                _ => attr.clone(),
+                            }
                         };
                         let final_value = if attr_str == "id" {
                             // RSX string attrs are `&str`; component `id` is `String`.
@@ -734,20 +744,8 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     for child in &el.children {
                         expanded_children.push(expand_node(child, node_counter));
                     }
-                    // Flex/Grid：多子节点打成 fragment，避免被包进 VStack 破坏网格/弹性子项。
-                    if name_str == "Grid" || name_str == "Flex" {
-                        children_expr = quote! {
-                            Some({
-                                use rui::core::tree::IntoElementList;
-                                let mut __list = Vec::<rui::core::tree::Element>::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
-                                let mut __frag = rui::core::tree::Element::new();
-                                __frag.set_attr("rui_fragment", "1");
-                                __frag = __frag.children(__list);
-                                __frag
-                            })
-                        };
-                    } else if expanded_children.len() == 1 {
+                    // 多子节点默认包进 VStack（组件 children 槽是单根）；布局原语 HStack/VStack/GStack 走下方 primitive 路径。
+                    if expanded_children.len() == 1 {
                         let first = &expanded_children[0];
                         children_expr = quote! { 
                             Some({
@@ -785,6 +783,8 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 match name_str.as_str() {
                     "VStack" => quote! { rui::primitives::vstack() },
                     "HStack" => quote! { rui::primitives::hstack() },
+                    // Grid 为 GStack 的 HTML/Solid 风格别名。
+                    "GStack" | "Grid" => quote! { rui::primitives::gstack() },
                     "Box" | "Rect" => quote! { rui::primitives::r#box() },
                     "Interactive" => quote! { rui::primitives::interactive(rui::core::tree::Element::new()) },
                     "Text" => quote! { rui::primitives::text("") },
@@ -817,7 +817,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 if let Ok(cp) = u32::from_str_radix(&icon_code, 16) {
                     if let Some(c) = std::char::from_u32(cp) {
                         let c_str = c.to_string();
-                        element = quote! { rui::components::text_node::build_icon_text_node(#c_str) };
+                        element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
                     }
                 }
             }

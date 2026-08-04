@@ -1,9 +1,21 @@
+//! # Toast
+//!
+//! 顶栏感视觉提示条（primary 底、圆角）。**仅绘制**，无队列、无定时消失、无全局 API。
+//!
+//! ## 用法
+//! ```ignore
+//! <Show when={show.get()}>{ toast("已保存") }</Show>
+//! ```
+//!
+//! ## 注意
+//! 可见性、位置、自动关闭均由父级 `Show` / `reactive!` 控制；默认 `z_index=1100`。
+
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::primitives::text::text;
 use crate::tokens;
 
-/// Fixed top-center toast strip (visual only; visibility should be driven by parent `Show` / `reactive!`).
+/// 顶栏感 toast 条（仅视觉）。见模块文档。
 pub fn toast(message: impl Into<String>) -> Element {
     let msg: String = message.into();
     let mut el: Element = r#box()
@@ -19,6 +31,5 @@ pub fn toast(message: impl Into<String>) -> Element {
         // shadcn Toast 描述区常用 `text-sm`
         .size(0.875 * 16.0)
         .into();
-    el = el.child(label);
-    el
+    el.child(label)
 }

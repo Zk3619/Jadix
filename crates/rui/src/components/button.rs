@@ -1,3 +1,20 @@
+//! # Button
+//!
+//! ShadCN 风格可点击按钮：变体（default / outline / ghost / link / …）、尺寸、禁用、
+//! hover 过渡与焦点环。
+//!
+//! ## 用法
+//! ```ignore
+//! <Button variant="outline" size="sm" on_click={move |_| { … }}>"保存"</Button>
+//! <Button id="hw-hover" variant="ghost" hover_easing="cubic">"悬停"</Button>
+//! // 或：Element::from(button("ok").variant("default").on_click(…))
+//! ```
+//!
+//! ## 注意
+//! - 空 `id` 会自动生成 `btn-N`；需要稳定焦点 / 测试选择器时请显式传 `id`。
+//! - hover / focus 用 `peek` + 每帧 paint sync，避免整树 rebuild。
+//! - 子节点可为文字或图标；Lucide 图标会保留自身 `text_size`。
+
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
     parse_color, parse_text_color, ButtonHoverPaint, Element, IntoDimension, IntoF32, LayoutStatus,
@@ -5,7 +22,7 @@ use crate::core::tree::{
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::components::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::style::{
     lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow, use_ui_transition_cubic,
     use_ui_transition_spring,

@@ -1,3 +1,24 @@
+//! # RadioGroup
+//!
+//! 水平 pill 单选组：选项为 `(value, label)`。外观是胶囊分段，不是圆形 radio。
+//!
+//! ## 用法
+//! ```ignore
+//! Element::from(
+//!     radio_group("tier")
+//!         .selected_signal(tier)
+//!         .default_value("free")
+//!         .options(vec![
+//!             ("free".into(), "Free".into()),
+//!             ("pro".into(), "Pro".into()),
+//!         ]),
+//! )
+//! ```
+//!
+//! ## 注意
+//! - 受控 `selected` 使用 `get()`（会订阅）。
+//! - 每项 `focus_id = "{group_id}:{value}"`，需保证 group `id` 稳定唯一。
+
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;

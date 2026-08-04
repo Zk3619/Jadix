@@ -1,3 +1,18 @@
+//! # Slider
+//!
+//! 水平滑块，值域 `0..=1`：轨道 + 拇指（flex-grow 定位）。默认 `max_w≈280px`。
+//!
+//! ## 用法
+//! ```ignore
+//! Element::from(slider("volume").value_signal(level))
+//! // 也可 <Slider id="volume" …>（若宏属性齐全）
+//! ```
+//!
+//! ## 注意
+//! - **当前点击轨道是步进 +0.08**（到头回绕到 0），不是指针拖拽。
+//! - 键盘：方向键约 ±0.05。
+//! - 受控 `value` 用 `get()` 会订阅。
+
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;

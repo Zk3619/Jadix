@@ -1,3 +1,17 @@
+//! # Switch
+//!
+//! 胶囊轨道 + 拇指开关（开/关）。尺寸约 2.75×1.5rem；支持受控 / 非受控与禁用。
+//!
+//! ## 用法
+//! ```ignore
+//! <Switch />
+//! { Element::from(switch("demo").checked_signal(on_sig)) }
+//! ```
+//!
+//! ## 注意
+//! - 与 Checkbox 相同：`peek` + 每帧 sync，避免根订阅触发整树 rebuild。
+//! - Builder 上的 `w()` 为 no-op（尺寸固定）。
+
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{Element, IntoDimension, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;

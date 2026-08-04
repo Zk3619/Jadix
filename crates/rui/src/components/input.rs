@@ -1,3 +1,33 @@
+//! # Input
+//!
+//! 单行文本输入：IME、选区、caret、placeholder、invalid 态，以及 HTML 风格的 [`InputType`]。
+//! 值与光标状态按 `id` 隔离。
+//!
+//! ## 用法
+//! ```ignore
+//! <Input id="email" type="email" />
+//! <Input id="pw" type="password" placeholder="密码" />
+//! <Input id="n" type="number" />
+//! <Input id="q" type="search" />
+//! ```
+//!
+//! ## `type`（对齐 HTML `<input type>` 文本族）
+//! | 值 | 行为 |
+//! |----|------|
+//! | `text`（默认） | 明文 |
+//! | `password` | 显示为 `•`，底层仍存原文 |
+//! | `number` | 仅允许数字、可选 `-` / `.`；非法非空 → 自动 invalid |
+//! | `tel` | 过滤电话字符；非空格式失败 → 自动 invalid |
+//! | `email` / `url` | 宽松字符过滤；非空格式失败 → 自动 invalid |
+//! | `search` | 同 text；空 placeholder 默认 `Search…` |
+//!
+//! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
+//!
+//! ## 注意
+//! - **必须稳定唯一 `id`**。
+//! - `focus_id` 为 `input:{id}`。
+//! - 显式 `invalid=true` 与类型校验叠加。
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::reactivity::use_signal;
@@ -8,13 +38,16 @@ use crate::core::tree::{
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::primitives::interactive::interactive;
-use crate::components::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 /// `focus_id` 前缀；与 `Button` 的普通 id 区分。
 pub const INPUT_FOCUS_PREFIX: &str = "input:";
 /// 全局：当前会话是否收到过 IME `Enabled`（用于区分直输与组字）。
 pub const IME_ACTIVE_SIGNAL: &str = "__rui_ime_active";
+
+/// 密码掩码字符（与多数桌面 UI 一致）。
+const PASSWORD_MASK: char = '•';
 
 pub fn input_value_signal_key(id: &str) -> String { format!("__rui_input_value_{}", id) }
 pub fn input_preedit_signal_key(id: &str) -> String { format!("__rui_input_preedit_{}", id) }
@@ -23,6 +56,7 @@ pub fn input_caret_signal_key(id: &str) -> String { format!("__rui_input_caret_{
 pub fn input_selection_signal_key(id: &str) -> String { format!("__rui_input_selection_{}", id) }
 pub fn input_overwrite_signal_key(id: &str) -> String { format!("__rui_input_overwrite_{}", id) }
 pub fn input_ime_anchor_signal_key(id: &str) -> String { format!("__rui_input_ime_anchor_{}", id) }
+pub fn input_type_signal_key(id: &str) -> String { format!("__rui_input_type_{}", id) }
 
 /// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
 ///
@@ -30,6 +64,249 @@ pub fn input_ime_anchor_signal_key(id: &str) -> String { format!("__rui_input_im
 pub const INPUT_LINE_SHAPE_SUFFIX: &str = "\u{2009}";
 
 fn focus_id_for_input(id: &str) -> String { format!("{INPUT_FOCUS_PREFIX}{id}") }
+
+/// HTML `<input type="…">` 的文本族子集。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputType {
+    #[default]
+    Text,
+    Password,
+    Email,
+    Number,
+    Search,
+    Tel,
+    Url,
+}
+
+impl InputType {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "password" => Self::Password,
+            "email" => Self::Email,
+            "number" => Self::Number,
+            "search" => Self::Search,
+            "tel" => Self::Tel,
+            "url" => Self::Url,
+            _ => Self::Text,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Password => "password",
+            Self::Email => "email",
+            Self::Number => "number",
+            Self::Search => "search",
+            Self::Tel => "tel",
+            Self::Url => "url",
+        }
+    }
+
+    pub fn is_password(self) -> bool {
+        matches!(self, Self::Password)
+    }
+
+    pub fn is_number(self) -> bool {
+        matches!(self, Self::Number)
+    }
+
+    pub fn is_tel(self) -> bool {
+        matches!(self, Self::Tel)
+    }
+
+    /// 空 placeholder 时的默认提示文案。
+    pub fn default_placeholder(self) -> &'static str {
+        match self {
+            Self::Email => "name@example.com",
+            Self::Tel => "Phone number",
+            Self::Url => "https://",
+            Self::Search => "Search…",
+            Self::Password => "Password",
+            Self::Number => "0",
+            Self::Text => "",
+        }
+    }
+
+    /// 非空值是否通过本类型的宽松格式校验（空串视为通过）。
+    pub fn validate_value(self, value: &str) -> bool {
+        let v = value.trim();
+        if v.is_empty() {
+            return true;
+        }
+        match self {
+            Self::Email => validate_email(v),
+            Self::Tel => validate_tel(v),
+            Self::Url => validate_url(v),
+            Self::Number => validate_number(v),
+            Self::Text | Self::Password | Self::Search => true,
+        }
+    }
+}
+
+impl From<&str> for InputType {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for InputType {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
+/// 过滤 `type="number"` 可插入文本：数字、至多一个前导 `-`、至多一个 `.`。
+pub fn filter_number_insert(existing: &str, insert: &str) -> String {
+    let mut out = String::new();
+    let mut has_dot = existing.contains('.');
+    let allow_minus_at_start = existing.is_empty();
+    for (i, ch) in insert.chars().enumerate() {
+        match ch {
+            '0'..='9' => out.push(ch),
+            '.' if !has_dot => {
+                has_dot = true;
+                out.push(ch);
+            }
+            '-' if allow_minus_at_start && i == 0 && out.is_empty() && !existing.starts_with('-') => {
+                out.push(ch);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 过滤 `type="tel"`：数字与常见电话符号。
+pub fn filter_tel_insert(_existing: &str, insert: &str) -> String {
+    insert
+        .chars()
+        .filter(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*'))
+        .collect()
+}
+
+/// 过滤 `type="email"`：本地部分与域名常用字符（不含空白）。
+pub fn filter_email_insert(_existing: &str, insert: &str) -> String {
+    insert
+        .chars()
+        .filter(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '%' | '+' | '-' | '!')
+        })
+        .collect()
+}
+
+/// 过滤 `type="url"`：可打印 ASCII，去掉空白与控制符。
+pub fn filter_url_insert(_existing: &str, insert: &str) -> String {
+    insert.chars().filter(|c| c.is_ascii_graphic()).collect()
+}
+
+/// 按字段 `type` 过滤插入文本。
+pub fn filter_insert_for_type(ty: InputType, existing: &str, insert: &str) -> String {
+    match ty {
+        InputType::Number => filter_number_insert(existing, insert),
+        InputType::Tel => filter_tel_insert(existing, insert),
+        InputType::Email => filter_email_insert(existing, insert),
+        InputType::Url => filter_url_insert(existing, insert),
+        InputType::Text | InputType::Password | InputType::Search => insert.to_string(),
+    }
+}
+
+fn validate_email(v: &str) -> bool {
+    let Some((local, domain)) = v.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() || domain.is_empty() || local.contains(' ') || domain.contains(' ') {
+        return false;
+    }
+    if !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
+        return false;
+    }
+    local
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-' | '!'))
+        && domain
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+}
+
+fn validate_tel(v: &str) -> bool {
+    let digits = v.chars().filter(|c| c.is_ascii_digit()).count();
+    digits >= 3
+        && v
+            .chars()
+            .all(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*'))
+}
+
+fn validate_url(v: &str) -> bool {
+    let lower = v.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("ftp://") {
+        return v.len() > 8 && !v.chars().any(|c| c.is_whitespace());
+    }
+    if v.contains(' ') || !v.contains('.') {
+        return false;
+    }
+    let host = v.split('/').next().unwrap_or(v);
+    host.contains('.')
+        && !host.starts_with('.')
+        && !host.ends_with('.')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+}
+
+fn validate_number(v: &str) -> bool {
+    let mut chars = v.chars().peekable();
+    if chars.peek() == Some(&'-') {
+        chars.next();
+    }
+    let rest: String = chars.collect();
+    if rest.is_empty() {
+        return false;
+    }
+    let mut seen_dot = false;
+    for c in rest.chars() {
+        match c {
+            '0'..='9' => {}
+            '.' if !seen_dot => seen_dot = true,
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn resolve_placeholder(explicit: &str, ty: InputType) -> String {
+    if explicit.is_empty() {
+        ty.default_placeholder().to_string()
+    } else {
+        explicit.to_string()
+    }
+}
+
+fn effective_invalid(explicit: bool, ty: InputType, value: &str) -> bool {
+    explicit || !ty.validate_value(value)
+}
+
+fn mask_password(s: &str) -> String {
+    s.chars().map(|_| PASSWORD_MASK).collect()
+}
+
+/// 将「明文 display」上的字节下标映射到掩码串上的字节下标（按 Unicode 标量一一对应）。
+fn map_byte_index_to_masked(real: &str, real_byte: usize, masked: &str) -> usize {
+    let byte = real.floor_char_boundary(real_byte.min(real.len()));
+    let chars = real[..byte].chars().count();
+    masked
+        .char_indices()
+        .nth(chars)
+        .map(|(i, _)| i)
+        .unwrap_or(masked.len())
+}
+
+fn map_byte_range_to_masked(real: &str, lo: usize, hi: usize, masked: &str) -> (usize, usize) {
+    (
+        map_byte_index_to_masked(real, lo, masked),
+        map_byte_index_to_masked(real, hi, masked),
+    )
+}
 
 trait ColorExt {
     fn with_alpha(self, alpha: f32) -> [f32; 4];
@@ -47,13 +324,14 @@ pub struct InputBuilder {
     placeholder: String,
     disabled: bool,
     invalid: bool,
+    input_type: InputType,
     text_size_px: f32,
     font_weight: u16,
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
 }
 
-/// Input component for single-line text.
+/// RSX `<Input>`：见模块文档。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Input(
@@ -61,6 +339,7 @@ pub fn Input(
     placeholder: String,
     disabled: bool,
     invalid: bool,
+    input_type: Option<String>,
     text_size: Option<f32>,
     mut on_click: crate::core::tree::Handler,
     mut on_key_down: crate::core::tree::KeyHandler,
@@ -70,6 +349,9 @@ pub fn Input(
         .placeholder(placeholder)
         .disabled(disabled)
         .invalid(invalid);
+    if let Some(t) = input_type {
+        builder = builder.input_type(t);
+    }
     
     if let Some(s) = text_size {
         builder = builder.text_size(s);
@@ -117,6 +399,7 @@ pub fn input(id: &str) -> InputBuilder {
         placeholder: String::new(),
         disabled: false,
         invalid: false,
+        input_type: InputType::Text,
         // shadcn/ui Input：`text-sm`；类名通常不含 font-medium → 400。
         text_size_px: 0.875 * 16.0,
         font_weight: 400,
@@ -136,6 +419,11 @@ impl InputBuilder {
     }
     pub fn invalid(mut self, v: bool) -> Self {
         self.invalid = v;
+        self
+    }
+    /// HTML `type`：[`InputType`] 或 `"password"` / `"number"` 等字符串。
+    pub fn input_type(mut self, t: impl Into<InputType>) -> Self {
+        self.input_type = t.into();
         self
     }
     pub fn w(mut self, width: impl IntoDimension) -> Self {
@@ -228,9 +516,12 @@ impl From<InputBuilder> for Element {
         let preedit_sel = preedit_sel_sig.peek();
         let ime_anchor = ime_anchor_sig.peek();
 
+        let placeholder = resolve_placeholder(&builder.placeholder, builder.input_type);
+        let invalid = effective_invalid(builder.invalid, builder.input_type, &committed);
+
         let show_placeholder = committed.is_empty() && preedit.is_empty();
-        let display_text = if show_placeholder {
-            builder.placeholder.clone()
+        let real_display = if show_placeholder {
+            placeholder.clone()
         } else if preedit.is_empty() {
             committed.clone()
         } else {
@@ -239,12 +530,39 @@ impl From<InputBuilder> for Element {
             format!("{}{}{}", &committed[..a], preedit, &committed[a..])
         };
 
+        let caret_in_real = if is_focused {
+            if show_placeholder { 0 }
+            else if !preedit.is_empty() {
+                let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
+                a = committed.floor_char_boundary(a);
+                let end = preedit_sel.map(|(_, e)| e).unwrap_or_else(|| preedit.len()).min(preedit.len());
+                a + preedit.floor_char_boundary(end)
+            } else {
+                let len = real_display.len();
+                let ix = text_sel_sig.peek().and_then(|(a, b)| if a.min(b) < a.max(b) { Some(a.max(b)) } else { None })
+                    .or_else(|| caret_sig.peek()).unwrap_or(len);
+                real_display.floor_char_boundary(ix.min(len))
+            }
+        } else { 0 };
+
+        let mask = builder.input_type.is_password() && !show_placeholder;
+        let display_text = if mask {
+            mask_password(&real_display)
+        } else {
+            real_display.clone()
+        };
+        let caret_byte = if mask {
+            map_byte_index_to_masked(&real_display, caret_in_real, &display_text)
+        } else {
+            caret_in_real
+        };
+
         let mut text_color = if show_placeholder { parse_text_color("muted-foreground") } else { parse_text_color("foreground") };
         if builder.disabled {
             text_color[3] = (text_color[3] as f32 * 0.5) as u8;
         }
 
-        let mut border_c = if builder.invalid { parse_color("destructive") } else if is_focused { parse_color("border-ring") } else { parse_color("input") };
+        let mut border_c = if invalid { parse_color("destructive") } else if is_focused { parse_color("border-ring") } else { parse_color("input") };
         let mut bg = parse_color("transparent");
         if builder.disabled {
             border_c[3] *= 0.5;
@@ -253,26 +571,11 @@ impl From<InputBuilder> for Element {
 
         let mut container = builder.container.bg(bg).border(border_c, 1.0);
         if is_focused {
-            let shadow_color = if builder.invalid { parse_color("destructive").with_alpha(0.4) } else { parse_color("ring") };
+            let shadow_color = if invalid { parse_color("destructive").with_alpha(0.4) } else { parse_color("ring") };
             container = container.shadow(shadow_color, 3.0);
         } else if !builder.disabled {
             container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
         }
-
-        let caret_byte = if is_focused {
-            if show_placeholder { 0 }
-            else if !preedit.is_empty() {
-                let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
-                a = committed.floor_char_boundary(a);
-                let end = preedit_sel.map(|(_, e)| e).unwrap_or_else(|| preedit.len()).min(preedit.len());
-                a + preedit.floor_char_boundary(end)
-            } else {
-                let len = display_text.len();
-                let ix = text_sel_sig.peek().and_then(|(a, b)| if a.min(b) < a.max(b) { Some(a.max(b)) } else { None })
-                    .or_else(|| caret_sig.peek()).unwrap_or(len);
-                display_text.floor_char_boundary(ix.min(len))
-            }
-        } else { 0 };
 
         let mut text_el = build_text_node(display_text.clone(), TextNodeConfig {
             size_px: builder.text_size_px,
@@ -296,26 +599,63 @@ impl From<InputBuilder> for Element {
             let mut pc = parse_color("primary");
             pc[3] *= 0.35;
             let selection_bg = [(pc[0] * 255.0) as u8, (pc[1] * 255.0) as u8, (pc[2] * 255.0) as u8, (pc[3] * 255.0) as u8];
-            let sel_draw = if preedit.is_empty() { text_sel_sig.peek().and_then(|(a, b)| if a.min(b) < a.max(b) { Some((a.min(b), a.max(b))) } else { None }) } else { None };
+            let sel_draw = if preedit.is_empty() {
+                text_sel_sig.peek().and_then(|(a, b)| {
+                    if a.min(b) < a.max(b) {
+                        let lo = a.min(b);
+                        let hi = a.max(b);
+                        Some(if mask {
+                            map_byte_range_to_masked(&real_display, lo, hi, &display_text)
+                        } else {
+                            (lo, hi)
+                        })
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
             let overwrite_highlight = if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
-                let ix = display_text.floor_char_boundary(caret_byte.min(display_text.len()));
-                if ix < display_text.len() { Some((ix, ix + display_text[ix..].chars().next().unwrap().len_utf8())) } else { None }
-            } else { None };
-            text_el.text_style.input_caret = Some(InputCaretDraw { caret_byte_index: caret_byte, selection: sel_draw, selection_bg, overwrite_highlight });
+                let ix = real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
+                if ix < real_display.len() {
+                    let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
+                    Some(if mask {
+                        map_byte_range_to_masked(&real_display, ix, end, &display_text)
+                    } else {
+                        (ix, end)
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            text_el.text_style.input_caret = Some(InputCaretDraw {
+                caret_byte_index: caret_byte,
+                selection: sel_draw,
+                selection_bg,
+                overwrite_highlight,
+            });
         }
 
         let mut el: Element = container.into();
         el = if builder.disabled { el.cursor_not_allowed() } else { el.cursor_text() };
 
+        let type_key = input_type_signal_key(&field_id);
+        use_signal(&type_key, || builder.input_type.as_str().to_string())
+            .set(builder.input_type.as_str().to_string());
+
         let sync = InputPaintSync {
             base_id: field_id.clone(),
-            placeholder: builder.placeholder.clone(),
+            placeholder,
             invalid: builder.invalid,
             disabled: builder.disabled,
             text_size_px: builder.text_size_px,
             font_weight: builder.font_weight,
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
+            input_type: builder.input_type.as_str().to_string(),
         };
 
         let disabled = builder.disabled;
@@ -373,8 +713,11 @@ fn sync_one_input_paint(
     let ime_anchor = ime_anchor_sig.peek();
 
     let show_placeholder = committed.is_empty() && preedit.is_empty();
-    let display_text = if show_placeholder {
-        desc.placeholder.clone()
+    let input_ty = InputType::parse(&desc.input_type);
+    let placeholder = resolve_placeholder(&desc.placeholder, input_ty);
+    let invalid = effective_invalid(desc.invalid, input_ty, &committed);
+    let real_display = if show_placeholder {
+        placeholder
     } else if preedit.is_empty() {
         committed.clone()
     } else {
@@ -382,6 +725,8 @@ fn sync_one_input_paint(
         a = committed.floor_char_boundary(a);
         format!("{}{}{}", &committed[..a], preedit, &committed[a..])
     };
+
+    let mask = input_ty.is_password() && !show_placeholder;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -392,7 +737,7 @@ fn sync_one_input_paint(
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;
     }
 
-    let mut border_c = if desc.invalid {
+    let mut border_c = if invalid {
         parse_color("destructive")
     } else if is_focused {
         parse_color("border-ring")
@@ -406,7 +751,7 @@ fn sync_one_input_paint(
     }
 
     let (want_shadow_color, want_shadow_blur) = if is_focused {
-        let sc = if desc.invalid {
+        let sc = if invalid {
             parse_color("destructive").with_alpha(0.4)
         } else {
             parse_color("ring")
@@ -418,7 +763,7 @@ fn sync_one_input_paint(
         ([0.0, 0.0, 0.0, 0.0], 0.0)
     };
 
-    let caret_byte = if is_focused {
+    let caret_in_real = if is_focused {
         if show_placeholder {
             0
         } else if !preedit.is_empty() {
@@ -430,16 +775,27 @@ fn sync_one_input_paint(
                 .min(preedit.len());
             a + preedit.floor_char_boundary(end)
         } else {
-            let len = display_text.len();
+            let len = real_display.len();
             let ix = text_sel_sig
                 .peek()
                 .and_then(|(a, b)| if a.min(b) < a.max(b) { Some(a.max(b)) } else { None })
                 .or_else(|| caret_sig.peek())
                 .unwrap_or(len);
-            display_text.floor_char_boundary(ix.min(len))
+            real_display.floor_char_boundary(ix.min(len))
         }
     } else {
         0
+    };
+
+    let display_text = if mask {
+        mask_password(&real_display)
+    } else {
+        real_display.clone()
+    };
+    let caret_byte = if mask {
+        map_byte_index_to_masked(&real_display, caret_in_real, &display_text)
+    } else {
+        caret_in_real
     };
 
     let mut container_layout = false;
@@ -515,7 +871,13 @@ fn sync_one_input_paint(
             let sel_draw = if preedit.is_empty() {
                 text_sel_sig.peek().and_then(|(a, b)| {
                     if a.min(b) < a.max(b) {
-                        Some((a.min(b), a.max(b)))
+                        let lo = a.min(b);
+                        let hi = a.max(b);
+                        Some(if mask {
+                            map_byte_range_to_masked(&real_display, lo, hi, &display_text)
+                        } else {
+                            (lo, hi)
+                        })
                     } else {
                         None
                     }
@@ -524,12 +886,14 @@ fn sync_one_input_paint(
                 None
             };
             let overwrite_highlight = if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
-                let ix = display_text.floor_char_boundary(caret_byte.min(display_text.len()));
-                if ix < display_text.len() {
-                    Some((
-                        ix,
-                        ix + display_text[ix..].chars().next().unwrap().len_utf8(),
-                    ))
+                let ix = real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
+                if ix < real_display.len() {
+                    let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
+                    Some(if mask {
+                        map_byte_range_to_masked(&real_display, ix, end, &display_text)
+                    } else {
+                        (ix, end)
+                    })
                 } else {
                     None
                 }

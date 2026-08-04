@@ -1,3 +1,16 @@
+//! # Separator
+//!
+//! 1px 分割线：默认水平满宽；`.vertical(true)` 时垂直满高。颜色取 [`crate::tokens::border`]。
+//!
+//! ## 用法
+//! ```ignore
+//! <Separator />
+//! { Element::from(separator().vertical(true)) }
+//! ```
+//!
+//! ## 注意
+//! 垂直分割线时，父级宜 `items="stretch"` 且有明确高度，否则可能看不见。
+
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::tokens;

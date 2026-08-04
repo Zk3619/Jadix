@@ -1,3 +1,19 @@
+//! # Scrollbar
+//!
+//! 可挂到某 [`ScrollArea`](crate::components::ScrollArea)（`target` = 其 rest id）的独立滚动条。
+//! **多数场景不必单独用**——`ScrollArea` 已内建横/纵条；本组件用于自定义摆放或拆分布局。
+//!
+//! ## 用法
+//! ```ignore
+//! <Scrollbar target="sa-main" orientation="vertical" visibility="auto" thickness="10" />
+//! // Element::from(scrollbar("sb").target("sa-main").orientation(Vertical).variant("capsule"))
+//! ```
+//!
+//! ## 注意
+//! - `target` 必须与对应 ScrollArea 的 `id` 一致。
+//! - `visibility`: auto | always | never（never 仍可能可滚内容）。
+//! - `children` 当前忽略；真正不占位的 overlay 条仍是 TODO（见下方注释）。
+
 use crate::components::scroll_area::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,

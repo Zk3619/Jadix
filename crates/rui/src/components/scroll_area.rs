@@ -1,3 +1,22 @@
+//! # ScrollArea
+//!
+//! 溢出滚动视口：裁剪内容、跟踪偏移，并内建横/纵滚动条。为虚拟列表等提供
+//! `scroll_offset_*` / `scroll_viewport_*` 等信号键。
+//!
+//! ## 用法
+//! ```ignore
+//! <ScrollArea id="sa-main" w="100%" h="100%"
+//!   scrollbar_visibility="auto" overflow_y="auto" overflow_x="auto">
+//!   …长内容…
+//! </ScrollArea>
+//! ```
+//! 读偏移：`use_signal(scroll_offset_y_signal_key("sa-main"), 0.0)`。
+//!
+//! ## 注意
+//! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
+//! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior="smooth"` 可选。
+//! - 独立外挂条见 [`crate::components::Scrollbar`]；多数场景用本组件内建即可。
+
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 

@@ -1,3 +1,20 @@
+//! # Checkbox
+//!
+//! 约 1rem 方框复选框；选中时显示 ✓。支持受控 / 非受控与禁用。
+//!
+//! ## 用法
+//! ```ignore
+//! <Checkbox />
+//! <Checkbox disabled=true />
+//! // 受控：
+//! { Element::from(checkbox("demo").checked_signal(checked_sig)) }
+//! ```
+//!
+//! ## 注意
+//! - 未传 `checked` 时用内部信号 `{id}__checkbox`；请保证 `id` 唯一。
+//! - 状态用 `peek` + 每帧 style sync，不在根上订阅 effect，以免多余 rebuild。
+//! - 可聚焦；Space / Enter 切换与按钮同路径。
+
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
