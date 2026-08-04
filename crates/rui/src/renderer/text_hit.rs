@@ -69,6 +69,7 @@ pub fn measure_prefix_width(
     if text.is_empty() {
         return 0.0;
     }
+    crate::renderer::font_loader::ensure_coverage_for_text(font_system, text);
     let key = measure_key(text, scaled_size, line_height, weight, family, max_width);
     if let Some(hit) = MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
         return hit;
@@ -107,7 +108,7 @@ pub fn measure_prefix_width(
 
 pub fn best_font_family(font_system: &glyphon::FontSystem) -> glyphon::Family<'static> {
     let db = font_system.db();
-    let preferred = "Noto Sans CJK, Noto Serif CJK, sans-serif";
+    let preferred = "Noto Sans CJK, Microsoft YaHei UI, Microsoft YaHei, Malgun Gothic, PingFang SC, Leelawadee UI, Segoe UI, sans-serif";
     crate::utils::font::resolve_family(db, preferred)
 }
 

@@ -54,15 +54,22 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.borrow().is_none() {
-            let window = Arc::new(
-                event_loop
-                    .create_window(
-                        Window::default_attributes()
-                            .with_title("RUI Engine")
-                            .with_visible(false),
-                    )
-                    .unwrap(),
-            );
+            let mut attrs = Window::default_attributes()
+                .with_title(
+                    std::env::var("RUI_WINDOW_TITLE").unwrap_or_else(|_| "RUI Engine".into()),
+                )
+                .with_visible(false);
+            if let (Ok(w), Ok(h)) = (
+                std::env::var("RUI_WINDOW_WIDTH"),
+                std::env::var("RUI_WINDOW_HEIGHT"),
+            ) {
+                if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
+                    if w > 0.0 && h > 0.0 {
+                        attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
+                    }
+                }
+            }
+            let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
             // Build a real initial UI before the first frame so the first redraw paints content.
             let initial_root = (self.app_builder.borrow_mut())();
@@ -172,6 +179,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 }
 
 pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
+    #[cfg(feature = "runtime-logging")]
     env_logger::builder()
         .filter_level(log::LevelFilter::Warn)
         .filter_module("wgpu_hal::vulkan::instance", log::LevelFilter::Off)

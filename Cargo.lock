@@ -339,6 +339,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "calculator"
+version = "0.1.0"
+dependencies = [
+ "rui",
+ "winit",
+]
+
+[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -407,7 +415,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58c4843457db4cfc367efd4fc554e0f222c9da86359606132adc0db01592b82b"
 dependencies = [
  "clipboard-win",
- "image",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -605,12 +612,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
-name = "crunchy"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -754,26 +755,6 @@ name = "fast-srgb8"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd2e7510819d6fbf51a5545c8f922716ecfb14df168a3242f7d33e0239efe6a1"
-
-[[package]]
-name = "fax"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f05de7d48f37cd6730705cbca900770cab77a89f413d23e100ad7fad7795a0ab"
-dependencies = [
- "fax_derive",
-]
-
-[[package]]
-name = "fax_derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0aca10fb742cb43f9e7bb8467c91aa9bcb8e3ffbc6a6f7389bb93ffc920577d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "fdeflate"
@@ -1054,21 +1035,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu_probe"
+version = "0.1.0"
+dependencies = [
+ "pollster",
+ "wgpu",
+ "windows-sys 0.59.0",
+ "winit",
+]
+
+[[package]]
 name = "grid"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36119f3a540b086b4e436bb2b588cf98a68863470e0e880f4d0842f112a3183a"
-
-[[package]]
-name = "half"
-version = "2.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
-dependencies = [
- "cfg-if",
- "crunchy",
- "zerocopy",
-]
 
 [[package]]
 name = "hashbrown"
@@ -1129,22 +1109,6 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
-
-[[package]]
-name = "image"
-version = "0.25.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
-dependencies = [
- "bytemuck",
- "byteorder-lite",
- "moxcms",
- "num-traits",
- "png 0.18.1",
- "tiff",
- "zune-core 0.5.1",
- "zune-jpeg 0.5.14",
-]
 
 [[package]]
 name = "image-webp"
@@ -1472,16 +1436,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moxcms"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
-dependencies = [
- "num-traits",
- "pxfm",
 ]
 
 [[package]]
@@ -2270,12 +2224,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 
 [[package]]
-name = "pxfm"
-version = "0.1.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5a041e753da8b807c9255f28de81879c78c876392ff2469cde94799b2896b9d"
-
-[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2444,7 +2392,7 @@ dependencies = [
  "svgtypes",
  "tiny-skia",
  "usvg",
- "zune-jpeg 0.4.21",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2471,14 +2419,12 @@ dependencies = [
  "bytemuck",
  "clipboard-rs",
  "env_logger",
- "euclid",
  "fontdb 0.16.2",
  "glyphon",
  "log",
  "palette",
  "png 0.18.1",
  "pollster",
- "regex",
  "resvg",
  "rui_macros",
  "serde",
@@ -2888,20 +2834,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "tiff"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b63feaf3343d35b6ca4d50483f94843803b0f51634937cc2ec519fc32232bc52"
-dependencies = [
- "fax",
- "flate2",
- "half",
- "quick-error",
- "weezl",
- "zune-jpeg 0.5.14",
 ]
 
 [[package]]
@@ -3359,7 +3291,6 @@ dependencies = [
  "document-features",
  "js-sys",
  "log",
- "naga",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -3409,7 +3340,6 @@ dependencies = [
  "ash",
  "bit-set",
  "bitflags 2.11.0",
- "block",
  "cfg_aliases 0.1.1",
  "core-graphics-types",
  "d3d12",
@@ -4091,25 +4021,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f423a2c17029964870cfaabb1f13dfab7d092a62a29a89264f4d36990ca414a"
 
 [[package]]
-name = "zune-core"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb8a0807f7c01457d0379ba880ba6322660448ddebc890ce29bb64da71fb40f9"
-
-[[package]]
 name = "zune-jpeg"
 version = "0.4.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29ce2c8a9384ad323cf564b67da86e21d3cfdff87908bc1223ed5c99bc792713"
 dependencies = [
- "zune-core 0.4.12",
-]
-
-[[package]]
-name = "zune-jpeg"
-version = "0.5.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b7a1c0af6e5d8d1363f4994b7a091ccf963d8b694f7da5b0b9cceb82da2c0a6"
-dependencies = [
- "zune-core 0.5.1",
+ "zune-core",
 ]

@@ -61,21 +61,9 @@ fn print_case(
 }
 
 fn main() -> std::io::Result<()> {
-    let mut font_system = FontSystem::new();
-    {
-        let db = font_system.db_mut();
-        db.load_font_data(include_bytes!("../../assets/lucide.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoSansCJK.ttc").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoSerifCJK.ttc").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoSansSymbols-wght.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoSansMath-Regular.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoMusic-Regular.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf").to_vec());
-        db.load_font_data(include_bytes!("../../assets/NotoColorEmoji.ttf").to_vec());
-        db.set_sans_serif_family("Noto Sans CJK SC");
-        db.set_serif_family("Noto Serif CJK SC");
-    }
+    // Match the app renderer (curated fonts — no full system scan).
+    // Escape hatch: RUI_LOAD_SYSTEM_FONTS=1
+    let mut font_system = rui::renderer::font_loader::create_font_system();
 
     let mut sans_families: Vec<String> = font_system
         .db()

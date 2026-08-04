@@ -3,16 +3,39 @@ name = "rui"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Lean by default: no resvg. Apps opt into emoji-svg / bundled-* as needed.
+default = []
+# Optional runtime logger initialization (env_logger).
+runtime-logging = ["dep:env_logger"]
+# Add the D3D12 backend (~520 KiB: wgpu-hal dx12 + DXC + gpu-allocator). Off by default:
+# the GL backend renders the same UI and its driver commits ~80 MB less on Windows.
+# Enable when you need WARP software fallback or D3D12-specific behaviour.
+backend-dx12 = ["wgpu/dx12"]
+# Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
+bundled-lucide = []
+# Embed large fonts into the binary (single-file distro; dramatically increases size).
+bundled-cjk = []
+bundled-cjk-serif = []
+bundled-emoji = []
+bundled-symbols = []
+bundled-fonts = ["bundled-lucide", "bundled-cjk", "bundled-cjk-serif", "bundled-emoji", "bundled-symbols"]
+# Load optional fonts from disk at runtime (RUI_FONT_DIR / assets/), without embedding.
+fonts-cjk = []
+fonts-cjk-serif = []
+fonts-emoji = []
+# Twemoji SVG via resvg (adds significant code size; PNG fallback remains without it).
+emoji-svg = ["dep:resvg"]
+
 [dependencies]
 winit = { workspace = true }
 wgpu = { workspace = true }
 taffy = { workspace = true }
 palette = { workspace = true }
-euclid = { workspace = true }
 bytemuck = { workspace = true }
 glyphon = { workspace = true }
 pollster = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 rui_macros = { path = "../rui_macros" }
 clipboard-rs = { workspace = true }
@@ -25,6 +48,5 @@ swash = { workspace = true }
 fontdb = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
-regex = "1.11"
 png = "0.18.1"
-resvg = "0.45.1"
+resvg = { version = "0.45.1", optional = true }

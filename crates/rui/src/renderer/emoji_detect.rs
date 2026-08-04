@@ -1,23 +1,8 @@
 //! 统一的 emoji grapheme 检测（`contains` 与切分共用一套规则）。
 
-use std::sync::OnceLock;
-
-use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
-fn extended_pictographic_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"\p{Extended_Pictographic}").expect("Extended_Pictographic class")
-    })
-}
-
-/// UTS #51 Extended_Pictographic（随 `regex` 内置 Unicode 数据版本升级），补全手写区间漏检。
-#[inline]
-fn char_is_extended_pictographic(c: char) -> bool {
-    let mut buf = [0u8; 4];
-    extended_pictographic_re().is_match(c.encode_utf8(&mut buf))
-}
+use super::extended_pictographic::is_extended_pictographic as char_is_extended_pictographic;
 
 #[inline]
 fn char_is_emoji_codepoint(cp: u32) -> bool {

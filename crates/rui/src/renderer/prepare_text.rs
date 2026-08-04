@@ -19,6 +19,7 @@ use crate::core::tree::TextLayoutInfo;
 use super::emoji_detect;
 use super::emoji_layout;
 use super::emoji_svg;
+use super::font_loader;
 use super::text::RuiTextRenderer;
 use super::text_hit::{best_font_family, measure_prefix_width};
 use super::twemoji_name;
@@ -326,8 +327,8 @@ fn node_shape_hash(
     text.hash(&mut h);
     ((scaled_size * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     ((line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
-    ((scaled_w * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
-    ((scaled_h * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
+    ((scaled_w / 8.0).round().clamp(0.0, (u16::MAX as f32) / 8.0) as u16).hash(&mut h);
+    ((scaled_h / 8.0).round().clamp(0.0, (u16::MAX as f32) / 8.0) as u16).hash(&mut h);
     weight.hash(&mut h);
     family_hash(family).hash(&mut h);
     align_to_u8(align).hash(&mut h);
@@ -484,9 +485,11 @@ fn emoji_debug_enabled() -> bool {
 fn emoji_custom_glyph_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
+        // Default ON: color Twemoji PNGs. Set RUI_EMOJI_CUSTOM_GLYPH=0 to use font glyphs
+        // (often monochrome outline boxes with Segoe UI).
         std::env::var("RUI_EMOJI_CUSTOM_GLYPH")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+            .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")))
+            .unwrap_or(true)
     })
 }
 
@@ -501,11 +504,50 @@ fn emoji_svg_enabled() -> bool {
 
 fn emoji_mode_label() -> &'static str {
     if emoji_custom_glyph_enabled() && emoji_svg_enabled() {
-        "gray-svg"
+        "color-svg"
     } else if emoji_custom_glyph_enabled() {
-        "gray"
+        "color-twemoji"
     } else {
-        "disabled"
+        "font"
+    }
+}
+
+/// Shape text; when Twemoji custom glyphs are on, paint emoji codepoints transparent so
+/// Segoe UI's monochrome outline glyphs do not show under/over the color PNGs.
+fn set_shaped_buffer_text(
+    buffer: &mut glyphon::Buffer,
+    font_system: &mut glyphon::FontSystem,
+    text: &str,
+    attrs: glyphon::Attrs,
+    shaping: glyphon::Shaping,
+    hide_emoji_font_glyphs: bool,
+) {
+    if !hide_emoji_font_glyphs || !emoji_detect::text_contains_emoji(text) {
+        buffer.set_text(font_system, text, attrs, shaping);
+        return;
+    }
+    let invisible = attrs.color(glyphon::Color::rgba(0, 0, 0, 0));
+    let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
+    let mut plain_start = 0usize;
+    let mut byte = 0usize;
+    for grapheme in text.graphemes(true) {
+        let start = byte;
+        byte += grapheme.len();
+        if emoji_detect::grapheme_is_emoji(grapheme) {
+            if plain_start < start {
+                spans.push((&text[plain_start..start], attrs));
+            }
+            spans.push((&text[start..byte], invisible));
+            plain_start = byte;
+        }
+    }
+    if plain_start < text.len() {
+        spans.push((&text[plain_start..], attrs));
+    }
+    if spans.is_empty() {
+        buffer.set_text(font_system, text, attrs, shaping);
+    } else {
+        buffer.set_rich_text(font_system, spans, attrs, shaping);
     }
 }
 
@@ -575,8 +617,44 @@ fn svg_runtime_allowed(stats: super::text::EmojiCacheStats) -> bool {
 fn twemoji_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("RUI_TWEMOJI_DIR") {
         let p = PathBuf::from(dir);
-        if p.exists() {
+        if p.is_dir() {
             return p;
+        }
+    }
+    // Absolute candidates — never rely solely on process cwd.
+    let mut candidates = vec![
+        PathBuf::from("assets/twemoji/72x72"),
+        PathBuf::from("crates/rui/assets/twemoji/72x72"),
+    ];
+    // crates/rui → ../../assets/twemoji/72x72
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push(manifest.join("../../assets/twemoji/72x72"));
+    candidates.push(manifest.join("assets/twemoji/72x72"));
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("assets/twemoji/72x72"));
+        candidates.push(cwd.join("crates/rui/assets/twemoji/72x72"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("assets/twemoji/72x72"));
+            candidates.push(parent.join("twemoji/72x72"));
+            // Walk up a few levels from target/release toward the workspace.
+            let mut walk = parent.to_path_buf();
+            for _ in 0..5 {
+                candidates.push(walk.join("assets/twemoji/72x72"));
+                if !walk.pop() {
+                    break;
+                }
+            }
+        }
+    }
+    for c in candidates {
+        if let Ok(canon) = c.canonicalize() {
+            if canon.is_dir() {
+                return canon;
+            }
+        } else if c.is_dir() {
+            return c;
         }
     }
     PathBuf::from("assets/twemoji/72x72")
@@ -637,23 +715,49 @@ fn decode_png_rgba(bytes: &[u8]) -> Option<super::text::EmojiRaster> {
     ))
 }
 
-fn load_twemoji_raster(sequence: &str) -> Option<super::text::EmojiRaster> {
+fn resize_rgba_nn(src: &super::text::EmojiRaster, dst_size: u16) -> super::text::EmojiRaster {
+    let dst = dst_size.max(1) as usize;
+    let sw = src.width.max(1) as usize;
+    let sh = src.height.max(1) as usize;
+    if sw == dst && sh == dst {
+        return src.clone();
+    }
+    let mut out = vec![0u8; dst * dst * 4];
+    for y in 0..dst {
+        let sy = y * sh / dst;
+        for x in 0..dst {
+            let sx = x * sw / dst;
+            let si = (sy * sw + sx) * 4;
+            let di = (y * dst + x) * 4;
+            out[di..di + 4].copy_from_slice(&src.rgba[si..si + 4]);
+        }
+    }
+    super::text::EmojiRaster::new(dst as u16, dst as u16, out)
+}
+
+fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::EmojiRaster> {
     let base = twemoji_dir();
     let path = base.join(twemoji_filename(sequence));
     if !Path::new(&path).exists() {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    decode_png_rgba(&bytes)
+    let raw = decode_png_rgba(&bytes)?;
+    Some(resize_rgba_nn(&raw, pixel_size.max(1)))
 }
 
 fn load_font_fallback_raster(
     text_renderer: &mut RuiTextRenderer,
     sequence: &str,
     pixel_size: u16,
-    family: glyphon::Family,
+    _family: glyphon::Family,
     font_weight: u16,
 ) -> Option<super::text::EmojiRaster> {
+    // Prefer a real color-emoji face; UI sans yields monochrome outline "emoji".
+    let emoji_family = crate::utils::font::resolve_family(
+        text_renderer.font_system.db(),
+        "Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, emoji, sans-serif",
+    );
     let size = pixel_size.max(1) as f32;
     let mut buffer = glyphon::Buffer::new(
         &mut text_renderer.font_system,
@@ -668,7 +772,7 @@ fn load_font_fallback_raster(
         &mut text_renderer.font_system,
         sequence,
         glyphon::Attrs::new()
-            .family(family)
+            .family(emoji_family)
             .weight(glyphon::fontdb::Weight(font_weight)),
         glyphon::Shaping::Advanced,
     );
@@ -684,40 +788,14 @@ fn load_font_fallback_raster(
             if w == 0 || h == 0 {
                 continue;
             }
-            let rgba = match image.content {
-                glyphon::SwashContent::Color => image.data,
-                glyphon::SwashContent::Mask => {
-                    let mut out = vec![0u8; w * h * 4];
-                    for (i, a) in image.data.iter().enumerate() {
-                        let di = i * 4;
-                        out[di] = 255;
-                        out[di + 1] = 255;
-                        out[di + 2] = 255;
-                        out[di + 3] = *a;
-                    }
-                    out
-                }
-                glyphon::SwashContent::SubpixelMask => {
-                    let mut out = vec![0u8; w * h * 4];
-                    for i in 0..(w * h) {
-                        let si = i * 3;
-                        let a = ((image.data[si] as u16
-                            + image.data[si + 1] as u16
-                            + image.data[si + 2] as u16)
-                            / 3) as u8;
-                        let di = i * 4;
-                        out[di] = 255;
-                        out[di + 1] = 255;
-                        out[di + 2] = 255;
-                        out[di + 3] = a;
-                    }
-                    out
-                }
+            // Only accept true color bitmaps — Mask/SubpixelMask is the "outline box" look.
+            let glyphon::SwashContent::Color = image.content else {
+                continue;
             };
             return Some(super::text::EmojiRaster::new(
                 image.placement.width as u16,
                 image.placement.height as u16,
-                rgba,
+                image.data,
             ));
         }
     }
@@ -731,6 +809,12 @@ fn load_emoji_raster_chain(
     family: glyphon::Family,
     font_weight: u16,
 ) -> Option<super::text::EmojiRaster> {
+    // 1) Twemoji PNG (preferred — always color), scaled to text size.
+    if let Some(png) = load_twemoji_raster(sequence, pixel_size) {
+        return Some(png);
+    }
+
+    // 2) Optional SVG (feature + env); skip when disabled.
     if emoji_custom_glyph_enabled() && svg_runtime_allowed(text_renderer.emoji_cache.stats) {
         text_renderer.emoji_cache.stats.svg_attempts += 1;
         let start = Instant::now();
@@ -749,9 +833,10 @@ fn load_emoji_raster_chain(
         text_renderer.emoji_cache.stats.svg_fallback_to_png += 1;
     }
 
-    load_twemoji_raster(sequence).or_else(|| {
-        load_font_fallback_raster(text_renderer, sequence, pixel_size, family, font_weight)
-    })
+    // 3) System color-emoji font (CBDT/sbix) — only after Twemoji miss.
+    font_loader::ensure_emoji_font_fallback(&mut text_renderer.font_system);
+    load_font_fallback_raster(text_renderer, sequence, pixel_size, family, font_weight)
+        .map(|r| resize_rgba_nn(&r, pixel_size.max(1)))
 }
 
 fn load_emoji_raster_cached(
@@ -824,7 +909,6 @@ pub fn prepare_text_frame(
     let mut shadow_skip_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     let mut frame_meta: Vec<Option<FrameTextNodeMeta>> = Vec::with_capacity(text_nodes.len());
-    let best = best_font_family(&text_renderer.font_system);
     let estimated = text_nodes.len().saturating_mul(3);
     let cap = text_renderer.text_area_capacity_hint.max(estimated);
     let mut text_areas = Vec::with_capacity(cap);
@@ -920,15 +1004,25 @@ pub fn prepare_text_frame(
                 .shape_suffix
                 .as_deref()
                 .is_some_and(|s| !s.is_empty() && emoji_detect::text_contains_emoji(s));
+
+        // Lazy-open CJK / emoji / script faces before family resolve + shaping (EUI-style).
+        let shape_text_for_coverage: Cow<'_, str> = match info.shape_suffix.as_deref() {
+            Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", info.text, s)),
+            _ => Cow::Borrowed(info.text.as_str()),
+        };
+        font_loader::ensure_coverage_for_text(
+            &mut text_renderer.font_system,
+            shape_text_for_coverage.as_ref(),
+        );
+
         let family = if has_emoji {
-            crate::utils::font::resolve_family(
-                text_renderer.font_system.db(),
-                "Noto Emoji, Noto Color Emoji, Noto Sans CJK SC, sans-serif",
-            )
+            // Twemoji custom glyphs paint color emoji; keep layout on UI sans.
+            // System emoji font opens only on Twemoji miss (ensure_emoji_font_fallback).
+            best_font_family(&text_renderer.font_system)
         } else if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
-            best
+            best_font_family(&text_renderer.font_system)
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
@@ -981,10 +1075,7 @@ pub fn prepare_text_frame(
         } else {
             shaping
         };
-        let shape_text: Cow<'_, str> = match info.shape_suffix.as_deref() {
-            Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", info.text, s)),
-            _ => Cow::Borrowed(info.text.as_str()),
-        };
+        let shape_text: Cow<'_, str> = shape_text_for_coverage;
         let key_hash = node_shape_hash(
             shape_text.as_ref(),
             scaled_size,
@@ -1030,13 +1121,16 @@ pub fn prepare_text_frame(
                     Some(scaled_w),
                     Some(scaled_h + 2.0),
                 );
-                buffer.set_text(
+                let attrs = glyphon::Attrs::new()
+                    .family(family)
+                    .weight(glyphon::fontdb::Weight(font_weight));
+                set_shaped_buffer_text(
+                    &mut buffer,
                     &mut text_renderer.font_system,
                     shape_text.as_ref(),
-                    glyphon::Attrs::new()
-                        .family(family)
-                        .weight(glyphon::fontdb::Weight(font_weight)),
+                    attrs,
                     shaping,
+                    emoji_custom_glyph_enabled() && has_emoji,
                 );
                 for line in buffer.lines.iter_mut() {
                     line.set_align(Some(st.align));
@@ -1115,8 +1209,9 @@ pub fn prepare_text_frame(
                     let raster =
                         load_emoji_raster_cached(text_renderer, &text, pixel_size, family, font_weight);
                     if let Some(raster) = raster {
-                        let width = raster.width as f32;
-                        let height = raster.height as f32;
+                        // Match logical quad to font size (raster already resized).
+                        let width = pixel_size as f32;
+                        let height = pixel_size as f32;
                         text_renderer.emoji_cache.stats.uploads += 1;
                         text_renderer.emoji_cache.stats.upload_bytes += raster.rgba.len() as u64;
                         glyphs.push(glyphon::CustomGlyph {
@@ -1595,7 +1690,7 @@ pub fn prepare_text_frame(
         let family = if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
-            best
+            best_font_family(&text_renderer.font_system)
         };
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight };
@@ -1714,7 +1809,7 @@ pub fn prepare_text_frame(
         let family = if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
         } else {
-            best
+            best_font_family(&text_renderer.font_system)
         };
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight };

@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rui = { path = "../../crates/rui" }
+# Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
+# Twemoji PNGs are still loaded from disk (see prepare_text::twemoji_dir).
+rui = { path = "../../crates/rui", default-features = false, features = ["bundled-lucide"] }
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }

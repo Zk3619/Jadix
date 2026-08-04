@@ -61,35 +61,77 @@ fn noto_serif_family_for_locale(locale: CjkLocale) -> &'static str {
     }
 }
 
+fn family_present(db: &Database, name: &str) -> bool {
+    db.faces()
+        .any(|face| face.families.iter().any(|(f, _)| f == name))
+}
+
+fn first_present_family<'a>(db: &Database, names: &[&'a str]) -> Option<&'a str> {
+    names.iter().copied().find(|n| family_present(db, n))
+}
+
 fn resolved_default_sans_family(db: &Database) -> &'static str {
     if let Some(locale) = cjk_locale_from_env() {
         let preferred = noto_sans_family_for_locale(locale);
-        if db.faces().any(|face| face.families.iter().any(|(f, _)| f == preferred)) {
+        if family_present(db, preferred) {
             return preferred;
         }
     }
-    "Noto Sans CJK SC"
+    first_present_family(
+        db,
+        &[
+            "Noto Sans CJK SC",
+            "Noto Sans CJK JP",
+            "Noto Sans CJK KR",
+            "Noto Sans CJK TC",
+            "Microsoft YaHei UI",
+            "Microsoft YaHei",
+            "Malgun Gothic",
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "Apple SD Gothic Neo",
+            "Source Han Sans SC",
+            "WenQuanYi Micro Hei",
+            "Leelawadee UI",
+            "Segoe UI",
+            "Arial",
+        ],
+    )
+    .unwrap_or("Segoe UI")
 }
 
 fn resolved_default_serif_family(db: &Database) -> &'static str {
     if let Some(locale) = cjk_locale_from_env() {
         let preferred = noto_serif_family_for_locale(locale);
-        if db.faces().any(|face| face.families.iter().any(|(f, _)| f == preferred)) {
+        if family_present(db, preferred) {
             return preferred;
         }
     }
-    "Noto Serif CJK SC"
+    first_present_family(
+        db,
+        &[
+            "Noto Serif CJK SC",
+            "Noto Serif CJK JP",
+            "Noto Serif CJK TC",
+            "Noto Serif",
+            "Times New Roman",
+            "Georgia",
+        ],
+    )
+    .unwrap_or("Times New Roman")
 }
 
 fn resolved_emoji_family(db: &Database) -> Option<&'static str> {
-    // Prefer bundled Noto Color Emoji family names.
+    // Prefer bundled Noto Color Emoji family names, then OS emoji faces.
     const CANDIDATES: &[&str] = &[
         "Noto Color Emoji",
         "Noto Color Emoji Windows Compatible",
         "NotoColorEmoji",
+        "Segoe UI Emoji",
+        "Apple Color Emoji",
     ];
     for &name in CANDIDATES {
-        if db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)) {
+        if family_present(db, name) {
             return Some(name);
         }
     }

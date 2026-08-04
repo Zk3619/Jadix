@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
+
+use super::font_loader;
 
 use glyphon::{
     ContentType, FontSystem, RasterizeCustomGlyphRequest, RasterizedCustomGlyph, SwashCache,
@@ -52,7 +53,7 @@ fn emoji_raster_cache_max() -> usize {
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|&n| n > 0)
-            .unwrap_or(2048)
+            .unwrap_or(64)
     })
 }
 
@@ -63,7 +64,7 @@ fn emoji_node_cache_max() -> usize {
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|&n| n > 0)
-            .unwrap_or(128)
+            .unwrap_or(32)
     })
 }
 
@@ -174,31 +175,6 @@ impl EmojiRaster {
     }
 }
 
-fn load_system_emoji_fonts(db: &mut glyphon::fontdb::Database) {
-    let candidates = if cfg!(target_os = "windows") {
-        vec!["C:/Windows/Fonts/seguiemj.ttf"]
-    } else if cfg!(target_os = "macos") {
-        vec![
-            "/System/Library/Fonts/Apple Color Emoji.ttc",
-            "/System/Library/Fonts/Apple Color Emoji.ttc/Contents/Resources/Apple Color Emoji.ttc",
-        ]
-    } else {
-        vec![
-            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/google-noto-color-emoji/NotoColorEmoji.ttf",
-        ]
-    };
-    for path in candidates {
-        if Path::new(path).exists() {
-            if let Ok(bytes) = std::fs::read(path) {
-                db.load_font_source(fontdb::Source::Binary(std::sync::Arc::new(bytes)));
-                log::info!("loaded system emoji font: {}", path);
-            }
-        }
-    }
-}
-
 fn has_table(face: &ttf_parser::Face<'_>, tag: &[u8; 4]) -> bool {
     let t = ttf_parser::Tag::from_bytes(tag);
     face.raw_face().table(t).is_some()
@@ -248,29 +224,7 @@ pub struct RuiTextRenderer {
 
 impl RuiTextRenderer {
     pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {
-        let mut font_system = FontSystem::new();
-        {
-            let db = font_system.db_mut();
-            // Load bundled fonts
-            db.load_font_data(include_bytes!("../../assets/lucide.ttf").to_vec());
-            // Sans Super OTC: includes SC/TC/HK/JP/KR variants in one bundle.
-            db.load_font_data(include_bytes!("../../assets/NotoSansCJK.ttc").to_vec());
-            // Super OTC: includes JP/KR/SC/TC/HK variants with full static weights.
-            db.load_font_data(include_bytes!("../../assets/NotoSerifCJK.ttc").to_vec());
-            // Symbols / Math / Music / Emoji coverage.
-            db.load_font_data(include_bytes!("../../assets/NotoSansSymbols-wght.ttf").to_vec());
-            db.load_font_data(include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf").to_vec());
-            db.load_font_data(include_bytes!("../../assets/NotoSansMath-Regular.ttf").to_vec());
-            db.load_font_data(include_bytes!("../../assets/NotoMusic-Regular.ttf").to_vec());
-            // Prefer Windows-compatible bundle first, keep original as fallback.
-            db.load_font_data(include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf").to_vec());
-            db.load_font_data(include_bytes!("../../assets/NotoColorEmoji.ttf").to_vec());
-            load_system_emoji_fonts(db);
-
-            // Prefer a single CJK+Latin family first for cross-language consistency.
-            db.set_sans_serif_family("Noto Sans CJK SC");
-            db.set_serif_family("Noto Serif CJK SC");
-        }
+        let font_system = font_loader::create_font_system();
         log_color_font_capabilities(font_system.db());
 
         let swash_cache = SwashCache::new();
