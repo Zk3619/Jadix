@@ -1,0 +1,28 @@
+[package]
+name = "gpu_probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Diagnostic-only: measures the memory floor of winit + wgpu(DX12) with no rui code,
+# so framework-side allocations can be separated from driver-side ones.
+
+[features]
+default = []
+# Off by default on purpose: cargo unifies features across a workspace build, so
+# enabling it here unconditionally would drag the D3D12 backend back into every
+# other binary. Turn it on only for a one-off `PROBE_BACKEND=dx12` comparison.
+dx12 = ["wgpu/dx12"]
+
+[dependencies]
+winit = { workspace = true }
+# On Windows wgpu 22 force-links the Vulkan + GLES backends regardless of features,
+# so GL and Vulkan can be compared without any extra feature.
+wgpu = { workspace = true }
+pollster = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+] }

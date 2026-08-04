@@ -1,4 +1,6 @@
 #![allow(non_snake_case)]
+// Release GUI builds should not spawn a console window.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};

@@ -1,0 +1,8 @@
+[package]
+name = "calculator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rui = { path = "../../crates/rui", default-features = false }
+winit = { workspace = true }
