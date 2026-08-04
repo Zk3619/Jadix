@@ -215,51 +215,136 @@ impl AppState {
         )
     }
 
-    pub(super) async fn new(window: Arc<Window>, mut root_element: Element) -> Self {
-        let size = window.inner_size();
-        let force_software = std::env::var("RUI_FORCE_SOFTWARE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
-
-        let surface = instance.create_surface(window.clone()).unwrap();
-
-        let primary_adapter = if force_software {
-            None
+    /// Backends to try, in order. `RUI_GPU_BACKEND` (`gl` / `dx12` / `vulkan` / `metal`)
+    /// moves one to the front; the rest stay as fallbacks so an unsupported pick
+    /// degrades instead of aborting.
+    fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
+        let mut order: Vec<(wgpu::Backends, &'static str)> = if cfg!(target_os = "macos") {
+            vec![(wgpu::Backends::METAL, "metal")]
+        } else if cfg!(windows) {
+            vec![
+                (wgpu::Backends::GL, "gl"),
+                (wgpu::Backends::DX12, "dx12"),
+                (wgpu::Backends::VULKAN, "vulkan"),
+            ]
         } else {
-            instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::default(),
-                    compatible_surface: Some(&surface),
-                    force_fallback_adapter: false,
-                })
-                .await
+            vec![
+                (wgpu::Backends::GL, "gl"),
+                (wgpu::Backends::VULKAN, "vulkan"),
+            ]
         };
-        let (adapter, text_backend) = if let Some(adapter) = primary_adapter {
-            (adapter, TextRendererBackend::Gpu)
-        } else {
+
+        let requested = std::env::var("RUI_GPU_BACKEND").unwrap_or_default();
+        let requested = match requested.trim().to_ascii_lowercase().as_str() {
+            "gl" | "gles" | "opengl" => Some(wgpu::Backends::GL),
+            "dx12" | "d3d12" => Some(wgpu::Backends::DX12),
+            "vulkan" | "vk" => Some(wgpu::Backends::VULKAN),
+            "metal" => Some(wgpu::Backends::METAL),
+            _ => None,
+        };
+        if let Some(front) = requested {
+            let label = order
+                .iter()
+                .find(|(b, _)| *b == front)
+                .map_or("requested", |(_, name)| *name);
+            order.retain(|(b, _)| *b != front);
+            order.insert(0, (front, label));
+        }
+        order
+    }
+
+    /// Create the instance / surface / adapter triple from the first backend that works.
+    async fn acquire_adapter(
+        window: &Arc<Window>,
+        force_software: bool,
+    ) -> (wgpu::Surface<'static>, wgpu::Adapter) {
+        let candidates = Self::backend_candidates();
+        if !force_software {
+            for (backends, name) in &candidates {
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                    backends: *backends,
+                    ..Default::default()
+                });
+                let Ok(surface) = instance.create_surface(window.clone()) else {
+                    log::debug!("backend {name}: no surface");
+                    continue;
+                };
+                let adapter = instance
+                    .request_adapter(&wgpu::RequestAdapterOptions {
+                        // Integrated GPU for 2D UI — lower working set than discrete.
+                        power_preference: wgpu::PowerPreference::LowPower,
+                        compatible_surface: Some(&surface),
+                        force_fallback_adapter: false,
+                    })
+                    .await;
+                if let Some(adapter) = adapter {
+                    log::info!("gpu backend: {name} ({})", adapter.get_info().name);
+                    return (surface, adapter);
+                }
+                log::debug!("backend {name}: no adapter");
+            }
+        }
+
+        // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
+        for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN] {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                backends,
+                ..Default::default()
+            });
+            let Ok(surface) = instance.create_surface(window.clone()) else {
+                continue;
+            };
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: Some(&surface),
                     force_fallback_adapter: true,
                 })
-                .await
-                .expect("no compatible GPU or software adapter found");
-            (adapter, TextRendererBackend::CpuTextHybrid)
+                .await;
+            if let Some(adapter) = adapter {
+                log::warn!("falling back to software adapter: {}", adapter.get_info().name);
+                return (surface, adapter);
+            }
+        }
+
+        panic!("no compatible GPU or software adapter found");
+    }
+
+    pub(super) async fn new(window: Arc<Window>, mut root_element: Element) -> Self {
+        let size = window.inner_size();
+        let force_software = std::env::var("RUI_FORCE_SOFTWARE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        // Backend choice dominates resident memory: on Windows the D3D12 and Vulkan
+        // user-mode drivers commit ~80 MB of private heaps at device creation, while
+        // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
+        // not need what DX12 buys, so GL leads and the others stay as fallbacks.
+        let (surface, adapter) = Self::acquire_adapter(&window, force_software).await;
+        let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+            TextRendererBackend::CpuTextHybrid
+        } else {
+            TextRendererBackend::Gpu
         };
         log::warn!("text renderer backend: {:?}", text_backend);
+
+        let adapter_limits = adapter.limits();
+        // Keep lean 2D defaults, but lift 2D texture cap to the adapter — otherwise maximize /
+        // large windows (>2048px) panic when configuring the swapchain.
+        let mut required_limits = wgpu::Limits::downlevel_defaults();
+        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
+        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+        required_limits.max_texture_dimension_3d = adapter_limits
+            .max_texture_dimension_3d
+            .min(required_limits.max_texture_dimension_3d.max(2048));
 
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits,
                     label: None,
-                    memory_hints: wgpu::MemoryHints::Performance,
+                    memory_hints: wgpu::MemoryHints::MemoryUsage,
                 },
                 None,
             )
@@ -687,11 +772,21 @@ impl AppState {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
-        let dims_changed =
-            self.config.width != new_size.width || self.config.height != new_size.height;
-        self.size = new_size;
-        self.config.width = new_size.width;
-        self.config.height = new_size.height;
+        let max_dim = self.device.limits().max_texture_dimension_2d.max(1);
+        let width = new_size.width.min(max_dim).max(1);
+        let height = new_size.height.min(max_dim).max(1);
+        if width != new_size.width || height != new_size.height {
+            log::warn!(
+                "clamping surface {}x{} to device max_texture_dimension_2d={}",
+                new_size.width,
+                new_size.height,
+                max_dim
+            );
+        }
+        let dims_changed = self.config.width != width || self.config.height != height;
+        self.size = PhysicalSize::new(width, height);
+        self.config.width = width;
+        self.config.height = height;
         // Only reconfigure when the backing size changes. Calling `configure` on every occlusion
         // / redraw causes visible flicker; use `recover_surface` after `SurfaceError::Lost` instead.
         if dims_changed {
@@ -703,7 +798,7 @@ impl AppState {
                 self.config.width,
                 self.config.height,
             );
-            self.layout_status = crate::core::tree::LayoutStatus::StructureChanged;
+            self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
         }
     }
 
@@ -857,7 +952,7 @@ impl AppState {
             );
             scrollbar_update_resolved = ScrollbarUpdateMode::Full;
         }
-        let render_result = if use_full_taffy_rebuild {
+        let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
                 logical_w,
@@ -900,6 +995,19 @@ impl AppState {
                 scrollbar_overlay_collect,
             )
         };
+        // Select 浮层：首帧用占位坐标，布局后按触发器/视口纠正并再 layout 一次。
+        if crate::components::select::sync_select_floating_placement(
+            &mut self.root_element,
+            logical_w,
+            logical_h,
+        ) {
+            render_result = self.layout_tree.build_and_layout(
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+            );
+        }
         #[cfg(debug_assertions)]
         let layout_done = Instant::now();
 
