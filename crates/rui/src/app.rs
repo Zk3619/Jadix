@@ -21,6 +21,7 @@ mod hot_reload;
 mod lifecycle;
 pub mod runtime;
 pub mod reactive;
+pub mod window_keys;
 mod scroll_support;
 mod state;
 mod tree_hit;

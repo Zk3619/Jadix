@@ -40,6 +40,7 @@ pub fn reactive_placeholder(anchor_id: impl Into<String>) -> Element {
         .template_id(anchor_id)
         .template_hash(REACTIVE_PLACEHOLDER_HASH)
         .w("100%")
+        .h("100%")
 }
 
 /// Register a **single** effect (first call per `anchor_id`) that rebuilds `fragment` and runs

@@ -152,6 +152,13 @@ impl super::App {
                     return true;
                 }
 
+                if super::window_keys::try_dispatch_window_key(&event) {
+                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                        st.window.request_redraw();
+                    }
+                    return true;
+                }
+
                 if !fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
                     if let Some(st) = (&*self.state.borrow()).as_ref() {
                         if super::tree_hit::dispatch_key_for_focused(&st.root_element, &fid, &event) {
