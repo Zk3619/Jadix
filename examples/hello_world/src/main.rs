@@ -5,7 +5,9 @@
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
-use rui::primitives::{hstack, r#box, tabs_headless, vstack, TABSTRIP_FOCUS_PREFIX};
+use rui::components::{navigation_host, tabs_headless, TABSTRIP_FOCUS_PREFIX};
+use rui::app::navigator::{Navigator, Presentation, PushOptions};
+use rui::primitives::{hstack, r#box, vstack};
 use rui::style::parse_color;
 use rui::core::reactivity::use_signal;
 use rui::core::tree::Element;
@@ -17,12 +19,12 @@ const TOGGLE_SHOWCASE_REACTIVE: &str = "examples/hello_world/ToggleControlsShowc
 const SELECT_POPOVER_SHOWCASE_REACTIVE: &str = "examples/hello_world/SelectPopoverTabShowcase:block";
 const PRIMITIVES_VIRT_REACTIVE: &str = "examples/hello_world/PrimitivesShowcase:virt_list";
 const GRID_DRAG_REACTIVE: &str = "examples/hello_world/GridAndDragShowcase:main";
+const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/hello_world/NavigatorShowcase:main";
 const HW_GRID_SORT_COMMIT: &str = "__rui_drag_commit:hw-grid-sort";
 const HW_GRID_SORT_HOVER: &str = "__rui_drag_hover:hw-grid-sort";
 const HW_GRID_LIST_ID: &str = "hw-grid-sort";
 
 fn hw_grid_sort_row(row_label: &String, i: usize, _items: &[String], hl: bool) -> Element {
-    let z_boost = rui::primitives::drag_indicator_z_boost();
     let grip: Element = r#box()
         .drag_reorder_handle(HW_GRID_LIST_ID, i)
         .p("0.25rem")
@@ -42,7 +44,8 @@ fn hw_grid_sort_row(row_label: &String, i: usize, _items: &[String], hl: bool) -
             .bg(parse_color(if hl { "accent" } else { "muted" }))
             .children([grip, caption_el]),
     )
-    .z_index(if hl { z_boost } else { 0 })
+    // 仅相对同级默认 0 抬一层；勿依赖全局 magic z（自定义 z 仍可能盖住）。
+    .z_index(if hl { 1 } else { 0 })
     .rounded(6.0)
 }
 
@@ -142,11 +145,46 @@ fn InputShowcase() -> rui::core::tree::Element {
         <MyCard title="2) Input (ShadCN-style)">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Click to focus, type text, Tab to move focus, Backspace to delete"
+                    "text / password / number / email / tel / url / search — type 过滤与非空校验"
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                     <Input id="hw-s2-input-a" placeholder="Placeholder…" flex_grow="1" />
                     <Input id="hw-s2-input-b" placeholder="Invalid" invalid=true flex_grow="1" />
+                    <Input id="hw-s2-input-pw" type="password" flex_grow="1" />
+                    <Input id="hw-s2-input-num" type="number" flex_grow="1" />
+                </HStack>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <Input id="hw-s2-email" type="email" flex_grow="1" />
+                    <Input id="hw-s2-tel" type="tel" flex_grow="1" />
+                    <Input id="hw-s2-url" type="url" flex_grow="1" />
+                    <Input id="hw-s2-search" type="search" flex_grow="1" />
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="2b) Picker placeholders (WIP)">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "file / directory / color / date* / time — 分模块占位（非 Input type）"
+                </Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <FilePicker id="hw-file" accept="image/*" flex_grow="1" />
+                    <DirectoryPicker id="hw-dir" flex_grow="1" />
+                    <ColorPicker id="hw-color" value="#3b82f6" flex_grow="1" />
+                </HStack>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <DatePicker id="hw-date" kind="date" flex_grow="1" />
+                    <DatePicker id="hw-dt" kind="datetime-local" flex_grow="1" />
+                    <TimePicker id="hw-time" flex_grow="1" />
+                </HStack>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <DatePicker id="hw-month" kind="month" flex_grow="1" />
+                    <DatePicker id="hw-week" kind="week" flex_grow="1" />
                 </HStack>
             </VStack>
         </MyCard>
@@ -823,7 +861,7 @@ fn GridAndDragShowcase() -> Element {
     let sort_list = rui::reactive!(GRID_DRAG_REACTIVE, move || {
         if let Some((from, to)) = commit.get() {
             let mut v = order.get();
-            rui::primitives::apply_reorder_vec(&mut v, from, to);
+            rui::utils::drag_reorder::apply_reorder_vec(&mut v, from, to);
             order.set(v);
             commit.set(None);
         }
@@ -846,9 +884,9 @@ fn GridAndDragShowcase() -> Element {
         <MyCard title="Grid + drag-reorder (ShadCN Card: rui::components::Card)">
             <VStack w="100%" gap="0.5rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Grid（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"
+                    "GStack（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"
                 </Label>
-                <Grid cols="3" rows="2" gap="0.5rem" w="100%" min_h="7rem">
+                <GStack cols="3" rows="2" gap="0.5rem" w="100%" min_h="7rem">
                     <Rect col_span="2" p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
                         <Label>"col_span = 2"</Label>
                     </Rect>
@@ -864,8 +902,116 @@ fn GridAndDragShowcase() -> Element {
                     <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
                         <Label>"(3,3)"</Label>
                     </Rect>
-                </Grid>
+                </GStack>
                 { sort_list }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum HwNavRoute {
+    Home,
+    Detail,
+    SheetHelp,
+}
+
+#[component]
+fn NavigatorShowcase() -> Element {
+    let nav = Navigator::new("hw_nav_demo", HwNavRoute::Home, [HwNavRoute::Home]);
+    let nav_bar = nav.clone();
+    let nav_detail = nav.clone();
+    let nav_sheet = nav.clone();
+    let nav_home = nav.clone();
+
+    let body = rui::reactive!(NAVIGATOR_SHOWCASE_REACTIVE, move || {
+        let n = nav.clone();
+        Element::from(navigation_host(n, |route| match route {
+            HwNavRoute::Home => ui! {
+                <VStack w="100%" h="100%" p="0.75rem" gap="0.5rem" bg="muted">
+                    <Label font_weight="600">"Home（root）"</Label>
+                    <Label text_size="0.75rem" color="muted-foreground">
+                        "Esc：先关 portal 浮层，再 pop 页面。侧栏回 Home 会截断栈。"
+                    </Label>
+                </VStack>
+            },
+            HwNavRoute::Detail => ui! {
+                <VStack w="100%" h="100%" p="0.75rem" gap="0.5rem" bg="secondary">
+                    <Label font_weight="600">"Detail（Host）"</Label>
+                    <Label text_size="0.75rem" color="muted-foreground">"keep-alive；返回 pop 到上一页"</Label>
+                </VStack>
+            },
+            HwNavRoute::SheetHelp => ui! {
+                <VStack w="16rem" p="1rem" gap="0.5rem" bg="background" class="rounded-md">
+                    <Label font_weight="600">"Help Sheet"</Label>
+                    <Label text_size="0.75rem" color="muted-foreground">
+                        "点遮罩或 Esc 关闭（Navigator::pop）"
+                    </Label>
+                </VStack>
+            },
+        }))
+    });
+
+    ui! {
+        <MyCard title="Navigator（portal_overlay + view 双栈）">
+            <VStack w="100%" gap="0.5rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Host / Sheet；Home 为 root（截断）。Detail 带 Slide 转场。埋层禁命中；Host 卸载自动 dispose。"
+                </Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                    <Button
+                        id="hw-nav-home"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            let _ = nav_home.bring_to_front(&HwNavRoute::Home);
+                        }}
+                    >
+                        "Home"
+                    </Button>
+                    <Button
+                        id="hw-nav-detail"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            nav_detail.push(
+                                HwNavRoute::Detail,
+                                PushOptions::default().with_slide(),
+                            );
+                        }}
+                    >
+                        "Push Detail"
+                    </Button>
+                    <Button
+                        id="hw-nav-sheet"
+                        size="sm"
+                        variant="secondary"
+                        on_click={move || {
+                            nav_sheet.push(
+                                HwNavRoute::SheetHelp,
+                                PushOptions {
+                                    presentation: Presentation::Sheet,
+                                    ..PushOptions::default()
+                                },
+                            );
+                        }}
+                    >
+                        "Open Sheet"
+                    </Button>
+                    <Button
+                        id="hw-nav-back"
+                        size="sm"
+                        variant="ghost"
+                        on_click={move || {
+                            let _ = nav_bar.pop();
+                        }}
+                    >
+                        "Back"
+                    </Button>
+                </HStack>
+                <Rect w="100%" h="10rem" relative=true class="rounded-md" bg="background">
+                    { body }
+                </Rect>
             </VStack>
         </MyCard>
     }
@@ -977,6 +1123,7 @@ fn main() {
                             <ButtonShowcase />
                             <ButtonHoverEasingShowcase />
                             <InputShowcase />
+                            <PickerPlaceholdersShowcase />
                             <TypographyShowcase />
                             <ShadowShowcase />
                             <ScrollShowcase />
@@ -988,6 +1135,7 @@ fn main() {
                             <RadioSliderShowcase />
                             <SelectPopoverTabShowcase />
                             <GridAndDragShowcase />
+                            <NavigatorShowcase />
                             <PrimitivesShowcase />
 
                             <VStack items="center" gap="1rem" p="1rem">

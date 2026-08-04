@@ -550,9 +550,9 @@ fn key_flex_row(children: Vec<Element>) -> Element {
         })
         .collect();
     ui! {
-        <Flex direction="row" gap="0.25rem" w="100%" grow="1">
+        <HStack gap="0.25rem" w="100%" grow="1">
             { cells }
-        </Flex>
+        </HStack>
     }
 }
 
@@ -622,7 +622,7 @@ fn apply_key(eng: Signal<Engine>, key: &winit::event::KeyEvent) -> bool {
 
 fn standard_pad(eng: Signal<Engine>) -> Element {
     ui! {
-        <Grid cols="4" rows="6" gap="0.25rem" w="100%" h="100%">
+        <GStack cols="4" rows="6" gap="0.25rem" w="100%" h="100%">
             { calc_key("k-%", "%", KeyTone::Fn, eng, |e| e.percent()) }
             { calc_key("k-ce", "CE", KeyTone::Fn, eng, |e| e.clear_entry()) }
             { calc_key("k-c", "C", KeyTone::Fn, eng, |e| e.clear_all()) }
@@ -647,7 +647,7 @@ fn standard_pad(eng: Signal<Engine>) -> Element {
             { calc_key("k-0", "0", KeyTone::Num, eng, |e| e.input_digit('0')) }
             { calc_key("k-dot", ".", KeyTone::Num, eng, |e| e.input_dot()) }
             { calc_key("k-eq", "=", KeyTone::Eq, eng, |e| e.equals()) }
-        </Grid>
+        </GStack>
     }
 }
 
@@ -659,7 +659,7 @@ fn scientific_pad(eng: Signal<Engine>) -> Element {
     let deg_l = if snap.deg { "DEG" } else { "RAD" };
 
     ui! {
-        <Flex direction="column" gap="0.25rem" w="100%" h="100%" grow="1">
+        <VStack gap="0.25rem" w="100%" h="100%" grow="1">
             { key_flex_row(vec![
                 calc_key("s-deg", deg_l, KeyTone::Fn, eng, |e| e.deg = !e.deg),
                 calc_key("s-sin", sin_l, KeyTone::Fn, eng, |e| if e.second { e.asin() } else { e.sin() }),
@@ -715,7 +715,7 @@ fn scientific_pad(eng: Signal<Engine>) -> Element {
                 calc_key("s-dot", ".", KeyTone::Num, eng, |e| e.input_dot()),
                 calc_key("s-eq", "=", KeyTone::Eq, eng, |e| e.equals()),
             ]) }
-        </Flex>
+        </VStack>
     }
 }
 
@@ -768,7 +768,7 @@ fn CalculatorApp() -> Element {
 
     let mode_header = rui::reactive!(MODE_SELECT_REACTIVE, move || {
         ui! {
-            <Flex direction="row" w="100%" items="center" gap="0.5rem" h="2.5rem">
+            <HStack w="100%" items="center" gap="0.5rem" h="2.5rem">
                 <Select
                     id="calc:mode"
                     value={mode}
@@ -780,7 +780,7 @@ fn CalculatorApp() -> Element {
                     placeholder="模式"
                     w="7rem"
                 />
-            </Flex>
+            </HStack>
         }
     });
 
@@ -793,13 +793,13 @@ fn CalculatorApp() -> Element {
                 { display_el }
             </VStack>
 
-            <Flex direction="row" w="100%" gap="0.15rem" mb="0.15rem">
+            <HStack w="100%" gap="0.15rem" mb="0.15rem">
                 { mem_key("mem-mc", "MC", has_mem, eng, |e| e.mem_clear()) }
                 { mem_key("mem-mr", "MR", has_mem, eng, |e| e.mem_recall()) }
                 { mem_key("mem-mp", "M+", true, eng, |e| e.mem_add()) }
                 { mem_key("mem-mm", "M−", true, eng, |e| e.mem_sub()) }
                 { mem_key("mem-ms", "MS", true, eng, |e| e.mem_store()) }
-            </Flex>
+            </HStack>
 
             <Rect w="100%" grow="1" min_h="18rem">
                 { pad }
