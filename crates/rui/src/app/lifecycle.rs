@@ -48,14 +48,37 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         match event {
             #[cfg(debug_assertions)]
             super::RuiUserEvent::HotReloadWake => {
-                if let Some(state) = (&mut *self.state.borrow_mut()).as_mut() {
+                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
                     state.window.request_redraw();
                     self.force_redraw_count = self.force_redraw_count.max(2);
                 }
             }
-            super::RuiUserEvent::AccessKit(_) => {
-                if let Some(state) = (*self.state.borrow()).as_ref() {
-                    state.window.request_redraw();
+            super::RuiUserEvent::AccessKit(ev) => {
+                use accesskit_winit::WindowEvent as AkWindowEvent;
+                match ev.window_event {
+                    AkWindowEvent::ActionRequested(req) => {
+                        if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                            if crate::accesskit_bridge::dispatch_accesskit_action(
+                                &state.root_element,
+                                &req,
+                            ) {
+                                state.window.request_redraw();
+                            }
+                        }
+                    }
+                    AkWindowEvent::InitialTreeRequested => {
+                        if let Some(adapter) = &mut self.accesskit_adapter {
+                            if let Some(state) = (*self.state.borrow()).as_ref() {
+                                let update = state.accesskit_tree_update();
+                                adapter.update_if_active(|| update);
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(state) = (*self.state.borrow()).as_ref() {
+                            state.window.request_redraw();
+                        }
+                    }
                 }
             }
         }
@@ -89,10 +112,30 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
             let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
-            // Build a real initial UI before the first frame so the first redraw paints content.
-            let initial_root = (self.app_builder.borrow_mut())();
-            let state = pollster::block_on(super::state::AppState::new(window.clone(), initial_root));
+            // Initialize GPU/runtime state with a private bootstrap root. The user app tree must be
+            // built exactly once, inside the tracked root effect below; otherwise startup creates
+            // a throwaway tree whose Drop/on_unmount side effects can invalidate resources still
+            // referenced by the tracked tree.
+            let state = pollster::block_on(super::state::AppState::new_bootstrap(window.clone()));
             *self.state.borrow_mut() = Some(state);
+
+            let state_ref = self.state.clone();
+            crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
+                std::rc::Rc::downgrade(&state_ref),
+            ));
+            crate::app::reactive::reset_registered_anchors();
+
+            // create_effect runs synchronously on registration. By the time it returns, the real
+            // root has been reconciled and deferred fine-grained reactive anchors have mounted, so
+            // making the window visible cannot expose the bootstrap root.
+            let builder_ref = self.app_builder.clone();
+            crate::core::reactivity::create_effect(move || {
+                let new_root = (builder_ref.borrow_mut())();
+                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                    st.rebuild_ui(new_root);
+                    st.window.request_redraw();
+                }
+            });
 
             let adapter = Adapter::with_mixed_handlers(
                 event_loop,
@@ -100,22 +143,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 AccessKitBootstrap,
                 self.event_loop_proxy.clone(),
             );
-            let _ = window.set_visible(true);
+            window.set_visible(true);
             self.accesskit_adapter = Some(adapter);
-
-            let state_ref = self.state.clone();
-            crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(std::rc::Rc::downgrade(
-                &state_ref,
-            )));
-            crate::app::reactive::reset_registered_anchors();
-            let builder_ref = self.app_builder.clone();
-            crate::core::reactivity::create_effect(move || {
-                let new_root = (builder_ref.borrow_mut())();
-                if let Some(st) = (&mut *state_ref.borrow_mut()).as_mut() {
-                    st.rebuild_ui(new_root);
-                    st.window.request_redraw();
-                }
-            });
         }
 
         if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -154,10 +183,15 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 state: element_state,
                 button,
                 ..
-            } => self.handle_non_left_mouse_input(id, element_state, button),
+            } => self.handle_mouse_button(id, element_state, button),
             WindowEvent::MouseWheel { delta, .. } => {
                 self.handle_mouse_wheel(id, delta);
             }
+            WindowEvent::DroppedFile(path) => {
+                super::push_dropped_file(path);
+            }
+            WindowEvent::HoveredFile(_) => {}
+            WindowEvent::HoveredFileCancelled => {}
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
@@ -167,31 +201,29 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let _ = self.handle_keyboard_input(event);
             }
-            WindowEvent::Occluded(occluded) => {
-                if !occluded {
-                    if let Some(state) = (&mut *self.state.borrow_mut()).as_mut() {
-                        if state.window.id() == id {
-                            state.window.set_visible(true);
-                            // One redraw; avoid extra `configure` / forced multi-frame redraw (flicker).
-                            state.window.request_redraw();
-                        }
+            WindowEvent::Occluded(occluded) if !occluded => {
+                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                    if state.window.id() == id {
+                        state.window.set_visible(true);
+                        // One redraw; avoid extra `configure` / forced multi-frame redraw (flicker).
+                        state.window.request_redraw();
                     }
                 }
             }
-            WindowEvent::Resized(physical_size) => {
-                if physical_size.width > 0 && physical_size.height > 0 {
-                    if let Some(state) = (&mut *self.state.borrow_mut()).as_mut() {
-                        if state.window.id() == id {
-                            state.note_winit_resized(physical_size);
-                            state.resize(physical_size);
-                            state.window.request_redraw();
-                            self.force_redraw_count = self.force_redraw_count.max(1);
-                        }
+            WindowEvent::Resized(physical_size)
+                if physical_size.width > 0 && physical_size.height > 0 =>
+            {
+                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                    if state.window.id() == id {
+                        state.note_winit_resized(physical_size);
+                        state.resize(physical_size);
+                        state.window.request_redraw();
+                        self.force_redraw_count = self.force_redraw_count.max(1);
                     }
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                if let Some(state) = (&mut *self.state.borrow_mut()).as_mut() {
+                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
                     if state.window.id() == id {
                         state.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
                         state.window.request_redraw();
@@ -199,6 +231,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Flush any buffered file drops once per frame.
+                let paths = super::take_dropped_files();
+                if !paths.is_empty() {
+                    super::fire_file_drop(paths);
+                }
                 self.handle_redraw_requested(id, event_loop);
             }
             _ => {}
@@ -215,7 +252,14 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         .format(|buf, record| {
             use std::io::Write;
             let ts = buf.timestamp();
-            writeln!(buf, "[{} {:<5} {}] {}", ts, record.level(), record.target(), record.args())
+            writeln!(
+                buf,
+                "[{} {:<5} {}] {}",
+                ts,
+                record.level(),
+                record.target(),
+                record.args()
+            )
         })
         .init();
 
@@ -235,10 +279,15 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         last_frame_time: std::time::Instant::now(),
         modifiers: ModifiersState::default(),
         left_button_down: false,
+        last_click_at: None,
+        last_click_pos: [0.0, 0.0],
+        click_count: 0,
         scrollbar_drag: None,
         drag_reorder: None,
         input_drag_rest: None,
         input_drag_anchor: 0,
+        label_drag_key: None,
+        label_drag_anchor: 0,
         scroll_accum: std::collections::HashMap::new(),
         hover_scroll_rest: None,
         hover_scroll_axis: None,

@@ -2,21 +2,19 @@
 // Release GUI builds should not spawn a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use rui::app::navigator::{Navigator, Presentation, PushOptions};
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
 use rui::components::{navigation_host, tabs_headless, TABSTRIP_FOCUS_PREFIX};
-use rui::app::navigator::{Navigator, Presentation, PushOptions};
-use rui::primitives::{hstack, r#box, vstack};
-use rui::style::parse_color;
 use rui::core::reactivity::use_signal;
 use rui::core::tree::Element;
+use rui::primitives::{hstack, r#box, vstack};
+use rui::style::parse_color;
 use rui::ui;
 
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
-const BUTTON_SHOWCASE_REACTIVE: &str = "examples/hello_world/ButtonShowcase:variants_block";
-const TOGGLE_SHOWCASE_REACTIVE: &str = "examples/hello_world/ToggleControlsShowcase:main";
-const SELECT_POPOVER_SHOWCASE_REACTIVE: &str = "examples/hello_world/SelectPopoverTabShowcase:block";
+const PRIMITIVES_SHOWCASE_REACTIVE: &str = "examples/hello_world/PrimitivesShowcase:controls";
 const PRIMITIVES_VIRT_REACTIVE: &str = "examples/hello_world/PrimitivesShowcase:virt_list";
 const GRID_DRAG_REACTIVE: &str = "examples/hello_world/GridAndDragShowcase:main";
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/hello_world/NavigatorShowcase:main";
@@ -24,16 +22,14 @@ const HW_GRID_SORT_COMMIT: &str = "__rui_drag_commit:hw-grid-sort";
 const HW_GRID_SORT_HOVER: &str = "__rui_drag_hover:hw-grid-sort";
 const HW_GRID_LIST_ID: &str = "hw-grid-sort";
 
-fn hw_grid_sort_row(row_label: &String, i: usize, _items: &[String], hl: bool) -> Element {
+fn hw_grid_sort_row(row_label: &str, i: usize, _items: &[String], hl: bool) -> Element {
     let grip: Element = r#box()
         .drag_reorder_handle(HW_GRID_LIST_ID, i)
         .p("0.25rem")
         .rounded(4.0)
         .bg(parse_color("secondary"))
         .into();
-    let mut caption_el: Element = label(&format!("hw-grid-sort-{i}"))
-        .text(row_label.as_str())
-        .into();
+    let mut caption_el: Element = label(&format!("hw-grid-sort-{i}")).text(row_label).into();
     caption_el = caption_el.flex_grow(1.0);
     Element::from(
         hstack()
@@ -78,12 +74,31 @@ fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str
 
 #[component]
 fn MyCard(title: String, children: Option<rui::core::tree::Element>) -> rui::core::tree::Element {
-    let child = children.unwrap_or_else(|| rui::core::tree::Element::new());
+    let child = children.unwrap_or_else(rui::core::tree::Element::new);
     ui! {
         <VStack w="100%" min_w="0" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
             <Label w="100%" text_size="1.25rem" font_weight="700" leading="normal">{ title }</Label>
             { child }
         </VStack>
+    }
+}
+
+/// Solid getter-props 试点：`#[component(reactive)]` + Signal 字段；文案/图标走自动 bind，不整卡重建。
+#[component(reactive)]
+fn ReactiveStatusBadge(
+    id: String,
+    label: rui::core::reactivity::Signal<String>,
+    ok: rui::core::reactivity::Signal<bool>,
+) -> rui::core::tree::Element {
+    ui! {
+        <HStack gap="0.5rem" items="center" p="0.5rem" class="rounded" bg="secondary">
+            <Icon
+                name={ if ok.get() { "check".to_string() } else { "ban".to_string() } }
+                size="1rem"
+                color="foreground"
+            />
+            <Label text_size="0.875rem">{ label.get() }</Label>
+        </HStack>
     }
 }
 
@@ -94,30 +109,28 @@ fn ButtonShowcase() -> rui::core::tree::Element {
 
     ui! {
         <MyCard title="1) Button Variants + State">
-            <Reactive id={BUTTON_SHOWCASE_REACTIVE}>
-                <VStack w="100%" min_w="0" gap="0.75rem">
-                    <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
-                        <Button variant="default" on_click={move || increment_count(count)}>
-                            { format!("Default ({})", count.get()) }
-                        </Button>
-                        <Button variant="secondary" on_click={move || choose_variant(selected, "secondary")}>
-                            "Secondary"
-                        </Button>
-                        <Button variant="outline" on_click={move || choose_variant(selected, "outline")}>
-                            "Outline"
-                        </Button>
-                        <Button variant="ghost">"Ghost"</Button>
-                        <Button variant="destructive" on_click={move || choose_variant(selected, "default")}>"Destructive"</Button>
-                        <Button variant="link">"Link"</Button>
-                        <Button variant="default" disabled=true>"Disabled"</Button>
-                    </HStack>
-                    <Show when={selected.get() != "default"}>
-                        <Label w="100%" text_size="0.875rem" color="muted-foreground" leading="normal">
-                            { format!("Selected variant: {}", selected.get()) }
-                        </Label>
-                    </Show>
-                </VStack>
-            </Reactive>
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
+                    <Button variant="default" on_click={move || increment_count(count)}>
+                        { format!("Default ({})", count.get()) }
+                    </Button>
+                    <Button variant="secondary" on_click={move || choose_variant(selected, "secondary")}>
+                        "Secondary"
+                    </Button>
+                    <Button variant="outline" on_click={move || choose_variant(selected, "outline")}>
+                        "Outline"
+                    </Button>
+                    <Button variant="ghost">"Ghost"</Button>
+                    <Button variant="destructive" on_click={move || choose_variant(selected, "default")}>"Destructive"</Button>
+                    <Button variant="link">"Link"</Button>
+                    <Button variant="default" disabled=true>"Disabled"</Button>
+                </HStack>
+                <Show when={selected.get() != "default"}>
+                    <Label w="100%" text_size="0.875rem" color="muted-foreground" leading="normal">
+                        { format!("Selected variant: {}", selected.get()) }
+                    </Label>
+                </Show>
+            </VStack>
         </MyCard>
     }
 }
@@ -141,6 +154,10 @@ fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
 
 #[component]
 fn InputShowcase() -> rui::core::tree::Element {
+    let mark_invalid = use_signal("hw_input_mark_invalid", || false);
+    let badge_ok = use_signal("hw_status_badge_ok", || true);
+    let badge_label = use_signal("hw_status_badge_label", || "Ready".to_string());
+
     ui! {
         <MyCard title="2) Input (ShadCN-style)">
             <VStack w="100%" gap="0.75rem">
@@ -158,6 +175,39 @@ fn InputShowcase() -> rui::core::tree::Element {
                     <Input id="hw-s2-tel" type="tel" flex_grow="1" />
                     <Input id="hw-s2-url" type="url" flex_grow="1" />
                     <Input id="hw-s2-search" type="search" flex_grow="1" />
+                </HStack>
+                <HStack gap="0.5rem" items="center" wrap="wrap" w="100%">
+                    <Input
+                        id="hw-s2-input-bound-invalid"
+                        placeholder="invalid={signal}"
+                        invalid={mark_invalid.get()}
+                        flex_grow="1"
+                    />
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        on_click={move || mark_invalid.set(!mark_invalid.peek())}
+                    >
+                        { if mark_invalid.get() { "Clear invalid" } else { "Mark invalid" } }
+                    </Button>
+                </HStack>
+                <HStack gap="0.5rem" items="center" wrap="wrap" w="100%">
+                    <ReactiveStatusBadge
+                        id="hw-status-badge"
+                        label={badge_label}
+                        ok={badge_ok}
+                    />
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        on_click={move || {
+                            let next = !badge_ok.peek();
+                            badge_ok.set(next);
+                            badge_label.set(if next { "Ready".into() } else { "Blocked".into() });
+                        }}
+                    >
+                        "Toggle badge"
+                    </Button>
                 </HStack>
             </VStack>
         </MyCard>
@@ -661,51 +711,49 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
 
     ui! {
         <MyCard title="8) Switch · Checkbox · Separator">
-            <Reactive id={TOGGLE_SHOWCASE_REACTIVE}>
-                <VStack gap="0.75rem" w="100%">
-                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                        "Tab to focus, Space/Enter toggles (same as buttons). Horizontal Separator uses full width; vertical divider uses programmatic separator().vertical(true)."
-                    </Label>
+            <VStack gap="0.75rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Tab to focus, Space/Enter toggles (same as buttons). Horizontal Separator uses full width; vertical divider uses programmatic separator().vertical(true)."
+                </Label>
 
-                    <Separator />
+                <Separator />
 
-                    <Label font_weight="700" text_size="0.875rem">"Uncontrolled (internal state)"</Label>
-                    <HStack gap="0.75rem" items="center" wrap="wrap">
-                        <Label text_size="0.875rem">"Notifications"</Label>
-                        <Switch />
-                        <Label text_size="0.875rem">"Terms"</Label>
-                        <Checkbox />
-                        <Label text_size="0.875rem" color="muted-foreground">"Disabled"</Label>
-                        <Checkbox disabled=true />
-                    </HStack>
+                <Label font_weight="700" text_size="0.875rem">"Uncontrolled (internal state)"</Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Label text_size="0.875rem">"Notifications"</Label>
+                    <Switch />
+                    <Label text_size="0.875rem">"Terms"</Label>
+                    <Checkbox />
+                    <Label text_size="0.875rem" color="muted-foreground">"Disabled"</Label>
+                    <Checkbox disabled=true />
+                </HStack>
 
-                    <Separator />
+                <Separator />
 
-                    <Label font_weight="700" text_size="0.875rem">"Controlled (shared Signal + Flip)"</Label>
-                    <HStack gap="0.75rem" items="center" wrap="wrap">
-                        { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
-                        <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
-                        <Button variant="outline" size="sm" on_click={move || sw.set(!sw.get())}>
-                            "Flip switch"
-                        </Button>
-                    </HStack>
-                    <HStack gap="0.75rem" items="center" wrap="wrap">
-                        { Element::from(checkbox("hw_demo_checkbox").checked_signal(cb)) }
-                        <Label text_size="0.875rem">{ format!("checkbox = {}", cb.get()) }</Label>
-                    </HStack>
+                <Label font_weight="700" text_size="0.875rem">"Controlled (shared Signal + Flip)"</Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
+                    <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
+                    <Button variant="outline" size="sm" on_click={move || sw.set(!sw.get())}>
+                        "Flip switch"
+                    </Button>
+                </HStack>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    { Element::from(checkbox("hw_demo_checkbox").checked_signal(cb)) }
+                    <Label text_size="0.875rem">{ format!("checkbox = {}", cb.get()) }</Label>
+                </HStack>
 
-                    <Separator />
+                <Separator />
 
-                    <Label font_weight="700" text_size="0.875rem">"Vertical separator in a row"</Label>
-                    <HStack gap="0.5rem" items="stretch" h="3rem" w="100%">
-                        <Label>"Panel A"</Label>
-                        { Element::from(separator().vertical(true)) }
-                        <Label>"Panel B"</Label>
-                        { Element::from(separator().vertical(true)) }
-                        <Label>"Panel C"</Label>
-                    </HStack>
-                </VStack>
-            </Reactive>
+                <Label font_weight="700" text_size="0.875rem">"Vertical separator in a row"</Label>
+                <HStack gap="0.5rem" items="stretch" h="3rem" w="100%">
+                    <Label>"Panel A"</Label>
+                    { Element::from(separator().vertical(true)) }
+                    <Label>"Panel B"</Label>
+                    { Element::from(separator().vertical(true)) }
+                    <Label>"Panel C"</Label>
+                </HStack>
+            </VStack>
         </MyCard>
     }
 }
@@ -719,7 +767,7 @@ fn RadioSliderShowcase() -> rui::core::tree::Element {
         <MyCard title="9) Radio group · Slider">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Radio: click a pill. Slider: click track to step, or focus + ArrowLeft/ArrowRight."
+                    "Radio / Slider 自带组件级响应式边界；下方标签用自动 bind_text 展示受控值。"
                 </Label>
                 { Element::from(
                     radio_group("hello_world:radio_tier")
@@ -749,27 +797,31 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
         <MyCard title="10) Select · Popover · Tab strip (AccessKit)">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Select / Popover: wrap in <Reactive> so `open` / menu updates subscribe. Tab strip: `tabs_headless` focus id uses prefix → TabList."
+                    "Select / Popover 自带组件级响应式边界；Tab 文案与开关用自动 bind_text。"
                 </Label>
-                <Reactive id={SELECT_POPOVER_SHOWCASE_REACTIVE}>
+                <VStack gap="0.75rem" w="100%">
+                    { Element::from(
+                        select("hello_world:select_plan")
+                            .value_signal(select_val)
+                            .default_value("basic")
+                            .options(vec![
+                                ("basic".to_string(), "Basic".to_string()),
+                                ("pro".to_string(), "Pro".to_string()),
+                                ("team".to_string(), "Team".to_string()),
+                            ]),
+                    ) }
+                    <Label text_size="0.875rem">{ format!("Selected plan: {}", select_val.get()) }</Label>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        on_click={move || pop_open.set(!pop_open.peek())}
+                    >
+                        { if pop_open.get() { "Close popover" } else { "Open popover" } }
+                    </Button>
+                    <Popover open={pop_open}>
+                        <Label>"Popover panel — Escape closes (last-registered popup)."</Label>
+                    </Popover>
                     <VStack gap="0.75rem" w="100%">
-                        { Element::from(
-                            select("hello_world:select_plan")
-                                .value_signal(select_val)
-                                .default_value("basic")
-                                .options(vec![
-                                    ("basic".to_string(), "Basic".to_string()),
-                                    ("pro".to_string(), "Pro".to_string()),
-                                    ("team".to_string(), "Team".to_string()),
-                                ]),
-                        ) }
-                        <Label text_size="0.875rem">{ format!("Selected plan: {}", select_val.get()) }</Label>
-                        <Button variant="outline" size="sm" on_click={move || pop_open.set(!pop_open.get())}>
-                            { if pop_open.get() { "Close popover" } else { "Open popover" } }
-                        </Button>
-                        <Popover open={pop_open}>
-                            <Label>"Popover panel — Escape closes (last-registered popup)."</Label>
-                        </Popover>
                         <Label text_size="0.75rem" color="muted-foreground">
                             { format!(
                                 "Shared tab index: {}. Focus id `{}hello_tabs_demo` (Tab to focus order, then ← / →).",
@@ -786,7 +838,7 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                             tabs_headless("hello_tabs_demo", 3).selected_signal(tab_idx),
                         ) }
                     </VStack>
-                </Reactive>
+                </VStack>
             </VStack>
         </MyCard>
     }
@@ -1025,67 +1077,71 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
     ui! {
         <VStack w="100%" gap="0">
             <MyCard title="11) Image · Portal · FocusTrap · VirtualList">
-                <VStack gap="0.75rem" w="100%">
-                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                        "GPU Image (queue_image_rgba8 + <Image>). Portal 提升浮层到根节点。FocusTrap 限制 Tab 顺序。VirtualList：Reactive + visible_item_range；完整滚动条需额外占位总高度（此处 200 行演示）。"
-                    </Label>
-                    <HStack gap="0.75rem" items="start" wrap="wrap">
-                        <VStack gap="0.25rem">
-                            <Label font_weight="700" text_size="0.75rem">"Texture quad"</Label>
-                            <Image id="demo-checker-img" texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
-                        </VStack>
-                        <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
-                            <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
-                            <HStack gap="0.5rem" wrap="wrap">
-                                <Button id="prim-overlay-toggle" variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
-                                    { if overlay_open.get() { "关闭 Portal 浮层" } else { "打开 Portal 浮层" } }
-                                </Button>
-                                <Button id="prim-trap-toggle" variant="secondary" on_click={move || trap_on.set(!trap_on.get())}>
-                                    { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
-                                </Button>
-                            </HStack>
-                            <FocusTrap id="prim-trap" active={trap_on.get()} order="trap-a,trap-b">
-                                <HStack gap="0.5rem" items="center" wrap="wrap">
-                                    <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
-                                    <Button id="trap-a" variant="default">"A"</Button>
-                                    <Button id="trap-b" variant="outline">"B"</Button>
+                <Reactive id={PRIMITIVES_SHOWCASE_REACTIVE}>
+                    <VStack gap="0.75rem" w="100%">
+                        <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                            "GPU Image (queue_image_rgba8 + <Image>). Portal 提升浮层到根节点。FocusTrap 限制 Tab 顺序。VirtualList：Reactive + visible_item_range；完整滚动条需额外占位总高度（此处 200 行演示）。"
+                        </Label>
+                        <HStack gap="0.75rem" items="start" wrap="wrap">
+                            <VStack gap="0.25rem">
+                                <Label font_weight="700" text_size="0.75rem">"Texture quad"</Label>
+                                <Image id="demo-checker-img" texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
+                            </VStack>
+                            <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
+                                <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
+                                <HStack gap="0.5rem" wrap="wrap">
+                                    <Button id="prim-overlay-toggle" variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
+                                        { if overlay_open.get() { "关闭 Portal 浮层" } else { "打开 Portal 浮层" } }
+                                    </Button>
+                                    <Button id="prim-trap-toggle" variant="secondary" on_click={move || trap_on.set(!trap_on.get())}>
+                                        { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
+                                    </Button>
                                 </HStack>
-                            </FocusTrap>
-                        </VStack>
-                    </HStack>
-                    <Label id="hw-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>
-                    <ScrollArea id="virt-demo" w="100%" h="11rem" overflow_y="auto" overflow_x="hidden" p="0.5rem" bg="muted" rounded="0.375rem">
-                        { rui::reactive!(PRIMITIVES_VIRT_REACTIVE, move || {
-                            let sy = use_signal(&scroll_offset_y_signal_key("virt-demo"), || 0.0_f32).get();
-                            let vh = use_signal(&scroll_viewport_h_signal_key("virt-demo"), || 160.0_f32).get();
-                            let (a, b) = rui::visible_item_range(sy, vh, 22.0, 200, 8);
-                            let mut col = vstack().w("100%").gap("2px");
-                            // 行文案勿夹每帧变化的 window 边界，否则滚动时整窗 text 全变、glyphon 每帧重跑。
-                            for i in a..b {
-                                let row: Element = label(&format!("virt-row-{i}"))
-                                    .text(format!("virtual row {i:04}"))
-                                    .into();
-                                col = col.child(row);
-                            }
-                            Element::from(col)
-                        }) }
-                    </ScrollArea>
-                </VStack>
+                                <FocusTrap id="prim-trap" active={trap_on.get()} order="trap-a,trap-b">
+                                    <HStack gap="0.5rem" items="center" wrap="wrap">
+                                        <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
+                                        <Button id="trap-a" variant="default">"A"</Button>
+                                        <Button id="trap-b" variant="outline">"B"</Button>
+                                    </HStack>
+                                </FocusTrap>
+                            </VStack>
+                        </HStack>
+                        <Label id="hw-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>
+                        <ScrollArea id="virt-demo" w="100%" h="11rem" overflow_y="auto" overflow_x="hidden" p="0.5rem" bg="muted" rounded="0.375rem">
+                            { rui::reactive!(PRIMITIVES_VIRT_REACTIVE, move || {
+                                let sy = use_signal(&scroll_offset_y_signal_key("virt-demo"), || 0.0_f32).get();
+                                let vh = use_signal(&scroll_viewport_h_signal_key("virt-demo"), || 160.0_f32).get();
+                                let (a, b) = rui::visible_item_range(sy, vh, 22.0, 200, 8);
+                                let mut col = vstack().w("100%").gap("2px");
+                                // 行文案勿夹每帧变化的 window 边界，否则滚动时整窗 text 全变、glyphon 每帧重跑。
+                                for i in a..b {
+                                    let row: Element = label(&format!("virt-row-{i}"))
+                                        .text(format!("virtual row {i:04}"))
+                                        .into();
+                                    col = col.child(row);
+                                }
+                                Element::from(col)
+                            }) }
+                        </ScrollArea>
+                    </VStack>
+                </Reactive>
             </MyCard>
             <Portal id="prim-portal-root">
-                <Show when={overlay_open.get()}>
-                    <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
-                        <VStack gap="0.75rem" p="1.25rem" bg="secondary" rounded="0.75rem" max_w="22rem" m="1rem">
-                            <Label font_weight="700" text_size="1.125rem">"Portal 浮层"</Label>
-                            <Label text_size="0.875rem" color="muted-foreground">
-                                "此节点经 Portal 提升到根，盖在主内容之上。"
-                            </Label>
-                            <Button id="prim-overlay-close" variant="default" on_click={move || overlay_open.set(false)}>
-                                "关闭"
-                            </Button>
-                        </VStack>
-                    </Rect>
-                </Show>
+                <Reactive id="examples/hello_world/PrimitivesShowcase:portal">
+                    <Show when={overlay_open.get()}>
+                        <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
+                            <VStack gap="0.75rem" p="1.25rem" bg="secondary" rounded="0.75rem" max_w="22rem" m="1rem">
+                                <Label font_weight="700" text_size="1.125rem">"Portal 浮层"</Label>
+                                <Label text_size="0.875rem" color="muted-foreground">
+                                    "此节点经 Portal 提升到根，盖在主内容之上。"
+                                </Label>
+                                <Button id="prim-overlay-close" variant="default" on_click={move || overlay_open.set(false)}>
+                                    "关闭"
+                                </Button>
+                            </VStack>
+                        </Rect>
+                    </Show>
+                </Reactive>
             </Portal>
         </VStack>
     }
@@ -1139,25 +1195,20 @@ fn main() {
                             <PrimitivesShowcase />
 
                             <VStack items="center" gap="1rem" p="1rem">
-                                <Button variant="secondary" on_click={move || show_extra.set(!show_extra.get())}>
+                                <Button variant="secondary" on_click={move || show_extra.set(!show_extra.peek())}>
                                     { if show_extra.get() { "Hide Technical Details" } else { "Show Technical Details" } }
                                 </Button>
-
-                                { if show_extra.get() {
-                                    ui! {
-                                        <Rect bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
-                                            <VStack gap="0.5rem">
-                                                <Label font_weight="700">"Technical Stack:"</Label>
-                                                <Label>"• Layout: Taffy (Flexbox)"</Label>
-                                                <Label>"• Text: Glyphon (Cosmic-text wrapper)"</Label>
-                                                <Label>"• Rendering: WGPU (Direct GPU Instances)"</Label>
-                                                <Label>"• Reactivity: Signal-based fine-grained updates"</Label>
-                                            </VStack>
-                                        </Rect>
-                                    }
-                                } else {
-                                    rui::core::tree::Element::new()
-                                } }
+                                <Show when={show_extra.get()}>
+                                    <Rect bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
+                                        <VStack gap="0.5rem">
+                                            <Label font_weight="700">"Technical Stack:"</Label>
+                                            <Label>"• Layout: Taffy (Flexbox)"</Label>
+                                            <Label>"• Text: Glyphon (Cosmic-text wrapper)"</Label>
+                                            <Label>"• Rendering: WGPU (Direct GPU Instances)"</Label>
+                                            <Label>"• Reactivity: Signal-based fine-grained updates"</Label>
+                                        </VStack>
+                                    </Rect>
+                                </Show>
                             </VStack>
                         </VStack>
                     </VStack>

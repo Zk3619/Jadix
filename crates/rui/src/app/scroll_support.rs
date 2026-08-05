@@ -36,7 +36,9 @@ fn collect_descendant_extent(
         let is_nested_scroll_area = c
             .focus_id
             .as_deref()
-            .and_then(|fid| fid.strip_prefix(crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX))
+            .and_then(|fid| {
+                fid.strip_prefix(crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX)
+            })
             .is_some_and(|rest| rest != current_rest);
 
         if is_nested_scroll_area {
@@ -80,10 +82,11 @@ pub(super) fn collect_scroll_areas_at(
     let vy = b[1] - scroll_acc[1];
 
     // Clipping check: if we are outside current overflow container, do not search children.
-    if el.style.overflow.x != taffy::style::Overflow::Visible || el.style.overflow.y != taffy::style::Overflow::Visible {
-        if x < vx || x > vx + b[2] || y < vy || y > vy + b[3] {
-            return;
-        }
+    if (el.style.overflow.x != taffy::style::Overflow::Visible
+        || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
+    {
+        return;
     }
 
     let mut next_acc = scroll_acc;
@@ -99,10 +102,11 @@ pub(super) fn collect_scroll_areas_at(
     }
 
     if let Some(id) = el.focus_id.as_deref() {
-        if let Some(rest) = id.strip_prefix(crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX) {
+        if let Some(rest) = id.strip_prefix(crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX)
+        {
             let mut max_right = b[0] + b[2];
             let mut max_bottom = b[1] + b[3];
-            collect_descendant_extent(el, &mut max_right, &mut max_bottom, &rest);
+            collect_descendant_extent(el, &mut max_right, &mut max_bottom, rest);
             let content_w = (max_right - b[0]).max(b[2]);
             let content_h = (max_bottom - b[1]).max(b[3]);
             let max_x = (content_w - b[2]).max(0.0);
@@ -126,12 +130,11 @@ pub(super) fn collect_scroll_chain_at(
     let vy = b[1] - scroll_acc[1];
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible
+    if (el.style.overflow.x != taffy::style::Overflow::Visible
+        || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && !inside
     {
-        if !inside {
-            return false;
-        }
+        return false;
     }
 
     let mut next_acc = scroll_acc;
@@ -151,7 +154,7 @@ pub(super) fn collect_scroll_chain_at(
     }
 
     if let Some(id) = el.focus_id.as_deref() {
-        if let Some(rest) = id.strip_prefix(crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX)
+        if let Some(rest) = id.strip_prefix(crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX)
         {
             let mut max_right = b[0] + b[2];
             let mut max_bottom = b[1] + b[3];
@@ -182,12 +185,11 @@ pub(super) fn collect_scroll_rest_chain_at(
     let vy = b[1] - scroll_acc[1];
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible
+    if (el.style.overflow.x != taffy::style::Overflow::Visible
+        || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && !inside
     {
-        if !inside {
-            return false;
-        }
+        return false;
     }
 
     let mut next_acc = scroll_acc;
@@ -207,7 +209,7 @@ pub(super) fn collect_scroll_rest_chain_at(
     }
 
     if let Some(id) = el.focus_id.as_deref() {
-        if let Some(rest) = id.strip_prefix(crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX)
+        if let Some(rest) = id.strip_prefix(crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX)
         {
             out.push(rest.to_string());
         }
@@ -215,7 +217,6 @@ pub(super) fn collect_scroll_rest_chain_at(
 
     child_hit || inside
 }
-
 
 #[allow(dead_code)]
 pub(super) fn find_scroll_area_metrics_by_rest(
@@ -225,7 +226,7 @@ pub(super) fn find_scroll_area_metrics_by_rest(
     if el.focus_id.as_deref()
         == Some(&format!(
             "{}{}",
-            crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX,
+            crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX,
             rest
         ))
     {
@@ -253,11 +254,11 @@ pub(super) fn set_scroll_offset_with_behavior(
     target_y: f32,
     immediate: bool,
 ) {
-    let sx_key = crate::components::scroll_area::scroll_offset_x_signal_key(rest);
-    let sy_key = crate::components::scroll_area::scroll_offset_y_signal_key(rest);
-    let tx_key = crate::components::scroll_area::scroll_target_x_signal_key(rest);
-    let ty_key = crate::components::scroll_area::scroll_target_y_signal_key(rest);
-    let behavior_key = crate::components::scroll_area::scroll_behavior_signal_key(rest);
+    let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(rest);
+    let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(rest);
+    let tx_key = crate::core::scroll_viewport::scroll_target_x_signal_key(rest);
+    let ty_key = crate::core::scroll_viewport::scroll_target_y_signal_key(rest);
+    let behavior_key = crate::core::scroll_viewport::scroll_behavior_signal_key(rest);
 
     let sx = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32);
     let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
@@ -276,7 +277,9 @@ pub(super) fn set_scroll_offset_with_behavior(
 pub fn get_system_scroll_lines() -> f32 {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SystemParametersInfoW, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        };
         let mut lines: u32 = 3;
         unsafe {
             if SystemParametersInfoW(

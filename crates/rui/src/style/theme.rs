@@ -1,7 +1,17 @@
 //! 设计令牌与主题系统（ShadCN v4 风格 OKLCH → display sRGB）。
-use std::sync::OnceLock;
+//!
+//! 支持运行时浅色 / 深色切换；[`get_theme`] 读取当前主题，[`set_theme_mode`] 切换。
+
+use std::cell::RefCell;
 
 use super::color_space::oklch_to_display_srgba;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ThemeMode {
+    #[default]
+    Light,
+    Dark,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct DesignTokens {
@@ -24,14 +34,17 @@ pub struct DesignTokens {
     pub radius: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct Theme {
+    pub mode: ThemeMode,
     pub colors: DesignTokens,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
+impl Theme {
+    pub fn light() -> Self {
         // 与 shadcn-ui `apps/v4/app/globals.css` 中 `:root` 对齐（浅色）。
         Self {
+            mode: ThemeMode::Light,
             colors: DesignTokens {
                 background: oklch_to_display_srgba(1.0, 0.0, 0.0, 1.0),
                 foreground: oklch_to_display_srgba(0.145, 0.0, 0.0, 1.0),
@@ -52,10 +65,81 @@ impl Default for Theme {
             },
         }
     }
+
+    pub fn dark() -> Self {
+        // 与 shadcn-ui v4 `.dark` 对齐。
+        Self {
+            mode: ThemeMode::Dark,
+            colors: DesignTokens {
+                background: oklch_to_display_srgba(0.145, 0.0, 0.0, 1.0),
+                foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
+                primary: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
+                primary_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
+                secondary: oklch_to_display_srgba(0.269, 0.0, 0.0, 1.0),
+                secondary_foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
+                muted: oklch_to_display_srgba(0.269, 0.0, 0.0, 1.0),
+                muted_foreground: oklch_to_display_srgba(0.708, 0.0, 0.0, 1.0),
+                accent: oklch_to_display_srgba(0.269, 0.0, 0.0, 1.0),
+                accent_foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
+                destructive: oklch_to_display_srgba(0.704, 0.191, 22.216, 1.0),
+                destructive_foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
+                border: oklch_to_display_srgba(1.0, 0.0, 0.0, 0.1),
+                input: oklch_to_display_srgba(1.0, 0.0, 0.0, 0.15),
+                ring: oklch_to_display_srgba(0.556, 0.0, 0.0, 0.5),
+                radius: 0.625,
+            },
+        }
+    }
+
+    pub fn is_dark(&self) -> bool {
+        self.mode == ThemeMode::Dark
+    }
 }
 
-static CURRENT_THEME: OnceLock<Theme> = OnceLock::new();
+impl Default for Theme {
+    fn default() -> Self {
+        Self::light()
+    }
+}
 
-pub fn get_theme() -> &'static Theme {
-    CURRENT_THEME.get_or_init(Theme::default)
+thread_local! {
+    static CURRENT_THEME: RefCell<Theme> = RefCell::new(Theme::light());
+}
+
+/// Borrow the current theme for a short closure (avoids returning a dangling reference).
+pub fn with_theme<R>(f: impl FnOnce(&Theme) -> R) -> R {
+    CURRENT_THEME.with(|t| f(&t.borrow()))
+}
+
+/// Snapshot of the current theme (cheap: tokens are Copy-ish via Clone).
+pub fn get_theme() -> Theme {
+    CURRENT_THEME.with(|t| t.borrow().clone())
+}
+
+pub fn theme_mode() -> ThemeMode {
+    CURRENT_THEME.with(|t| t.borrow().mode)
+}
+
+pub fn is_dark_theme() -> bool {
+    CURRENT_THEME.with(|t| t.borrow().is_dark())
+}
+
+pub fn set_theme(theme: Theme) {
+    CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
+}
+
+pub fn set_theme_mode(mode: ThemeMode) {
+    set_theme(match mode {
+        ThemeMode::Light => Theme::light(),
+        ThemeMode::Dark => Theme::dark(),
+    });
+}
+
+pub fn toggle_theme_mode() -> ThemeMode {
+    let next = match theme_mode() {
+        ThemeMode::Light => ThemeMode::Dark,
+        ThemeMode::Dark => ThemeMode::Light,
+    };
+    set_theme_mode(next);
+    next
 }

@@ -5,17 +5,52 @@
 
 use taffy::prelude::TrackSizingFunction;
 
+use crate::core::scroll_viewport::maybe_activate_scroll_viewport;
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
 
 pub struct BoxBuilder {
     pub(crate) el: Element,
+    /// When set and overflow is `scroll`/`auto` on an axis, registers as a scroll viewport.
+    scroll_id: Option<String>,
+    scroll_behavior: String,
+    hover_mode: String,
+}
+
+impl Default for BoxBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BoxBuilder {
     pub fn new() -> Self {
         Self {
             el: Element::new(),
+            scroll_id: None,
+            scroll_behavior: "auto".to_string(),
+            hover_mode: "scrollbar".to_string(),
         }
+    }
+
+    /// Stable id for scroll viewport registration (`scroll:{id}`).
+    /// Also accepted as RSX `id` on Box / VStack / HStack / GStack / Rect.
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.scroll_id = Some(id.into());
+        self
+    }
+
+    pub fn scroll_id(self, id: impl Into<String>) -> Self {
+        self.id(id)
+    }
+
+    pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
+        self.scroll_behavior = mode.into();
+        self
+    }
+
+    pub fn hover_mode(mut self, mode: impl Into<String>) -> Self {
+        self.hover_mode = mode.into();
+        self
     }
 
     pub fn w(mut self, w: impl IntoDimension) -> Self {
@@ -267,7 +302,6 @@ impl BoxBuilder {
         self
     }
 
-
     pub fn flex_col(mut self) -> Self {
         self.el = self.el.flex_col();
         self
@@ -347,12 +381,16 @@ impl BoxBuilder {
     }
 
     pub fn absolute(mut self, abs: bool) -> Self {
-        if abs { self.el = self.el.absolute(); }
+        if abs {
+            self.el = self.el.absolute();
+        }
         self
     }
 
     pub fn relative(mut self, rel: bool) -> Self {
-        if rel { self.el = self.el.relative(); }
+        if rel {
+            self.el = self.el.relative();
+        }
         self
     }
 
@@ -539,7 +577,12 @@ impl BoxBuilder {
 
 impl From<BoxBuilder> for Element {
     fn from(builder: BoxBuilder) -> Self {
-        builder.el
+        maybe_activate_scroll_viewport(
+            builder.el,
+            builder.scroll_id.as_deref(),
+            &builder.scroll_behavior,
+            &builder.hover_mode,
+        )
     }
 }
 

@@ -54,7 +54,10 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_ws(&mut self) {
-        while self.peek().is_some_and(|b| (b as char).is_ascii_whitespace()) {
+        while self
+            .peek()
+            .is_some_and(|b| (b as char).is_ascii_whitespace())
+        {
             self.i += 1;
         }
     }
@@ -106,7 +109,9 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if c == b'"' {
-                let s = std::str::from_utf8(&self.src[start..self.i]).ok()?.to_string();
+                let s = std::str::from_utf8(&self.src[start..self.i])
+                    .ok()?
+                    .to_string();
                 self.i += 1;
                 return Some(s);
             }

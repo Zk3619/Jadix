@@ -4,8 +4,8 @@ use std::rc::{Rc, Weak};
 use crate::core::reactivity::{use_signal, Signal};
 
 thread_local! {
-    static ANIMATIONS: RefCell<Vec<Weak<RefCell<SpringState>>>> = RefCell::new(Vec::new());
-    static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = RefCell::new(Vec::new());
+    static ANIMATIONS: RefCell<Vec<Weak<RefCell<SpringState>>>> = const { RefCell::new(Vec::new()) };
+    static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct SpringState {
@@ -233,7 +233,8 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
 
                 // 用积分后的状态判断 settle，避免旧位移 + 新速度混用导致长期微振、scrollbar_overlay 误报。
                 let disp_after = s.current - s.target;
-                if disp_after.abs() < SPRING_SETTLE_POS_EPS && s.velocity.abs() < SPRING_SETTLE_VEL_EPS
+                if disp_after.abs() < SPRING_SETTLE_POS_EPS
+                    && s.velocity.abs() < SPRING_SETTLE_VEL_EPS
                 {
                     s.current = s.target;
                     s.velocity = 0.0;
@@ -250,7 +251,7 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
                     }
                 }
 
-                signals_to_update.push((s.signal.clone(), s.current));
+                signals_to_update.push((s.signal, s.current));
                 i += 1;
             } else {
                 list.remove(i);
@@ -281,7 +282,7 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
                     } else {
                         cubic_running = true;
                     }
-                    cubic_updates.push((s.signal.clone(), s.value));
+                    cubic_updates.push((s.signal, s.value));
                 }
                 i += 1;
             } else {

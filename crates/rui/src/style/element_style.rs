@@ -36,10 +36,18 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
         return raw.trim().parse::<f32>().ok();
     }
     if let Some(raw) = t.strip_suffix("rem") {
-        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+        return raw
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * root_font_size_px);
     }
     if let Some(raw) = t.strip_suffix("em") {
-        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+        return raw
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * root_font_size_px);
     }
     None
 }
@@ -80,7 +88,7 @@ pub fn parse_box_shadow(s: impl AsRef<str>) -> BoxShadow {
     // - 2 lengths => offset-x/offset-y
     // - 3 lengths => + blur (negative not allowed → 0)
     // - 4 lengths => + spread (can be negative)
-    if lens.len() >= 1 {
+    if !lens.is_empty() {
         out.offset[0] = lens[0];
     }
     if lens.len() >= 2 {
@@ -125,16 +133,11 @@ mod tests {
         approx_eq(sh.spread, 2.0);
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineStyle {
+    #[default]
     None,
     Solid,
-}
-
-impl Default for LineStyle {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl LineStyle {
@@ -208,6 +211,10 @@ pub struct Style {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_inset: bool,
+    /// Element opacity multiplier for drawn colors (layout unchanged).
+    pub opacity: f32,
+    /// Visual translate offset in logical px (MVP transform; does not affect layout).
+    pub translate: [f32; 2],
 }
 
 impl Default for Style {
@@ -273,6 +280,8 @@ impl Default for Style {
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_inset: false,
+            opacity: 1.0,
+            translate: [0.0, 0.0],
         }
     }
 }

@@ -3,6 +3,7 @@
 //! 对齐 solid-ui / Kobalte **ToggleGroup**：一组两态按钮。
 //! - `multiple=false`（默认）：单选，值 `Signal<String>`（空串表示未选）
 //! - `multiple=true`：多选，值用 `Signal<Vec<String>>`
+//! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //!
 //! ## 用法
 //! ```ignore
@@ -103,15 +104,11 @@ impl ToggleGroupBuilder {
     }
 }
 
-fn item_el(
-    group_id: &str,
-    value: &str,
-    label: &str,
+fn toggle_chip_colors(
     pressed: bool,
     disabled: bool,
     outline: bool,
-    on_click: impl FnMut() + 'static,
-) -> Element {
+) -> ([f32; 4], [f32; 4], [u8; 4]) {
     let mut bg = if pressed {
         parse_color("accent")
     } else {
@@ -132,6 +129,19 @@ fn item_el(
         border[3] *= 0.5;
         fg[3] = (fg[3] as f32 * 0.5) as u8;
     }
+    (bg, border, fg)
+}
+
+fn item_el(
+    group_id: &str,
+    value: &str,
+    label: &str,
+    pressed: bool,
+    disabled: bool,
+    outline: bool,
+    on_click: impl FnMut() + 'static,
+) -> Element {
+    let (bg, border, fg) = toggle_chip_colors(pressed, disabled, outline);
     let mut chip: Element = r#box()
         .px("0.75rem")
         .py("0.375rem")
@@ -168,6 +178,11 @@ impl From<ToggleGroupBuilder> for Element {
         let disabled = builder.disabled;
         let group_id = builder.id.clone();
         let multiple = builder.multiple;
+        let option_values: Vec<String> = builder
+            .options
+            .iter()
+            .map(|(value, _)| value.clone())
+            .collect();
 
         let mut row: Element = hstack().gap("0.25rem").items_center().into();
 
@@ -176,8 +191,9 @@ impl From<ToggleGroupBuilder> for Element {
             let sig = builder
                 .value_multi
                 .unwrap_or_else(|| use_signal(scope.as_str(), Vec::new));
+            let selected = sig.peek();
             for (val, label) in builder.options {
-                let pressed = sig.get().iter().any(|v| v == &val);
+                let pressed = selected.iter().any(|v| v == &val);
                 let sig_c = sig;
                 let v_c = val.clone();
                 row = row.child(item_el(
@@ -201,13 +217,19 @@ impl From<ToggleGroupBuilder> for Element {
                     },
                 ));
             }
+            let sync_sig = sig;
+            row = row.reactive_sync(move |root, _layout_tree| {
+                sync_toggle_group_pressed(root, &option_values, outline, disabled, |value| {
+                    sync_sig.peek().iter().any(|v| v == value)
+                })
+            });
         } else {
             let scope = format!("{}__tg", builder.id);
             let default = builder.default_value.clone();
             let sig = builder
                 .value_single
                 .unwrap_or_else(|| use_signal(scope.as_str(), || default));
-            let current = sig.get();
+            let current = sig.peek();
             for (val, label) in builder.options {
                 let pressed = current == val;
                 let sig_c = sig;
@@ -231,9 +253,53 @@ impl From<ToggleGroupBuilder> for Element {
                     },
                 ));
             }
+            let sync_sig = sig;
+            row = row.reactive_sync(move |root, _layout_tree| {
+                let current = sync_sig.peek();
+                sync_toggle_group_pressed(root, &option_values, outline, disabled, |value| {
+                    current == *value
+                })
+            });
         }
 
         row.template_id = Some(builder.id);
         row
+    }
+}
+
+fn sync_toggle_group_pressed(
+    root: &mut Element,
+    option_values: &[String],
+    outline: bool,
+    disabled: bool,
+    mut is_pressed: impl FnMut(&str) -> bool,
+) -> crate::core::tree::LayoutStatus {
+    let mut changed = false;
+    for (option, value) in root.children.iter_mut().zip(option_values.iter()) {
+        let pressed = is_pressed(value.as_str());
+        let (want_bg, want_border, want_fg) = toggle_chip_colors(pressed, disabled, outline);
+        if option.style.bg_color != want_bg {
+            option.style.bg_color = want_bg;
+            changed = true;
+        }
+        if option.style.border_color != want_border {
+            option.style.border_color = want_border;
+            changed = true;
+        }
+        if option.style.border_width != if outline { 1.0 } else { 0.0 } {
+            option.style.border_width = if outline { 1.0 } else { 0.0 };
+            changed = true;
+        }
+        if let Some(label) = option.children.get_mut(0) {
+            if label.text_style.color != want_fg {
+                label.text_style.color = want_fg;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        crate::core::tree::LayoutStatus::StyleChanged
+    } else {
+        crate::core::tree::LayoutStatus::Clean
     }
 }

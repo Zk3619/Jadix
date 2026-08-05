@@ -1,8 +1,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
+use syn::visit::Visit;
 use syn::{Expr, Ident, Token, braced};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
@@ -42,7 +43,10 @@ impl Parse for RsxNode {
 
         if input.peek(syn::LitStr) {
             let lit: syn::LitStr = input.parse()?;
-            let expr = syn::Expr::Lit(syn::ExprLit { attrs: Vec::new(), lit: syn::Lit::Str(lit) });
+            let expr = syn::Expr::Lit(syn::ExprLit {
+                attrs: Vec::new(),
+                lit: syn::Lit::Str(lit),
+            });
             return Ok(RsxNode::Expr(expr));
         }
 
@@ -53,28 +57,44 @@ impl Parse for RsxNode {
         let mut attributes = Vec::new();
         while !input.peek(Token![>]) && !input.peek(Token![/]) {
             let attr_name: Ident = if input.peek(Token![in]) {
-                input.parse::<Token![in]>()
-                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at keyword attr_name {}", e)))?;
+                input.parse::<Token![in]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at keyword attr_name {}", e))
+                })?;
                 syn::Ident::new("in", proc_macro2::Span::call_site())
             } else if input.peek(Token![type]) {
                 // HTML-like `type="password"`；`type` 是关键字，需单独吃掉 token。
-                input.parse::<Token![type]>()
-                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at keyword attr type: {}", e)))?;
+                input.parse::<Token![type]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at keyword attr type: {}", e))
+                })?;
                 syn::Ident::new("type", proc_macro2::Span::call_site())
             } else {
-                input.parse().map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?
+                input
+                    .parse()
+                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?
             };
-            input.parse::<Token![=]>().map_err(|e| syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name)))?;
-            
+            input.parse::<Token![=]>().map_err(|e| {
+                syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name))
+            })?;
+
             let attr_value: Expr = if input.peek(syn::token::Brace) {
                 let content;
                 braced!(content in input);
-                content.parse().map_err(|e| syn::Error::new(e.span(), format!("Failed to parse braced attribute '{}': {}", attr_name, e)))?
+                content.parse().map_err(|e| {
+                    syn::Error::new(
+                        e.span(),
+                        format!("Failed to parse braced attribute '{}': {}", attr_name, e),
+                    )
+                })?
             } else {
-                let lit: syn::Lit = input.parse().map_err(|e| syn::Error::new(e.span(), format!("Expected literal: {}", e)))?;
-                syn::Expr::Lit(syn::ExprLit { attrs: Vec::new(), lit })
+                let lit: syn::Lit = input
+                    .parse()
+                    .map_err(|e| syn::Error::new(e.span(), format!("Expected literal: {}", e)))?;
+                syn::Expr::Lit(syn::ExprLit {
+                    attrs: Vec::new(),
+                    lit,
+                })
             };
-            
+
             attributes.push((attr_name, attr_value));
         }
 
@@ -93,24 +113,34 @@ impl Parse for RsxNode {
                 if input.is_empty() {
                     break;
                 }
-                
+
                 let fork = input.fork();
-                if fork.parse::<Token![<]>().is_ok() {
-                    if fork.parse::<Token![/]>().is_ok() {
-                        break;
-                    }
+                if fork.parse::<Token![<]>().is_ok() && fork.parse::<Token![/]>().is_ok() {
+                    break;
                 }
-                children.push(input.parse::<RsxNode>().map_err(|e| syn::Error::new(e.span(), format!("Failed at child: {}", e)))?);
+                children.push(
+                    input.parse::<RsxNode>().map_err(|e| {
+                        syn::Error::new(e.span(), format!("Failed at child: {}", e))
+                    })?,
+                );
             }
 
             // Close tag: `</Name>`
-            input.parse::<Token![<]>().map_err(|e| syn::Error::new(e.span(), "Expected < for close tag"))?;
-            input.parse::<Token![/]>().map_err(|e| syn::Error::new(e.span(), "Expected / for close tag"))?;
-            let close_name: Ident = input.parse().map_err(|e| syn::Error::new(e.span(), "Expected identifier for close tag"))?;
+            input
+                .parse::<Token![<]>()
+                .map_err(|e| syn::Error::new(e.span(), "Expected < for close tag"))?;
+            input
+                .parse::<Token![/]>()
+                .map_err(|e| syn::Error::new(e.span(), "Expected / for close tag"))?;
+            let close_name: Ident = input
+                .parse()
+                .map_err(|e| syn::Error::new(e.span(), "Expected identifier for close tag"))?;
             if close_name != name {
                 return Err(syn::Error::new(close_name.span(), "Tag name mismatch"));
             }
-            input.parse::<Token![>]>().map_err(|e| syn::Error::new(e.span(), "Expected > for close tag"))?;
+            input
+                .parse::<Token![>]>()
+                .map_err(|e| syn::Error::new(e.span(), "Expected > for close tag"))?;
         }
 
         Ok(RsxNode::Element(RsxElement {
@@ -121,7 +151,7 @@ impl Parse for RsxNode {
     }
 }
 
-/// A procedural macro that parses an HTML-like block (RSX) and converts it 
+/// A procedural macro that parses an HTML-like block (RSX) and converts it
 /// into `rui::core::tree::Element` builder calls.
 #[proc_macro]
 pub fn ui(input: TokenStream) -> TokenStream {
@@ -130,9 +160,10 @@ pub fn ui(input: TokenStream) -> TokenStream {
     match syn::parse::<RsxNode>(input) {
         Ok(root) => {
             let mut node_counter = 0usize;
-            let expanded = expand_node(&root, &mut node_counter);
-            let template_hash_lit = syn::LitStr::new(&template_hash, proc_macro2::Span::call_site());
-            
+            let expanded = expand_node(&root, &mut node_counter, false);
+            let template_hash_lit =
+                syn::LitStr::new(&template_hash, proc_macro2::Span::call_site());
+
             quote! {
                 {
                     let __rui_root: rui::core::tree::Element = (#expanded).into();
@@ -142,77 +173,142 @@ pub fn ui(input: TokenStream) -> TokenStream {
                 }
             }.into()
         }
-        Err(err) => {
-            let e = err.to_string();
-            quote! { compile_error!(#e) }.into()
-        }
+        Err(err) => err.to_compile_error().into(),
     }
 }
 
 /// A marker attribute for functional components.
 /// It automatically generates a Props struct based on the function arguments.
+///
+/// `#[component(reactive)]` wraps the body in [`reactive_component`] (requires `id: String`).
+///
+/// Field-level Solid alignment:
+/// - `Signal` / closure / `Element` props are **excluded** from the PartialEq snapshot (static
+///   props only trigger subtree refresh).
+/// - The component effect uses [`isolate_reads`] so naked `signal.get()` in the body does **not**
+///   re-subscribe the component boundary; prefer `ui!` auto `bind_*` / `<Show>` / `<For>` for
+///   field updates.
 #[proc_macro_attribute]
 pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemFn);
     let vis = &input.vis;
     let name = &input.sig.ident;
+    let generics = &input.sig.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let fn_docs: Vec<_> = input
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect();
     let props_name = syn::Ident::new(&format!("{}Props", name), name.span());
+    let snapshot_name = syn::Ident::new(&format!("__{name}ReactiveSnapshot"), name.span());
 
     let mut fields = Vec::new();
     let mut field_names = Vec::new();
     let mut field_unwrapping = Vec::new();
+    let mut snapshot_fields = Vec::new();
+    let mut snapshot_inits = Vec::new();
+    let mut snapshot_assigns = Vec::new();
     let mut has_base_builder_arg = false;
+    let mut has_id_arg = false;
 
+    let mut reactive = false;
     let mut crate_path = quote! { rui };
-    let attr_str = _attr.to_string();
-    if attr_str.contains("crate_path") {
-        if let Ok(meta) = syn::parse::<syn::Meta>(_attr) {
-            if let syn::Meta::NameValue(nv) = meta {
-                if nv.path.is_ident("crate_path") {
-                    if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = nv.value {
-                        let path: syn::Path = s.parse().unwrap();
-                        crate_path = quote! { #path };
-                    }
-                }
+    if !_attr.is_empty() {
+        let attr_parser = syn::meta::parser(|meta| {
+            if meta.path.is_ident("reactive") {
+                reactive = true;
+                Ok(())
+            } else if meta.path.is_ident("crate_path") {
+                let value = meta.value()?;
+                let s: syn::LitStr = value.parse()?;
+                let path: syn::Path = s.parse()?;
+                crate_path = quote! { #path };
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "unsupported #[component] attribute; expected `reactive` or `crate_path = \"...\"`",
+                ))
             }
-        }
+        });
+        syn::parse_macro_input!(_attr with attr_parser);
     }
 
     for arg in &input.sig.inputs {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                let name = &pat_ident.ident;
-                let ty = &pat_type.ty;
-                let name_str = name.to_string();
-                let ty_str = quote!(#ty).to_string();
-                let is_already_option = ty_str.starts_with("Option");
-                if name_str == "base_builder" {
-                    has_base_builder_arg = true;
-                }
-                
-                field_names.push(name.clone());
-                
-                if name_str == "id" {
-                    // id is always a String, never optional
-                    fields.push(quote! { pub #name: String });
-                    field_unwrapping.push(quote! { let #name = #name; });
-                } else if is_already_option {
-                    // Already Option<T>, keep as-is
-                    fields.push(quote! { pub #name: #ty });
-                    let mut_tok = if pat_ident.mutability.is_some() { quote! { mut } } else { quote! {} };
-                    field_unwrapping.push(quote! { let #mut_tok #name = #name; });
+        if let syn::FnArg::Typed(pat_type) = arg
+            && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+        {
+            let name = &pat_ident.ident;
+            let ty = &pat_type.ty;
+            let name_str = name.to_string();
+            let ty_str = quote!(#ty).to_string();
+            let is_already_option = ty_str.starts_with("Option");
+            let arg_docs: Vec<_> = pat_type
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("doc"))
+                .collect();
+            if name_str == "base_builder" {
+                has_base_builder_arg = true;
+            }
+            if name_str == "id" {
+                has_id_arg = true;
+            }
+
+            field_names.push(name.clone());
+
+            if name_str == "id" {
+                fields.push(quote! { #(#arg_docs)* pub #name: String });
+                field_unwrapping.push(quote! { let #name = #name; });
+            } else if is_already_option {
+                fields.push(quote! { #(#arg_docs)* pub #name: #ty });
+                let mut_tok = if pat_ident.mutability.is_some() {
+                    quote! { mut }
                 } else {
-                    // Wrap in Option<T>
-                    fields.push(quote! { pub #name: Option<#ty> });
-                    let mut_tok = if pat_ident.mutability.is_some() { quote! { mut } } else { quote! {} };
-                    field_unwrapping.push(quote! { let #mut_tok #name = #name.unwrap_or_default(); });
-                }
+                    quote! {}
+                };
+                field_unwrapping.push(quote! { let #mut_tok #name = #name; });
+            } else if ty_str.contains("Signal") {
+                // Solid getter-props: required Signal props (no Default). Missing → panic with name.
+                fields.push(quote! { #(#arg_docs)* pub #name: Option<#ty> });
+                let mut_tok = if pat_ident.mutability.is_some() {
+                    quote! { mut }
+                } else {
+                    quote! {}
+                };
+                let missing = format!("missing required Signal prop `{name_str}`");
+                field_unwrapping.push(quote! {
+                    let #mut_tok #name = #name.expect(#missing);
+                });
+            } else {
+                fields.push(quote! { #(#arg_docs)* pub #name: Option<#ty> });
+                let mut_tok = if pat_ident.mutability.is_some() {
+                    quote! { mut }
+                } else {
+                    quote! {}
+                };
+                field_unwrapping.push(quote! { let #mut_tok #name = #name.unwrap_or_default(); });
+            }
+
+            if reactive && !reactive_snapshot_skip(&name_str, &ty_str) {
+                // After field unwrapping, non-Option params become T; Option params stay Option<T>.
+                let snapshot_ty = quote! { #ty };
+                snapshot_fields.push(quote! { #name: #snapshot_ty });
+                snapshot_inits.push(quote! { #name: #name.clone() });
+                snapshot_assigns.push(quote! { let #name = __snap.#name.clone(); });
             }
         }
     }
 
+    if reactive && !has_id_arg {
+        return quote! {
+            compile_error!("#[component(reactive)] requires an `id: String` parameter")
+        }
+        .into();
+    }
+
     // Add children if not present
-    if !field_names.iter().any(|n| n.to_string() == "children") {
+    if !field_names.iter().any(|n| *n == "children") {
         fields.push(quote! { pub children: Option<#crate_path::core::tree::Element> });
         field_names.push(syn::Ident::new("children", proc_macro2::Span::call_site()));
         field_unwrapping.push(quote! { let children = children; });
@@ -221,7 +317,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // Add base prop for styling/layout
     fields.push(quote! { pub base: Option<Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>> });
     field_names.push(syn::Ident::new("base", proc_macro2::Span::call_site()));
-    field_unwrapping.push(quote! { let base = base; });
+    field_unwrapping.push(quote! { let mut base = base; });
 
     let body = &input.block;
 
@@ -251,15 +347,35 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    let expanded = quote! {
-        #[derive(Default)]
-        #vis struct #props_name {
-            #(#fields),*
+    let fn_body = if reactive {
+        quote! {
+            #(#field_unwrapping)*
+            #crate_path::app::reactive::stash_component_children(&id, children);
+            #[derive(Clone, PartialEq)]
+            struct #snapshot_name #impl_generics #where_clause {
+                #(#snapshot_fields),*
+            }
+            let __snapshot = #snapshot_name {
+                #(#snapshot_inits),*
+            };
+            #crate_path::app::reactive::reactive_component(
+                format!("{id}__component"),
+                __snapshot,
+                move |__snap| {
+                    #(#snapshot_assigns)*
+                    let children = #crate_path::app::reactive::take_component_children(&id);
+                    #merge_base_stmt
+                    let mut __el = { #body };
+                    if let Some(base_fn) = base.take() {
+                        let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                        __el = base_fn(builder).el;
+                    }
+                    __el
+                },
+            )
         }
-
-        #vis fn #name(props: #props_name) -> #crate_path::core::tree::Element {
-            #vis use #props_name;
-            let #props_name { #(#field_names),* } = props;
+    } else {
+        quote! {
             #(#field_unwrapping)*
             #merge_base_stmt
             let mut __el = { #body };
@@ -268,7 +384,37 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
+    let expanded = quote! {
+        #(#fn_docs)*
+        #[derive(Default)]
+        #vis struct #props_name #impl_generics #where_clause {
+            #(#fields),*
+        }
+
+        #(#fn_docs)*
+        #vis fn #name #impl_generics (props: #props_name #ty_generics) -> #crate_path::core::tree::Element
+        #where_clause
+        {
+            #vis use #props_name;
+            let #props_name { #(#field_names),* } = props;
+            #fn_body
+        }
+    };
+
     expanded.into()
+}
+
+fn reactive_snapshot_skip(name: &str, ty_str: &str) -> bool {
+    if matches!(name, "id" | "children" | "base" | "base_builder") {
+        return true;
+    }
+    ty_str.contains("Signal")
+        || ty_str.contains("Element")
+        || ty_str.contains("Box<dyn")
+        || ty_str.contains("FnOnce")
+        || ty_str.contains("FnMut")
+        || ty_str.contains("Fn(")
+        || ty_str.contains("Handler")
 }
 
 fn normalize_template_source(source: &str) -> String {
@@ -301,15 +447,81 @@ fn stable_template_hash(source: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenStream {
+/// Best-effort AST heuristic for Solid-style signal reads.
+///
+/// Tightened vs a bare zero-arg `.get()` scan:
+/// - receiver must be a path / field / index / paren / reference chain (not a call result);
+/// - also treats `.get_untracked()` as non-subscribing (ignored);
+/// - ignores `.get(...)` with arguments (e.g. `HashMap::get`).
+fn expr_reads_get(expr: &Expr) -> bool {
+    struct Finder {
+        found: bool,
+    }
+    impl Finder {
+        fn receiver_ok(expr: &Expr) -> bool {
+            match expr {
+                Expr::Path(_) | Expr::Field(_) | Expr::Index(_) => true,
+                Expr::Paren(p) => Self::receiver_ok(&p.expr),
+                Expr::Group(g) => Self::receiver_ok(&g.expr),
+                Expr::Reference(r) => Self::receiver_ok(&r.expr),
+                Expr::Try(t) => Self::receiver_ok(&t.expr),
+                Expr::MethodCall(m) => {
+                    // Allow chains like `self.count.get()` / `state.foo.get()`.
+                    Self::receiver_ok(&m.receiver)
+                }
+                _ => false,
+            }
+        }
+    }
+    impl Visit<'_> for Finder {
+        fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
+            if self.found {
+                return;
+            }
+            if node.method == "get" && node.args.is_empty() && Self::receiver_ok(&node.receiver) {
+                self.found = true;
+                return;
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+    }
+    let mut finder = Finder { found: false };
+    finder.visit_expr(expr);
+    finder.found
+}
+
+fn expand_node(
+    node: &RsxNode,
+    node_counter: &mut usize,
+    in_reactive_boundary: bool,
+) -> proc_macro2::TokenStream {
     match node {
         RsxNode::Expr(expr) => {
-            // Usually an expression child evaluates to something that can be added to the tree
+            // Solid-style: dynamic text children that read `.get()` become in-place bindings
+            // instead of subscribing the surrounding (often root) effect.
+            if !in_reactive_boundary && expr_reads_get(expr) {
+                let idx = *node_counter;
+                *node_counter += 1;
+                return quote! {
+                    rui::app::reactive::bind_text(
+                        format!("{}:{}:bind#{}", file!(), line!(), #idx),
+                        move || {
+                            let __rui_text = #expr;
+                            __rui_text.to_string()
+                        },
+                    )
+                };
+            }
             quote! { #expr }
         }
         RsxNode::Element(el) => {
             let name_str = el.name.to_string();
-            if name_str == "Reactive" || name_str == "Show" || name_str == "Popover" || name_str == "ForKeyed" || name_str == "For" {
+            if name_str == "Reactive"
+                || name_str == "Show"
+                || name_str == "Popover"
+                || name_str == "ForKeyed"
+                || name_str == "For"
+            {
                 let get_attr = |name: &str| -> Option<&Expr> {
                     el.attributes
                         .iter()
@@ -323,7 +535,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     };
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter));
+                        expanded_children.push(expand_node(child, node_counter, true));
                     }
                     let child_el = if expanded_children.is_empty() {
                         quote! { rui::core::tree::Element::new() }
@@ -354,7 +566,11 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     };
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter));
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
                     }
                     let child_el = if expanded_children.is_empty() {
                         quote! { rui::core::tree::Element::new() }
@@ -376,6 +592,16 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     };
                     let idx = *node_counter;
                     *node_counter += 1;
+                    // Solid-style: when `when` reads `.get()`, subscribe in a dedicated reactive_view.
+                    if expr_reads_get(when_expr) {
+                        return quote! {
+                            rui::app::reactive::show_reactive(
+                                format!("{}:{}:Show#{}", file!(), line!(), #idx),
+                                move || { #when_expr },
+                                move || { #child_el },
+                            )
+                        };
+                    }
                     return quote! {
                         rui::app::reactive::show_scoped(
                             format!("{}:{}:Show#{}", file!(), line!(), #idx),
@@ -391,7 +617,8 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     };
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter));
+                        // Body is rendered inside Popover's reactive_view effect.
+                        expanded_children.push(expand_node(child, node_counter, true));
                     }
                     let child_el = if expanded_children.is_empty() {
                         quote! { rui::core::tree::Element::new() }
@@ -413,7 +640,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     };
                     return quote! {
                         rui::core::tree::Element::from(
-                            rui::components::popover_panel(#open_expr).child(#child_el)
+                            rui::components::popover_panel(#open_expr).child(move || #child_el)
                         )
                     };
                 }
@@ -426,7 +653,9 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     *node_counter += 1;
                     quote! { format!("{}:{}:For#{}", file!(), line!(), #idx) }
                 };
-                let each_expr_opt = get_attr("each").or_else(|| get_attr("of")).or_else(|| get_attr("in"));
+                let each_expr_opt = get_attr("each")
+                    .or_else(|| get_attr("of"))
+                    .or_else(|| get_attr("in"));
                 let Some(each_expr) = each_expr_opt else {
                     return quote! { compile_error!("<For>/<ForKeyed> requires `each={...}` (or `in={...}` / `of={...}`) attribute"); };
                 };
@@ -450,7 +679,11 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 let render_ts = if let Some(item_ident) = item_ident_for_render {
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter));
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
                     }
                     let child_el = if expanded_children.is_empty() {
                         quote! { rui::core::tree::Element::new() }
@@ -488,6 +721,35 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     }
                 };
 
+                let each_is_reactive = expr_reads_get(each_expr);
+                let items_scope_ts = if each_is_reactive {
+                    quote! { format!("{}:items", #scope_ts) }
+                } else {
+                    quote! { #scope_ts }
+                };
+                let emit_for =
+                    |base: proc_macro2::TokenStream, fallback: Option<proc_macro2::TokenStream>| {
+                        let list_body = if let Some(fallback_ts) = fallback {
+                            quote! {{
+                                use rui::core::tree::IntoElementList;
+                                let __out = #base;
+                                if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
+                            }}
+                        } else {
+                            quote! {{ #base }}
+                        };
+                        if each_is_reactive {
+                            quote! {
+                                rui::app::reactive::for_reactive(
+                                    #scope_ts,
+                                    move || #list_body,
+                                )
+                            }
+                        } else {
+                            list_body
+                        }
+                    };
+
                 if let Some(key_ts) = maybe_key_ts {
                     if let Some(item_ident) = maybe_item_ident
                         .as_ref()
@@ -497,7 +759,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     {
                         let base = quote! {
                             rui::app::reactive::for_keyed_iter(
-                                #scope_ts,
+                                #items_scope_ts,
                                 #each_expr,
                                 |__rui_for_item| {
                                     let #item_ident = __rui_for_item;
@@ -506,47 +768,51 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 #render_ts,
                             )
                         };
-                        if let Some(fallback_ts) = maybe_fallback_ts.clone() {
-                            return quote! {{
-                                use rui::core::tree::IntoElementList;
-                                let __out = #base;
-                                if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
-                            }};
-                        }
-                        return quote! {{ #base }};
+                        return emit_for(base, maybe_fallback_ts.clone());
                     } else {
-                        let base = quote! { rui::app::reactive::for_keyed_iter(#scope_ts, #each_expr, #key_ts, #render_ts) };
-                        if let Some(fallback_ts) = maybe_fallback_ts.clone() {
-                            return quote! {{
-                                use rui::core::tree::IntoElementList;
-                                let __out = #base;
-                                if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
-                            }};
-                        }
-                        return quote! {{ #base }};
+                        let base = quote! {
+                            rui::app::reactive::for_keyed_iter(
+                                #items_scope_ts,
+                                #each_expr,
+                                #key_ts,
+                                #render_ts,
+                            )
+                        };
+                        return emit_for(base, maybe_fallback_ts.clone());
                     }
                 } else {
-                    let base = quote! { rui::app::reactive::for_each_iter(#scope_ts, #each_expr, #render_ts) };
-                    if let Some(fallback_ts) = maybe_fallback_ts {
-                        return quote! {{
-                            use rui::core::tree::IntoElementList;
-                            let __out = #base;
-                            if __out.is_empty() { (#fallback_ts).into_element_list() } else { __out }
-                        }};
-                    }
-                    return quote! {{ #base }};
+                    let base = quote! {
+                        rui::app::reactive::for_each_iter(
+                            #items_scope_ts,
+                            #each_expr,
+                            #render_ts,
+                        )
+                    };
+                    return emit_for(base, maybe_fallback_ts);
                 }
             }
-            let is_custom = name_str.chars().next().map_or(false, |c| c.is_uppercase()) 
-                && !["VStack", "HStack", "GStack", "Grid", "Rect", "Icon", "Box", "Text", "Interactive"].contains(&name_str.as_str());
+            let is_custom = name_str.chars().next().is_some_and(|c| c.is_uppercase())
+                && ![
+                    "VStack",
+                    "HStack",
+                    "GStack",
+                    "Grid",
+                    "Rect",
+                    "Icon",
+                    "Box",
+                    "Text",
+                    "Interactive",
+                ]
+                .contains(&name_str.as_str());
 
             let mut element = if is_custom {
                 let name_ident = &el.name;
                 let props_ident = syn::Ident::new(&format!("{}Props", name_str), name_ident.span());
-                
+
                 let mut prop_names = Vec::new();
                 let mut prop_values = Vec::new();
                 let mut base_calls = Vec::new();
+                let mut chrome_binds: Vec<proc_macro2::TokenStream> = Vec::new();
 
                 for (attr, value) in &el.attributes {
                     let attr_str = attr.to_string();
@@ -554,43 +820,294 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     if attr_name.starts_with("el.") {
                         attr_name = &attr_name[3..];
                     }
-                    
-                    let is_base = match attr_name {
-                        "w" | "width" | "max_w" | "maxWidth" | "max_width" | "min_w" | "minWidth" | "min_width" |
-                        "h" | "height" | "max_h" | "maxHeight" | "max_height" | "min_h" | "minHeight" | "min_height" |
-                        "p" | "padding" | "mx" | "my" | "px" | "py" | "pt" | "pr" | "pb" | "pl" | "mt" | "mr" | "mb" | "ml" |
-                        "rounded" | "bg" | "color" | "text_color" | "font_weight" | "text_weight" |
-                        "flex_grow" | "flex_shrink" | "grow" | "shrink" | "flex_basis" | "absolute" | "relative" | "top" | "right" | "bottom" | "left" | "inset" | "z_index" |
-                        "cols" | "grid_cols" | "rows" | "grid_rows" | "col_span" | "grid_column_span" | "row_span" | "grid_row_span" | "align_self" |
-                        "text_size" | "leading" | "text_leading" | "line_height" | "lineHeight" | "underline" | 
-                        "text_decoration" | "textDecoration" |
-                        "text_decoration_line" | "textDecorationLine" |
-                        "text_decoration_style" | "textDecorationStyle" |
-                        "text_decoration_color" | "textDecorationColor" |
-                        "text_decoration_thickness" | "textDecorationThickness" |
-                        "items" | "wrap" | "gap" |
-                        "border_style" | "borderStyle" | "border_color" | "borderColor" | "border_width" | "borderWidth" |
-                        "outline_style" | "outlineStyle" | "outline_color" | "outlineColor" | "outline_width" | "outlineWidth" |
-                        "shadow" | "box_shadow" | "boxShadow" | "box-shadow" |
-                        "box_shadow_color" | "boxShadowColor" | "box_shadow_blur" | "boxShadowBlur" |
-                        "box_shadow_offset_x" | "boxShadowOffsetX" | "box_shadow_offset_y" | "boxShadowOffsetY" |
-                        "box_shadow_spread" | "boxShadowSpread" | "box_shadow_inset" | "boxShadowInset" |
-                        "text_shadow" | "textShadow" | "text-shadow" |
-                        "text_shadow_color" | "textShadowColor" | "text_shadow_blur" | "textShadowBlur" |
-                        "text_shadow_offset_x" | "textShadowOffsetX" | "text_shadow_offset_y" | "textShadowOffsetY" |
-                        "text_align" |
-                        "class" | "className" | "tw" | "uno" => true,
-                        _ => false,
-                    };
+
+                    // Button / Input chrome attrs → bind_attr (Solid-style, no rebuild).
+                    if !in_reactive_boundary
+                        && matches!(name_str.as_str(), "Button" | "Input")
+                        && matches!(attr_name, "variant" | "disabled" | "invalid")
+                        && expr_reads_get(value)
+                    {
+                        let idx = *node_counter;
+                        *node_counter += 1;
+                        if name_str == "Button" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_btn_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_button_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Button" && attr_name == "disabled" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| #value))
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_btn_disabled#{}", file!(), line!(), #idx),
+                                    move || #value,
+                                    |el, d| rui::components::apply_bound_button_disabled(el, d),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Input" && attr_name == "invalid" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| #value))
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_input_invalid#{}", file!(), line!(), #idx),
+                                    move || #value,
+                                    |el, v| rui::components::apply_bound_input_invalid(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Input" && attr_name == "disabled" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| #value))
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_input_disabled#{}", file!(), line!(), #idx),
+                                    move || #value,
+                                    |el, d| rui::components::apply_bound_input_disabled(el, d),
+                                );
+                            });
+                            continue;
+                        }
+                    }
+
+                    let is_base = matches!(
+                        attr_name,
+                        "w" | "width"
+                            | "max_w"
+                            | "maxWidth"
+                            | "max_width"
+                            | "min_w"
+                            | "minWidth"
+                            | "min_width"
+                            | "h"
+                            | "height"
+                            | "max_h"
+                            | "maxHeight"
+                            | "max_height"
+                            | "min_h"
+                            | "minHeight"
+                            | "min_height"
+                            | "p"
+                            | "padding"
+                            | "mx"
+                            | "my"
+                            | "px"
+                            | "py"
+                            | "pt"
+                            | "pr"
+                            | "pb"
+                            | "pl"
+                            | "mt"
+                            | "mr"
+                            | "mb"
+                            | "ml"
+                            | "rounded"
+                            | "bg"
+                            | "color"
+                            | "text_color"
+                            | "font_weight"
+                            | "text_weight"
+                            | "flex_grow"
+                            | "flex_shrink"
+                            | "grow"
+                            | "shrink"
+                            | "flex_basis"
+                            | "absolute"
+                            | "relative"
+                            | "top"
+                            | "right"
+                            | "bottom"
+                            | "left"
+                            | "inset"
+                            | "z_index"
+                            | "cols"
+                            | "grid_cols"
+                            | "rows"
+                            | "grid_rows"
+                            | "col_span"
+                            | "grid_column_span"
+                            | "row_span"
+                            | "grid_row_span"
+                            | "align_self"
+                            | "text_size"
+                            | "leading"
+                            | "text_leading"
+                            | "line_height"
+                            | "lineHeight"
+                            | "underline"
+                            | "text_decoration"
+                            | "textDecoration"
+                            | "text_decoration_line"
+                            | "textDecorationLine"
+                            | "text_decoration_style"
+                            | "textDecorationStyle"
+                            | "text_decoration_color"
+                            | "textDecorationColor"
+                            | "text_decoration_thickness"
+                            | "textDecorationThickness"
+                            | "items"
+                            | "wrap"
+                            | "gap"
+                            | "border_style"
+                            | "borderStyle"
+                            | "border_color"
+                            | "borderColor"
+                            | "border_width"
+                            | "borderWidth"
+                            | "outline_style"
+                            | "outlineStyle"
+                            | "outline_color"
+                            | "outlineColor"
+                            | "outline_width"
+                            | "outlineWidth"
+                            | "shadow"
+                            | "box_shadow"
+                            | "boxShadow"
+                            | "box-shadow"
+                            | "box_shadow_color"
+                            | "boxShadowColor"
+                            | "box_shadow_blur"
+                            | "boxShadowBlur"
+                            | "box_shadow_offset_x"
+                            | "boxShadowOffsetX"
+                            | "box_shadow_offset_y"
+                            | "boxShadowOffsetY"
+                            | "box_shadow_spread"
+                            | "boxShadowSpread"
+                            | "box_shadow_inset"
+                            | "boxShadowInset"
+                            | "text_shadow"
+                            | "textShadow"
+                            | "text-shadow"
+                            | "text_shadow_color"
+                            | "textShadowColor"
+                            | "text_shadow_blur"
+                            | "textShadowBlur"
+                            | "text_shadow_offset_x"
+                            | "textShadowOffsetX"
+                            | "text_shadow_offset_y"
+                            | "textShadowOffsetY"
+                            | "text_align"
+                            | "class"
+                            | "className"
+                            | "tw"
+                            | "uno"
+                    );
 
                     if is_base {
-                        if attr_name == "class" || attr_name == "className" || attr_name == "tw" || attr_name == "uno" {
-                            let calls = parse_utility_calls(value);
-                            for call in calls {
-                                // Replace __rui_el with b for component base context
-                                let call_str = call.to_string().replace("__rui_el", "b");
-                                let call_tokens: proc_macro2::TokenStream = call_str.parse().unwrap();
-                                base_calls.push(call_tokens);
+                        // Dynamic class / color base attrs → bind on resulting Element.
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            if matches!(attr_name, "class" | "className" | "tw" | "uno") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_class(
+                                        __rui_el,
+                                        format!("{}:{}:bind_class#{}", file!(), line!(), #idx),
+                                        move || (#value).to_string(),
+                                    );
+                                });
+                                continue;
+                            }
+                            if attr_name == "bg" {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_bg#{}", file!(), line!(), #idx),
+                                        move || {
+                                            let __v = (#value).to_string();
+                                            rui::core::tree::parse_color(__v.as_str())
+                                        },
+                                        |el, color| {
+                                            if el.style.bg_color == color {
+                                                rui::core::tree::LayoutStatus::Clean
+                                            } else {
+                                                el.style.bg_color = color;
+                                                rui::core::tree::LayoutStatus::StyleChanged
+                                            }
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
+                            if matches!(attr_name, "color" | "text_color") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_color#{}", file!(), line!(), #idx),
+                                        move || {
+                                            let __v = (#value).to_string();
+                                            rui::core::tree::parse_text_color(__v.as_str())
+                                        },
+                                        |el, color| {
+                                            if el.text_style.color == color {
+                                                rui::core::tree::LayoutStatus::Clean
+                                            } else {
+                                                el.text_style.color = color;
+                                                rui::core::tree::LayoutStatus::StyleChanged
+                                            }
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
+                            if matches!(attr_name, "border_color" | "borderColor") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_border_color#{}", file!(), line!(), #idx),
+                                        move || {
+                                            let __v = (#value).to_string();
+                                            rui::core::tree::parse_color(__v.as_str())
+                                        },
+                                        |el, color| {
+                                            if el.style.border_color == color {
+                                                rui::core::tree::LayoutStatus::Clean
+                                            } else {
+                                                el.style.border_color = color;
+                                                rui::core::tree::LayoutStatus::StyleChanged
+                                            }
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
+                        }
+                        if attr_name == "class"
+                            || attr_name == "className"
+                            || attr_name == "tw"
+                            || attr_name == "uno"
+                        {
+                            // Apply via Element path (shared runtime catalog) after the component
+                            // builds — BaseComponentBuilder cannot consume `with_class_list`.
+                            for warn in parse_utility_unknown_warnings(value) {
+                                base_calls.push(warn);
+                            }
+                            if let Some(lit) = class_lit_str(value) {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::style::with_class_list(__rui_el, #lit);
+                                });
                             }
                         } else if matches!(attr_name, "leading" | "text_leading") {
                             // 与原生节点分支一致：`leading="normal"` 等不能走 `IntoF32 for &str`（会按 CSS 长度解析失败 → 0 → 行高≈0，文本被裁掉）。
@@ -608,7 +1125,9 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                 Some("tight") => quote! { b = b.leading_tight(); },
                                 Some("normal") => quote! { b = b.leading_normal(); },
                                 Some("relaxed") => quote! { b = b.leading_relaxed(); },
-                                _ => quote! { b = b.leading(rui::core::tree::IntoF32::into_f32(#value)); },
+                                _ => {
+                                    quote! { b = b.leading(rui::core::tree::IntoF32::into_f32(#value)); }
+                                }
                             };
                             base_calls.push(call);
                         } else if matches!(attr_name, "cols" | "grid_cols") {
@@ -714,8 +1233,14 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                             quote! { (#value).into() }
                         } else if attr_name == "children" {
                             quote! { #value }
-                        } else if matches!(attr_name, "on_click" | "onClick" | "on_change" | "onChange") {
+                        } else if matches!(
+                            attr_name,
+                            "on_click" | "onClick" | "on_change" | "onChange"
+                        ) {
                             quote! { Some(rui::core::tree::Handler::from(rui::core::tree::ZeroArgFn(#value))) }
+                        } else if !in_reactive_boundary && expr_reads_get(value) {
+                            // Avoid subscribing the parent effect during props construction.
+                            quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
                         } else {
                             quote! { Some((#value).into()) }
                         };
@@ -724,7 +1249,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     }
                 }
 
-                if name_str == "Input" && !prop_names.iter().any(|p| p.to_string() == "id") {
+                if name_str == "Input" && !prop_names.iter().any(|p| *p == "id") {
                     let seq = INPUT_RSX_ANON_SEQ.fetch_add(1, Ordering::Relaxed);
                     prop_names.push(syn::Ident::new("id", name_ident.span()));
                     prop_values.push(quote! {
@@ -737,17 +1262,21 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 } else {
                     quote! { Some(Box::new(|mut b: rui::components::base::BaseComponentBuilder| { #(#base_calls)* b })) }
                 };
-                
+
                 let mut children_expr = quote! { None };
                 if !el.children.is_empty() {
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter));
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
                     }
                     // 多子节点默认包进 VStack（组件 children 槽是单根）；布局原语 HStack/VStack/GStack 走下方 primitive 路径。
                     if expanded_children.len() == 1 {
                         let first = &expanded_children[0];
-                        children_expr = quote! { 
+                        children_expr = quote! {
                             Some({
                                 use rui::core::tree::IntoElementList;
                                 let mut __list = (#first).into_element_list();
@@ -758,10 +1287,10 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                                     __v = __v.children(__list);
                                     rui::core::tree::Element::from(__v)
                                 }
-                            }) 
+                            })
                         };
                     } else {
-                        children_expr = quote! { 
+                        children_expr = quote! {
                             Some({
                                 let mut __v = rui::primitives::vstack();
                                 #( __v = __v.child(rui::core::tree::Element::from(#expanded_children)); )*
@@ -771,13 +1300,32 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     }
                 }
 
+                if chrome_binds.is_empty() {
+                    return quote! {
+                        {
+                            #[allow(clippy::needless_update)]
+                            let __rui_comp = #name_ident(#props_ident {
+                                base: #base_expr,
+                                children: #children_expr,
+                                #(#prop_names: #prop_values,)*
+                                ..Default::default()
+                            });
+                            __rui_comp
+                        }
+                    };
+                }
                 return quote! {
-                    #name_ident(#props_ident {
-                        base: #base_expr,
-                        children: #children_expr,
-                        #(#prop_names: #prop_values,)*
-                        ..Default::default()
-                    })
+                    {
+                        #[allow(clippy::needless_update)]
+                        let mut __rui_el: rui::core::tree::Element = #name_ident(#props_ident {
+                            base: #base_expr,
+                            children: #children_expr,
+                            #(#prop_names: #prop_values,)*
+                            ..Default::default()
+                        }).into();
+                        #(#chrome_binds)*
+                        __rui_el
+                    }
                 };
             } else {
                 match name_str.as_str() {
@@ -786,70 +1334,194 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     // Grid 为 GStack 的 HTML/Solid 风格别名。
                     "GStack" | "Grid" => quote! { rui::primitives::gstack() },
                     "Box" | "Rect" => quote! { rui::primitives::r#box() },
-                    "Interactive" => quote! { rui::primitives::interactive(rui::core::tree::Element::new()) },
+                    "Interactive" => {
+                        quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
+                    }
                     "Text" => quote! { rui::primitives::text("") },
                     _ => quote! { rui::core::tree::Element::new() },
                 }
             };
-            
+
+            let mut pending_icon_bind: Option<proc_macro2::TokenStream> = None;
             if name_str == "Icon" {
                 let mut icon_code = "ea0e".to_string(); // fallback to an album icon
+                let mut dynamic_name: Option<&syn::Expr> = None;
                 for (attr, value) in &el.attributes {
-                    if attr.to_string() == "name" {
-                        if let syn::Expr::Lit(expr_lit) = value {
-                            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
-                                let name_str = lit_str.value();
-                                let json_str = include_str!("../../rui/assets/lucide.json");
-                                static ICONS: std::sync::OnceLock<std::collections::HashMap<String, String>> = std::sync::OnceLock::new();
-                                let map = ICONS.get_or_init(|| {
-                                    serde_json::from_str(json_str).unwrap_or_default()
-                                });
-                                if let Some(code) = map.get(&name_str) {
-                                    icon_code = code.clone();
-                                } else {
-                                    panic!("Icon '{}' not found in lucide.json. Ensure the name is correct.", name_str);
-                                }
+                    if *attr == "name" {
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            dynamic_name = Some(value);
+                            continue;
+                        }
+                        if let syn::Expr::Lit(expr_lit) = value
+                            && let syn::Lit::Str(lit_str) = &expr_lit.lit
+                        {
+                            let name_str = lit_str.value();
+                            let json_str = include_str!("../../rui/assets/lucide.json");
+                            static ICONS: std::sync::OnceLock<
+                                std::collections::HashMap<String, String>,
+                            > = std::sync::OnceLock::new();
+                            let map = ICONS
+                                .get_or_init(|| serde_json::from_str(json_str).unwrap_or_default());
+                            if let Some(code) = map.get(&name_str) {
+                                icon_code = code.clone();
+                            } else {
+                                panic!(
+                                    "Icon '{}' not found in lucide.json. Ensure the name is correct.",
+                                    name_str
+                                );
                             }
                         }
                     }
                 }
-                
-                if let Ok(cp) = u32::from_str_radix(&icon_code, 16) {
-                    if let Some(c) = std::char::from_u32(cp) {
-                        let c_str = c.to_string();
-                        element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
-                    }
+
+                if let Some(name_expr) = dynamic_name {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    // Initial glyph via untrack; subsequent updates via bind_attr.
+                    element = quote! {
+                        {
+                            let __glyph = rui::core::reactivity::untrack(|| {
+                                let __n = (#name_expr).to_string();
+                                rui::utils::lucide_glyph(__n.as_str())
+                                    .unwrap_or_else(|| "\u{ea0e}".to_string())
+                            });
+                            rui::utils::text_node::build_icon_text_node(__glyph)
+                        }
+                    };
+                    pending_icon_bind = Some(quote! {
+                        __rui_el = rui::app::reactive::bind_attr(
+                            __rui_el,
+                            format!("{}:{}:bind_icon_name#{}", file!(), line!(), #idx),
+                            move || (#name_expr).to_string(),
+                            |el, name| rui::utils::apply_bound_icon_name(el, name),
+                        );
+                    });
+                } else if let Ok(cp) = u32::from_str_radix(&icon_code, 16)
+                    && let Some(c) = std::char::from_u32(cp)
+                {
+                    let c_str = c.to_string();
+                    element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
                 }
             }
-            
+
             let mut utility_calls: Vec<proc_macro2::TokenStream> = Vec::new();
+            let mut dynamic_binds: Vec<proc_macro2::TokenStream> = Vec::new();
+            if let Some(icon_bind) = pending_icon_bind {
+                dynamic_binds.push(icon_bind);
+            }
             for (attr, value) in &el.attributes {
                 let attr_str = attr.to_string();
                 if matches!(attr_str.as_str(), "class" | "className" | "tw" | "uno") {
-                    utility_calls.extend(parse_utility_calls(value));
+                    if !in_reactive_boundary && expr_reads_get(value) {
+                        let idx = *node_counter;
+                        *node_counter += 1;
+                        dynamic_binds.push(quote! {
+                            __rui_el = rui::app::reactive::bind_class(
+                                __rui_el,
+                                format!("{}:{}:bind_class#{}", file!(), line!(), #idx),
+                                move || (#value).to_string(),
+                            );
+                        });
+                    } else {
+                        utility_calls.extend(parse_utility_calls(value));
+                    }
                     continue;
                 }
-                if attr_str == "id" && name_str == "ScrollArea" {
+                if attr_str == "id"
+                    && matches!(
+                        name_str.as_str(),
+                        "ScrollArea"
+                            | "ScrollViewport"
+                            | "Box"
+                            | "Rect"
+                            | "VStack"
+                            | "HStack"
+                            | "GStack"
+                            | "Grid"
+                    )
+                {
                     element = quote! { #element.id(#value) };
+                    continue;
+                }
+                if matches!(attr_str.as_str(), "scroll_id" | "scrollId") {
+                    element = quote! { #element.scroll_id(#value) };
                     continue;
                 }
                 match attr_str.as_str() {
                     "w" | "width" => element = apply_min_max_size_expr(element, value, "w"),
-                    "max_w" | "maxWidth" | "max_width" => element = quote! { #element.max_w(#value) },
-                    "min_w" | "minWidth" | "min_width" => element = quote! { #element.min_w(#value) },
-                    "inline_size" | "inlineSize" => element = apply_min_max_size_expr(element, value, "w"),
+                    "max_w" | "maxWidth" | "max_width" => {
+                        element = quote! { #element.max_w(#value) }
+                    }
+                    "min_w" | "minWidth" | "min_width" => {
+                        element = quote! { #element.min_w(#value) }
+                    }
+                    "inline_size" | "inlineSize" => {
+                        element = apply_min_max_size_expr(element, value, "w")
+                    }
                     "h" | "height" => element = apply_min_max_size_expr(element, value, "h"),
-                    "max_h" | "maxHeight" | "max_height" => element = quote! { #element.max_h(#value) },
-                    "min_h" | "minHeight" | "min_height" => element = quote! { #element.min_h(#value) },
-                    "block_size" | "blockSize" => element = apply_min_max_size_expr(element, value, "h"),
+                    "max_h" | "maxHeight" | "max_height" => {
+                        element = quote! { #element.max_h(#value) }
+                    }
+                    "min_h" | "minHeight" | "min_height" => {
+                        element = quote! { #element.min_h(#value) }
+                    }
+                    "block_size" | "blockSize" => {
+                        element = apply_min_max_size_expr(element, value, "h")
+                    }
                     "bg" => {
-                        element = quote! { #element.bg(rui::core::tree::parse_color(#value)) }
-                    },
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_bg#{}", file!(), line!(), #idx),
+                                    move || {
+                                        let __v = (#value).to_string();
+                                        rui::core::tree::parse_color(__v.as_str())
+                                    },
+                                    |el, color| {
+                                        if el.style.bg_color == color {
+                                            rui::core::tree::LayoutStatus::Clean
+                                        } else {
+                                            el.style.bg_color = color;
+                                            rui::core::tree::LayoutStatus::StyleChanged
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.bg(rui::core::tree::parse_color(#value)) };
+                        }
+                    }
                     "border_style" | "borderStyle" => {
                         element = quote! { #element.border_style(#value) }
                     }
                     "border_color" | "borderColor" => {
-                        element = quote! { #element.border_color(rui::core::tree::parse_color(#value)) }
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_border_color#{}", file!(), line!(), #idx),
+                                    move || {
+                                        let __v = (#value).to_string();
+                                        rui::core::tree::parse_color(__v.as_str())
+                                    },
+                                    |el, color| {
+                                        if el.style.border_color == color {
+                                            rui::core::tree::LayoutStatus::Clean
+                                        } else {
+                                            el.style.border_color = color;
+                                            rui::core::tree::LayoutStatus::StyleChanged
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.border_color(rui::core::tree::parse_color(#value)) };
+                        }
                     }
                     "border_width" | "borderWidth" => {
                         element = quote! { #element.border_width(rui::core::tree::IntoF32::into_f32(#value)) }
@@ -858,147 +1530,231 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                         element = quote! { #element.outline_style(#value) }
                     }
                     "outline_color" | "outlineColor" => {
-                        element = quote! { #element.outline_color(rui::core::tree::parse_color(#value)) }
+                        element =
+                            quote! { #element.outline_color(rui::core::tree::parse_color(#value)) }
                     }
                     "outline_width" | "outlineWidth" => {
                         element = quote! { #element.outline_width(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
                     "color" => {
-                        element = quote! { #element.text_color(rui::core::tree::parse_text_color(#value)) }
-                    },
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_color#{}", file!(), line!(), #idx),
+                                    move || {
+                                        let __v = (#value).to_string();
+                                        rui::core::tree::parse_text_color(__v.as_str())
+                                    },
+                                    |el, color| {
+                                        if el.text_style.color == color {
+                                            rui::core::tree::LayoutStatus::Clean
+                                        } else {
+                                            el.text_style.color = color;
+                                            rui::core::tree::LayoutStatus::StyleChanged
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.text_color(rui::core::tree::parse_text_color(#value)) };
+                        }
+                    }
                     "font_weight" | "text_weight" => {
                         element = quote! { #element.font_weight(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
-                    "underline" => {
-                        element = quote! { #element.underline(#value) }
-                    },
+                    }
+                    "underline" => element = quote! { #element.underline(#value) },
                     "text_decoration" | "textDecoration" | "decoration" => {
                         element = quote! { #element.text_decoration(#value) }
-                    },
+                    }
                     "text_decoration_line" | "textDecorationLine" => {
                         element = quote! { #element.text_decoration_line(#value) }
                     }
                     "text_size" | "textSize" | "size" if name_str == "Label" => {
                         element = quote! { #element.text_size(#value) }
-                    },
-                    "gap" => {
-                        element = quote! { #element.gap(#value) }
-                    },
-                    "items" | "align" => {
-                        element = quote! { #element.items(#value) }
-                    },
-                    "justify" => {
-                        element = quote! { #element.justify(#value) }
-                    },
-                    "wrap" => {
-                        element = quote! { #element.wrap(#value) }
-                    },
+                    }
+                    "gap" => element = quote! { #element.gap(#value) },
+                    "items" | "align" => element = quote! { #element.items(#value) },
+                    "justify" => element = quote! { #element.justify(#value) },
+                    "wrap" => element = quote! { #element.wrap(#value) },
                     "text_decoration_style" | "textDecorationStyle" => {
                         element = quote! { #element.text_decoration_style(#value) }
-                    },
+                    }
                     "text_decoration_color" | "textDecorationColor" => {
                         element = quote! { #element.text_decoration_color(rui::core::tree::parse_text_color(#value)) }
-                    },
+                    }
                     "text_decoration_thickness" | "textDecorationThickness" => {
                         element = quote! { #element.text_decoration_thickness(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "text_underline_offset" | "textUnderlineOffset" => {
                         element = quote! { #element.text_underline_offset(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "line_height" | "lineHeight" | "lh" | "text_line_height" => {
                         if is_custom {
                             element = quote! { #element.line_height(rui::core::tree::IntoF32::into_f32(#value)) }
                         } else {
                             element = quote! { #element.text_line_height(rui::core::tree::IntoF32::into_f32(#value)) }
                         }
-                    },
+                    }
                     "leading" | "text_leading" => {
                         let s = if let syn::Expr::Lit(expr_lit) = value {
-                            if let syn::Lit::Str(lit_str) = &expr_lit.lit { Some(lit_str.value()) } else { None }
-                        } else { None };
+                            if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                                Some(lit_str.value())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
                         let s = s.as_deref().unwrap_or("");
                         if s == "none" {
-                            if is_custom { element = quote! { #element.leading_none() } }
-                            else { element = quote! { #element.text_leading_none() } }
+                            if is_custom {
+                                element = quote! { #element.leading_none() }
+                            } else {
+                                element = quote! { #element.text_leading_none() }
+                            }
                         } else if s == "tight" {
-                            if is_custom { element = quote! { #element.leading_tight() } }
-                            else { element = quote! { #element.text_leading_tight() } }
+                            if is_custom {
+                                element = quote! { #element.leading_tight() }
+                            } else {
+                                element = quote! { #element.text_leading_tight() }
+                            }
                         } else if s == "normal" {
-                            if is_custom { element = quote! { #element.leading_normal() } }
-                            else { element = quote! { #element.text_leading_normal() } }
+                            if is_custom {
+                                element = quote! { #element.leading_normal() }
+                            } else {
+                                element = quote! { #element.text_leading_normal() }
+                            }
                         } else if s == "relaxed" {
-                            if is_custom { element = quote! { #element.leading_relaxed() } }
-                            else { element = quote! { #element.text_leading_relaxed() } }
+                            if is_custom {
+                                element = quote! { #element.leading_relaxed() }
+                            } else {
+                                element = quote! { #element.text_leading_relaxed() }
+                            }
                         } else {
-                            if is_custom { element = quote! { #element.leading(rui::core::tree::IntoF32::into_f32(#value)) } }
-                            else { element = quote! { #element.text_leading(rui::core::tree::IntoF32::into_f32(#value)) } }
+                            if is_custom {
+                                element = quote! { #element.leading(rui::core::tree::IntoF32::into_f32(#value)) }
+                            } else {
+                                element = quote! { #element.text_leading(rui::core::tree::IntoF32::into_f32(#value)) }
+                            }
                         }
-                    },
+                    }
                     "size" => {
                         if is_custom || name_str == "Button" || name_str == "Input" {
                             element = quote! { #element.size(#value) }
                         } else {
                             element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
                         }
-                    },
+                    }
                     "text_size" | "font_size" => {
                         element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "p" | "padding" => element = quote! { #element.p(#value) },
                     "px" | "padding_x" | "paddingX" => element = quote! { #element.px(#value) },
                     "py" | "padding_y" | "paddingY" => element = quote! { #element.py(#value) },
                     "pt" | "padding_top" | "paddingTop" => element = quote! { #element.pt(#value) },
-                    "pr" | "padding_right" | "paddingRight" => element = quote! { #element.pr(#value) },
-                    "pb" | "padding_bottom" | "paddingBottom" => element = quote! { #element.pb(#value) },
-                    "pl" | "padding_left" | "paddingLeft" => element = quote! { #element.pl(#value) },
-                    "padding_inline" | "paddingInline" => element = quote! { #element.padding_inline(#value) },
-                    "padding_block" | "paddingBlock" => element = quote! { #element.padding_block(#value) },
-                    "padding_inline_start" | "paddingInlineStart" => element = quote! { #element.padding_inline_start(#value) },
-                    "padding_inline_end" | "paddingInlineEnd" => element = quote! { #element.padding_inline_end(#value) },
-                    "padding_block_start" | "paddingBlockStart" => element = quote! { #element.padding_block_start(#value) },
-                    "padding_block_end" | "paddingBlockEnd" => element = quote! { #element.padding_block_end(#value) },
+                    "pr" | "padding_right" | "paddingRight" => {
+                        element = quote! { #element.pr(#value) }
+                    }
+                    "pb" | "padding_bottom" | "paddingBottom" => {
+                        element = quote! { #element.pb(#value) }
+                    }
+                    "pl" | "padding_left" | "paddingLeft" => {
+                        element = quote! { #element.pl(#value) }
+                    }
+                    "padding_inline" | "paddingInline" => {
+                        element = quote! { #element.padding_inline(#value) }
+                    }
+                    "padding_block" | "paddingBlock" => {
+                        element = quote! { #element.padding_block(#value) }
+                    }
+                    "padding_inline_start" | "paddingInlineStart" => {
+                        element = quote! { #element.padding_inline_start(#value) }
+                    }
+                    "padding_inline_end" | "paddingInlineEnd" => {
+                        element = quote! { #element.padding_inline_end(#value) }
+                    }
+                    "padding_block_start" | "paddingBlockStart" => {
+                        element = quote! { #element.padding_block_start(#value) }
+                    }
+                    "padding_block_end" | "paddingBlockEnd" => {
+                        element = quote! { #element.padding_block_end(#value) }
+                    }
                     "m" | "margin" => element = quote! { #element.m(#value) },
                     "overflow" => element = quote! { #element.overflow(#value) },
                     "overflow_x" | "overflowX" => element = quote! { #element.overflow_x(#value) },
                     "overflow_y" | "overflowY" => element = quote! { #element.overflow_y(#value) },
-                    "scroll_behavior" | "scrollBehavior" => element = quote! { #element.scroll_behavior(#value) },
+                    "scroll_behavior" | "scrollBehavior" => {
+                        element = quote! { #element.scroll_behavior(#value) }
+                    }
                     "hover_mode" | "hoverMode" => element = quote! { #element.hover_mode(#value) },
                     "scrollbar_visibility" | "scrollbarVisibility" => {
                         element = quote! { #element.scrollbar_visibility(#value) }
-                    },
-                    "scrollbar_inset" | "scrollbarInset" => element = quote! { #element.scrollbar_inset(#value) },
-                    "scrollbar_inset_x" | "scrollbarInsetX" => element = quote! { #element.scrollbar_inset_x(#value) },
-                    "scrollbar_inset_y" | "scrollbarInsetY" => element = quote! { #element.scrollbar_inset_y(#value) },
-                    "scrollbar_y_side" | "scrollbarYSide" => element = quote! { #element.scrollbar_y_side(#value) },
-                    "scrollbar_x_side" | "scrollbarXSide" => element = quote! { #element.scrollbar_x_side(#value) },
+                    }
+                    "scrollbar_inset" | "scrollbarInset" => {
+                        element = quote! { #element.scrollbar_inset(#value) }
+                    }
+                    "scrollbar_inset_x" | "scrollbarInsetX" => {
+                        element = quote! { #element.scrollbar_inset_x(#value) }
+                    }
+                    "scrollbar_inset_y" | "scrollbarInsetY" => {
+                        element = quote! { #element.scrollbar_inset_y(#value) }
+                    }
+                    "scrollbar_y_side" | "scrollbarYSide" => {
+                        element = quote! { #element.scrollbar_y_side(#value) }
+                    }
+                    "scrollbar_x_side" | "scrollbarXSide" => {
+                        element = quote! { #element.scrollbar_x_side(#value) }
+                    }
                     "scrollbar_thickness" | "scrollbarThickness" => {
                         element = quote! { #element.scrollbar_thickness(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
-                    "scrollbar_variant" | "scrollbarVariant" => element = quote! { #element.scrollbar_variant(#value) },
+                    }
+                    "scrollbar_variant" | "scrollbarVariant" => {
+                        element = quote! { #element.scrollbar_variant(#value) }
+                    }
                     "scrollbar_track_color" | "scrollbarTrackColor" => {
                         element = quote! { #element.scrollbar_track_color(#value) }
-                    },
+                    }
                     "scrollbar_thumb_color" | "scrollbarThumbColor" => {
                         element = quote! { #element.scrollbar_thumb_color(#value) }
-                    },
+                    }
                     "mx" | "margin_x" | "marginX" => element = quote! { #element.mx(#value) },
                     "my" | "margin_y" | "marginY" => element = quote! { #element.my(#value) },
                     "mt" | "margin_top" | "marginTop" => element = quote! { #element.mt(#value) },
-                    "mr" | "margin_right" | "marginRight" => element = quote! { #element.mr(#value) },
-                    "mb" | "margin_bottom" | "marginBottom" => element = quote! { #element.mb(#value) },
+                    "mr" | "margin_right" | "marginRight" => {
+                        element = quote! { #element.mr(#value) }
+                    }
+                    "mb" | "margin_bottom" | "marginBottom" => {
+                        element = quote! { #element.mb(#value) }
+                    }
                     "ml" | "margin_left" | "marginLeft" => element = quote! { #element.ml(#value) },
-                    "margin_inline" | "marginInline" => element = quote! { #element.margin_inline(#value) },
-                    "margin_block" | "marginBlock" => element = quote! { #element.margin_block(#value) },
-                    "margin_inline_start" | "marginInlineStart" => element = quote! { #element.margin_inline_start(#value) },
-                    "margin_inline_end" | "marginInlineEnd" => element = quote! { #element.margin_inline_end(#value) },
-                    "margin_block_start" | "marginBlockStart" => element = quote! { #element.margin_block_start(#value) },
-                    "margin_block_end" | "marginBlockEnd" => element = quote! { #element.margin_block_end(#value) },
+                    "margin_inline" | "marginInline" => {
+                        element = quote! { #element.margin_inline(#value) }
+                    }
+                    "margin_block" | "marginBlock" => {
+                        element = quote! { #element.margin_block(#value) }
+                    }
+                    "margin_inline_start" | "marginInlineStart" => {
+                        element = quote! { #element.margin_inline_start(#value) }
+                    }
+                    "margin_inline_end" | "marginInlineEnd" => {
+                        element = quote! { #element.margin_inline_end(#value) }
+                    }
+                    "margin_block_start" | "marginBlockStart" => {
+                        element = quote! { #element.margin_block_start(#value) }
+                    }
+                    "margin_block_end" | "marginBlockEnd" => {
+                        element = quote! { #element.margin_block_end(#value) }
+                    }
                     "rounded" | "radius" | "border_radius" | "borderRadius" => {
-                        element = quote! { #element.rounded(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                        element =
+                            quote! { #element.rounded(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
                     "shadow" => {
                         element = quote! { #element.shadow([0.0, 0.0, 0.0, 0.5], rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "box_shadow" | "boxShadow" | "box-shadow" => {
                         element = quote! { #element.box_shadow(#value) }
                     }
@@ -1020,27 +1776,23 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     "box_shadow_inset" | "boxShadowInset" => {
                         element = quote! { #element.box_shadow_inset(#value) }
                     }
-                    "text_shadow" => {
-                        element = quote! { #element.text_shadow(#value) }
-                    },
+                    "text_shadow" => element = quote! { #element.text_shadow(#value) },
                     "textShadow" | "text-shadow" => {
                         element = quote! { #element.text_shadow(#value) }
-                    },
+                    }
                     "text_shadow_color" | "textShadowColor" => {
                         element = quote! { #element.text_shadow_color(rui::core::tree::parse_text_color(#value)) }
-                    },
+                    }
                     "text_shadow_blur" | "textShadowBlur" => {
                         element = quote! { #element.text_shadow_blur(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "text_shadow_offset_x" | "textShadowOffsetX" => {
                         element = quote! { #element.text_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
+                    }
                     "text_shadow_offset_y" | "textShadowOffsetY" => {
                         element = quote! { #element.text_shadow_offset_y(rui::core::tree::IntoF32::into_f32(#value)) }
-                    },
-                    "text_align" => {
-                        element = quote! { #element.text_align(#value) }
-                    },
+                    }
+                    "text_align" => element = quote! { #element.text_align(#value) },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
                     "variant" | "type" => element = quote! { #element.variant(#value) },
                     "show" | "visibility" | "display_mode" => {
@@ -1051,10 +1803,12 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                         element = quote! { #element.thickness(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
                     "track_color" => {
-                        element = quote! { #element.track_color(rui::core::tree::parse_color(#value)) }
+                        element =
+                            quote! { #element.track_color(rui::core::tree::parse_color(#value)) }
                     }
                     "thumb_color" => {
-                        element = quote! { #element.thumb_color(rui::core::tree::parse_color(#value)) }
+                        element =
+                            quote! { #element.thumb_color(rui::core::tree::parse_color(#value)) }
                     }
                     "disabled" => element = quote! { #element.disabled(#value) },
                     "placeholder" => element = quote! { #element.placeholder(#value) },
@@ -1062,10 +1816,10 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
 
                     "grow" | "flex_grow" | "flexGrow" => {
                         element = quote! { #element.flex_grow(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }
-                    },
+                    }
                     "shrink" | "flex_shrink" | "flexShrink" => {
                         element = quote! { #element.flex_shrink(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }
-                    },
+                    }
                     "cols" | "grid_cols" => {
                         if let Some(n) = expr_as_u16(value) {
                             element = quote! { #element.grid_cols_equal(#n) };
@@ -1086,29 +1840,25 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                             element = quote! { #element.grid_row_span(#n) };
                         }
                     }
-                    "align_self" => {
-                        element = quote! { #element.align_self_kw(#value) }
-                    }
-                    "flex_basis" => {
-                        element = quote! { #element.flex_basis(#value) }
-                    }
+                    "align_self" => element = quote! { #element.align_self_kw(#value) },
+                    "flex_basis" => element = quote! { #element.flex_basis(#value) },
                     _ => {}
                 }
             }
 
             for child in &el.children {
                 match child {
-                    RsxNode::Expr(expr) => {
-                        // We map text strings or elements inside { } to `.children()`
-                        element = quote! { 
+                    RsxNode::Expr(_expr) => {
+                        let expanded_child = expand_node(child, node_counter, in_reactive_boundary);
+                        element = quote! {
                             {
                                 use rui::core::tree::IntoElementList;
-                                #element.children((#expr).into_element_list())
+                                #element.children((#expanded_child).into_element_list())
                             }
                         };
                     }
                     RsxNode::Element(_) => {
-                        let expanded_child = expand_node(child, node_counter);
+                        let expanded_child = expand_node(child, node_counter, in_reactive_boundary);
                         element = quote! {
                             {
                                 use rui::core::tree::IntoElementList;
@@ -1118,7 +1868,7 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                     }
                 }
             }
-            
+
             // Apply flex row/col explicitly if tag is known
             if name_str == "VStack" {
                 element = quote! { #element.flex_col() };
@@ -1127,11 +1877,12 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
                 element = quote! { #element.flex_row() };
             }
 
-            if !utility_calls.is_empty() {
+            if !utility_calls.is_empty() || !dynamic_binds.is_empty() {
                 element = quote! {
                     {
                         let mut __rui_el: rui::core::tree::Element = (#element).into();
                         #(#utility_calls)*
+                        #(#dynamic_binds)*
                         __rui_el
                     }
                 };
@@ -1142,262 +1893,48 @@ fn expand_node(node: &RsxNode, node_counter: &mut usize) -> proc_macro2::TokenSt
     }
 }
 
-fn parse_utility_calls(value: &Expr) -> Vec<proc_macro2::TokenStream> {
+fn class_lit_str(value: &Expr) -> Option<syn::LitStr> {
     let Expr::Lit(expr_lit) = value else {
-        return Vec::new();
+        return None;
     };
     let syn::Lit::Str(lit_str) = &expr_lit.lit else {
+        return None;
+    };
+    Some(lit_str.clone())
+}
+
+fn parse_utility_unknown_warnings(value: &Expr) -> Vec<proc_macro2::TokenStream> {
+    let Some(lit_str) = class_lit_str(value) else {
         return Vec::new();
     };
-    lit_str
-        .value()
-        .split_whitespace()
-        .filter_map(utility_token_to_call)
-        .collect()
+    let raw = lit_str.value();
+    let span = lit_str.span();
+    let mut out = Vec::new();
+    for token in raw.split_whitespace() {
+        let parsed = rui_style_tokens::parse_class_token(token);
+        if !rui_style_tokens::is_known_utility(&parsed.utility) {
+            let msg = format!("unknown rui utility class `{token}`");
+            out.push(quote_spanned! { span =>
+                {
+                    #[deprecated(note = #msg)]
+                    #[allow(dead_code)]
+                    fn __rui_unknown_utility_class() {}
+                    __rui_unknown_utility_class();
+                }
+            });
+        }
+    }
+    out
 }
 
-fn utility_token_to_call(token: &str) -> Option<proc_macro2::TokenStream> {
-    match token {
-        "flex" => return Some(quote! { __rui_el = __rui_el.flex_row(); }),
-        "flex-col" => return Some(quote! { __rui_el = __rui_el.flex_col(); }),
-        "flex-row" => return Some(quote! { __rui_el = __rui_el.flex_row(); }),
-        "grid" => return Some(quote! { __rui_el = __rui_el.display_grid(); }),
-        "items-center" => return Some(quote! { __rui_el = __rui_el.items_center(); }),
-        "justify-center" => return Some(quote! { __rui_el = __rui_el.justify_center(); }),
-        "grow" => return Some(quote! { __rui_el = __rui_el.flex_grow(1.0); }),
-        "grow-0" => return Some(quote! { __rui_el = __rui_el.flex_grow(0.0); }),
-        "shrink" => return Some(quote! { __rui_el = __rui_el.flex_shrink(1.0); }),
-        "shrink-0" => return Some(quote! { __rui_el = __rui_el.flex_shrink(0.0); }),
-        "overflow-hidden" => return Some(quote! { __rui_el = __rui_el.overflow("hidden"); }),
-        "overflow-auto" => return Some(quote! { __rui_el = __rui_el.overflow("auto"); }),
-        "overflow-scroll" => return Some(quote! { __rui_el = __rui_el.overflow("scroll"); }),
-        _ => {}
+fn parse_utility_calls(value: &Expr) -> Vec<proc_macro2::TokenStream> {
+    let mut out = parse_utility_unknown_warnings(value);
+    if let Some(lit) = class_lit_str(value) {
+        out.push(quote! {
+            __rui_el = rui::style::with_class_list(__rui_el, #lit);
+        });
     }
-
-    if let Some(raw) = token.strip_prefix("grid-cols-") {
-        if let Ok(n) = raw.parse::<u16>() {
-            if n > 0 {
-                return Some(quote! {
-                    __rui_el = __rui_el.display_grid().grid_template_columns(rui::layout::cols_equal_fr(#n));
-                });
-            }
-        }
-    }
-
-    if let Some(raw) = token.strip_prefix("grid-rows-") {
-        if let Ok(n) = raw.parse::<u16>() {
-            if n > 0 {
-                return Some(quote! {
-                    __rui_el = __rui_el.display_grid().grid_template_rows(rui::layout::cols_equal_fr(#n));
-                });
-            }
-        }
-    }
-
-    if let Some(v) = parse_tailwind_value(token, "gap-x-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.gap_x(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "gap-y-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.gap_y(#lit); });
-    }
-
-    if let Some(v) = parse_tailwind_value(token, "w-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.w(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "h-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.h(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "min-w-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.min_w(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "max-w-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.max_w(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "min-h-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.min_h(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "max-h-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.max_h(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "p-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.p(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "px-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.px(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "py-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.py(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "pt-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.pt(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "pr-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.pr(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "pb-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.pb(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "pl-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.pl(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "m-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.m(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "mx-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.mx(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "my-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.my(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "mt-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.mt(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "mr-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.mr(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "mb-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.mb(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "ml-") {
-        let lit = syn::LitStr::new(&v, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.ml(#lit); });
-    }
-    if let Some(v) = parse_tailwind_value(token, "gap-") {
-        if let Ok(px) = parse_space_value(&v) {
-            return Some(quote! { __rui_el = __rui_el.gap(#px); });
-        }
-    }
-
-    if let Some(rest) = token.strip_prefix("rounded-") {
-        let px = match rest {
-            "none" => 0.0_f32,
-            "sm" => 2.0_f32,
-            "md" => 6.0_f32,
-            "lg" => 8.0_f32,
-            "xl" => 12.0_f32,
-            "2xl" => 16.0_f32,
-            "full" => return Some(quote! { __rui_el = __rui_el.rounded_full(); }),
-            _ => return None,
-        };
-        return Some(quote! { __rui_el = __rui_el.rounded(#px); });
-    }
-    if token == "rounded" {
-        return Some(quote! { __rui_el = __rui_el.rounded(6.0_f32); });
-    }
-
-    if let Some(rest) = token.strip_prefix("text-") {
-        if let Some(size_px) = text_size_token_to_px(rest) {
-            return Some(quote! { __rui_el = __rui_el.text_size(#size_px); });
-        }
-        let lit = syn::LitStr::new(rest, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.text_color(rui::core::tree::parse_text_color(#lit)); });
-    }
-    if let Some(rest) = token.strip_prefix("bg-") {
-        let lit = syn::LitStr::new(rest, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.bg(rui::core::tree::parse_color(#lit)); });
-    }
-    if let Some(rest) = token.strip_prefix("font-") {
-        let w = match rest {
-            "thin" => 100.0_f32,
-            "extralight" => 200.0_f32,
-            "light" => 300.0_f32,
-            "normal" => 400.0_f32,
-            "medium" => 500.0_f32,
-            "semibold" => 600.0_f32,
-            "bold" => 700.0_f32,
-            "extrabold" => 800.0_f32,
-            "black" => 900.0_f32,
-            _ => return None,
-        };
-        return Some(quote! { __rui_el = __rui_el.font_weight(#w); });
-    }
-    if let Some(rest) = token.strip_prefix("overflow-x-") {
-        let lit = syn::LitStr::new(rest, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.overflow_x(#lit); });
-    }
-    if let Some(rest) = token.strip_prefix("overflow-y-") {
-        let lit = syn::LitStr::new(rest, proc_macro2::Span::call_site());
-        return Some(quote! { __rui_el = __rui_el.overflow_y(#lit); });
-    }
-
-    match token {
-        "self-auto" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("auto"); });
-        }
-        "self-center" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("center"); });
-        }
-        "self-start" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("start"); });
-        }
-        "self-end" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("end"); });
-        }
-        "self-stretch" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("stretch"); });
-        }
-        "self-baseline" => {
-            return Some(quote! { __rui_el = __rui_el.align_self_kw("baseline"); });
-        }
-        _ => {}
-    }
-
-    None
-}
-
-fn parse_tailwind_value(token: &str, prefix: &str) -> Option<String> {
-    let raw = token.strip_prefix(prefix)?;
-    if raw.is_empty() {
-        return None;
-    }
-    if let Some(inner) = raw.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
-        let v = inner.trim();
-        if v.is_empty() {
-            return None;
-        }
-        return Some(v.to_string());
-    }
-    parse_space_value(raw).ok().map(|px| format!("{px}px"))
-}
-
-fn parse_space_value(raw: &str) -> Result<f32, ()> {
-    let n: f32 = raw.parse().map_err(|_| ())?;
-    Ok(n * 4.0)
-}
-
-fn text_size_token_to_px(token: &str) -> Option<f32> {
-    match token {
-        "xs" => Some(12.0),
-        "sm" => Some(14.0),
-        "base" => Some(16.0),
-        "lg" => Some(18.0),
-        "xl" => Some(20.0),
-        "2xl" => Some(24.0),
-        "3xl" => Some(30.0),
-        "4xl" => Some(36.0),
-        _ => None,
-    }
+    out
 }
 
 fn parse_min_max_call(expr: &Expr) -> Option<(&'static str, String, String)> {

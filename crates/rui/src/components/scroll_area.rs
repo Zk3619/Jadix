@@ -1,7 +1,7 @@
 //! # ScrollArea
 //!
-//! 溢出滚动视口：裁剪内容、跟踪偏移，并内建横/纵滚动条。为虚拟列表等提供
-//! `scroll_offset_*` / `scroll_viewport_*` 等信号键。
+//! 产品层滚动容器：[`ScrollViewport`](crate::components::ScrollViewport) + 内建横/纵滚动条。
+//! 无条裁剪或自定义条请用 viewport / `Box`+`overflow`，见 [`crate::core::scroll_viewport`]。
 //!
 //! ## 用法
 //! ```ignore
@@ -15,81 +15,29 @@
 //! ## 注意
 //! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
 //! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior="smooth"` 可选。
-//! - 独立外挂条见 [`crate::components::Scrollbar`]；多数场景用本组件内建即可。
-
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+//! - 独立外挂条见 [`crate::components::Scrollbar`]。
 
 use crate::components::base::BaseComponentBuilder;
-use crate::components::scrollbar::{
-    scrollbar, scrollbar_visibility_signal_key, ScrollbarBuilder, ScrollbarOrientation,
-};
+use crate::components::scrollbar::{scrollbar, ScrollbarBuilder, ScrollbarOrientation};
 use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::activate_scroll_viewport;
 use crate::core::tree::{parse_color, Element, IntoDimension, IntoF32};
 use rui_macros::component;
 
+// ── re-export viewport 契约（兼容 `scroll_area::…` 旧路径）──────────────────
+pub use crate::core::scroll_viewport::{
+    scroll_activity_signal_key, scroll_behavior_signal_key, scroll_content_h_signal_key,
+    scroll_content_w_signal_key, scroll_hover_mode_signal_key, scroll_offset_x_signal_key,
+    scroll_offset_y_signal_key, scroll_overflow_allows_scrollbar, scroll_overflow_x_signal_key,
+    scroll_overflow_y_signal_key, scroll_scrollbar_inset_signal_key,
+    scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+    scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
+    scroll_target_x_signal_key, scroll_target_y_signal_key, scroll_viewport_h_signal_key,
+    scroll_viewport_w_signal_key, signal_keys_for_rest_cached, ScrollAreaSignalKeys,
+    ScrollViewportSignalKeys, SCROLL_AREA_FOCUS_PREFIX, SCROLL_VIEWPORT_FOCUS_PREFIX,
+};
+
 const SCROLLBAR_EDGE_PAD: f32 = 2.0;
-
-/// Pre-formatted signal id strings for one scroll-area `rest` id. Caching avoids per-frame
-/// `format!` allocations when many nested `ScrollArea`s exist (outer scroll hot path).
-pub struct ScrollAreaSignalKeys {
-    pub offset_x: String,
-    pub offset_y: String,
-    pub target_x: String,
-    pub target_y: String,
-    pub viewport_w: String,
-    pub viewport_h: String,
-    pub content_w: String,
-    pub content_h: String,
-    pub behavior: String,
-    pub activity: String,
-    pub overflow_x: String,
-    pub overflow_y: String,
-    /// Legacy `__rui_scroll_hover_{rest}` (content hover).
-    pub hover_legacy: String,
-    pub hover_axis_x: String,
-    pub hover_axis_y: String,
-    pub scrollbar_visibility_x: String,
-    pub scrollbar_visibility_y: String,
-    pub spring_x: String,
-    pub spring_y: String,
-}
-
-impl ScrollAreaSignalKeys {
-    pub fn new(rest: &str) -> Self {
-        Self {
-            offset_x: scroll_offset_x_signal_key(rest),
-            offset_y: scroll_offset_y_signal_key(rest),
-            target_x: scroll_target_x_signal_key(rest),
-            target_y: scroll_target_y_signal_key(rest),
-            viewport_w: scroll_viewport_w_signal_key(rest),
-            viewport_h: scroll_viewport_h_signal_key(rest),
-            content_w: scroll_content_w_signal_key(rest),
-            content_h: scroll_content_h_signal_key(rest),
-            behavior: scroll_behavior_signal_key(rest),
-            activity: scroll_activity_signal_key(rest),
-            overflow_x: scroll_overflow_x_signal_key(rest),
-            overflow_y: scroll_overflow_y_signal_key(rest),
-            hover_legacy: format!("__rui_scroll_hover_{rest}"),
-            hover_axis_x: format!("__rui_scroll_hover_{rest}:x"),
-            hover_axis_y: format!("__rui_scroll_hover_{rest}:y"),
-            scrollbar_visibility_x: scrollbar_visibility_signal_key(rest, "x"),
-            scrollbar_visibility_y: scrollbar_visibility_signal_key(rest, "y"),
-            spring_x: format!("scrollbar_spring_{rest}:x"),
-            spring_y: format!("scrollbar_spring_{rest}:y"),
-        }
-    }
-}
-
-pub fn signal_keys_for_rest_cached<'a>(
-    rest: &str,
-    cache: &'a mut HashMap<String, ScrollAreaSignalKeys>,
-) -> &'a ScrollAreaSignalKeys {
-    match cache.entry(rest.to_string()) {
-        Entry::Occupied(e) => e.into_mut(),
-        Entry::Vacant(v) => v.insert(ScrollAreaSignalKeys::new(rest)),
-    }
-}
 
 pub struct ScrollAreaBuilder {
     id: String,
@@ -133,7 +81,7 @@ pub fn scrollarea(id: &str) -> ScrollAreaBuilder {
     scroll_area(id)
 }
 
-/// ScrollArea component for overflow management.
+/// ScrollArea：viewport + 内建滚动条。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ScrollArea(
@@ -193,88 +141,6 @@ pub fn ScrollArea(
         builder = builder.child(c);
     }
     builder.into()
-}
-
-pub const SCROLL_AREA_FOCUS_PREFIX: &str = "scroll:";
-
-pub fn scroll_offset_x_signal_key(id: &str) -> String {
-    format!("__rui_scroll_x_{}", id)
-}
-
-pub fn scroll_offset_y_signal_key(id: &str) -> String {
-    format!("__rui_scroll_y_{}", id)
-}
-
-pub fn scroll_viewport_w_signal_key(id: &str) -> String {
-    format!("__rui_scroll_viewport_w_{}", id)
-}
-
-pub fn scroll_viewport_h_signal_key(id: &str) -> String {
-    format!("__rui_scroll_viewport_h_{}", id)
-}
-
-pub fn scroll_content_w_signal_key(id: &str) -> String {
-    format!("__rui_scroll_content_w_{}", id)
-}
-
-pub fn scroll_content_h_signal_key(id: &str) -> String {
-    format!("__rui_scroll_content_h_{}", id)
-}
-
-pub fn scroll_target_x_signal_key(id: &str) -> String {
-    format!("__rui_scroll_target_x_{}", id)
-}
-
-pub fn scroll_target_y_signal_key(id: &str) -> String {
-    format!("__rui_scroll_target_y_{}", id)
-}
-
-pub fn scroll_behavior_signal_key(id: &str) -> String {
-    format!("__rui_scroll_behavior_{}", id)
-}
-
-pub fn scroll_activity_signal_key(id: &str) -> String {
-    format!("__rui_scroll_activity_{}", id)
-}
-
-pub fn scroll_hover_mode_signal_key(id: &str) -> String {
-    format!("__rui_scroll_hover_mode_{}", id)
-}
-
-pub fn scroll_overflow_x_signal_key(id: &str) -> String {
-    format!("__rui_scroll_overflow_x_{}", id)
-}
-
-pub fn scroll_overflow_y_signal_key(id: &str) -> String {
-    format!("__rui_scroll_overflow_y_{}", id)
-}
-
-pub fn scroll_scrollbar_inset_signal_key(id: &str) -> String {
-    format!("__rui_scroll_scrollbar_inset_{}", id)
-}
-
-pub fn scroll_scrollbar_inset_x_signal_key(id: &str) -> String {
-    format!("__rui_scroll_scrollbar_inset_x_{}", id)
-}
-
-pub fn scroll_scrollbar_inset_y_signal_key(id: &str) -> String {
-    format!("__rui_scroll_scrollbar_inset_y_{}", id)
-}
-
-pub fn scroll_scrollbar_y_side_signal_key(id: &str) -> String {
-    format!("__rui_scroll_scrollbar_y_side_{}", id)
-}
-
-pub fn scroll_scrollbar_x_side_signal_key(id: &str) -> String {
-    format!("__rui_scroll_scrollbar_x_side_{}", id)
-}
-
-/// Matches `allow_axis` in `update_scrollbar_elements`: scrollbar widgets only for scrollable overflow modes.
-pub fn scroll_overflow_allows_scrollbar(overflow: &str) -> bool {
-    let o = overflow.trim();
-    !o.eq_ignore_ascii_case("hidden")
-        && !o.eq_ignore_ascii_case("clip")
-        && !o.eq_ignore_ascii_case("visible")
 }
 
 fn apply_scrollbar_appearance(mut b: ScrollbarBuilder, a: &ScrollAreaBuilder) -> ScrollbarBuilder {
@@ -342,25 +208,21 @@ impl ScrollAreaBuilder {
         self
     }
 
-    /// Horizontal scrollbar inset mode: `inside` | `outside` (default `inside`).
     pub fn scrollbar_inset_x(mut self, mode: impl Into<String>) -> Self {
         self.scrollbar_inset_x = mode.into();
         self
     }
 
-    /// Vertical scrollbar inset mode: `inside` | `outside` (default `inside`).
     pub fn scrollbar_inset_y(mut self, mode: impl Into<String>) -> Self {
         self.scrollbar_inset_y = mode.into();
         self
     }
 
-    /// Vertical scrollbar: `left` | `right` (default `right`).
     pub fn scrollbar_y_side(mut self, side: impl Into<String>) -> Self {
         self.scrollbar_y_side = side.into();
         self
     }
 
-    /// Horizontal scrollbar: `top` | `bottom` (default `bottom`).
     pub fn scrollbar_x_side(mut self, side: impl Into<String>) -> Self {
         self.scrollbar_x_side = side.into();
         self
@@ -371,13 +233,11 @@ impl ScrollAreaBuilder {
         self
     }
 
-    /// `capsule` (default) or `rect`.
     pub fn scrollbar_variant(mut self, v: impl Into<String>) -> Self {
         self.scrollbar_variant = v.into();
         self
     }
 
-    /// Theme token, e.g. `"secondary"` (see `parse_color`).
     pub fn scrollbar_track_color(mut self, token: impl Into<String>) -> Self {
         self.scrollbar_track_color = Some(token.into());
         self
@@ -438,26 +298,13 @@ impl ScrollAreaBuilder {
 
 impl From<ScrollAreaBuilder> for Element {
     fn from(builder: ScrollAreaBuilder) -> Element {
-        let sx_key = scroll_offset_x_signal_key(&builder.id);
-        let sy_key = scroll_offset_y_signal_key(&builder.id);
-        let behavior_key = scroll_behavior_signal_key(&builder.id);
-        let hover_mode_key = scroll_hover_mode_signal_key(&builder.id);
-        let overflow_x_key = scroll_overflow_x_signal_key(&builder.id);
-        let overflow_y_key = scroll_overflow_y_signal_key(&builder.id);
         let inset_key = scroll_scrollbar_inset_signal_key(&builder.id);
         let inset_x_key = scroll_scrollbar_inset_x_signal_key(&builder.id);
         let inset_y_key = scroll_scrollbar_inset_y_signal_key(&builder.id);
         let yside_key = scroll_scrollbar_y_side_signal_key(&builder.id);
         let xside_key = scroll_scrollbar_x_side_signal_key(&builder.id);
 
-        let sx = use_signal(&sx_key, || 0.0_f32).peek();
-        let sy = use_signal(&sy_key, || 0.0_f32).peek();
-        use_signal(&behavior_key, || builder.scroll_behavior.clone())
-            .set(builder.scroll_behavior.clone());
-        use_signal(&hover_mode_key, || builder.hover_mode.clone()).set(builder.hover_mode.clone());
-        use_signal(&overflow_x_key, || builder.overflow_x.clone()).set(builder.overflow_x.clone());
-        use_signal(&overflow_y_key, || builder.overflow_y.clone()).set(builder.overflow_y.clone());
-        // Keep legacy combined inset signal for compatibility.
+        // Product-only scrollbar chrome signals (viewport signals set in activate_scroll_viewport).
         use_signal(&inset_key, || builder.scrollbar_inset_y.clone())
             .set(builder.scrollbar_inset_y.clone());
         use_signal(&inset_x_key, || builder.scrollbar_inset_x.clone())
@@ -539,8 +386,6 @@ impl From<ScrollAreaBuilder> for Element {
                 h_scroll = h_scroll.bottom(SCROLLBAR_EDGE_PAD);
             }
         }
-        // Corner reservation is runtime-driven in `update_scrollbar_elements` using actual
-        // scrollability metrics, so we keep static inset anchors here minimal.
 
         let mut outer = builder.base.el;
 
@@ -560,32 +405,30 @@ impl From<ScrollAreaBuilder> for Element {
         outer.style.position = taffy::style::Position::Relative;
 
         let content_children = std::mem::take(&mut outer.children);
-        // Reserve exactly the inside scrollbar occupied lane:
-        // track thickness + edge inset from the viewport boundary.
         let inside_reserve = base_thickness + SCROLLBAR_EDGE_PAD;
         let add_padding = |p: &mut taffy::style::LengthPercentage, delta: f32| {
             *p = match *p {
                 taffy::style::LengthPercentage::Length(v) => {
                     taffy::style::LengthPercentage::Length((v + delta).max(0.0))
                 }
-                // Keep percentage paddings unchanged; we only add deterministic pixel reserve
-                // for the scrollbar slot when original padding is absolute.
                 taffy::style::LengthPercentage::Percent(v) => {
                     taffy::style::LengthPercentage::Percent(v)
                 }
             };
         };
-        let mut viewport = Element::new()
-            .w("100%")
-            .h("100%")
-            .focus_id(format!("{}{}", SCROLL_AREA_FOCUS_PREFIX, builder.id))
-            .overflow_x(builder.overflow_x.clone())
-            .overflow_y(builder.overflow_y.clone())
-            .scroll_offset(sx, sy)
-            .children(content_children);
+
+        let mut viewport = activate_scroll_viewport(
+            Element::new()
+                .w("100%")
+                .h("100%")
+                .children(content_children),
+            &builder.id,
+            &builder.overflow_x,
+            &builder.overflow_y,
+            &builder.scroll_behavior,
+            &builder.hover_mode,
+        );
         viewport.style.padding = padding;
-        // Inside scrollbar must reserve a transparent slot so hidden bars don't overlap
-        // content hit-testing (buttons should never accidentally hit scrollbar tracks).
         if show_v && !inset_outside_y && !v_right {
             add_padding(&mut viewport.style.padding.left, inside_reserve);
         }
@@ -608,7 +451,6 @@ impl From<ScrollAreaBuilder> for Element {
                 .min_w(0.0)
                 .min_h(0.0)
                 .w("100%");
-            // Keep viewport lane pinned to start in outside mode.
             inner_col.style.justify_content = Some(taffy::style::JustifyContent::FlexStart);
             inner_col.style.align_items = Some(taffy::style::AlignItems::Stretch);
             let vp = viewport

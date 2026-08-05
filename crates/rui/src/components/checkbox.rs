@@ -45,7 +45,7 @@ pub fn Checkbox(
     let mut builder = checkbox(&id)
         .default_checked(default_checked)
         .disabled(disabled);
-    
+
     if let Some(sig) = checked {
         builder = builder.checked_signal(sig);
     }

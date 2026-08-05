@@ -31,13 +31,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::reactivity::use_signal;
-use crate::style::InputCaretDraw;
 use crate::core::tree::{
     parse_color, parse_text_color, Element, InputPaintSync, IntoDimension, IntoF32, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, BoxBuilder};
+use crate::style::InputCaretDraw;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
@@ -49,21 +49,39 @@ pub const IME_ACTIVE_SIGNAL: &str = "__rui_ime_active";
 /// 密码掩码字符（与多数桌面 UI 一致）。
 const PASSWORD_MASK: char = '•';
 
-pub fn input_value_signal_key(id: &str) -> String { format!("__rui_input_value_{}", id) }
-pub fn input_preedit_signal_key(id: &str) -> String { format!("__rui_input_preedit_{}", id) }
-pub fn input_preedit_sel_signal_key(id: &str) -> String { format!("__rui_input_preedit_sel_{}", id) }
-pub fn input_caret_signal_key(id: &str) -> String { format!("__rui_input_caret_{}", id) }
-pub fn input_selection_signal_key(id: &str) -> String { format!("__rui_input_selection_{}", id) }
-pub fn input_overwrite_signal_key(id: &str) -> String { format!("__rui_input_overwrite_{}", id) }
-pub fn input_ime_anchor_signal_key(id: &str) -> String { format!("__rui_input_ime_anchor_{}", id) }
-pub fn input_type_signal_key(id: &str) -> String { format!("__rui_input_type_{}", id) }
+pub fn input_value_signal_key(id: &str) -> String {
+    format!("__rui_input_value_{}", id)
+}
+pub fn input_preedit_signal_key(id: &str) -> String {
+    format!("__rui_input_preedit_{}", id)
+}
+pub fn input_preedit_sel_signal_key(id: &str) -> String {
+    format!("__rui_input_preedit_sel_{}", id)
+}
+pub fn input_caret_signal_key(id: &str) -> String {
+    format!("__rui_input_caret_{}", id)
+}
+pub fn input_selection_signal_key(id: &str) -> String {
+    format!("__rui_input_selection_{}", id)
+}
+pub fn input_overwrite_signal_key(id: &str) -> String {
+    format!("__rui_input_overwrite_{}", id)
+}
+pub fn input_ime_anchor_signal_key(id: &str) -> String {
+    format!("__rui_input_ime_anchor_{}", id)
+}
+pub fn input_type_signal_key(id: &str) -> String {
+    format!("__rui_input_type_{}", id)
+}
 
 /// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
 ///
 /// 仅在聚焦编辑时挂到 `text_shape_suffix`：失焦且纯 ASCII 走 Basic shaping 时该字位易缺字形，会被画成「乱码框」。
 pub const INPUT_LINE_SHAPE_SUFFIX: &str = "\u{2009}";
 
-fn focus_id_for_input(id: &str) -> String { format!("{INPUT_FOCUS_PREFIX}{id}") }
+fn focus_id_for_input(id: &str) -> String {
+    format!("{INPUT_FOCUS_PREFIX}{id}")
+}
 
 /// HTML `<input type="…">` 的文本族子集。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -168,7 +186,11 @@ pub fn filter_number_insert(existing: &str, insert: &str) -> String {
                 has_dot = true;
                 out.push(ch);
             }
-            '-' if allow_minus_at_start && i == 0 && out.is_empty() && !existing.starts_with('-') => {
+            '-' if allow_minus_at_start
+                && i == 0
+                && out.is_empty()
+                && !existing.starts_with('-') =>
+            {
                 out.push(ch);
             }
             _ => {}
@@ -232,14 +254,14 @@ fn validate_email(v: &str) -> bool {
 fn validate_tel(v: &str) -> bool {
     let digits = v.chars().filter(|c| c.is_ascii_digit()).count();
     digits >= 3
-        && v
-            .chars()
+        && v.chars()
             .all(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*'))
 }
 
 fn validate_url(v: &str) -> bool {
     let lower = v.to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("ftp://") {
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("ftp://")
+    {
         return v.len() > 8 && !v.chars().any(|c| c.is_whitespace());
     }
     if v.contains(' ') || !v.contains('.') {
@@ -352,7 +374,7 @@ pub fn Input(
     if let Some(t) = input_type {
         builder = builder.input_type(t);
     }
-    
+
     if let Some(s) = text_size {
         builder = builder.text_size(s);
     }
@@ -366,19 +388,21 @@ pub fn Input(
         let mut old_click = el.on_click.clone();
         el = el.on_click(move || {
             if let Some(ref mut rc) = old_click {
-                 rc.borrow_mut()();
+                rc.borrow_mut()();
             }
-            (&mut on_click.0)(());
+            (on_click.0)(());
         });
 
         let mut old_key = el.on_key_down.clone();
         el = el.on_key_down(move |ev| {
             let mut handled = false;
             if let Some(ref mut rc) = old_key {
-                 handled = rc.borrow_mut()(ev.clone());
+                handled = rc.borrow_mut()(ev.clone());
             }
-            if handled { return true; }
-            (&mut on_key_down.0)(ev)
+            if handled {
+                return true;
+            }
+            (on_key_down.0)(ev)
         });
     }
 
@@ -450,7 +474,7 @@ impl InputBuilder {
         self.text_size_px = size.into_f32();
         self
     }
-    
+
     pub fn text_line_height(mut self, px: impl IntoF32) -> Self {
         self.line_height_px = Some(px.into_f32());
         self.leading_scale = None;
@@ -461,10 +485,18 @@ impl InputBuilder {
         self.line_height_px = None;
         self
     }
-    pub fn text_leading_none(self) -> Self { self.text_leading(1.0) }
-    pub fn text_leading_tight(self) -> Self { self.text_leading(1.25) }
-    pub fn text_leading_normal(self) -> Self { self.text_leading(1.5) }
-    pub fn text_leading_relaxed(self) -> Self { self.text_leading(1.625) }
+    pub fn text_leading_none(self) -> Self {
+        self.text_leading(1.0)
+    }
+    pub fn text_leading_tight(self) -> Self {
+        self.text_leading(1.25)
+    }
+    pub fn text_leading_normal(self) -> Self {
+        self.text_leading(1.5)
+    }
+    pub fn text_leading_relaxed(self) -> Self {
+        self.text_leading(1.625)
+    }
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
         self.font_weight = weight.into_f32().round() as u16;
         self
@@ -505,9 +537,13 @@ impl From<InputBuilder> for Element {
 
         let value_sig = use_signal(&input_value_signal_key(&field_id), String::new);
         let preedit_sig = use_signal(&input_preedit_signal_key(&field_id), String::new);
-        let preedit_sel_sig = use_signal(&input_preedit_sel_signal_key(&field_id), || Option::<(usize, usize)>::None);
+        let preedit_sel_sig = use_signal(&input_preedit_sel_signal_key(&field_id), || {
+            Option::<(usize, usize)>::None
+        });
         let caret_sig = use_signal(&input_caret_signal_key(&field_id), || None::<usize>);
-        let text_sel_sig = use_signal(&input_selection_signal_key(&field_id), || None::<(usize, usize)>);
+        let text_sel_sig = use_signal(&input_selection_signal_key(&field_id), || {
+            None::<(usize, usize)>
+        });
         let overwrite_sig = use_signal(&input_overwrite_signal_key(&field_id), || false);
         let ime_anchor_sig = use_signal(&input_ime_anchor_signal_key(&field_id), || None::<usize>);
 
@@ -531,19 +567,34 @@ impl From<InputBuilder> for Element {
         };
 
         let caret_in_real = if is_focused {
-            if show_placeholder { 0 }
-            else if !preedit.is_empty() {
+            if show_placeholder {
+                0
+            } else if !preedit.is_empty() {
                 let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
                 a = committed.floor_char_boundary(a);
-                let end = preedit_sel.map(|(_, e)| e).unwrap_or_else(|| preedit.len()).min(preedit.len());
+                let end = preedit_sel
+                    .map(|(_, e)| e)
+                    .unwrap_or_else(|| preedit.len())
+                    .min(preedit.len());
                 a + preedit.floor_char_boundary(end)
             } else {
                 let len = real_display.len();
-                let ix = text_sel_sig.peek().and_then(|(a, b)| if a.min(b) < a.max(b) { Some(a.max(b)) } else { None })
-                    .or_else(|| caret_sig.peek()).unwrap_or(len);
+                let ix = text_sel_sig
+                    .peek()
+                    .and_then(|(a, b)| {
+                        if a.min(b) < a.max(b) {
+                            Some(a.max(b))
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| caret_sig.peek())
+                    .unwrap_or(len);
                 real_display.floor_char_boundary(ix.min(len))
             }
-        } else { 0 };
+        } else {
+            0
+        };
 
         let mask = builder.input_type.is_password() && !show_placeholder;
         let display_text = if mask {
@@ -557,12 +608,22 @@ impl From<InputBuilder> for Element {
             caret_in_real
         };
 
-        let mut text_color = if show_placeholder { parse_text_color("muted-foreground") } else { parse_text_color("foreground") };
+        let mut text_color = if show_placeholder {
+            parse_text_color("muted-foreground")
+        } else {
+            parse_text_color("foreground")
+        };
         if builder.disabled {
             text_color[3] = (text_color[3] as f32 * 0.5) as u8;
         }
 
-        let mut border_c = if invalid { parse_color("destructive") } else if is_focused { parse_color("border-ring") } else { parse_color("input") };
+        let mut border_c = if invalid {
+            parse_color("destructive")
+        } else if is_focused {
+            parse_color("border-ring")
+        } else {
+            parse_color("input")
+        };
         let mut bg = parse_color("transparent");
         if builder.disabled {
             border_c[3] *= 0.5;
@@ -571,23 +632,31 @@ impl From<InputBuilder> for Element {
 
         let mut container = builder.container.bg(bg).border(border_c, 1.0);
         if is_focused {
-            let shadow_color = if invalid { parse_color("destructive").with_alpha(0.4) } else { parse_color("ring") };
+            let shadow_color = if invalid {
+                parse_color("destructive").with_alpha(0.4)
+            } else {
+                parse_color("ring")
+            };
             container = container.shadow(shadow_color, 3.0);
         } else if !builder.disabled {
             container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
         }
 
-        let mut text_el = build_text_node(display_text.clone(), TextNodeConfig {
-            size_px: builder.text_size_px,
-            weight: builder.font_weight,
-            color: text_color,
-            underline: false,
-            underline_offset_px: None,
-            center: false,
-            line_height_px: builder.line_height_px,
-            leading_scale: builder.leading_scale,
-            font_family: None,
-        }).w("100%");
+        let mut text_el = build_text_node(
+            display_text.clone(),
+            TextNodeConfig {
+                size_px: builder.text_size_px,
+                weight: builder.font_weight,
+                color: text_color,
+                underline: false,
+                underline_offset_px: None,
+                center: false,
+                line_height_px: builder.line_height_px,
+                leading_scale: builder.leading_scale,
+                font_family: None,
+            },
+        )
+        .w("100%");
         text_el.text_shape_suffix = if is_focused {
             Some(INPUT_LINE_SHAPE_SUFFIX.to_string())
         } else {
@@ -598,7 +667,12 @@ impl From<InputBuilder> for Element {
         if is_focused {
             let mut pc = parse_color("primary");
             pc[3] *= 0.35;
-            let selection_bg = [(pc[0] * 255.0) as u8, (pc[1] * 255.0) as u8, (pc[2] * 255.0) as u8, (pc[3] * 255.0) as u8];
+            let selection_bg = [
+                (pc[0] * 255.0) as u8,
+                (pc[1] * 255.0) as u8,
+                (pc[2] * 255.0) as u8,
+                (pc[3] * 255.0) as u8,
+            ];
             let sel_draw = if preedit.is_empty() {
                 text_sel_sig.peek().and_then(|(a, b)| {
                     if a.min(b) < a.max(b) {
@@ -616,21 +690,23 @@ impl From<InputBuilder> for Element {
             } else {
                 None
             };
-            let overwrite_highlight = if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
-                let ix = real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
-                if ix < real_display.len() {
-                    let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
-                    Some(if mask {
-                        map_byte_range_to_masked(&real_display, ix, end, &display_text)
+            let overwrite_highlight =
+                if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
+                    let ix =
+                        real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
+                    if ix < real_display.len() {
+                        let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
+                        Some(if mask {
+                            map_byte_range_to_masked(&real_display, ix, end, &display_text)
+                        } else {
+                            (ix, end)
+                        })
                     } else {
-                        (ix, end)
-                    })
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
             text_el.text_style.input_caret = Some(InputCaretDraw {
                 caret_byte_index: caret_byte,
                 selection: sel_draw,
@@ -640,7 +716,11 @@ impl From<InputBuilder> for Element {
         }
 
         let mut el: Element = container.into();
-        el = if builder.disabled { el.cursor_not_allowed() } else { el.cursor_text() };
+        el = if builder.disabled {
+            el.cursor_not_allowed()
+        } else {
+            el.cursor_text()
+        };
 
         let type_key = input_type_signal_key(&field_id);
         use_signal(&type_key, || builder.input_type.as_str().to_string())
@@ -676,6 +756,36 @@ impl From<InputBuilder> for Element {
     }
 }
 
+/// Solid-style in-place bind for `<Input invalid={sig.get()}>`.
+pub fn apply_bound_input_invalid(el: &mut Element, invalid: bool) -> LayoutStatus {
+    let Some(sync) = el.input_paint_sync.as_mut() else {
+        return LayoutStatus::Clean;
+    };
+    if sync.invalid == invalid {
+        return LayoutStatus::Clean;
+    }
+    sync.invalid = invalid;
+    LayoutStatus::StyleChanged
+}
+
+/// Solid-style in-place bind for `<Input disabled={sig.get()}>`.
+pub fn apply_bound_input_disabled(el: &mut Element, disabled: bool) -> LayoutStatus {
+    let Some(sync) = el.input_paint_sync.as_mut() else {
+        return LayoutStatus::Clean;
+    };
+    if sync.disabled == disabled {
+        return LayoutStatus::Clean;
+    }
+    sync.disabled = disabled;
+    el.focusable = !disabled;
+    el.cursor = Some(if disabled {
+        crate::core::tree::CursorKind::NotAllowed
+    } else {
+        crate::core::tree::CursorKind::Text
+    });
+    LayoutStatus::StyleChanged
+}
+
 /// 每帧将 Input 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
 pub(crate) fn sync_input_paint_subtree(
     el: &mut Element,
@@ -705,11 +815,19 @@ fn sync_one_input_paint(
 
     let committed = use_signal(&input_value_signal_key(&desc.base_id), String::new).peek();
     let preedit = use_signal(&input_preedit_signal_key(&desc.base_id), String::new).peek();
-    let preedit_sel = use_signal(&input_preedit_sel_signal_key(&desc.base_id), || Option::<(usize, usize)>::None).peek();
+    let preedit_sel = use_signal(&input_preedit_sel_signal_key(&desc.base_id), || {
+        Option::<(usize, usize)>::None
+    })
+    .peek();
     let caret_sig = use_signal(&input_caret_signal_key(&desc.base_id), || None::<usize>);
-    let text_sel_sig = use_signal(&input_selection_signal_key(&desc.base_id), || None::<(usize, usize)>);
+    let text_sel_sig = use_signal(&input_selection_signal_key(&desc.base_id), || {
+        None::<(usize, usize)>
+    });
     let overwrite_sig = use_signal(&input_overwrite_signal_key(&desc.base_id), || false);
-    let ime_anchor_sig = use_signal(&input_ime_anchor_signal_key(&desc.base_id), || None::<usize>);
+    let ime_anchor_sig = use_signal(
+        &input_ime_anchor_signal_key(&desc.base_id),
+        || None::<usize>,
+    );
     let ime_anchor = ime_anchor_sig.peek();
 
     let show_placeholder = committed.is_empty() && preedit.is_empty();
@@ -778,7 +896,13 @@ fn sync_one_input_paint(
             let len = real_display.len();
             let ix = text_sel_sig
                 .peek()
-                .and_then(|(a, b)| if a.min(b) < a.max(b) { Some(a.max(b)) } else { None })
+                .and_then(|(a, b)| {
+                    if a.min(b) < a.max(b) {
+                        Some(a.max(b))
+                    } else {
+                        None
+                    }
+                })
                 .or_else(|| caret_sig.peek())
                 .unwrap_or(len);
             real_display.floor_char_boundary(ix.min(len))
@@ -885,21 +1009,23 @@ fn sync_one_input_paint(
             } else {
                 None
             };
-            let overwrite_highlight = if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
-                let ix = real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
-                if ix < real_display.len() {
-                    let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
-                    Some(if mask {
-                        map_byte_range_to_masked(&real_display, ix, end, &display_text)
+            let overwrite_highlight =
+                if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
+                    let ix =
+                        real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
+                    if ix < real_display.len() {
+                        let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
+                        Some(if mask {
+                            map_byte_range_to_masked(&real_display, ix, end, &display_text)
+                        } else {
+                            (ix, end)
+                        })
                     } else {
-                        (ix, end)
-                    })
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
             Some(InputCaretDraw {
                 caret_byte_index: caret_byte,
                 selection: sel_draw,

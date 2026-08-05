@@ -1,26 +1,30 @@
 //! GPU 与文本渲染：管线、实例数据、glyphon 封装及每帧文本准备。
 
+pub mod cpu_text;
+pub mod emoji_detect;
+pub mod emoji_layout;
+pub mod emoji_matrix;
+pub mod emoji_svg;
+mod extended_pictographic;
+pub mod font_loader;
+pub mod offscreen;
 pub mod pipeline;
 pub mod prepare_text;
-pub mod emoji_svg;
-pub mod twemoji_name;
-pub mod emoji_detect;
-mod extended_pictographic;
-pub mod emoji_matrix;
-pub mod emoji_layout;
-pub mod cpu_text;
-pub(crate) mod text_prepare_debug;
 pub mod text;
-pub mod font_loader;
 pub mod text_hit;
+pub(crate) mod text_prepare_debug;
 pub mod textured_pipeline;
+pub mod twemoji_name;
 
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
-pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
-pub use prepare_text::prepare_text_frame;
 pub(crate) use prepare_text::caret_blink_phase;
+pub use prepare_text::prepare_text_frame;
 pub use text::RuiTextRenderer;
-pub use text_hit::{best_font_family, hit_test_input_text_index, measure_prefix_width};
+pub use text_hit::{
+    best_font_family, hit_test_input_text_index, is_single_line_text_box, measure_prefix_width,
+    truncate_with_ellipsis,
+};
+pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 
 /// 将逻辑空间实例缩放到物理像素（DPI）。
 pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceInput> {
@@ -53,6 +57,8 @@ pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceI
 pub struct TexturedDraw {
     pub rect: [f32; 4],
     pub texture_key: String,
+    /// Combined ancestor × element opacity for tint alpha.
+    pub opacity: f32,
 }
 
 /// 缩放至物理像素后的纹理绘制矩形。
@@ -60,6 +66,7 @@ pub struct TexturedDraw {
 pub struct ScaledTexturedDraw {
     pub rect: [f32; 4],
     pub texture_key: String,
+    pub opacity: f32,
 }
 
 pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTexturedDraw> {
@@ -73,6 +80,7 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
                 d.rect[3] * scale,
             ],
             texture_key: d.texture_key.clone(),
+            opacity: d.opacity,
         })
         .collect()
 }

@@ -45,7 +45,7 @@ pub fn FocusTrap(
         owner.set(String::new());
     }
 
-    let mut el = children.unwrap_or_else(|| Element::new());
+    let mut el = children.unwrap_or_else(Element::new);
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;

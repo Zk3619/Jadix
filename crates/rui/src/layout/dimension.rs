@@ -46,13 +46,13 @@ impl IntoDimension for i32 {
 impl IntoDimension for &str {
     fn into_dimension(self) -> Dimension {
         let s = self.trim();
-        if s.ends_with('%') {
-            if let Ok(val) = s[..s.len() - 1].parse::<f32>() {
+        if let Some(rest) = s.strip_suffix('%') {
+            if let Ok(val) = rest.parse::<f32>() {
                 return Dimension::Percent(val / 100.0);
             }
-        } else if s.ends_with("vw") || s.ends_with("vh") {
+        } else if let Some(rest) = s.strip_suffix("vw").or_else(|| s.strip_suffix("vh")) {
             // Taffy's Dimension has no viewport unit, fallback to percent semantics.
-            if let Ok(val) = s[..s.len() - 2].parse::<f32>() {
+            if let Ok(val) = rest.parse::<f32>() {
                 return Dimension::Percent(val / 100.0);
             }
         } else if let Some(val) = parse_css_length_px(s, CSS_ROOT_FONT_SIZE_PX) {

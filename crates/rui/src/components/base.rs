@@ -241,7 +241,6 @@ impl BaseComponentBuilder {
         self
     }
 
-
     pub fn top(mut self, val: impl IntoDimension) -> Self {
         self.el = self.el.top(val);
         self
@@ -251,11 +250,15 @@ impl BaseComponentBuilder {
         self
     }
     pub fn relative(mut self, r: bool) -> Self {
-        if r { self.el = self.el.relative(); }
+        if r {
+            self.el = self.el.relative();
+        }
         self
     }
     pub fn absolute(mut self, a: bool) -> Self {
-        if a { self.el = self.el.absolute(); }
+        if a {
+            self.el = self.el.absolute();
+        }
         self
     }
     pub fn bottom(mut self, val: impl IntoDimension) -> Self {
@@ -398,7 +401,6 @@ impl BaseComponentBuilder {
         self
     }
 
-
     // Layout
     pub fn items(mut self, align: impl Into<String>) -> Self {
         let s = align.into();
@@ -496,11 +498,22 @@ impl BaseComponentBuilder {
         self
     }
     pub fn overflow_x(mut self, o: impl Into<String>) -> Self {
-        self.el.set_attr("overflow_x", o.into());
+        let o = o.into();
+        self.el = self.el.overflow_x(o.as_str());
+        self.el.set_attr("overflow_x", o);
         self
     }
     pub fn overflow_y(mut self, o: impl Into<String>) -> Self {
-        self.el.set_attr("overflow_y", o.into());
+        let o = o.into();
+        self.el = self.el.overflow_y(o.as_str());
+        self.el.set_attr("overflow_y", o);
+        self
+    }
+    pub fn overflow(mut self, o: impl Into<String>) -> Self {
+        let o = o.into();
+        self.el = self.el.overflow(o.as_str());
+        self.el.set_attr("overflow_x", o.clone());
+        self.el.set_attr("overflow_y", o);
         self
     }
     pub fn scrollbar_variant(mut self, v: impl Into<String>) -> Self {

@@ -4,8 +4,8 @@
 use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use crate::tokens;
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 
 pub(crate) fn stub_label(text: &str, muted: bool) -> Element {
     let color = if muted {
@@ -77,10 +77,7 @@ pub(crate) fn stub_trigger(id: &str, leading: Element, main: Element, disabled: 
     } else {
         row.cursor_kind(CursorKind::Pointer)
     };
-    let mut out: Element = interactive(cursor)
-        .focus_id(id)
-        .focusable(!disabled)
-        .into();
+    let mut out: Element = interactive(cursor).focus_id(id).focusable(!disabled).into();
     out.template_id = Some(id.to_string());
     out
 }

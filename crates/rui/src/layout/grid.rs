@@ -14,7 +14,7 @@ pub fn tracks_fr(weights: &[f32]) -> Vec<TrackSizingFunction> {
     weights
         .iter()
         .copied()
-        .map(|w| flex::<f32, TrackSizingFunction>(w))
+        .map(flex::<f32, TrackSizingFunction>)
         .collect()
 }
 

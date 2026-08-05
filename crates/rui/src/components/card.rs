@@ -26,7 +26,7 @@ use rui_macros::component;
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Card(children: Option<Element>) -> Element {
-    let child = children.unwrap_or_else(|| Element::new());
+    let child = children.unwrap_or_else(Element::new);
     Element::from(
         vstack()
             .w("100%")

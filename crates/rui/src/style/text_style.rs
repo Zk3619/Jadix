@@ -1,6 +1,14 @@
 //! 文本排版与绘制相关样式（字号、字重、颜色、装饰线、阴影、对齐等）。
 //! 与 [`super::Style`]（盒模型 / Taffy）分离：后者管布局，本模块管「字怎么画」。
 
+/// 文本溢出策略（单行裁剪 / 省略号）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+}
+
 /// 文本装饰线线型（与 CSS `text-decoration-style` 对齐）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextDecorationStyle {
@@ -46,6 +54,10 @@ pub struct TextStyle {
     /// 行高相对字号的倍率。`None` 表示使用默认策略。
     pub line_height_scale: Option<f32>,
     pub align: glyphon::cosmic_text::Align,
+    /// 单行盒宽不足时的溢出策略。
+    pub overflow: TextOverflow,
+    /// 静态文本是否允许拖选（MVP：样式标记；绘制走 `input_caret` 选区路径）。
+    pub selectable: bool,
     /// 若存在，在 [`crate::renderer::prepare_text`] 中额外绘制文本插入符（需焦点与闪烁相位）。
     pub input_caret: Option<InputCaretDraw>,
 }
@@ -70,6 +82,8 @@ impl Default for TextStyle {
             line_height_px: None,
             line_height_scale: None,
             align: glyphon::cosmic_text::Align::Left,
+            overflow: TextOverflow::Clip,
+            selectable: false,
             input_caret: None,
         }
     }
@@ -88,10 +102,18 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
         return raw.trim().parse::<f32>().ok();
     }
     if let Some(raw) = t.strip_suffix("rem") {
-        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+        return raw
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * root_font_size_px);
     }
     if let Some(raw) = t.strip_suffix("em") {
-        return raw.trim().parse::<f32>().ok().map(|v| v * root_font_size_px);
+        return raw
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| v * root_font_size_px);
     }
     None
 }
@@ -132,7 +154,24 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 
 #[cfg(test)]
 mod tests {
-    use super::parse_text_shadow;
+    use super::{parse_text_shadow, TextOverflow, TextStyle};
+
+    #[test]
+    fn text_style_overflow_and_selectable_defaults() {
+        let s = TextStyle::default();
+        assert_eq!(s.overflow, TextOverflow::Clip);
+        assert!(!s.selectable);
+    }
+
+    #[test]
+    fn element_selectable_and_overflow_roundtrip() {
+        let el = crate::core::tree::Element::new()
+            .text("hi")
+            .selectable(true)
+            .text_overflow_ellipsis();
+        assert!(el.text_style.selectable);
+        assert_eq!(el.text_style.overflow, TextOverflow::Ellipsis);
+    }
 
     fn approx_eq(a: f32, b: f32) {
         assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");

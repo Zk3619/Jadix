@@ -7,12 +7,10 @@ pub fn global_byte_to_line_local(shape_text: &str, global_byte: usize) -> Option
     if global_byte > shape_text.len() {
         return None;
     }
-    let mut line_i = 0usize;
-    for (range, _) in LineIter::new(shape_text) {
+    for (line_i, (range, _)) in LineIter::new(shape_text).enumerate() {
         if global_byte >= range.start && global_byte < range.end {
             return Some((line_i, global_byte - range.start));
         }
-        line_i += 1;
     }
     None
 }
@@ -54,8 +52,8 @@ pub fn custom_emoji_left_top(
     let (run, g) = find_glyph_for_line_byte(buffer, line_i, local)?;
     let physical = g.physical((text_area_left, text_area_top), scale);
     let image = swash_cache.get_image_uncached(font_system, physical.cache_key)?;
-    let x_quad = physical.x + image.placement.left as i32;
-    let y_quad = (run.line_y * scale).round() as i32 + physical.y - image.placement.top as i32;
+    let x_quad = physical.x + image.placement.left;
+    let y_quad = (run.line_y * scale).round() as i32 + physical.y - image.placement.top;
     let left = (x_quad as f32 - text_area_left) / scale;
     let top = (y_quad as f32 - text_area_top) / scale;
     Some((left, top))

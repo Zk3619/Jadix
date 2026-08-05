@@ -99,14 +99,17 @@ impl super::App {
         format!("__rui_scroll_hover_{rest}:{a}")
     }
 
-    fn scroll_axis_enabled_by_overflow(rest: &str, axis: super::scroll_support::ScrollAxis) -> bool {
+    fn scroll_axis_enabled_by_overflow(
+        rest: &str,
+        axis: super::scroll_support::ScrollAxis,
+    ) -> bool {
         let ox = crate::core::reactivity::use_signal(
-            &crate::components::scroll_area::scroll_overflow_x_signal_key(rest),
+            &crate::core::scroll_viewport::scroll_overflow_x_signal_key(rest),
             || "auto".to_string(),
         )
         .peek();
         let oy = crate::core::reactivity::use_signal(
-            &crate::components::scroll_area::scroll_overflow_y_signal_key(rest),
+            &crate::core::scroll_viewport::scroll_overflow_y_signal_key(rest),
             || "auto".to_string(),
         )
         .peek();
@@ -114,7 +117,7 @@ impl super::App {
             super::scroll_support::ScrollAxis::X => ox.as_str(),
             super::scroll_support::ScrollAxis::Y => oy.as_str(),
         };
-        crate::components::scroll_area::scroll_overflow_allows_scrollbar(o)
+        crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(o)
     }
 
     fn peek_scrollbar_visibility(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
@@ -141,9 +144,13 @@ impl super::App {
         crate::style::use_scrollbar_visibility_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
     }
 
-    pub(super) fn handle_cursor_moved(&mut self, id: WindowId, position: winit::dpi::PhysicalPosition<f64>) {
+    pub(super) fn handle_cursor_moved(
+        &mut self,
+        id: WindowId,
+        position: winit::dpi::PhysicalPosition<f64>,
+    ) {
         let mut state_borrow = self.state.borrow_mut();
-        let state = match (&mut *state_borrow).as_mut() {
+        let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
@@ -158,7 +165,8 @@ impl super::App {
         // under the cursor and keep its hover signal set while we remain inside.
         let mut hover_rest: Option<String> = None;
         let mut hover_axis: Option<(String, super::scroll_support::ScrollAxis)> = None;
-        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
+        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+        {
             if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
                 // Hovering scrollbar track/thumb should only affect that axis.
                 // Do not set area-hover here, otherwise both axes are treated as hovered.
@@ -176,8 +184,9 @@ impl super::App {
             );
             // `collect_scroll_chain_at` only keeps the topmost branch; first is deepest.
             if let Some((rest, _, _, _)) = targets.first() {
-                let key = crate::components::scroll_area::scroll_hover_mode_signal_key(rest);
-                let mode = crate::core::reactivity::use_signal(&key, || "scrollbar".to_string()).get();
+                let key = crate::core::scroll_viewport::scroll_hover_mode_signal_key(rest);
+                let mode =
+                    crate::core::reactivity::use_signal(&key, || "scrollbar".to_string()).get();
                 if mode.eq_ignore_ascii_case("area") {
                     hover_rest = Some(rest.clone());
                 }
@@ -191,63 +200,110 @@ impl super::App {
                     super::scroll_support::ScrollAxis::Y => y,
                 };
                 let span = (drag.track_len - drag.thumb_len).max(1.0);
-                let thumb_pos = (cursor_axis - drag.track_start - drag.grab_offset).clamp(0.0, span);
+                let thumb_pos =
+                    (cursor_axis - drag.track_start - drag.grab_offset).clamp(0.0, span);
                 let t = (thumb_pos / span).clamp(0.0, 1.0);
                 Some((drag.rest.clone(), drag.axis, drag.max_offset * t))
             } else {
                 None
             };
 
-        let drag_sel_update: Option<(String, usize, usize)> =
-            if self.left_button_down && self.scrollbar_drag.is_none() {
-                if let Some(rest) = self.input_drag_rest.as_ref() {
-                    if let Some((bounds, display_el, style, leaf_scroll)) =
-                        super::tree_hit::find_input_text_leaf_for_rest(&state.root_element, None, rest)
-                    {
-                        let vk = crate::components::input::input_value_signal_key(rest);
-                        let pk = crate::components::input::input_preedit_signal_key(rest);
-                        let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
-                        let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
-                        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
-                        let ime_anchor =
-                            crate::core::reactivity::use_signal(&ak, || None::<usize>).get();
-                        let display_owned = if committed.is_empty() && pre.is_empty() {
-                            display_el.clone()
-                        } else {
-                            super::tree_hit::input_display_text(&committed, &pre, ime_anchor)
-                        };
-                        let ui_scale = scale.max(1.0);
-                        let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
-                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                        let ix = crate::renderer::hit_test_input_text_index(
-                            &mut state.text_renderer.font_system,
-                            &display_owned,
-                            mx,
-                            my,
-                            bounds,
-                            &style,
-                            ui_scale,
-                        );
-                        let caret_ix = if committed.is_empty() && pre.is_empty() { 0 } else { ix };
-                        let lo = self.input_drag_anchor.min(caret_ix);
-                        let hi = self.input_drag_anchor.max(caret_ix);
-                        Some((rest.clone(), lo, hi))
+        let drag_sel_update: Option<(String, usize, usize)> = if self.left_button_down
+            && self.scrollbar_drag.is_none()
+        {
+            if let Some(rest) = self.input_drag_rest.as_ref() {
+                if let Some((bounds, display_el, style, leaf_scroll)) =
+                    super::tree_hit::find_input_text_leaf_for_rest(&state.root_element, None, rest)
+                {
+                    let vk = crate::components::input::input_value_signal_key(rest);
+                    let pk = crate::components::input::input_preedit_signal_key(rest);
+                    let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
+                    let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
+                    let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+                    let ime_anchor =
+                        crate::core::reactivity::use_signal(&ak, || None::<usize>).get();
+                    let display_owned = if committed.is_empty() && pre.is_empty() {
+                        display_el.clone()
                     } else {
-                        None
-                    }
+                        super::tree_hit::input_display_text(&committed, &pre, ime_anchor)
+                    };
+                    let ui_scale = scale.max(1.0);
+                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    let ix = crate::renderer::hit_test_input_text_index(
+                        &mut state.text_renderer.font_system,
+                        &display_owned,
+                        mx,
+                        my,
+                        bounds,
+                        &style,
+                        ui_scale,
+                    );
+                    let caret_ix = if committed.is_empty() && pre.is_empty() {
+                        0
+                    } else {
+                        ix
+                    };
+                    let lo = self.input_drag_anchor.min(caret_ix);
+                    let hi = self.input_drag_anchor.max(caret_ix);
+                    Some((rest.clone(), lo, hi))
+                } else {
+                    None
+                }
+            } else if let Some(key) = self.label_drag_key.as_ref() {
+                if let Some((bounds, display_el, style, leaf_scroll)) =
+                    super::tree_hit::find_selectable_text_leaf_for_key(&state.root_element, key)
+                {
+                    let ui_scale = scale.max(1.0);
+                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    let ix = crate::renderer::hit_test_input_text_index(
+                        &mut state.text_renderer.font_system,
+                        &display_el,
+                        mx,
+                        my,
+                        bounds,
+                        &style,
+                        ui_scale,
+                    );
+                    let lo = self.label_drag_anchor.min(ix);
+                    let hi = self.label_drag_anchor.max(ix);
+                    Some((key.clone(), lo, hi))
                 } else {
                     None
                 }
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
+
+        let label_drag_sel_update = drag_sel_update.as_ref().and_then(|(key, lo, hi)| {
+            if self.label_drag_key.as_deref() == Some(key.as_str()) {
+                Some((key.clone(), *lo, *hi))
+            } else {
+                None
+            }
+        });
+        let input_drag_sel_update = drag_sel_update.and_then(|(key, lo, hi)| {
+            if self.input_drag_rest.as_deref() == Some(key.as_str()) {
+                Some((key, lo, hi))
+            } else {
+                None
+            }
+        });
 
         if self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
                 // 指针不在本列表任一拖拽手柄上时，回到「源行」下标，避免 hover 卡在最后一根有效行。
                 let mut new_hover = drag.from_index;
-                if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
-                    if let Some((lid, idx)) = crate::utils::drag_reorder::parse_drag_item_focus_id(&fid) {
+                if let Some(fid) =
+                    super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+                {
+                    if let Some((lid, idx)) =
+                        crate::utils::drag_reorder::parse_drag_item_focus_id(&fid)
+                    {
                         if lid == drag.list_id {
                             new_hover = idx;
                         }
@@ -266,7 +322,6 @@ impl super::App {
         let mut to_run = Vec::new();
         super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
 
-        
         if let Some(cursor) = cursor_pick {
             window.set_cursor(match cursor {
                 crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
@@ -309,7 +364,7 @@ impl super::App {
                 let k = format!("__rui_scroll_hover_{}", rest);
                 crate::core::reactivity::use_signal(&k, || false).set(true);
                 hover_state_changed = true;
-                if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
             }
@@ -323,7 +378,7 @@ impl super::App {
         // Hover-driven visibility must trigger at least one redraw; otherwise scrollbar spring
         // won't advance from hidden alpha until another unrelated redraw happens.
         if hover_state_changed {
-            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
             }
         }
@@ -331,37 +386,48 @@ impl super::App {
         if let Some((rest, axis, new_offset)) = scrollbar_drag_update {
             self.bump_scrollbar_visible_until_axis(&rest, axis, std::time::Instant::now());
             match axis {
-                super::scroll_support::ScrollAxis::X => super::scroll_support::set_scroll_offset_with_behavior(
-                    &rest,
-                    new_offset,
-                    crate::core::reactivity::use_signal(
-                        &crate::components::scroll_area::scroll_offset_y_signal_key(&rest),
-                        || 0.0_f32,
+                super::scroll_support::ScrollAxis::X => {
+                    super::scroll_support::set_scroll_offset_with_behavior(
+                        &rest,
+                        new_offset,
+                        crate::core::reactivity::use_signal(
+                            &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+                            || 0.0_f32,
+                        )
+                        .get(),
+                        true,
                     )
-                    .get(),
-                    true,
-                ),
-                super::scroll_support::ScrollAxis::Y => super::scroll_support::set_scroll_offset_with_behavior(
-                    &rest,
-                    crate::core::reactivity::use_signal(
-                        &crate::components::scroll_area::scroll_offset_x_signal_key(&rest),
-                        || 0.0_f32,
+                }
+                super::scroll_support::ScrollAxis::Y => {
+                    super::scroll_support::set_scroll_offset_with_behavior(
+                        &rest,
+                        crate::core::reactivity::use_signal(
+                            &crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest),
+                            || 0.0_f32,
+                        )
+                        .get(),
+                        new_offset,
+                        true,
                     )
-                    .get(),
-                    new_offset,
-                    true,
-                ),
+                }
             }
-            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
             }
         }
-        if let Some((rest, lo, hi)) = drag_sel_update {
+        if let Some((rest, lo, hi)) = input_drag_sel_update {
             let sk = crate::components::input::input_selection_signal_key(&rest);
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
         }
+        if let Some((key, lo, hi)) = label_drag_sel_update {
+            let sk = crate::components::label::label_selection_signal_key(&key);
+            crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                st.window.request_redraw();
+            }
+        }
         for (cb, is_hover) in to_run {
-            (&mut *cb.borrow_mut())(is_hover);
+            (*cb.borrow_mut())(is_hover);
         }
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
@@ -374,7 +440,7 @@ impl super::App {
 
     pub(super) fn handle_cursor_left(&mut self, id: WindowId) {
         let mut state_borrow = self.state.borrow_mut();
-        let state = match (&mut *state_borrow).as_mut() {
+        let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
@@ -399,7 +465,7 @@ impl super::App {
 
     pub(super) fn handle_mouse_input(&mut self, id: WindowId, element_state: ElementState) {
         let mut state_borrow = self.state.borrow_mut();
-        let state = match (&mut *state_borrow).as_mut() {
+        let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
@@ -409,6 +475,7 @@ impl super::App {
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
 
         let mut input_drag: Option<(String, usize)> = None;
+        let mut label_drag: Option<(String, usize)> = None;
         if element_state == ElementState::Pressed {
             if let Some((rest, bounds, display_el, style, leaf_scroll)) =
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
@@ -427,18 +494,38 @@ impl super::App {
                 let pk = crate::components::input::input_preedit_signal_key(&rest);
                 let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
                 let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
-                let caret_ix = if committed.is_empty() && pre.is_empty() { 0 } else { ix };
+                let caret_ix = if committed.is_empty() && pre.is_empty() {
+                    0
+                } else {
+                    ix
+                };
                 input_drag = Some((rest, caret_ix));
+            } else if let Some((key, bounds, display_el, style, leaf_scroll)) =
+                super::tree_hit::find_selectable_text_at(&state.root_element, x, y, [0.0, 0.0])
+            {
+                let ui_scale = scale.max(1.0);
+                let ix = crate::renderer::hit_test_input_text_index(
+                    &mut state.text_renderer.font_system,
+                    &display_el,
+                    x + leaf_scroll[0],
+                    y + leaf_scroll[1],
+                    bounds,
+                    &style,
+                    ui_scale,
+                );
+                label_drag = Some((key, ix));
             }
         }
 
         if element_state == ElementState::Pressed {
-            if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
-                if let Some((rest, axis, is_thumb)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
+            if let Some(fid) =
+                super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+            {
+                if let Some((rest, axis, is_thumb)) =
+                    super::scroll_support::parse_scrollbar_focus_id(&fid)
+                {
                     let metrics = self.scroll_metrics_cache.get(&rest).copied();
-                    if let Some((_area_bounds, [max_x, max_y], _)) =
-                        metrics
-                    {
+                    if let Some((_area_bounds, [max_x, max_y], _)) = metrics {
                         let axis_ch = match axis {
                             super::scroll_support::ScrollAxis::X => "x",
                             super::scroll_support::ScrollAxis::Y => "y",
@@ -455,43 +542,64 @@ impl super::App {
                             rest,
                             axis_ch
                         );
-                         if let (Some((track_bounds, track_scroll)), Some((thumb_bounds, thumb_scroll))) = (
-                            super::tree_hit::find_bounds_by_focus_id(&state.root_element, &track_fid, [0.0, 0.0]),
-                            super::tree_hit::find_bounds_by_focus_id(&state.root_element, &thumb_fid, [0.0, 0.0]),
+                        if let (
+                            Some((track_bounds, track_scroll)),
+                            Some((thumb_bounds, thumb_scroll)),
+                        ) = (
+                            super::tree_hit::find_bounds_by_focus_id(
+                                &state.root_element,
+                                &track_fid,
+                                [0.0, 0.0],
+                            ),
+                            super::tree_hit::find_bounds_by_focus_id(
+                                &state.root_element,
+                                &thumb_fid,
+                                [0.0, 0.0],
+                            ),
                         ) {
-                            let (track_start, track_len, thumb_len, max_offset, cursor_axis, thumb_start) =
-                                match axis {
-                                    super::scroll_support::ScrollAxis::X => (
-                                        track_bounds[0] - track_scroll[0],
-                                        track_bounds[2].max(1.0),
-                                        thumb_bounds[2].max(1.0),
-                                        max_x,
-                                        x,
-                                        thumb_bounds[0] - thumb_scroll[0],
-                                    ),
-                                    super::scroll_support::ScrollAxis::Y => (
-                                        track_bounds[1] - track_scroll[1],
-                                        track_bounds[3].max(1.0),
-                                        thumb_bounds[3].max(1.0),
-                                        max_y,
-                                        y,
-                                        thumb_bounds[1] - thumb_scroll[1],
-                                    ),
-                                };
+                            let (
+                                track_start,
+                                track_len,
+                                thumb_len,
+                                max_offset,
+                                cursor_axis,
+                                thumb_start,
+                            ) = match axis {
+                                super::scroll_support::ScrollAxis::X => (
+                                    track_bounds[0] - track_scroll[0],
+                                    track_bounds[2].max(1.0),
+                                    thumb_bounds[2].max(1.0),
+                                    max_x,
+                                    x,
+                                    thumb_bounds[0] - thumb_scroll[0],
+                                ),
+                                super::scroll_support::ScrollAxis::Y => (
+                                    track_bounds[1] - track_scroll[1],
+                                    track_bounds[3].max(1.0),
+                                    thumb_bounds[3].max(1.0),
+                                    max_y,
+                                    y,
+                                    thumb_bounds[1] - thumb_scroll[1],
+                                ),
+                            };
                             drop(state_borrow);
                             let focus_visible =
-                                crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+                                crate::core::reactivity::use_signal("__rui_focus_visible", || {
+                                    false
+                                });
                             focus_visible.set(false);
                             if is_thumb {
-                                self.scrollbar_drag = Some(super::scroll_support::ScrollbarDragState {
-                                    rest,
-                                    axis,
-                                    track_start,
-                                    track_len,
-                                    thumb_len,
-                                    max_offset,
-                                    grab_offset: (cursor_axis - thumb_start).clamp(0.0, thumb_len),
-                                });
+                                self.scrollbar_drag =
+                                    Some(super::scroll_support::ScrollbarDragState {
+                                        rest,
+                                        axis,
+                                        track_start,
+                                        track_len,
+                                        thumb_len,
+                                        max_offset,
+                                        grab_offset: (cursor_axis - thumb_start)
+                                            .clamp(0.0, thumb_len),
+                                    });
                             } else {
                                 let span = (track_len - thumb_len).max(1.0);
                                 let thumb_pos =
@@ -499,46 +607,41 @@ impl super::App {
                                 let t = (thumb_pos / span).clamp(0.0, 1.0);
                                 let target = max_offset * t;
                                 let behavior_key =
-                                    crate::components::scroll_area::scroll_behavior_signal_key(&rest);
-                                let behavior = crate::core::reactivity::use_signal(&behavior_key, || {
-                                    "auto".to_string()
-                                })
-                                .get();
+                                    crate::core::scroll_viewport::scroll_behavior_signal_key(&rest);
+                                let behavior =
+                                    crate::core::reactivity::use_signal(&behavior_key, || {
+                                        "auto".to_string()
+                                    })
+                                    .get();
                                 let immediate = !behavior.eq_ignore_ascii_case("smooth");
                                 match axis {
                                     super::scroll_support::ScrollAxis::X => {
                                         let cur_y = crate::core::reactivity::use_signal(
-                                            &crate::components::scroll_area::scroll_offset_y_signal_key(
+                                            &crate::core::scroll_viewport::scroll_offset_y_signal_key(
                                                 &rest,
                                             ),
                                             || 0.0_f32,
                                         )
                                         .get();
                                         super::scroll_support::set_scroll_offset_with_behavior(
-                                            &rest,
-                                            target,
-                                            cur_y,
-                                            immediate,
+                                            &rest, target, cur_y, immediate,
                                         );
                                     }
                                     super::scroll_support::ScrollAxis::Y => {
                                         let cur_x = crate::core::reactivity::use_signal(
-                                            &crate::components::scroll_area::scroll_offset_x_signal_key(
+                                            &crate::core::scroll_viewport::scroll_offset_x_signal_key(
                                                 &rest,
                                             ),
                                             || 0.0_f32,
                                         )
                                         .get();
                                         super::scroll_support::set_scroll_offset_with_behavior(
-                                            &rest,
-                                            cur_x,
-                                            target,
-                                            immediate,
+                                            &rest, cur_x, target, immediate,
                                         );
                                     }
                                 }
                             }
-                            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
                             }
                             return;
@@ -547,8 +650,12 @@ impl super::App {
                 }
             }
             if self.scrollbar_drag.is_none() && self.drag_reorder.is_none() {
-                if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
-                    if let Some((list_id, idx)) = crate::utils::drag_reorder::parse_drag_item_focus_id(&fid) {
+                if let Some(fid) =
+                    super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+                {
+                    if let Some((list_id, idx)) =
+                        crate::utils::drag_reorder::parse_drag_item_focus_id(&fid)
+                    {
                         drop(state_borrow);
                         self.drag_reorder = Some(crate::utils::drag_reorder::DragReorderState {
                             list_id: list_id.clone(),
@@ -557,10 +664,11 @@ impl super::App {
                         });
                         let hk = crate::utils::drag_reorder::drag_hover_signal_key(&list_id);
                         crate::core::reactivity::use_signal(&hk, || None::<usize>).set(Some(idx));
-                        let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+                        let focus_visible =
+                            crate::core::reactivity::use_signal("__rui_focus_visible", || false);
                         focus_visible.set(false);
                         self.left_button_down = true;
-                        if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                             st.window.request_redraw();
                         }
                         return;
@@ -568,16 +676,64 @@ impl super::App {
                 }
             }
 
-            let cb_to_run = super::tree_hit::find_click(&state.root_element, x, y, [0.0, 0.0]);
+            let capture = super::pointer_capture_id();
+            let path = if let Some(ref id) = capture {
+                if let Some(el) =
+                    super::pointer_events::find_by_focus_id(&state.root_element, id.as_str())
+                {
+                    vec![super::pointer_events::HitPathEntry {
+                        focus_id: el.focus_id.clone(),
+                        on_pointer_down: el.on_pointer_down.clone(),
+                        on_pointer_up: el.on_pointer_up.clone(),
+                        on_click: el.on_click.clone(),
+                        on_context_menu: el.on_context_menu.clone(),
+                        on_double_click: el.on_double_click.clone(),
+                    }]
+                } else {
+                    super::pointer_events::hit_path(&state.root_element, x, y)
+                }
+            } else {
+                super::pointer_events::hit_path(&state.root_element, x, y)
+            };
+            let cb_to_run = path
+                .iter()
+                .rev()
+                .find_map(|e| e.on_click.clone())
+                .or_else(|| {
+                    super::pointer_events::resolve_click_with_capture(
+                        &state.root_element,
+                        x,
+                        y,
+                        capture.as_deref(),
+                    )
+                });
             drop(state_borrow);
-            let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+            let focus_visible =
+                crate::core::reactivity::use_signal("__rui_focus_visible", || false);
             focus_visible.set(false);
             // Focus chrome is applied in render via `peek`; without a redraw, click-to-clear / click-to-focus
             // would lag until the next unrelated frame.
             let mut need_paint_sync_redraw = true;
 
-            if let Some(cb) = cb_to_run {
-                (&mut *cb.borrow_mut())();
+            let detail = self.click_count.max(1);
+            let mut pev = super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
+            super::pointer_events::dispatch_pointer(
+                &path,
+                &mut pev,
+                super::pointer_events::PointerKind::Down,
+            );
+            if detail >= 2 && !pev.is_consumed() {
+                let mut pev2 =
+                    super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
+                super::pointer_events::dispatch_pointer(
+                    &path,
+                    &mut pev2,
+                    super::pointer_events::PointerKind::DoubleClick,
+                );
+            } else if !pev.is_consumed() {
+                if let Some(cb) = cb_to_run {
+                    (*cb.borrow_mut())();
+                }
             }
 
             if let Some((rest, caret_ix)) = input_drag {
@@ -588,12 +744,22 @@ impl super::App {
                     .set(Some((caret_ix, caret_ix)));
                 self.input_drag_rest = Some(rest);
                 self.input_drag_anchor = caret_ix;
+                self.label_drag_key = None;
+                self.left_button_down = true;
+                need_paint_sync_redraw = true;
+            } else if let Some((key, caret_ix)) = label_drag {
+                let sk = crate::components::label::label_selection_signal_key(&key);
+                crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                    .set(Some((caret_ix, caret_ix)));
+                self.label_drag_key = Some(key);
+                self.label_drag_anchor = caret_ix;
+                self.input_drag_rest = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
             }
 
             if need_paint_sync_redraw {
-                if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
             }
@@ -608,7 +774,7 @@ impl super::App {
                     let ck = crate::utils::drag_reorder::drag_commit_signal_key(&st_drag.list_id);
                     crate::core::reactivity::use_signal(&ck, || None::<(usize, usize)>)
                         .set(Some((st_drag.from_index, h)));
-                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }
                 }
@@ -619,7 +785,18 @@ impl super::App {
                 let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
                 if let Some((a, b)) = sel {
                     if a == b {
-                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                            .set(None);
+                    }
+                }
+            }
+            if let Some(key) = self.label_drag_key.take() {
+                let sk = crate::components::label::label_selection_signal_key(&key);
+                let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
+                if let Some((a, b)) = sel {
+                    if a == b {
+                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                            .set(None);
                     }
                 }
             }
@@ -631,12 +808,14 @@ impl super::App {
         let lines = super::scroll_support::get_system_scroll_lines();
         let line_height = 25.0; // Base line height for scrolling
         let (dx, dy) = match delta {
-            MouseScrollDelta::LineDelta(dx, dy) => (dx * lines * line_height, dy * lines * line_height),
+            MouseScrollDelta::LineDelta(dx, dy) => {
+                (dx * lines * line_height, dy * lines * line_height)
+            }
             MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
         };
 
         let mut state_borrow = self.state.borrow_mut();
-        let state = match (&mut *state_borrow).as_mut() {
+        let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
@@ -654,16 +833,13 @@ impl super::App {
             &mut target_rests,
         );
 
-        let metrics_for_rest = |rest: &str| {
-            self.scroll_metrics_cache
-                .get(rest)
-                .copied()
-        };
+        let metrics_for_rest = |rest: &str| self.scroll_metrics_cache.get(rest).copied();
 
         // When wheel happens over a scrollbar track/thumb, prioritize that target scroll area.
         // This fixes cases where hit-chain returns an unrelated ancestor (or none), causing
         // wheel input to be ignored while cursor is on the scrollbar itself.
-        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0]) {
+        if let Some(fid) = super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+        {
             if let Some((rest, _, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid) {
                 if metrics_for_rest(&rest).is_some() {
                     target_rests.retain(|r| r != &rest);
@@ -675,12 +851,13 @@ impl super::App {
         // We'll capture at most one scroll area (deepest first); metrics are loaded lazily
         // to avoid precomputing extent for every ancestor on each wheel tick.
         let mut captured: Option<(String, f32, f32, f32, f32)> = None;
+        #[cfg(debug_assertions)]
         let candidate_count = target_rests.len();
         for rest in target_rests {
             let Some((_, [max_x, max_y], _)) = metrics_for_rest(&rest) else {
                 continue;
             };
-            let keys = crate::components::scroll_area::signal_keys_for_rest_cached(
+            let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                 &rest,
                 &mut self.scroll_signal_key_cache,
             );
@@ -706,15 +883,30 @@ impl super::App {
             // Show scrollbar immediately and keep it visible for a while.
             let now = std::time::Instant::now();
             if dx.abs() > 0.1 {
-                self.bump_scrollbar_visible_until_axis(&rest, super::scroll_support::ScrollAxis::X, now);
+                self.bump_scrollbar_visible_until_axis(
+                    &rest,
+                    super::scroll_support::ScrollAxis::X,
+                    now,
+                );
             }
             if dy.abs() > 0.1 {
-                self.bump_scrollbar_visible_until_axis(&rest, super::scroll_support::ScrollAxis::Y, now);
+                self.bump_scrollbar_visible_until_axis(
+                    &rest,
+                    super::scroll_support::ScrollAxis::Y,
+                    now,
+                );
             }
 
             // Smooth policy (per requirement): wheel updates target; content animates toward it (no sudden jumps).
-            let (offset_x_key, offset_y_key, target_x_key, target_y_key, behavior_key, activity_key) = {
-                let keys = crate::components::scroll_area::signal_keys_for_rest_cached(
+            let (
+                offset_x_key,
+                offset_y_key,
+                target_x_key,
+                target_y_key,
+                behavior_key,
+                activity_key,
+            ) = {
+                let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                     &rest,
                     &mut self.scroll_signal_key_cache,
                 );
@@ -727,8 +919,8 @@ impl super::App {
                     keys.activity.clone(),
                 )
             };
-            let behavior = crate::core::reactivity::use_signal(&behavior_key, || "auto".to_string())
-                .peek();
+            let behavior =
+                crate::core::reactivity::use_signal(&behavior_key, || "auto".to_string()).peek();
             let is_smooth_mode = behavior.eq_ignore_ascii_case("smooth");
 
             let sx = crate::core::reactivity::use_signal(&offset_x_key, || 0.0_f32);
@@ -749,10 +941,16 @@ impl super::App {
 
                 crate::core::reactivity::use_signal(&activity_key, || 0.0_f32).set_silent(1.0);
                 if dx.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(&rest, super::scroll_support::ScrollAxis::X);
+                    Self::maybe_wheel_bump_scrollbar_spring(
+                        &rest,
+                        super::scroll_support::ScrollAxis::X,
+                    );
                 }
                 if dy.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(&rest, super::scroll_support::ScrollAxis::Y);
+                    Self::maybe_wheel_bump_scrollbar_spring(
+                        &rest,
+                        super::scroll_support::ScrollAxis::Y,
+                    );
                 }
             } else {
                 // Non-smooth: keep existing target-based accumulation behavior.
@@ -761,10 +959,16 @@ impl super::App {
                 entry[0] += dx;
                 entry[1] += dy;
                 if dx.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(&rest, super::scroll_support::ScrollAxis::X);
+                    Self::maybe_wheel_bump_scrollbar_spring(
+                        &rest,
+                        super::scroll_support::ScrollAxis::X,
+                    );
                 }
                 if dy.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(&rest, super::scroll_support::ScrollAxis::Y);
+                    Self::maybe_wheel_bump_scrollbar_spring(
+                        &rest,
+                        super::scroll_support::ScrollAxis::Y,
+                    );
                 }
             }
 
@@ -799,7 +1003,7 @@ impl super::App {
 
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         let mut state_borrow = self.state.borrow_mut();
-        let state = match (&mut *state_borrow).as_mut() {
+        let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
             _ => return,
         };
@@ -812,8 +1016,8 @@ impl super::App {
                 let merged = &hot_reload.merged_templates;
                 let has_templates = !merged.is_empty();
                 let ids: Vec<String> = merged.iter().map(|v| v.id.clone()).collect();
-                let template_match =
-                    has_templates && super::hot_reload::has_any_template_id(&state.root_element, &ids);
+                let template_match = has_templates
+                    && super::hot_reload::has_any_template_id(&state.root_element, &ids);
 
                 if !hot_reload.asset_paths.is_empty() {
                     log::warn!(
@@ -839,7 +1043,8 @@ impl super::App {
                             first.len
                         );
                     }
-                    let replacement_count: usize = merged.iter().map(|t| t.text_replacements.len()).sum();
+                    let replacement_count: usize =
+                        merged.iter().map(|t| t.text_replacements.len()).sum();
                     let style_count: usize = merged.iter().map(|t| t.style_attrs.len()).sum();
                     log::warn!(
                         "hot-reload payload replacements={} styles={}",
@@ -870,7 +1075,11 @@ impl super::App {
                     let mut existing_ids = Vec::new();
                     super::hot_reload::collect_template_ids(&state.root_element, &mut existing_ids);
                     if !existing_ids.is_empty() {
-                        let preview = existing_ids.into_iter().take(5).collect::<Vec<_>>().join(", ");
+                        let preview = existing_ids
+                            .into_iter()
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         log::warn!("hot-reload existing template ids (preview): {}", preview);
                     }
                 }
@@ -923,10 +1132,10 @@ impl super::App {
         }
 
         for (rest, adx, ady, max_x, max_y) in accum_ops {
-            let sx_key = crate::components::scroll_area::scroll_offset_x_signal_key(&rest);
-            let sy_key = crate::components::scroll_area::scroll_offset_y_signal_key(&rest);
-            let tx_key = crate::components::scroll_area::scroll_target_x_signal_key(&rest);
-            let ty_key = crate::components::scroll_area::scroll_target_y_signal_key(&rest);
+            let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest);
+            let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest);
+            let tx_key = crate::core::scroll_viewport::scroll_target_x_signal_key(&rest);
+            let ty_key = crate::core::scroll_viewport::scroll_target_y_signal_key(&rest);
             let sx_sig = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32);
             let sy_sig = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
             let tx = crate::core::reactivity::use_signal(&tx_key, || sx_sig.peek());
@@ -935,10 +1144,18 @@ impl super::App {
             let ty_cur = ty.peek();
             let nx = (tx_cur - adx).clamp(0.0, max_x);
             let ny = (ty_cur - ady).clamp(0.0, max_y);
-            if (nx - tx_cur).abs() > 0.01 { tx.set_silent(nx); }
-            if (ny - ty_cur).abs() > 0.01 { ty.set_silent(ny); }
+            if (nx - tx_cur).abs() > 0.01 {
+                tx.set_silent(nx);
+            }
+            if (ny - ty_cur).abs() > 0.01 {
+                ty.set_silent(ny);
+            }
             if adx.abs() > 0.1 || ady.abs() > 0.1 {
-                crate::core::reactivity::use_signal(&crate::components::scroll_area::scroll_activity_signal_key(&rest), || 0.0_f32).set_silent(1.0);
+                crate::core::reactivity::use_signal(
+                    &crate::core::scroll_viewport::scroll_activity_signal_key(&rest),
+                    || 0.0_f32,
+                )
+                .set_silent(1.0);
             }
         }
 
@@ -956,7 +1173,7 @@ impl super::App {
 
         let mut pre_render_data = Vec::new();
         for (rest, (_, [mx, my], _)) in &self.scroll_metrics_cache {
-            let keys = crate::components::scroll_area::signal_keys_for_rest_cached(
+            let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                 rest,
                 &mut self.scroll_signal_key_cache,
             );
@@ -965,16 +1182,23 @@ impl super::App {
             let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
             let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
             let behavior =
-                crate::core::reactivity::use_signal(keys.behavior.as_str(), || "auto".to_string()).peek();
+                crate::core::reactivity::use_signal(keys.behavior.as_str(), || "auto".to_string())
+                    .peek();
             let old_sx = sx.peek();
             let old_sy = sy.peek();
             let raw_max_x = mx.max(0.0);
             let raw_max_y = my.max(0.0);
-            let lp = self.scroll_max_lowpass.entry(rest.clone()).or_insert([raw_max_x, raw_max_y]);
+            let lp = self
+                .scroll_max_lowpass
+                .entry(rest.clone())
+                .or_insert([raw_max_x, raw_max_y]);
             let target_x_lp = tx.peek().clamp(0.0, lp[0].min(raw_max_x));
             let target_y_lp = ty.peek().clamp(0.0, lp[1].min(raw_max_y));
 
-            let is_dragging_this = self.scrollbar_drag.as_ref().is_some_and(|d| d.rest == *rest);
+            let is_dragging_this = self
+                .scrollbar_drag
+                .as_ref()
+                .is_some_and(|d| d.rest == *rest);
 
             if behavior.eq_ignore_ascii_case("smooth") && !is_dragging_this {
                 // Clamp to raw extent only: low-pass max lags behind during layout changes and can
@@ -994,7 +1218,9 @@ impl super::App {
                 }
                 // Nested ScrollArea: skip work for areas already at target (outer idle while inner scrolls).
                 const SMOOTH_IDLE_EPS: f32 = 0.04;
-                if (target_x - old_sx).abs() < SMOOTH_IDLE_EPS && (target_y - old_sy).abs() < SMOOTH_IDLE_EPS {
+                if (target_x - old_sx).abs() < SMOOTH_IDLE_EPS
+                    && (target_y - old_sy).abs() < SMOOTH_IDLE_EPS
+                {
                     pre_render_data.push((rest.clone(), old_sx, old_sy, old_sx, old_sy, sx, sy));
                     continue;
                 }
@@ -1026,12 +1252,31 @@ impl super::App {
                 {
                     smooth_scroll_animating = true;
                 }
-                pre_render_data.push((rest.clone(), old_sx, old_sy, cur_x.clamp(0.0, raw_max_x), cur_y.clamp(0.0, raw_max_y), sx, sy));
+                pre_render_data.push((
+                    rest.clone(),
+                    old_sx,
+                    old_sy,
+                    cur_x.clamp(0.0, raw_max_x),
+                    cur_y.clamp(0.0, raw_max_y),
+                    sx,
+                    sy,
+                ));
             } else {
                 if is_dragging_this {
-                    if let Some(v) = self.scroll_velocity.get_mut(rest) { v[0] = 0.0; v[1] = 0.0; }
+                    if let Some(v) = self.scroll_velocity.get_mut(rest) {
+                        v[0] = 0.0;
+                        v[1] = 0.0;
+                    }
                 }
-                pre_render_data.push((rest.clone(), old_sx, old_sy, target_x_lp, target_y_lp, sx, sy));
+                pre_render_data.push((
+                    rest.clone(),
+                    old_sx,
+                    old_sy,
+                    target_x_lp,
+                    target_y_lp,
+                    sx,
+                    sy,
+                ));
             }
         }
 
@@ -1086,8 +1331,8 @@ impl super::App {
 
         // `scroll_accum` 在本函数开头已 drain，此处恒空；平滑滚仍会使 `scrollbar_pass == Full`，
         // 与 overlay 弹簧一样可在 `Clean` 下跳过整树 Taffy（collect 用信号画滚动条）。
-        let scrollbar_skip_flex_layout =
-            self.scrollbar_drag.is_none() && (anim_tick.scrollbar_overlay || smooth_scroll_animating);
+        let scrollbar_skip_flex_layout = self.scrollbar_drag.is_none()
+            && (anim_tick.scrollbar_overlay || smooth_scroll_animating);
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(
@@ -1115,35 +1360,67 @@ impl super::App {
                     for (rest, _, _, _) in scroll_metrics.iter() {
                         let fx = format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{rest}:x");
                         let fy = format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{rest}:y");
-                        let viewport_fid =
-                            format!("{}{}", crate::components::scroll_area::SCROLL_AREA_FOCUS_PREFIX, rest);
-                        let thx = format!("{}{}:x", crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX, rest);
-                        let thy = format!("{}{}:y", crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX, rest);
-                        let bx = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fx, [0.0, 0.0])
-                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
-                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-                        let by = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fy, [0.0, 0.0])
-                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
-                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-                        let th_bx = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &thx, [0.0, 0.0])
-                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
-                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-                        let th_by = super::tree_hit::find_bounds_by_focus_id(&state.root_element, &thy, [0.0, 0.0])
-                            .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
-                            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-                        let inset_x = super::tree_hit::find_element_by_focus_id(&state.root_element, &fx)
-                            .map(|e| Self::fmt_inset_rect(e.style.inset))
-                            .unwrap_or_else(|| "n/a".to_string());
-                        let inset_y = super::tree_hit::find_element_by_focus_id(&state.root_element, &fy)
-                            .map(|e| Self::fmt_inset_rect(e.style.inset))
-                            .unwrap_or_else(|| "n/a".to_string());
-                        let viewport_padding =
-                            super::tree_hit::find_element_by_focus_id(&state.root_element, &viewport_fid)
+                        let viewport_fid = format!(
+                            "{}{}",
+                            crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX,
+                            rest
+                        );
+                        let thx = format!(
+                            "{}{}:x",
+                            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
+                            rest
+                        );
+                        let thy = format!(
+                            "{}{}:y",
+                            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
+                            rest
+                        );
+                        let bx = super::tree_hit::find_bounds_by_focus_id(
+                            &state.root_element,
+                            &fx,
+                            [0.0, 0.0],
+                        )
+                        .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                        .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let by = super::tree_hit::find_bounds_by_focus_id(
+                            &state.root_element,
+                            &fy,
+                            [0.0, 0.0],
+                        )
+                        .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                        .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let th_bx = super::tree_hit::find_bounds_by_focus_id(
+                            &state.root_element,
+                            &thx,
+                            [0.0, 0.0],
+                        )
+                        .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                        .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let th_by = super::tree_hit::find_bounds_by_focus_id(
+                            &state.root_element,
+                            &thy,
+                            [0.0, 0.0],
+                        )
+                        .map(|(b, s)| [b[0] - s[0], b[1] - s[1], b[2], b[3]])
+                        .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let inset_x =
+                            super::tree_hit::find_element_by_focus_id(&state.root_element, &fx)
+                                .map(|e| Self::fmt_inset_rect(e.style.inset))
+                                .unwrap_or_else(|| "n/a".to_string());
+                        let inset_y =
+                            super::tree_hit::find_element_by_focus_id(&state.root_element, &fy)
+                                .map(|e| Self::fmt_inset_rect(e.style.inset))
+                                .unwrap_or_else(|| "n/a".to_string());
+                        let viewport_padding = super::tree_hit::find_element_by_focus_id(
+                            &state.root_element,
+                            &viewport_fid,
+                        )
+                        .map(|e| Self::fmt_padding_rect(e.style.padding))
+                        .unwrap_or_else(|| "n/a".to_string());
+                        let outer_padding =
+                            Self::find_element_by_template_id(&state.root_element, rest)
                                 .map(|e| Self::fmt_padding_rect(e.style.padding))
                                 .unwrap_or_else(|| "n/a".to_string());
-                        let outer_padding = Self::find_element_by_template_id(&state.root_element, rest)
-                            .map(|e| Self::fmt_padding_rect(e.style.padding))
-                            .unwrap_or_else(|| "n/a".to_string());
                         diag_track_bounds.insert(rest.clone(), (bx, by));
                         diag_thumb_bounds.insert(rest.clone(), (th_bx, th_by));
                         diag_track_inset.insert(rest.clone(), (inset_x, inset_y));
@@ -1178,18 +1455,29 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
 
                 let hover_cursor_pick = state.last_hover_cursor;
                 let mut hover_to_run = Vec::new();
-                super::tree_hit::update_hovers(&state.root_element, hx, hy, [0.0, 0.0], &mut hover_to_run);
+                super::tree_hit::update_hovers(
+                    &state.root_element,
+                    hx,
+                    hy,
+                    [0.0, 0.0],
+                    &mut hover_to_run,
+                );
 
                 if let Some(cursor) = hover_cursor_pick {
                     window.set_cursor(match cursor {
-                        crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
+                        crate::core::tree::CursorKind::Pointer => {
+                            winit::window::CursorIcon::Pointer
+                        }
                         crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                        crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                        crate::core::tree::CursorKind::NotAllowed => {
+                            winit::window::CursorIcon::NotAllowed
+                        }
                         _ => winit::window::CursorIcon::Default,
                     });
                 }
 
-                let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
+                let focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                 let fid = focused.get();
                 let ime_data = if fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
                     super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fid, [0.0, 0.0])
@@ -1205,8 +1493,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Post-render: low-pass scroll extents, viewport/content metrics, overlay scrollbar visibility.
                 // Offsets were integrated before `render()` using metrics cached from the previous frame.
                 let mut scrollbar_fade_animating = false;
-                for (rest, bounds, [max_x, max_y], [content_w, content_h]) in scroll_metrics.iter() {
-                    let keys = crate::components::scroll_area::signal_keys_for_rest_cached(
+                for (rest, bounds, [max_x, max_y], [content_w, content_h]) in scroll_metrics.iter()
+                {
+                    let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                         rest,
                         &mut self.scroll_signal_key_cache,
                     );
@@ -1223,16 +1512,27 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let soft_max_x = lp[0].min(raw_max_x);
                     let soft_max_y = lp[1].min(raw_max_y);
 
-                    let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32);
-                    let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32);
-                    let vw = crate::core::reactivity::use_signal(keys.viewport_w.as_str(), || 0.0_f32);
-                    let vh = crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32);
-                    let cw = crate::core::reactivity::use_signal(keys.content_w.as_str(), || 0.0_f32);
-                    let ch = crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32);
-                    let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
-                    let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
+                    let sx =
+                        crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32);
+                    let sy =
+                        crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32);
+                    let vw =
+                        crate::core::reactivity::use_signal(keys.viewport_w.as_str(), || 0.0_f32);
+                    let vh =
+                        crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32);
+                    let cw =
+                        crate::core::reactivity::use_signal(keys.content_w.as_str(), || 0.0_f32);
+                    let ch =
+                        crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32);
+                    let tx =
+                        crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
+                    let ty =
+                        crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
                     let behavior =
-                        crate::core::reactivity::use_signal(keys.behavior.as_str(), || "auto".to_string()).peek();
+                        crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+                            "auto".to_string()
+                        })
+                        .peek();
                     let is_smooth_mode = behavior.eq_ignore_ascii_case("smooth");
                     let target_x = if is_smooth_mode {
                         tx.peek().clamp(0.0, soft_max_x)
@@ -1248,13 +1548,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let new_sy = sy.peek();
 
                     let overflow_x =
-                        crate::core::reactivity::use_signal(keys.overflow_x.as_str(), || "auto".to_string()).peek();
+                        crate::core::reactivity::use_signal(keys.overflow_x.as_str(), || {
+                            "auto".to_string()
+                        })
+                        .peek();
                     let overflow_y =
-                        crate::core::reactivity::use_signal(keys.overflow_y.as_str(), || "auto".to_string()).peek();
+                        crate::core::reactivity::use_signal(keys.overflow_y.as_str(), || {
+                            "auto".to_string()
+                        })
+                        .peek();
                     let axis_x_enabled =
-                        crate::components::scroll_area::scroll_overflow_allows_scrollbar(overflow_x.as_str());
+                        crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(
+                            overflow_x.as_str(),
+                        );
                     let axis_y_enabled =
-                        crate::components::scroll_area::scroll_overflow_allows_scrollbar(overflow_y.as_str());
+                        crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(
+                            overflow_y.as_str(),
+                        );
                     let can_scroll_x = axis_x_enabled && *content_w > bounds[2] + 0.5;
                     let can_scroll_y = axis_y_enabled && *content_h > bounds[3] + 0.5;
 
@@ -1268,7 +1578,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             let should_log = self
                                 .scroll_diag_last_log
                                 .get(&key)
-                                .map_or(true, |t| now_log.duration_since(*t).as_millis() >= 600);
+                                .is_none_or(|t| now_log.duration_since(*t).as_millis() >= 600);
                             if should_log {
                                 self.scroll_diag_last_log.insert(key, now_log);
                                 let (tx, ty) = diag_track_bounds
@@ -1284,22 +1594,22 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                     .cloned()
                                     .unwrap_or_else(|| ("n/a".to_string(), "n/a".to_string()));
                                 let inset_mode_x = crate::core::reactivity::use_signal(
-                                    &crate::components::scroll_area::scroll_scrollbar_inset_x_signal_key(rest),
+                                    &crate::core::scroll_viewport::scroll_scrollbar_inset_x_signal_key(rest),
                                     || "inside".to_string(),
                                 )
                                 .peek();
                                 let inset_mode_y = crate::core::reactivity::use_signal(
-                                    &crate::components::scroll_area::scroll_scrollbar_inset_y_signal_key(rest),
+                                    &crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key(rest),
                                     || "inside".to_string(),
                                 )
                                 .peek();
                                 let side_x = crate::core::reactivity::use_signal(
-                                    &crate::components::scroll_area::scroll_scrollbar_x_side_signal_key(rest),
+                                    &crate::core::scroll_viewport::scroll_scrollbar_x_side_signal_key(rest),
                                     || "bottom".to_string(),
                                 )
                                 .peek();
                                 let side_y = crate::core::reactivity::use_signal(
-                                    &crate::components::scroll_area::scroll_scrollbar_y_side_signal_key(rest),
+                                    &crate::core::scroll_viewport::scroll_scrollbar_y_side_signal_key(rest),
                                     || "right".to_string(),
                                 )
                                 .peek();
@@ -1338,13 +1648,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
 
                     // Handle activity/hover: keep visible while hovering, scrolling, or animating.
-                    let activity = crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32);
+                    let activity =
+                        crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32);
                     let is_hover =
-                        crate::core::reactivity::use_signal(keys.hover_legacy.as_str(), || false).peek();
+                        crate::core::reactivity::use_signal(keys.hover_legacy.as_str(), || false)
+                            .peek();
                     let is_hover_x =
-                        crate::core::reactivity::use_signal(keys.hover_axis_x.as_str(), || false).peek();
+                        crate::core::reactivity::use_signal(keys.hover_axis_x.as_str(), || false)
+                            .peek();
                     let is_hover_y =
-                        crate::core::reactivity::use_signal(keys.hover_axis_y.as_str(), || false).peek();
+                        crate::core::reactivity::use_signal(keys.hover_axis_y.as_str(), || false)
+                            .peek();
                     let at_target =
                         (target_x - new_sx).abs() < 0.1 && (target_y - new_sy).abs() < 0.1;
                     let is_dragging = self
@@ -1353,65 +1667,73 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         .is_some_and(|d| d.rest == *rest);
                     let visible_until_x = self
                         .scrollbar_visible_until
-                        .get(&Self::scrollbar_axis_key(&rest, super::scroll_support::ScrollAxis::X))
+                        .get(&Self::scrollbar_axis_key(
+                            rest,
+                            super::scroll_support::ScrollAxis::X,
+                        ))
                         .copied()
                         .unwrap_or(now);
                     let visible_until_y = self
                         .scrollbar_visible_until
-                        .get(&Self::scrollbar_axis_key(&rest, super::scroll_support::ScrollAxis::Y))
+                        .get(&Self::scrollbar_axis_key(
+                            rest,
+                            super::scroll_support::ScrollAxis::Y,
+                        ))
                         .copied()
                         .unwrap_or(now);
 
-                    let is_dragging_x = self
-                        .scrollbar_drag
-                        .as_ref()
-                        .is_some_and(|d| d.rest == *rest && d.axis == super::scroll_support::ScrollAxis::X);
-                    let is_dragging_y = self
-                        .scrollbar_drag
-                        .as_ref()
-                        .is_some_and(|d| d.rest == *rest && d.axis == super::scroll_support::ScrollAxis::Y);
+                    let is_dragging_x = self.scrollbar_drag.as_ref().is_some_and(|d| {
+                        d.rest == *rest && d.axis == super::scroll_support::ScrollAxis::X
+                    });
+                    let is_dragging_y = self.scrollbar_drag.as_ref().is_some_and(|d| {
+                        d.rest == *rest && d.axis == super::scroll_support::ScrollAxis::Y
+                    });
 
                     // Independent per-axis visibility.
                     // - hover over content: allow both
                     // - hover over scrollbar: only that axis
                     // - wheel: axis-specific visible_until
-                    let keep_visible_x = (is_hover || is_hover_x)
-                        || is_dragging_x
-                        || now < visible_until_x;
-                    let keep_visible_y = (is_hover || is_hover_y)
-                        || is_dragging_y
-                        || now < visible_until_y;
+                    let keep_visible_x =
+                        (is_hover || is_hover_x) || is_dragging_x || now < visible_until_x;
+                    let keep_visible_y =
+                        (is_hover || is_hover_y) || is_dragging_y || now < visible_until_y;
 
                     // Keep the old activity signal (used elsewhere) as “any axis visible”.
-                    let keep_visible = is_hover || is_dragging || now < visible_until_x || now < visible_until_y || !at_target;
+                    let keep_visible = is_hover
+                        || is_dragging
+                        || now < visible_until_x
+                        || now < visible_until_y
+                        || !at_target;
                     let target = if keep_visible || !at_target { 1.0 } else { 0.0 };
                     if activity.get() != target {
                         activity.set(target);
                     }
 
                     // Update springs per-axis: only `auto` uses hover/scroll fade; `always`/`never` are fixed.
-                    let vis_x = crate::core::reactivity::use_signal(keys.scrollbar_visibility_x.as_str(), || {
-                        "auto".to_string()
-                    })
+                    let vis_x = crate::core::reactivity::use_signal(
+                        keys.scrollbar_visibility_x.as_str(),
+                        || "auto".to_string(),
+                    )
                     .peek()
                     .to_ascii_lowercase();
-                    let vis_y = crate::core::reactivity::use_signal(keys.scrollbar_visibility_y.as_str(), || {
-                        "auto".to_string()
-                    })
+                    let vis_y = crate::core::reactivity::use_signal(
+                        keys.scrollbar_visibility_y.as_str(),
+                        || "auto".to_string(),
+                    )
                     .peek()
                     .to_ascii_lowercase();
 
                     if axis_x_enabled {
-                        let spring_x =
-                            crate::style::use_scrollbar_visibility_spring(keys.spring_x.as_str(), 0.0);
+                        let spring_x = crate::style::use_scrollbar_visibility_spring(
+                            keys.spring_x.as_str(),
+                            0.0,
+                        );
                         // `raw_max_*` can sit at 0 briefly (stale metrics / sub-pixel) while the axis is
                         // still hoverable. Never force the spring to 0 when that axis is actively hovered,
                         // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
                         // appear after scrolling bumps `raw_max` above the threshold.
-                        let spring_eligible_x = raw_max_x > 0.5
-                            || is_hover_x
-                            || is_dragging_x
-                            || now < visible_until_x;
+                        let spring_eligible_x =
+                            raw_max_x > 0.5 || is_hover_x || is_dragging_x || now < visible_until_x;
                         let target_x_vis = match vis_x.as_str() {
                             "never" => 0.0,
                             "always" => 1.0,
@@ -1441,12 +1763,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         }
                     }
                     if axis_y_enabled {
-                        let spring_y =
-                            crate::style::use_scrollbar_visibility_spring(keys.spring_y.as_str(), 0.0);
-                        let spring_eligible_y = raw_max_y > 0.5
-                            || is_hover_y
-                            || is_dragging_y
-                            || now < visible_until_y;
+                        let spring_y = crate::style::use_scrollbar_visibility_spring(
+                            keys.spring_y.as_str(),
+                            0.0,
+                        );
+                        let spring_eligible_y =
+                            raw_max_y > 0.5 || is_hover_y || is_dragging_y || now < visible_until_y;
                         let target_y_vis = match vis_y.as_str() {
                             "never" => 0.0,
                             "always" => 1.0,
@@ -1511,12 +1833,15 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .scrollbar_visible_until
                     .values()
                     .any(|&until| now < until);
-                if smooth_scroll_animating || scrollbar_fade_animating || scrollbar_visibility_pending {
+                if smooth_scroll_animating
+                    || scrollbar_fade_animating
+                    || scrollbar_visibility_pending
+                {
                     window.request_redraw();
                 }
 
                 for (cb, is_hover) in hover_to_run {
-                    (&mut *cb.borrow_mut())(is_hover);
+                    (*cb.borrow_mut())(is_hover);
                 }
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
@@ -1566,16 +1891,87 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
         }
     }
 
-    pub(super) fn handle_non_left_mouse_input(
+    pub(super) fn handle_mouse_button(
         &mut self,
         id: WindowId,
         element_state: ElementState,
         button: MouseButton,
     ) {
-        if button != MouseButton::Left {
-            return;
+        match button {
+            MouseButton::Left => {
+                if element_state == ElementState::Pressed {
+                    let pos = self.cursor_pos;
+                    let x = pos.x as f32;
+                    let y = pos.y as f32;
+                    const DBL_MS: u128 = 400;
+                    const DBL_PX: f32 = 6.0;
+                    let now = std::time::Instant::now();
+                    let is_double = self.last_click_at.is_some_and(|t| {
+                        now.duration_since(t).as_millis() <= DBL_MS
+                            && (x - self.last_click_pos[0]).abs() <= DBL_PX
+                            && (y - self.last_click_pos[1]).abs() <= DBL_PX
+                    });
+                    self.click_count = if is_double {
+                        self.click_count.saturating_add(1).max(2)
+                    } else {
+                        1
+                    };
+                    self.last_click_at = Some(now);
+                    self.last_click_pos = [x, y];
+                }
+                self.handle_mouse_input(id, element_state);
+                if element_state == ElementState::Released {
+                    if let Some(state) = (*self.state.borrow()).as_ref() {
+                        if state.window.id() != id {
+                            return;
+                        }
+                        let scale = state.window.scale_factor() as f32;
+                        let x = self.cursor_pos.x as f32 / scale;
+                        let y = self.cursor_pos.y as f32 / scale;
+                        let path = super::pointer_events::hit_path(&state.root_element, x, y);
+                        let mut pev = super::pointer_events::PointerEvent::new(
+                            x,
+                            y,
+                            MouseButton::Left,
+                            self.click_count.max(1),
+                        );
+                        super::pointer_events::dispatch_pointer(
+                            &path,
+                            &mut pev,
+                            super::pointer_events::PointerKind::Up,
+                        );
+                    }
+                }
+            }
+            MouseButton::Right => {
+                if element_state != ElementState::Pressed {
+                    return;
+                }
+                let (x, y, path) = {
+                    let state_borrow = self.state.borrow();
+                    let Some(state) = state_borrow.as_ref() else {
+                        return;
+                    };
+                    if state.window.id() != id {
+                        return;
+                    }
+                    let scale = state.window.scale_factor() as f32;
+                    let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                    let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                    let path = super::pointer_events::hit_path(&state.root_element, x, y);
+                    (x, y, path)
+                };
+                let mut pev = super::pointer_events::PointerEvent::new(x, y, MouseButton::Right, 1);
+                super::pointer_events::dispatch_pointer(
+                    &path,
+                    &mut pev,
+                    super::pointer_events::PointerKind::ContextMenu,
+                );
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
+                }
+            }
+            _ => {}
         }
-        self.handle_mouse_input(id, element_state);
     }
 }
-

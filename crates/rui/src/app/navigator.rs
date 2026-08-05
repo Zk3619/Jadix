@@ -4,7 +4,8 @@
 //! - typed `Route: Clone + Eq + Hash`
 //! - 默认 keep-alive；root 路由 `bring_to_front` / 重复 `push` 会**截断栈**
 //! - Esc：先 portal_overlay，再 [`try_pop_active`]
-//! - Host 卸载：[`Element::on_unmount`](crate::core::tree::Element::on_unmount) 自动 [`Navigator::dispose`]
+//! - Host 卸载：[`Element::on_unmount`](crate::core::tree::Element::on_unmount) 清除 active 注册（不删命名信号，避免首帧 rebuild 误伤）
+//! - 显式释放：[`Navigator::dispose`]
 //! - 转场：[`Transition`] + [`FrameState`]；由 [`tick_active`] 推进
 //!
 //! z（Host 渲染）：`Host = 100 + i*10`，`Sheet = 500 + i*50`。
@@ -54,24 +55,17 @@ pub enum FrameState {
 }
 
 /// 转场类型（v1：无 / 滑入滑出）。
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Transition {
+    #[default]
     None,
     /// 水平滑入/滑出；`duration_secs` 默认约 0.2s。
     Slide { duration_secs: f32 },
 }
 
-impl Default for Transition {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 impl Transition {
     pub fn slide_default() -> Self {
-        Self::Slide {
-            duration_secs: 0.2,
-        }
+        Self::Slide { duration_secs: 0.2 }
     }
 
     pub fn duration_secs(self) -> f32 {
@@ -174,10 +168,12 @@ impl<R: Clone + Eq + Hash + 'static> Navigator<R> {
         }
         state.set_silent(inner);
 
+        // Host 离开树时只清 active 注册。不要 `remove_named_signal`：
+        // 启动时 `app_builder` 会先非追踪建一棵树，再在 root effect 里 rebuild；
+        // 若此处删信号，deferred 的 reactive host 读栈会 unwrap 到 None。
         let hid = host_id.clone();
         let unmount = UnmountHook::new(move || {
             clear_active_navigator(&hid);
-            remove_named_signal(&navigator_signal_key(&hid));
             clear_active_tick(&hid);
         });
 
@@ -325,12 +321,7 @@ impl<R: Clone + Eq + Hash + 'static> Navigator<R> {
         true
     }
 
-    fn bring_to_front_at(
-        &self,
-        inner: &mut NavInner<R>,
-        pos: usize,
-        opts: Option<&PushOptions>,
-    ) {
+    fn bring_to_front_at(&self, inner: &mut NavInner<R>, pos: usize, opts: Option<&PushOptions>) {
         let mut frame = inner.frames.remove(pos);
         if let Some(opts) = opts {
             frame.presentation = opts.presentation;
@@ -435,6 +426,7 @@ impl<R: Clone + Eq + Hash + 'static> Navigator<R> {
         );
     }
 
+    /// 显式释放：取消 active 注册并删除命名信号。Host 自动 unmount 不会走这条路径。
     pub fn dispose(&self) {
         self.unmount.disarm();
         clear_active_navigator(&self.host_id);
@@ -580,9 +572,7 @@ mod tests {
         nav.push(
             R::Profile,
             PushOptions {
-                transition: Transition::Slide {
-                    duration_secs: 0.1,
-                },
+                transition: Transition::Slide { duration_secs: 0.1 },
                 ..PushOptions::default()
             },
         );

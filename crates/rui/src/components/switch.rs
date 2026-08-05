@@ -18,8 +18,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
 use crate::tokens;
-use taffy::prelude::JustifyContent;
 use rui_macros::component;
+use taffy::prelude::JustifyContent;
 
 pub struct SwitchBuilder {
     id: String,
@@ -43,7 +43,7 @@ pub fn Switch(
     let mut builder = switch(&id)
         .default_checked(default_checked)
         .disabled(disabled);
-    
+
     if let Some(sig) = checked {
         builder = builder.checked_signal(sig);
     }
@@ -130,7 +130,11 @@ impl From<SwitchBuilder> for Element {
         let on = sig.peek();
         let inner_el = build_switch_inner_row(on, thumb);
 
-        let track_bg = if on { tokens::primary() } else { tokens::input() };
+        let track_bg = if on {
+            tokens::primary()
+        } else {
+            tokens::input()
+        };
         let mut track: Element = hstack()
             .w("2.75rem")
             .h("1.5rem")
@@ -197,7 +201,7 @@ pub(crate) fn sync_switch_checked_subtree(
         };
         let inner_mismatch = el
             .children
-            .get(0)
+            .first()
             .is_some_and(|inner| inner.style.justify_content != Some(want_justify));
         let changed = el.style.bg_color != want_bg || inner_mismatch;
         if changed {

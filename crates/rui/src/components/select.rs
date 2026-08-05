@@ -11,20 +11,19 @@
 //! ```
 //!
 //! ## 注意
-//! - **打开态须包在 `<Reactive>` 内**，否则菜单开闭不刷新。
+//! - 菜单开闭与选项列表由组件内 [`crate::app::reactive::reactive_component`] 边界管理（props 刷新 + `open` 订阅），无需手动 `<Reactive>`。
 //! - 菜单 / underlay 走 `rui_portal` + [`crate::app::portal_overlay`] 栈分配 z；不占文档流。
 //! - 选项为 `(value, label)`；受控用 `Signal<String>`。
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::reactive::reactive_component;
 use crate::components::button::button;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use crate::tokens;
-use crate::utils::popup::{
-    compute_anchored_placement, panel_block_clicks, underlay_close_on_click, PopupPlacement,
-};
+use crate::utils::popup::{panel_block_clicks, underlay_close_on_click, PopupPlacement};
 use rui_macros::component;
 
 pub struct SelectBuilder {
@@ -165,231 +164,193 @@ impl Default for SelectPlace {
     }
 }
 
-impl From<SelectBuilder> for Element {
-    fn from(builder: SelectBuilder) -> Self {
-        let open_key = format!("{}__select_open", builder.id);
-        let val_key = format!("{}__select_value", builder.id);
-        let place_key = format!("{}__select_place", builder.id);
-        let open = use_signal(open_key.as_str(), || false);
-        let default_initial = if !builder.default_value.is_empty() {
-            builder.default_value.clone()
-        } else {
-            builder
-                .options
-                .first()
-                .map(|(v, _)| v.clone())
-                .unwrap_or_default()
-        };
-        let val = builder
-            .value
-            .unwrap_or_else(|| use_signal(val_key.as_str(), move || default_initial.clone()));
-        let place = use_signal(place_key.as_str(), SelectPlace::default);
+#[derive(Clone, PartialEq)]
+struct SelectRenderProps {
+    id: String,
+    default_value: String,
+    options: Vec<(String, String)>,
+    placeholder: String,
+    trigger_width: String,
+    menu_width: Option<String>,
+    max_height: String,
+    match_trigger: bool,
+    placement: PopupPlacement,
+}
 
-        // 订阅 open，保证菜单开闭触发 rebuild；栈用 peek 对齐。
-        let _ = open.get();
-        let overlay_z = portal_sync(&builder.id, open, OverlayKind::Menu, OverlayMode::Stacked);
+fn build_select_view(
+    props: SelectRenderProps,
+    open: Signal<bool>,
+    val: Signal<String>,
+    place: Signal<SelectPlace>,
+) -> Element {
+    let SelectRenderProps {
+        id,
+        default_value: _,
+        options,
+        placeholder,
+        trigger_width,
+        menu_width,
+        max_height,
+        match_trigger,
+        placement,
+    } = props;
 
-        let current = val.get();
-        let label = builder
-            .options
-            .iter()
-            .find(|(v, _)| v == &current)
-            .map(|(_, l)| l.as_str())
-            .filter(|_| !current.is_empty())
-            .unwrap_or(builder.placeholder.as_str());
+    let _ = open.get();
+    let overlay_z = portal_sync(&id, open, OverlayKind::Menu, OverlayMode::Stacked);
 
-        let open_t = open;
-        let trigger_id = format!("{}:trigger", builder.id);
-        let trigger: Element = button(&trigger_id)
-            .variant("outline")
-            .w(builder.trigger_width.as_str())
-            .on_click(move || open_t.set(!open_t.peek()))
-            .text(label.to_string())
-            .into();
+    let current = val.get();
+    let label = options
+        .iter()
+        .find(|(v, _)| v == &current)
+        .map(|(_, l)| l.as_str())
+        .filter(|_| !current.is_empty())
+        .unwrap_or(placeholder.as_str());
 
-        // 根节点仅包裹触发器：打开菜单时不改变文档流尺寸。
-        let mut root: Element = vstack().gap("0").into();
-        root = root.relative();
-        root = root.child(trigger);
-        root.set_attr("rui_select_root", builder.id.as_str());
-        root.set_attr("rui_select_trigger", trigger_id.as_str());
-        root.set_attr(
-            "rui_select_match_trigger",
-            if builder.match_trigger { "1" } else { "0" },
-        );
+    let open_t = open;
+    let trigger_id = format!("{id}:trigger");
+    let trigger: Element = button(&trigger_id)
+        .variant("outline")
+        .w(trigger_width.as_str())
+        .on_click(move || open_t.set(!open_t.peek()))
+        .text(label.to_string())
+        .into();
 
-        if let Some(oz) = overlay_z {
-            let p = place.peek();
-            root = root.child(underlay_close_on_click(open, oz.underlay));
+    let mut view: Element = vstack().gap("0").into();
+    view = view.relative();
+    view = view.child(trigger);
+    view.set_attr("rui_select_root", id.as_str());
+    view.set_attr("rui_select_trigger", trigger_id.as_str());
+    view.set_attr(
+        "rui_select_match_trigger",
+        if match_trigger { "1" } else { "0" },
+    );
 
-            let mut rows: Element = vstack().gap("2px").p("4px").into();
-            for (idx, (opt_v, opt_l)) in builder.options.into_iter().enumerate() {
-                let v_sig = val;
-                let o_sig = open;
-                let ov = opt_v.clone();
-                let bid = format!("{}:opt:{idx}", builder.id);
-                let row: Element = button(&bid)
-                    .variant("ghost")
-                    .size("sm")
-                    .w("100%")
-                    .on_click(move || {
-                        v_sig.set(ov.clone());
-                        o_sig.set(false);
-                    })
-                    .text(opt_l)
-                    .into();
-                rows = rows.child(row);
-            }
+    if let Some(oz) = overlay_z {
+        let p = place.peek();
+        view = view.child(underlay_close_on_click(open, oz.underlay));
 
-            let scroll_id = format!("{}:menu_scroll", builder.id);
-            let menu_w_s = format!("{}px", p.w.max(32.0));
-            let menu_max_h_s = format!("{}px", p.max_h.max(48.0));
-            let mut menu: Element = scroll_area(&scroll_id)
-                .overflow_x("hidden")
-                .overflow_y("auto")
-                .scrollbar_visibility("auto")
-                .w(menu_w_s.as_str())
-                .h("auto")
-                .child(rows)
+        let mut rows: Element = vstack().gap("2px").p("4px").into();
+        for (idx, (opt_v, opt_l)) in options.into_iter().enumerate() {
+            let v_sig = val;
+            let o_sig = open;
+            let ov = opt_v.clone();
+            let bid = format!("{id}:opt:{idx}");
+            let row: Element = button(&bid)
+                .variant("ghost")
+                .size("sm")
+                .w("100%")
+                .on_click(move || {
+                    v_sig.set(ov.clone());
+                    o_sig.set(false);
+                })
+                .text(opt_l)
                 .into();
-            menu = menu
-                .max_h(menu_max_h_s.as_str())
-                .bg(tokens::background())
-                .rounded("0.375rem")
-                .border_style("solid")
-                .border_width(1.0)
-                .border_color(tokens::border())
-                .absolute()
-                .left(p.x)
-                .top(p.y);
-            menu.set_attr("rui_select_menu", builder.id.as_str());
-            menu.set_attr("rui_select_trigger", trigger_id.as_str());
-            menu.set_attr(
-                "rui_select_match_trigger",
-                if builder.match_trigger { "1" } else { "0" },
-            );
-            if let Some(mw) = &builder.menu_width {
-                menu.set_attr("rui_select_menu_w", mw.as_str());
-            }
-            menu.set_attr("rui_select_max_h", builder.max_height.as_str());
-            menu.set_attr(
-                "rui_select_placement",
-                match builder.placement {
-                    PopupPlacement::BottomStart => "bottom-start",
-                    PopupPlacement::BottomEnd => "bottom-end",
-                    PopupPlacement::TopStart => "top-start",
-                    PopupPlacement::TopEnd => "top-end",
-                },
-            );
-            menu = panel_block_clicks(menu, oz.panel);
-            root = root.child(menu);
+            rows = rows.child(row);
         }
 
-        root.template_id = Some(builder.id);
+        let scroll_id = format!("{id}:menu_scroll");
+        let menu_w_s = format!("{}px", p.w.max(32.0));
+        let menu_max_h_s = format!("{}px", p.max_h.max(48.0));
+        let mut menu: Element = scroll_area(&scroll_id)
+            .overflow_x("hidden")
+            .overflow_y("auto")
+            .scrollbar_visibility("auto")
+            .w(menu_w_s.as_str())
+            .h("auto")
+            .child(rows)
+            .into();
+        menu = menu
+            .max_h(menu_max_h_s.as_str())
+            .bg(tokens::background())
+            .rounded("0.375rem")
+            .border_style("solid")
+            .border_width(1.0)
+            .border_color(tokens::border())
+            .absolute()
+            .left(p.x)
+            .top(p.y);
+        menu.set_attr("rui_floating", id.as_str());
+        menu.set_attr("rui_floating_trigger", trigger_id.as_str());
+        // Keep legacy attrs for one release of compatibility with sync_floating_placement.
+        menu.set_attr("rui_select_menu", id.as_str());
+        menu.set_attr("rui_select_trigger", trigger_id.as_str());
+        menu.set_attr(
+            "rui_floating_match_trigger",
+            if match_trigger { "1" } else { "0" },
+        );
+        menu.set_attr(
+            "rui_select_match_trigger",
+            if match_trigger { "1" } else { "0" },
+        );
+        if let Some(mw) = &menu_width {
+            menu.set_attr("rui_floating_w", mw.as_str());
+            menu.set_attr("rui_select_menu_w", mw.as_str());
+        }
+        menu.set_attr("rui_floating_max_h", max_height.as_str());
+        menu.set_attr("rui_select_max_h", max_height.as_str());
+        let place_attr = match placement {
+            PopupPlacement::BottomStart => "bottom-start",
+            PopupPlacement::BottomEnd => "bottom-end",
+            PopupPlacement::TopStart => "top-start",
+            PopupPlacement::TopEnd => "top-end",
+        };
+        menu.set_attr("rui_floating_placement", place_attr);
+        menu.set_attr("rui_select_placement", place_attr);
+        menu = panel_block_clicks(menu, oz.panel);
+        view = view.child(menu);
+    }
+
+    view
+}
+
+impl From<SelectBuilder> for Element {
+    fn from(builder: SelectBuilder) -> Self {
+        let SelectBuilder {
+            id,
+            value,
+            default_value,
+            options,
+            placeholder,
+            trigger_width,
+            menu_width,
+            max_height,
+            match_trigger,
+            placement,
+            children,
+        } = builder;
+
+        let open_key = format!("{id}__select_open");
+        let val_key = format!("{id}__select_value");
+        let place_key = format!("{id}__select_place");
+        let open = use_signal(open_key.as_str(), || false);
+        let default_initial = if !default_value.is_empty() {
+            default_value.clone()
+        } else {
+            options.first().map(|(v, _)| v.clone()).unwrap_or_default()
+        };
+        let val =
+            value.unwrap_or_else(|| use_signal(val_key.as_str(), move || default_initial.clone()));
+        let place = use_signal(place_key.as_str(), SelectPlace::default);
+        let view_id = format!("{id}__select_view");
+
+        let render_props = SelectRenderProps {
+            id: id.clone(),
+            default_value,
+            options,
+            placeholder,
+            trigger_width,
+            menu_width,
+            max_height,
+            match_trigger,
+            placement,
+        };
+
+        let template_id = id.clone();
+        let mut root = reactive_component(view_id, render_props, move |props| {
+            build_select_view(props, open, val, place)
+        });
+        root = root.children(children);
+        root.template_id = Some(template_id);
         root
     }
 }
-
-fn parse_css_px(raw: &str, fallback: f32) -> f32 {
-    let s = raw.trim();
-    if let Some(n) = s.strip_suffix("rem") {
-        return n.trim().parse::<f32>().unwrap_or(fallback / 16.0) * 16.0;
-    }
-    if let Some(n) = s.strip_suffix("px") {
-        return n.trim().parse::<f32>().unwrap_or(fallback);
-    }
-    s.parse::<f32>().unwrap_or(fallback)
-}
-
-/// 布局后根据触发器位置更新 Select 浮层坐标（Portal 绝对定位）；几何有变时返回 `true`（需再跑一轮 layout）。
-pub(crate) fn sync_select_floating_placement(
-    root: &mut Element,
-    viewport_w: f32,
-    viewport_h: f32,
-) -> bool {
-    let trigger_bounds = collect_focus_bounds(root);
-    let mut changed = false;
-    apply_select_menus(root, &trigger_bounds, [viewport_w, viewport_h], &mut changed);
-    changed
-}
-
-fn collect_focus_bounds(el: &Element) -> Vec<(String, [f32; 4])> {
-    let mut out = Vec::new();
-    collect_focus_bounds_rec(el, &mut out);
-    out
-}
-
-fn collect_focus_bounds_rec(el: &Element, out: &mut Vec<(String, [f32; 4])>) {
-    if let Some(fid) = &el.focus_id {
-        out.push((fid.clone(), el.layout_bounds));
-    }
-    for c in &el.children {
-        collect_focus_bounds_rec(c, out);
-    }
-}
-
-fn apply_select_menus(
-    el: &mut Element,
-    triggers: &[(String, [f32; 4])],
-    viewport: [f32; 2],
-    changed: &mut bool,
-) {
-    if el.attrs.contains_key("rui_select_menu") {
-        let id = el.attrs.get("rui_select_menu").cloned().unwrap_or_default();
-        let trigger_fid = el
-            .attrs
-            .get("rui_select_trigger")
-            .cloned()
-            .unwrap_or_default();
-        if let Some((_, tb)) = triggers.iter().find(|(f, _)| *f == trigger_fid) {
-            let match_trigger = el
-                .attrs
-                .get("rui_select_match_trigger")
-                .map(|s| s.as_str() != "0")
-                .unwrap_or(true);
-            let menu_w = if match_trigger {
-                tb[2]
-            } else if let Some(raw) = el.attrs.get("rui_select_menu_w") {
-                parse_css_px(raw, tb[2])
-            } else {
-                tb[2]
-            };
-            let max_h_cap = el
-                .attrs
-                .get("rui_select_max_h")
-                .map(|s| parse_css_px(s, 256.0))
-                .unwrap_or(256.0);
-            let preferred = match el.attrs.get("rui_select_placement").map(|s| s.as_str()) {
-                Some("bottom-end") => PopupPlacement::BottomEnd,
-                Some("top-start") => PopupPlacement::TopStart,
-                Some("top-end") => PopupPlacement::TopEnd,
-                _ => PopupPlacement::BottomStart,
-            };
-            let estimate_h = el.layout_bounds[3].max(32.0);
-            let (x, y, max_h, _) =
-                compute_anchored_placement(*tb, viewport, menu_w, estimate_h, preferred, 4.0);
-            let max_h = max_h.min(max_h_cap).max(48.0);
-            let w = menu_w.max(32.0);
-            let next = SelectPlace { x, y, w, max_h };
-            let place_key = format!("{id}__select_place");
-            let place = use_signal(place_key.as_str(), SelectPlace::default);
-            let cur = place.peek();
-            let dirty = (cur.x - next.x).abs() > 0.5
-                || (cur.y - next.y).abs() > 0.5
-                || (cur.w - next.w).abs() > 0.5
-                || (cur.max_h - next.max_h).abs() > 0.5;
-            if dirty {
-                place.set_silent(next);
-                el.style.inset.left = crate::core::tree::Element::into_margin_auto(x);
-                el.style.inset.top = crate::core::tree::Element::into_margin_auto(y);
-                el.style.size.width = taffy::style::Dimension::Length(w);
-                el.style.max_size.height = taffy::style::Dimension::Length(max_h);
-                *changed = true;
-            }
-        }
-    }
-    for c in &mut el.children {
-        apply_select_menus(c, triggers, viewport, changed);
-    }
-}
-

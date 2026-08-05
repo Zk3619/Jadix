@@ -1,4 +1,6 @@
 #[cfg(debug_assertions)]
+use serde::Deserialize;
+#[cfg(debug_assertions)]
 use std::collections::HashMap;
 #[cfg(debug_assertions)]
 use std::io::{BufRead, BufReader};
@@ -10,8 +12,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 #[cfg(debug_assertions)]
 use std::sync::Arc;
-#[cfg(debug_assertions)]
-use serde::Deserialize;
 #[cfg(debug_assertions)]
 use winit::event_loop::EventLoopProxy;
 
@@ -35,7 +35,8 @@ impl HotReloadState {
         let pending_count = Arc::new(AtomicUsize::new(0));
         let pending_count_ref = Arc::clone(&pending_count);
         let wake_thread = wake.clone();
-        let addr = std::env::var("RUI_HOT_RELOAD_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
+        let addr =
+            std::env::var("RUI_HOT_RELOAD_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
         std::thread::spawn(move || {
             let listener = match TcpListener::bind(&addr) {
                 Ok(v) => v,
@@ -202,7 +203,10 @@ fn parse_command(raw: &str) -> Option<HotReloadCommand> {
     match msg {
         IncomingMessage::Reload => Some(HotReloadCommand::Reload),
         IncomingMessage::TemplatePatch { file, templates } => {
-            Some(HotReloadCommand::TemplatePatch(TemplatePatchMsg { file, templates }))
+            Some(HotReloadCommand::TemplatePatch(TemplatePatchMsg {
+                file,
+                templates,
+            }))
         }
         IncomingMessage::AssetReload { paths } => Some(HotReloadCommand::AssetReload(paths)),
     }
@@ -220,10 +224,7 @@ pub(super) fn has_any_template_id(
 }
 
 #[cfg(debug_assertions)]
-fn has_any_template_id_inner(
-    el: &crate::core::tree::Element,
-    expected_ids: &[String],
-) -> bool {
+fn has_any_template_id_inner(el: &crate::core::tree::Element, expected_ids: &[String]) -> bool {
     if let Some(id) = el.template_id.as_ref() {
         if expected_ids.iter().any(|v| template_id_matches(v, id)) {
             return true;
@@ -247,19 +248,15 @@ pub(super) fn template_id_matches(incoming: &str, runtime: &str) -> bool {
     }
     let (ap, al, ai) = split_template_id_triple(&a);
     let (bp, bl, bi) = split_template_id_triple(&b);
-    
+
     // If indices match, it's a very strong signal.
-    if ai != usize::MAX && ai == bi {
-        if path_suffix_component_match(&ap, &bp) {
-            return true;
-        }
+    if ai != usize::MAX && ai == bi && path_suffix_component_match(&ap, &bp) {
+        return true;
     }
 
     // Fallback to line matching if indices aren't available or don't match (legacy/compatibility)
-    if al != 0 && al == bl {
-        if path_suffix_component_match(&ap, &bp) {
-            return true;
-        }
+    if al != 0 && al == bl && path_suffix_component_match(&ap, &bp) {
+        return true;
     }
     false
 }
@@ -293,16 +290,11 @@ fn split_template_id_triple(id: &str) -> (String, usize, usize) {
         let i = parts[parts.len() - 1].parse().unwrap_or(usize::MAX);
         (p, l, i)
     } else if parts.len() == 2 {
-        (
-            parts[0].clone(),
-            parts[1].parse().unwrap_or(0),
-            usize::MAX,
-        )
+        (parts[0].clone(), parts[1].parse().unwrap_or(0), usize::MAX)
     } else {
         (id.to_string(), 0, usize::MAX)
     }
 }
-
 
 #[cfg(any(debug_assertions, test))]
 fn path_suffix_component_match(a: &str, b: &str) -> bool {

@@ -22,7 +22,10 @@ pub struct SeparatorBuilder {
 }
 
 pub fn separator() -> SeparatorBuilder {
-    SeparatorBuilder { vertical: false, children: Vec::new() }
+    SeparatorBuilder {
+        vertical: false,
+        children: Vec::new(),
+    }
 }
 
 /// Separator component.
@@ -30,7 +33,9 @@ pub fn separator() -> SeparatorBuilder {
 #[allow(non_snake_case)]
 pub fn Separator(vertical: bool, children: Option<Element>) -> Element {
     let mut builder = separator().vertical(vertical);
-    if let Some(c) = children { builder = builder.child(c); }
+    if let Some(c) = children {
+        builder = builder.child(c);
+    }
     builder.into()
 }
 

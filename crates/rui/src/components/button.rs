@@ -20,13 +20,13 @@ use crate::core::tree::{
     parse_color, parse_text_color, ButtonHoverPaint, Element, IntoDimension, IntoF32, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow, use_ui_transition_cubic,
-    use_ui_transition_spring,
+    lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow,
+    use_ui_transition_cubic, use_ui_transition_spring,
 };
+use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -46,7 +46,11 @@ impl ColorExt for [f32; 4] {
 }
 
 /// `shadow-xs` 与 `focus-visible:ring` / `ring-destructive/20` 的合成（单槽 `box-shadow`）。
-fn button_shadow_style_for_sync(is_focused: bool, disabled: bool, variant: &str) -> (f32, [f32; 4], [f32; 2], f32) {
+fn button_shadow_style_for_sync(
+    is_focused: bool,
+    disabled: bool,
+    variant: &str,
+) -> (f32, [f32; 4], [f32; 2], f32) {
     let xs = matches!(variant, "default" | "secondary" | "outline" | "destructive");
     if is_focused && !disabled {
         let c = if variant == "destructive" {
@@ -124,7 +128,10 @@ fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
 }
 
 /// `hover_t`：0=静止，1=悬停；由弹簧驱动，对标浏览器 `transition` 的平滑插值（颜色在线性 sRGB 下 lerp）。
-fn button_chrome_for_variant(variant: &str, hover_t: f32) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
+pub(crate) fn button_chrome_for_variant(
+    variant: &str,
+    hover_t: f32,
+) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
     let t = hover_t.clamp(0.0, 1.0);
     match variant {
         "default" => {
@@ -192,28 +199,32 @@ pub enum ButtonVariant {
 
 impl From<&str> for ButtonVariant {
     fn from(s: &str) -> Self {
-        Self::from_str(s)
+        s.parse().unwrap_or(Self::Default)
     }
 }
 
 impl From<String> for ButtonVariant {
     fn from(s: String) -> Self {
-        Self::from_str(&s)
+        s.parse().unwrap_or(Self::Default)
     }
 }
 
-impl ButtonVariant {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for ButtonVariant {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "secondary" => Self::Secondary,
             "outline" => Self::Outline,
             "ghost" => Self::Ghost,
             "destructive" => Self::Destructive,
             "link" => Self::Link,
             _ => Self::Default,
-        }
+        })
     }
+}
 
+impl ButtonVariant {
     pub(crate) fn as_paint_key(self) -> &'static str {
         match self {
             Self::Default => "default",
@@ -242,19 +253,21 @@ pub enum ButtonSize {
 
 impl From<&str> for ButtonSize {
     fn from(s: &str) -> Self {
-        Self::from_str(s)
+        s.parse().unwrap_or(Self::Default)
     }
 }
 
 impl From<String> for ButtonSize {
     fn from(s: String) -> Self {
-        Self::from_str(&s)
+        s.parse().unwrap_or(Self::Default)
     }
 }
 
-impl ButtonSize {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for ButtonSize {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "xs" => Self::Xs,
             "sm" => Self::Sm,
             "lg" => Self::Lg,
@@ -263,9 +276,11 @@ impl ButtonSize {
             "icon-sm" => Self::IconSm,
             "icon-lg" => Self::IconLg,
             _ => Self::Default,
-        }
+        })
     }
+}
 
+impl ButtonSize {
     fn height(&self) -> &'static str {
         match self {
             Self::Xs | Self::IconXs => "1.5rem",
@@ -308,7 +323,10 @@ impl ButtonSize {
     }
 
     fn is_icon(&self) -> bool {
-        matches!(self, Self::Icon | Self::IconXs | Self::IconSm | Self::IconLg)
+        matches!(
+            self,
+            Self::Icon | Self::IconXs | Self::IconSm | Self::IconLg
+        )
     }
 
     /// 对齐 shadcn/ui `buttonVariants`：基底 `text-sm`，仅 `xs` / `icon-xs` 叠加 `text-xs`。
@@ -351,22 +369,21 @@ pub fn Button(
     size: ButtonSize,
     disabled: bool,
     hover_easing: String,
-    #[prop(default = "Handler::default()")]
-    mut on_click: crate::core::tree::Handler,
-    #[prop(default = "KeyHandler::default()")]
-    mut on_key_down: crate::core::tree::KeyHandler,
+    #[prop(default = "Handler::default()")] mut on_click: crate::core::tree::Handler,
+    #[prop(default = "KeyHandler::default()")] mut on_key_down: crate::core::tree::KeyHandler,
     children: Option<Element>,
 ) -> Element {
-    let hover_easing = if hover_easing.is_empty() || (hover_easing != "spring" && hover_easing != "cubic") {
-        "spring".to_string()
-    } else {
-        hover_easing
-    };
+    let hover_easing =
+        if hover_easing.is_empty() || (hover_easing != "spring" && hover_easing != "cubic") {
+            "spring".to_string()
+        } else {
+            hover_easing
+        };
     let mut builder = button(&id)
-        .variant(&variant.as_paint_key())
+        .variant(variant.as_paint_key())
         .hover_easing(&hover_easing)
         .disabled(disabled);
-    
+
     builder.size = size;
     builder.container = builder.container.gap(size.gap());
     builder.text_style.size_px = IntoF32::into_f32(size.text_size());
@@ -383,14 +400,14 @@ pub fn Button(
     if let Some(c) = children {
         builder = builder.child(c);
     }
-    
+
     let mut el: Element = builder.into();
-    
+
     if !disabled {
         let mut old_click = el.on_click.clone();
         el = el.on_click(move || {
             if let Some(ref mut rc) = old_click {
-                 rc.borrow_mut()();
+                rc.borrow_mut()();
             }
             on_click.call(());
         });
@@ -399,9 +416,11 @@ pub fn Button(
         el = el.on_key_down(move |ev| {
             let mut handled = false;
             if let Some(ref mut rc) = old_key {
-                 handled = rc.borrow_mut()(ev.clone());
+                handled = rc.borrow_mut()(ev.clone());
             }
-            if handled { return true; }
+            if handled {
+                return true;
+            }
             on_key_down.call(ev)
         });
     }
@@ -411,7 +430,11 @@ pub fn Button(
 
 pub fn button(id: &str) -> ButtonBuilder {
     let size = ButtonSize::Default;
-    let id = if id.trim().is_empty() { auto_button_id() } else { id.to_string() };
+    let id = if id.trim().is_empty() {
+        auto_button_id()
+    } else {
+        id.to_string()
+    };
     ButtonBuilder {
         id,
         variant: ButtonVariant::Default,
@@ -447,12 +470,12 @@ impl ButtonBuilder {
     }
 
     pub fn variant(mut self, v: &str) -> Self {
-        self.variant = ButtonVariant::from_str(v);
+        self.variant = v.parse().unwrap_or(ButtonVariant::Default);
         self
     }
 
     pub fn size(mut self, s: &str) -> Self {
-        self.size = ButtonSize::from_str(s);
+        self.size = s.parse().unwrap_or(ButtonSize::Default);
         self.container = self.container.gap(self.size.gap());
         self.text_style.size_px = IntoF32::into_f32(self.size.text_size());
         if self.size.is_icon() {
@@ -485,11 +508,21 @@ impl ButtonBuilder {
         self
     }
 
-    pub fn text_leading_none(self) -> Self { self.leading_none() }
-    pub fn text_leading_tight(self) -> Self { self.leading_tight() }
-    pub fn text_leading_normal(self) -> Self { self.leading_normal() }
-    pub fn text_leading_relaxed(self) -> Self { self.leading_relaxed() }
-    pub fn text_line_height(self, px: impl IntoF32) -> Self { self.line_height(px) }
+    pub fn text_leading_none(self) -> Self {
+        self.leading_none()
+    }
+    pub fn text_leading_tight(self) -> Self {
+        self.leading_tight()
+    }
+    pub fn text_leading_normal(self) -> Self {
+        self.leading_normal()
+    }
+    pub fn text_leading_relaxed(self) -> Self {
+        self.leading_relaxed()
+    }
+    pub fn text_line_height(self, px: impl IntoF32) -> Self {
+        self.line_height(px)
+    }
 
     pub fn on_click(mut self, cb: impl FnMut() + 'static) -> Self {
         self.on_click = Some(Box::new(cb));
@@ -592,7 +625,7 @@ impl From<ButtonBuilder> for Element {
         let hovered = use_signal(&id_hover, || false);
         let focused = use_signal("__rui_button_focus_id", String::new);
         let focus_visible = use_signal("__rui_focus_visible", || false);
-        
+
         // `peek`：不把 hover / 焦点订阅到根 `create_effect`，避免悬停、点输入框、Tab 等触发整树 `rebuild_ui`。
         // hover 由 `sync_button_hover_paint_subtree` 写回；焦点环由同函数内 `sync_button_focus_ring_shadow` 写回。
         let is_hovered = hovered.peek() && !builder.disabled;
@@ -618,7 +651,8 @@ impl From<ButtonBuilder> for Element {
                 .py(builder.size.padding_v());
         }
 
-        let (mut bg, text_color, border) = button_chrome_for_variant(builder.variant.as_paint_key(), t);
+        let (mut bg, text_color, border) =
+            button_chrome_for_variant(builder.variant.as_paint_key(), t);
         if builder.disabled {
             bg[3] *= 0.5;
         }
@@ -650,11 +684,37 @@ impl From<ButtonBuilder> for Element {
             disabled: builder.disabled,
             hover_easing: builder.hover_easing.clone(),
         });
-        
+
         for mut child in builder.content {
-            if let Some(text_content) = child.text.take() {
+            // Preserve Solid-style bindings (`bind_text` / `bind_prop`): keep template_id + unmount hook.
+            let preserve_binding = child.template_id.is_some() || child.on_unmount.is_some();
+            if preserve_binding && child.text.is_some() {
                 let mut color = text_color;
-                if builder.disabled { color[3] = (color[3] as f32 * 0.5) as u8; }
+                if builder.disabled {
+                    color[3] = (color[3] as f32 * 0.5) as u8;
+                }
+                let underline = builder.variant == ButtonVariant::Link && is_hovered;
+                let is_lucide_glyph = child.text_style.font_family.as_deref() == Some("lucide");
+                let size_px = if is_lucide_glyph {
+                    child.text_style.size
+                } else {
+                    builder.text_style.size_px
+                };
+                child.text_style.color = color;
+                child.text_style.underline = underline;
+                child.text_style.size = size_px;
+                if builder.variant == ButtonVariant::Link {
+                    child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
+                } else if let Some(uo) = builder.text_style.underline_offset_px {
+                    child.text_style.underline_offset = uo;
+                }
+                child = child.w("100%").text_center().min_w("0").flex_shrink(1.0);
+                el = el.child(child);
+            } else if let Some(text_content) = child.text.take() {
+                let mut color = text_color;
+                if builder.disabled {
+                    color[3] = (color[3] as f32 * 0.5) as u8;
+                }
                 let underline = builder.variant == ButtonVariant::Link && is_hovered;
                 // `Icon` 等叶子在宏里设置了 `text_size`；若只用 `builder.text_style.size_px`，
                 // icon-sm / icon / icon-lg 会全部被压成按钮默认字号（仅 icon-xs 碰巧一致）。
@@ -666,18 +726,21 @@ impl From<ButtonBuilder> for Element {
                 };
                 // Button caption text should occupy the button content box width to avoid
                 // accidental over-shrink clipping in flex contexts (e.g. "MC"/"CE" -> "M"/"C").
-                let text_node = build_text_node(text_content, TextNodeConfig {
-                    color,
-                    underline,
-                    underline_offset_px: if builder.variant == ButtonVariant::Link {
-                        Some(LINK_UNDERLINE_OFFSET_PX)
-                    } else {
-                        builder.text_style.underline_offset_px
+                let text_node = build_text_node(
+                    text_content,
+                    TextNodeConfig {
+                        color,
+                        underline,
+                        underline_offset_px: if builder.variant == ButtonVariant::Link {
+                            Some(LINK_UNDERLINE_OFFSET_PX)
+                        } else {
+                            builder.text_style.underline_offset_px
+                        },
+                        font_family: child.text_style.font_family.clone(),
+                        size_px,
+                        ..builder.text_style
                     },
-                    font_family: child.text_style.font_family.clone(),
-                    size_px,
-                    ..builder.text_style
-                })
+                )
                 .w("100%")
                 .text_center()
                 .min_w("0")
@@ -699,7 +762,13 @@ impl From<ButtonBuilder> for Element {
             .focus_id(builder.id)
             .focusable(!disabled)
             .on_hover(move |h| {
-                let v = if disabled { 0.0 } else if h { 1.0 } else { 0.0 };
+                let v = if disabled {
+                    0.0
+                } else if h {
+                    1.0
+                } else {
+                    0.0
+                };
                 if hover_easing == "cubic" {
                     cubic_cb.set(v);
                 } else {
@@ -714,7 +783,9 @@ impl From<ButtonBuilder> for Element {
             .on_click(move || {
                 if !disabled {
                     focused.set(focus_id.clone());
-                    if let Some(ref mut cb) = on_click { cb(); }
+                    if let Some(ref mut cb) = on_click {
+                        cb();
+                    }
                 }
             })
             .into()
@@ -747,8 +818,7 @@ fn paint_button_root_from_hover(
         Some(b_color) => el.style.border_color == b_color,
         None => true,
     };
-    let root_ok =
-        el.style.bg_color == bg && el.style.border_width == target_bw && root_color_ok;
+    let root_ok = el.style.bg_color == bg && el.style.border_width == target_bw && root_color_ok;
     let mut text_children_ok = true;
     for child in &el.children {
         if child.text.is_none() {
@@ -790,7 +860,8 @@ fn paint_button_root_from_hover(
         }
     }
     let mut layout_hit = el.style.border_width != old_bw;
-    let mut style_hit = !layout_hit && (el.style.bg_color != old_bg || el.style.border_color != old_bc);
+    let mut style_hit =
+        !layout_hit && (el.style.bg_color != old_bg || el.style.border_color != old_bc);
     layout_tree.update_taffy_node_style(el);
 
     for child in &mut el.children {
@@ -811,9 +882,9 @@ fn paint_button_root_from_hover(
         }
         if prev_u != underline {
             layout_hit = true;
-        } else if child.text_style.color != old_tc {
-            style_hit = true;
-        } else if (prev_uo - child.text_style.underline_offset).abs() > 0.01 {
+        } else if child.text_style.color != old_tc
+            || (prev_uo - child.text_style.underline_offset).abs() > 0.01
+        {
             style_hit = true;
         }
         if child.layout_node.is_some() {
@@ -868,6 +939,50 @@ fn sync_button_focus_ring_shadow(
     *impact = impact.merge(LayoutStatus::StyleChanged);
 }
 
+/// Solid-style in-place bind for `<Button variant={sig.get()}>`.
+///
+/// Updates [`ButtonHoverPaint::variant`] and rest-state chrome without rebuilding the button tree.
+pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
+    let variant = variant.as_ref();
+    let Some(desc) = el.button_hover_paint.as_mut() else {
+        return LayoutStatus::Clean;
+    };
+    if desc.variant == variant {
+        return LayoutStatus::Clean;
+    }
+    desc.variant = variant.to_string();
+    let (bg, text_color, border) = button_chrome_for_variant(variant, 0.0);
+    el.style.bg_color = bg;
+    match border {
+        Some(b) => {
+            el.style.border_color = b;
+            el.style.border_width = 1.0;
+        }
+        None => {
+            el.style.border_width = 0.0;
+        }
+    }
+    for child in &mut el.children {
+        if child.text.is_some() {
+            child.text_style.color = text_color;
+        }
+    }
+    LayoutStatus::StyleChanged
+}
+
+/// Solid-style in-place bind for `<Button disabled={sig.get()}>`.
+pub fn apply_bound_button_disabled(el: &mut Element, disabled: bool) -> LayoutStatus {
+    let Some(desc) = el.button_hover_paint.as_mut() else {
+        return LayoutStatus::Clean;
+    };
+    if desc.disabled == disabled {
+        return LayoutStatus::Clean;
+    }
+    desc.disabled = disabled;
+    el.focusable = !disabled;
+    LayoutStatus::StyleChanged
+}
+
 /// 把 `{focus_id}_hover` 与全局焦点环同步到带 [`Element::button_hover_paint`] 的节点（不经过根 `create_effect`）。
 pub(crate) fn sync_button_hover_paint_subtree(
     el: &mut Element,
@@ -881,8 +996,7 @@ pub(crate) fn sync_button_hover_paint_subtree(
             paint_button_root_from_hover(el, layout_tree, &desc, &fid, is_hovered, impact);
             let focused = use_signal("__rui_button_focus_id", String::new);
             let focus_visible = use_signal("__rui_focus_visible", || false);
-            let is_focused =
-                !desc.disabled && focus_visible.peek() && focused.peek() == fid;
+            let is_focused = !desc.disabled && focus_visible.peek() && focused.peek() == fid;
             sync_button_focus_ring_shadow(
                 el,
                 layout_tree,

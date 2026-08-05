@@ -9,17 +9,10 @@ use winit::window::Window;
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
-    RuiPipeline, RuiTextRenderer, TexturedInstanceInput, TexturedQuadPipeline,
+    InstanceInput, RuiPipeline, RuiTextRenderer, TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
     components::{
-        scroll_area::{
-            scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-            scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-            scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-            scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
-            scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_AREA_FOCUS_PREFIX,
-        },
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
             scrollbar_min_thumb_along_track, SCROLLBAR_THUMB_FOCUS_PREFIX,
@@ -27,12 +20,19 @@ use crate::{
         },
     },
     core::reactivity::use_signal,
+    core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+        scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
+        scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+        scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
+        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+    },
 };
 use std::collections::hash_map::Entry;
-use std::sync::OnceLock;
-use std::time::Instant;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 use taffy::prelude::Dimension;
 
 #[cfg(debug_assertions)]
@@ -135,6 +135,11 @@ pub(super) struct AppState {
     shadow_tex_cache: std::collections::HashMap<u64, super::image_registry::GpuImageTexture>,
     shadow_rect_cache: std::collections::HashMap<u64, [f32; 4]>,
     last_shadow_tex_draws: Vec<crate::renderer::prepare_text::ShadowTexDraw>,
+    /// Accumulated dirty rect in logical px for partial redraw (`x,y,w,h`).
+    pub(super) damage_rect: Option<[f32; 4]>,
+    pub(super) force_full_redraw: bool,
+    /// After the first successful present, partial `LoadOp::Load` is allowed.
+    has_presented_frame: bool,
 }
 
 impl AppState {
@@ -302,7 +307,10 @@ impl AppState {
                 })
                 .await;
             if let Some(adapter) = adapter {
-                log::warn!("falling back to software adapter: {}", adapter.get_info().name);
+                log::warn!(
+                    "falling back to software adapter: {}",
+                    adapter.get_info().name
+                );
                 return (surface, adapter);
             }
         }
@@ -310,7 +318,23 @@ impl AppState {
         panic!("no compatible GPU or software adapter found");
     }
 
-    pub(super) async fn new(window: Arc<Window>, mut root_element: Element) -> Self {
+    /// Initialize renderer/window state with an internal empty root.
+    ///
+    /// The user app tree is mounted later by the tracked root effect. Keeping it out of this
+    /// constructor guarantees that `app_builder` is not evaluated once for GPU initialization and
+    /// again for reactivity.
+    /// Attr marker on the private bootstrap root created by [`Self::new_bootstrap`].
+    /// Cleared on the first real [`Self::rebuild_ui`] mount.
+    pub(super) const BOOTSTRAP_ROOT_ATTR: &'static str = "rui_bootstrap";
+
+    #[inline]
+    pub(super) fn is_bootstrap_root(el: &Element) -> bool {
+        el.get_attr(Self::BOOTSTRAP_ROOT_ATTR).map(|s| s.as_str()) == Some("1")
+    }
+
+    pub(super) async fn new_bootstrap(window: Arc<Window>) -> Self {
+        let mut root_element = Element::new().w("100%").h("100%");
+        root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
         let size = window.inner_size();
         let force_software = std::env::var("RUI_FORCE_SOFTWARE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -488,7 +512,32 @@ impl AppState {
             shadow_tex_cache: std::collections::HashMap::new(),
             shadow_rect_cache: std::collections::HashMap::new(),
             last_shadow_tex_draws: Vec::new(),
+            damage_rect: None,
+            force_full_redraw: true,
+            has_presented_frame: false,
         }
+    }
+
+    pub(super) fn union_damage(&mut self, rect: [f32; 4]) {
+        if rect[2] <= 0.0 || rect[3] <= 0.0 {
+            return;
+        }
+        self.damage_rect = Some(match self.damage_rect {
+            Some(existing) => super::damage::union_rects(existing, rect),
+            None => rect,
+        });
+    }
+
+    pub(super) fn mark_full_redraw(&mut self) {
+        self.force_full_redraw = true;
+        self.damage_rect = None;
+    }
+
+    fn damage_scissor_padding(instances: &[InstanceInput]) -> f32 {
+        instances.iter().fold(8.0_f32, |acc, inst| {
+            let pad = inst.shadow_blur + inst.shadow_spread.abs() + 8.0;
+            acc.max(pad)
+        })
     }
 
     pub(super) fn rebuild_ui(&mut self, root_element: Element) {
@@ -503,13 +552,24 @@ impl AppState {
         #[cfg(not(debug_assertions))]
         let mut root_element = root_element;
 
-        log::warn!(
-            "[rebuild_ui] START new_children={} old_children={}",
+        let initial_mount = Self::is_bootstrap_root(&self.root_element);
+
+        log::debug!(
+            "[rebuild_ui] START initial_mount={} new_children={} old_children={}",
+            initial_mount,
             root_element.children.len(),
             self.root_element.children.len()
         );
-        let status = Self::reconcile_elements(&mut root_element, &mut self.root_element);
-        log::warn!("[rebuild_ui] END status={:?}", status);
+
+        // First tracked mount replaces the private bootstrap root. Skip reconcile: there is no
+        // user state to preserve, and walking an empty shell is pure overhead on every cold start.
+        let status = if initial_mount {
+            use crate::core::tree::LayoutStatus;
+            LayoutStatus::StructureChanged
+        } else {
+            Self::reconcile_elements(&mut root_element, &mut self.root_element)
+        };
+        log::debug!("[rebuild_ui] END status={:?}", status);
         self.root_element = root_element;
         recompute_scroll_viewport_flags(&mut self.root_element);
         self.layout_status = status;
@@ -559,6 +619,10 @@ impl AppState {
 
         if id_match {
             new_el.layout_node = old_el.layout_node;
+            // Keep dispose hooks alive across root rebuilds that recreate the same template_id.
+            if new_el.on_unmount.is_none() {
+                new_el.on_unmount = old_el.on_unmount.clone();
+            }
             let is_reactive_placeholder = new_el.template_hash.as_deref()
                 == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
             if is_reactive_placeholder {
@@ -578,21 +642,20 @@ impl AppState {
                     // until the anchor effect runs again — but updates that only rerun the root
                     // effect (e.g. unrelated `use_signal` in `main`) never rerun that anchor.
                     let tid = new_el.template_id.clone();
-                    let promoted = std::mem::replace(old_el, Element::new());
+                    let promoted = std::mem::take(old_el);
                     *new_el = promoted;
                     new_el.template_id = tid;
                 }
                 return LayoutStatus::Clean;
             }
 
-            let mut status = if new_el.text != old_el.text {
-                LayoutStatus::LayoutChanged
-            } else if new_el.style != old_el.style {
+            let mut status = if new_el.text != old_el.text
+                || new_el.style != old_el.style
+                || new_el.image_texture != old_el.image_texture
+            {
                 LayoutStatus::LayoutChanged
             } else if new_el.text_style != old_el.text_style {
                 LayoutStatus::StyleChanged
-            } else if new_el.image_texture != old_el.image_texture {
-                LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean
             };
@@ -633,6 +696,40 @@ impl AppState {
         old_el: &mut Element,
     ) -> crate::core::tree::LayoutStatus {
         Self::reconcile_elements(new_el, old_el)
+    }
+
+    /// Solid-style in-place binding: mutate one mounted node by exact `template_id`.
+    pub(crate) fn update_element_by_template_id<F>(
+        &mut self,
+        template_id: &str,
+        patch: F,
+    ) -> crate::core::tree::LayoutStatus
+    where
+        F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
+    {
+        if let Some(el) = Self::find_element_mut_by_template_id(&mut self.root_element, template_id)
+        {
+            let status = patch(el);
+            self.layout_status = Self::merge_layout_status(self.layout_status, status);
+            status
+        } else {
+            crate::core::tree::LayoutStatus::Clean
+        }
+    }
+
+    fn find_element_mut_by_template_id<'a>(
+        root: &'a mut Element,
+        template_id: &str,
+    ) -> Option<&'a mut Element> {
+        if root.template_id.as_deref() == Some(template_id) {
+            return Some(root);
+        }
+        for child in &mut root.children {
+            if let Some(found) = Self::find_element_mut_by_template_id(child, template_id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     fn children_all_keyed(children: &[Element]) -> bool {
@@ -694,7 +791,7 @@ impl AppState {
             &mut self.root_element,
             target_id,
             offset,
-            SCROLL_AREA_FOCUS_PREFIX,
+            SCROLL_VIEWPORT_FOCUS_PREFIX,
         );
     }
 
@@ -799,6 +896,7 @@ impl AppState {
                 self.config.height,
             );
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+            self.mark_full_redraw();
         }
     }
 
@@ -848,6 +946,11 @@ impl AppState {
         let pre_chrome_layout_status = self.layout_status;
 
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
+        crate::core::tree::sync_reactive_elements_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
         crate::components::button::sync_button_hover_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -856,6 +959,10 @@ impl AppState {
         crate::components::input::sync_input_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::label::sync_label_selection_paint_subtree(
+            &mut self.root_element,
             &mut sync_impact,
         );
         crate::components::switch::sync_switch_checked_subtree(
@@ -868,6 +975,31 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        {
+            let focused =
+                crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+            let dark = crate::style::is_dark_theme();
+            crate::style::sync_class_variants_subtree(
+                &mut self.root_element,
+                mouse_pos,
+                focused.as_str(),
+                dark,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+        }
+
+        use crate::core::tree::LayoutStatus;
+        if sync_impact != LayoutStatus::Clean {
+            let (lw, lh) = self.logical_size();
+            self.union_damage([0.0, 0.0, lw, lh]);
+        }
+        if matches!(
+            pre_chrome_layout_status,
+            LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+        ) {
+            self.mark_full_redraw();
+        }
 
         let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
 
@@ -981,11 +1113,11 @@ impl AppState {
             // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
             // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
             // 避免仅 hover 颜色每帧全量 Taffy。
-            let scrollbar_overlay_collect =
-                scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
-                    || (scrollbar_skip_flex_layout
-                        && scrollbar_update_resolved == ScrollbarUpdateMode::Full
-                        && scroll_only);
+            let scrollbar_overlay_collect = scrollbar_update_resolved
+                == ScrollbarUpdateMode::ViewportsOnly
+                || (scrollbar_skip_flex_layout
+                    && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                    && scroll_only);
             self.layout_tree.build_and_layout_fast(
                 &mut self.root_element,
                 logical_w,
@@ -996,7 +1128,7 @@ impl AppState {
             )
         };
         // Select 浮层：首帧用占位坐标，布局后按触发器/视口纠正并再 layout 一次。
-        if crate::components::select::sync_select_floating_placement(
+        if crate::utils::popup::sync_floating_placement(
             &mut self.root_element,
             logical_w,
             logical_h,
@@ -1153,6 +1285,35 @@ impl AppState {
                 label: Some("Render Encoder"),
             });
 
+        let use_partial_damage =
+            self.has_presented_frame && !self.force_full_redraw && self.damage_rect.is_some();
+        let clear_color = wgpu::Color {
+            r: 0.95,
+            g: 0.95,
+            b: 0.95,
+            a: 1.0,
+        };
+        let color_load = if use_partial_damage {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(clear_color)
+        };
+        let scissor_physical = if use_partial_damage {
+            self.damage_rect.map(|damage| {
+                let pad = Self::damage_scissor_padding(&render_result.instances);
+                let scale = ui_scale;
+                let x = ((damage[0] - pad) * scale).floor().max(0.0) as u32;
+                let y = ((damage[1] - pad) * scale).floor().max(0.0) as u32;
+                let w = ((damage[2] + pad * 2.0) * scale).ceil() as u32;
+                let h = ((damage[3] + pad * 2.0) * scale).ceil() as u32;
+                let max_w = self.config.width.saturating_sub(x);
+                let max_h = self.config.height.saturating_sub(y);
+                (x, y, w.min(max_w).max(1), h.min(max_h).max(1))
+            })
+        } else {
+            None
+        };
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -1160,12 +1321,7 @@ impl AppState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.95,
-                            g: 0.95,
-                            b: 0.95,
-                            a: 1.0,
-                        }),
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1173,6 +1329,10 @@ impl AppState {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            if let Some((x, y, w, h)) = scissor_physical {
+                render_pass.set_scissor_rect(x, y, w, h);
+            }
 
             render_pass.set_pipeline(&self.pipeline.render_pipeline);
             render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
@@ -1206,7 +1366,7 @@ impl AppState {
                         .map(|d| TexturedInstanceInput {
                             rect_pos: [d.rect[0], d.rect[1]],
                             rect_size: [d.rect[2], d.rect[3]],
-                            tint: [1.0, 1.0, 1.0, 1.0],
+                            tint: [1.0, 1.0, 1.0, d.opacity],
                         })
                         .collect();
                     if !insts.is_empty() {
@@ -1264,8 +1424,7 @@ impl AppState {
                         });
                 render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                render_pass
-                    .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
                 render_pass.set_index_buffer(
                     self.textured_pipeline.index_buffer.slice(..),
@@ -1310,6 +1469,9 @@ impl AppState {
         #[cfg(debug_assertions)]
         let present_begin = Instant::now();
         output.present();
+        self.damage_rect = None;
+        self.force_full_redraw = false;
+        self.has_presented_frame = true;
         #[cfg(debug_assertions)]
         {
             let draw_done = Instant::now();
@@ -1389,7 +1551,7 @@ fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
     let self_is = el
         .focus_id
         .as_deref()
-        .is_some_and(|f| f.starts_with(SCROLL_AREA_FOCUS_PREFIX));
+        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
     let mut any_child = false;
     let mut vp_count = u32::from(self_is);
     for child in &mut el.children {
@@ -1439,7 +1601,7 @@ fn update_scrollbar_elements(
     fn subtree_contains_scroll_rest(el: &Element, target_rest: &str) -> bool {
         if let Some(fid) = el.focus_id.as_deref() {
             if fid
-                .strip_prefix(SCROLL_AREA_FOCUS_PREFIX)
+                .strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX)
                 .is_some_and(|rest| rest == target_rest)
             {
                 return true;
@@ -1472,7 +1634,7 @@ fn update_scrollbar_elements(
         // `update_scrollbar_elements` every frame (parent scroll uses ViewportsOnly), and stale
         // `vw`/corner math makes nested bars look doubly reserved / too short.
         if let Some(fid) = el.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
+            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
                 let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
                 el.scroll_offset = [sx, sy];
@@ -1502,7 +1664,7 @@ fn update_scrollbar_elements(
     // scrollbar geometry freezes during drag and jumps on release.
     if let Some(target_rest) = active_drag_rest {
         if let Some(fid) = el.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
+            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 if rest != target_rest && !subtree_contains_scroll_rest(el, target_rest) {
                     let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
                     let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
@@ -1521,7 +1683,7 @@ fn update_scrollbar_elements(
             || child.focus_id.as_deref().is_some_and(|f| {
                 f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
                     || f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
-                    || f.starts_with(SCROLL_AREA_FOCUS_PREFIX)
+                    || f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX)
             });
         if descend {
             update_scrollbar_elements(child, base_style, layout_tree, mode, active_drag_rest);
@@ -1539,7 +1701,7 @@ fn update_scrollbar_elements(
         } else if let Some(prefix) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
             let (rest, axis) = prefix.rsplit_once(':').unwrap_or((prefix, "y"));
             (rest.to_string(), axis, false)
-        } else if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
+        } else if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
             // High-performance path: sync viewport scroll offset directly in the render pass.
             // This bypasses the reactive rebuild for pure scroll offset changes.
             let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
@@ -1619,9 +1781,12 @@ fn update_scrollbar_elements(
     } else if vis == "always" {
         1.0
     } else {
-        crate::style::use_scrollbar_visibility_spring(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
-            .peek()
-            .clamp(0.0, 1.0)
+        crate::style::use_scrollbar_visibility_spring(
+            &format!("scrollbar_spring_{rest}:{axis}"),
+            0.0,
+        )
+        .peek()
+        .clamp(0.0, 1.0)
     };
 
     // Recover base thickness from the track's max cross constraint only. Using `layout_bounds`
@@ -1727,14 +1892,16 @@ fn update_scrollbar_elements(
 
     match axis {
         "x" => {
-            el.style.size.width =
-                Dimension::Length((main_available - reserve_left - reserve_right - edge_pad_main).max(1.0));
+            el.style.size.width = Dimension::Length(
+                (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0),
+            );
             el.style.size.height = Dimension::Length(cross);
         }
         _ => {
             el.style.size.width = Dimension::Length(cross);
-            el.style.size.height =
-                Dimension::Length((main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0));
+            el.style.size.height = Dimension::Length(
+                (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
+            );
         }
     }
     // The scrollbar builder sets `min_w / min_h` at build time to the initial viewport
@@ -1802,7 +1969,8 @@ fn update_scrollbar_elements(
     {
         match axis {
             "x" => {
-                let track = (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
+                let track =
+                    (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
                 let track_inner = (track - inset * 2.0).max(1.0);
                 let (tw, ml) = if scrollable {
                     let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
@@ -1825,7 +1993,8 @@ fn update_scrollbar_elements(
                 thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(0.0);
             }
             _ => {
-                let track = (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
+                let track =
+                    (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
                 let track_inner = (track - inset * 2.0).max(1.0);
                 let (th, mt) = if scrollable {
                     let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);

@@ -7,7 +7,7 @@ use std::rc::Weak;
 use crate::core::tree::Element;
 
 thread_local! {
-    static APP_RUNTIME: RefCell<Option<AppRuntime>> = RefCell::new(None);
+    static APP_RUNTIME: RefCell<Option<AppRuntime>> = const { RefCell::new(None) };
 }
 
 /// Weak handle to `Rc<RefCell<Option<AppState>>>` for the running application.
@@ -39,6 +39,20 @@ impl AppRuntime {
             }
         }
     }
+
+    pub fn try_update_element_by_template_id<F>(
+        &self,
+        template_id: &str,
+        patch: F,
+    ) -> Option<crate::core::tree::LayoutStatus>
+    where
+        F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
+    {
+        let state_rc = self.state.upgrade()?;
+        let mut opt = state_rc.borrow_mut();
+        let state = opt.as_mut()?;
+        Some(state.update_element_by_template_id(template_id, patch))
+    }
 }
 
 pub fn set_app_runtime(rt: AppRuntime) {
@@ -50,7 +64,10 @@ pub fn clear_app_runtime() {
 }
 
 /// Returns [`None`] if no runtime is installed (e.g. before first `resumed` or after teardown).
-pub fn try_reconcile_subtree(anchor_id: &str, new_fragment: Element) -> Option<crate::core::tree::LayoutStatus> {
+pub fn try_reconcile_subtree(
+    anchor_id: &str,
+    new_fragment: Element,
+) -> Option<crate::core::tree::LayoutStatus> {
     APP_RUNTIME.with(|c| {
         c.borrow()
             .as_ref()
@@ -64,4 +81,18 @@ pub fn request_redraw() {
             rt.request_redraw();
         }
     });
+}
+
+pub fn try_update_element_by_template_id<F>(
+    template_id: &str,
+    patch: F,
+) -> Option<crate::core::tree::LayoutStatus>
+where
+    F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
+{
+    APP_RUNTIME.with(|c| {
+        c.borrow()
+            .as_ref()
+            .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
+    })
 }

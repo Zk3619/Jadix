@@ -8,7 +8,7 @@ use glyphon::{
     ContentType, FontSystem, RasterizeCustomGlyphRequest, RasterizedCustomGlyph, SwashCache,
     TextArea, TextAtlas, TextRenderer, Viewport,
 };
-use wgpu::{Device, Queue, SurfaceConfiguration, RenderPass};
+use wgpu::{Device, Queue, RenderPass, SurfaceConfiguration};
 
 pub(crate) struct ShapedTextEntry {
     pub key_hash: u64,
@@ -24,6 +24,7 @@ pub(crate) struct EmojiCacheKey {
     pub color_mode: u8,
 }
 
+#[derive(Default)]
 pub(crate) struct EmojiGlyphCache {
     pub entries: HashMap<EmojiCacheKey, EmojiGlyphEntry>,
     entry_lru: VecDeque<EmojiCacheKey>,
@@ -31,19 +32,6 @@ pub(crate) struct EmojiGlyphCache {
     raster_lru: VecDeque<EmojiRasterCacheKey>,
     pub next_custom_id: u16,
     pub stats: EmojiCacheStats,
-}
-
-impl Default for EmojiGlyphCache {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-            entry_lru: VecDeque::new(),
-            raster_entries: HashMap::new(),
-            raster_lru: VecDeque::new(),
-            next_custom_id: 0,
-            stats: EmojiCacheStats::default(),
-        }
-    }
 }
 
 fn emoji_raster_cache_max() -> usize {
@@ -230,8 +218,12 @@ impl RuiTextRenderer {
         let swash_cache = SwashCache::new();
         let cache = glyphon::Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, config.format);
-        let text_renderer =
-            TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
+        let text_renderer = TextRenderer::new(
+            &mut text_atlas,
+            device,
+            wgpu::MultisampleState::default(),
+            None,
+        );
         let viewport = Viewport::new(device, &cache);
 
         Self {
@@ -277,6 +269,8 @@ impl RuiTextRenderer {
     }
 
     pub fn render<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
-        self.text_renderer.render(&self.text_atlas, &self.viewport, render_pass).unwrap();
+        self.text_renderer
+            .render(&self.text_atlas, &self.viewport, render_pass)
+            .unwrap();
     }
 }

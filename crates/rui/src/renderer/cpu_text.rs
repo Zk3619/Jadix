@@ -12,6 +12,12 @@ pub struct CpuTextProfiler {
     last_log: Instant,
 }
 
+impl Default for CpuTextProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CpuTextProfiler {
     pub fn new() -> Self {
         Self {
@@ -37,4 +43,3 @@ impl CpuTextProfiler {
         }
     }
 }
-

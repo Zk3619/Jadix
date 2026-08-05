@@ -3,25 +3,27 @@
 //! 调试：设置环境变量 `RUI_TEXT_DEBUG`（见 [`super::text_prepare_debug`]）。
 
 use std::borrow::Cow;
+use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
-use std::hash::{Hash, Hasher};
 use unicode_segmentation::UnicodeSegmentation;
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
 
-use crate::style::{tailwind_default_leading_scale, TextDecorationStyle};
 use crate::core::tree::TextLayoutInfo;
+use crate::style::{tailwind_default_leading_scale, TextDecorationStyle, TextOverflow};
 
 use super::emoji_detect;
 use super::emoji_layout;
 use super::emoji_svg;
 use super::font_loader;
 use super::text::RuiTextRenderer;
-use super::text_hit::{best_font_family, measure_prefix_width};
+use super::text_hit::{
+    best_font_family, is_single_line_text_box, measure_prefix_width, truncate_with_ellipsis,
+};
 use super::twemoji_name;
 use super::InstanceInput;
 
@@ -213,8 +215,7 @@ fn generate_shadow_bitmap(
                     };
                     let src = (src_a as u16 * sample_alpha as u16) / 255;
                     let dst = alpha_buf[dst_row + bx as usize];
-                    alpha_buf[dst_row + bx as usize] =
-                        src + dst - (src * dst) / 255;
+                    alpha_buf[dst_row + bx as usize] = src + dst - (src * dst) / 255;
                 }
             }
         }
@@ -244,11 +245,7 @@ fn generate_shadow_bitmap(
             let theta = idx as f32 * GOLDEN_ANGLE;
             let w = (-(r * r) / two_sigma2).exp();
             let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
-            stamp(
-                shadow_dx + theta.cos() * r,
-                shadow_dy + theta.sin() * r,
-                wa,
-            );
+            stamp(shadow_dx + theta.cos() * r, shadow_dy + theta.sin() * r, wa);
         }
     }
 
@@ -272,12 +269,7 @@ fn generate_shadow_bitmap(
         }
     }
 
-    let draw_rect = [
-        bmp_x0 as f32,
-        bmp_y0 as f32,
-        bw as f32,
-        bh as f32,
-    ];
+    let draw_rect = [bmp_x0 as f32, bmp_y0 as f32, bw as f32, bh as f32];
     Some(ShadowBitmapOutput {
         rgba,
         width: bw,
@@ -392,7 +384,7 @@ fn preshape_budget() -> usize {
 }
 
 fn caret_blink_visible() -> bool {
-    caret_blink_phase() % 2 == 0
+    caret_blink_phase().is_multiple_of(2)
 }
 
 pub(crate) fn caret_blink_phase() -> u128 {
@@ -429,7 +421,10 @@ fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4
     }
 }
 
-fn text_bounds_from_clip(clip: Option<[f32; 4]>, config: &SurfaceConfiguration) -> glyphon::TextBounds {
+fn text_bounds_from_clip(
+    clip: Option<[f32; 4]>,
+    config: &SurfaceConfiguration,
+) -> glyphon::TextBounds {
     if let Some(b) = clip {
         glyphon::TextBounds {
             left: b[0].floor() as i32,
@@ -488,7 +483,9 @@ fn emoji_custom_glyph_enabled() -> bool {
         // Default ON: color Twemoji PNGs. Set RUI_EMOJI_CUSTOM_GLYPH=0 to use font glyphs
         // (often monochrome outline boxes with Segoe UI).
         std::env::var("RUI_EMOJI_CUSTOM_GLYPH")
-            .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off")))
+            .map(|v| {
+                !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
+            })
             .unwrap_or(true)
     })
 }
@@ -564,7 +561,11 @@ fn emoji_baseline_layout_tweak(text_size: f32) -> f32 {
 
 /// 无法从 layout 推导位置时的回退垂直偏移（沿用原平台启发式）。
 fn emoji_baseline_offset_fallback(text_size: f32) -> f32 {
-    let platform_default = if cfg!(target_os = "windows") { 0.12 } else { 0.1 };
+    let platform_default = if cfg!(target_os = "windows") {
+        0.12
+    } else {
+        0.1
+    };
     let factor = std::env::var("RUI_EMOJI_BASELINE_FACTOR")
         .ok()
         .and_then(|s| s.parse::<f32>().ok())
@@ -575,7 +576,7 @@ fn emoji_baseline_offset_fallback(text_size: f32) -> f32 {
 fn emoji_metrics_log_tick(stats: super::text::EmojiCacheStats) {
     static FRAMES: AtomicU64 = AtomicU64::new(0);
     let frame = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
-    if frame % 120 == 0 {
+    if frame.is_multiple_of(120) {
         let hit_rate = if stats.lookups == 0 {
             0.0
         } else {
@@ -698,11 +699,11 @@ fn decode_png_rgba(bytes: &[u8]) -> Option<super::text::EmojiRaster> {
             }
         }
         png::ColorType::Grayscale => {
-            for i in 0..(w * h) {
+            for (i, &gray) in data.iter().enumerate().take(w * h) {
                 let di = i * 4;
-                rgba[di] = data[i];
-                rgba[di + 1] = data[i];
-                rgba[di + 2] = data[i];
+                rgba[di] = gray;
+                rgba[di + 1] = gray;
+                rgba[di + 2] = gray;
                 rgba[di + 3] = 255;
             }
         }
@@ -854,7 +855,9 @@ fn load_emoji_raster_cached(
         return Some(raster);
     }
     let raster = load_emoji_raster_chain(text_renderer, sequence, pixel_size, family, font_weight)?;
-    text_renderer.emoji_cache.insert_raster(key.clone(), raster.clone());
+    text_renderer
+        .emoji_cache
+        .insert_raster(key.clone(), raster.clone());
     Some(raster)
 }
 
@@ -865,9 +868,7 @@ fn shadow_clip_for_glyphon(
     outset: f32,
     viewport: [f32; 4],
 ) -> Option<[f32; 4]> {
-    let Some(c) = node_clip else {
-        return None;
-    };
+    let c = node_clip?;
     let expanded = [
         c[0] - outset,
         c[1] - outset,
@@ -906,7 +907,8 @@ pub fn prepare_text_frame(
 
     let mut shadow_new_bitmaps: Vec<ShadowNewBitmap> = Vec::new();
     let mut shadow_tex_draws: Vec<ShadowTexDraw> = Vec::new();
-    let mut shadow_skip_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut shadow_skip_indices: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
 
     let mut frame_meta: Vec<Option<FrameTextNodeMeta>> = Vec::with_capacity(text_nodes.len());
     let estimated = text_nodes.len().saturating_mul(3);
@@ -965,12 +967,14 @@ pub fn prepare_text_frame(
                 frame_meta.push(None);
                 continue;
             }
-            let expanded_clip = scaled_clip.map(|c| [
-                c[0] - margin,
-                c[1] - margin,
-                c[2] + 2.0 * margin,
-                c[3] + 2.0 * margin,
-            ]);
+            let expanded_clip = scaled_clip.map(|c| {
+                [
+                    c[0] - margin,
+                    c[1] - margin,
+                    c[2] + 2.0 * margin,
+                    c[3] + 2.0 * margin,
+                ]
+            });
             let expanded_vp = [
                 -margin,
                 -margin,
@@ -1026,11 +1030,7 @@ pub fn prepare_text_frame(
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
-        let requested_weight = if is_icon {
-            400
-        } else {
-            st.weight
-        };
+        let requested_weight = if is_icon { 400 } else { st.weight };
         let font_weight = crate::utils::font::normalize_weight_for_family(
             text_renderer.font_system.db(),
             family,
@@ -1052,9 +1052,7 @@ pub fn prepare_text_frame(
         let shaping = match perf_mode {
             // Editing/caret keeps advanced shaping for cursor fidelity.
             TextPerfMode::HighQuality => {
-                if force_fast_mode && st.input_caret.is_none() {
-                    glyphon::Shaping::Basic
-                } else if is_ascii_basic {
+                if (force_fast_mode && st.input_caret.is_none()) || is_ascii_basic {
                     glyphon::Shaping::Basic
                 } else {
                     glyphon::Shaping::Advanced
@@ -1075,7 +1073,26 @@ pub fn prepare_text_frame(
         } else {
             shaping
         };
-        let shape_text: Cow<'_, str> = shape_text_for_coverage;
+        let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
+            && st.input_caret.is_none()
+            && is_single_line_text_box(line_height, scaled_h)
+        {
+            Cow::Owned(truncate_with_ellipsis(
+                &mut text_renderer.font_system,
+                info.text.as_str(),
+                scaled_size,
+                line_height,
+                font_weight,
+                family,
+                scaled_w.max(0.0),
+            ))
+        } else {
+            Cow::Borrowed(info.text.as_str())
+        };
+        let shape_text: Cow<'_, str> = match info.shape_suffix.as_deref() {
+            Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", display_text, s)),
+            _ => display_text,
+        };
         let key_hash = node_shape_hash(
             shape_text.as_ref(),
             scaled_size,
@@ -1206,8 +1223,13 @@ pub fn prepare_text_frame(
                     let pixel_size = scaled_size.ceil().clamp(1.0, 512.0) as u16;
                     let glyph_id = next_custom_id;
                     next_custom_id = next_custom_id.wrapping_add(1).max(1);
-                    let raster =
-                        load_emoji_raster_cached(text_renderer, &text, pixel_size, family, font_weight);
+                    let raster = load_emoji_raster_cached(
+                        text_renderer,
+                        &text,
+                        pixel_size,
+                        family,
+                        font_weight,
+                    );
                     if let Some(raster) = raster {
                         // Match logical quad to font size (raster already resized).
                         let width = pixel_size as f32;
@@ -1236,10 +1258,9 @@ pub fn prepare_text_frame(
                         text_renderer.emoji_cache.stats.upload_bytes
                     );
                 }
-                text_renderer.emoji_cache.insert_emoji_node(
-                    key,
-                    super::text::EmojiGlyphEntry { glyphs, rasters },
-                );
+                text_renderer
+                    .emoji_cache
+                    .insert_emoji_node(key, super::text::EmojiGlyphEntry { glyphs, rasters });
                 text_renderer.emoji_cache.next_custom_id = next_custom_id;
             }
         }
@@ -1298,7 +1319,12 @@ pub fn prepare_text_frame(
                 if let Some(cached_rect) = shadow_cached_rects.get(&skey) {
                     shadow_tex_draws.push(ShadowTexDraw {
                         cache_key: skey,
-                        rect: [x + cached_rect[0], y + cached_rect[1], cached_rect[2], cached_rect[3]],
+                        rect: [
+                            x + cached_rect[0],
+                            y + cached_rect[1],
+                            cached_rect[2],
+                            cached_rect[3],
+                        ],
                     });
                 }
                 shadow_skip_indices.insert(i);
@@ -1380,11 +1406,14 @@ pub fn prepare_text_frame(
                     let shadow_perf = text_perf_mode();
                     let center_left = tb.x + tb.shadow_dx;
                     let center_top = tb.y + tb.dy + tb.shadow_dy;
-                    let (min_radius, min_alpha, base_samples, radial_scale, max_samples) = match shadow_perf {
-                        TextPerfMode::HighQuality => (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize),
-                        TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
-                        TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
-                    };
+                    let (min_radius, min_alpha, base_samples, radial_scale, max_samples) =
+                        match shadow_perf {
+                            TextPerfMode::HighQuality => {
+                                (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize)
+                            }
+                            TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
+                            TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
+                        };
                     const SHARP_BLUR_EPS: f32 = 0.75;
                     let shadow_bounds_clip = shadow_clip_for_glyphon(
                         tb.clip_bounds,
@@ -1398,7 +1427,8 @@ pub fn prepare_text_frame(
                             return;
                         }
                         let shadow_rect = [left, top, tb.box_w, tb.box_h];
-                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds) else {
+                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds)
+                        else {
                             return;
                         };
                         if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
@@ -1419,7 +1449,8 @@ pub fn prepare_text_frame(
                         });
                     };
 
-                    let draw_blur = radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
+                    let draw_blur =
+                        radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
                     if !draw_blur {
                         push_shadow_layer(center_left, center_top, alpha);
                     } else {
@@ -1557,7 +1588,8 @@ pub fn prepare_text_frame(
                 if w <= 0.0 || h <= 0.0 {
                     return;
                 }
-                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], tb.clip_bounds) else {
+                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], tb.clip_bounds)
+                else {
                     return;
                 };
                 underline_instances.push(InstanceInput {
@@ -1926,7 +1958,7 @@ pub fn prepare_text_frame(
                 &mut text_renderer.font_system,
                 &mut text_renderer.text_atlas,
                 &text_renderer.viewport,
-                warmup_areas.into_iter(),
+                warmup_areas,
                 &mut text_renderer.swash_cache,
                 |input| text_renderer.emoji_cache.rasterize(input),
             )
@@ -1942,7 +1974,7 @@ pub fn prepare_text_frame(
             &mut text_renderer.font_system,
             &mut text_renderer.text_atlas,
             &text_renderer.viewport,
-            text_areas.into_iter(),
+            text_areas,
             &mut text_renderer.swash_cache,
             |input| text_renderer.emoji_cache.rasterize(input),
         )

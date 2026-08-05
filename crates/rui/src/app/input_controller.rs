@@ -1,17 +1,18 @@
 use winit::event::{ElementState, Ime, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
+use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
 use crate::utils::clipboard::{
     get_text as clipboard_get_text, sanitize_pasted_line, set_text as clipboard_set_text,
     shortcut_modifiers as clipboard_shortcut_modifiers,
 };
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{caret_move_left, caret_move_right, delete_char_forward};
-use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
 
 fn input_type_for(rest: &str) -> InputType {
     let key = input_type_signal_key(rest);
-    let raw = crate::core::reactivity::use_signal(&key, || InputType::Text.as_str().to_string()).peek();
+    let raw =
+        crate::core::reactivity::use_signal(&key, || InputType::Text.as_str().to_string()).peek();
     InputType::parse(&raw)
 }
 
@@ -23,7 +24,8 @@ fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
 impl super::App {
     pub(super) fn handle_ime_event(&mut self, ime: Ime) {
         let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
-        let ime_active = crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
+        let ime_active =
+            crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
         let fid = focused.get();
         match ime {
             Ime::Enabled => {
@@ -37,8 +39,10 @@ impl super::App {
                     let tsk = crate::components::input::input_selection_signal_key(rest);
                     let ak = crate::components::input::input_ime_anchor_signal_key(rest);
                     let pre = crate::core::reactivity::use_signal(&pk, String::new);
-                    let sel = crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
-                    let text_sel = crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
+                    let sel =
+                        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
+                    let text_sel =
+                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
                     pre.set(String::new());
                     sel.set(None);
@@ -56,8 +60,10 @@ impl super::App {
                     let ck = crate::components::input::input_caret_signal_key(rest);
                     let ak = crate::components::input::input_ime_anchor_signal_key(rest);
                     let pre = crate::core::reactivity::use_signal(&pk, String::new);
-                    let sel = crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
-                    let text_sel = crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
+                    let sel =
+                        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
+                    let text_sel =
+                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
                     let old_pre = pre.get();
@@ -100,8 +106,10 @@ impl super::App {
                     let tsk = crate::components::input::input_selection_signal_key(rest);
                     let ck = crate::components::input::input_caret_signal_key(rest);
                     let pre = crate::core::reactivity::use_signal(&pk, String::new);
-                    let sel = crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
-                    let text_sel = crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
+                    let sel =
+                        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
+                    let text_sel =
+                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     pre.set(String::new());
                     sel.set(None);
@@ -111,7 +119,7 @@ impl super::App {
                 }
             }
         }
-        if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
             st.window.request_redraw();
         }
     }
@@ -119,8 +127,10 @@ impl super::App {
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
         if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
-                let trap_ring =
-                    crate::core::reactivity::use_signal(crate::components::FOCUS_TRAP_RING_KEY, String::new);
+                let trap_ring = crate::core::reactivity::use_signal(
+                    crate::components::FOCUS_TRAP_RING_KEY,
+                    String::new,
+                );
                 let ring = trap_ring.get();
                 let mut ids: Vec<String> = if !ring.is_empty() {
                     ring.split(',')
@@ -131,13 +141,15 @@ impl super::App {
                     Vec::new()
                 };
                 if ids.is_empty() {
-                    if let Some(st) = (&*self.state.borrow()).as_ref() {
+                    if let Some(st) = (*self.state.borrow()).as_ref() {
                         collect_focusable_ids(&st.root_element, &mut ids);
                     }
                 }
                 if !ids.is_empty() {
-                    let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
-                    let focus_visible = crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+                    let focused =
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
+                    let focus_visible =
+                        crate::core::reactivity::use_signal("__rui_focus_visible", || false);
                     let current = focused.get();
                     let shift = self.modifiers.shift_key();
                     let idx = ids.iter().position(|id| id == &current);
@@ -157,8 +169,12 @@ impl super::App {
                     focused.set(next_id);
                 }
             } else if !matches!(event.logical_key, Key::Named(NamedKey::Tab)) {
-                let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
-                let ime_active = crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
+                let focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
+                let ime_active = crate::core::reactivity::use_signal(
+                    crate::components::IME_ACTIVE_SIGNAL,
+                    || false,
+                );
                 let fid = focused.get();
 
                 if event.state == ElementState::Pressed
@@ -167,7 +183,7 @@ impl super::App {
                     let closed = crate::app::portal_overlay::try_close_top()
                         || crate::app::navigator::try_pop_active();
                     if closed {
-                        if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                             st.window.request_redraw();
                         }
                         return true;
@@ -175,16 +191,33 @@ impl super::App {
                 }
 
                 if super::window_keys::try_dispatch_window_key(&event) {
-                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }
                     return true;
                 }
 
                 if !fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
-                    if let Some(st) = (&*self.state.borrow()).as_ref() {
-                        if super::tree_hit::dispatch_key_for_focused(&st.root_element, &fid, &event) {
-                            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                    if clipboard_shortcut_modifiers(&self.modifiers) {
+                        if let Key::Character(ch) = &event.logical_key {
+                            if ch.as_str().eq_ignore_ascii_case("c") {
+                                if let Some(st) = (*self.state.borrow()).as_ref() {
+                                    if crate::components::label::try_copy_label_selection(
+                                        &st.root_element,
+                                    ) {
+                                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                            st.window.request_redraw();
+                                        }
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(st) = (*self.state.borrow()).as_ref() {
+                        if super::tree_hit::dispatch_key_for_focused(&st.root_element, &fid, &event)
+                        {
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
                             }
                             return true;
@@ -192,7 +225,14 @@ impl super::App {
                     }
                 }
 
-                if let Some(rest) = fid.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
+                let edit_target = fid
+                    .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
+                    .map(|r| (r, false))
+                    .or_else(|| {
+                        fid.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX)
+                            .map(|r| (r, true))
+                    });
+                if let Some((rest, multiline)) = edit_target {
                     let value_key = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&value_key, String::new);
                     let pk = crate::components::input::input_preedit_signal_key(rest);
@@ -200,7 +240,8 @@ impl super::App {
                     let ck = crate::components::input::input_caret_signal_key(rest);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     let tsk = crate::components::input::input_selection_signal_key(rest);
-                    let text_sel_sig = crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
+                    let text_sel_sig =
+                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
                     if clipboard_shortcut_modifiers(&self.modifiers) {
@@ -220,7 +261,11 @@ impl super::App {
                                     handled = true;
                                 } else if k.eq_ignore_ascii_case("v") {
                                     if let Some(text) = clipboard_get_text() {
-                                        let text = sanitize_pasted_line(&text);
+                                        let text = if multiline {
+                                            text.replace('\r', "")
+                                        } else {
+                                            sanitize_pasted_line(&text)
+                                        };
                                         if !text.is_empty() {
                                             let mut s = val_sig.get();
                                             if let Some((a, b)) = text_sel_sig.get() {
@@ -239,7 +284,8 @@ impl super::App {
                                                     caret_sig.set(Some(insert_at + text.len()));
                                                 }
                                             } else {
-                                                let mut insert_at = caret_sig.get().unwrap_or(s.len());
+                                                let mut insert_at =
+                                                    caret_sig.get().unwrap_or(s.len());
                                                 insert_at = insert_at.min(s.len());
                                                 insert_at = s.floor_char_boundary(insert_at);
                                                 let text = filter_typed_insert(rest, &s, &text);
@@ -269,7 +315,7 @@ impl super::App {
                                 }
                             }
                             if handled {
-                                if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                     st.window.request_redraw();
                                 }
                                 return true;
@@ -348,7 +394,8 @@ impl super::App {
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::Insert) => {
-                                let ow_key = crate::components::input::input_overwrite_signal_key(rest);
+                                let ow_key =
+                                    crate::components::input::input_overwrite_signal_key(rest);
                                 let ow = crate::core::reactivity::use_signal(&ow_key, || false);
                                 ow.set(!ow.get());
                                 nav_handled = true;
@@ -356,7 +403,7 @@ impl super::App {
                             _ => {}
                         }
                         if nav_handled {
-                            if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
                             }
                             return true;
@@ -364,7 +411,7 @@ impl super::App {
                     }
                     if matches!(event.logical_key, Key::Named(NamedKey::Backspace)) {
                         let pre = preedit_sig.get();
-                        if !(ime_active.get() && !pre.is_empty()) {
+                        if !ime_active.get() || pre.is_empty() {
                             let mut s = val_sig.get();
                             if let Some((a, b)) = text_sel_sig.get() {
                                 let lo = a.min(b);
@@ -393,56 +440,70 @@ impl super::App {
                             }
                         }
                     } else if let Some(t) = event.text.as_ref() {
-                        if !ime_active.get() && !t.is_empty() && !self.modifiers.control_key() {
-                            if t.as_str() != "\r" && t.as_str() != "\n" {
-                                let mut s = val_sig.get();
-                                if let Some((a, b)) = text_sel_sig.get() {
-                                    let lo = a.min(b);
-                                    let hi = a.max(b);
-                                    if lo < hi && hi <= s.len() {
-                                        s.replace_range(lo..hi, "");
-                                    }
-                                    let mut insert_at = lo.min(s.len());
-                                    insert_at = s.floor_char_boundary(insert_at);
-                                    let text = filter_typed_insert(rest, &s, t);
-                                    if !text.is_empty() {
+                        let is_nl = t.as_str() == "\r" || t.as_str() == "\n";
+                        let allow = !ime_active.get()
+                            && !t.is_empty()
+                            && !self.modifiers.control_key()
+                            && (multiline || !is_nl);
+                        if allow {
+                            let insert = if is_nl { "\n" } else { t.as_str() };
+                            let mut s = val_sig.get();
+                            if let Some((a, b)) = text_sel_sig.get() {
+                                let lo = a.min(b);
+                                let hi = a.max(b);
+                                if lo < hi && hi <= s.len() {
+                                    s.replace_range(lo..hi, "");
+                                }
+                                let mut insert_at = lo.min(s.len());
+                                insert_at = s.floor_char_boundary(insert_at);
+                                let text = if multiline {
+                                    insert.to_string()
+                                } else {
+                                    filter_typed_insert(rest, &s, insert)
+                                };
+                                if !text.is_empty() {
+                                    s.insert_str(insert_at, &text);
+                                    val_sig.set(s);
+                                    text_sel_sig.set(None);
+                                    caret_sig.set(Some(insert_at + text.len()));
+                                }
+                            } else {
+                                let mut insert_at = caret_sig.get().unwrap_or(s.len());
+                                insert_at = insert_at.min(s.len());
+                                insert_at = s.floor_char_boundary(insert_at);
+                                let text = if multiline {
+                                    insert.to_string()
+                                } else {
+                                    filter_typed_insert(rest, &s, insert)
+                                };
+                                if text.is_empty() {
+                                    // rejected by type filter
+                                } else {
+                                    let ow_key =
+                                        crate::components::input::input_overwrite_signal_key(rest);
+                                    let overwrite_sig =
+                                        crate::core::reactivity::use_signal(&ow_key, || false);
+                                    let overwrite = overwrite_sig.get();
+                                    if overwrite
+                                        && text_sel_sig.get().is_none()
+                                        && insert_at < s.len()
+                                        && text.chars().count() == 1
+                                    {
+                                        let first = s[insert_at..].chars().next().unwrap();
+                                        let olen = first.len_utf8();
+                                        s.replace_range(insert_at..insert_at + olen, &text);
+                                        val_sig.set(s);
+                                        caret_sig.set(Some(insert_at + text.len()));
+                                    } else {
                                         s.insert_str(insert_at, &text);
                                         val_sig.set(s);
-                                        text_sel_sig.set(None);
                                         caret_sig.set(Some(insert_at + text.len()));
-                                    }
-                                } else {
-                                    let mut insert_at = caret_sig.get().unwrap_or(s.len());
-                                    insert_at = insert_at.min(s.len());
-                                    insert_at = s.floor_char_boundary(insert_at);
-                                    let text = filter_typed_insert(rest, &s, t);
-                                    if text.is_empty() {
-                                        // rejected by type filter
-                                    } else {
-                                        let ow_key = crate::components::input::input_overwrite_signal_key(rest);
-                                        let overwrite_sig = crate::core::reactivity::use_signal(&ow_key, || false);
-                                        let overwrite = overwrite_sig.get();
-                                        if overwrite
-                                            && text_sel_sig.get().is_none()
-                                            && insert_at < s.len()
-                                            && text.chars().count() == 1
-                                        {
-                                            let first = s[insert_at..].chars().next().unwrap();
-                                            let olen = first.len_utf8();
-                                            s.replace_range(insert_at..insert_at + olen, &text);
-                                            val_sig.set(s);
-                                            caret_sig.set(Some(insert_at + text.len()));
-                                        } else {
-                                            s.insert_str(insert_at, &text);
-                                            val_sig.set(s);
-                                            caret_sig.set(Some(insert_at + text.len()));
-                                        }
                                     }
                                 }
                             }
                         }
                     }
-                    if let Some(st) = (&mut *self.state.borrow_mut()).as_mut() {
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }
                 }

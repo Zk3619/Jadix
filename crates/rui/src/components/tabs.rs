@@ -11,8 +11,10 @@
 //! ```
 //!
 //! ## 注意
-//! `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
+//! - 选中 index 由组件内 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Reactive>`。
+//! - `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
+use crate::app::reactive::reactive_view;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;
@@ -26,6 +28,7 @@ pub struct TabsHeadlessBuilder {
     count: usize,
     selected: Option<Signal<usize>>,
     default_selected: usize,
+    children: Vec<Element>,
 }
 
 pub fn tabs_headless(id: impl Into<String>, tab_count: usize) -> TabsHeadlessBuilder {
@@ -34,6 +37,7 @@ pub fn tabs_headless(id: impl Into<String>, tab_count: usize) -> TabsHeadlessBui
         count: tab_count.max(1),
         selected: None,
         default_selected: 0,
+        children: Vec::new(),
     }
 }
 
@@ -47,57 +51,85 @@ impl TabsHeadlessBuilder {
         self.default_selected = i;
         self
     }
+
+    pub fn child(mut self, c: Element) -> Self {
+        self.children.push(c);
+        self
+    }
+
+    pub fn children(mut self, c: Vec<Element>) -> Self {
+        self.children.extend(c);
+        self
+    }
 }
 
 impl From<TabsHeadlessBuilder> for Element {
     fn from(builder: TabsHeadlessBuilder) -> Self {
-        let scope = format!("{}__tabs", builder.id);
-        let sel = builder.selected.unwrap_or_else(|| {
+        let TabsHeadlessBuilder {
+            id,
+            count,
+            selected,
+            default_selected,
+            children,
+        } = builder;
+        let scope = format!("{id}__tabs");
+        let sel = selected.unwrap_or_else(|| {
             use_signal(scope.as_str(), || {
-                builder.default_selected.min(builder.count.saturating_sub(1))
+                default_selected.min(count.saturating_sub(1))
             })
         });
-        let sel_k = sel;
-        let n = builder.count;
-        let focus_id = format!("{TABSTRIP_FOCUS_PREFIX}{}", builder.id);
-        let mut el: Element = interactive(Element::new())
-            .focus_id(focus_id)
-            .focusable(true)
-            .on_key_down(move |ev| {
-                use winit::event::ElementState;
-                use winit::keyboard::{Key, NamedKey};
-                if ev.state != ElementState::Pressed || ev.repeat {
-                    return false;
-                }
-                let mut i = sel_k.get();
-                match ev.logical_key {
-                    Key::Named(NamedKey::ArrowRight) => {
-                        i = (i + 1).min(n.saturating_sub(1));
-                        sel_k.set(i);
-                        true
+        let view_id = format!("{id}__tabs_view");
+        let strip_id = id.clone();
+
+        let strip = reactive_view(view_id, move || {
+            let _ = sel.get();
+            let sel_k = sel;
+            let n = count;
+            let focus_id = format!("{TABSTRIP_FOCUS_PREFIX}{strip_id}");
+            let mut el: Element = interactive(Element::new())
+                .focus_id(focus_id)
+                .focusable(true)
+                .on_key_down(move |ev| {
+                    use winit::event::ElementState;
+                    use winit::keyboard::{Key, NamedKey};
+                    if ev.state != ElementState::Pressed || ev.repeat {
+                        return false;
                     }
-                    Key::Named(NamedKey::ArrowLeft) => {
-                        i = i.saturating_sub(1);
-                        sel_k.set(i);
-                        true
+                    let mut i = sel_k.get();
+                    match ev.logical_key {
+                        Key::Named(NamedKey::ArrowRight) => {
+                            i = (i + 1).min(n.saturating_sub(1));
+                            sel_k.set(i);
+                            true
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            i = i.saturating_sub(1);
+                            sel_k.set(i);
+                            true
+                        }
+                        _ => false,
                     }
-                    _ => false,
-                }
-            })
-            .into();
-        el.template_id = Some(builder.id);
-        el
+                })
+                .into();
+            el.template_id = Some(format!("{strip_id}:strip"));
+            el
+        });
+
+        let mut root = Element::new().child(strip);
+        root = root.children(children);
+        root.template_id = Some(id);
+        root
     }
 }
 
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Tabs(id: String, count: usize, children: Option<Element>) -> Element {
-    let mut el = tabs_headless_root(id, count);
+    let mut builder = tabs_headless(id, count);
     if let Some(c) = children {
-        el = el.child(c);
+        builder = builder.child(c);
     }
-    el
+    builder.into()
 }
 
 pub fn tabs_headless_root(id: impl Into<String>, tab_count: usize) -> Element {

@@ -25,7 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir()?);
-    let addr = std::env::args().nth(2).unwrap_or_else(|| DEFAULT_ADDR.to_string());
+    let addr = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| DEFAULT_ADDR.to_string());
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = RecommendedWatcher::new(
@@ -50,7 +52,8 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
     let mut last_sent = Instant::now() - Duration::from_millis(DEBOUNCE_MS);
     let mut last_poll_sent = Instant::now() - Duration::from_millis(POLL_DEBOUNCE_MS);
     let mut last_wire_payload: Option<String> = None;
-    let mut template_cache: HashMap<String, Vec<TemplateFragment>> = build_initial_cache(watch_path);
+    let mut template_cache: HashMap<String, Vec<TemplateFragment>> =
+        build_initial_cache(watch_path);
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Ok(event)) => {
@@ -296,8 +299,8 @@ fn build_template_patch_msg(
 
             for (idx, mut cur) in extracted.iter().cloned().enumerate() {
                 cur.index = idx; // Assign stable sequence index
-                // Note: CLI `id` already contains key:line:column from collect_templates_for_file
-                
+                                 // Note: CLI `id` already contains key:line:column from collect_templates_for_file
+
                 let is_changed = if let Some(p_list) = prev {
                     if let Some(old) = p_list.iter().find(|p| p.hash == cur.hash) {
                         // Same content hash, but check if styles or position changed in a way that needs update
@@ -318,7 +321,7 @@ fn build_template_patch_msg(
                     patched.push(cur);
                 }
             }
-            
+
             template_cache.insert(key.clone(), extracted);
             all_templates.extend(patched);
         } else if let Some(cached) = template_cache.get(&key) {
@@ -344,19 +347,24 @@ fn send_dev_batch(
     let mut wire_chunks: Vec<String> = Vec::new();
     let mut wgsl_n = 0usize;
     if !wgsl_files.is_empty() {
-        let paths: Vec<String> = wgsl_files.iter().map(|p| normalize_path_for_id(p)).collect();
+        let paths: Vec<String> = wgsl_files
+            .iter()
+            .map(|p| normalize_path_for_id(p))
+            .collect();
         let msg = OutgoingAssetReload {
             kind: "asset_reload",
             paths,
         };
-        let payload = serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
+        let payload =
+            serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
         wire_chunks.push(payload);
         wgsl_n = wgsl_files.len();
     }
     let template_count = if !rust_files.is_empty() {
         let msg = build_template_patch_msg(rust_files, template_cache);
         let n = msg.templates.len();
-        let payload = serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
+        let payload =
+            serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
         wire_chunks.push(payload);
         n
     } else {
@@ -546,7 +554,6 @@ fn normalize_path_for_id(path: &Path) -> String {
     normalized.to_string_lossy().replace('\\', "/")
 }
 
-
 fn collect_templates_for_file(file: &Path, key: &str) -> Vec<TemplateFragment> {
     const READ_RETRIES: usize = 3;
     const RETRY_SLEEP_MS: u64 = 25;
@@ -577,7 +584,9 @@ fn collect_templates_for_file(file: &Path, key: &str) -> Vec<TemplateFragment> {
 
 fn apply_text_replacements_single(prev: &[TemplateFragment], cur: &mut TemplateFragment) {
     // Try to find previous version by index first (most stable for line shifts)
-    let old = prev.get(cur.index).or_else(|| prev.iter().find(|p| p.id == cur.id));
+    let old = prev
+        .get(cur.index)
+        .or_else(|| prev.iter().find(|p| p.id == cur.id));
     let Some(old) = old else {
         return;
     };

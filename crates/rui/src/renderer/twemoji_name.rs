@@ -20,10 +20,7 @@ mod tests {
 
     #[test]
     fn stem_family_zwj() {
-        assert_eq!(
-            twemoji_stem("👨‍👩‍👧‍👦"),
-            "1f468-200d-1f469-200d-1f467-200d-1f466"
-        );
+        assert_eq!(twemoji_stem("👨‍👩‍👧‍👦"), "1f468-200d-1f469-200d-1f467-200d-1f466");
     }
 
     #[test]

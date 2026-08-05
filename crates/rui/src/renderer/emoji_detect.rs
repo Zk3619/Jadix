@@ -32,9 +32,9 @@ fn grapheme_is_keycap_sequence(g: &str) -> bool {
 
 /// 单个 Unicode grapheme是否按 emoji 处理（与 Twemoji 切分一致）。
 pub fn grapheme_is_emoji(g: &str) -> bool {
-    if g.chars().any(|c| {
-        char_is_emoji_codepoint(c as u32) || char_is_extended_pictographic(c)
-    }) {
+    if g.chars()
+        .any(|c| char_is_emoji_codepoint(c as u32) || char_is_extended_pictographic(c))
+    {
         return true;
     }
     grapheme_is_keycap_sequence(g)
@@ -45,7 +45,7 @@ pub fn text_contains_emoji(text: &str) -> bool {
     if text.is_ascii() {
         return false;
     }
-    text.graphemes(true).any(|g| grapheme_is_emoji(g))
+    text.graphemes(true).any(grapheme_is_emoji)
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ use rui_macros::component;
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Portal(id: String, children: Option<Element>) -> Element {
-    let mut inner = children.unwrap_or_else(|| Element::new());
+    let mut inner = children.unwrap_or_else(Element::new);
     inner.template_id = Some(id);
     inner.set_attr("rui_portal", "1");
     inner

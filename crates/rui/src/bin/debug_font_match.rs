@@ -5,13 +5,20 @@ use std::path::Path;
 
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
 
-fn collect_used_faces(font_system: &mut FontSystem, family: Family<'_>, weight: u16, text: &str) -> String {
+fn collect_used_faces(
+    font_system: &mut FontSystem,
+    family: Family<'_>,
+    weight: u16,
+    text: &str,
+) -> String {
     let mut buffer = Buffer::new(font_system, Metrics::new(14.0, 20.0));
     buffer.set_size(font_system, Some(800.0), Some(40.0));
     buffer.set_text(
         font_system,
         text,
-        Attrs::new().family(family).weight(glyphon::fontdb::Weight(weight)),
+        Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight)),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(font_system, false);
@@ -42,8 +49,11 @@ fn print_case(
     text: &str,
 ) -> std::io::Result<()> {
     let resolved_family = rui::utils::font::resolve_family(font_system.db(), req_family);
-    let effective_weight =
-        rui::utils::font::normalize_weight_for_family(font_system.db(), resolved_family, req_weight);
+    let effective_weight = rui::utils::font::normalize_weight_for_family(
+        font_system.db(),
+        resolved_family,
+        req_weight,
+    );
     let resolved_label = match resolved_family {
         Family::Name(n) => n.to_string(),
         Family::SansSerif => "sans-serif".to_string(),
@@ -85,11 +95,20 @@ fn main() -> std::io::Result<()> {
         ("baseline", "Font probe: Hello 你好 日本語 한국어 😀 ∑ ♪ §"),
         ("latin_ext", "Latin ext: ÀÁÂÃÄÅ ÇÐĒĞİŁŃŐŒŘŚŞŤŮŸŽ ƒ ƛ Ǽ Ȝ"),
         ("arabic", "Arabic: العربية مرحبا بكم ١٢٣٤٥٦٧٨٩٠"),
-        ("devanagari", "Devanagari: देवनागरी हिन्दी भाषा क ख ग घ ङ १२३४"),
+        (
+            "devanagari",
+            "Devanagari: देवनागरी हिन्दी भाषा क ख ग घ ङ १२३४",
+        ),
         ("symbol_block", "Symbols: § ¶ † ‡ ‰ ‱ ※ ※ ♠ ♣ ♥ ♦ ⚑ ⚙ ⌘ ⌥"),
-        ("math_alnum", "Math alnum: 𝐀 𝐵 𝑪 𝒟 𝔼 𝕱 𝖦 𝟘 𝟙 𝟚 ∀ ∃ ∈ ∑ ∏ √ ∞"),
+        (
+            "math_alnum",
+            "Math alnum: 𝐀 𝐵 𝑪 𝒟 𝔼 𝕱 𝖦 𝟘 𝟙 𝟚 ∀ ∃ ∈ ∑ ∏ √ ∞",
+        ),
         ("emoji_zwj", "Emoji ZWJ: 👨‍👩‍👧‍👦 👩‍💻 🧑🏽‍🚀 🏳️‍🌈 👩🏽‍❤️‍💋‍👨🏻 🤝🏻"),
-        ("mixed_stress", "Mixed: Hello العربية देवनागरी 日本語 한국어 𝟘𝟙𝟚 ⚙️ 👨‍👩‍👧‍👦"),
+        (
+            "mixed_stress",
+            "Mixed: Hello العربية देवनागरी 日本語 한국어 𝟘𝟙𝟚 ⚙️ 👨‍👩‍👧‍👦",
+        ),
     ];
     let families = [
         "Noto Sans CJK SC",

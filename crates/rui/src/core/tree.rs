@@ -1,7 +1,6 @@
 use taffy::prelude::*;
 use winit::event::KeyEvent;
 
-
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
@@ -9,7 +8,9 @@ pub use crate::layout::dimension::{
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::Style;
-pub use crate::style::{parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextStyle};
+pub use crate::style::{
+    parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextOverflow, TextStyle,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorKind {
@@ -41,6 +42,30 @@ pub struct InputPaintSync {
     pub leading_scale: Option<f32>,
     /// HTML 风格 `type`（`text` / `password` / `email` / …），影响显示掩码与输入过滤。
     pub input_type: String,
+}
+
+/// Generic signal-to-element synchronization hook.
+///
+/// Stateful components attach one of these to their root when a signal only needs to update the
+/// existing element tree (style/layout/text) rather than reconstruct a subtree through
+/// [`crate::app::reactive`]. The callback runs during the frame prepass and reports its layout
+/// impact. This is the reusable component-level reactive capability; structural changes such as
+/// mounting an overlay still use a reactive subtree boundary.
+#[derive(Clone)]
+pub struct ReactiveSync {
+    callback: std::rc::Rc<dyn Fn(&mut Element, &mut LayoutTree) -> LayoutStatus>,
+}
+
+impl ReactiveSync {
+    pub fn new(callback: impl Fn(&mut Element, &mut LayoutTree) -> LayoutStatus + 'static) -> Self {
+        Self {
+            callback: std::rc::Rc::new(callback),
+        }
+    }
+
+    pub fn run(&self, element: &mut Element, layout_tree: &mut LayoutTree) -> LayoutStatus {
+        (self.callback)(element, layout_tree)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +109,13 @@ impl UnmountHook {
     pub fn disarm(&self) {
         *self.f.borrow_mut() = None;
     }
+
+    /// Run the hook early (e.g. when chaining multiple dispose callbacks on one element).
+    pub fn fire(&self) {
+        if let Some(f) = self.f.borrow_mut().take() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        }
+    }
 }
 
 impl Drop for UnmountHook {
@@ -105,6 +137,22 @@ pub struct Element {
     pub layout_bounds: [f32; 4],
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
+    /// Pointer down with capture/bubble ([`crate::app::pointer_events::PointerEvent`]).
+    pub on_pointer_down: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// Pointer up with capture/bubble.
+    pub on_pointer_up: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// Right-click / context menu.
+    pub on_context_menu: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// Double-click (detail >= 2).
+    pub on_double_click: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
     /// Keyboard on focused node. Return `true` if the event is consumed.
     pub on_key_down: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
     /// 节点从树中丢弃且 `Rc` 计数归零时触发（用于 Navigator Host dispose 等）。
@@ -113,11 +161,11 @@ pub struct Element {
     pub focusable: bool,
     pub cursor: Option<CursorKind>,
     pub scroll_offset: [f32; 2],
-    /// True if this node or any descendant is a ScrollArea viewport (`scroll:` focus id).
+    /// True if this node or any descendant is a scroll viewport (`scroll:` focus id).
     /// Used to prune subtrees in the ViewportsOnly scrollbar prepass (see
     /// [`scroll_viewport_subtree_count`] for nested viewports).
     pub contains_scroll_viewport: bool,
-    /// Count of `scroll:` viewport nodes in this subtree (including self). Nested ScrollAreas need
+    /// Count of `scroll:` viewport nodes in this subtree (including self). Nested viewports need
     /// scrollbar geometry prepass to recurse past ancestor viewports when this is > 1 on a viewport.
     pub scroll_viewport_subtree_count: u32,
     pub template_hash: Option<String>,
@@ -130,8 +178,12 @@ pub struct Element {
     pub switch_checked_sync: Option<Signal<bool>>,
     /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.
     pub checkbox_sync: Option<Signal<bool>>,
+    /// Generic component-owned signal synchronization; see [`ReactiveSync`].
+    pub reactive_sync: Option<ReactiveSync>,
     /// GPU 贴图资源键（见 [`crate::queue_image_rgba8`]）；布局收集时生成纹理四边形实例。
     pub image_texture: Option<String>,
+    /// Parsed utility class list + base style snapshot for variant re-resolve (`hover:` / `dark:` …).
+    pub class_set: Option<crate::style::ClassSet>,
     pub(crate) layout_node: Option<taffy::prelude::NodeId>,
     pub attrs: std::collections::HashMap<String, String>,
 }
@@ -296,6 +348,10 @@ impl Element {
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
             on_click: None,
             on_hover: None,
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_context_menu: None,
+            on_double_click: None,
             on_key_down: None,
             on_unmount: None,
             focus_id: None,
@@ -310,12 +366,22 @@ impl Element {
             input_paint_sync: None,
             switch_checked_sync: None,
             checkbox_sync: None,
+            reactive_sync: None,
             image_texture: None,
+            class_set: None,
             layout_node: None,
             attrs: std::collections::HashMap::new(),
         }
     }
+}
 
+impl Default for Element {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Element {
     /// 绑定已上传的贴图键；矩形区域由布局样式（`w`/`h` 等）决定。
     pub fn image_texture(mut self, key: impl Into<String>) -> Self {
         self.image_texture = Some(key.into());
@@ -373,6 +439,38 @@ impl Element {
         self
     }
 
+    pub fn on_pointer_down(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_pointer_down = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    pub fn on_pointer_up(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_pointer_up = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    pub fn on_context_menu(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_context_menu = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    pub fn on_double_click(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_double_click = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
     /// 节点从 UI 树移除且钩子 `Rc` 归零时调用一次。
     pub fn on_unmount(mut self, f: impl FnOnce() + 'static) -> Self {
         self.on_unmount = Some(UnmountHook::new(f));
@@ -381,6 +479,15 @@ impl Element {
 
     pub fn on_unmount_hook(mut self, hook: std::rc::Rc<UnmountHook>) -> Self {
         self.on_unmount = Some(hook);
+        self
+    }
+
+    /// Attach component-owned reactive synchronization without subscribing the root UI effect.
+    pub fn reactive_sync(
+        mut self,
+        callback: impl Fn(&mut Element, &mut LayoutTree) -> LayoutStatus + 'static,
+    ) -> Self {
+        self.reactive_sync = Some(ReactiveSync::new(callback));
         self
     }
 
@@ -425,7 +532,7 @@ impl Element {
     pub fn gap(mut self, g: impl IntoDimension) -> Self {
         let lp = Self::gap_lp(g);
         self.style.gap = taffy::geometry::Size {
-            width: lp.clone(),
+            width: lp,
             height: lp,
         };
         self
@@ -465,7 +572,8 @@ impl Element {
     }
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
         self.text_style.font_family = Some(family.into());
-        self.attrs.insert("font_family".to_string(), "1".to_string());
+        self.attrs
+            .insert("font_family".to_string(), "1".to_string());
         self
     }
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
@@ -481,7 +589,8 @@ impl Element {
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
         let w = weight.into_f32().round().clamp(100.0, 900.0) as u16;
         self.text_style.weight = w;
-        self.attrs.insert("font_weight".to_string(), "1".to_string());
+        self.attrs
+            .insert("font_weight".to_string(), "1".to_string());
         self
     }
     pub fn underline(mut self, underline: bool) -> Self {
@@ -490,8 +599,10 @@ impl Element {
     }
     pub fn text_decoration(mut self, decoration: impl Into<String>) -> Self {
         let raw = decoration.into().to_lowercase();
-        self.attrs.insert("text_decoration_line".to_string(), "1".to_string());
-        self.attrs.insert("text_decoration_style".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_line".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_style".to_string(), "1".to_string());
         if raw.contains("none") {
             self.text_style.underline = false;
             self.text_style.overline = false;
@@ -513,7 +624,10 @@ impl Element {
             if raw.contains("overline") {
                 self.text_style.overline = true;
             }
-            if raw.contains("line-through") || raw.contains("linethrough") || raw.contains("strikethrough") {
+            if raw.contains("line-through")
+                || raw.contains("linethrough")
+                || raw.contains("strikethrough")
+            {
                 self.text_style.line_through = true;
             }
         }
@@ -532,7 +646,8 @@ impl Element {
     }
     pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
         let raw = line.into().to_lowercase();
-        self.attrs.insert("text_decoration_line".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_line".to_string(), "1".to_string());
         if raw.contains("none") {
             self.text_style.underline = false;
             self.text_style.overline = false;
@@ -545,14 +660,18 @@ impl Element {
         if raw.contains("overline") {
             self.text_style.overline = true;
         }
-        if raw.contains("line-through") || raw.contains("linethrough") || raw.contains("strikethrough") {
+        if raw.contains("line-through")
+            || raw.contains("linethrough")
+            || raw.contains("strikethrough")
+        {
             self.text_style.line_through = true;
         }
         self
     }
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
         let s = style.into().trim().to_lowercase();
-        self.attrs.insert("text_decoration_style".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_style".to_string(), "1".to_string());
         self.text_style.decoration_style = match s.as_str() {
             "double" => TextDecorationStyle::Double,
             "dotted" => TextDecorationStyle::Dotted,
@@ -564,17 +683,20 @@ impl Element {
     }
     pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.decoration_color = Some(color);
-        self.attrs.insert("text_decoration_color".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_color".to_string(), "1".to_string());
         self
     }
     pub fn text_decoration_thickness(mut self, thickness: impl IntoF32) -> Self {
         self.text_style.decoration_thickness = thickness.into_f32().max(0.0);
-        self.attrs.insert("text_decoration_thickness".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_decoration_thickness".to_string(), "1".to_string());
         self
     }
     pub fn text_underline_offset(mut self, offset: impl IntoF32) -> Self {
         self.text_style.underline_offset = offset.into_f32();
-        self.attrs.insert("text_underline_offset".to_string(), "1".to_string());
+        self.attrs
+            .insert("text_underline_offset".to_string(), "1".to_string());
         self
     }
     pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {
@@ -602,22 +724,26 @@ impl Element {
     }
     pub fn text_center(mut self) -> Self {
         self.text_style.align = glyphon::cosmic_text::Align::Center;
-        self.attrs.insert("text_align".to_string(), "center".to_string());
+        self.attrs
+            .insert("text_align".to_string(), "center".to_string());
         self
     }
     pub fn text_left(mut self) -> Self {
         self.text_style.align = glyphon::cosmic_text::Align::Left;
-        self.attrs.insert("text_align".to_string(), "left".to_string());
+        self.attrs
+            .insert("text_align".to_string(), "left".to_string());
         self
     }
     pub fn text_right(mut self) -> Self {
         self.text_style.align = glyphon::cosmic_text::Align::Right;
-        self.attrs.insert("text_align".to_string(), "right".to_string());
+        self.attrs
+            .insert("text_align".to_string(), "right".to_string());
         self
     }
     pub fn text_line_height(mut self, line_height: impl IntoF32) -> Self {
         self.text_style.line_height_px = Some(line_height.into_f32().max(1.0));
-        self.attrs.insert("line_height".to_string(), "1".to_string());
+        self.attrs
+            .insert("line_height".to_string(), "1".to_string());
         self
     }
     pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
@@ -648,6 +774,35 @@ impl Element {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.625);
         self.attrs.insert("leading".to_string(), "1".to_string());
+        self
+    }
+    pub fn text_overflow(mut self, overflow: TextOverflow) -> Self {
+        self.text_style.overflow = overflow;
+        self.attrs.insert(
+            "text_overflow".to_string(),
+            match overflow {
+                TextOverflow::Clip => "clip".to_string(),
+                TextOverflow::Ellipsis => "ellipsis".to_string(),
+            },
+        );
+        self
+    }
+    pub fn text_overflow_ellipsis(self) -> Self {
+        self.text_overflow(TextOverflow::Ellipsis)
+    }
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.text_style.selectable = selectable;
+        if selectable {
+            self.attrs
+                .insert("text_selectable".to_string(), "1".to_string());
+        } else {
+            self.attrs.remove("text_selectable");
+        }
+        self
+    }
+    /// AccessKit semantic role (e.g. `"group"`, `"button"`, `"label"`).
+    pub fn accesskit_role(mut self, role: impl Into<String>) -> Self {
+        self.attrs.insert("accesskit_role".to_string(), role.into());
         self
     }
     pub fn bg(mut self, color: [f32; 4]) -> Self {
@@ -737,6 +892,14 @@ impl Element {
     }
     pub fn box_shadow_inset(mut self, inset: bool) -> Self {
         self.style.shadow_inset = inset;
+        self
+    }
+    pub fn opacity(mut self, o: f32) -> Self {
+        self.style.opacity = o.clamp(0.0, 1.0);
+        self
+    }
+    pub fn translate(mut self, x: f32, y: f32) -> Self {
+        self.style.translate = [x, y];
         self
     }
     pub fn w(mut self, width: impl IntoDimension) -> Self {
@@ -1156,6 +1319,21 @@ impl Element {
     }
 }
 
+/// Run generic component-owned reactive synchronizers for the mounted tree.
+pub(crate) fn sync_reactive_elements_subtree(
+    element: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
+    if let Some(sync) = element.reactive_sync.clone() {
+        *impact = impact.merge(sync.run(element, layout_tree));
+    }
+    for child in &mut element.children {
+        sync_reactive_elements_subtree(child, layout_tree, impact);
+    }
+}
+
 impl From<String> for Element {
     fn from(s: String) -> Self {
         Element::new().text(s)
@@ -1180,9 +1358,6 @@ impl From<Vec<Element>> for Element {
 
 impl From<Option<Element>> for Element {
     fn from(opt: Option<Element>) -> Self {
-        match opt {
-            Some(v) => v,
-            None => Element::new(),
-        }
+        opt.unwrap_or_default()
     }
 }

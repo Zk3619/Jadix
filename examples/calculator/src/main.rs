@@ -189,10 +189,8 @@ impl Engine {
         if self.error {
             return;
         }
-        if !self.fresh || self.acc.is_none() {
-            if !self.apply_pending() {
-                return;
-            }
+        if (!self.fresh || self.acc.is_none()) && !self.apply_pending() {
+            return;
         }
         self.pending = Some(op);
         self.fresh = true;
@@ -422,10 +420,7 @@ enum KeyTone {
     Eq,
 }
 
-fn mutate(
-    eng: Signal<Engine>,
-    mut f: impl FnMut(&mut Engine) + 'static,
-) -> impl FnMut() + 'static {
+fn mutate(eng: Signal<Engine>, mut f: impl FnMut(&mut Engine) + 'static) -> impl FnMut() + 'static {
     move || {
         let mut e = eng.get();
         f(&mut e);
@@ -731,10 +726,7 @@ fn CalculatorApp() -> Element {
     let preview = e.preview();
     let is_standard = mode.get() == "standard";
 
-    rui::app::window_keys::set_window_key_handler({
-        let eng = eng;
-        move |key| apply_key(eng, key)
-    });
+    rui::app::window_keys::set_window_key_handler(move |key| apply_key(eng, key));
 
     let preview_el = ui! {
         <Label

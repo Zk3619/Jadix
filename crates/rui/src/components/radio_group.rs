@@ -16,7 +16,7 @@
 //! ```
 //!
 //! ## 注意
-//! - 受控 `selected` 使用 `get()`（会订阅）。
+//! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //! - 每项 `focus_id = "{group_id}:{value}"`，需保证 group `id` 稳定唯一。
 
 use crate::core::reactivity::{use_signal, Signal};
@@ -49,7 +49,7 @@ pub fn RadioGroup(
     let mut builder = radio_group(&id)
         .default_value(default_value)
         .options(options);
-    
+
     if let Some(sig) = selected {
         builder = builder.selected_signal(sig);
     }
@@ -106,12 +106,18 @@ impl From<RadioGroupBuilder> for Element {
         let sel = builder
             .selected
             .unwrap_or_else(|| use_signal(scope.as_str(), || builder.default_value.clone()));
+        let option_values: Vec<String> = builder
+            .options
+            .iter()
+            .map(|(value, _)| value.clone())
+            .collect();
+        let current = sel.peek();
 
         let mut row: Element = hstack().gap("0.5rem").items_center().into();
 
         for (value, label) in builder.options {
             let v = value.clone();
-            let is_on = sel.get() == value;
+            let is_on = current == value;
             let bg = if is_on {
                 tokens::primary()
             } else {
@@ -122,10 +128,7 @@ impl From<RadioGroupBuilder> for Element {
             } else {
                 tokens::foreground_text()
             };
-            let pill_label: Element = text(label.as_str())
-                .color(fg)
-                .size(0.875 * 16.0)
-                .into();
+            let pill_label: Element = text(label.as_str()).color(fg).size(0.875 * 16.0).into();
             let pill: Element = r#box()
                 .px("0.75rem")
                 .py("0.375rem")
@@ -143,6 +146,42 @@ impl From<RadioGroupBuilder> for Element {
             row = row.child(opt);
         }
         row = row.children(builder.children);
+        let sync_selected = sel;
+        row = row.reactive_sync(move |root, _layout_tree| {
+            let current = sync_selected.peek();
+            let mut changed = false;
+
+            for (option, value) in root.children.iter_mut().zip(option_values.iter()) {
+                let selected = current == *value;
+                let want_bg = if selected {
+                    tokens::primary()
+                } else {
+                    tokens::muted()
+                };
+                let want_fg = if selected {
+                    tokens::primary_foreground_text()
+                } else {
+                    tokens::foreground_text()
+                };
+
+                if option.style.bg_color != want_bg {
+                    option.style.bg_color = want_bg;
+                    changed = true;
+                }
+                if let Some(label) = option.children.get_mut(0) {
+                    if label.text_style.color != want_fg {
+                        label.text_style.color = want_fg;
+                        changed = true;
+                    }
+                }
+            }
+
+            if changed {
+                crate::core::tree::LayoutStatus::StyleChanged
+            } else {
+                crate::core::tree::LayoutStatus::Clean
+            }
+        });
 
         row.template_id = Some(builder.group_id);
         row

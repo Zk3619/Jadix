@@ -11,21 +11,21 @@ use std::time::Instant;
 
 use taffy::prelude::*;
 
-use crate::renderer::{InstanceInput, TexturedDraw};
-use crate::style::TextStyle;
-use crate::core::tree::Element;
 use crate::components::scrollbar::{
-    scrollbar_min_thumb_along_track, scrollbar_visibility_signal_key,
-    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    scrollbar_min_thumb_along_track, scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX,
+    SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
-use crate::components::scroll_area::{
+use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
     scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-    scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key, scroll_viewport_h_signal_key,
-    scroll_viewport_w_signal_key, SCROLL_AREA_FOCUS_PREFIX,
+    scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
+    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
-use crate::core::reactivity::use_signal;
+use crate::core::tree::Element;
+use crate::renderer::{InstanceInput, TexturedDraw};
+use crate::style::TextStyle;
 
 /// 将带 `rui_portal=1` 的子树从原父节点摘下并挂到 `root` 末尾（绘制顺序靠后，便于浮层）。
 /// 返回本帧提升的子树数；非 0 时应做完整 Taffy 重建（见 `AppState::render`）。
@@ -155,18 +155,30 @@ fn scroll_area_signals_cached<'a>(
                 use_signal(&scroll_overflow_x_signal_key(rest), || "auto".to_string()).peek();
             let overflow_y =
                 use_signal(&scroll_overflow_y_signal_key(rest), || "auto".to_string()).peek();
-            let scrollbar_vis_x =
-                use_signal(&scrollbar_visibility_signal_key(rest, "x"), || "auto".to_string()).peek();
-            let scrollbar_vis_y =
-                use_signal(&scrollbar_visibility_signal_key(rest, "y"), || "auto".to_string()).peek();
-            let inset_x =
-                use_signal(&scroll_scrollbar_inset_x_signal_key(rest), || "inside".to_string()).peek();
-            let inset_y =
-                use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || "inside".to_string()).peek();
-            let y_side =
-                use_signal(&scroll_scrollbar_y_side_signal_key(rest), || "right".to_string()).peek();
-            let x_side =
-                use_signal(&scroll_scrollbar_x_side_signal_key(rest), || "bottom".to_string()).peek();
+            let scrollbar_vis_x = use_signal(&scrollbar_visibility_signal_key(rest, "x"), || {
+                "auto".to_string()
+            })
+            .peek();
+            let scrollbar_vis_y = use_signal(&scrollbar_visibility_signal_key(rest, "y"), || {
+                "auto".to_string()
+            })
+            .peek();
+            let inset_x = use_signal(&scroll_scrollbar_inset_x_signal_key(rest), || {
+                "inside".to_string()
+            })
+            .peek();
+            let inset_y = use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
+                "inside".to_string()
+            })
+            .peek();
+            let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(rest), || {
+                "right".to_string()
+            })
+            .peek();
+            let x_side = use_signal(&scroll_scrollbar_x_side_signal_key(rest), || {
+                "bottom".to_string()
+            })
+            .peek();
             v.insert(ScrollAreaSignalsCached {
                 vw,
                 vh,
@@ -359,8 +371,7 @@ fn measured_text_leaf_size(
             Some(suf) if !suf.is_empty() => Cow::Owned(format!("{}{}", m.text, suf)),
             _ => Cow::Borrowed(m.text.as_str()),
         };
-        blob
-            .split('\n')
+        blob.split('\n')
             .map(|seg| segment_intrinsic_width(seg, size, m.weight))
             .fold(0.0_f32, f32::max)
     };
@@ -419,6 +430,12 @@ fn measured_text_leaf_size(
     taffy::geometry::Size { width, height }
 }
 
+impl Default for LayoutTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LayoutTree {
     pub fn new() -> Self {
         Self {
@@ -457,7 +474,9 @@ impl LayoutTree {
         self.root_node = Some(root_node);
 
         // Prune nodes that were not visited in this pass.
-        let to_remove: Vec<NodeId> = self.total_nodes.iter()
+        let to_remove: Vec<NodeId> = self
+            .total_nodes
+            .iter()
             .filter(|id| !self.visited_nodes.contains(id))
             .cloned()
             .collect();
@@ -503,6 +522,7 @@ impl LayoutTree {
             None,
             None,
             mouse_pos,
+            1.0,
             &mut instances,
             &mut textured_draws,
             &mut text_nodes,
@@ -547,7 +567,9 @@ impl LayoutTree {
         scroll_only: bool,
         scrollbar_overlay_collect: bool,
     ) -> RenderResult {
-        let root_node = self.root_node.expect("fast path requires existing root_node");
+        let root_node = self
+            .root_node
+            .expect("fast path requires existing root_node");
 
         // Must match `build_and_layout`: the root's Element + Taffy style must follow the current
         // viewport. Otherwise `compute_layout` still sees stale definite sizes from the last full
@@ -609,6 +631,7 @@ impl LayoutTree {
             None,
             None,
             mouse_pos,
+            1.0,
             &mut instances,
             &mut textured_draws,
             &mut text_nodes,
@@ -714,12 +737,13 @@ impl LayoutTree {
         parent_clip: Option<[f32; 4]>,
         ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
+        ancestor_opacity: f32,
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
         hover_cursor: &mut Option<crate::core::tree::CursorKind>,
-        scroll_only: bool,
+        _scroll_only: bool,
         scrollbar_overlay_collect: bool,
         thumb_geometry_override: Option<[f32; 4]>,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
@@ -738,7 +762,7 @@ impl LayoutTree {
                 if let Some(fid) = element.focus_id.as_deref() {
                     if let Some(rest_axis) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
                         let (rest, axis) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
-                        let sig = scroll_area_signals_cached(rest, *cache);
+                        let sig = scroll_area_signals_cached(rest, cache);
                         let (t_rect, th_rect) = scrollbar_track_overlay_abs(
                             element,
                             base_abs_x,
@@ -785,20 +809,26 @@ impl LayoutTree {
 
         element.layout_bounds = [abs_x, abs_y, lay_w, lay_h];
 
-        let render_x = abs_x - scroll_acc[0];
-        let render_y = abs_y - scroll_acc[1];
+        let opacity = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
+        let render_x = abs_x - scroll_acc[0] + element.style.translate[0];
+        let render_y = abs_y - scroll_acc[1] + element.style.translate[1];
         let render_rect = [render_x, render_y, lay_w, lay_h];
-        
+
         // Clipping & Visibility
         let mut clip = parent_clip;
-        if element.style.overflow.x != taffy::style::Overflow::Visible || element.style.overflow.y != taffy::style::Overflow::Visible {
+        if element.style.overflow.x != taffy::style::Overflow::Visible
+            || element.style.overflow.y != taffy::style::Overflow::Visible
+        {
             clip = Some(intersect_rect(clip, render_rect));
         }
         let draw_rect = intersect_rect(clip, render_rect);
 
         // Hit Testing (Update cursor if mouse is over visible part)
-        if mouse_pos[0] >= draw_rect[0] && mouse_pos[0] <= draw_rect[0] + draw_rect[2] &&
-           mouse_pos[1] >= draw_rect[1] && mouse_pos[1] <= draw_rect[1] + draw_rect[3] {
+        if mouse_pos[0] >= draw_rect[0]
+            && mouse_pos[0] <= draw_rect[0] + draw_rect[2]
+            && mouse_pos[1] >= draw_rect[1]
+            && mouse_pos[1] <= draw_rect[1] + draw_rect[3]
+        {
             if let Some(c) = element.cursor {
                 *hover_cursor = Some(c);
             }
@@ -810,14 +840,22 @@ impl LayoutTree {
         } else {
             element.style.border_width
         };
-        if (element.style.bg_color[3] > 0.0 || border_w > 0.0 || element.style.shadow_color[3] > 0.0)
-            && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
-            let resolved_radii = resolve_corner_radii(element.style.radii, draw_rect[2], draw_rect[3]);
+        if (element.style.bg_color[3] > 0.0
+            || border_w > 0.0
+            || element.style.shadow_color[3] > 0.0)
+            && draw_rect[2] > 0.0
+            && draw_rect[3] > 0.0
+        {
+            let resolved_radii =
+                resolve_corner_radii(element.style.radii, draw_rect[2], draw_rect[3]);
             instances.push(InstanceInput {
-                rect_pos: [draw_rect[0], draw_rect[1]], rect_size: [draw_rect[2], draw_rect[3]],
-                color: element.style.bg_color, border_color: element.style.border_color,
-                radii: resolved_radii, border_width: border_w,
-                shadow_color: element.style.shadow_color,
+                rect_pos: [draw_rect[0], draw_rect[1]],
+                rect_size: [draw_rect[2], draw_rect[3]],
+                color: mul_color_alpha(element.style.bg_color, opacity),
+                border_color: mul_color_alpha(element.style.border_color, opacity),
+                radii: resolved_radii,
+                border_width: border_w,
+                shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
                 shadow_offset: element.style.shadow_offset,
                 shadow_blur: element.style.shadow_blur,
                 shadow_spread: element.style.shadow_spread,
@@ -848,12 +886,13 @@ impl LayoutTree {
                         *r += outline_w;
                     }
                 }
-                let resolved_radii = resolve_corner_radii(outline_radii, outline_draw[2], outline_draw[3]);
+                let resolved_radii =
+                    resolve_corner_radii(outline_radii, outline_draw[2], outline_draw[3]);
                 instances.push(InstanceInput {
                     rect_pos: [outline_draw[0], outline_draw[1]],
                     rect_size: [outline_draw[2], outline_draw[3]],
                     color: [0.0, 0.0, 0.0, 0.0],
-                    border_color: element.style.outline_color,
+                    border_color: mul_color_alpha(element.style.outline_color, opacity),
                     radii: resolved_radii,
                     border_width: outline_w,
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
@@ -871,30 +910,43 @@ impl LayoutTree {
                 textured_draws.push(TexturedDraw {
                     rect: draw_rect,
                     texture_key: tex_key.clone(),
+                    opacity,
                 });
             }
         }
 
         if let Some(text) = &element.text {
+            let mut text_style = element.text_style.clone();
+            if opacity < 1.0 - f32::EPSILON {
+                let a = ((f32::from(text_style.color[3]) * opacity).round() as u16).min(255) as u8;
+                text_style.color[3] = a;
+            }
             text_nodes.push(TextLayoutInfo {
                 text: text.clone(),
                 shape_suffix: element.text_shape_suffix.clone(),
                 template_id: element.template_id.clone(),
-                x: render_x, y: render_y,
-                width: lay_w, height: lay_h,
-                clip_bounds: clip, style: element.text_style.clone(),
+                x: render_x,
+                y: render_y,
+                width: lay_w,
+                height: lay_h,
+                clip_bounds: clip,
+                style: text_style,
             });
         }
 
         // Recurse children
         let mut next_scroll_acc = scroll_acc;
-        if element.style.overflow.x != taffy::style::Overflow::Visible { next_scroll_acc[0] += element.scroll_offset[0]; }
-        if element.style.overflow.y != taffy::style::Overflow::Visible { next_scroll_acc[1] += element.scroll_offset[1]; }
+        if element.style.overflow.x != taffy::style::Overflow::Visible {
+            next_scroll_acc[0] += element.scroll_offset[0];
+        }
+        if element.style.overflow.y != taffy::style::Overflow::Visible {
+            next_scroll_acc[1] += element.scroll_offset[1];
+        }
 
         let pass_to_children = element
             .focus_id
             .as_deref()
-            .and_then(|fid| fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX))
+            .and_then(|fid| fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
             .or(ancestor_scroll_viewport_rest);
 
         let child_nodes = self.taffy.children(node).unwrap();
@@ -908,7 +960,7 @@ impl LayoutTree {
                     if child
                         .focus_id
                         .as_deref()
-                        .map_or(false, |f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
+                        .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
                     {
                         thumb_rect_for_child.take()
                     } else {
@@ -925,12 +977,13 @@ impl LayoutTree {
                     clip,
                     pass_to_children,
                     mouse_pos,
+                    opacity,
                     instances,
                     textured_draws,
                     text_nodes,
                     scroll_metrics,
                     hover_cursor,
-                    scroll_only,
+                    _scroll_only,
                     scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
@@ -940,14 +993,19 @@ impl LayoutTree {
             }
         } else {
             let mut order: Vec<usize> = (0..element.children.len()).collect();
-            order.sort_by(|&a, &b| element.children[a].style.z_index.cmp(&element.children[b].style.z_index).then(a.cmp(&b)));
+            order.sort_by(|&a, &b| {
+                element.children[a]
+                    .style
+                    .z_index
+                    .cmp(&element.children[b].style.z_index)
+                    .then(a.cmp(&b))
+            });
             for i in order {
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     let c = &element.children[i];
-                    if c
-                        .focus_id
+                    if c.focus_id
                         .as_deref()
-                        .map_or(false, |f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
+                        .is_some_and(|f| f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX))
                     {
                         thumb_rect_for_child.take()
                     } else {
@@ -964,12 +1022,13 @@ impl LayoutTree {
                     clip,
                     pass_to_children,
                     mouse_pos,
+                    opacity,
                     instances,
                     textured_draws,
                     text_nodes,
                     scroll_metrics,
                     hover_cursor,
-                    scroll_only,
+                    _scroll_only,
                     scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
@@ -981,7 +1040,7 @@ impl LayoutTree {
 
         // If this is a ScrollArea, record its metrics (content size vs viewport size)
         if let Some(fid) = element.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
+            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let content_w = (max_right - abs_x).max(layout.size.width);
                 let content_h = (max_bottom - abs_y).max(layout.size.height);
                 scroll_metrics.push((
@@ -1000,7 +1059,7 @@ impl LayoutTree {
         let mut extent_r = max_right;
         let mut extent_b = max_bottom;
         if let Some(fid) = element.focus_id.as_deref() {
-            if let Some(rest) = fid.strip_prefix(SCROLL_AREA_FOCUS_PREFIX) {
+            if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 if ancestor_scroll_viewport_rest.is_some_and(|a| a != rest) {
                     extent_r = abs_x + layout.size.width;
                     extent_b = abs_y + layout.size.height;
@@ -1061,7 +1120,11 @@ fn scrollbar_track_overlay_abs(
             _ => can_scroll_y,
         };
     let allow_axis = if axis == "x" { allow_x } else { allow_y };
-    let scrollable = if axis == "x" { can_scroll_x } else { can_scroll_y };
+    let scrollable = if axis == "x" {
+        can_scroll_x
+    } else {
+        can_scroll_y
+    };
     let vis_trim = if axis == "x" {
         sig.scrollbar_vis_x.trim()
     } else {
@@ -1170,12 +1233,7 @@ fn scrollbar_track_overlay_abs(
             } else {
                 (track_inner, 0.0)
             };
-            [
-                base_abs_x + inset + ml,
-                base_abs_y + inset,
-                tw,
-                thumb_cross,
-            ]
+            [base_abs_x + inset + ml, base_abs_y + inset, tw, thumb_cross]
         }
         _ => {
             let track = (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
@@ -1195,16 +1253,17 @@ fn scrollbar_track_overlay_abs(
             } else {
                 (track_inner, 0.0)
             };
-            [
-                base_abs_x + inset,
-                base_abs_y + inset + mt,
-                thumb_cross,
-                th,
-            ]
+            [base_abs_x + inset, base_abs_y + inset + mt, thumb_cross, th]
         }
     };
 
     (track_rect, thumb_rect)
+}
+
+#[inline]
+fn mul_color_alpha(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
+    color[3] *= opacity;
+    color
 }
 
 fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {

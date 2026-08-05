@@ -130,13 +130,11 @@ fn resolved_emoji_family(db: &Database) -> Option<&'static str> {
         "Segoe UI Emoji",
         "Apple Color Emoji",
     ];
-    for &name in CANDIDATES {
-        if family_present(db, name) {
-            return Some(name);
-        }
-    }
-    // Fallback: pick any family containing "emoji" and "noto".
-    None
+    CANDIDATES
+        .iter()
+        .find(|&&name| family_present(db, name))
+        .copied()
+        .map(|v| v as _)
 }
 
 /// 将 `requested_weight` 归一到同一字体家族可用的“最接近权重”，以避免
@@ -163,7 +161,9 @@ pub fn normalize_weight_for_family<'a>(
 
     let family_h = family_name_hash(name);
 
-    if let Some(hit) = WEIGHT_NORMALIZE_CACHE.with(|cache| cache.borrow().get(&(family_h, requested_weight)).copied()) {
+    if let Some(hit) = WEIGHT_NORMALIZE_CACHE
+        .with(|cache| cache.borrow().get(&(family_h, requested_weight)).copied())
+    {
         return hit;
     }
 
@@ -186,9 +186,7 @@ pub fn normalize_weight_for_family<'a>(
         out
     });
 
-    let effective = if weights.is_empty() {
-        requested_weight
-    } else if weights.binary_search(&requested_weight).is_ok() {
+    let effective = if weights.is_empty() || weights.binary_search(&requested_weight).is_ok() {
         requested_weight
     } else {
         // Pick the nearest available face weight within the same family.
@@ -199,7 +197,11 @@ pub fn normalize_weight_for_family<'a>(
                 let dist = (candidate as i32 - requested_weight as i32).abs();
                 // When distances are equal (e.g. 600 between 500/700), prefer the heavier one
                 // so UI weights remain visually distinguishable.
-                let tie_break = if candidate < requested_weight { 1u8 } else { 0u8 };
+                let tie_break = if candidate < requested_weight {
+                    1u8
+                } else {
+                    0u8
+                };
                 (dist, tie_break)
             })
             .unwrap_or(&requested_weight)
@@ -285,14 +287,20 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
         match lower.as_str() {
             "sans-serif" | "sans" => {
                 let mapped = resolved_default_sans_family(db);
-                if db.faces().any(|face| face.families.iter().any(|(f, _)| f == mapped)) {
+                if db
+                    .faces()
+                    .any(|face| face.families.iter().any(|(f, _)| f == mapped))
+                {
                     return Family::Name(mapped);
                 }
                 return Family::SansSerif;
             }
             "serif" => {
                 let mapped = resolved_default_serif_family(db);
-                if db.faces().any(|face| face.families.iter().any(|(f, _)| f == mapped)) {
+                if db
+                    .faces()
+                    .any(|face| face.families.iter().any(|(f, _)| f == mapped))
+                {
                     return Family::Name(mapped);
                 }
                 return Family::Serif;
@@ -321,13 +329,19 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
             _ => None,
         };
         if let Some(mapped) = alias {
-            if db.faces().any(|face| face.families.iter().any(|(f, _)| f == mapped)) {
+            if db
+                .faces()
+                .any(|face| face.families.iter().any(|(f, _)| f == mapped))
+            {
                 return Family::Name(mapped);
             }
         }
 
         // Query the database to see if this specific face exists by checking families directly.
-        if db.faces().any(|face| face.families.iter().any(|(f, _)| f == name)) {
+        if db
+            .faces()
+            .any(|face| face.families.iter().any(|(f, _)| f == name))
+        {
             return Family::Name(name);
         }
     }

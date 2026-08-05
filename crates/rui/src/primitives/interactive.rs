@@ -9,7 +9,7 @@ use winit::event::KeyEvent;
 
 thread_local! {
     /// 按钮等控件用 `set_silent` 更新 hover 后需补一帧绘制（不再经由根 `create_effect`）。
-    static HOVER_PAINT_DIRTY: Cell<bool> = Cell::new(false);
+    static HOVER_PAINT_DIRTY: Cell<bool> = const { Cell::new(false) };
 }
 
 #[inline]

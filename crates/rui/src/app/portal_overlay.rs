@@ -18,6 +18,7 @@ pub enum OverlayKind {
     Modal,
     Menu,
     Popover,
+    Tooltip,
 }
 
 /// 是否进入 Esc LIFO 栈。
@@ -45,7 +46,7 @@ struct OverlayLayer {
 }
 
 thread_local! {
-    static OVERLAY_STACK: RefCell<Vec<OverlayLayer>> = RefCell::new(Vec::new());
+    static OVERLAY_STACK: RefCell<Vec<OverlayLayer>> = const { RefCell::new(Vec::new()) };
 }
 
 fn z_for_index(i: usize) -> OverlayZ {

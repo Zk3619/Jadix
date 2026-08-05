@@ -1,6 +1,6 @@
 //! # Scrollbar
 //!
-//! 可挂到某 [`ScrollArea`](crate::components::ScrollArea)（`target` = 其 rest id）的独立滚动条。
+//! 可挂到某滚动视口（`target` = viewport rest id，如 [`ScrollArea`](crate::components::ScrollArea) / [`ScrollViewport`](crate::components::ScrollViewport) 的 `id`）的独立滚动条。
 //! **多数场景不必单独用**——`ScrollArea` 已内建横/纵条；本组件用于自定义摆放或拆分布局。
 //!
 //! ## 用法
@@ -10,18 +10,18 @@
 //! ```
 //!
 //! ## 注意
-//! - `target` 必须与对应 ScrollArea 的 `id` 一致。
+//! - `target` 必须与对应视口的 `id` 一致。
 //! - `visibility`: auto | always | never（never 仍可能可滚内容）。
 //! - `children` 当前忽略；真正不占位的 overlay 条仍是 TODO（见下方注释）。
 
-use crate::components::scroll_area::{
+use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
 };
-use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, IntoDimension, IntoF32};
-use taffy::prelude::*;
 use rui_macros::component;
+use taffy::prelude::*;
 
 // TODO(scrollbar-overlay):
 // 仅记录方案，不在当前提交中实现：
@@ -120,15 +120,19 @@ pub fn Scrollbar(
     children: Option<Element>,
 ) -> Element {
     let mut builder = scrollbar("scrollbar").target(target);
-    
-    if orientation.to_ascii_lowercase() == "horizontal" {
+
+    if orientation.eq_ignore_ascii_case("horizontal") {
         builder = builder.orientation(ScrollbarOrientation::Horizontal);
     } else {
         builder = builder.orientation(ScrollbarOrientation::Vertical);
     }
-    
-    if let Some(v) = visibility { builder = builder.visibility(v); }
-    if let Some(t) = thickness { builder = builder.thickness(t); }
+
+    if let Some(v) = visibility {
+        builder = builder.visibility(v);
+    }
+    if let Some(t) = thickness {
+        builder = builder.thickness(t);
+    }
 
     if let Some(c) = children {
         builder = builder.child(c);
@@ -204,7 +208,7 @@ impl ScrollbarBuilder {
         self.thumb_color = color;
         self
     }
-    
+
     pub fn flex_grow(mut self, grow: impl crate::core::tree::IntoF32Raw) -> Self {
         self.flex_grow = grow.into_f32_raw();
         self
@@ -326,7 +330,11 @@ impl From<ScrollbarBuilder> for Element {
                     let min_thumb = scrollbar_min_thumb_along_track(track);
                     let tw = (track * ratio).clamp(min_thumb, track.max(min_thumb));
                     let max_offset = (cw - vw).max(0.0);
-                    let t = if max_offset > 0.0 { sx / max_offset } else { 0.0 };
+                    let t = if max_offset > 0.0 {
+                        sx / max_offset
+                    } else {
+                        0.0
+                    };
                     let ml = (track - tw).max(0.0) * t.clamp(0.0, 1.0);
                     (track, track_cross, tw, thumb_cross, ml, 0.0)
                 }
@@ -336,7 +344,11 @@ impl From<ScrollbarBuilder> for Element {
                     let min_thumb = scrollbar_min_thumb_along_track(track);
                     let th = (track * ratio).clamp(min_thumb, track.max(min_thumb));
                     let max_offset = (ch - vh).max(0.0);
-                    let t = if max_offset > 0.0 { sy / max_offset } else { 0.0 };
+                    let t = if max_offset > 0.0 {
+                        sy / max_offset
+                    } else {
+                        0.0
+                    };
                     let mt = (track - th).max(0.0) * t.clamp(0.0, 1.0);
                     (track_cross, track, thumb_cross, th, 0.0, mt)
                 }

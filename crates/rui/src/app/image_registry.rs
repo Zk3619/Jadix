@@ -13,7 +13,9 @@ pub fn upload_rgba8(
     width: u32,
     height: u32,
 ) -> GpuImageTexture {
-    let expected = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let expected = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
     assert_eq!(
         rgba.len(),
         expected,

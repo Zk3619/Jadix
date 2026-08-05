@@ -1,8 +1,8 @@
 //! `RUI_TEXT_DEBUG`：观察每段文本的 **请求** 族名/字重/行高与 shaping 后 **fontdb 实际用到的字面**（多 fallback 时会有多个族名）。
 
 use std::collections::HashSet;
-use std::sync::OnceLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use glyphon::{Buffer, Family, FontSystem, Shaping};
 
@@ -48,12 +48,7 @@ pub(crate) fn enabled() -> bool {
 pub(crate) fn reshape_only() -> bool {
     *RESHAPE_ONLY.get_or_init(|| {
         std::env::var("RUI_TEXT_DEBUG_RESHAPE_ONLY")
-            .map(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes"
-                )
-            })
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
             .unwrap_or(false)
     })
 }
@@ -156,7 +151,7 @@ pub(crate) fn maybe_log_family_mismatch(
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| match attrs_family {
+        .unwrap_or(match attrs_family {
             Family::Name(n) => n,
             Family::SansSerif => "sans-serif",
             Family::Serif => "serif",
@@ -171,9 +166,7 @@ pub(crate) fn maybe_log_family_mismatch(
     }
 
     let req_l = req.to_ascii_lowercase();
-    let matched = resolved
-        .iter()
-        .any(|n| n.to_ascii_lowercase() == req_l);
+    let matched = resolved.iter().any(|n| n.to_ascii_lowercase() == req_l);
     if matched {
         return;
     }
@@ -300,15 +293,19 @@ pub(crate) fn log_line(
         .font_family
         .as_deref()
         .unwrap_or(shaping_family.as_str());
-    let lh_scale = info.style.line_height_px.map(|_| "px".to_string()).unwrap_or_else(|| {
-        info.style
-            .line_height_scale
-            .map(|s| format!("{s:.4}"))
-            .unwrap_or_else(|| {
-                let tw = tailwind_default_leading_scale(info.style.size);
-                format!("tw-v4≈{tw:.4}")
-            })
-    });
+    let lh_scale = info
+        .style
+        .line_height_px
+        .map(|_| "px".to_string())
+        .unwrap_or_else(|| {
+            info.style
+                .line_height_scale
+                .map(|s| format!("{s:.4}"))
+                .unwrap_or_else(|| {
+                    let tw = tailwind_default_leading_scale(info.style.size);
+                    format!("tw-v4≈{tw:.4}")
+                })
+        });
     let preview: String = info
         .text
         .chars()

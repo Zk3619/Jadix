@@ -145,10 +145,22 @@ impl TexturedQuadPipeline {
         });
 
         let vertices = &[
-            VertexInput { position: [0.0, 0.0], uv: [0.0, 1.0] },
-            VertexInput { position: [1.0, 0.0], uv: [1.0, 1.0] },
-            VertexInput { position: [1.0, 1.0], uv: [1.0, 0.0] },
-            VertexInput { position: [0.0, 1.0], uv: [0.0, 0.0] },
+            VertexInput {
+                position: [0.0, 0.0],
+                uv: [0.0, 1.0],
+            },
+            VertexInput {
+                position: [1.0, 0.0],
+                uv: [1.0, 1.0],
+            },
+            VertexInput {
+                position: [1.0, 1.0],
+                uv: [1.0, 0.0],
+            },
+            VertexInput {
+                position: [0.0, 1.0],
+                uv: [0.0, 0.0],
+            },
         ];
         let indices: &[u16] = &[0, 1, 2, 2, 3, 0];
 

@@ -120,13 +120,7 @@ impl From<ToggleBuilder> for Element {
 
         let (px, py, text_px) = size_pad(&builder.size);
         let mut bg = if pressed {
-            if outline {
-                parse_color("accent")
-            } else {
-                parse_color("accent")
-            }
-        } else if outline {
-            parse_color("transparent")
+            parse_color("accent")
         } else {
             parse_color("transparent")
         };

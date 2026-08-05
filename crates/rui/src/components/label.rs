@@ -17,10 +17,124 @@
 //! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
 //! 约 14px / weight 500 / leading-none / `min_w=0`。`template_id` 取自 `id`。
 
+use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage, LayoutStatus};
 use crate::primitives::text::TextBuilder;
-use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
+use crate::style::{parse_color, InputCaretDraw};
+use crate::utils::clipboard::set_text as clipboard_set_text;
 use crate::utils::text_node::apply_label_defaults;
 use rui_macros::component;
+
+/// 全局 signal：最近一次静态文本复制的内容（便于单测断言；剪贴板仍走 OS API）。
+pub const LABEL_SELECTION_COPY_SIGNAL: &str = "__rui_label_selection_copy";
+
+pub fn label_selection_signal_key(id: &str) -> String {
+    format!("__rui_label_selection_{}", id)
+}
+
+/// 稳定键：`focus_id` 优先，否则 `template_id`；不可选或无文本时返回 `None`。
+pub fn selectable_text_key(el: &Element) -> Option<String> {
+    if !el.text_style.selectable {
+        return None;
+    }
+    if el.text.as_ref().is_none_or(|t| t.is_empty()) {
+        return None;
+    }
+    if el
+        .focus_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with(crate::components::INPUT_FOCUS_PREFIX))
+    {
+        return None;
+    }
+    el.focus_id.clone().or_else(|| el.template_id.clone())
+}
+
+fn selection_bg_color() -> [u8; 4] {
+    let mut pc = parse_color("primary");
+    pc[3] *= 0.35;
+    [
+        (pc[0] * 255.0) as u8,
+        (pc[1] * 255.0) as u8,
+        (pc[2] * 255.0) as u8,
+        (pc[3] * 255.0) as u8,
+    ]
+}
+
+fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
+    let Some(key) = selectable_text_key(el) else {
+        if el.text_style.input_caret.is_some() {
+            el.text_style.input_caret = None;
+            *impact = LayoutStatus::StyleChanged;
+        }
+        return;
+    };
+    let sk = label_selection_signal_key(&key);
+    let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).peek();
+    let sel_draw = sel.and_then(|(a, b)| {
+        let lo = a.min(b);
+        let hi = a.max(b);
+        if lo < hi {
+            Some((lo, hi))
+        } else {
+            None
+        }
+    });
+    let want = sel_draw.map(|range| InputCaretDraw {
+        caret_byte_index: 0,
+        selection: Some(range),
+        selection_bg: selection_bg_color(),
+        overwrite_highlight: None,
+    });
+    if el.text_style.input_caret != want {
+        el.text_style.input_caret = want;
+        *impact = LayoutStatus::StyleChanged;
+    }
+}
+
+/// 每帧将可选 Label 的选区信号同步到 `text_style.input_caret`（`peek`，不触发 rebuild）。
+pub(crate) fn sync_label_selection_paint_subtree(el: &mut Element, impact: &mut LayoutStatus) {
+    sync_one_label_selection(el, impact);
+    for child in &mut el.children {
+        sync_label_selection_paint_subtree(child, impact);
+    }
+}
+
+/// 复制首个非空静态文本选区到剪贴板与 [`LABEL_SELECTION_COPY_SIGNAL`]。
+pub fn try_copy_label_selection(root: &Element) -> bool {
+    try_copy_label_selection_subtree(root)
+}
+
+fn try_copy_label_selection_subtree(el: &Element) -> bool {
+    if let Some(key) = selectable_text_key(el) {
+        let sk = label_selection_signal_key(&key);
+        if let Some((a, b)) =
+            crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).peek()
+        {
+            let lo = a.min(b);
+            let hi = a.max(b);
+            if lo < hi {
+                if let Some(text) = &el.text {
+                    if hi <= text.len() {
+                        let slice = &text[lo..hi];
+                        clipboard_set_text(slice);
+                        crate::core::reactivity::use_signal(
+                            LABEL_SELECTION_COPY_SIGNAL,
+                            String::new,
+                        )
+                        .set(slice.to_string());
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    for child in &el.children {
+        if try_copy_label_selection_subtree(child) {
+            return true;
+        }
+    }
+    false
+}
 
 pub struct LabelBuilder {
     pub(crate) id: String,
@@ -40,11 +154,21 @@ pub fn Label(
     children: Option<Element>,
 ) -> Element {
     let mut builder = label(&id).text(text);
-    if let Some(s) = size { builder = builder.size(s); }
-    if let Some(c) = color { builder = builder.color(c); }
-    if let Some(w) = weight { builder = builder.font_weight(w); }
-    if center { builder = builder.text_center(); }
-    if let Some(c) = children { builder = builder.child(c); }
+    if let Some(s) = size {
+        builder = builder.size(s);
+    }
+    if let Some(c) = color {
+        builder = builder.color(c);
+    }
+    if let Some(w) = weight {
+        builder = builder.font_weight(w);
+    }
+    if center {
+        builder = builder.text_center();
+    }
+    if let Some(c) = children {
+        builder = builder.child(c);
+    }
     builder.into()
 }
 
@@ -246,6 +370,25 @@ impl LabelBuilder {
         self.inner = self.inner.leading(1.625);
         self
     }
+
+    pub fn text_overflow_ellipsis(mut self) -> Self {
+        self.inner.el = self.inner.el.text_overflow_ellipsis();
+        self
+    }
+
+    pub fn text_overflow(mut self, overflow: crate::style::TextOverflow) -> Self {
+        self.inner.el = self.inner.el.text_overflow(overflow);
+        self
+    }
+
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.inner.el = self.inner.el.selectable(selectable);
+        if selectable {
+            enable_label_selection(&mut self.inner.el, &self.id);
+            self.inner.el = self.inner.el.cursor_text();
+        }
+        self
+    }
 }
 
 impl From<LabelBuilder> for Element {
@@ -256,8 +399,71 @@ impl From<LabelBuilder> for Element {
     }
 }
 
+/// Enable static label text selection (MVP scaffolding).
+///
+/// Sets `text_style.selectable`, assigns `focus_id`, and marks the element for future
+/// paint sync (`input_caret` selection path when a caret draw sync is installed).
+pub fn enable_label_selection(el: &mut Element, focus_id: impl Into<String>) {
+    let id = focus_id.into();
+    el.focus_id = Some(id.clone());
+    el.text_style.selectable = true;
+    el.cursor = Some(crate::core::tree::CursorKind::Text);
+    el.attrs
+        .insert("text_selectable".to_string(), "1".to_string());
+    el.attrs
+        .insert(format!("__rui_label_sel:{id}"), "1".to_string());
+}
+
 impl crate::core::tree::IntoElementList for LabelBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::use_signal;
+    use crate::core::tree::Element;
+
+    #[test]
+    fn selectable_label_records_selection_range() {
+        let key = "lbl1";
+        let sk = label_selection_signal_key(key);
+        use_signal(&sk, || None::<(usize, usize)>).set(Some((1, 4)));
+        assert_eq!(
+            use_signal(&sk, || None::<(usize, usize)>).get(),
+            Some((1, 4))
+        );
+    }
+
+    #[test]
+    fn non_selectable_label_does_not_participate_in_selection() {
+        let el = Element::new().text("hello").selectable(false);
+        assert!(selectable_text_key(&el).is_none());
+
+        let mut el2 = Element::new().text("hello").selectable(true);
+        el2.template_id = Some("t2".into());
+        assert_eq!(selectable_text_key(&el2).as_deref(), Some("t2"));
+
+        let mut el3 = Element::new().text("hello").selectable(true);
+        enable_label_selection(&mut el3, "focus-me");
+        assert_eq!(selectable_text_key(&el3).as_deref(), Some("focus-me"));
+    }
+
+    #[test]
+    fn copy_label_selection_updates_global_signal() {
+        let mut root = Element::new();
+        let mut lbl = Element::new().text("hello world").selectable(true);
+        enable_label_selection(&mut lbl, "copy-lbl");
+        root.children.push(lbl);
+
+        let sk = label_selection_signal_key("copy-lbl");
+        use_signal(&sk, || None::<(usize, usize)>).set(Some((0, 5)));
+        assert!(try_copy_label_selection(&root));
+        assert_eq!(
+            use_signal(LABEL_SELECTION_COPY_SIGNAL, String::new).get(),
+            "hello"
+        );
     }
 }

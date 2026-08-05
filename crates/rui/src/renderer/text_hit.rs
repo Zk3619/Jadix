@@ -74,15 +74,9 @@ pub fn measure_prefix_width(
     if let Some(hit) = MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
         return hit;
     }
-    let mut buffer = glyphon::Buffer::new(
-        font_system,
-        glyphon::Metrics::new(scaled_size, line_height),
-    );
-    buffer.set_size(
-        font_system,
-        Some(max_width),
-        Some(line_height + 2.0),
-    );
+    let mut buffer =
+        glyphon::Buffer::new(font_system, glyphon::Metrics::new(scaled_size, line_height));
+    buffer.set_size(font_system, Some(max_width), Some(line_height + 2.0));
     buffer.set_text(
         font_system,
         text,
@@ -104,6 +98,77 @@ pub fn measure_prefix_width(
         cache.insert(key, measured);
     });
     measured
+}
+
+const ELLIPSIS: &str = "…";
+
+/// True when the layout box is tall enough for at most one line of text.
+pub fn is_single_line_text_box(line_height: f32, box_height: f32) -> bool {
+    line_height > 0.0 && box_height <= line_height * 1.25
+}
+
+/// Truncate `text` with a trailing ellipsis so shaped width fits within `max_width`.
+pub fn truncate_with_ellipsis(
+    font_system: &mut glyphon::FontSystem,
+    text: &str,
+    scaled_size: f32,
+    line_height: f32,
+    weight: u16,
+    family: glyphon::Family,
+    max_width: f32,
+) -> String {
+    if text.is_empty() || max_width <= 0.0 {
+        return text.to_string();
+    }
+    let full_w = measure_prefix_width(
+        font_system,
+        text,
+        scaled_size,
+        line_height,
+        weight,
+        family,
+        max_width,
+    );
+    if full_w <= max_width {
+        return text.to_string();
+    }
+    let ellipsis_w = measure_prefix_width(
+        font_system,
+        ELLIPSIS,
+        scaled_size,
+        line_height,
+        weight,
+        family,
+        max_width,
+    );
+    if ellipsis_w >= max_width {
+        return ELLIPSIS.to_string();
+    }
+    let budget = max_width - ellipsis_w;
+    let mut lo = 0usize;
+    let mut hi = text.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let end = text.floor_char_boundary(mid);
+        let prefix = &text[..end];
+        let w = measure_prefix_width(
+            font_system,
+            prefix,
+            scaled_size,
+            line_height,
+            weight,
+            family,
+            max_width,
+        );
+        if w <= budget {
+            lo = end;
+        } else if end == 0 {
+            break;
+        } else {
+            hi = text.floor_char_boundary(end - 1);
+        }
+    }
+    format!("{}{}", &text[..lo], ELLIPSIS)
 }
 
 pub fn best_font_family(font_system: &glyphon::FontSystem) -> glyphon::Family<'static> {

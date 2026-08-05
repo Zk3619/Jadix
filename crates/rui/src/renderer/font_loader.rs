@@ -12,7 +12,6 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 #[cfg(any(
     feature = "bundled-lucide",
     feature = "bundled-cjk",
@@ -21,6 +20,7 @@ use std::sync::{Mutex, OnceLock};
     feature = "bundled-symbols"
 ))]
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use glyphon::fontdb::Database;
 #[cfg(any(
@@ -46,10 +46,7 @@ const RUNTIME_SYMBOLS: &[&str] = &[
     "NotoSansMath-Regular.ttf",
     "NotoMusic-Regular.ttf",
 ];
-const RUNTIME_EMOJI: &[&str] = &[
-    "NotoColorEmoji_WindowsCompatible.ttf",
-    "NotoColorEmoji.ttf",
-];
+const RUNTIME_EMOJI: &[&str] = &["NotoColorEmoji_WindowsCompatible.ttf", "NotoColorEmoji.ttf"];
 
 /// Script / coverage buckets that may trigger a lazy font open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -542,7 +539,10 @@ fn load_lazy_symbols(db: &mut Database, state: &mut LazyFontState) {
         #[cfg(feature = "bundled-symbols")]
         {
             load_static_bytes(db, include_bytes!("../../assets/NotoSansSymbols-wght.ttf"));
-            load_static_bytes(db, include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf"));
+            load_static_bytes(
+                db,
+                include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf"),
+            );
             load_static_bytes(db, include_bytes!("../../assets/NotoSansMath-Regular.ttf"));
             load_static_bytes(db, include_bytes!("../../assets/NotoMusic-Regular.ttf"));
         }
@@ -730,10 +730,9 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
     {
         if (env_flag_enabled("RUI_LOAD_CJK") || cfg!(feature = "fonts-cjk"))
             && !env_flag_disabled("RUI_LOAD_CJK")
+            && try_load_font_file(db, RUNTIME_CJK_SANS, state)
         {
-            if try_load_font_file(db, RUNTIME_CJK_SANS, state) {
-                state.attempted.cjk = true;
-            }
+            state.attempted.cjk = true;
         }
     }
 
@@ -797,9 +796,7 @@ pub fn create_font_system() -> FontSystem {
     load_eager_bundled_fonts(&mut db, &mut state);
 
     let face_count = db.len();
-    log::info!(
-        "font database ready: {face_count} faces (eager UI only; CJK/emoji lazy on demand)"
-    );
+    log::info!("font database ready: {face_count} faces (eager UI only; CJK/emoji lazy on demand)");
 
     drop(state);
     FontSystem::new_with_locale_and_db(resolve_locale(), db)

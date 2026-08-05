@@ -7,7 +7,7 @@ use winit::keyboard::ModifiersState;
 pub(super) enum RuiUserEvent {
     #[cfg(debug_assertions)]
     HotReloadWake,
-    AccessKit(#[allow(dead_code)] accesskit_winit::Event),
+    AccessKit(accesskit_winit::Event),
 }
 
 impl From<accesskit_winit::Event> for RuiUserEvent {
@@ -16,28 +16,30 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
     }
 }
 
-mod input_controller;
+mod damage;
 mod hot_reload;
+mod image_registry;
+mod input_controller;
 mod lifecycle;
-pub mod runtime;
+pub mod navigator;
+pub mod pending_images;
+pub mod pointer_events;
+pub mod portal_overlay;
 pub mod reactive;
-pub mod window_keys;
+pub mod runtime;
 mod scroll_support;
 mod state;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod tree_hit;
 mod window_events;
-pub mod pending_images;
-pub mod portal_overlay;
-pub mod navigator;
-mod image_registry;
-#[cfg(test)]
-mod reactive_tests;
+pub mod window_keys;
 
+use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;
 use state::AppState;
-use crate::utils::drag_reorder::DragReorderState;
 
-use crate::components::scroll_area::ScrollAreaSignalKeys;
+use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
 type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
@@ -50,32 +52,40 @@ struct App {
     last_frame_time: std::time::Instant,
     modifiers: ModifiersState,
     left_button_down: bool,
+    /// Last primary-button click for double-click detection.
+    last_click_at: Option<std::time::Instant>,
+    last_click_pos: [f32; 2],
+    click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
     drag_reorder: Option<DragReorderState>,
-    /// 正在拖选文本的 input `rest`（`input:{rest}` 中的 id）。
+    /// ??????? input `rest`?`input:{rest}` ?? id??
     input_drag_rest: Option<String>,
-    /// 拖选锚点（UTF-8 字节）。
+    /// ?????UTF-8 ????
     input_drag_anchor: usize,
-    /// 累积的滚动增量，在每一帧开始时应用到信号。
+    /// 静态可选文本拖选时的稳定键（`focus_id` / `template_id`）
+    label_drag_key: Option<String>,
+    /// 静态文本拖选锚点（UTF-8 字节）
+    label_drag_anchor: usize,
+    /// ?????????????????????
     scroll_accum: std::collections::HashMap<String, [f32; 2]>,
-    /// 当前指针悬停的滚动区域（用于 overlay scrollbar 的 Auto 显示）。
+    /// ?????????????? overlay scrollbar ? Auto ????
     hover_scroll_rest: Option<String>,
-    /// 当前指针悬停的滚动条轴（用于横竖滚动条独立显隐）。
+    /// ?????????????????????????
     hover_scroll_axis: Option<(String, scroll_support::ScrollAxis)>,
-    /// overlay scrollbar 的自动隐藏：显示截止时间（滚动/hover/拖拽会延长）。
+    /// overlay scrollbar ???????????????/hover/???????
     scrollbar_visible_until: std::collections::HashMap<String, std::time::Instant>,
-    /// `scroll_behavior="smooth"` 的滚轮动量（px/s），用于产生“快速滚动感”。
+    /// `scroll_behavior="smooth"` ??????px/s??????????????
     scroll_velocity: std::collections::HashMap<String, [f32; 2]>,
-    /// `scroll_behavior="smooth"`：滚轮输入后至少保持动画/重绘到此时刻，避免连续滚轮出现断续停顿。
+    /// `scroll_behavior="smooth"`????????????/????????????????????
     smooth_active_until: std::collections::HashMap<String, std::time::Instant>,
-    /// 平滑后的最大滚动量 `[max_x, max_y]`，减轻布局度量抖动导致的 target 来回跳、中部振荡。
+    /// ????????? `[max_x, max_y]`???????????? target ?????????
     scroll_max_lowpass: std::collections::HashMap<String, [f32; 2]>,
-    /// 上一帧 `collect_scroll_area_metrics` 的哈希快照，用于本帧在 `render()` 之前积分平滑滚动。
+    /// ??? `collect_scroll_area_metrics` ??????????? `render()` ?????????
     scroll_metrics_cache: std::collections::HashMap<String, ScrollMetrics>,
-    /// Duplicate `ScrollArea id` detector: warn once per `id`.
+    /// Duplicate scroll viewport `id` detector: warn once per `id`.
     scroll_metric_duplicate_warned: std::collections::HashSet<String>,
-    /// Stable signal key strings per scroll-area id (avoids per-frame `format!` in nested scroll).
-    scroll_signal_key_cache: std::collections::HashMap<String, ScrollAreaSignalKeys>,
+    /// Stable signal key strings per scroll viewport id (avoids per-frame `format!` in nested scroll).
+    scroll_signal_key_cache: std::collections::HashMap<String, ScrollViewportSignalKeys>,
     /// Throttle for optional scrollbar diagnostics (`RUI_SCROLLBAR_DIAG`).
     scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
@@ -86,4 +96,48 @@ struct App {
 
 pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
     lifecycle::run(app_builder);
+}
+
+/// Set pointer capture to the element with this `focus_id` (DOM `setPointerCapture` analogue).
+pub fn set_pointer_capture(focus_id: impl Into<String>) {
+    POINTER_CAPTURE.with(|c| *c.borrow_mut() = Some(focus_id.into()));
+}
+
+/// Release pointer capture.
+pub fn release_pointer_capture() {
+    POINTER_CAPTURE.with(|c| *c.borrow_mut() = None);
+}
+
+pub fn pointer_capture_id() -> Option<String> {
+    POINTER_CAPTURE.with(|c| c.borrow().clone())
+}
+
+thread_local! {
+    static POINTER_CAPTURE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static FILE_DROP_HANDLER: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(Vec<std::path::PathBuf>)>>>> =
+        const { std::cell::RefCell::new(None) };
+    static DROPPED_FILES: std::cell::RefCell<Vec<std::path::PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Register a process-wide file-drop handler (paths from the OS).
+pub fn on_file_drop(handler: impl FnMut(Vec<std::path::PathBuf>) + 'static) {
+    FILE_DROP_HANDLER.with(|h| {
+        *h.borrow_mut() = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+    });
+}
+
+pub(super) fn take_dropped_files() -> Vec<std::path::PathBuf> {
+    DROPPED_FILES.with(|f| std::mem::take(&mut *f.borrow_mut()))
+}
+
+pub(super) fn push_dropped_file(path: std::path::PathBuf) {
+    DROPPED_FILES.with(|f| f.borrow_mut().push(path));
+}
+
+pub(super) fn fire_file_drop(paths: Vec<std::path::PathBuf>) {
+    FILE_DROP_HANDLER.with(|h| {
+        if let Some(cb) = h.borrow().as_ref() {
+            (*cb.borrow_mut())(paths);
+        }
+    });
 }

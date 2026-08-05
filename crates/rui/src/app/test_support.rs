@@ -1,0 +1,22 @@
+//! Internal helpers for integration tests under `crates/rui/tests/`.
+
+use super::state::AppState;
+use crate::core::tree::{Element, LayoutStatus, LayoutTree};
+
+pub fn reconcile_elements(new_el: &mut Element, old_el: &mut Element) -> LayoutStatus {
+    AppState::reconcile_elements_for_test(new_el, old_el)
+}
+
+pub fn is_bootstrap_root(el: &Element) -> bool {
+    AppState::is_bootstrap_root(el)
+}
+
+pub const BOOTSTRAP_ROOT_ATTR: &str = AppState::BOOTSTRAP_ROOT_ATTR;
+
+pub fn sync_reactive_elements_subtree(
+    element: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    crate::core::tree::sync_reactive_elements_subtree(element, layout_tree, impact);
+}

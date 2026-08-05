@@ -60,17 +60,61 @@ impl InstanceInput {
             array_stride: mem::size_of::<InstanceInput>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 8, shader_location: 3, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 16, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
-                wgpu::VertexAttribute { offset: 32, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
-                wgpu::VertexAttribute { offset: 48, shader_location: 6, format: wgpu::VertexFormat::Float32x4 },
-                wgpu::VertexAttribute { offset: 64, shader_location: 7, format: wgpu::VertexFormat::Float32 },
-                wgpu::VertexAttribute { offset: 68, shader_location: 8, format: wgpu::VertexFormat::Float32x4 },
-                wgpu::VertexAttribute { offset: 84, shader_location: 9, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 92, shader_location: 10, format: wgpu::VertexFormat::Float32 },
-                wgpu::VertexAttribute { offset: 96, shader_location: 11, format: wgpu::VertexFormat::Float32 },
-                wgpu::VertexAttribute { offset: 100, shader_location: 12, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 8,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 68,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 84,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 92,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 96,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 100,
+                    shader_location: 12,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -113,16 +157,25 @@ impl RuiPipeline {
             Self::bind_group_and_pipeline(device, config, &shader, &globals_buffer);
 
         let vertices = &[
-            VertexInput { position: [0.0, 0.0], uv: [0.0, 0.0] },
-            VertexInput { position: [1.0, 0.0], uv: [1.0, 0.0] },
-            VertexInput { position: [1.0, 1.0], uv: [1.0, 1.0] },
-            VertexInput { position: [0.0, 1.0], uv: [0.0, 1.0] },
+            VertexInput {
+                position: [0.0, 0.0],
+                uv: [0.0, 0.0],
+            },
+            VertexInput {
+                position: [1.0, 0.0],
+                uv: [1.0, 0.0],
+            },
+            VertexInput {
+                position: [1.0, 1.0],
+                uv: [1.0, 1.0],
+            },
+            VertexInput {
+                position: [0.0, 1.0],
+                uv: [0.0, 1.0],
+            },
         ];
 
-        let indices: &[u16] = &[
-            0, 1, 2,
-            2, 3, 0,
-        ];
+        let indices: &[u16] = &[0, 1, 2, 2, 3, 0];
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Quad Vertex Buffer"),
