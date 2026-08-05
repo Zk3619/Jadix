@@ -16,3 +16,6 @@
 
 !examples/
 !examples/**
+
+!docs/
+!docs/**

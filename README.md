@@ -171,13 +171,13 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 - **中文**
   - 保留模式内部实现 + 声明式组件 API。
-  - 信号驱动的局部更新与脏区重绘。
+  - 信号驱动的局部更新（子树 reconcile + 按需 `request_redraw`）；整帧 GPU 绘制（脏区 / scissor 局部重绘尚未落地）。
   - 面向现代 UI 的组件体系与样式表达。
   - 持续提升开发体验（热重载、可维护宏系统、示例完善）。
 
 - **English**
   - Retained internals with a declarative component API.
-  - Signal-driven partial updates and dirty-region redraw.
+  - Signal-driven partial updates (subtree reconcile + on-demand `request_redraw`); full-frame GPU present (dirty-region / scissor redraw is not implemented yet).
   - Modern component system and style expression.
   - Better developer experience (hot reload, maintainable macros, richer examples).
 
@@ -202,5 +202,4 @@ fn FineGrainedDemo() -> rui::core::tree::Element {
 
 ## License
 
-暂未声明 License。若你计划开源发布，建议尽快补充许可证（如 MIT / Apache-2.0）。  
-No license has been declared yet. If you plan to publish this repository, consider adding one early (e.g., MIT / Apache-2.0).
+MIT — see [LICENSE](LICENSE).
