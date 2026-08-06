@@ -422,9 +422,7 @@ enum KeyTone {
 
 fn mutate(eng: Signal<Engine>, mut f: impl FnMut(&mut Engine) + 'static) -> impl FnMut() + 'static {
     move || {
-        let mut e = eng.get();
-        f(&mut e);
-        eng.set(e);
+        eng.update(|e| f(e));
     }
 }
 
@@ -714,88 +712,93 @@ fn scientific_pad(eng: Signal<Engine>) -> Element {
     }
 }
 
-const MODE_SELECT_REACTIVE: &str = "examples/calculator/mode_select";
-
 #[component]
 fn CalculatorApp() -> Element {
     let mode = use_signal("calc_mode_str", || "standard".to_string());
     let eng = use_signal("calc_engine", Engine::default);
-    let e = eng.get();
-    let has_mem = e.memory != 0.0;
-    let display = e.shown();
-    let preview = e.preview();
-    let is_standard = mode.get() == "standard";
 
     rui::app::window_keys::set_window_key_handler(move |key| apply_key(eng, key));
 
-    let preview_el = ui! {
-        <Label
-            id="calc-preview"
-            text={preview}
-            text_size="0.9375rem"
-            font_weight="400"
-            color={rgba_u8("#6b6b6b")}
-            w="100%"
-            text_align="right"
-        />
+    // Keep Select outside the engine-tracking subtree so digit clicks do not remount it.
+    let mode_header = ui! {
+        <HStack w="100%" items="center" gap="0.5rem" h="2.5rem">
+            <Select
+                id="calc:mode"
+                value={mode}
+                default_value="standard"
+                options={vec![
+                    ("standard".to_string(), "标准".to_string()),
+                    ("scientific".to_string(), "科学".to_string()),
+                ]}
+                placeholder="模式"
+                w="7rem"
+            />
+        </HStack>
     };
 
-    let display_el = ui! {
-        <Label
-            id="calc-display"
-            text={display}
-            text_size="2.75rem"
-            font_weight="600"
-            color={rgba_u8("#1a1a1a")}
-            w="100%"
-            text_align="right"
-        />
-    };
+    let body = rui::reactive!("examples/calculator/body", move || {
+        let e = eng.get();
+        let has_mem = e.memory != 0.0;
+        let display = e.shown();
+        let preview = e.preview();
+        let is_standard = mode.get() == "standard";
 
-    let pad = if is_standard {
-        standard_pad(eng)
-    } else {
-        scientific_pad(eng)
-    };
+        let preview_el = ui! {
+            <Label
+                id="calc-preview"
+                text={preview}
+                text_size="0.9375rem"
+                font_weight="400"
+                color={rgba_u8("#6b6b6b")}
+                w="100%"
+                text_align="right"
+            />
+        };
 
-    let mode_header = rui::reactive!(MODE_SELECT_REACTIVE, move || {
+        let display_el = ui! {
+            <Label
+                id="calc-display"
+                text={display}
+                text_size="2.75rem"
+                font_weight="600"
+                color={rgba_u8("#1a1a1a")}
+                w="100%"
+                text_align="right"
+            />
+        };
+
+        let pad = if is_standard {
+            standard_pad(eng)
+        } else {
+            scientific_pad(eng)
+        };
+
         ui! {
-            <HStack w="100%" items="center" gap="0.5rem" h="2.5rem">
-                <Select
-                    id="calc:mode"
-                    value={mode}
-                    default_value="standard"
-                    options={vec![
-                        ("standard".to_string(), "标准".to_string()),
-                        ("scientific".to_string(), "科学".to_string()),
-                    ]}
-                    placeholder="模式"
-                    w="7rem"
-                />
-            </HStack>
+            <VStack w="100%" h="100%" gap="0.35rem">
+                <VStack w="100%" justify="end" items="stretch" px="0.4rem" pb="0.25rem" min_h="5.5rem" gap="0.15rem">
+                    { preview_el }
+                    { display_el }
+                </VStack>
+
+                <HStack w="100%" gap="0.15rem" mb="0.15rem">
+                    { mem_key("mem-mc", "MC", has_mem, eng, |e| e.mem_clear()) }
+                    { mem_key("mem-mr", "MR", has_mem, eng, |e| e.mem_recall()) }
+                    { mem_key("mem-mp", "M+", true, eng, |e| e.mem_add()) }
+                    { mem_key("mem-mm", "M−", true, eng, |e| e.mem_sub()) }
+                    { mem_key("mem-ms", "MS", true, eng, |e| e.mem_store()) }
+                </HStack>
+
+                <Rect w="100%" grow="1" min_h="18rem">
+                    { pad }
+                </Rect>
+            </VStack>
         }
     });
 
     ui! {
         <VStack w="100%" h="100%" bg="#f3f3f3" gap="0.35rem" p="0.6rem">
             { mode_header }
-
-            <VStack w="100%" justify="end" items="stretch" px="0.4rem" pb="0.25rem" min_h="5.5rem" gap="0.15rem">
-                { preview_el }
-                { display_el }
-            </VStack>
-
-            <HStack w="100%" gap="0.15rem" mb="0.15rem">
-                { mem_key("mem-mc", "MC", has_mem, eng, |e| e.mem_clear()) }
-                { mem_key("mem-mr", "MR", has_mem, eng, |e| e.mem_recall()) }
-                { mem_key("mem-mp", "M+", true, eng, |e| e.mem_add()) }
-                { mem_key("mem-mm", "M−", true, eng, |e| e.mem_sub()) }
-                { mem_key("mem-ms", "MS", true, eng, |e| e.mem_store()) }
-            </HStack>
-
-            <Rect w="100%" grow="1" min_h="18rem">
-                { pad }
-            </Rect>
+            { body }
         </VStack>
     }
 }

@@ -59,10 +59,13 @@ pub(super) enum TextRendererBackend {
 }
 
 pub(super) struct AppState {
+    // Field drop order is the reverse of declaration. wgpu Surface must drop while Device
+    // and the winit Window/HWND are still alive (Windows GL/WGL otherwise panics in
+    // make_current → workspace `panic = "abort"` → STATUS_STACK_BUFFER_OVERRUN 0xC0000409).
     pub(super) window: Arc<Window>,
-    pub(super) surface: wgpu::Surface<'static>,
     pub(super) device: wgpu::Device,
     pub(super) queue: wgpu::Queue,
+    pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     pub(super) pipeline: RuiPipeline,
@@ -444,9 +447,9 @@ impl AppState {
 
         Self {
             window,
-            surface,
             device,
             queue,
+            surface,
             config,
             size,
             pipeline,

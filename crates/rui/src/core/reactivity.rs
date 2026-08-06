@@ -288,10 +288,14 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
         rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
     }
 
-    if *rt.current_owner.borrow() == Some(id) {
+    // Temporaries from `borrow()` in an `if` condition live for the whole `if`
+    // expression (including the body). Split the read so `borrow_mut` is not nested.
+    let clear_current = *rt.current_owner.borrow() == Some(id);
+    if clear_current {
         *rt.current_owner.borrow_mut() = node.parent;
     }
-    if *rt.root_owner.borrow() == Some(id) {
+    let clear_root = *rt.root_owner.borrow() == Some(id);
+    if clear_root {
         *rt.root_owner.borrow_mut() = None;
     }
 }
@@ -829,7 +833,10 @@ pub fn dispose_effect(id: EffectId) {
 pub fn clear_effects() {
     RUNTIME.with(|rt_rc| {
         let rt = rt_rc.borrow();
-        if let Some(root) = *rt.root_owner.borrow() {
+        // Copy the Option out first — an `if let` temporary from `borrow()` would
+        // stay alive across `dispose_owner`, which itself mutates `root_owner`.
+        let root = *rt.root_owner.borrow();
+        if let Some(root) = root {
             dispose_owner(&rt, root);
         }
         // Orphan owners (should be none).
@@ -1624,5 +1631,27 @@ mod tests {
         a.set(2);
         assert_eq!(a.peek(), 2);
         assert_eq!(b.peek(), 99);
+    }
+
+    #[test]
+    fn clear_effects_disposes_root_without_refcell_panic() {
+        let runs = Rc::new(Cell::new(0_u32));
+        let (_handle, _) = create_root({
+            let runs = runs.clone();
+            move || {
+                let s = Signal::new(0_i32);
+                create_effect({
+                    let runs = runs.clone();
+                    move || {
+                        let _ = s.get();
+                        runs.set(runs.get() + 1);
+                    }
+                });
+            }
+        });
+        assert!(runs.get() >= 1);
+        // Regression: nested `root_owner.borrow()` across `dispose_owner` used to panic
+        // with `RefCell already borrowed` (Windows abort → 0xC0000409).
+        clear_effects();
     }
 }

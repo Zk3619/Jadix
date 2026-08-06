@@ -11,12 +11,13 @@
 //! ```
 //!
 //! ## 注意
-//! - 菜单开闭与选项列表由组件内 [`crate::app::reactive::reactive_component`] 边界管理（props 刷新 + `open` 订阅），无需手动 `<Reactive>`。
+//! - 菜单开闭与选项列表由组件内 [`crate::app::reactive::reactive_component_live`] 边界管理
+//!   （`open` / `value` 订阅 + props 刷新），无需手动 `<Reactive>`。
 //! - 菜单 / underlay 走 `rui_portal` + [`crate::app::portal_overlay`] 栈分配 z；不占文档流。
 //! - 选项为 `(value, label)`；受控用 `Signal<String>`。
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::reactive_component;
+use crate::app::reactive::reactive_component_live;
 use crate::components::button::button;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{use_signal, Signal};
@@ -53,12 +54,17 @@ pub fn Select(
     default_value: String,
     options: Vec<(String, String)>,
     placeholder: String,
+    w: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut builder = select(&id)
         .default_value(default_value)
         .options(options)
         .placeholder(placeholder);
+
+    if let Some(width) = w {
+        builder = builder.trigger_width(width);
+    }
 
     if let Some(sig) = value {
         builder = builder.value_signal(sig);
@@ -345,12 +351,39 @@ impl From<SelectBuilder> for Element {
             placement,
         };
 
-        let template_id = id.clone();
-        let mut root = reactive_component(view_id, render_props, move |props| {
+        let mut root = reactive_component_live(view_id, render_props, move |props| {
             build_select_view(props, open, val, place)
         });
         root = root.children(children);
-        root.template_id = Some(template_id);
+        // Keep the reactive_component_live anchor id (`{id}__select_view`). Overwriting with
+        // bare `id` made `try_reconcile_subtree` miss the placeholder, so the trigger
+        // never mounted (calculator mode Select looked "missing").
         root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::create_root;
+
+    #[test]
+    fn select_keeps_reactive_view_anchor_id() {
+        let (_owner, el) = create_root(|| {
+            let el: Element = select("calc:mode")
+                .default_value("standard")
+                .options(vec![
+                    ("standard".into(), "标准".into()),
+                    ("scientific".into(), "科学".into()),
+                ])
+                .trigger_width("7rem")
+                .into();
+            el
+        });
+        assert_eq!(
+            el.template_id.as_deref(),
+            Some("calc:mode__select_view"),
+            "Select root must keep the reactive_component_live anchor id"
+        );
     }
 }

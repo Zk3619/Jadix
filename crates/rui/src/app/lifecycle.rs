@@ -18,15 +18,21 @@ impl super::App {
     /// The root `create_effect` captures `Rc<RefCell<Option<AppState>>>`. If we leave
     /// teardown to thread-local `Runtime` destructors after `main` returns, winit has
     /// already torn down and wgpu-hal's GLES/WGL path panics inside `make_current`
-    /// (`unwrap` on OS error 2004).
+    /// (`unwrap` on OS error 2004). With `panic = "abort"` that becomes Windows
+    /// `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409).
     fn shutdown_renderer(&mut self) {
+        // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
+        let Some(state) = self.state.borrow_mut().take() else {
+            return;
+        };
+        // End the `borrow_mut` guard before `state` drops. Dropping `AppState` runs
+        // element `UnmountHook`s that may touch `self.state` via the shared Rc still held
+        // by effect closures until `clear_effects` runs.
         crate::app::runtime::clear_app_runtime();
         self.accesskit_adapter = None;
-        // Take AppState out first so wgpu Surface/Device drop while the HWND is still
-        // alive (field drop order keeps `window` until after `surface`).
-        let _ = self.state.borrow_mut().take();
-        // Drop effect closures that captured the state `Rc` (root UI rebuild effect).
+        // Drop effect closures before GPU/UI state so they cannot rebuild into a dead cell.
         crate::core::reactivity::clear_effects();
+        drop(state);
     }
 }
 

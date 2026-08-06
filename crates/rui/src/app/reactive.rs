@@ -285,6 +285,61 @@ where
     reactive_placeholder(id)
 }
 
+/// Like [`reactive_component`], but `render` runs with normal signal tracking (no
+/// [`crate::core::reactivity::isolate_reads`]).
+///
+/// Use for components whose internal signals (e.g. Select `open`) must rebuild the
+/// subtree. Prefer [`reactive_component`] when the body should only refresh on props.
+pub fn reactive_component_live<P, F>(anchor_id: impl Into<String>, props: P, mut render: F) -> Element
+where
+    P: Clone + PartialEq + 'static,
+    F: FnMut(P) -> Element + 'static,
+{
+    let id = anchor_id.into();
+    let gen_key = format!("{id}__component_gen");
+    let generation = use_signal(gen_key.as_str(), || 0u32);
+
+    let props_cell = COMPONENT_PROPS.with(|store| {
+        let mut store = store.borrow_mut();
+        if let Some(cell) = store.get(&id) {
+            Rc::clone(cell)
+        } else {
+            let cell = Rc::new(RefCell::new(Box::new(props.clone()) as Box<dyn Any>));
+            store.insert(id.clone(), Rc::clone(&cell));
+            cell
+        }
+    });
+
+    let props_changed = {
+        let mut boxed = props_cell.borrow_mut();
+        let slot = boxed
+            .downcast_mut::<P>()
+            .expect("reactive_component_live props type mismatch for anchor id");
+        if *slot != props {
+            *slot = props;
+            true
+        } else {
+            false
+        }
+    };
+    if props_changed {
+        generation.set(generation.peek().wrapping_add(1));
+    }
+
+    let gen_for_effect = generation;
+    let props_for_effect = props_cell;
+    reactive_anchor(id.clone(), move || {
+        let _ = gen_for_effect.get();
+        let props = props_for_effect
+            .borrow()
+            .downcast_ref::<P>()
+            .expect("reactive_component_live props type mismatch for anchor id")
+            .clone();
+        render(props)
+    });
+    reactive_placeholder(id)
+}
+
 /// Solid-style text binding: register one effect that patches `text` on a mounted node in place.
 ///
 /// Unlike [`reactive_view`], this does **not** rebuild a subtree. Prefer this for labels/counters.

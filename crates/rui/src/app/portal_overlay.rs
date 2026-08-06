@@ -120,6 +120,11 @@ pub fn try_close_top() -> bool {
     })
 }
 
+/// Drop portal stack entries (call on app shutdown so Signal handles do not linger).
+pub fn clear_overlay_stack() {
+    OVERLAY_STACK.with(|cell| cell.borrow_mut().clear());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
