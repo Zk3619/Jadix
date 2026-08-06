@@ -17,6 +17,7 @@ struct InstanceInput {
     @location(10) shadow_blur: f32,
     @location(11) shadow_spread: f32,
     @location(12) shadow_inset: f32,
+    @location(13) rotate_deg: f32,
 };
 
 struct VertexOutput {
@@ -31,7 +32,7 @@ struct VertexOutput {
     @location(7) shadow_blur: f32,
     @location(8) shadow_spread: f32,
     @location(9) shadow_inset: f32,
-    @location(10) p: vec2<f32>, // physical point relative to rect center
+    @location(10) p: vec2<f32>, // local point relative to rect center (unrotated)
 };
 
 struct Globals {
@@ -41,15 +42,22 @@ struct Globals {
 @group(0) @binding(0)
 var<uniform> globals: Globals;
 
+fn rotate2(v: vec2<f32>, c: f32, s: f32) -> vec2<f32> {
+    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
+}
+
 @vertex
 fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    
+
     let center = instance.rect_pos + instance.rect_size * 0.5;
-    
+    let angle = instance.rotate_deg * 0.017453292519943295;
+    let ca = cos(angle);
+    let sa = sin(angle);
+
     // Extend quad: outset needs extra for blur/offset/spread; inset shadow lives inside the rect.
     let spread = max(0.0, instance.shadow_spread);
     var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
@@ -60,16 +68,25 @@ fn vs_main(
             instance.shadow_blur * 2.0 + instance.border_width + abs(instance.shadow_spread)
         );
     }
-    let expand_offset = (model.position - 0.5) * 2.0 * ext;
-    
-    let physical_pos = instance.rect_pos + model.position * instance.rect_size + expand_offset;
-    
+
+    // Grow AABB enough to cover rotated corners.
+    let half = instance.rect_size * 0.5 + ext;
+    let c0 = abs(rotate2(vec2<f32>( half.x,  half.y), ca, sa));
+    let c1 = abs(rotate2(vec2<f32>( half.x, -half.y), ca, sa));
+    let c2 = abs(rotate2(vec2<f32>(-half.x,  half.y), ca, sa));
+    let c3 = abs(rotate2(vec2<f32>(-half.x, -half.y), ca, sa));
+    let rot_half = max(max(c0, c1), max(c2, c3));
+
+    let local = (model.position - 0.5) * 2.0 * rot_half;
+    let physical_pos = center + rotate2(local, ca, sa);
+
     // Convert to NDC
     let x = (physical_pos.x / globals.resolution.x) * 2.0 - 1.0;
     let y = 1.0 - (physical_pos.y / globals.resolution.y) * 2.0;
 
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    out.p = physical_pos - center;
+    // SDF samples in unrotated local space.
+    out.p = local;
     out.rect_size = instance.rect_size;
     out.color = instance.color;
     out.border_color = instance.border_color;
@@ -80,7 +97,7 @@ fn vs_main(
     out.shadow_blur = instance.shadow_blur;
     out.shadow_spread = instance.shadow_spread;
     out.shadow_inset = instance.shadow_inset;
-    
+
     return out;
 }
 
@@ -104,7 +121,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Anti-aliasing width
     let aa = 1.0;
-    
+
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);
 
@@ -113,7 +130,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let alpha_border = 1.0 - smoothstep(-aa, aa, d + in.border_width);
         final_color = mix(in.border_color, in.color, alpha_border);
     }
-    
+
     // Compute shadow factor
     var shadow_alpha = 0.0;
     if (in.shadow_blur > 0.0) {
@@ -148,6 +165,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (out_a > 0.0) {
         out_rgb = (in.shadow_color.rgb * s_a + final_color.rgb * fill_alpha * (1.0 - s_a)) / out_a;
     }
-    
+
     return vec4<f32>(out_rgb, out_a);
 }

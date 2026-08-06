@@ -14,7 +14,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use wgpu::{Device, Queue, SurfaceConfiguration};
 
 use crate::core::tree::TextLayoutInfo;
-use crate::style::{tailwind_default_leading_scale, TextDecorationStyle, TextOverflow};
+use crate::style::{
+    tailwind_default_leading_scale, TextDecorationStyle, TextDirection, TextOverflow,
+};
 
 use super::emoji_detect;
 use super::emoji_layout;
@@ -314,6 +316,8 @@ fn node_shape_hash(
     family: glyphon::Family,
     align: glyphon::cosmic_text::Align,
     shaping: glyphon::Shaping,
+    letter_spacing: f32,
+    direction: TextDirection,
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
@@ -329,6 +333,13 @@ fn node_shape_hash(
         _ => 0,
     };
     shaping_mode.hash(&mut h);
+    letter_spacing.to_bits().hash(&mut h);
+    (match direction {
+        TextDirection::Auto => 0u8,
+        TextDirection::Ltr => 1u8,
+        TextDirection::Rtl => 2u8,
+    })
+    .hash(&mut h);
     h.finish()
 }
 
@@ -506,6 +517,51 @@ fn emoji_mode_label() -> &'static str {
         "color-twemoji"
     } else {
         "font"
+    }
+}
+
+fn apply_letter_spacing_approx(text: &str, spacing_px: f32, font_size: f32) -> String {
+    if spacing_px.abs() < 0.5 || text.is_empty() {
+        return text.to_string();
+    }
+    let hair_w = (font_size * 0.05).max(0.5);
+    let n = (spacing_px / hair_w).round().max(0.0) as usize;
+    if n == 0 {
+        return text.to_string();
+    }
+    let hair = "\u{200A}".repeat(n);
+    let mut out = String::new();
+    let mut first = true;
+    for g in text.graphemes(true) {
+        if !first {
+            out.push_str(&hair);
+        }
+        first = false;
+        out.push_str(g);
+    }
+    out
+}
+
+fn direction_mark(dir: TextDirection) -> &'static str {
+    match dir {
+        TextDirection::Ltr => "\u{200E}",
+        TextDirection::Rtl => "\u{200F}",
+        TextDirection::Auto => "",
+    }
+}
+
+fn resolve_text_align(
+    align: glyphon::cosmic_text::Align,
+    dir: TextDirection,
+) -> glyphon::cosmic_text::Align {
+    match dir {
+        TextDirection::Rtl if matches!(align, glyphon::cosmic_text::Align::Left) => {
+            glyphon::cosmic_text::Align::Right
+        }
+        TextDirection::Ltr if matches!(align, glyphon::cosmic_text::Align::Right) => {
+            glyphon::cosmic_text::Align::Left
+        }
+        _ => align,
     }
 }
 
@@ -1073,6 +1129,7 @@ pub fn prepare_text_frame(
         } else {
             shaping
         };
+        let align = resolve_text_align(st.align, st.direction);
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
             && st.input_caret.is_none()
             && is_single_line_text_box(line_height, scaled_h)
@@ -1093,6 +1150,14 @@ pub fn prepare_text_frame(
             Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", display_text, s)),
             _ => display_text,
         };
+        let spaced =
+            apply_letter_spacing_approx(shape_text.as_ref(), st.letter_spacing, scaled_size);
+        let mark = direction_mark(st.direction);
+        let shape_text: Cow<'_, str> = if mark.is_empty() {
+            Cow::Owned(spaced)
+        } else {
+            Cow::Owned(format!("{mark}{spaced}"))
+        };
         let key_hash = node_shape_hash(
             shape_text.as_ref(),
             scaled_size,
@@ -1101,8 +1166,10 @@ pub fn prepare_text_frame(
             scaled_h,
             font_weight,
             family,
-            st.align,
+            align,
             shaping,
+            st.letter_spacing,
+            st.direction,
         );
 
         if preshape_only {
@@ -1140,17 +1207,55 @@ pub fn prepare_text_frame(
                 );
                 let attrs = glyphon::Attrs::new()
                     .family(family)
-                    .weight(glyphon::fontdb::Weight(font_weight));
-                set_shaped_buffer_text(
-                    &mut buffer,
-                    &mut text_renderer.font_system,
-                    shape_text.as_ref(),
-                    attrs,
-                    shaping,
-                    emoji_custom_glyph_enabled() && has_emoji,
-                );
+                    .weight(glyphon::fontdb::Weight(font_weight))
+                    .color(glyphon::Color::rgba(
+                        st.color[0],
+                        st.color[1],
+                        st.color[2],
+                        st.color[3],
+                    ));
+                if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
+                    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
+                    for (si, span) in spans.iter().enumerate() {
+                        let mut body =
+                            apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size);
+                        if si == 0 {
+                            let m = direction_mark(st.direction);
+                            if !m.is_empty() {
+                                body = format!("{m}{body}");
+                            }
+                        }
+                        let mut a = attrs;
+                        if let Some(c) = span.color {
+                            a = a.color(glyphon::Color::rgba(c[0], c[1], c[2], c[3]));
+                        }
+                        if let Some(w) = span.weight {
+                            a = a.weight(glyphon::fontdb::Weight(w));
+                        }
+                        if let Some(sz) = span.size {
+                            let lh = line_height * (sz / st.size.max(1.0));
+                            a = a.metrics(glyphon::Metrics::new(
+                                (sz * ui_scale).max(1.0),
+                                lh.max(1.0),
+                            ));
+                        }
+                        owned.push((body, a));
+                    }
+                    let rich: Vec<(&str, glyphon::Attrs)> =
+                        owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+                    buffer.set_rich_text(&mut text_renderer.font_system, rich, attrs, shaping);
+                } else {
+                    set_shaped_buffer_text(
+                        &mut buffer,
+                        &mut text_renderer.font_system,
+                        shape_text.as_ref(),
+                        attrs,
+                        shaping,
+                        emoji_custom_glyph_enabled() && has_emoji,
+                    );
+                }
                 for line in buffer.lines.iter_mut() {
-                    line.set_align(Some(st.align));
+                    line.set_align(Some(align));
                 }
                 buffer.shape_until_scroll(&mut text_renderer.font_system, false);
                 let measured = buffer
@@ -1313,7 +1418,7 @@ pub fn prepare_text_frame(
         let has_shadow = st.shadow_color.is_some() && sblur > 0.0;
 
         if has_shadow {
-            let sc = st.shadow_color.unwrap();
+            let Some(sc) = st.shadow_color else { continue };
             let skey = shadow_cache_key(key_hash, sc, sdx, sdy, sblur);
             if shadow_cached_keys.contains(&skey) {
                 if let Some(cached_rect) = shadow_cached_rects.get(&skey) {
@@ -1525,7 +1630,8 @@ pub fn prepare_text_frame(
                         shadow_blur: 0.0,
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
-                        _padding: [0.0; 2],
+                        rotate_deg: 0.0,
+                        _padding: 0.0,
                     });
                 }
                 for g in &entry.glyphs {
@@ -1552,7 +1658,8 @@ pub fn prepare_text_frame(
                                 shadow_blur: 0.0,
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
-                                _padding: [0.0; 2],
+                                rotate_deg: 0.0,
+                                _padding: 0.0,
                             });
                         }
                     }
@@ -1604,7 +1711,8 @@ pub fn prepare_text_frame(
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
-                    _padding: [0.0; 2],
+                    rotate_deg: 0.0,
+                    _padding: 0.0,
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {
@@ -1789,7 +1897,8 @@ pub fn prepare_text_frame(
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
-                    _padding: [0.0; 2],
+                    rotate_deg: 0.0,
+                    _padding: 0.0,
                 });
             }
         }
@@ -1899,7 +2008,8 @@ pub fn prepare_text_frame(
                 shadow_blur: 0.0,
                 shadow_spread: 0.0,
                 shadow_inset: 0.0,
-                _padding: [0.0; 2],
+                rotate_deg: 0.0,
+                _padding: 0.0,
             });
         }
     }
@@ -1950,35 +2060,33 @@ pub fn prepare_text_frame(
                 custom_glyphs: &[],
             });
         }
-        text_renderer
-            .text_renderer
-            .prepare_with_custom(
-                device,
-                queue,
-                &mut text_renderer.font_system,
-                &mut text_renderer.text_atlas,
-                &text_renderer.viewport,
-                warmup_areas,
-                &mut text_renderer.swash_cache,
-                |input| text_renderer.emoji_cache.rasterize(input),
-            )
-            .unwrap();
-    }
-
-    let text_area_count = text_areas.len();
-    text_renderer
-        .text_renderer
-        .prepare_with_custom(
+        if let Err(err) = text_renderer.text_renderer.prepare_with_custom(
             device,
             queue,
             &mut text_renderer.font_system,
             &mut text_renderer.text_atlas,
             &text_renderer.viewport,
-            text_areas,
+            warmup_areas,
             &mut text_renderer.swash_cache,
             |input| text_renderer.emoji_cache.rasterize(input),
-        )
-        .unwrap();
+        ) {
+            log::error!("glyphon warmup prepare failed: {err:?}");
+        }
+    }
+
+    let text_area_count = text_areas.len();
+    if let Err(err) = text_renderer.text_renderer.prepare_with_custom(
+        device,
+        queue,
+        &mut text_renderer.font_system,
+        &mut text_renderer.text_atlas,
+        &text_renderer.viewport,
+        text_areas,
+        &mut text_renderer.swash_cache,
+        |input| text_renderer.emoji_cache.rasterize(input),
+    ) {
+        log::error!("glyphon prepare failed: {err:?}");
+    }
     emoji_metrics_log_tick(text_renderer.emoji_cache.stats);
     text_renderer.text_area_capacity_hint = text_area_count;
 

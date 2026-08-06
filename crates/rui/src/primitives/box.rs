@@ -394,6 +394,36 @@ impl BoxBuilder {
         self
     }
 
+    pub fn top(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.top(val);
+        self
+    }
+
+    pub fn right(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.right(val);
+        self
+    }
+
+    pub fn bottom(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.bottom(val);
+        self
+    }
+
+    pub fn left(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.left(val);
+        self
+    }
+
+    pub fn inset(mut self, val: impl IntoDimension) -> Self {
+        self.el = self.el.inset(val);
+        self
+    }
+
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.el = self.el.z_index(z);
+        self
+    }
+
     pub fn shadow(mut self, color: [f32; 4], blur: f32) -> Self {
         self.el = self.el.shadow(color, blur);
         self

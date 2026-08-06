@@ -53,6 +53,12 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     self.force_redraw_count = self.force_redraw_count.max(2);
                 }
             }
+            super::RuiUserEvent::UiWake => {
+                super::ui_bridge::drain_ui_tasks();
+                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                    state.window.request_redraw();
+                }
+            }
             super::RuiUserEvent::AccessKit(ev) => {
                 use accesskit_winit::WindowEvent as AkWindowEvent;
                 match ev.window_event {
@@ -269,6 +275,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         .build()
         .expect("event loop");
     let event_loop_proxy = event_loop.create_proxy();
+    super::ui_bridge::install_proxy(event_loop_proxy.clone());
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = super::App {
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),

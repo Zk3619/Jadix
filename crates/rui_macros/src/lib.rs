@@ -20,6 +20,18 @@ fn expr_as_u16(value: &Expr) -> Option<u16> {
     }
 }
 
+fn expr_as_i32(value: &Expr) -> Option<i32> {
+    match value {
+        Expr::Lit(l) => match &l.lit {
+            syn::Lit::Int(i) => i.base10_parse().ok(),
+            syn::Lit::Str(s) => s.value().trim().parse().ok(),
+            _ => None,
+        },
+        Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => expr_as_i32(&u.expr).map(|v| -v),
+        _ => None,
+    }
+}
+
 struct RsxElement {
     name: Ident,
     attributes: Vec<(Ident, Expr)>,
@@ -1406,6 +1418,7 @@ fn expand_node(
 
             let mut utility_calls: Vec<proc_macro2::TokenStream> = Vec::new();
             let mut dynamic_binds: Vec<proc_macro2::TokenStream> = Vec::new();
+            let mut unknown_attr_warnings: Vec<proc_macro2::TokenStream> = Vec::new();
             if let Some(icon_bind) = pending_icon_bind {
                 dynamic_binds.push(icon_bind);
             }
@@ -1536,7 +1549,7 @@ fn expand_node(
                     "outline_width" | "outlineWidth" => {
                         element = quote! { #element.outline_width(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
-                    "color" => {
+                    "color" | "text_color" => {
                         if !in_reactive_boundary && expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
@@ -1842,7 +1855,35 @@ fn expand_node(
                     }
                     "align_self" => element = quote! { #element.align_self_kw(#value) },
                     "flex_basis" => element = quote! { #element.flex_basis(#value) },
-                    _ => {}
+
+                    "absolute" => element = quote! { #element.absolute(#value) },
+                    "relative" => element = quote! { #element.relative(#value) },
+                    "top" => element = quote! { #element.top(#value) },
+                    "right" => element = quote! { #element.right(#value) },
+                    "bottom" => element = quote! { #element.bottom(#value) },
+                    "left" => element = quote! { #element.left(#value) },
+                    "inset" => element = quote! { #element.inset(#value) },
+                    "z_index" | "zIndex" => {
+                        if let Some(z) = expr_as_i32(value) {
+                            element = quote! { #element.z_index(#z) };
+                        }
+                    }
+
+                    // Consumed by a dedicated pre-pass above, so reaching the fallback here would
+                    // be a false "unknown attribute" report.
+                    "name" if name_str == "Icon" => {}
+                    _ => {
+                        let msg = format!("unknown rui attribute `{attr_str}` on `<{name_str}>`");
+                        let span = attr.span();
+                        unknown_attr_warnings.push(quote_spanned! { span =>
+                            {
+                                #[deprecated(note = #msg)]
+                                #[allow(dead_code)]
+                                fn __rui_unknown_attr() {}
+                                __rui_unknown_attr();
+                            }
+                        });
+                    }
                 }
             }
 
@@ -1877,9 +1918,13 @@ fn expand_node(
                 element = quote! { #element.flex_row() };
             }
 
-            if !utility_calls.is_empty() || !dynamic_binds.is_empty() {
+            if !utility_calls.is_empty()
+                || !dynamic_binds.is_empty()
+                || !unknown_attr_warnings.is_empty()
+            {
                 element = quote! {
                     {
+                        #(#unknown_attr_warnings)*
                         let mut __rui_el: rui::core::tree::Element = (#element).into();
                         #(#utility_calls)*
                         #(#dynamic_binds)*

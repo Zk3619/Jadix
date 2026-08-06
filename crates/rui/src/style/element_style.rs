@@ -107,6 +107,57 @@ pub fn parse_box_shadow(s: impl AsRef<str>) -> BoxShadow {
     out
 }
 
+/// Split multi-layer `box-shadow` on commas (ignore commas inside parentheses for `rgb(...)`).
+pub fn parse_box_shadows(s: impl AsRef<str>) -> Vec<BoxShadow> {
+    let raw = s.as_ref().trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    for (i, ch) in raw.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                let part = raw[start..i].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = i + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let tail = raw[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    if parts.is_empty() {
+        return vec![parse_box_shadow(raw)];
+    }
+    parts.into_iter().map(parse_box_shadow).collect()
+}
+
+/// Two-stop linear gradient. `angle_deg`: 0 = left→right, 90 = top→bottom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearGradient {
+    pub from: [f32; 4],
+    pub to: [f32; 4],
+    pub angle_deg: f32,
+}
+
+impl Default for LinearGradient {
+    fn default() -> Self {
+        Self {
+            from: [0.0, 0.0, 0.0, 0.0],
+            to: [0.0, 0.0, 0.0, 0.0],
+            angle_deg: 90.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_box_shadow;
@@ -132,7 +183,16 @@ mod tests {
         approx_eq(sh.blur, 4.0);
         approx_eq(sh.spread, 2.0);
     }
+
+    #[test]
+    fn box_shadows_split_on_comma() {
+        let list = super::parse_box_shadows("0 1px 2px rgb(0,0,0), 0 4px 8px #00000080");
+        assert_eq!(list.len(), 2);
+        approx_eq(list[0].blur, 2.0);
+        approx_eq(list[1].blur, 8.0);
+    }
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineStyle {
     #[default]
@@ -211,10 +271,22 @@ pub struct Style {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_inset: bool,
+    /// Additional box-shadow layers beyond the primary `shadow_*` fields.
+    pub extra_shadows: Vec<BoxShadow>,
+    /// Optional two-stop linear gradient fill (painted as strips; layout unchanged).
+    pub bg_gradient: Option<LinearGradient>,
     /// Element opacity multiplier for drawn colors (layout unchanged).
     pub opacity: f32,
     /// Visual translate offset in logical px (MVP transform; does not affect layout).
     pub translate: [f32; 2],
+    /// Visual rotation in degrees around the element center (does not affect layout).
+    pub rotate_deg: f32,
+    /// Visual uniform scale around the element center (does not affect layout). Default 1.0.
+    pub scale: f32,
+    /// CSS `aspect-ratio` (width / height). Passed to Taffy.
+    pub aspect_ratio: Option<f32>,
+    /// Emulate CSS `position: fixed` (taffy has no Fixed): Absolute layout + ignore ancestor scroll.
+    pub position_fixed: bool,
 }
 
 impl Default for Style {
@@ -280,13 +352,47 @@ impl Default for Style {
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_inset: false,
+            extra_shadows: Vec::new(),
+            bg_gradient: None,
             opacity: 1.0,
             translate: [0.0, 0.0],
+            rotate_deg: 0.0,
+            scale: 1.0,
+            aspect_ratio: None,
+            position_fixed: false,
         }
     }
 }
 
 impl Style {
+    pub fn primary_shadow(&self) -> BoxShadow {
+        BoxShadow {
+            color: self.shadow_color,
+            offset: self.shadow_offset,
+            blur: self.shadow_blur,
+            spread: self.shadow_spread,
+            inset: self.shadow_inset,
+        }
+    }
+
+    pub fn set_shadows_from_parsed(&mut self, shadows: &[BoxShadow]) {
+        self.extra_shadows.clear();
+        if let Some(first) = shadows.first() {
+            self.shadow_color = first.color;
+            self.shadow_offset = first.offset;
+            self.shadow_blur = first.blur;
+            self.shadow_spread = first.spread;
+            self.shadow_inset = first.inset;
+            self.extra_shadows.extend_from_slice(&shadows[1..]);
+        } else {
+            self.shadow_color = [0.0, 0.0, 0.0, 0.0];
+            self.shadow_offset = [0.0, 0.0];
+            self.shadow_blur = 0.0;
+            self.shadow_spread = 0.0;
+            self.shadow_inset = false;
+        }
+    }
+
     pub fn to_taffy_style(&self) -> taffy::style::Style {
         taffy::style::Style {
             display: self.display,
@@ -310,6 +416,7 @@ impl Style {
             overflow: self.overflow,
             position: self.position,
             inset: self.inset,
+            aspect_ratio: self.aspect_ratio,
             grid_template_columns: self.grid_template_columns.clone(),
             grid_template_rows: self.grid_template_rows.clone(),
             grid_auto_rows: self.grid_auto_rows.clone(),

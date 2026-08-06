@@ -254,23 +254,26 @@ impl RuiTextRenderer {
             },
         );
 
-        self.text_renderer
-            .prepare_with_custom(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
-                |input| self.emoji_cache.rasterize(input),
-            )
-            .unwrap();
+        if let Err(err) = self.text_renderer.prepare_with_custom(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.text_atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+            |input| self.emoji_cache.rasterize(input),
+        ) {
+            log::error!("glyphon TextRenderer::prepare failed: {err:?}");
+        }
     }
 
     pub fn render<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
-        self.text_renderer
+        if let Err(err) = self
+            .text_renderer
             .render(&self.text_atlas, &self.viewport, render_pass)
-            .unwrap();
+        {
+            log::error!("glyphon TextRenderer::render failed: {err:?}");
+        }
     }
 }

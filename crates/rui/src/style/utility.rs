@@ -421,6 +421,90 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
             changed
         }
+
+        KnownUtility::PositionFixed => {
+            *el = std::mem::take(el).fixed();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::PositionAbsolute => {
+            *el = std::mem::take(el).absolute();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::PositionRelative => {
+            el.style.position_fixed = false;
+            *el = std::mem::take(el).relative();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::AspectRatio(r) => {
+            if el.style.aspect_ratio != Some(r) {
+                el.style.aspect_ratio = Some(r);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::Rotate(deg) => {
+            if (el.style.rotate_deg - deg).abs() > f32::EPSILON {
+                el.style.rotate_deg = deg;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::Scale(s) => {
+            if (el.style.scale - s).abs() > f32::EPSILON {
+                el.style.scale = s;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::BgGradientTo(angle) => {
+            let mut g = el.style.bg_gradient.unwrap_or_default();
+            g.angle_deg = angle;
+            el.style.bg_gradient = Some(g);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::GradientFrom(name) => {
+            let color = parse_color(name);
+            let mut g = el.style.bg_gradient.unwrap_or_default();
+            g.from = color;
+            el.style.bg_gradient = Some(g);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::GradientTo(name) => {
+            let color = parse_color(name);
+            let mut g = el.style.bg_gradient.unwrap_or_default();
+            g.to = color;
+            el.style.bg_gradient = Some(g);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::LetterSpacing(px) => {
+            if (el.text_style.letter_spacing - px).abs() > f32::EPSILON {
+                el.text_style.letter_spacing = px;
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::TextDirectionLtr => {
+            use crate::style::TextDirection;
+            if el.text_style.direction != TextDirection::Ltr {
+                el.text_style.direction = TextDirection::Ltr;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::TextDirectionRtl => {
+            use crate::style::TextDirection;
+            if el.text_style.direction != TextDirection::Rtl {
+                el.text_style.direction = TextDirection::Rtl;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
     }
 }
 
@@ -483,5 +567,34 @@ mod tests {
         let t = parse_class_token("dark:hover:bg-muted");
         assert_eq!(t.utility, "bg-muted");
         assert_eq!(t.variants.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod p1_utility_tests {
+    use super::*;
+
+    #[test]
+    fn apply_aspect_ratio_utility() {
+        let mut el = Element::new();
+        let impact = apply_class_list(&mut el, "aspect-square");
+        assert_eq!(impact, LayoutStatus::LayoutChanged);
+        assert_eq!(el.style.aspect_ratio, Some(1.0));
+
+        let mut el = Element::new();
+        apply_class_list(&mut el, "aspect-[16/9]");
+        assert!((el.style.aspect_ratio.unwrap() - 16.0 / 9.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn apply_fixed_and_rtl() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "fixed");
+        assert!(el.style.position_fixed);
+        assert_eq!(el.style.position, taffy::style::Position::Absolute);
+
+        let mut el = Element::new().text("x");
+        apply_class_list(&mut el, "rtl");
+        assert_eq!(el.text_style.direction, crate::style::TextDirection::Rtl);
     }
 }

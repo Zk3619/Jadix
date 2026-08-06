@@ -2,11 +2,14 @@ use crate::core::tree::Element;
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
 
-/// Wakes the event loop for hot reload (debug) and delivers [`accesskit_winit`] messages.
+/// Wakes the event loop for hot reload (debug) and background tasks, and delivers
+/// [`accesskit_winit`] messages.
 #[derive(Debug)]
 pub(super) enum RuiUserEvent {
     #[cfg(debug_assertions)]
     HotReloadWake,
+    /// A worker thread queued a closure via [`ui_bridge::run_on_ui_thread`].
+    UiWake,
     AccessKit(accesskit_winit::Event),
 }
 
@@ -32,8 +35,11 @@ mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod tree_hit;
+pub mod ui_bridge;
 mod window_events;
 pub mod window_keys;
+
+pub use ui_bridge::{run_on_ui_thread, spawn_blocking};
 
 use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;

@@ -25,7 +25,9 @@ pub use color_space::{
     lerp_premultiplied_display_srgba, linearize_display_srgb, linearize_display_srgb_component,
     mix_display_srgb_in_oklab, oklch_to_display_srgba,
 };
-pub use element_style::{parse_box_shadow, BoxShadow, LineStyle, Style};
+pub use element_style::{
+    parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,
+};
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,
     TAILWIND_TEXT_3XL_LEADING_SCALE, TAILWIND_TEXT_4XL_LEADING_SCALE,
@@ -33,7 +35,8 @@ pub use tailwind_leading::{
     TAILWIND_TEXT_SM_LEADING_SCALE, TAILWIND_TEXT_XL_LEADING_SCALE, TAILWIND_TEXT_XS_LEADING_SCALE,
 };
 pub use text_style::{
-    parse_text_shadow, InputCaretDraw, TextDecorationStyle, TextOverflow, TextStyle,
+    parse_text_shadow, InputCaretDraw, TextDecorationStyle, TextDirection, TextOverflow, TextSpan,
+    TextStyle,
 };
 pub use theme::{
     get_theme, is_dark_theme, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,

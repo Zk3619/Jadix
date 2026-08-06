@@ -1,8 +1,6 @@
-//! Taffy 布局、文本测量与将树展开为 GPU 实例 / 文本排版信息。
-//!
-//! 命名说明：本模块**不是** [`crate::renderer`]（wgpu/glyphon），只做 **布局与遍历**；
-//! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆。
-
+//! Taffy 布局、文本测量与将树展开GPU 实例 / 文本排版信息
+//! 命名说明：本模块**不是** [`crate::renderer`]（wgpu/glyphon），只做 **布局与遍*
+//! 因此使用 `LayoutTree` / `layout_tree`，避免与「渲染器」混淆
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
@@ -27,8 +25,7 @@ use crate::core::tree::Element;
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 
-/// 将带 `rui_portal=1` 的子树从原父节点摘下并挂到 `root` 末尾（绘制顺序靠后，便于浮层）。
-/// 返回本帧提升的子树数；非 0 时应做完整 Taffy 重建（见 `AppState::render`）。
+/// 将带 `rui_portal=1` 的子树从原父节点摘下并挂?`root` 末尾（绘制顺序靠后，便于浮层）?/// 返回本帧提升的子树数；非 0 时应做完?Taffy 重建（见 `AppState::render`）.
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     let mut lifted = Vec::new();
     hoist_portal_rec(root, &mut lifted);
@@ -64,7 +61,7 @@ fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
     out
 }
 
-/// Minimum cross-axis size for an `auto` scrollbar at spring≈0; must match `app::state`.
+/// Minimum cross-axis size for an `auto` scrollbar at spring?; must match `app::state`.
 const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
@@ -199,20 +196,20 @@ fn scroll_area_signals_cached<'a>(
     }
 }
 
-/// 一次布局+收集的 CPU 细分（毫秒）；见 `AppState` debug `render profile`。
+/// 一次布局+收集?CPU 细分（毫秒）；见 `AppState` debug `render profile`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LayoutProfileMs {
-    /// `build_and_layout`：建/剪 Taffy 子树（含 cascade、clear）；`fast` 路径为 0。
+    /// `build_and_layout`：建/?Taffy 子树（含 cascade、clear）；`fast` 路径?0
     pub rebuild_ms: f32,
-    /// `build_and_layout_fast`：根尺寸、cascade、`update_taffy_node_style(root)`；整树重建路径为 0。
+    /// `build_and_layout_fast`：根尺寸、cascade、`update_taffy_node_style(root)`；整树重建路径为 0
     pub setup_ms: f32,
-    /// `compute_layout_with_measure`；`scroll_only` 跳过则为 0。
+    /// `compute_layout_with_measure`；`scroll_only` 跳过则为 0
     pub taffy_compute_ms: f32,
-    /// `collect_instances_mut`（整树展开实例与 `TextLayoutInfo`）。
+    /// `collect_instances_mut`（整树展开实例?`TextLayoutInfo`）
     pub collect_ms: f32,
 }
 
-/// 一次布局+收集的产出。
+/// 一次布局+收集的产出.
 pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
     pub textured_draws: Vec<TexturedDraw>,
@@ -222,13 +219,15 @@ pub struct RenderResult {
     pub prof: LayoutProfileMs,
 }
 
-/// 单段文本在布局后的几何与样式快照（供 glyphon 使用）。
+/// 单段文本在布局后的几何与样式快照（?glyphon 使用）.
 #[derive(Clone)]
 pub struct TextLayoutInfo {
     pub text: String,
-    /// 与 [`crate::core::tree::Element::text_shape_suffix`] 一致，参与 shaping，不参与逻辑光标。
+    /// Matches [`crate::core::tree::Element::text_shape_suffix`]: shapes with text, not for caret.
     pub shape_suffix: Option<String>,
-    /// 收集自 [`crate::core::tree::Element::template_id`]，供 `RUI_TEXT_DEBUG` 等过滤。
+    /// Rich-text spans; when set, prepare uses `set_rich_text`.
+    pub spans: Option<Vec<crate::style::TextSpan>>,
+    /// From [`crate::core::tree::Element::template_id`] for `RUI_TEXT_DEBUG` filters.
     pub template_id: Option<String>,
     pub x: f32,
     pub y: f32,
@@ -238,12 +237,12 @@ pub struct TextLayoutInfo {
     pub style: TextStyle,
 }
 
-/// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集。
+/// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集.
 pub struct LayoutTree {
     pub taffy: TaffyTree<()>,
     pub(crate) root_node: Option<NodeId>,
     text_measurements: HashMap<taffy::NodeId, TextMeasureMeta>,
-    /// 单次 `compute_layout` 内文本叶测量结果（与 `text_measurements` 生命周期对齐，每帧 compute 前清空）。
+    /// Per-compute_layout text leaf measure memo (cleared each compute).
     measure_layout_cache: RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
     /// Track nodes visited in the current build pass for pruning.
     visited_nodes: std::collections::HashSet<NodeId>,
@@ -251,7 +250,7 @@ pub struct LayoutTree {
     total_nodes: std::collections::HashSet<NodeId>,
 }
 
-/// 文本叶子的测量元数据（与 [`TextStyle`] 行高一致，避免布局盒过矮裁切 glyph）。
+/// Text leaf measure meta (line-height aligned with TextStyle).
 struct TextMeasureMeta {
     size: f32,
     text: String,
@@ -260,39 +259,10 @@ struct TextMeasureMeta {
     line_height_px: Option<f32>,
     line_height_scale: Option<f32>,
     weight: u16,
+    letter_spacing: f32,
 }
 
-/// 单字符宽度启发式：拉丁字母约 0.58em（0.52 对常见 UI 字重偏窄，会导致盒宽 < 实际 glyph 宽而**右侧裁字**）；
-/// CJK/阿拉伯/天城文等接近 1em；旧逻辑统一 0.6em 会**低估** CJK 行宽。
-fn char_intrinsic_width_em(c: char) -> f32 {
-    if c.is_ascii_whitespace() {
-        return 0.35;
-    }
-    if c.is_ascii() {
-        return 0.58;
-    }
-    let u = c as u32;
-    // 组合用附加符号（不占整格）
-    if (0x0300..=0x036F).contains(&u) || (0x1AB0..=0x1AFF).contains(&u) {
-        return 0.2;
-    }
-    // 其余（含 CJK、RTL、天城文、泰文、emoji 等）按接近全角宽估
-    0.95
-}
-
-fn segment_intrinsic_width(seg: &str, size: f32, weight: u16) -> f32 {
-    let mut w = 0.0;
-    for c in seg.chars() {
-        w += char_intrinsic_width_em(c) * size;
-    }
-    // 字重 >400 略增宽；再乘小系数补偿字距/rounding，与 glyphon 实测宽度对齐。
-    let wf = 1.0 + ((weight as f32 - 400.0).max(0.0)) * 0.0003;
-    (w * wf * 1.03).max(size * 0.5)
-}
-
-/// 文本叶子的 flex 测量：在 Taffy 给出确定宽度时按「约略换行」估高，避免盒高过矮裁切多行；
-/// 宽度未定时用按字符累加的启发式（优于统一 0.6×字符数）。
-/// 单次 `compute_layout` 内对 `measured_text_leaf_size` 的 memo（Taffy 会对同一叶多次探测）。
+/// 单次 `compute_layout` 内对 `measured_text_leaf_size` ?memo（Taffy 会对同一叶多次探测）.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 struct TextMeasureCacheKey {
     node: NodeId,
@@ -322,7 +292,7 @@ impl TextMeasureCacheKey {
 fn pack_avail_space(d: taffy::style::AvailableSpace) -> u64 {
     match d {
         taffy::style::AvailableSpace::Definite(v) => {
-            // 高 2 bit 作 tag，低 62 bit 存 f32::to_bits（布局里极少用到极大指数）
+            // ?2 bit ?tag，低 62 bit ?f32::to_bits（布局里极少用到极大指数）
             (3u64 << 62) | ((v.to_bits() as u64) & ((1u64 << 62) - 1))
         }
         taffy::style::AvailableSpace::MinContent => 1u64 << 62,
@@ -364,27 +334,6 @@ fn measured_text_leaf_size(
         _ => None,
     };
 
-    let intrinsic_width = if is_icon {
-        size
-    } else {
-        let blob: Cow<str> = match m.shape_suffix.as_deref() {
-            Some(suf) if !suf.is_empty() => Cow::Owned(format!("{}{}", m.text, suf)),
-            _ => Cow::Borrowed(m.text.as_str()),
-        };
-        blob.split('\n')
-            .map(|seg| segment_intrinsic_width(seg, size, m.weight))
-            .fold(0.0_f32, f32::max)
-    };
-
-    let width = if let Some(w) = known_dimensions.width {
-        w
-    } else if let Some(w) = avail_width {
-        // 宽度未定时优先受容器可用宽度约束，这样压缩布局会触发换行而不是保持“单行固有宽”。
-        intrinsic_width.min(w)
-    } else {
-        intrinsic_width
-    };
-
     let single_line_height = if is_icon {
         size
     } else if let Some(lh) = m.line_height_px {
@@ -395,38 +344,30 @@ fn measured_text_leaf_size(
         size * crate::style::tailwind_default_leading_scale(size)
     };
 
-    let avail_for_wrap = known_dimensions
-        .width
-        .or(avail_width)
-        .unwrap_or(width)
-        .max(1.0);
-
-    let mut line_blocks = 0.0_f32;
-    for seg in m.text.split('\n') {
-        let line_w = if is_icon {
-            size
-        } else {
-            segment_intrinsic_width(seg, size, m.weight)
-        };
-        if is_icon {
-            line_blocks += 1.0;
-            continue;
-        }
-        // 需要换行时：ceil(line_w / avail)；与 +0.5 阈值相比，避免「略宽于容器」仍算一行
-        if line_w <= avail_for_wrap {
-            line_blocks += 1.0;
-        } else {
-            line_blocks += (line_w / avail_for_wrap).ceil().max(1.0);
-        }
+    if is_icon {
+        let width = known_dimensions.width.unwrap_or(size);
+        let height = known_dimensions.height.unwrap_or(size);
+        return taffy::geometry::Size { width, height };
     }
-    line_blocks = line_blocks.max(1.0);
 
-    let intrinsic_height = single_line_height * line_blocks;
-    let height = match known_dimensions.height {
-        Some(h) => intrinsic_height.max(h),
-        None => intrinsic_height,
+    let blob: Cow<str> = match m.shape_suffix.as_deref() {
+        Some(suf) if !suf.is_empty() => Cow::Owned(format!("{}{}", m.text, suf)),
+        _ => Cow::Borrowed(m.text.as_str()),
     };
 
+    let (width, height) = crate::text::measure_leaf(
+        blob.as_ref(),
+        size,
+        m.weight,
+        single_line_height,
+        known_dimensions.width,
+        avail_width,
+        m.letter_spacing,
+    );
+    let height = match known_dimensions.height {
+        Some(h) => height.max(h),
+        None => height,
+    };
     taffy::geometry::Size { width, height }
 }
 
@@ -553,7 +494,7 @@ impl LayoutTree {
     /// When `scroll_only` is true, skip [`TaffyTree::compute_layout`]: `Element.scroll_offset` does
     /// not participate in flex/grid sizing (only affects collect-time drawing). Use after
     /// `update_scrollbar_elements` synced only `scroll:` offsets and no scrollbar styles changed
-    /// — avoids O(nested) full layout each frame when many `ScrollArea`s are nested.
+    /// ?avoids O(nested) full layout each frame when many `ScrollArea`s are nested.
     ///
     /// When `scrollbar_overlay_collect` is true, track/thumb draw rects use live scroll signals
     /// (same contract as a `ViewportsOnly` prepass without Full). Use whenever that prepass did not
@@ -717,6 +658,7 @@ impl LayoutTree {
                         line_height_px: element.text_style.line_height_px,
                         line_height_scale: element.text_style.line_height_scale,
                         weight: element.text_style.weight,
+                        letter_spacing: element.text_style.letter_spacing,
                     },
                 );
             }
@@ -749,7 +691,13 @@ impl LayoutTree {
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     ) -> [f32; 2] {
         element.layout_node = Some(node);
-        let layout = self.taffy.layout(node).unwrap();
+        let layout = match self.taffy.layout(node) {
+            Ok(l) => *l,
+            Err(err) => {
+                log::error!("taffy.layout({node:?}) failed: {err:?}");
+                return [abs_offset[0], abs_offset[1]];
+            }
+        };
         let base_abs_x = abs_offset[0] + layout.location.x;
         let base_abs_y = abs_offset[1] + layout.location.y;
 
@@ -810,9 +758,32 @@ impl LayoutTree {
         element.layout_bounds = [abs_x, abs_y, lay_w, lay_h];
 
         let opacity = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
-        let render_x = abs_x - scroll_acc[0] + element.style.translate[0];
-        let render_y = abs_y - scroll_acc[1] + element.style.translate[1];
-        let render_rect = [render_x, render_y, lay_w, lay_h];
+        let scroll_for_render = if element.style.position_fixed {
+            [0.0_f32, 0.0_f32]
+        } else {
+            scroll_acc
+        };
+        let render_x = abs_x - scroll_for_render[0] + element.style.translate[0];
+        let render_y = abs_y - scroll_for_render[1] + element.style.translate[1];
+        let scale = if element.style.scale.is_finite() && element.style.scale > 0.0 {
+            element.style.scale
+        } else {
+            1.0
+        };
+        let (vis_w, vis_h, vis_x, vis_y) = if (scale - 1.0).abs() > f32::EPSILON {
+            let sw = lay_w * scale;
+            let sh = lay_h * scale;
+            (
+                sw,
+                sh,
+                render_x + (lay_w - sw) * 0.5,
+                render_y + (lay_h - sh) * 0.5,
+            )
+        } else {
+            (lay_w, lay_h, render_x, render_y)
+        };
+        let render_rect = [vis_x, vis_y, vis_w, vis_h];
+        let rotate_deg = element.style.rotate_deg;
 
         // Clipping & Visibility
         let mut clip = parent_clip;
@@ -834,34 +805,121 @@ impl LayoutTree {
             }
         }
 
-        // Collect main instance
+        // Collect main instance (solid / gradient strips + shadows)
         let border_w = if element.style.border_style == crate::style::LineStyle::None {
             0.0
         } else {
             element.style.border_width
         };
-        if (element.style.bg_color[3] > 0.0
-            || border_w > 0.0
-            || element.style.shadow_color[3] > 0.0)
-            && draw_rect[2] > 0.0
-            && draw_rect[3] > 0.0
-        {
+        let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
+        let has_border = border_w > 0.0;
+        let has_shadow = element.style.shadow_color[3] > 0.0;
+        if (has_bg || has_border || has_shadow) && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, draw_rect[2], draw_rect[3]);
-            instances.push(InstanceInput {
-                rect_pos: [draw_rect[0], draw_rect[1]],
-                rect_size: [draw_rect[2], draw_rect[3]],
-                color: mul_color_alpha(element.style.bg_color, opacity),
-                border_color: mul_color_alpha(element.style.border_color, opacity),
-                radii: resolved_radii,
-                border_width: border_w,
-                shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
-                shadow_offset: element.style.shadow_offset,
-                shadow_blur: element.style.shadow_blur,
-                shadow_spread: element.style.shadow_spread,
-                shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
-                _padding: [0.0; 2],
-            });
+            if let Some(grad) = element.style.bg_gradient {
+                const STRIPS: usize = 24;
+                let angle = grad.angle_deg.to_radians();
+                let dx = angle.cos();
+                let dy = angle.sin();
+                let horizontal = dx.abs() >= dy.abs();
+                for i in 0..STRIPS {
+                    let t = (i as f32 + 0.5) / STRIPS as f32;
+                    let t = if horizontal {
+                        if dx >= 0.0 {
+                            t
+                        } else {
+                            1.0 - t
+                        }
+                    } else if dy >= 0.0 {
+                        t
+                    } else {
+                        1.0 - t
+                    };
+                    let color = mul_color_alpha(lerp_color(grad.from, grad.to, t), opacity);
+                    let (pos, size) = if horizontal {
+                        let sw = draw_rect[2] / STRIPS as f32;
+                        (
+                            [draw_rect[0] + i as f32 * sw, draw_rect[1]],
+                            [sw.max(0.5), draw_rect[3]],
+                        )
+                    } else {
+                        let sh = draw_rect[3] / STRIPS as f32;
+                        (
+                            [draw_rect[0], draw_rect[1] + i as f32 * sh],
+                            [draw_rect[2], sh.max(0.5)],
+                        )
+                    };
+                    instances.push(InstanceInput {
+                        rect_pos: pos,
+                        rect_size: size,
+                        color,
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        radii: resolved_radii,
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur: 0.0,
+                        shadow_spread: 0.0,
+                        shadow_inset: 0.0,
+                        rotate_deg,
+                        _padding: 0.0,
+                    });
+                }
+                if has_border || has_shadow {
+                    instances.push(InstanceInput {
+                        rect_pos: [draw_rect[0], draw_rect[1]],
+                        rect_size: [draw_rect[2], draw_rect[3]],
+                        color: [0.0, 0.0, 0.0, 0.0],
+                        border_color: mul_color_alpha(element.style.border_color, opacity),
+                        radii: resolved_radii,
+                        border_width: border_w,
+                        shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
+                        shadow_offset: element.style.shadow_offset,
+                        shadow_blur: element.style.shadow_blur,
+                        shadow_spread: element.style.shadow_spread,
+                        shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
+                        rotate_deg,
+                        _padding: 0.0,
+                    });
+                }
+            } else {
+                instances.push(InstanceInput {
+                    rect_pos: [draw_rect[0], draw_rect[1]],
+                    rect_size: [draw_rect[2], draw_rect[3]],
+                    color: mul_color_alpha(element.style.bg_color, opacity),
+                    border_color: mul_color_alpha(element.style.border_color, opacity),
+                    radii: resolved_radii,
+                    border_width: border_w,
+                    shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
+                    shadow_offset: element.style.shadow_offset,
+                    shadow_blur: element.style.shadow_blur,
+                    shadow_spread: element.style.shadow_spread,
+                    shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
+                    rotate_deg,
+                    _padding: 0.0,
+                });
+            }
+            for sh in &element.style.extra_shadows {
+                if sh.color[3] <= 0.0 {
+                    continue;
+                }
+                instances.push(InstanceInput {
+                    rect_pos: [draw_rect[0], draw_rect[1]],
+                    rect_size: [draw_rect[2], draw_rect[3]],
+                    color: [0.0, 0.0, 0.0, 0.0],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    radii: resolved_radii,
+                    border_width: 0.0,
+                    shadow_color: mul_color_alpha(sh.color, opacity),
+                    shadow_offset: sh.offset,
+                    shadow_blur: sh.blur,
+                    shadow_spread: sh.spread,
+                    shadow_inset: if sh.inset { 1.0 } else { 0.0 },
+                    rotate_deg,
+                    _padding: 0.0,
+                });
+            }
         }
 
         // Collect outline as an overlay (drawn outside; does not affect layout).
@@ -900,7 +958,8 @@ impl LayoutTree {
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
-                    _padding: [0.0; 2],
+                    rotate_deg,
+                    _padding: 0.0,
                 });
             }
         }
@@ -924,6 +983,7 @@ impl LayoutTree {
             text_nodes.push(TextLayoutInfo {
                 text: text.clone(),
                 shape_suffix: element.text_shape_suffix.clone(),
+                spans: element.text_spans.clone(),
                 template_id: element.template_id.clone(),
                 x: render_x,
                 y: render_y,
@@ -949,7 +1009,13 @@ impl LayoutTree {
             .and_then(|fid| fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
             .or(ancestor_scroll_viewport_rest);
 
-        let child_nodes = self.taffy.children(node).unwrap();
+        let child_nodes = match self.taffy.children(node) {
+            Ok(c) => c,
+            Err(err) => {
+                log::error!("taffy.children({node:?}) failed: {err:?}");
+                return [abs_x + lay_w, abs_y + lay_h];
+            }
+        };
         let any_z = element.children.iter().any(|c| c.style.z_index != 0);
         let mut max_right = abs_x + lay_w;
         let mut max_bottom = abs_y + lay_h;
@@ -1264,6 +1330,17 @@ fn scrollbar_track_overlay_abs(
 fn mul_color_alpha(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
     color[3] *= opacity;
     color
+}
+
+#[inline]
+fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
 }
 
 fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {

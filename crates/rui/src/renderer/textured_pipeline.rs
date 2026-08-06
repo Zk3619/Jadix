@@ -1,5 +1,4 @@
-//! 简单纹理四边形管线（`image_texture` 节点），与圆角矩形管线独立。
-
+//! 简坕纹睆四边形管线（`image_texture` 节点），与圆角矩形管线独立?
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 

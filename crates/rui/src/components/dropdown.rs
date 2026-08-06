@@ -106,7 +106,10 @@ mod tests {
         .open_signal(open)
         .anchor_focus_id("dd-test__trigger")
         .into();
-        assert!(el.template_id.is_none() || el.children.len() >= 0);
-        let _ = el;
+        assert_eq!(
+            el.template_id.as_deref(),
+            Some("dd-test__dropdown_view"),
+            "dropdown must expose a stable reactive-view anchor"
+        );
     }
 }

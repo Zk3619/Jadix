@@ -1,7 +1,7 @@
-//! 文本排版与绘制相关样式（字号、字重、颜色、装饰线、阴影、对齐等）。
-//! 与 [`super::Style`]（盒模型 / Taffy）分离：后者管布局，本模块管「字怎么画」。
+//! Text layout / paint style (size, weight, color, decoration, shadow, align).
+//! Separated from [`super::Style`] (box model / Taffy).
 
-/// 文本溢出策略（单行裁剪 / 省略号）。
+/// Text overflow strategy (clip / ellipsis).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextOverflow {
     #[default]
@@ -9,7 +9,51 @@ pub enum TextOverflow {
     Ellipsis,
 }
 
-/// 文本装饰线线型（与 CSS `text-decoration-style` 对齐）。
+/// Paragraph direction MVP: Unicode marks + align; bidi still handled by cosmic-text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    Ltr,
+    Rtl,
+}
+
+/// Rich-text span with optional color / weight / size overrides.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpan {
+    pub text: String,
+    pub color: Option<[u8; 4]>,
+    pub weight: Option<u16>,
+    pub size: Option<f32>,
+}
+
+impl TextSpan {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            color: None,
+            weight: None,
+            size: None,
+        }
+    }
+
+    pub fn color(mut self, color: [u8; 4]) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    pub fn weight(mut self, weight: u16) -> Self {
+        self.weight = Some(weight);
+        self
+    }
+
+    pub fn size(mut self, size: f32) -> Self {
+        self.size = Some(size);
+        self
+    }
+}
+
+/// Text decoration style (CSS `text-decoration-style`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextDecorationStyle {
     Solid,
@@ -19,20 +63,20 @@ pub enum TextDecorationStyle {
     Wavy,
 }
 
-/// 单行输入框内光标的绘制参数（由 [`crate::components::input`] 写入）。
+/// Caret draw params for single-line inputs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputCaretDraw {
-    /// 在 `display` 文本（UTF-8）中的字节下标，光标画在该位置之前。
+    /// UTF-8 byte index in display text; caret is drawn before this index.
     pub caret_byte_index: usize,
-    /// 选区 `[start, end)`（UTF-8 字节，与 Web `::selection` / Tailwind `selection:` 语义对齐）；`None` 或空区间不画高亮。
+    /// Selection `[start, end)` in UTF-8 bytes; `None`/empty skips highlight.
     pub selection: Option<(usize, usize)>,
-    /// 选区背景色（通常为 `primary` 半透明，对应 `selection:bg-primary`）。
+    /// Selection background color.
     pub selection_bg: [u8; 4],
-    /// 改写（Overwrite）模式下，闪烁高亮「下一待替换字符」`[start, end)`；与 `selection` 互斥，由 [`crate::components::input`] 写入。
+    /// Overwrite-mode highlight `[start, end)`.
     pub overwrite_highlight: Option<(usize, usize)>,
 }
 
-/// 单段文本的排版样式；[`crate::core::tree::Element`] 与布局产出的 [`crate::layout::layout_tree::TextLayoutInfo`] 共用。
+/// Per-run text style shared by Element and TextLayoutInfo.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     pub font_family: Option<String>,
@@ -49,16 +93,20 @@ pub struct TextStyle {
     pub shadow_color: Option<[u8; 4]>,
     pub shadow_offset: [f32; 2],
     pub shadow_blur: f32,
-    /// 绝对行高（逻辑像素）。
+    /// Absolute line height in logical px.
     pub line_height_px: Option<f32>,
-    /// 行高相对字号的倍率。`None` 表示使用默认策略。
+    /// Line-height scale relative to font size. `None` = default policy.
     pub line_height_scale: Option<f32>,
     pub align: glyphon::cosmic_text::Align,
-    /// 单行盒宽不足时的溢出策略。
+    /// Overflow when the single-line box is too narrow.
     pub overflow: TextOverflow,
-    /// 静态文本是否允许拖选（MVP：样式标记；绘制走 `input_caret` 选区路径）。
+    /// Whether static text allows drag-select.
     pub selectable: bool,
-    /// 若存在，在 [`crate::renderer::prepare_text`] 中额外绘制文本插入符（需焦点与闪烁相位）。
+    /// Paragraph direction (Auto / LTR / RTL).
+    pub direction: TextDirection,
+    /// Letter spacing in logical px (hair-space approx on cosmic-text 0.12).
+    pub letter_spacing: f32,
+    /// Optional caret drawn in prepare_text.
     pub input_caret: Option<InputCaretDraw>,
 }
 
@@ -84,6 +132,8 @@ impl Default for TextStyle {
             align: glyphon::cosmic_text::Align::Left,
             overflow: TextOverflow::Clip,
             selectable: false,
+            direction: TextDirection::Auto,
+            letter_spacing: 0.0,
             input_caret: None,
         }
     }
@@ -95,7 +145,6 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
         return None;
     }
     if let Ok(v) = t.parse::<f32>() {
-        // Unsuffixed numeric values default to rem (align with IntoF32/IntoDimension).
         return Some(v * root_font_size_px);
     }
     if let Some(raw) = t.strip_suffix("px") {
@@ -118,19 +167,14 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
     None
 }
 
-/// 解析单个 `text-shadow`（不支持逗号多阴影）。
-///
-/// 语义参考 MDN：`<color>? && <length>{2,3}`。
-/// `color` 与本项目语义色系统对齐（`parse_text_color`）。
+/// Parse a single `text-shadow` (no comma-separated layers).
 pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32) {
     let raw = s.as_ref().trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
         return (None, [0.0, 0.0], 0.0);
     }
 
-    // Keep in sync with `CSS_ROOT_FONT_SIZE_PX`.
     let root_font_size_px = 16.0_f32;
-
     let mut lens: Vec<f32> = Vec::with_capacity(3);
     let mut color: Option<[u8; 4]> = None;
     for tok in raw.split_whitespace() {
@@ -161,6 +205,8 @@ mod tests {
         let s = TextStyle::default();
         assert_eq!(s.overflow, TextOverflow::Clip);
         assert!(!s.selectable);
+        assert_eq!(s.direction, super::TextDirection::Auto);
+        assert_eq!(s.letter_spacing, 0.0);
     }
 
     #[test]

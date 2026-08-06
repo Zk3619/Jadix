@@ -50,7 +50,9 @@ pub struct InstanceInput {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_inset: f32,
-    pub _padding: [f32; 2],
+    /// Visual rotation in degrees around rect center.
+    pub rotate_deg: f32,
+    pub _padding: f32,
 }
 
 impl InstanceInput {
@@ -113,6 +115,11 @@ impl InstanceInput {
                 wgpu::VertexAttribute {
                     offset: 100,
                     shader_location: 12,
+                    format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 104,
+                    shader_location: 13,
                     format: wgpu::VertexFormat::Float32,
                 },
             ],
@@ -276,7 +283,7 @@ impl RuiPipeline {
         (bind_group, render_pipeline)
     }
 
-    /// 开发态热重载：替换主矩形着色器（入口仍为 `vs_main` / `fs_main`）。
+    /// 开发态热重载：替换主矩形着色器（入口仍?`vs_main` / `fs_main`）
     pub fn rebuild_wgsl(
         &mut self,
         device: &wgpu::Device,

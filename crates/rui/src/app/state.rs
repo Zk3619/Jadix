@@ -1,4 +1,3 @@
-#[cfg(debug_assertions)]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -76,6 +75,9 @@ pub(super) struct AppState {
     pub(super) layout_tree: LayoutTree,
     pub(super) text_renderer: RuiTextRenderer,
     pub(super) root_element: Element,
+    /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
+    /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
+    template_paths: HashMap<String, Vec<usize>>,
     pub(super) num_instances: u32,
     pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
     pub(super) layout_status: crate::core::tree::LayoutStatus,
@@ -457,6 +459,7 @@ impl AppState {
             layout_tree,
             text_renderer,
             root_element,
+            template_paths: HashMap::new(),
             num_instances,
             text_nodes: render_result.text_nodes,
             layout_status: crate::core::tree::LayoutStatus::StructureChanged,
@@ -699,6 +702,9 @@ impl AppState {
     }
 
     /// Solid-style in-place binding: mutate one mounted node by exact `template_id`.
+    ///
+    /// Lookup is O(depth) through the cached child-index path; only a cache miss or a stale path
+    /// falls back to a full DFS.
     pub(crate) fn update_element_by_template_id<F>(
         &mut self,
         template_id: &str,
@@ -707,29 +713,48 @@ impl AppState {
     where
         F: FnOnce(&mut Element) -> crate::core::tree::LayoutStatus,
     {
-        if let Some(el) = Self::find_element_mut_by_template_id(&mut self.root_element, template_id)
-        {
-            let status = patch(el);
-            self.layout_status = Self::merge_layout_status(self.layout_status, status);
-            status
-        } else {
-            crate::core::tree::LayoutStatus::Clean
-        }
-    }
-
-    fn find_element_mut_by_template_id<'a>(
-        root: &'a mut Element,
-        template_id: &str,
-    ) -> Option<&'a mut Element> {
-        if root.template_id.as_deref() == Some(template_id) {
-            return Some(root);
-        }
-        for child in &mut root.children {
-            if let Some(found) = Self::find_element_mut_by_template_id(child, template_id) {
-                return Some(found);
+        let mut path = self.template_paths.remove(template_id).unwrap_or_default();
+        if !Self::template_path_matches(&self.root_element, &path, template_id) {
+            path.clear();
+            if !Self::find_template_path(&self.root_element, template_id, &mut path) {
+                return crate::core::tree::LayoutStatus::Clean;
             }
         }
-        None
+
+        let mut cursor = &mut self.root_element;
+        for &index in &path {
+            cursor = &mut cursor.children[index];
+        }
+        let status = patch(cursor);
+
+        self.template_paths.insert(template_id.to_string(), path);
+        self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        status
+    }
+
+    fn template_path_matches(root: &Element, path: &[usize], template_id: &str) -> bool {
+        let mut cursor = root;
+        for &index in path {
+            match cursor.children.get(index) {
+                Some(child) => cursor = child,
+                None => return false,
+            }
+        }
+        cursor.template_id.as_deref() == Some(template_id)
+    }
+
+    fn find_template_path(root: &Element, template_id: &str, out: &mut Vec<usize>) -> bool {
+        if root.template_id.as_deref() == Some(template_id) {
+            return true;
+        }
+        for (index, child) in root.children.iter().enumerate() {
+            out.push(index);
+            if Self::find_template_path(child, template_id, out) {
+                return true;
+            }
+            out.pop();
+        }
+        false
     }
 
     fn children_all_keyed(children: &[Element]) -> bool {
@@ -2639,3 +2664,38 @@ mod hot_reload_inject {
         n
     }
 } // mod hot_reload_inject
+
+#[cfg(test)]
+mod template_path_tests {
+    use super::AppState;
+    use crate::core::tree::Element;
+
+    fn tree() -> Element {
+        Element::new().children(vec![
+            Element::new().template_id("a"),
+            Element::new().children(vec![Element::new().template_id("b")]),
+        ])
+    }
+
+    #[test]
+    fn finds_child_index_path() {
+        let root = tree();
+        let mut path = Vec::new();
+        assert!(AppState::find_template_path(&root, "b", &mut path));
+        assert_eq!(path, vec![1, 0]);
+
+        path.clear();
+        assert!(!AppState::find_template_path(&root, "missing", &mut path));
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn path_validation_rejects_stale_and_out_of_range() {
+        let root = tree();
+        assert!(AppState::template_path_matches(&root, &[1, 0], "b"));
+        // Same shape, wrong node: the cached path must not be trusted blindly.
+        assert!(!AppState::template_path_matches(&root, &[1, 0], "a"));
+        // Shrunk subtree.
+        assert!(!AppState::template_path_matches(&root, &[9], "a"));
+    }
+}

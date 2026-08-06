@@ -99,6 +99,19 @@ pub enum KnownUtility<'a> {
     TranslateY(f32),
     /// Single-line ellipsis overflow (`truncate`).
     Truncate,
+    PositionFixed,
+    PositionAbsolute,
+    PositionRelative,
+    AspectRatio(f32),
+    Rotate(f32),
+    Scale(f32),
+    /// Linear gradient direction angle (0=to-r, 90=to-b, 180=to-l, 270=to-t).
+    BgGradientTo(f32),
+    GradientFrom(&'a str),
+    GradientTo(&'a str),
+    LetterSpacing(f32),
+    TextDirectionLtr,
+    TextDirectionRtl,
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -306,6 +319,18 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::TextColor(rest));
     }
     if let Some(rest) = token.strip_prefix("bg-") {
+        if rest == "gradient-to-r" {
+            return Some(KnownUtility::BgGradientTo(0.0));
+        }
+        if rest == "gradient-to-l" {
+            return Some(KnownUtility::BgGradientTo(180.0));
+        }
+        if rest == "gradient-to-b" {
+            return Some(KnownUtility::BgGradientTo(90.0));
+        }
+        if rest == "gradient-to-t" {
+            return Some(KnownUtility::BgGradientTo(270.0));
+        }
         return Some(KnownUtility::BgColor(rest));
     }
     if let Some(rest) = token.strip_prefix("font-") {
@@ -329,6 +354,92 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
     if token == "truncate" {
         return Some(KnownUtility::Truncate);
+    }
+
+    match token {
+        "fixed" => return Some(KnownUtility::PositionFixed),
+        "absolute" => return Some(KnownUtility::PositionAbsolute),
+        "relative" | "sticky" => return Some(KnownUtility::PositionRelative),
+        "aspect-square" => return Some(KnownUtility::AspectRatio(1.0)),
+        "aspect-video" => return Some(KnownUtility::AspectRatio(16.0 / 9.0)),
+        "rtl" => return Some(KnownUtility::TextDirectionRtl),
+        "ltr" => return Some(KnownUtility::TextDirectionLtr),
+        _ => {}
+    }
+
+    if let Some(rest) = token.strip_prefix("aspect-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let inner = inner.trim();
+            if let Some((a, b)) = inner.split_once('/') {
+                let num: f32 = a.trim().parse().ok()?;
+                let den: f32 = b.trim().parse().ok()?;
+                if den != 0.0 {
+                    return Some(KnownUtility::AspectRatio(num / den));
+                }
+            } else {
+                let v: f32 = inner.parse().ok()?;
+                return Some(KnownUtility::AspectRatio(v));
+            }
+        }
+    }
+
+    if let Some(rest) = token.strip_prefix("rotate-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let inner = inner.trim().strip_suffix("deg").unwrap_or(inner.trim());
+            let v: f32 = inner.parse().ok()?;
+            return Some(KnownUtility::Rotate(v));
+        }
+        let deg = match rest {
+            "0" => 0.0,
+            "45" => 45.0,
+            "90" => 90.0,
+            "180" => 180.0,
+            _ => return None,
+        };
+        return Some(KnownUtility::Rotate(deg));
+    }
+
+    if let Some(rest) = token.strip_prefix("scale-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let v: f32 = inner.trim().parse().ok()?;
+            return Some(KnownUtility::Scale(v));
+        }
+        let pct: f32 = rest.parse().ok()?;
+        return Some(KnownUtility::Scale(pct / 100.0));
+    }
+
+    if let Some(rest) = token.strip_prefix("from-") {
+        return Some(KnownUtility::GradientFrom(rest));
+    }
+    if let Some(rest) = token.strip_prefix("to-") {
+        // Avoid colliding with unrelated tokens if any; gradient `to-*` color stops only.
+        return Some(KnownUtility::GradientTo(rest));
+    }
+
+    if let Some(rest) = token.strip_prefix("tracking-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let inner = inner.trim();
+            if let Some(raw) = inner.strip_suffix("em") {
+                let em: f32 = raw.trim().parse().ok()?;
+                return Some(KnownUtility::LetterSpacing(em * 16.0));
+            }
+            if let Some(raw) = inner.strip_suffix("px") {
+                let px: f32 = raw.trim().parse().ok()?;
+                return Some(KnownUtility::LetterSpacing(px));
+            }
+            let v: f32 = inner.parse().ok()?;
+            return Some(KnownUtility::LetterSpacing(v));
+        }
+        let px = match rest {
+            "tighter" => -0.05 * 16.0,
+            "tight" => -0.025 * 16.0,
+            "normal" => 0.0,
+            "wide" => 0.025 * 16.0,
+            "wider" => 0.05 * 16.0,
+            "widest" => 0.1 * 16.0,
+            _ => return None,
+        };
+        return Some(KnownUtility::LetterSpacing(px));
     }
 
     None
@@ -373,5 +484,57 @@ mod tests {
         assert!(is_known_utility("translate-y-2"));
         assert!(is_known_utility("truncate"));
         assert!(!is_known_utility("not-a-real-class"));
+    }
+
+    #[test]
+    fn aspect_square_and_arbitrary() {
+        assert!(matches!(
+            classify_utility("aspect-square"),
+            Some(KnownUtility::AspectRatio(r)) if (r - 1.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("aspect-video"),
+            Some(KnownUtility::AspectRatio(r)) if (r - 16.0 / 9.0).abs() < 0.001
+        ));
+        assert!(matches!(
+            classify_utility("aspect-[16/9]"),
+            Some(KnownUtility::AspectRatio(r)) if (r - 16.0 / 9.0).abs() < 0.001
+        ));
+        assert!(matches!(
+            classify_utility("aspect-[1.5]"),
+            Some(KnownUtility::AspectRatio(r)) if (r - 1.5).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn rotate_scale_tracking_direction() {
+        assert!(matches!(
+            classify_utility("rotate-45"),
+            Some(KnownUtility::Rotate(45.0))
+        ));
+        assert!(matches!(
+            classify_utility("rotate-[12deg]"),
+            Some(KnownUtility::Rotate(12.0))
+        ));
+        assert!(matches!(
+            classify_utility("scale-150"),
+            Some(KnownUtility::Scale(1.5))
+        ));
+        assert!(matches!(
+            classify_utility("scale-[1.2]"),
+            Some(KnownUtility::Scale(1.2))
+        ));
+        assert!(matches!(
+            classify_utility("tracking-wide"),
+            Some(KnownUtility::LetterSpacing(_))
+        ));
+        assert!(matches!(
+            classify_utility("rtl"),
+            Some(KnownUtility::TextDirectionRtl)
+        ));
+        assert!(matches!(
+            classify_utility("fixed"),
+            Some(KnownUtility::PositionFixed)
+        ));
     }
 }

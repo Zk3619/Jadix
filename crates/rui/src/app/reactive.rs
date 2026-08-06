@@ -299,14 +299,44 @@ where
         compute,
         |el, next| {
             if el.text.as_deref() == Some(next.as_str()) {
-                LayoutStatus::Clean
+                return LayoutStatus::Clean;
+            }
+            // Counter-style labels usually keep the same intrinsic width. When they do, taffy has
+            // nothing to recompute and a paint-only pass is enough.
+            let same_width = text_intrinsic_width(el, el.text.as_deref().unwrap_or(""))
+                .zip(text_intrinsic_width(el, next.as_str()))
+                .is_some_and(|(before, after)| (before - after).abs() < 0.5);
+            el.text = Some(next);
+            el.style.flex_shrink = 0.0;
+            if same_width {
+                LayoutStatus::StyleChanged
             } else {
-                el.text = Some(next);
-                el.style.flex_shrink = 0.0;
                 LayoutStatus::LayoutChanged
             }
         },
     )
+}
+
+/// Intrinsic single-line width of `text` under `el`'s text style.
+///
+/// `None` when the node is not a plain text leaf, in which case callers must assume the layout
+/// changed.
+fn text_intrinsic_width(el: &Element, text: &str) -> Option<f32> {
+    if !el.children.is_empty()
+        || el.text_shape_suffix.is_some()
+        || el.text_spans.is_some()
+        || el.text_style.font_family.as_deref() == Some("lucide")
+    {
+        return None;
+    }
+    let size = el.text_style.size;
+    let line_height = el
+        .text_style
+        .line_height_px
+        .or_else(|| el.text_style.line_height_scale.map(|s| size * s))
+        .unwrap_or_else(|| size * crate::style::tailwind_default_leading_scale(size));
+    let prepared = crate::text::prepare(text, size, el.text_style.weight, line_height);
+    Some(crate::text::intrinsic_width(&prepared))
 }
 
 /// Attach a Solid-style binding to an existing element (style/class/text patches).
@@ -606,4 +636,40 @@ where
 {
     let items_vec: Vec<T> = items.into_iter().collect();
     for_each(scope_id, &items_vec, render)
+}
+
+#[cfg(test)]
+mod intrinsic_width_tests {
+    use super::*;
+
+    fn label(text: &str) -> Element {
+        let mut el = Element::new();
+        el.text = Some(text.to_string());
+        el
+    }
+
+    #[test]
+    fn same_glyph_count_keeps_the_same_intrinsic_width() {
+        let el = label("10");
+        let before = text_intrinsic_width(&el, "10").expect("measurable");
+        let after = text_intrinsic_width(&el, "11").expect("measurable");
+        assert!(
+            (before - after).abs() < 0.5,
+            "digit-only counters should not resize: {before} vs {after}"
+        );
+    }
+
+    #[test]
+    fn longer_text_reports_a_wider_intrinsic_width() {
+        let el = label("1");
+        let before = text_intrinsic_width(&el, "1").expect("measurable");
+        let after = text_intrinsic_width(&el, "1000000").expect("measurable");
+        assert!(after > before + 0.5, "{before} vs {after}");
+    }
+
+    #[test]
+    fn non_leaf_nodes_are_not_comparable() {
+        let el = Element::new().children(vec![label("x")]);
+        assert!(text_intrinsic_width(&el, "x").is_none());
+    }
 }

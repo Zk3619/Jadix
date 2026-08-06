@@ -131,6 +131,8 @@ pub struct Element {
     pub style: crate::style::Style,
     pub children: Vec<Element>,
     pub text: Option<String>,
+    /// Rich-text spans; when set, prepare uses set_rich_text. `text` is concat fallback.
+    pub text_spans: Option<Vec<crate::style::TextSpan>>,
     /// 仅参与 glyph 排版（`set_text` / 宽度估计），不计入 `text` 的字节长度；用于减轻纯中文 IME 下 cosmic-text 行高随拼音 bbox 抖动。
     pub text_shape_suffix: Option<String>,
     pub text_style: TextStyle,
@@ -343,6 +345,7 @@ impl Element {
             style: crate::style::Style::default(),
             children: Vec::new(),
             text: None,
+            text_spans: None,
             text_shape_suffix: None,
             text_style: TextStyle::default(),
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
@@ -862,12 +865,8 @@ impl Element {
         self
     }
     pub fn box_shadow(mut self, shadow: impl AsRef<str>) -> Self {
-        let s = crate::style::parse_box_shadow(shadow);
-        self.style.shadow_color = s.color;
-        self.style.shadow_offset = s.offset;
-        self.style.shadow_blur = s.blur;
-        self.style.shadow_spread = s.spread;
-        self.style.shadow_inset = s.inset;
+        let list = crate::style::parse_box_shadows(shadow);
+        self.style.set_shadows_from_parsed(&list);
         self
     }
     pub fn box_shadow_color(mut self, color: [f32; 4]) -> Self {
@@ -1283,6 +1282,51 @@ impl Element {
         self.style.position = Position::Relative;
         self
     }
+
+    pub fn fixed(mut self) -> Self {
+        self.style.position = Position::Absolute;
+        self.style.position_fixed = true;
+        self
+    }
+    pub fn aspect_ratio(mut self, ratio: f32) -> Self {
+        self.style.aspect_ratio = Some(ratio);
+        self
+    }
+    pub fn aspect_ratio_opt(mut self, ratio: Option<f32>) -> Self {
+        self.style.aspect_ratio = ratio;
+        self
+    }
+    pub fn rotate(mut self, deg: f32) -> Self {
+        self.style.rotate_deg = deg;
+        self
+    }
+    pub fn scale(mut self, scale: f32) -> Self {
+        self.style.scale = scale;
+        self
+    }
+    pub fn linear_gradient(mut self, from: [f32; 4], to: [f32; 4], angle_deg: f32) -> Self {
+        self.style.bg_gradient = Some(crate::style::LinearGradient {
+            from,
+            to,
+            angle_deg,
+        });
+        self
+    }
+    pub fn text_spans(mut self, spans: Vec<crate::style::TextSpan>) -> Self {
+        let concat: String = spans.iter().map(|s| s.text.as_str()).collect();
+        self.text_spans = Some(spans);
+        self.text = Some(concat);
+        self.style.flex_shrink = 0.0;
+        self
+    }
+    pub fn text_direction(mut self, dir: crate::style::TextDirection) -> Self {
+        self.text_style.direction = dir;
+        self
+    }
+    pub fn letter_spacing(mut self, spacing: f32) -> Self {
+        self.text_style.letter_spacing = spacing;
+        self
+    }
     pub fn top(mut self, val: impl IntoDimension) -> Self {
         self.style.inset.top = Self::into_margin_auto(val);
         self
@@ -1359,5 +1403,35 @@ impl From<Vec<Element>> for Element {
 impl From<Option<Element>> for Element {
     fn from(opt: Option<Element>) -> Self {
         opt.unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod p1_builder_tests {
+    use super::*;
+    use crate::style::{TextDirection, TextSpan};
+
+    #[test]
+    fn text_spans_builder_sets_concat_text() {
+        let el = Element::new().text_spans(vec![
+            TextSpan::new("Hello").weight(700),
+            TextSpan::new(" "),
+            TextSpan::new("world").color([255, 0, 0, 255]),
+        ]);
+        assert_eq!(el.text.as_deref(), Some("Hello world"));
+        assert_eq!(el.text_spans.as_ref().map(|s| s.len()), Some(3));
+    }
+
+    #[test]
+    fn text_direction_builder() {
+        let el = Element::new().text("hi").text_direction(TextDirection::Rtl);
+        assert_eq!(el.text_style.direction, TextDirection::Rtl);
+    }
+
+    #[test]
+    fn fixed_sets_absolute_and_flag() {
+        let el = Element::new().fixed();
+        assert_eq!(el.style.position, Position::Absolute);
+        assert!(el.style.position_fixed);
     }
 }

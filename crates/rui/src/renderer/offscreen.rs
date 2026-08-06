@@ -167,9 +167,122 @@ pub fn images_match(a: &RgbaImage, b: &RgbaImage, tolerance: u8) -> bool {
         .all(|(x, y)| x.abs_diff(*y) <= tolerance)
 }
 
+const GOLDEN_MAGIC: &[u8; 4] = b"RUIG";
+
+/// Serialize a golden as `magic + u32 width + u32 height + RGBA8 rows`.
+///
+/// Deliberately not PNG: goldens are compared byte-exactly after decode, and a raw format keeps
+/// the test path free of an image-codec dependency.
+pub fn encode_rgba_golden(image: &RgbaImage) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12 + image.pixels.len());
+    out.extend_from_slice(GOLDEN_MAGIC);
+    out.extend_from_slice(&image.width.to_le_bytes());
+    out.extend_from_slice(&image.height.to_le_bytes());
+    out.extend_from_slice(&image.pixels);
+    out
+}
+
+/// Inverse of [`encode_rgba_golden`]. `None` on a bad magic, truncated header, or size mismatch.
+pub fn decode_rgba_golden(bytes: &[u8]) -> Option<RgbaImage> {
+    if bytes.len() < 12 || &bytes[0..4] != GOLDEN_MAGIC {
+        return None;
+    }
+    let width = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    let height = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    let expected = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    let pixels = bytes.get(12..12 + expected)?.to_vec();
+    Some(RgbaImage {
+        width,
+        height,
+        pixels,
+    })
+}
+
+/// Path of the golden named `name` under `crates/rui/tests/golden/`.
+pub fn golden_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden")
+        .join(format!("{name}.rgba"))
+}
+
+/// Compare `image` against the stored golden `name`, panicking on mismatch.
+///
+/// Set `RUI_UPDATE_GOLDEN=1` to (re)write the golden instead of asserting; a missing golden is
+/// always written so the first run of a new case bootstraps itself.
+pub fn assert_matches_golden(name: &str, image: &RgbaImage, tolerance: u8) {
+    let path = golden_path(name);
+    let update = std::env::var("RUI_UPDATE_GOLDEN").is_ok();
+
+    if update || !path.exists() {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).expect("create golden dir");
+        }
+        std::fs::write(&path, encode_rgba_golden(image)).expect("write golden");
+        return;
+    }
+
+    let bytes = std::fs::read(&path).expect("read golden");
+    let expected = decode_rgba_golden(&bytes).unwrap_or_else(|| {
+        panic!("golden `{name}` is corrupt; re-record with RUI_UPDATE_GOLDEN=1")
+    });
+    assert!(
+        images_match(&expected, image, tolerance),
+        "golden `{name}` mismatch ({}x{} vs {}x{}); re-record with RUI_UPDATE_GOLDEN=1",
+        expected.width,
+        expected.height,
+        image.width,
+        image.height
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn golden_encode_decode_roundtrip() {
+        let img = RgbaImage {
+            width: 2,
+            height: 2,
+            pixels: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        };
+        let decoded = decode_rgba_golden(&encode_rgba_golden(&img)).expect("decode");
+        assert_eq!(decoded.width, 2);
+        assert_eq!(decoded.height, 2);
+        assert!(images_match(&img, &decoded, 0));
+    }
+
+    #[test]
+    fn golden_decode_rejects_foreign_bytes() {
+        assert!(decode_rgba_golden(b"PNG\x00short").is_none());
+    }
+
+    #[test]
+    fn offscreen_clear_readback_golden() {
+        let Some(gpu) = OffscreenGpu::new() else {
+            eprintln!("skip: no wgpu adapter");
+            return;
+        };
+        let img = gpu
+            .clear_readback(
+                8,
+                8,
+                wgpu::Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+            )
+            .expect("readback");
+        // Software rasterizers differ slightly in sRGB encode; compare with slack.
+        assert_matches_golden("offscreen_clear_blue_8x8", &img, 8);
+    }
 
     #[test]
     fn offscreen_clear_readback_smoke() {

@@ -10,14 +10,12 @@ pub mod style;
 /// 兼容旧路径 `crate::render::*`。
 pub use renderer as render;
 
-/// 兼容旧路径 `crate::text::RuiTextRenderer`。
-pub mod text {
-    pub use crate::renderer::RuiTextRenderer;
-}
 pub mod accesskit_bridge;
 pub mod app;
 pub mod components;
 pub mod primitives;
+/// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
+pub mod text;
 pub mod tokens;
 pub mod utils;
 
