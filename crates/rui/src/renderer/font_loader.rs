@@ -10,7 +10,7 @@
 //! 3. Before shaping a string, [`ensure_coverage_for_text`] opens only the faces
 //!    required by the codepoints actually present.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 #[cfg(any(
     feature = "bundled-lucide",
@@ -99,8 +99,117 @@ impl ScriptNeeds {
 
 #[derive(Default)]
 struct LazyFontState {
+    /// Scripts we have already *tried* to open globally (avoid repeated failed FS scans).
     attempted: ScriptNeeds,
+    /// Paths that opened successfully at least once (diagnostic / mmap hint).
     loaded_paths: HashSet<String>,
+    /// Paths already injected into a specific [`Database`] (pointer identity).
+    ///
+    /// Critical: layout-time measure and render-time glyphon use **different**
+    /// [`FontSystem`]s. A path loaded into one db must still be loaded into the other;
+    /// a process-global "already loaded" short-circuit caused CJK tofu in the renderer.
+    db_loaded: HashMap<usize, HashSet<String>>,
+}
+
+fn db_identity(db: &Database) -> usize {
+    db as *const Database as usize
+}
+
+fn family_present_any(db: &Database, names: &[&str]) -> bool {
+    names.iter().any(|n| family_present(db, n))
+}
+
+fn cjk_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Noto Sans CJK SC",
+            "Noto Sans CJK JP",
+            "Noto Sans CJK KR",
+            "Noto Sans CJK TC",
+            "Microsoft YaHei UI",
+            "Microsoft YaHei",
+            "PingFang SC",
+            "Hiragino Sans GB",
+            "Source Han Sans SC",
+            "WenQuanYi Micro Hei",
+        ],
+    )
+}
+
+fn hangul_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Malgun Gothic",
+            "Apple SD Gothic Neo",
+            "Noto Sans CJK KR",
+            "NanumGothic",
+        ],
+    )
+}
+
+fn thai_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Leelawadee UI",
+            "Leelawadee",
+            "Tahoma",
+            "Thonburi",
+            "Noto Sans Thai",
+        ],
+    )
+}
+
+fn arabic_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Segoe UI",
+            "Arial",
+            "Traditional Arabic",
+            "Geeza Pro",
+            "Noto Naskh Arabic",
+        ],
+    )
+}
+
+fn devanagari_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Nirmala UI",
+            "Mangal",
+            "Noto Sans Devanagari",
+            "Kohinoor Devanagari",
+        ],
+    )
+}
+
+fn symbols_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Segoe UI Symbol",
+            "Apple Symbols",
+            "Noto Sans Symbols",
+            "Noto Sans Symbols 2",
+            "Noto Sans Math",
+        ],
+    )
+}
+
+fn emoji_coverage_present(db: &Database) -> bool {
+    family_present_any(
+        db,
+        &[
+            "Noto Color Emoji",
+            "Noto Color Emoji Windows Compatible",
+            "Segoe UI Emoji",
+            "Apple Color Emoji",
+        ],
+    )
 }
 
 fn lazy_state() -> std::sync::MutexGuard<'static, LazyFontState> {
@@ -164,16 +273,29 @@ fn find_font_file(file_name: &str) -> Option<PathBuf> {
 
 fn try_load_font_path(db: &mut Database, path: &Path, state: &mut LazyFontState) -> bool {
     let key = path.to_string_lossy().to_string();
-    if state.loaded_paths.contains(&key) {
+    let db_id = db_identity(db);
+    if state
+        .db_loaded
+        .get(&db_id)
+        .is_some_and(|set| set.contains(&key))
+    {
         return true;
     }
     match db.load_font_file(path) {
         Ok(()) => {
             log::info!("loaded font file: {}", path.display());
-            state.loaded_paths.insert(key);
+            state.loaded_paths.insert(key.clone());
+            state.db_loaded.entry(db_id).or_default().insert(key);
             true
         }
         Err(err) => {
+            if state
+                .db_loaded
+                .get(&db_id)
+                .is_some_and(|set| set.contains(&key))
+            {
+                return true;
+            }
             log::warn!("failed to load font {}: {err}", path.display());
             false
         }
@@ -600,7 +722,34 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
     }
 
     let mut state = lazy_state();
-    let todo = needs.minus_attempted(state.attempted);
+    // Global attempted avoids re-scanning missing files every frame, but each FontSystem
+    // still needs faces injected into *its* Database.
+    let mut todo = needs.minus_attempted(state.attempted);
+    {
+        let db = font_system.db();
+        if needs.cjk && !cjk_coverage_present(db) {
+            todo.cjk = true;
+        }
+        if needs.hangul && !hangul_coverage_present(db) {
+            todo.hangul = true;
+        }
+        if needs.thai && !thai_coverage_present(db) {
+            todo.thai = true;
+        }
+        if needs.symbols && !symbols_coverage_present(db) {
+            todo.symbols = true;
+        }
+        if needs.arabic && !arabic_coverage_present(db) {
+            todo.arabic = true;
+        }
+        if needs.devanagari && !devanagari_coverage_present(db) {
+            todo.devanagari = true;
+        }
+        let eager_emoji = env_flag_enabled("RUI_LOAD_SYSTEM_EMOJI");
+        if needs.emoji && eager_emoji && !emoji_coverage_present(db) {
+            todo.emoji = true;
+        }
+    }
     if todo.is_empty() {
         return;
     }
@@ -615,37 +764,48 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
     state.attempted.merge(mark);
 
     let db = font_system.db_mut();
+    let mut loaded_any = false;
     if todo.cjk {
         log::info!("lazy-loading CJK fonts for coverage");
         load_lazy_cjk(db, &mut state);
+        loaded_any = true;
     }
     if todo.hangul {
         log::info!("lazy-loading Hangul fonts for coverage");
         load_lazy_hangul(db, &mut state);
+        loaded_any = true;
     }
     if todo.thai {
         log::info!("lazy-loading Thai fonts for coverage");
         load_lazy_thai(db, &mut state);
+        loaded_any = true;
     }
     if todo.emoji && eager_emoji {
         log::info!("lazy-loading emoji fonts for coverage (RUI_LOAD_SYSTEM_EMOJI=1)");
         state.attempted.emoji = true;
         load_lazy_emoji(db, &mut state);
+        loaded_any = true;
     }
     if todo.symbols {
         log::info!("lazy-loading symbol fonts for coverage");
         load_lazy_symbols(db, &mut state);
+        loaded_any = true;
     }
     if todo.arabic {
         log::info!("lazy-loading Arabic fonts for coverage");
         load_lazy_arabic(db, &mut state);
+        loaded_any = true;
     }
     if todo.devanagari {
         log::info!("lazy-loading Devanagari fonts for coverage");
         load_lazy_devanagari(db, &mut state);
+        loaded_any = true;
     }
 
     apply_default_families(db);
+    if loaded_any {
+        crate::text::measure::invalidate_prepare_cache();
+    }
     log::info!(
         "font database after lazy load: {} faces",
         font_system.db().len()
@@ -655,13 +815,15 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
 /// Open system color-emoji only after Twemoji/SVG raster miss (or explicit env).
 pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
     let mut state = lazy_state();
-    if state.attempted.emoji {
+    let missing_in_db = !emoji_coverage_present(font_system.db());
+    if state.attempted.emoji && !missing_in_db {
         return;
     }
     state.attempted.emoji = true;
     log::info!("Twemoji miss — lazy-loading system emoji font fallback");
     load_lazy_emoji(font_system.db_mut(), &mut state);
     apply_default_families(font_system.db_mut());
+    crate::text::measure::invalidate_prepare_cache();
 }
 
 /// Scan `text` and lazily open CJK / emoji / symbol / script fonts as needed.
@@ -800,4 +962,25 @@ pub fn create_font_system() -> FontSystem {
 
     drop(state);
     FontSystem::new_with_locale_and_db(resolve_locale(), db)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_coverage_injects_cjk_into_each_font_system() {
+        let mut layout_fs = create_font_system();
+        let mut render_fs = create_font_system();
+        ensure_coverage_for_text(&mut layout_fs, "中文");
+        ensure_coverage_for_text(&mut render_fs, "日本語");
+        assert!(
+            cjk_coverage_present(layout_fs.db()),
+            "layout FontSystem missing CJK after ensure_coverage"
+        );
+        assert!(
+            cjk_coverage_present(render_fs.db()),
+            "render FontSystem missing CJK after ensure_coverage (global loaded_paths short-circuit regression)"
+        );
+    }
 }

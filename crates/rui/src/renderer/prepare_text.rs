@@ -1290,11 +1290,14 @@ pub fn prepare_text_frame(
                 let segments = split_text_with_emoji(shape_text.as_ref());
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
+                // When font advances collapse (missing emoji face), Twemoji quads would
+                // all land on the same x — advance a layout cursor as a backstop.
+                let mut emoji_left_cursor = 0.0_f32;
                 for seg in segments {
                     let TextSegment::Emoji { text, start } = seg else {
                         continue;
                     };
-                    let (left, top) = match emoji_layout::custom_emoji_left_top(
+                    let (mut left, top) = match emoji_layout::custom_emoji_left_top(
                         &text_renderer.shaped_cache[i].buffer,
                         shape_text.as_ref(),
                         start,
@@ -1326,6 +1329,11 @@ pub fn prepare_text_frame(
                         }
                     };
                     let pixel_size = scaled_size.ceil().clamp(1.0, 512.0) as u16;
+                    let slot = pixel_size as f32;
+                    if left + 0.5 < emoji_left_cursor {
+                        left = emoji_left_cursor;
+                    }
+                    emoji_left_cursor = left + slot * 0.95;
                     let glyph_id = next_custom_id;
                     next_custom_id = next_custom_id.wrapping_add(1).max(1);
                     let raster = load_emoji_raster_cached(

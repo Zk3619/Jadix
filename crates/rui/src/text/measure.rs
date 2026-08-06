@@ -55,6 +55,19 @@ thread_local! {
     static LAYOUT_FONT_SYSTEM: RefCell<Option<FontSystem>> = const { RefCell::new(None) };
 }
 
+/// Drop cached segment widths after fonts are (lazily) added so measure/render stay aligned.
+pub fn invalidate_prepare_cache() {
+    PREPARE_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Release the layout-only [`FontSystem`] and measure cache (call on app shutdown).
+pub fn shutdown_layout_text() {
+    invalidate_prepare_cache();
+    LAYOUT_FONT_SYSTEM.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
 fn with_layout_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
     LAYOUT_FONT_SYSTEM.with(|cell| {
         let mut slot = cell.borrow_mut();
@@ -142,8 +155,9 @@ fn measure_run_width(
     if text.is_empty() || text == "\n" {
         return 0.0;
     }
+    let heuristic = heuristic_segment_width(text, size, weight);
     if font_system.db().faces().next().is_none() {
-        return heuristic_segment_width(text, size, weight);
+        return heuristic;
     }
     ensure_coverage_for_text(font_system, text);
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -164,8 +178,17 @@ fn measure_run_width(
             .fold(0.0_f32, f32::max)
     }));
     match shaped {
-        Ok(w) if w > 0.0 => w,
-        _ => heuristic_segment_width(text, size, weight),
+        Ok(w) if w.is_finite() && w > 0.0 => {
+            // Guard against buffer-width / failed-shape blowups that would make
+            // `layout()` ceil into near-infinite line counts.
+            let max_sane = (text.chars().count() as f32 * size * 2.5).max(size * 2.0);
+            if w > max_sane * 4.0 {
+                heuristic
+            } else {
+                w.min(max_sane.max(heuristic))
+            }
+        }
+        _ => heuristic,
     }
 }
 
@@ -238,28 +261,34 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
     let mut line_count = 1u32;
     let mut line_w = 0.0_f32;
     let mut max_line_width = 0.0_f32;
+    // Hard cap: prevents a single pathological segment from claiming millions of lines.
+    const MAX_EXTRA_LINES_PER_SEG: u32 = 64;
+    const MAX_TOTAL_LINES: u32 = 4_096;
 
     for seg in &prepared.segments {
         if seg.text == "\n" {
             max_line_width = max_line_width.max(line_w);
-            line_count += 1;
+            line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = 0.0;
             continue;
         }
         if line_w > 0.0 && line_w + seg.width > avail && seg.width <= avail {
             max_line_width = max_line_width.max(line_w);
-            line_count += 1;
+            line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = seg.width;
         } else if seg.width > avail && line_w > 0.0 {
             // Oversized segment on a non-empty line: break first, then place.
             max_line_width = max_line_width.max(line_w);
-            line_count += 1;
+            line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = seg.width;
             // Still wider than avail: count extra visual lines (same as old ceil heuristic).
             if seg.width > avail {
-                let extra = (seg.width / avail).ceil().max(1.0) as u32;
+                let extra = (seg.width / avail)
+                    .ceil()
+                    .max(1.0)
+                    .min(MAX_EXTRA_LINES_PER_SEG as f32) as u32;
                 if extra > 1 {
-                    line_count += extra - 1;
+                    line_count = (line_count + extra - 1).min(MAX_TOTAL_LINES);
                     line_w = seg.width % avail;
                     if line_w == 0.0 {
                         line_w = avail;
@@ -267,8 +296,11 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
                 }
             }
         } else if seg.width > avail {
-            let extra = (seg.width / avail).ceil().max(1.0) as u32;
-            line_count += extra - 1;
+            let extra = (seg.width / avail)
+                .ceil()
+                .max(1.0)
+                .min(MAX_EXTRA_LINES_PER_SEG as f32) as u32;
+            line_count = (line_count + extra - 1).min(MAX_TOTAL_LINES);
             line_w = seg.width % avail;
             if line_w == 0.0 {
                 line_w = avail;
@@ -364,5 +396,35 @@ mod tests {
         let p = prepare("a\nb\nc", 12.0, 400, 16.0);
         let m = layout(&p, 10_000.0);
         assert_eq!(m.line_count, 3);
+    }
+
+    #[test]
+    fn layout_caps_pathological_segment_width() {
+        let prepared = PreparedText {
+            segments: vec![PreparedSegment {
+                text: "爆炸".into(),
+                width: 16_384.0,
+                break_after: false,
+            }],
+            size: 14.0,
+            weight: 400,
+            line_height: 21.0,
+            max_segment_width: 16_384.0,
+        };
+        let m = layout(&prepared, 40.0);
+        assert!(
+            m.line_count <= 64,
+            "line_count blew up: {}",
+            m.line_count
+        );
+        assert!(m.height < 21.0 * 65.0);
+    }
+
+    #[test]
+    fn cjk_measure_stays_bounded() {
+        let text = "中文日文한국어 हिन्दी ไทย";
+        let (w, h) = measure_leaf(text, 16.0, 400, 24.0, None, Some(320.0), 0.0);
+        assert!(w.is_finite() && h.is_finite(), "non-finite {w}x{h}");
+        assert!(h < 24.0 * 64.0, "height too large: {h}");
     }
 }
