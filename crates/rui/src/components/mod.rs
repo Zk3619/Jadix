@@ -12,8 +12,10 @@
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
 //!
 //! ## 横切约定
-//! - 有状态控件尽量给稳定唯一 `id`（信号键 / `focus_id` 依赖它）。
-//! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按 `id` 建内部信号。
+//! - **身份**：勿给每个控件强行编造 `id`。展示型默认不需要；有状态非受控多实例才需要稳定实例键；
+//!   焦点 / a11y / 浮层锚点用 `focus_id`（可带前缀）。详见 `docs/COMPONENT_LIBRARY.md` §4.2。
+//! - 有状态控件若用全局 `use_signal("{id}__…")`，多实例必须稳定唯一键（空 id 撞键会串状态）。
+//! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
 //! - Tabs headless 条带自带 [`crate::app::reactive::reactive_view`]；面板仍可用 `<Show>` 或 `#[component(reactive)]`。
 //! - 选择器占位按行为分文件：[`file_picker`] / [`color_picker`] / [`date_picker`]（勿再扩 `Input type`）。

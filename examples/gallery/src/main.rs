@@ -197,6 +197,7 @@ fn InputShowcase() -> rui::core::tree::Element {
                         flex_grow="1"
                     />
                     <Button
+                        id="gal-s2-mark-invalid"
                         variant="outline"
                         size="sm"
                         on_click={move || mark_invalid.set(!mark_invalid.peek())}
@@ -1710,6 +1711,105 @@ fn main() {
 mod mount_tests {
     use super::*;
     use rui::core::reactivity::{create_effect, create_root};
+
+    #[test]
+    fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                // Match App: `switch_reactive` body builds under `isolate_reads`.
+                let mut tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                fn find_btn<'a>(
+                    el: &'a rui::core::tree::Element,
+                ) -> Option<&'a rui::core::tree::Element> {
+                    if el.template_id.as_deref() == Some("gal-s2-mark-invalid") {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(find_btn)
+                }
+                let btn = find_btn(&tree).expect("gal-s2-mark-invalid button");
+                assert!(
+                    btn.children
+                        .iter()
+                        .any(|c| c.text.as_deref() == Some("Mark invalid")),
+                    "button children={:?}",
+                    btn.children
+                        .iter()
+                        .map(|c| (c.template_id.clone(), c.text.clone(), c.text_style.size))
+                        .collect::<Vec<_>>()
+                );
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
+                let node = result
+                    .text_nodes
+                    .iter()
+                    .find(|n| n.text == "Mark invalid")
+                    .expect("forms section must layout Mark invalid");
+                assert!(
+                    node.width > 40.0,
+                    "caption width too small: {} (likely empty outline button)",
+                    node.width
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_input_showcase_mark_invalid_button_has_caption() {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = InputShowcase(InputShowcaseProps::default());
+                fn find_caption<'a>(el: &'a mut rui::core::tree::Element) -> Option<&'a mut rui::core::tree::Element> {
+                    if el.text.as_deref() == Some("Mark invalid") {
+                        return Some(el);
+                    }
+                    for child in el.children.iter_mut() {
+                        if let Some(found) = find_caption(child) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                let caption = find_caption(&mut tree).expect("caption node");
+                let color = caption.text_style.color;
+                assert!(
+                    color[3] > 0,
+                    "caption alpha must be visible, got {:?}",
+                    color
+                );
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let result = layout.build_and_layout(&mut tree, 900.0, 600.0, [0.0, 0.0]);
+                let node = result
+                    .text_nodes
+                    .iter()
+                    .find(|n| n.text == "Mark invalid")
+                    .expect("layout must collect Mark invalid");
+                assert!(
+                    node.width > 4.0 && node.height > 4.0,
+                    "caption box must be visible, got {}x{} at ({},{})",
+                    node.width,
+                    node.height,
+                    node.x,
+                    node.y
+                );
+                assert!(
+                    node.x >= 0.0 && node.y >= 0.0 && node.x < 900.0 && node.y < 600.0,
+                    "caption must be on-screen, got ({},{})",
+                    node.x,
+                    node.y
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
 
     #[test]
     fn headless_mount_gallery_app_does_not_overflow() {

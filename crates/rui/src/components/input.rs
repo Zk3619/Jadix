@@ -76,7 +76,9 @@ pub fn input_type_signal_key(id: &str) -> String {
 
 /// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
 ///
-/// 仅在聚焦编辑时挂到 `text_shape_suffix`：失焦且纯 ASCII 走 Basic shaping 时该字位易缺字形，会被画成「乱码框」。
+/// Historical shaping probe (U+2009). No longer attached on focus: `input_caret` already
+/// forces Advanced shaping, and the thin space pulled Latin fallbacks that shifted CJK baselines.
+#[allow(dead_code)]
 pub const INPUT_LINE_SHAPE_SUFFIX: &str = "\u{2009}";
 
 pub(crate) fn focus_id_for_input(id: &str) -> String {
@@ -463,7 +465,10 @@ impl InputBuilder {
         self
     }
     pub fn flex_grow(mut self, grow: impl crate::core::tree::IntoF32Raw) -> Self {
-        self.container = self.container.flex_grow(grow);
+        // Default Input is `w(100%)` for solo fields. In a row with siblings (e.g. Button),
+        // that percentage claims the full line and can crush neighbors to an empty outline.
+        // Opting into flex_grow means share free space instead of forcing full width.
+        self.container = self.container.flex_grow(grow).w("auto").min_w("0");
         self
     }
     pub fn flex_shrink(mut self, shrink: impl crate::core::tree::IntoF32Raw) -> Self {
@@ -661,11 +666,7 @@ impl From<InputBuilder> for Element {
             },
         )
         .w("100%");
-        text_el.text_shape_suffix = if is_focused {
-            Some(INPUT_LINE_SHAPE_SUFFIX.to_string())
-        } else {
-            None
-        };
+        text_el.text_shape_suffix = None;
         text_el.template_id = Some(format!("__rui_input:{}:text", field_id));
 
         if is_focused {
@@ -967,11 +968,7 @@ fn sync_one_input_paint(
             text_el.text = Some(display_text.clone());
             text_layout = true;
         }
-        let want_suffix = if is_focused {
-            Some(INPUT_LINE_SHAPE_SUFFIX.to_string())
-        } else {
-            None
-        };
+        let want_suffix = None;
         if text_el.text_shape_suffix != want_suffix {
             text_el.text_shape_suffix = want_suffix;
             text_layout = true;

@@ -11,7 +11,8 @@
 //! ```
 //!
 //! ## 注意
-//! - 空 `id` 会自动生成 `btn-N`；需要稳定焦点 / 测试选择器时请显式传 `id`。
+//! - **`id` 非必填心智**：无稳定焦点/测试需求时可省略；空 `id` → 自动 `btn-N`（会话内递增，**不**保证跨 rebuild 同一逻辑实例）。
+//! - 多实例非受控、稳定焦点、冒烟选择器：请显式稳定 `id`（见 `docs/COMPONENT_LIBRARY.md` §4.2）。
 //! - hover / focus 用 `peek` + 每帧 paint sync，避免整树 rebuild。
 //! - 子节点可为文字或图标；Lucide 图标会保留自身 `text_size`。
 
@@ -687,9 +688,12 @@ impl From<ButtonBuilder> for Element {
         });
 
         for mut child in builder.content {
-            // Preserve Solid-style bindings (`bind_text` / `bind_prop`): keep template_id + unmount hook.
-            let preserve_binding = child.template_id.is_some() || child.on_unmount.is_some();
-            if preserve_binding && child.text.is_some() {
+            // Always build caption through `build_text_node` so measure/paint match static
+            // `"…"` children. Re-attach bind_text identity (template_id + unmount) so Solid-style
+            // updates keep targeting this leaf — preserving the raw bind shell used to leave a
+            // zero-content outline button in gallery (Mark invalid).
+            if let Some(text_content) = child.text.take() {
+                let preserve_binding = child.template_id.is_some() || child.on_unmount.is_some();
                 let mut color = text_color;
                 if builder.disabled {
                     color[3] = (color[3] as f32 * 0.5) as u8;
@@ -701,36 +705,7 @@ impl From<ButtonBuilder> for Element {
                 } else {
                     builder.text_style.size_px
                 };
-                child.text_style.color = color;
-                child.text_style.underline = underline;
-                child.text_style.size = size_px;
-                if builder.variant == ButtonVariant::Link {
-                    child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
-                } else if let Some(uo) = builder.text_style.underline_offset_px {
-                    child.text_style.underline_offset = uo;
-                }
-                // Content-sized caption: do not `min_w(0)` / `w(100%)` / shrink — those let a
-                // wrapping HStack compress the leaf below glyph width and force mid-word wrap
-                // (e.g. "Secondary" → "Secondar"/"y"), which also inflates height and collapses
-                // sibling card layout.
-                child = child.text_center().flex_shrink(0.0);
-                el = el.child(child);
-            } else if let Some(text_content) = child.text.take() {
-                let mut color = text_color;
-                if builder.disabled {
-                    color[3] = (color[3] as f32 * 0.5) as u8;
-                }
-                let underline = builder.variant == ButtonVariant::Link && is_hovered;
-                // `Icon` 等叶子在宏里设置了 `text_size`；若只用 `builder.text_style.size_px`，
-                // icon-sm / icon / icon-lg 会全部被压成按钮默认字号（仅 icon-xs 碰巧一致）。
-                let is_lucide_glyph = child.text_style.font_family.as_deref() == Some("lucide");
-                let size_px = if is_lucide_glyph {
-                    child.text_style.size
-                } else {
-                    builder.text_style.size_px
-                };
-                // Keep caption min-content sized; parent `justify_center` / `items_center` centers it.
-                let text_node = build_text_node(
+                let mut text_node = build_text_node(
                     text_content,
                     TextNodeConfig {
                         color,
@@ -742,11 +717,24 @@ impl From<ButtonBuilder> for Element {
                         },
                         font_family: child.text_style.font_family.clone(),
                         size_px,
-                        ..builder.text_style
+                        weight: if is_lucide_glyph {
+                            400
+                        } else {
+                            builder.text_style.weight
+                        },
+                        ..builder.text_style.clone()
                     },
                 )
                 .text_center()
                 .flex_shrink(0.0);
+                if preserve_binding {
+                    if let Some(tid) = child.template_id.take() {
+                        text_node.template_id = Some(tid);
+                    }
+                    if let Some(hook) = child.on_unmount.take() {
+                        text_node.on_unmount = Some(hook);
+                    }
+                }
                 el = el.child(text_node);
             } else {
                 el = el.child(child);

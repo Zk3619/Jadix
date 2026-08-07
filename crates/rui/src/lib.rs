@@ -47,6 +47,14 @@ mod headless_layout_tests;
 mod diagnose_button_text_tests;
 
 #[cfg(test)]
+#[path = "../test/diagnose_button_bind_text.rs"]
+mod diagnose_button_bind_text_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_input_shape_suffix.rs"]
+mod diagnose_input_shape_suffix_tests;
+
+#[cfg(test)]
 #[path = "../test/diagnose_weight_clip.rs"]
 mod diagnose_weight_clip_tests;
 
