@@ -210,6 +210,23 @@ impl AppState {
         self.last_resized_event = Some(physical_size);
     }
 
+    /// Pick the swapchain / layout size for this frame.
+    ///
+    /// Prefer the latest `WindowEvent::Resized` over `inner_size()`. Using
+    /// `max(inner, resized)` (old behavior) correctly covered grow-lag, but on
+    /// **shrink** a still-large `inner_size` kept the layout viewport tall: content
+    /// still "fit" (`can_scroll_y=false`) while the OS window already clipped the
+    /// bottom — gallery looked like it entered a broken scroll/clip state.
+    pub(super) fn resolve_surface_size(
+        inner: PhysicalSize<u32>,
+        last_resized: Option<PhysicalSize<u32>>,
+    ) -> PhysicalSize<u32> {
+        match last_resized {
+            Some(e) if e.width > 0 && e.height > 0 => e,
+            _ => inner,
+        }
+    }
+
     pub(super) fn ui_scale(&self) -> f32 {
         self.window.scale_factor() as f32
     }
@@ -1013,19 +1030,14 @@ impl AppState {
         let render_begin = Instant::now();
         let inner = self.window.inner_size();
         if inner.width > 0 && inner.height > 0 {
-            let mut w = inner.width;
-            let mut h = inner.height;
-            if let Some(e) = self.last_resized_event {
-                w = w.max(e.width);
-                h = h.max(e.height);
-            }
-            let target = PhysicalSize::new(w, h);
+            let target = Self::resolve_surface_size(inner, self.last_resized_event);
             if target.width != self.config.width || target.height != self.config.height {
                 self.resize(target);
             }
+            // Drop the event once `inner_size` matches (grow or shrink).
             if self
                 .last_resized_event
-                .is_some_and(|e| inner.width >= e.width && inner.height >= e.height)
+                .is_some_and(|e| inner.width == e.width && inner.height == e.height)
             {
                 self.last_resized_event = None;
             }
@@ -2918,5 +2930,38 @@ mod template_path_tests {
         assert!(!AppState::template_path_matches(&root, &[1, 0], "a"));
         // Shrunk subtree.
         assert!(!AppState::template_path_matches(&root, &[9], "a"));
+    }
+}
+
+#[cfg(test)]
+mod surface_resize_tests {
+    use super::AppState;
+    use winit::dpi::PhysicalSize;
+
+    #[test]
+    fn shrink_prefers_resized_event_not_stale_large_inner() {
+        let inner = PhysicalSize::new(800, 947);
+        let resized = PhysicalSize::new(800, 525);
+        let target = AppState::resolve_surface_size(inner, Some(resized));
+        assert_eq!(
+            (target.width, target.height),
+            (800, 525),
+            "shrink must adopt Resized height; max(inner,resized) left layout tall and disabled scroll"
+        );
+    }
+
+    #[test]
+    fn grow_prefers_resized_event_when_inner_lags() {
+        let inner = PhysicalSize::new(800, 525);
+        let resized = PhysicalSize::new(800, 947);
+        let target = AppState::resolve_surface_size(inner, Some(resized));
+        assert_eq!((target.width, target.height), (800, 947));
+    }
+
+    #[test]
+    fn without_resized_event_uses_inner() {
+        let inner = PhysicalSize::new(640, 480);
+        let target = AppState::resolve_surface_size(inner, None);
+        assert_eq!((target.width, target.height), (640, 480));
     }
 }

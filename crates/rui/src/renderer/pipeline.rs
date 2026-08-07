@@ -52,10 +52,31 @@ pub struct InstanceInput {
     pub shadow_inset: f32,
     /// Visual rotation in degrees around rect center.
     pub rotate_deg: f32,
-    pub _padding: f32,
+    /// Overflow clip in the same space as `rect_pos` (logical or physical after scale).
+    /// When `clip_size[0] < 0.0`, clipping is disabled.
+    pub clip_pos: [f32; 2],
+    pub clip_size: [f32; 2],
+    pub _pad: f32,
 }
 
 impl InstanceInput {
+    /// Sentinel: fragment shader skips scissor-style discard.
+    pub const NO_CLIP_SIZE: [f32; 2] = [-1.0, -1.0];
+
+    pub fn with_clip(mut self, clip: Option<[f32; 4]>) -> Self {
+        match clip {
+            Some([x, y, w, h]) if w > 0.0 && h > 0.0 => {
+                self.clip_pos = [x, y];
+                self.clip_size = [w, h];
+            }
+            _ => {
+                self.clip_pos = [0.0, 0.0];
+                self.clip_size = Self::NO_CLIP_SIZE;
+            }
+        }
+        self
+    }
+
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
@@ -121,6 +142,16 @@ impl InstanceInput {
                     offset: 104,
                     shader_location: 13,
                     format: wgpu::VertexFormat::Float32,
+                },
+                wgpu::VertexAttribute {
+                    offset: 108,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 116,
+                    shader_location: 15,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }

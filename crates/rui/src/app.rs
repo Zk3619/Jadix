@@ -61,13 +61,13 @@ pub mod error_boundary;
 pub mod resource;
 pub mod router;
 pub mod runtime;
-mod scroll_support;
+pub(crate) mod scroll_support;
 mod secondary_window;
 mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tray;
-mod tree_hit;
+pub(crate) mod tree_hit;
 pub mod ui_bridge;
 mod window_events;
 pub mod window_keys;

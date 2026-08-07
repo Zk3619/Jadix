@@ -32,10 +32,14 @@ impl BoxBuilder {
         }
     }
 
-    /// Stable id for scroll viewport registration (`scroll:{id}`).
-    /// Also accepted as RSX `id` on Box / VStack / HStack / GStack / Rect.
+    /// Stable id for scroll viewport registration (`scroll:{id}`) and tree identity
+    /// (`template_id`, e.g. Portal `mount`). RSX `id` on Box / VStack / HStack / GStack / Rect.
     pub fn id(mut self, id: impl Into<String>) -> Self {
-        self.scroll_id = Some(id.into());
+        let id = id.into();
+        self.scroll_id = Some(id.clone());
+        if self.el.template_id.is_none() {
+            self.el = self.el.template_id(id);
+        }
         self
     }
 
@@ -391,6 +395,11 @@ impl BoxBuilder {
         if rel {
             self.el = self.el.relative();
         }
+        self
+    }
+
+    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+        self.el = self.el.pointer_events(mode);
         self
     }
 

@@ -261,6 +261,10 @@ impl BaseComponentBuilder {
         }
         self
     }
+    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+        self.el = self.el.pointer_events(mode);
+        self
+    }
     pub fn bottom(mut self, val: impl IntoDimension) -> Self {
         self.el = self.el.bottom(val);
         self

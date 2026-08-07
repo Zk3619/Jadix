@@ -18,6 +18,8 @@ struct InstanceInput {
     @location(11) shadow_spread: f32,
     @location(12) shadow_inset: f32,
     @location(13) rotate_deg: f32,
+    @location(14) clip_pos: vec2<f32>,
+    @location(15) clip_size: vec2<f32>,
 };
 
 struct VertexOutput {
@@ -33,6 +35,9 @@ struct VertexOutput {
     @location(8) shadow_spread: f32,
     @location(9) shadow_inset: f32,
     @location(10) p: vec2<f32>, // local point relative to rect center (unrotated)
+    @location(11) clip_pos: vec2<f32>,
+    @location(12) clip_size: vec2<f32>,
+    @location(13) frag_px: vec2<f32>,
 };
 
 struct Globals {
@@ -97,6 +102,9 @@ fn vs_main(
     out.shadow_blur = instance.shadow_blur;
     out.shadow_spread = instance.shadow_spread;
     out.shadow_inset = instance.shadow_inset;
+    out.clip_pos = instance.clip_pos;
+    out.clip_size = instance.clip_size;
+    out.frag_px = physical_pos;
 
     return out;
 }
@@ -114,6 +122,17 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // CSS overflow clip: keep full rounded-rect geometry (borders stay on true edges)
+    // and discard fragments outside the scroll/overflow clip. Intersecting the rect into
+    // the visible box would re-draw borders on the viewport edge ("sticky" top/bottom).
+    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
+        let c1 = in.clip_pos + in.clip_size;
+        if (in.frag_px.x < in.clip_pos.x || in.frag_px.x >= c1.x
+            || in.frag_px.y < in.clip_pos.y || in.frag_px.y >= c1.y) {
+            discard;
+        }
+    }
+
     let b = in.rect_size * 0.5;
 
     // SDF distance to the edge of the rounded box

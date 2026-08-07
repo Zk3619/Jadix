@@ -235,9 +235,21 @@ pub fn sync_floating_placement(root: &mut Element, viewport_w: f32, viewport_h: 
     changed
 }
 
-/// 标记 `rui_portal=1`，布局时提升到根末尾。
+/// 标记 `rui_portal=1`，布局时提升到根 portal 叠层（Solid `<Portal>` / `document.body`）。
 pub fn mark_portal(mut el: Element) -> Element {
     el.set_attr("rui_portal", "1");
+    el
+}
+
+/// 标记 portal，并挂到宿主 `template_id`（Solid `<Portal mount={…}>`）。
+///
+/// 空 / 找不到宿主时，[`crate::layout::layout_tree::hoist_portal_subtrees`] 回退到根叠层。
+pub fn mark_portal_mount(mut el: Element, mount: impl AsRef<str>) -> Element {
+    let mount = mount.as_ref().trim();
+    el = mark_portal(el);
+    if !mount.is_empty() {
+        el.set_attr(crate::layout::layout_tree::ATTR_PORTAL_MOUNT, mount);
+    }
     el
 }
 
@@ -245,6 +257,12 @@ pub fn mark_portal(mut el: Element) -> Element {
 pub fn portal_panel(mut inner: Element, z: i32) -> Element {
     inner.style.z_index = z;
     mark_portal(inner)
+}
+
+/// 设置 z-index，并 portal 提升到指定宿主。
+pub fn portal_panel_mount(mut inner: Element, z: i32, mount: impl AsRef<str>) -> Element {
+    inner.style.z_index = z;
+    mark_portal_mount(inner, mount)
 }
 
 /// 全屏 underlay：点击将 `open` 设为 false；绝对定位 + portal。

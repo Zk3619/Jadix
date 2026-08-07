@@ -10,7 +10,10 @@ use std::rc::Rc;
 
 use winit::event::MouseButton;
 
-use crate::core::tree::Element;
+use crate::core::tree::{
+    pointer_events_targets_children, pointer_events_targets_self, Element,
+};
+use crate::layout::layout_tree::portal_hit_passthrough;
 
 use super::tree_hit;
 
@@ -76,7 +79,12 @@ pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
 }
 
 fn pointer_events_blocked(el: &Element) -> bool {
-    !el.pointer_events_enabled()
+    !pointer_events_targets_children(el)
+}
+
+#[inline]
+fn claims_own_bounds(el: &Element) -> bool {
+    pointer_events_targets_self(el) && !portal_hit_passthrough(el)
 }
 
 fn hit_path_rec(
@@ -137,7 +145,12 @@ fn hit_path_rec(
     }
 
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
-    if child_hit || inside {
+    let hit = if claims_own_bounds(el) {
+        child_hit || inside
+    } else {
+        child_hit
+    };
+    if hit {
         true
     } else {
         out.truncate(entry_index);

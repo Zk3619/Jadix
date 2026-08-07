@@ -4,7 +4,10 @@ use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::CursorIcon;
 
-use crate::core::tree::{CursorKind, Element};
+use crate::core::tree::{
+    pointer_events_targets_children, pointer_events_targets_self, CursorKind, Element,
+};
+use crate::layout::layout_tree::portal_hit_passthrough;
 
 thread_local! {
     static HOVER_HANDLERS_SCRATCH: RefCell<Vec<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>> =
@@ -13,7 +16,12 @@ thread_local! {
 
 #[inline]
 fn pointer_events_blocked(el: &Element) -> bool {
-    !el.pointer_events_enabled()
+    !pointer_events_targets_children(el)
+}
+
+#[inline]
+fn claims_own_bounds(el: &Element) -> bool {
+    pointer_events_targets_self(el) && !portal_hit_passthrough(el)
 }
 
 fn hit_test_child_indices(el: &Element) -> Vec<usize> {
@@ -101,6 +109,9 @@ pub(super) fn pick_cursor(
     }
 
     if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+        if !claims_own_bounds(el) {
+            return None;
+        }
         el.cursor
     } else {
         None
@@ -184,6 +195,9 @@ pub(super) fn find_focus_id_at(
     }
 
     if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+        if !claims_own_bounds(el) {
+            return None;
+        }
         return el.focus_id.clone();
     }
     None
@@ -471,13 +485,16 @@ fn pick_hover_target(
     }
 
     if inside {
+        if !claims_own_bounds(el) {
+            return None;
+        }
         el.on_hover.clone()
     } else {
         None
     }
 }
 
-pub(super) fn find_click(
+pub(crate) fn find_click(
     el: &Element,
     x: f32,
     y: f32,
@@ -521,6 +538,9 @@ pub(super) fn find_click(
         }
     }
     if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+        if !claims_own_bounds(el) {
+            return None;
+        }
         if let Some(cb) = &el.on_click {
             return Some(cb.clone());
         }

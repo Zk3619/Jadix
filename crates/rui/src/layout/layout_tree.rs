@@ -25,22 +25,192 @@ use crate::core::tree::Element;
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 
-/// 将带 `rui_portal=1` 的子树从原父节点摘下并挂?`root` 末尾（绘制顺序靠后，便于浮层）?/// 返回本帧提升的子树数；非 0 时应做完?Taffy 重建（见 `AppState::render`）.
+/// SolidJS-style portal mount: default overlays live on a dedicated absolute layer at the
+/// app root (analogous to `document.body`), never as flex/grid siblings of the app shell.
+pub const PORTAL_LAYER_ID: &str = "__rui_portal_layer";
+
+/// Attr on nodes placed by [`hoist_portal_subtrees`] (root layer or a `mount` host).
+pub const ATTR_HOISTED_PORTAL: &str = "rui_hoisted_portal";
+
+/// Optional Solid-style `mount` target: host [`Element::template_id`] (see [`Portal`] mount prop).
+pub const ATTR_PORTAL_MOUNT: &str = "rui_portal_mount";
+
+/// Portal stacking shells must not steal pointer / wheel hits from content underneath.
+///
+/// True when the node opts into [`PointerEvents::BoxNone`], or is the root
+/// [`PORTAL_LAYER_ID`] mount. Interactive hoisted surfaces (`portal_panel` underlays)
+/// stay `auto` so they still receive clicks.
+#[inline]
+pub fn portal_hit_passthrough(el: &Element) -> bool {
+    use crate::core::tree::PointerEvents;
+    el.pointer_events_mode() == PointerEvents::BoxNone
+        || el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+}
+
+/// Lift `rui_portal=1` subtrees onto their mount host (Solid `<Portal mount={…}>`).
+///
+/// - Default / missing host → stable root layer [`PORTAL_LAYER_ID`] (`document.body`).
+/// - `rui_portal_mount=<template_id>` → that host's children (local overlay stack).
+/// - Unknown mount id → falls back to the root layer.
+/// - Strips prior [`ATTR_HOISTED_PORTAL`] nodes each pass (no orphan accumulation).
+/// - Returns how many subtrees were lifted; non-zero → full Taffy rebuild (`AppState::render`).
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
+    strip_hoisted_portals(root);
+    ensure_portal_layer(root);
+
     let mut lifted = Vec::new();
     hoist_portal_rec(root, &mut lifted);
     let n = lifted.len();
-    root.children.extend(lifted);
+
+    // (mount_id, node) — empty mount_id means root layer.
+    let mut placements: Vec<(String, Element)> = Vec::with_capacity(lifted.len());
+    for mut node in lifted {
+        let mount = node
+            .attrs
+            .remove(ATTR_PORTAL_MOUNT)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        node.attrs.remove("rui_portal");
+        node.set_attr(ATTR_HOISTED_PORTAL, "1");
+        // Empty / wrapper portals must not steal scroll; interactive underlays keep `auto`.
+        if node.pointer_events_mode() == crate::core::tree::PointerEvents::Auto
+            && portal_root_defaults_to_box_none(&node)
+        {
+            node.set_attr(
+                crate::core::tree::ATTR_POINTER_EVENTS,
+                crate::core::tree::PointerEvents::BoxNone.as_str(),
+            );
+        }
+        // Absolute so overlays never flex-split the shell / host flow.
+        if node.style.position != taffy::style::Position::Absolute {
+            node.style.position = taffy::style::Position::Absolute;
+        }
+        placements.push((mount, node));
+    }
+
+    // Resolve hosts after lift so we never target a node that was itself portaled away.
+    // Empty path (mount == root) falls back to the body layer — never flex-split the shell.
+    let mut root_bucket = Vec::new();
+    let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
+    for (mount, node) in placements {
+        if mount.is_empty() {
+            root_bucket.push(node);
+            continue;
+        }
+        let mut path = Vec::new();
+        if find_template_id_path(root, &mount, &mut path) && !path.is_empty() {
+            if let Some((_, kids)) = host_buckets.iter_mut().find(|(p, _)| *p == path) {
+                kids.push(node);
+            } else {
+                host_buckets.push((path, vec![node]));
+            }
+        } else {
+            root_bucket.push(node);
+        }
+    }
+
+    let layer_idx = root
+        .children
+        .iter()
+        .position(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        .expect("portal layer");
+    {
+        let layer = &mut root.children[layer_idx];
+        layer.style.position = taffy::style::Position::Absolute;
+        if layer.pointer_events_mode() == crate::core::tree::PointerEvents::Auto {
+            layer.set_attr(
+                crate::core::tree::ATTR_POINTER_EVENTS,
+                crate::core::tree::PointerEvents::BoxNone.as_str(),
+            );
+        }
+        layer.children.clear();
+        layer.children.append(&mut root_bucket);
+    }
+
+    for (path, mut kids) in host_buckets {
+        let host = element_mut_by_path(root, &path);
+        host.children.append(&mut kids);
+    }
+
     n
+}
+
+fn portal_root_defaults_to_box_none(el: &Element) -> bool {
+    el.on_click.is_none()
+        && el.on_pointer_down.is_none()
+        && el.on_pointer_up.is_none()
+        && el.on_context_menu.is_none()
+        && el.on_double_click.is_none()
+}
+
+fn strip_hoisted_portals(node: &mut Element) {
+    node.children.retain(|c| {
+        c.attrs
+            .get(ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            != Some("1")
+    });
+    for c in &mut node.children {
+        strip_hoisted_portals(c);
+    }
+}
+
+fn ensure_portal_layer(root: &mut Element) {
+    if root
+        .children
+        .iter()
+        .any(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+    {
+        return;
+    }
+    root.children.push(
+        Element::new()
+            .absolute()
+            .inset(0.0)
+            .w("100%")
+            .h("100%")
+            .pointer_events_box_none()
+            .template_id(PORTAL_LAYER_ID),
+    );
+}
+
+fn find_template_id_path(node: &Element, id: &str, path: &mut Vec<usize>) -> bool {
+    if node.template_id.as_deref() == Some(id) {
+        return true;
+    }
+    for (i, c) in node.children.iter().enumerate() {
+        // Do not search inside the root portal layer — hosts live in the app tree.
+        if c.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            continue;
+        }
+        path.push(i);
+        if find_template_id_path(c, id, path) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
+fn element_mut_by_path<'a>(root: &'a mut Element, path: &[usize]) -> &'a mut Element {
+    let mut cur = root;
+    for &i in path {
+        cur = &mut cur.children[i];
+    }
+    cur
 }
 
 fn hoist_portal_rec(node: &mut Element, lifted: &mut Vec<Element>) {
     let mut i = 0;
     while i < node.children.len() {
+        if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            i += 1;
+            continue;
+        }
         hoist_portal_rec(&mut node.children[i], lifted);
         if node.children[i].attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
-            let mut n = node.children.remove(i);
-            n.attrs.remove("rui_portal");
+            let n = node.children.remove(i);
             lifted.push(n);
         } else {
             i += 1;
@@ -279,6 +449,8 @@ struct TextMeasureMeta {
     letter_spacing: f32,
     /// When set, leaf measure uses [`crate::text::prepare_rich`] instead of concat-only prepare.
     spans: Option<Vec<crate::style::TextSpan>>,
+    /// `whitespace-nowrap`: ignore definite avail shrink; min/max content = intrinsic.
+    nowrap: bool,
 }
 
 /// 单次 `compute_layout` 内对 `measured_text_leaf_size` ?memo（Taffy 会对同一叶多次探测）.
@@ -348,9 +520,15 @@ fn measured_text_leaf_size(
     let size = m.size;
     let is_icon = m.is_icon;
 
-    let avail_width = match available_space.width {
-        taffy::style::AvailableSpace::Definite(w) => Some(w.max(1.0)),
-        _ => None,
+    // `whitespace-nowrap` (ShadCN Button): ignore definite shrink — min/max content are the
+    // full line, matching CSS inline-flex + nowrap (browser grows the button instead of wrapping).
+    let avail_width = if m.nowrap {
+        None
+    } else {
+        match available_space.width {
+            taffy::style::AvailableSpace::Definite(w) => Some(w.max(1.0)),
+            _ => None,
+        }
     };
 
     let single_line_height = if is_icon {
@@ -381,15 +559,29 @@ fn measured_text_leaf_size(
             let gaps = blob.chars().count().saturating_sub(1) as f32;
             intrinsic_w = (intrinsic_w + gaps * m.letter_spacing).max(0.0);
         }
-        let min_content = prepared.max_segment_width.min(intrinsic_w).max(1.0);
-        let width = if let Some(w) = known_dimensions.width {
+        let min_content = if m.nowrap {
+            intrinsic_w.max(1.0)
+        } else {
+            prepared.max_segment_width.min(intrinsic_w).max(1.0)
+        };
+        let width = if m.nowrap {
+            known_dimensions
+                .width
+                .map(|w| w.max(intrinsic_w).max(1.0))
+                .unwrap_or(intrinsic_w)
+        } else if let Some(w) = known_dimensions.width {
             w.max(1.0)
         } else if let Some(w) = avail_width {
             intrinsic_w.min(w.max(1.0)).max(min_content)
         } else {
             intrinsic_w
         };
-        let metrics = crate::text::layout(&prepared, width.max(1.0));
+        let layout_w = if m.nowrap {
+            intrinsic_w.max(1.0)
+        } else {
+            width.max(1.0)
+        };
+        let metrics = crate::text::layout(&prepared, layout_w);
         (width, metrics.height.max(single_line_height))
     } else {
         crate::text::measure_leaf(
@@ -400,6 +592,7 @@ fn measured_text_leaf_size(
             known_dimensions.width,
             avail_width,
             m.letter_spacing,
+            m.nowrap,
         )
     };
     let height = match known_dimensions.height {
@@ -525,6 +718,8 @@ impl LayoutTree {
                         weight: element.text_style.weight,
                         letter_spacing: element.text_style.letter_spacing,
                         spans: element.text_spans.clone(),
+                        nowrap: element.text_style.white_space
+                            == crate::style::WhiteSpace::Nowrap,
                     },
                 );
                 return;
@@ -896,6 +1091,8 @@ impl LayoutTree {
                         weight: element.text_style.weight,
                         letter_spacing: element.text_style.letter_spacing,
                         spans: element.text_spans.clone(),
+                        nowrap: element.text_style.white_space
+                            == crate::style::WhiteSpace::Nowrap,
                     },
                 );
             }
@@ -1030,20 +1227,22 @@ impl LayoutTree {
         {
             clip = Some(intersect_rect(clip, render_rect));
         }
-        let draw_rect = intersect_rect(clip, render_rect);
+        let visible_rect = intersect_rect(clip, render_rect);
 
         // Hit Testing (Update cursor if mouse is over visible part)
-        if mouse_pos[0] >= draw_rect[0]
-            && mouse_pos[0] <= draw_rect[0] + draw_rect[2]
-            && mouse_pos[1] >= draw_rect[1]
-            && mouse_pos[1] <= draw_rect[1] + draw_rect[3]
+        if mouse_pos[0] >= visible_rect[0]
+            && mouse_pos[0] <= visible_rect[0] + visible_rect[2]
+            && mouse_pos[1] >= visible_rect[1]
+            && mouse_pos[1] <= visible_rect[1] + visible_rect[3]
         {
             if let Some(c) = element.cursor {
                 *hover_cursor = Some(c);
             }
         }
 
-        // Collect main instance (solid / gradient strips + shadows)
+        // Collect main instance (solid / gradient strips + shadows).
+        // Geometry stays full `render_rect`; overflow is fragment-clipped via `.with_clip(clip)`.
+        // Baking `visible_rect` into pos/size made scrolled borders stick to the viewport edge.
         let border_w = if element.style.border_style == crate::style::LineStyle::None {
             0.0
         } else {
@@ -1052,9 +1251,9 @@ impl LayoutTree {
         let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
-        if (has_bg || has_border || has_shadow) && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
+        if (has_bg || has_border || has_shadow) && visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
             let resolved_radii =
-                resolve_corner_radii(element.style.radii, draw_rect[2], draw_rect[3]);
+                resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
             if let Some(grad) = element.style.bg_gradient {
                 const STRIPS: usize = 24;
                 let angle = grad.angle_deg.to_radians();
@@ -1076,39 +1275,67 @@ impl LayoutTree {
                     };
                     let color = mul_color_alpha(lerp_color(grad.from, grad.to, t), opacity);
                     let (pos, size) = if horizontal {
-                        let sw = draw_rect[2] / STRIPS as f32;
+                        let sw = render_rect[2] / STRIPS as f32;
                         (
-                            [draw_rect[0] + i as f32 * sw, draw_rect[1]],
-                            [sw.max(0.5), draw_rect[3]],
+                            [render_rect[0] + i as f32 * sw, render_rect[1]],
+                            [sw.max(0.5), render_rect[3]],
                         )
                     } else {
-                        let sh = draw_rect[3] / STRIPS as f32;
+                        let sh = render_rect[3] / STRIPS as f32;
                         (
-                            [draw_rect[0], draw_rect[1] + i as f32 * sh],
-                            [draw_rect[2], sh.max(0.5)],
+                            [render_rect[0], render_rect[1] + i as f32 * sh],
+                            [render_rect[2], sh.max(0.5)],
                         )
                     };
-                    instances.push(InstanceInput {
-                        rect_pos: pos,
-                        rect_size: size,
-                        color,
-                        border_color: [0.0, 0.0, 0.0, 0.0],
-                        radii: resolved_radii,
-                        border_width: 0.0,
-                        shadow_color: [0.0, 0.0, 0.0, 0.0],
-                        shadow_offset: [0.0, 0.0],
-                        shadow_blur: 0.0,
-                        shadow_spread: 0.0,
-                        shadow_inset: 0.0,
-                        rotate_deg,
-                        _padding: 0.0,
-                    });
+                    instances.push(
+                        InstanceInput {
+                            rect_pos: pos,
+                            rect_size: size,
+                            color,
+                            border_color: [0.0, 0.0, 0.0, 0.0],
+                            radii: resolved_radii,
+                            border_width: 0.0,
+                            shadow_color: [0.0, 0.0, 0.0, 0.0],
+                            shadow_offset: [0.0, 0.0],
+                            shadow_blur: 0.0,
+                            shadow_spread: 0.0,
+                            shadow_inset: 0.0,
+                            rotate_deg,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            _pad: 0.0,
+                        }
+                        .with_clip(clip),
+                    );
                 }
                 if has_border || has_shadow {
-                    instances.push(InstanceInput {
-                        rect_pos: [draw_rect[0], draw_rect[1]],
-                        rect_size: [draw_rect[2], draw_rect[3]],
-                        color: [0.0, 0.0, 0.0, 0.0],
+                    instances.push(
+                        InstanceInput {
+                            rect_pos: [render_rect[0], render_rect[1]],
+                            rect_size: [render_rect[2], render_rect[3]],
+                            color: [0.0, 0.0, 0.0, 0.0],
+                            border_color: mul_color_alpha(element.style.border_color, opacity),
+                            radii: resolved_radii,
+                            border_width: border_w,
+                            shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
+                            shadow_offset: element.style.shadow_offset,
+                            shadow_blur: element.style.shadow_blur,
+                            shadow_spread: element.style.shadow_spread,
+                            shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
+                            rotate_deg,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            _pad: 0.0,
+                        }
+                        .with_clip(clip),
+                    );
+                }
+            } else {
+                instances.push(
+                    InstanceInput {
+                        rect_pos: [render_rect[0], render_rect[1]],
+                        rect_size: [render_rect[2], render_rect[3]],
+                        color: mul_color_alpha(element.style.bg_color, opacity),
                         border_color: mul_color_alpha(element.style.border_color, opacity),
                         radii: resolved_radii,
                         border_width: border_w,
@@ -1118,45 +1345,37 @@ impl LayoutTree {
                         shadow_spread: element.style.shadow_spread,
                         shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
                         rotate_deg,
-                        _padding: 0.0,
-                    });
-                }
-            } else {
-                instances.push(InstanceInput {
-                    rect_pos: [draw_rect[0], draw_rect[1]],
-                    rect_size: [draw_rect[2], draw_rect[3]],
-                    color: mul_color_alpha(element.style.bg_color, opacity),
-                    border_color: mul_color_alpha(element.style.border_color, opacity),
-                    radii: resolved_radii,
-                    border_width: border_w,
-                    shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
-                    shadow_offset: element.style.shadow_offset,
-                    shadow_blur: element.style.shadow_blur,
-                    shadow_spread: element.style.shadow_spread,
-                    shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
-                    rotate_deg,
-                    _padding: 0.0,
-                });
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        _pad: 0.0,
+                    }
+                    .with_clip(clip),
+                );
             }
             for sh in &element.style.extra_shadows {
                 if sh.color[3] <= 0.0 {
                     continue;
                 }
-                instances.push(InstanceInput {
-                    rect_pos: [draw_rect[0], draw_rect[1]],
-                    rect_size: [draw_rect[2], draw_rect[3]],
-                    color: [0.0, 0.0, 0.0, 0.0],
-                    border_color: [0.0, 0.0, 0.0, 0.0],
-                    radii: resolved_radii,
-                    border_width: 0.0,
-                    shadow_color: mul_color_alpha(sh.color, opacity),
-                    shadow_offset: sh.offset,
-                    shadow_blur: sh.blur,
-                    shadow_spread: sh.spread,
-                    shadow_inset: if sh.inset { 1.0 } else { 0.0 },
-                    rotate_deg,
-                    _padding: 0.0,
-                });
+                instances.push(
+                    InstanceInput {
+                        rect_pos: [render_rect[0], render_rect[1]],
+                        rect_size: [render_rect[2], render_rect[3]],
+                        color: [0.0, 0.0, 0.0, 0.0],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        radii: resolved_radii,
+                        border_width: 0.0,
+                        shadow_color: mul_color_alpha(sh.color, opacity),
+                        shadow_offset: sh.offset,
+                        shadow_blur: sh.blur,
+                        shadow_spread: sh.spread,
+                        shadow_inset: if sh.inset { 1.0 } else { 0.0 },
+                        rotate_deg,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        _pad: 0.0,
+                    }
+                    .with_clip(clip),
+                );
             }
         }
 
@@ -1174,8 +1393,8 @@ impl LayoutTree {
                 lay_w + outline_w * 2.0,
                 lay_h + outline_w * 2.0,
             ];
-            let outline_draw = intersect_rect(parent_clip, outline_rect);
-            if outline_draw[2] > 0.0 && outline_draw[3] > 0.0 {
+            let outline_visible = intersect_rect(parent_clip, outline_rect);
+            if outline_visible[2] > 0.0 && outline_visible[3] > 0.0 {
                 let mut outline_radii = element.style.radii;
                 for r in &mut outline_radii {
                     if *r >= 0.0 {
@@ -1183,29 +1402,34 @@ impl LayoutTree {
                     }
                 }
                 let resolved_radii =
-                    resolve_corner_radii(outline_radii, outline_draw[2], outline_draw[3]);
-                instances.push(InstanceInput {
-                    rect_pos: [outline_draw[0], outline_draw[1]],
-                    rect_size: [outline_draw[2], outline_draw[3]],
-                    color: [0.0, 0.0, 0.0, 0.0],
-                    border_color: mul_color_alpha(element.style.outline_color, opacity),
-                    radii: resolved_radii,
-                    border_width: outline_w,
-                    shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    shadow_offset: [0.0, 0.0],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_inset: 0.0,
-                    rotate_deg,
-                    _padding: 0.0,
-                });
+                    resolve_corner_radii(outline_radii, outline_rect[2], outline_rect[3]);
+                instances.push(
+                    InstanceInput {
+                        rect_pos: [outline_rect[0], outline_rect[1]],
+                        rect_size: [outline_rect[2], outline_rect[3]],
+                        color: [0.0, 0.0, 0.0, 0.0],
+                        border_color: mul_color_alpha(element.style.outline_color, opacity),
+                        radii: resolved_radii,
+                        border_width: outline_w,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur: 0.0,
+                        shadow_spread: 0.0,
+                        shadow_inset: 0.0,
+                        rotate_deg,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        _pad: 0.0,
+                    }
+                    .with_clip(parent_clip),
+                );
             }
         }
 
         if let Some(tex_key) = element.image_texture.as_ref() {
-            if !tex_key.is_empty() && draw_rect[2] > 0.0 && draw_rect[3] > 0.0 {
+            if !tex_key.is_empty() && visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
                 textured_draws.push(TexturedDraw {
-                    rect: draw_rect,
+                    rect: visible_rect,
                     texture_key: tex_key.clone(),
                     opacity,
                 });
@@ -1735,7 +1959,9 @@ fn push_input_chrome_instances(
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
                     rotate_deg: 0.0,
-                    _padding: 0.0,
+                    clip_pos: [0.0, 0.0],
+                    clip_size: InstanceInput::NO_CLIP_SIZE,
+                    _pad: 0.0,
                 });
             }
         }
@@ -1773,7 +1999,9 @@ fn push_input_chrome_instances(
             shadow_spread: 0.0,
             shadow_inset: 0.0,
             rotate_deg: 0.0,
-            _padding: 0.0,
+            clip_pos: [0.0, 0.0],
+            clip_size: InstanceInput::NO_CLIP_SIZE,
+            _pad: 0.0,
         });
     }
 }

@@ -1,6 +1,9 @@
 //! # Sidebar
 //!
 //! 侧栏布局壳：竖向导航槽位 + 可选页脚。
+//!
+//! 默认 `flex-shrink: 0` 且 `min-width` 与宽度一致，避免主内容区固有宽把侧栏挤扁
+//! （典型 app-shell：rail 不缩，主区 `min-width: 0`）。
 
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
@@ -69,6 +72,9 @@ impl From<SidebarBuilder> for Element {
             col = col.child(f);
         }
         let mut el: Element = col.into();
+        // App-shell: fixed rail must not flex-shrink when the main pane's content has a large
+        // min-content width (gallery Forms inputs). Pair with main `min_w(0)`.
+        el = el.flex_shrink(0.0).min_w(width.as_str());
         el = el.bg(tokens::muted());
         el.style.border_width = 1.0;
         el.style.border_color = tokens::border();

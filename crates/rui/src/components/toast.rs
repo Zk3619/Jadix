@@ -82,9 +82,14 @@ pub fn toast(message: impl Into<String>) -> Element {
 }
 
 /// Host that renders the global toast queue (place near app root).
+///
+/// Returns an **absolute** overlay (`inset: 0`) so the placeholder’s default
+/// `w/h: 100%` does not participate in flex sizing. Otherwise a root
+/// `HStack { sidebar, ScrollArea, toast_host }` splits the main pane with the
+/// toast host and leaves a dead empty column (gallery regression).
 pub fn toast_host() -> Element {
     let open = use_signal(TOAST_HOST_OPEN, || true);
-    reactive_view("__rui_toast_host_view", move || {
+    let host = reactive_view("__rui_toast_host_view", move || {
         let mut q = toast_queue().get();
         if prune_expired(&mut q) {
             toast_queue().set(q.clone());
@@ -111,7 +116,8 @@ pub fn toast_host() -> Element {
         let mut panel: Element = r#box().child(stack).into();
         panel = panel.absolute().right(16.0).top(16.0);
         portal_panel(panel, oz.panel)
-    })
+    });
+    host.absolute().inset(0.0).w("100%").h("100%")
 }
 
 #[cfg(test)]

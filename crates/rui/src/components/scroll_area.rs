@@ -268,6 +268,11 @@ impl ScrollAreaBuilder {
         self
     }
 
+    pub fn min_w(mut self, width: impl IntoDimension) -> Self {
+        self.base = self.base.min_w(width);
+        self
+    }
+
     pub fn flex_grow(mut self, grow: impl crate::core::tree::IntoF32Raw) -> Self {
         self.base = self.base.flex_grow(grow);
         self

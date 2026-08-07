@@ -20,6 +20,91 @@ pub enum CursorKind {
     NotAllowed,
 }
 
+/// Pointer hit policy for [`Element`] (`rui_pointer_events`), RN-aligned subset.
+///
+/// | Mode | Self | Children |
+/// |------|------|----------|
+/// | [`Auto`](Self::Auto) | yes | yes |
+/// | [`None`](Self::None) | no | no |
+/// | [`BoxNone`](Self::BoxNone) | no | yes |
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointerEvents {
+    #[default]
+    Auto,
+    None,
+    BoxNone,
+}
+
+pub const ATTR_POINTER_EVENTS: &str = "rui_pointer_events";
+
+impl PointerEvents {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            "box-none" | "box_none" => Self::BoxNone,
+            "auto" | "" => Self::Auto,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::BoxNone => "box-none",
+        }
+    }
+}
+
+/// Parse HTML-ish bool literals for RSX attrs (`clearable="true"`, `absolute="1"`, …).
+pub fn parse_bool_like(value: impl ParseBoolLike) -> bool {
+    value.to_bool()
+}
+
+pub trait ParseBoolLike {
+    fn to_bool(self) -> bool;
+}
+
+impl ParseBoolLike for bool {
+    fn to_bool(self) -> bool {
+        self
+    }
+}
+
+impl ParseBoolLike for &str {
+    fn to_bool(self) -> bool {
+        match self.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => true,
+            "false" | "0" | "no" | "off" | "" => false,
+            _ => false,
+        }
+    }
+}
+
+impl ParseBoolLike for String {
+    fn to_bool(self) -> bool {
+        self.as_str().to_bool()
+    }
+}
+
+impl ParseBoolLike for &String {
+    fn to_bool(self) -> bool {
+        self.as_str().to_bool()
+    }
+}
+
+/// Whether hit-testing may target this node's own bounds (not only descendants).
+#[inline]
+pub fn pointer_events_targets_self(el: &Element) -> bool {
+    el.pointer_events_mode() == PointerEvents::Auto
+}
+
+/// Whether hit-testing may descend into children.
+#[inline]
+pub fn pointer_events_targets_children(el: &Element) -> bool {
+    el.pointer_events_mode() != PointerEvents::None
+}
+
 /// [`Element::button_hover_paint`]：用于无整树重建的按钮 hover / focus 环同步（见 `components/button.rs`）。
 #[derive(Debug, Clone)]
 pub struct ButtonHoverPaint {
@@ -42,6 +127,10 @@ pub struct InputPaintSync {
     pub leading_scale: Option<f32>,
     /// HTML 风格 `type`（`text` / `password` / `email` / …），影响显示掩码与输入过滤。
     pub input_type: String,
+    /// 非空时可点的清除（叉号）按钮。
+    pub clearable: bool,
+    /// `type=password` 时显示睁眼/闭眼切换明文。
+    pub password_toggle: bool,
 }
 
 /// Generic signal-to-element synchronization hook.
@@ -462,7 +551,6 @@ impl Element {
         self.cursor = Some(c);
         self
     }
-
     pub fn cursor_text(self) -> Self {
         self.cursor_kind(CursorKind::Text)
     }
@@ -542,14 +630,45 @@ impl Element {
         self
     }
 
-    /// `rui_pointer_events=none`：跳过命中（埋层页面等）。
-    pub fn pointer_events_none(mut self) -> Self {
-        self.set_attr("rui_pointer_events", "none");
+    /// `rui_pointer_events`：命中策略（对齐 RN / 实用 CSS 子集）。
+    ///
+    /// - `auto`（默认）：自身与子节点都可命中
+    /// - `none`：自身与子树均不命中（埋层页面等）
+    /// - `box-none`：自身不作为目标，仍命中子节点（portal 壳、装饰层）
+    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+        match PointerEvents::parse(mode.as_ref()) {
+            PointerEvents::Auto => {
+                self.attrs.remove(ATTR_POINTER_EVENTS);
+            }
+            other => {
+                self.set_attr(ATTR_POINTER_EVENTS, other.as_str());
+            }
+        }
         self
     }
 
+    /// [`PointerEvents::None`] — 整树不命中。
+    pub fn pointer_events_none(mut self) -> Self {
+        self.set_attr(ATTR_POINTER_EVENTS, PointerEvents::None.as_str());
+        self
+    }
+
+    /// [`PointerEvents::BoxNone`] — 自身穿透，子节点仍可命中。
+    pub fn pointer_events_box_none(mut self) -> Self {
+        self.set_attr(ATTR_POINTER_EVENTS, PointerEvents::BoxNone.as_str());
+        self
+    }
+
+    pub fn pointer_events_mode(&self) -> PointerEvents {
+        self.attrs
+            .get(ATTR_POINTER_EVENTS)
+            .map(|s| PointerEvents::parse(s))
+            .unwrap_or(PointerEvents::Auto)
+    }
+
+    /// `true` unless [`PointerEvents::None`]（兼容旧调用）。
     pub fn pointer_events_enabled(&self) -> bool {
-        self.attrs.get("rui_pointer_events").map(|s| s.as_str()) != Some("none")
+        self.pointer_events_mode() != PointerEvents::None
     }
     pub fn on_hover(mut self, handler: impl FnMut(bool) + 'static) -> Self {
         self.on_hover = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
@@ -840,6 +959,22 @@ impl Element {
     }
     pub fn text_overflow_ellipsis(self) -> Self {
         self.text_overflow(TextOverflow::Ellipsis)
+    }
+    /// CSS / Tailwind `whitespace-nowrap`: caption stays one line (ShadCN Button).
+    pub fn whitespace_nowrap(mut self) -> Self {
+        self.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+        self.attrs
+            .insert("white_space".to_string(), "nowrap".to_string());
+        self
+    }
+    pub fn white_space(mut self, keyword: impl AsRef<str>) -> Self {
+        let s = keyword.as_ref().trim().to_ascii_lowercase();
+        self.text_style.white_space = match s.as_str() {
+            "nowrap" | "no-wrap" | "pre" => crate::style::WhiteSpace::Nowrap,
+            _ => crate::style::WhiteSpace::Normal,
+        };
+        self.attrs.insert("white_space".to_string(), s);
+        self
     }
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.text_style.selectable = selectable;

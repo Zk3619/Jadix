@@ -47,6 +47,12 @@ pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceI
             out.shadow_offset[1] *= scale;
             out.shadow_blur *= scale;
             out.shadow_spread *= scale;
+            if out.clip_size[0] >= 0.0 && out.clip_size[1] >= 0.0 {
+                out.clip_pos[0] *= scale;
+                out.clip_pos[1] *= scale;
+                out.clip_size[0] *= scale;
+                out.clip_size[1] *= scale;
+            }
             out
         })
         .collect()

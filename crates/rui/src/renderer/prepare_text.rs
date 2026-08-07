@@ -320,6 +320,9 @@ fn node_shape_hash(
     shaping: glyphon::Shaping,
     letter_spacing: f32,
     direction: TextDirection,
+    // Baked into glyphon Attrs on shape — must invalidate when opacity/color flips
+    // (e.g. Input adornments hidden with opacity 0 then shown).
+    color: [u8; 4],
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
@@ -342,6 +345,7 @@ fn node_shape_hash(
         TextDirection::Rtl => 2u8,
     })
     .hash(&mut h);
+    color.hash(&mut h);
     h.finish()
 }
 
@@ -1119,11 +1123,19 @@ pub fn prepare_text_frame(
             scaled_size * scale
         };
 
-        let is_ascii_basic = st.input_caret.is_none() && info.text.is_ascii();
+        let is_input_text =
+            super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref());
+        // Input field text must keep a stable shaping mode across focus: caret install used to
+        // flip ASCII placeholders (e.g. password "Password") from Basic → Advanced and tighten
+        // glyph advances. Labels may still use Basic for scroll perf.
+        let is_ascii_basic =
+            !is_input_text && st.input_caret.is_none() && info.text.is_ascii();
         let shaping = match perf_mode {
             // Editing/caret keeps advanced shaping for cursor fidelity.
             TextPerfMode::HighQuality => {
-                if (force_fast_mode && st.input_caret.is_none()) || is_ascii_basic {
+                if (force_fast_mode && st.input_caret.is_none() && !is_input_text)
+                    || is_ascii_basic
+                {
                     glyphon::Shaping::Basic
                 } else {
                     glyphon::Shaping::Advanced
@@ -1139,7 +1151,11 @@ pub fn prepare_text_frame(
             }
         };
         // Scroll/drag frame: only ASCII non-input text is downgraded to Basic.
-        let shaping = if force_fast_mode && st.input_caret.is_none() && info.text.is_ascii() {
+        let shaping = if force_fast_mode
+            && st.input_caret.is_none()
+            && info.text.is_ascii()
+            && !is_input_text
+        {
             glyphon::Shaping::Basic
         } else {
             shaping
@@ -1148,9 +1164,16 @@ pub fn prepare_text_frame(
         // `layout(&prepared, info.width)` for line-count / max-width hints and drive
         // buffer size from the same logical avail width. Full glyph/buffer sharing with
         // the layout-only FontSystem is still deferred (separate FontSystems).
+        // `whitespace-nowrap`: shape against intrinsic (or wider box), never soft-wrap mid-label.
+        let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
         let (buffer_soft_w, buffer_soft_h) = if let Some(ref prepared) = info.prepared {
-            let metrics = crate::text::layout(prepared, info.width.max(1.0));
-            let soft_w = (info.width.max(1.0) * ui_scale).max(1.0);
+            let layout_w = if nowrap {
+                crate::text::intrinsic_width(prepared).max(info.width).max(1.0)
+            } else {
+                info.width.max(1.0)
+            };
+            let metrics = crate::text::layout(prepared, layout_w);
+            let soft_w = (layout_w * ui_scale).max(1.0);
             let soft_h = (metrics.height * ui_scale)
                 .max(scaled_h)
                 .max(line_height)
@@ -1202,6 +1225,7 @@ pub fn prepare_text_frame(
             shaping,
             st.letter_spacing,
             st.direction,
+            st.color,
         );
 
         if preshape_only {
@@ -1608,7 +1632,9 @@ pub fn prepare_text_frame(
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
                         rotate_deg: 0.0,
-                        _padding: 0.0,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        _pad: 0.0,
                     });
                 };
             for g in run.glyphs.iter() {
@@ -1772,7 +1798,9 @@ pub fn prepare_text_frame(
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
                         rotate_deg: 0.0,
-                        _padding: 0.0,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        _pad: 0.0,
                     });
                 }
                 for g in &entry.glyphs {
@@ -1800,7 +1828,9 @@ pub fn prepare_text_frame(
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
                                 rotate_deg: 0.0,
-                                _padding: 0.0,
+                                clip_pos: [0.0, 0.0],
+                                clip_size: InstanceInput::NO_CLIP_SIZE,
+                                _pad: 0.0,
                             });
                         }
                     }
@@ -1853,7 +1883,9 @@ pub fn prepare_text_frame(
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
                     rotate_deg: 0.0,
-                    _padding: 0.0,
+                    clip_pos: [0.0, 0.0],
+                    clip_size: InstanceInput::NO_CLIP_SIZE,
+                    _pad: 0.0,
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {
@@ -2024,5 +2056,99 @@ pub fn prepare_text_frame(
         shadow_new_bitmaps,
         shadow_tex_draws,
         needs_warmup: !text_renderer.pending_warmup.is_empty(),
+    }
+}
+
+#[cfg(test)]
+mod shape_cache_key_tests {
+    use super::node_shape_hash;
+    use crate::style::TextDirection;
+
+    #[test]
+    fn shape_hash_changes_when_text_alpha_flips() {
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let hidden = node_shape_hash(
+            "x",
+            14.0,
+            14.0,
+            20.0,
+            20.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            [100, 100, 100, 0],
+        );
+        let shown = node_shape_hash(
+            "x",
+            14.0,
+            14.0,
+            20.0,
+            20.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            [100, 100, 100, 200],
+        );
+        assert_ne!(
+            hidden, shown,
+            "opacity/color alpha must invalidate shaped cache (Input adornments)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod input_shaping_stability_tests {
+    use crate::renderer::font_loader;
+    use crate::renderer::text_hit::best_font_family;
+    use crate::renderer::text_prepare_debug::is_input_inline_text;
+
+    fn shaped_line_w(fs: &mut glyphon::FontSystem, text: &str, shaping: glyphon::Shaping) -> f32 {
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let family = best_font_family(fs);
+        let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(fs, Some(1024.0), Some(lh + 2.0));
+        buffer.set_text(
+            fs,
+            text,
+            glyphon::Attrs::new()
+                .family(family)
+                .weight(glyphon::fontdb::Weight(400)),
+            shaping,
+        );
+        buffer.shape_until_scroll(fs, false);
+        buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn password_placeholder_basic_vs_advanced_differs() {
+        // Documents why Input must not flip shaping on focus (caret install).
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        let basic = shaped_line_w(&mut fs, "Password", glyphon::Shaping::Basic);
+        let advanced = shaped_line_w(&mut fs, "Password", glyphon::Shaping::Advanced);
+        assert!(
+            (basic - advanced).abs() > 0.05,
+            "expected Basic/Advanced advance difference for Password; basic={basic} adv={advanced}"
+        );
+    }
+
+    #[test]
+    fn input_inline_template_id_detected() {
+        assert!(is_input_inline_text(Some("__rui_input:pw:text")));
+        assert!(!is_input_inline_text(Some("__rui_input:pw:clear")));
+        assert!(!is_input_inline_text(Some("label")));
+        assert!(!is_input_inline_text(None));
     }
 }

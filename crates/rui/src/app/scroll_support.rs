@@ -115,6 +115,9 @@ pub(super) fn collect_scroll_areas_at(
     scroll_acc: [f32; 2],
     out: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
 ) {
+    if !crate::core::tree::pointer_events_targets_children(el) {
+        return;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -163,6 +166,9 @@ pub(super) fn collect_scroll_chain_at(
     scroll_acc: [f32; 2],
     out: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
 ) -> bool {
+    if !crate::core::tree::pointer_events_targets_children(el) {
+        return false;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -205,19 +211,27 @@ pub(super) fn collect_scroll_chain_at(
         }
     }
 
+    if crate::layout::layout_tree::portal_hit_passthrough(el)
+        || !crate::core::tree::pointer_events_targets_self(el)
+    {
+        return child_hit;
+    }
     child_hit || inside
 }
 
 /// Collect only scroll-area ids on the topmost hit branch (deepest first).
 /// This avoids computing extent/metrics during wheel hit-testing; callers can
 /// resolve metrics lazily (preferably from cache) only for candidate ids.
-pub(super) fn collect_scroll_rest_chain_at(
+pub(crate) fn collect_scroll_rest_chain_at(
     el: &Element,
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
     out: &mut Vec<String>,
 ) -> bool {
+    if !crate::core::tree::pointer_events_targets_children(el) {
+        return false;
+    }
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
@@ -253,6 +267,11 @@ pub(super) fn collect_scroll_rest_chain_at(
         }
     }
 
+    if crate::layout::layout_tree::portal_hit_passthrough(el)
+        || !crate::core::tree::pointer_events_targets_self(el)
+    {
+        return child_hit;
+    }
     child_hit || inside
 }
 
@@ -284,6 +303,18 @@ pub(super) fn find_scroll_area_metrics_by_rest(
         }
     }
     None
+}
+
+/// Clamp offset + target to the current scroll max.
+///
+/// When the viewport grows enough that `max → 0`, offset is forced to 0 for paint,
+/// but a stale **target** above max must also be written back. Otherwise smooth-scroll
+/// (gallery `scroll_behavior="smooth"`) will re-seek the old target after a later
+/// shrink — top content jumps out of view instead of keeping the top and letting the
+/// bottom overflow.
+pub(super) fn clamp_scroll_offset_and_target(offset: f32, target: f32, max: f32) -> (f32, f32) {
+    let max = max.max(0.0);
+    (offset.clamp(0.0, max), target.clamp(0.0, max))
 }
 
 pub(super) fn set_scroll_offset_with_behavior(
@@ -353,5 +384,27 @@ mod inertia_tests {
             v = decay_scroll_velocity(v[0], v[1], 0.016, 4.5);
         }
         assert_eq!(v, [0.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
+mod clamp_scroll_extent_tests {
+    use super::clamp_scroll_offset_and_target;
+
+    #[test]
+    fn expand_to_fit_clears_stale_target_so_later_shrink_keeps_top() {
+        // Scrolled down, then viewport grows until max=0: both must become 0.
+        let (o, t) = clamp_scroll_offset_and_target(280.0, 280.0, 0.0);
+        assert_eq!((o, t), (0.0, 0.0));
+        // Shrink again: with synced target, stay at top (bottom overflows).
+        let (o2, t2) = clamp_scroll_offset_and_target(o, t, 200.0);
+        assert_eq!((o2, t2), (0.0, 0.0));
+    }
+
+    #[test]
+    fn shrink_while_scrolled_clamps_to_new_max_not_zero() {
+        // Standard browser-like: stay near bottom when max shrinks.
+        let (o, t) = clamp_scroll_offset_and_target(350.0, 350.0, 200.0);
+        assert_eq!((o, t), (200.0, 200.0));
     }
 }
