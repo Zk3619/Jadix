@@ -40,7 +40,7 @@ pub use tailwind_leading::{
 };
 pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextDecorationStyle, TextDirection, TextOverflow, TextSpan,
-    TextSpanKind, TextStyle,
+    TextSpanKind, TextStyle, WhiteSpace,
 };
 pub use theme::{
     get_theme, is_dark_theme, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,

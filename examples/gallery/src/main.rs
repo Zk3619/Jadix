@@ -175,19 +175,19 @@ fn InputShowcase() -> rui::core::tree::Element {
         <MyCard title="2) Input (ShadCN-style)">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "text / password / number / email / tel / url / search — type 过滤与非空校验"
+                    "text / password / number / email / tel / url / search — type 过滤与非空校验；clearable 叉号清除；password_toggle 睁眼/闭眼"
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <Input id="gal-s2-input-a" placeholder="Placeholder…" flex_grow="1" />
-                    <Input id="gal-s2-input-b" placeholder="Invalid" invalid=true flex_grow="1" />
-                    <Input id="gal-s2-input-pw" type="password" flex_grow="1" />
-                    <Input id="gal-s2-input-num" type="number" flex_grow="1" />
+                <Input id="gal-s2-input-a" placeholder="Placeholder…" clearable="true" flex_grow="1" />
+                    <Input id="gal-s2-input-b" placeholder="Invalid" invalid=true clearable="true" flex_grow="1" />
+                    <Input id="gal-s2-input-pw" type="password" password_toggle="true" clearable="true" flex_grow="1" />
+                    <Input id="gal-s2-input-num" type="number" clearable=true flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <Input id="gal-s2-email" type="email" flex_grow="1" />
-                    <Input id="gal-s2-tel" type="tel" flex_grow="1" />
-                    <Input id="gal-s2-url" type="url" flex_grow="1" />
-                    <Input id="gal-s2-search" type="search" flex_grow="1" />
+                    <Input id="gal-s2-email" type="email" clearable=true flex_grow="1" />
+                    <Input id="gal-s2-tel" type="tel" clearable=true flex_grow="1" />
+                    <Input id="gal-s2-url" type="url" clearable=true flex_grow="1" />
+                    <Input id="gal-s2-search" type="search" clearable="true" flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="center" wrap="wrap" w="100%">
                     <Input
@@ -297,9 +297,9 @@ fn TypographyShowcase() -> rui::core::tree::Element {
                     <HStack w="100%" min_w="0" gap="1rem" items="center" wrap="wrap">
                         <Label text_decoration_line="underline" text_decoration_color="red-500">"Red"</Label>
                         <Label text_decoration_line="underline" text_decoration_color="emerald-500">"Green"</Label>
-                        <Label text_decoration_line="underline" text_decoration_thickness="1">"Thin"</Label>
-                        <Label text_decoration_line="underline" text_decoration_thickness="2">"Medium"</Label>
-                        <Label text_decoration_line="underline" text_decoration_thickness="3" text_decoration_style="dashed">"Thick Dashed"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="1px">"Thin"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="2px">"Medium"</Label>
+                        <Label text_decoration_line="underline" text_decoration_thickness="3px" text_decoration_style="dashed">"Thick Dashed"</Label>
                         <Label text_decoration_line="underline" text_decoration_style="wavy" text_decoration_color="violet-500">"Wavy Violet"</Label>
                     </HStack>
                 </VStack>
@@ -1086,6 +1086,7 @@ fn NavigatorShowcase() -> Element {
 #[component]
 fn PrimitivesShowcase() -> rui::core::tree::Element {
     let overlay_open = use_signal("prim_overlay_open", || false);
+    let local_open = use_signal("prim_local_portal_open", || false);
     let trap_on = use_signal("prim_trap_on", || false);
 
     ui! {
@@ -1094,7 +1095,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                 <Reactive id={PRIMITIVES_SHOWCASE_REACTIVE}>
                     <VStack gap="0.75rem" w="100%">
                         <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                            "GPU Image (queue_image_rgba8 + <Image>). Portal 提升浮层到根节点。FocusTrap 限制 Tab 顺序。VirtualList：Reactive + visible_item_range；完整滚动条需额外占位总高度（此处 200 行演示）。"
+                            "GPU Image (queue_image_rgba8 + <Image>). Portal 默认挂到根叠层（body）；也可 mount 到子容器 template_id。FocusTrap 限制 Tab。VirtualList：Reactive + visible_item_range（此处 200 行演示）。"
                         </Label>
                         <HStack gap="0.75rem" items="start" wrap="wrap">
                             <VStack gap="0.25rem">
@@ -1105,12 +1106,20 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                 <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
                                 <HStack gap="0.5rem" wrap="wrap">
                                     <Button id="prim-overlay-toggle" variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
-                                        { if overlay_open.get() { "关闭 Portal 浮层" } else { "打开 Portal 浮层" } }
+                                        { if overlay_open.get() { "关闭根 Portal" } else { "打开根 Portal" } }
+                                    </Button>
+                                    <Button id="prim-local-portal-toggle" variant="outline" on_click={move || local_open.set(!local_open.get())}>
+                                        { if local_open.get() { "关闭局部 Portal" } else { "打开局部 Portal" } }
                                     </Button>
                                     <Button id="prim-trap-toggle" variant="secondary" on_click={move || trap_on.set(!trap_on.get())}>
                                         { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
                                     </Button>
                                 </HStack>
+                                <Rect id="prim-portal-host" relative=true w="100%" min_h="6.5rem" p="0.75rem" bg="muted" rounded="0.5rem" overflow="hidden">
+                                    <Label text_size="0.75rem" color="muted-foreground">
+                                        "局部宿主 prim-portal-host（mount 叠层裁剪在此框内）"
+                                    </Label>
+                                </Rect>
                                 <FocusTrap id="prim-trap" active={trap_on.get()} order="trap-a,trap-b">
                                     <HStack gap="0.5rem" items="center" wrap="wrap">
                                         <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
@@ -1145,11 +1154,28 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                     <Show when={overlay_open.get()}>
                         <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
                             <VStack gap="0.75rem" p="1.25rem" bg="secondary" rounded="0.75rem" max_w="22rem" m="1rem">
-                                <Label font_weight="700" text_size="1.125rem">"Portal 浮层"</Label>
+                                <Label font_weight="700" text_size="1.125rem">"根 Portal 浮层"</Label>
                                 <Label text_size="0.875rem" color="muted-foreground">
-                                    "此节点经 Portal 提升到根，盖在主内容之上。"
+                                    "未指定 mount：提升到根叠层（对齐 Solid document.body）。"
                                 </Label>
                                 <Button id="prim-overlay-close" variant="default" on_click={move || overlay_open.set(false)}>
+                                    "关闭"
+                                </Button>
+                            </VStack>
+                        </Rect>
+                    </Show>
+                </Reactive>
+            </Portal>
+            <Portal id="prim-portal-local" mount="prim-portal-host">
+                <Reactive id="examples/gallery/PrimitivesShowcase:portal_local">
+                    <Show when={local_open.get()}>
+                        <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="40">
+                            <VStack gap="0.5rem" p="0.75rem" bg="secondary" rounded="0.5rem" m="0.5rem">
+                                <Label font_weight="700" text_size="0.875rem">"局部 Portal"</Label>
+                                <Label text_size="0.75rem" color="muted-foreground">
+                                    "mount=\"prim-portal-host\"：挂在子容器叠层内。"
+                                </Label>
+                                <Button id="prim-local-portal-close" size="sm" variant="default" on_click={move || local_open.set(false)}>
                                     "关闭"
                                 </Button>
                             </VStack>
@@ -1688,7 +1714,7 @@ fn build_gallery_app() -> Element {
     ui! {
         <HStack w="100%" h="100%" bg="background" gap="0" relative=true>
             { side }
-            <ScrollArea id="root-scroll" h="100%" overflow_y="auto" overflow_x="auto" grow="1" scroll_behavior="smooth">
+            <ScrollArea id="root-scroll" h="100%" min_w="0" overflow_y="auto" overflow_x="auto" grow="1" scroll_behavior="smooth">
                 { body }
             </ScrollArea>
             { Element::from(toast_host()) }
@@ -1752,6 +1778,64 @@ mod mount_tests {
                     node.width > 40.0,
                     "caption width too small: {} (likely empty outline button)",
                     node.width
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_password_input_adornments_visible_when_focused() {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let id = "gal-s2-input-pw";
+                use_signal(&rui::components::input_value_signal_key(id), String::new)
+                    .set("secret1".into());
+                use_signal("__rui_button_focus_id", String::new)
+                    .set(format!("{}{id}", rui::components::INPUT_FOCUS_PREFIX));
+
+                let mut tree =
+                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                fn find_id<'a>(
+                    el: &'a rui::core::tree::Element,
+                    tid: &str,
+                ) -> Option<&'a rui::core::tree::Element> {
+                    if el.template_id.as_deref() == Some(tid) {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(|c| find_id(c, tid))
+                }
+                let pw = find_id(&tree, id).expect("password input root");
+                let clear = find_id(pw, &format!("__rui_input:{id}:clear"))
+                    .expect("clear adornment must mount for clearable=\"true\"");
+                let eye = find_id(pw, &format!("__rui_input:{id}:reveal"))
+                    .expect("eye adornment must mount for password_toggle=\"true\"");
+                assert!(
+                    (clear.style.opacity - 1.0).abs() < 0.001,
+                    "clear opacity={}, expected 1",
+                    clear.style.opacity
+                );
+                assert!(
+                    (eye.style.opacity - 1.0).abs() < 0.001,
+                    "eye opacity={}, expected 1",
+                    eye.style.opacity
+                );
+
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
+                let lucide = result
+                    .text_nodes
+                    .iter()
+                    .filter(|n| n.style.font_family.as_deref() == Some("lucide"))
+                    .filter(|n| n.style.color[3] > 0 && n.width > 0.5)
+                    .count();
+                assert!(
+                    lucide >= 2,
+                    "focused password input must collect visible lucide adornments; got {lucide}"
                 );
             });
         });
@@ -1849,6 +1933,184 @@ mod mount_tests {
                 assert!(
                     find_bind(&tree),
                     "ButtonShowcase must auto-lower format!(…, signal.get()) to bind_text"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_section_does_not_crush_sidebar_width() {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                use_signal("gal_nav_section", || "basics".to_string()).set("forms".to_string());
+                let mut app = build_gallery_app();
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut app, 720.0, 700.0, [-1.0, -1.0]);
+                fn find_id<'a>(
+                    el: &'a rui::core::tree::Element,
+                    id: &str,
+                ) -> Option<&'a rui::core::tree::Element> {
+                    if el.template_id.as_deref() == Some(id) {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(|c| find_id(c, id))
+                }
+                let side = find_id(&app, "gal-sidebar").expect("gal-sidebar");
+                let w = side.layout_bounds[2];
+                assert!(
+                    (w - 208.0).abs() < 1.5,
+                    "forms page must not crush sidebar below 13rem; got {w}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn overlays_revisit_does_not_shrink_main_pane() {
+        // <Portal> on the overlays page was hoisted to the root HStack each visit without
+        // cleaning prior lifts → accumulating w/h 100% flex siblings crushed the ScrollArea.
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                fn find_id<'a>(
+                    el: &'a rui::core::tree::Element,
+                    id: &str,
+                ) -> Option<&'a rui::core::tree::Element> {
+                    if el.template_id.as_deref() == Some(id) {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(|c| find_id(c, id))
+                }
+                let mut widths = Vec::new();
+                for section in ["overlays", "basics", "overlays", "basics", "overlays"] {
+                    rui::app::reactive::reset_registered_anchors();
+                    use_signal("gal_nav_section", || "basics".to_string())
+                        .set(section.to_string());
+                    let mut app = build_gallery_app();
+                    let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
+                    let scroll = find_id(&app, "root-scroll").expect("root-scroll");
+                    widths.push((section, scroll.layout_bounds[2]));
+                }
+                let overlay_widths: Vec<f32> = widths
+                    .iter()
+                    .filter(|(s, _)| *s == "overlays")
+                    .map(|(_, w)| *w)
+                    .collect();
+                assert!(
+                    overlay_widths.len() == 3
+                        && overlay_widths.iter().all(|w| *w > 700.0)
+                        && (overlay_widths[0] - overlay_widths[2]).abs() < 2.0,
+                    "overlays main width must stay wide across revisits; got {widths:?}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn gallery_main_pane_uses_remaining_width() {
+        // toast_host must not flex-split the main column (reactive_placeholder is w/h 100%).
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut app = build_gallery_app();
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
+                fn find_id<'a>(
+                    el: &'a rui::core::tree::Element,
+                    id: &str,
+                ) -> Option<&'a rui::core::tree::Element> {
+                    if el.template_id.as_deref() == Some(id) {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(|c| find_id(c, id))
+                }
+                let side = find_id(&app, "gal-sidebar").expect("sidebar");
+                let scroll = find_id(&app, "root-scroll").expect("root-scroll");
+                let side_w = side.layout_bounds[2];
+                let scroll_w = scroll.layout_bounds[2];
+                assert!(
+                    (side_w - 208.0).abs() < 1.5,
+                    "sidebar width, got {side_w}"
+                );
+                assert!(
+                    scroll_w > 700.0,
+                    "main ScrollArea must use remaining width after sidebar; got {scroll_w} (toast host was stealing flex space)"
+                );
+                assert!(
+                    (side_w + scroll_w - 1000.0).abs() < 2.0,
+                    "sidebar+scroll should fill root (toast absolute); got {}+{}={}",
+                    side_w,
+                    scroll_w,
+                    side_w + scroll_w
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn basics_section_scrolls_when_viewport_shorter() {
+        // Basics section content (~800px) must enable Y scroll when the ScrollArea
+        // viewport is shorter — same failure mode as gallery after a window-height shrink
+        // once surface size tracks Resized (see AppState::resolve_surface_size).
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let body = gallery_section_body("basics");
+                let mut root = Element::from(
+                    rui::components::scroll_area::scroll_area("diag-root")
+                        .w("100%")
+                        .h("100%")
+                        .overflow_y("auto")
+                        .overflow_x("hidden")
+                        .child(body),
+                );
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let tall = layout.build_and_layout(&mut root, 600.0, 900.0, [-1.0, -1.0]);
+                let (_, tall_vp, _, tall_content) = tall
+                    .scroll_metrics
+                    .iter()
+                    .find(|(id, ..)| id == "diag-root")
+                    .expect("diag-root metrics");
+                assert!(
+                    tall_content[1] <= tall_vp[3] + 0.5,
+                    "at 900px tall viewport, basics should fit (content_h={} vp_h={})",
+                    tall_content[1],
+                    tall_vp[3]
+                );
+
+                let short = layout.build_and_layout(&mut root, 600.0, 500.0, [-1.0, -1.0]);
+                let (_, short_vp, short_max, short_content) = short
+                    .scroll_metrics
+                    .iter()
+                    .find(|(id, ..)| id == "diag-root")
+                    .expect("diag-root metrics");
+                assert!(
+                    short_content[1] > short_vp[3] + 0.5 && short_max[1] > 1.0,
+                    "at 500px viewport, basics must scroll (content_h={} vp_h={} max_y={})",
+                    short_content[1],
+                    short_vp[3],
+                    short_max[1]
                 );
             });
         });

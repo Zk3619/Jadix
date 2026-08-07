@@ -99,12 +99,20 @@ pub enum KnownUtility<'a> {
     TranslateY(f32),
     /// Single-line ellipsis overflow (`truncate`).
     Truncate,
+    /// Tailwind `whitespace-nowrap` — text leaf stays one line (ShadCN Button).
+    WhitespaceNowrap,
     PositionFixed,
     PositionAbsolute,
     PositionRelative,
     AspectRatio(f32),
     Rotate(f32),
     Scale(f32),
+    /// `pointer-events-auto`
+    PointerEventsAuto,
+    /// `pointer-events-none` — block self + descendants
+    PointerEventsNone,
+    /// `pointer-events-box-none` — pass through self, children remain hittable
+    PointerEventsBoxNone,
     /// Linear gradient direction angle (0=to-r, 90=to-b, 180=to-l, 270=to-t).
     BgGradientTo(f32),
     GradientFrom(&'a str),
@@ -264,6 +272,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "self-baseline" => return Some(KnownUtility::AlignSelf("baseline")),
         "transition-opacity" => return Some(KnownUtility::TransitionOpacity),
         "transition-transform" => return Some(KnownUtility::TransitionTransform),
+        "pointer-events-auto" => return Some(KnownUtility::PointerEventsAuto),
+        "pointer-events-none" => return Some(KnownUtility::PointerEventsNone),
+        "pointer-events-box-none" => return Some(KnownUtility::PointerEventsBoxNone),
         "animate-spin" => return Some(KnownUtility::AnimateSpin),
         "animate-none" => return Some(KnownUtility::AnimateNone),
         "group" => return Some(KnownUtility::GroupMarker { name: None }),
@@ -429,6 +440,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     if token == "truncate" {
         return Some(KnownUtility::Truncate);
     }
+    if token == "whitespace-nowrap" || token == "whitespace-no-wrap" {
+        return Some(KnownUtility::WhitespaceNowrap);
+    }
 
     match token {
         "fixed" => return Some(KnownUtility::PositionFixed),
@@ -557,6 +571,11 @@ mod tests {
         assert!(is_known_utility("translate-x-4"));
         assert!(is_known_utility("translate-y-2"));
         assert!(is_known_utility("truncate"));
+        assert!(is_known_utility("whitespace-nowrap"));
+        assert!(matches!(
+            classify_utility("whitespace-nowrap"),
+            Some(KnownUtility::WhitespaceNowrap)
+        ));
         assert!(!is_known_utility("not-a-real-class"));
     }
 

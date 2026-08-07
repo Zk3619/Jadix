@@ -605,11 +605,15 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::Truncate => {
-            use crate::style::TextOverflow;
+            use crate::style::{TextOverflow, WhiteSpace};
             let mut changed = LayoutStatus::Clean;
             if el.text_style.overflow != TextOverflow::Ellipsis {
                 el.text_style.overflow = TextOverflow::Ellipsis;
                 changed = LayoutStatus::StyleChanged;
+            }
+            if el.text_style.white_space != WhiteSpace::Nowrap {
+                el.text_style.white_space = WhiteSpace::Nowrap;
+                changed = LayoutStatus::LayoutChanged;
             }
             // Match Tailwind `truncate`: overflow hidden + nowrap + ellipsis.
             let overflow_changed = el.style.overflow.x != taffy::style::Overflow::Hidden
@@ -620,6 +624,15 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 changed = LayoutStatus::LayoutChanged;
             }
             changed
+        }
+        KnownUtility::WhitespaceNowrap => {
+            use crate::style::WhiteSpace;
+            if el.text_style.white_space != WhiteSpace::Nowrap {
+                el.text_style.white_space = WhiteSpace::Nowrap;
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
 
         KnownUtility::PositionFixed => {
@@ -634,6 +647,18 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             el.style.position_fixed = false;
             *el = std::mem::take(el).relative();
             LayoutStatus::LayoutChanged
+        }
+        KnownUtility::PointerEventsAuto => {
+            *el = std::mem::take(el).pointer_events("auto");
+            LayoutStatus::Clean
+        }
+        KnownUtility::PointerEventsNone => {
+            *el = std::mem::take(el).pointer_events_none();
+            LayoutStatus::Clean
+        }
+        KnownUtility::PointerEventsBoxNone => {
+            *el = std::mem::take(el).pointer_events_box_none();
+            LayoutStatus::Clean
         }
         KnownUtility::AspectRatio(r) => {
             if el.style.aspect_ratio != Some(r) {

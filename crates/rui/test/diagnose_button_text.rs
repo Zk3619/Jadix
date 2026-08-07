@@ -57,3 +57,55 @@ fn button_captions_stay_single_line_after_layout() {
         );
     }
 }
+
+#[test]
+fn icon_button_lucide_glyph_stays_centered() {
+    use crate::utils::build_icon_text_node;
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    // Lucide private-use glyphs — any single codepoint is enough for layout centering.
+    let glyph = "\u{e02a}";
+    let mut root = Element::new().w(200.0).h(80.0).child(Element::from(
+        button("icon-center")
+            .size("icon")
+            .child(build_icon_text_node(glyph)),
+    ));
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
+
+    fn find_btn(el: &Element) -> Option<&Element> {
+        if el.template_id.as_deref() == Some("icon-center") {
+            return Some(el);
+        }
+        el.children.iter().find_map(find_btn)
+    }
+    let btn = find_btn(&root).expect("icon button");
+    assert!(
+        btn.children
+            .iter()
+            .any(|c| c.text_style.white_space != crate::style::WhiteSpace::Nowrap),
+        "lucide caption must not get whitespace-nowrap"
+    );
+    let icon = btn
+        .children
+        .iter()
+        .find(|c| c.text.is_some())
+        .expect("icon leaf");
+    let bx = btn.layout_bounds;
+    let ix = icon.layout_bounds;
+    let btn_cx = bx[0] + bx[2] * 0.5;
+    let btn_cy = bx[1] + bx[3] * 0.5;
+    let icon_cx = ix[0] + ix[2] * 0.5;
+    let icon_cy = ix[1] + ix[3] * 0.5;
+    assert!(
+        (icon_cx - btn_cx).abs() < 1.5,
+        "icon must be horizontally centered: btn_cx={btn_cx:.3} icon_cx={icon_cx:.3} btn={bx:?} icon={ix:?}"
+    );
+    assert!(
+        (icon_cy - btn_cy).abs() < 1.5,
+        "icon must be vertically centered: btn_cy={btn_cy:.3} icon_cy={icon_cy:.3}"
+    );
+}

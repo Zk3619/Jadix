@@ -570,6 +570,7 @@ pub fn measure_leaf(
     known_width: Option<f32>,
     avail_width: Option<f32>,
     letter_spacing: f32,
+    nowrap: bool,
 ) -> (f32, f32) {
     let prepared = prepare(text, size, weight, line_height);
     let mut intrinsic_w = intrinsic_width(&prepared);
@@ -580,15 +581,29 @@ pub fn measure_leaf(
     }
     // Min-content: longest unbreakable segment. Shrinking below this forces mid-word wrap in
     // glyphon (last-letter spill) and fake multi-line height from `layout`'s ceil heuristic.
-    let min_content = prepared.max_segment_width.min(intrinsic_w).max(1.0);
-    let width = if let Some(w) = known_width {
+    // `nowrap` (ShadCN Button / Tailwind whitespace-nowrap): min == max == intrinsic.
+    let min_content = if nowrap {
+        intrinsic_w.max(1.0)
+    } else {
+        prepared.max_segment_width.min(intrinsic_w).max(1.0)
+    };
+    let width = if nowrap {
+        known_width
+            .map(|w| w.max(intrinsic_w).max(1.0))
+            .unwrap_or(intrinsic_w)
+    } else if let Some(w) = known_width {
         w.max(1.0)
     } else if let Some(w) = avail_width {
         intrinsic_w.min(w.max(1.0)).max(min_content)
     } else {
         intrinsic_w
     };
-    let metrics = layout(&prepared, width.max(1.0));
+    let layout_w = if nowrap {
+        intrinsic_w.max(1.0)
+    } else {
+        width.max(1.0)
+    };
+    let metrics = layout(&prepared, layout_w);
     let height = metrics.height.max(line_height);
     (width, height)
 }
@@ -596,6 +611,25 @@ pub fn measure_leaf(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measure_leaf_nowrap_ignores_narrow_avail() {
+        let text = "Default (68)";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let intrinsic = intrinsic_width(&prepared);
+        let avail = (intrinsic * 0.5).max(1.0);
+        let (w, h) = measure_leaf(text, size, 500, lh, None, Some(avail), 0.0, true);
+        assert!(
+            (w - intrinsic).abs() < 0.5,
+            "nowrap width {w} should be intrinsic {intrinsic}"
+        );
+        assert!(
+            (h - lh).abs() < 0.5,
+            "nowrap must stay one line, h={h} lh={lh}"
+        );
+    }
 
     #[test]
     fn measure_leaf_does_not_shrink_below_unbreakable_word() {
@@ -607,7 +641,7 @@ mod tests {
         assert!(intrinsic > 2.0, "sanity intrinsic={intrinsic}");
         // Slightly narrower than intrinsic — old path wrapped mid-word and grew height.
         let avail = (intrinsic - 1.0).max(1.0);
-        let (w, h) = measure_leaf(text, size, 500, lh, None, Some(avail), 0.0);
+        let (w, h) = measure_leaf(text, size, 500, lh, None, Some(avail), 0.0, false);
         assert!(
             w + 0.01 >= prepared.max_segment_width.min(intrinsic),
             "width {w} should respect min-content {}",
@@ -673,7 +707,7 @@ mod tests {
     #[test]
     fn cjk_measure_stays_bounded() {
         let text = "中文日文한국어 हिन्दी ไทย";
-        let (w, h) = measure_leaf(text, 16.0, 400, 24.0, None, Some(320.0), 0.0);
+        let (w, h) = measure_leaf(text, 16.0, 400, 24.0, None, Some(320.0), 0.0, false);
         assert!(w.is_finite() && h.is_finite(), "non-finite {w}x{h}");
         assert!(h < 24.0 * 64.0, "height too large: {h}");
     }

@@ -55,6 +55,10 @@ mod diagnose_button_bind_text_tests;
 mod diagnose_input_shape_suffix_tests;
 
 #[cfg(test)]
+#[path = "../test/diagnose_input_adornments.rs"]
+mod diagnose_input_adornments_tests;
+
+#[cfg(test)]
 #[path = "../test/diagnose_weight_clip.rs"]
 mod diagnose_weight_clip_tests;
 
@@ -65,6 +69,30 @@ mod diagnose_showcase_collapse_tests;
 #[cfg(test)]
 #[path = "../test/diagnose_input_caret.rs"]
 mod diagnose_input_caret_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_scroll_clip_border.rs"]
+mod diagnose_scroll_clip_border_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_scroll_content_shrink.rs"]
+mod diagnose_scroll_content_shrink_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_sidebar_shell_width.rs"]
+mod diagnose_sidebar_shell_width_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_portal_hoist_flex.rs"]
+mod diagnose_portal_hoist_flex_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_portal_scroll_passthrough.rs"]
+mod diagnose_portal_scroll_passthrough_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_pointer_events.rs"]
+mod diagnose_pointer_events_tests;
 
 /// Backward-compatible path for macro-generated code.
 pub mod tree {
@@ -77,7 +105,7 @@ pub mod reactivity {
     pub use crate::core::resource::{Resource, ResourceState};
 }
 
-pub use core::tree::CursorKind;
+pub use core::tree::{CursorKind, PointerEvents};
 pub use rui_macros::*;
 
 /// Default stable anchor id for [`app::reactive::reactive_anchor`] / [`app::reactive::reactive_placeholder`]

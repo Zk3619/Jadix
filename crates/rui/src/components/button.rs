@@ -11,6 +11,9 @@
 //! ```
 //!
 //! ## 注意
+//! - **对齐 ShadCN / solid-ui**：普通文案默认 `whitespace-nowrap` + `flex-shrink: 0`
+//!  （基类 `inline-flex shrink-0 … whitespace-nowrap`），动态文案变宽时拉宽按钮而非内部换行。
+//!  Lucide 图标叶不加 nowrap，避免方按钮内图标偏右。
 //! - **`id` 非必填心智**：无稳定焦点/测试需求时可省略；空 `id` → 自动 `btn-N`（会话内递增，**不**保证跨 rebuild 同一逻辑实例）。
 //! - 多实例非受控、稳定焦点、冒烟选择器：请显式稳定 `id`（见 `docs/COMPONENT_LIBRARY.md` §4.2）。
 //! - hover / focus 用 `peek` + 每帧 paint sync，避免整树 rebuild。
@@ -727,6 +730,11 @@ impl From<ButtonBuilder> for Element {
                 )
                 .text_center()
                 .flex_shrink(0.0);
+                // ShadCN: `whitespace-nowrap` on label text only. Lucide icon glyphs are square
+                // measure leaves — nowrap inflate soft-wrap width and breaks centering in icon buttons.
+                if !is_lucide_glyph {
+                    text_node = text_node.whitespace_nowrap();
+                }
                 if preserve_binding {
                     if let Some(tid) = child.template_id.take() {
                         text_node.template_id = Some(tid);

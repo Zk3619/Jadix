@@ -9,6 +9,16 @@ pub enum TextOverflow {
     Ellipsis,
 }
 
+/// CSS `white-space` MVP for text leaves (`normal` soft-wraps; `nowrap` stays one line).
+///
+/// Aligns with Tailwind `whitespace-nowrap` / ShadCN Button base classes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WhiteSpace {
+    #[default]
+    Normal,
+    Nowrap,
+}
+
 /// Paragraph direction MVP: Unicode marks + align; bidi still handled by cosmic-text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextDirection {
@@ -178,6 +188,8 @@ pub struct TextStyle {
     pub align: glyphon::cosmic_text::Align,
     /// Overflow when the single-line box is too narrow.
     pub overflow: TextOverflow,
+    /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
+    pub white_space: WhiteSpace,
     /// Whether static text allows drag-select.
     pub selectable: bool,
     /// Paragraph direction (Auto / LTR / RTL).
@@ -209,6 +221,7 @@ impl Default for TextStyle {
             line_height_scale: None,
             align: glyphon::cosmic_text::Align::Left,
             overflow: TextOverflow::Clip,
+            white_space: WhiteSpace::Normal,
             selectable: false,
             direction: TextDirection::Auto,
             letter_spacing: 0.0,
@@ -276,7 +289,7 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_text_shadow, TextOverflow, TextSpan, TextSpanKind, TextStyle};
+    use super::{parse_text_shadow, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace};
 
     #[test]
     fn text_span_chip_builder() {
@@ -312,6 +325,7 @@ mod tests {
     fn text_style_overflow_and_selectable_defaults() {
         let s = TextStyle::default();
         assert_eq!(s.overflow, TextOverflow::Clip);
+        assert_eq!(s.white_space, WhiteSpace::Normal);
         assert!(!s.selectable);
         assert_eq!(s.direction, super::TextDirection::Auto);
         assert_eq!(s.letter_spacing, 0.0);

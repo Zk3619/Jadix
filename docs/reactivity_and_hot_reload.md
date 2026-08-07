@@ -26,6 +26,8 @@
 | `bind_class` | utility class 字符串 |
 | `bind_style` / `bind_style!` + [`StylePatch`](../crates/rui/src/app/reactive.rs) | 批量 bg / text_color / border_color / class |
 
+**`bind_text` 与布局（对齐 DOM / Solid）：** 固有宽变大、或超过已挂载 `layout_bounds` 宽度时返回 `LayoutChanged`，父级（如 ShadCN 式 `inline-flex` + `whitespace-nowrap` 的 Button）拉宽；同宽或变窄可走 `StyleChanged` 仅重绘。勿用过宽的「同宽」阈值跳过布局，否则文案会在旧宽里 soft-wrap 而按钮尺寸不变。
+
 `ui!` 自动降级（含 `.get()` 且不在 `<Reactive>` 内）：
 
 - 文本 child → `bind_text`

@@ -357,8 +357,13 @@ where
 }
 
 /// Solid-style text binding: register one effect that patches `text` on a mounted node in place.
+/// Solid-style in-place text binding (like setting a DOM text node). Prefer this for
+/// labels/counters — it does **not** rebuild a subtree.
 ///
-/// Unlike [`reactive_view`], this does **not** rebuild a subtree. Prefer this for labels/counters.
+/// Layout impact mirrors the browser: when intrinsic width grows (or exceeds the mounted
+/// box), return [`LayoutStatus::LayoutChanged`] so flex parents — e.g. ShadCN-style
+/// `inline-flex` + `whitespace-nowrap` buttons — widen instead of soft-wrapping into a
+/// stale box. Equal/shrinking width stays paint-only [`LayoutStatus::StyleChanged`].
 pub fn bind_text<F>(anchor_id: impl Into<String>, compute: F) -> Element
 where
     F: FnMut() -> String + 'static,
@@ -372,17 +377,22 @@ where
             if el.text.as_deref() == Some(next.as_str()) {
                 return LayoutStatus::Clean;
             }
-            // Counter-style labels usually keep the same intrinsic width. When they do, taffy has
-            // nothing to recompute and a paint-only pass is enough.
-            let same_width = text_intrinsic_width(el, el.text.as_deref().unwrap_or(""))
-                .zip(text_intrinsic_width(el, next.as_str()))
-                .is_some_and(|(before, after)| (before - after).abs() < 0.5);
+            let old = el.text.as_deref().unwrap_or("");
+            let before_w = text_intrinsic_width(el, old);
+            let after_w = text_intrinsic_width(el, next.as_str());
+            let box_w = el.layout_bounds[2];
+            let needs_layout = match (before_w, after_w) {
+                (Some(before), Some(after)) => {
+                    after > before + 0.01 || (box_w > 1.0 && after > box_w + 0.01)
+                }
+                _ => true,
+            };
             el.text = Some(next);
             el.style.flex_shrink = 0.0;
-            if same_width {
-                LayoutStatus::StyleChanged
-            } else {
+            if needs_layout {
                 LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::StyleChanged
             }
         },
     )
@@ -392,7 +402,7 @@ where
 ///
 /// `None` when the node is not a plain text leaf, in which case callers must assume the layout
 /// changed.
-fn text_intrinsic_width(el: &Element, text: &str) -> Option<f32> {
+pub(crate) fn text_intrinsic_width(el: &Element, text: &str) -> Option<f32> {
     if !el.children.is_empty()
         || el.text_shape_suffix.is_some()
         || el.text_spans.is_some()
