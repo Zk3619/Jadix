@@ -116,7 +116,13 @@ pub fn Counter() -> Element {
 
 #### Instance keys（多实例组件）
 
-`use_signal("name", ...)` 的字符串键在**同一组件多实例**时会碰撞。请使用稳定且唯一的键，例如 `format!("counter:{id}", id = props.instance_id)`，或与 `reactive!` 的显式 anchor id 同步命名。详见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。
+`use_signal("name", ...)` 的字符串键在**同一组件多实例**时会碰撞。优先：
+
+1. **受控**：状态放在调用方 `Signal`，组件可不依赖全局 `id`。  
+2. **Owner 作用域**：[`use_scoped_signal`](../crates/rui/src/core/reactivity.rs)，减少手写全局 id。  
+3. 否则使用稳定唯一键，例如 `format!("counter:{id}", id = props.instance_id)`，或与 `reactive!` 的显式 anchor id 同步。
+
+**不要**给每个子控件都发明一个 `id`「以防万一」。身份轴拆分见 [COMPONENT_LIBRARY.md §4.2](COMPONENT_LIBRARY.md)。热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。
 
 #### Derived values: `create_memo`
 

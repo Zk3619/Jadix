@@ -111,15 +111,17 @@ RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止�
 代码锚点示例（同一按钮）：
 
 ```rust
-// A · 标签
-ui! { <Button id="ok" variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
+// A · 标签（无持久状态时可省略 id）
+ui! { <Button variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
 
-// B · Builder（无类 HTML 标签）
+// 多实例 / 测试 / 稳定焦点时再显式 id（见 §4.2）
+ui! { <Button id="save" variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
+
+// B · Builder（无类 HTML 标签）；空 id 可走自动生成，持久状态勿依赖自动 id
 Element::from(
-    button("ok")
+    button("save") // 或 button("") 仅临时
         .variant("outline")
         .on_click(move |_| { /* … */ })
-        // 子文本按各 Builder 约定：.text / .child / Into 等
 )
 ```
 
@@ -136,15 +138,66 @@ Element::from(
 - 函数名可与标签同名（模块已 `allow(non_snake_case)`）时，须在文档区分「标签用 PascalCase / 调用用模块路径」。  
 - 少数暂仅 Builder / 函数：`dialog_panel`、`toast`、`dropdown` 等——文档与 Gallery 须标明；补标签属增强，不阻塞 Builder 一等地位。
 
-### 4.2 身份与状态
+### 4.2 身份与状态（`id` 勿过度使用）
+
+> **现状判断**：多数 Builder 把 `id: impl Into<String>` 当作**首位必参**，Gallery 也充满 `gal-*` 字符串。这把「实例键 / 焦点 / 信号命名空间 / 测试选择器」揉进同一个 prop，造成**过度使用 `id`**。下文为权威纠偏；实现分期收敛见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) **C-WP-V.5 / C-WP-2.6**。
+
+#### 4.2.1 四条身份轴（禁止混为一谈）
+
+| 轴 | 含义 | 典型载体 | 用户是否常写 |
+|----|------|----------|--------------|
+| **实例键 / 信号命名空间** | 非受控 `use_signal`、hover spring、`{id}__open` 等全局表键 | 今日多由组件 `id` 派生 | 仅多实例或跨子树持久时需要稳定键 |
+| **`focus_id`** | Tab / 点击焦点、AccessKit、浮层 `anchor` | `Element.focus_id`；常带前缀（`input:`、`tabstrip:`） | 需要可编程焦点或 a11y 名时 |
+| **`template_id`** | 热重载 / `reactive!` 子树身份 | 宏或 `reactive!(id, …)` | 热补丁或显式 anchor 时 |
+| **测试 / 调试选择器** | 自动化点选、日志 | 可与上重合，**非**每个控件必填 | 测试需要时 |
+
+**禁止**：为「看起来像 HTML」而给每个静态 Label / 布局壳强行编造 `id`。  
+**禁止**：文档暗示「不用 id 就不合法」——`Separator` / `Card` 等无状态控件已证明可以没有用户 `id`。
+
+#### 4.2.2 何时**需要**稳定用户可见 `id`（或等价实例键）
+
+| 场景 | 要求 |
+|------|------|
+| 非受控状态且**多实例**并存（多 Input、多 Dialog） | 稳定唯一键；否则全局 `use_signal("{id}__…")` **撞键串状态**（Input 空 id 注释已明示） |
+| 受控 Signal 由外部持有 | **不强制**组件 `id`；状态在调用方 Signal |
+| 焦点环 / 读屏 / 浮层锚点需稳定引用 | 显式 `focus_id`（或文档约定由 `id` 派生且稳定） |
+| 测试选择器、IME/冒烟脚本 | 显式稳定 id / focus_id |
+| 仅单次点击、无内部持久信号的 Button | **可不传**；允许会话内自动 id（见下） |
+
+#### 4.2.3 自动生成 id 的边界
+
+今日实现（事实）：
+
+- `Button`：空 id → `btn-N`（进程内递增）  
+- `Input`：空 id → `__rui_input_rt_N`（兜底，避免多框共用 value 信号）  
+- RSX 宏：部分省略 id 的标签会生成唯一名（以宏为准）
+
+| 可以 | 不可以指望 |
+|------|------------|
+| 单页内区分 hover/paint 键、避免立刻撞键 | **跨 rebuild / 热重载后仍指向同一逻辑实例** |
+| 无状态展示、一次性按钮 | 表单字段持久、多实例非受控状态的长期身份 |
+
+自动 id **不是**「用户永远不用想身份」的完整方案；长期方向是 **Owner 作用域信号**（`use_scoped_signal`），减少对全局字符串 `id` 的依赖（见 [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)、[`custom_components.md`](custom_components.md)）。
+
+#### 4.2.4 API 与文档约定（目标态）
+
+| 控件类别 | `id` / 实例键 | 说明 |
+|----------|---------------|------|
+| **展示型**（Separator、Card、纯布局 Navbar 壳等） | **默认不要求** | 若 Builder 仍留 `id` 参数，标为可选或仅用于测试 |
+| **有状态 · 非受控**（Input、Checkbox、Select、Dialog open…） | 多实例要稳定键；单实例可框架派生 | 优先受控 Signal，少强迫用户起名 |
+| **有状态 · 受控** | 可选 | 行为不依赖组件 id |
+| **浮层** | 组件实例键可框架派生；**锚点用 `focus_id` / `anchor_focus_id`** | 勿让用户为 trigger 与 panel 各编两个无关魔法字符串（除非要稳定引用） |
+
+Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**；其余按钮勿堆 `gal-btn-1…N`。
+
+#### 4.2.5 状态规则（与身份正交）
 
 | 规则 | 要求 |
 |------|------|
-| `id` | 有状态控件尽量稳定唯一；空 id 可自动生成（如 `btn-N`），但焦点 / 测试选择器应显式传 |
-| `focus_id` | 使用约定前缀（`input:`、`tabstrip:`、`scroll:` 等）；AccessKit 依赖前缀映射 Role |
-| 非受控 | 组件按 `id` 内部 `use_signal` |
+| 非受控 | 内部信号键必须落入**唯一命名空间**（显式 id、宏生成 id、或 Owner 作用域） |
 | 受控 | 调用方持有 `Signal<T>`；组件**不得**再为同一语义状态建第二份 signal |
 | 禁用 | `disabled` 统一关闭指针与键盘激活，并参与 `disabled:` utility 变体 |
+| `focus_id` 前缀 | `input:`、`tabstrip:`、`scroll:` 等；AccessKit 依赖前缀；新增前缀须改 bridge + 本文或 `keyboard_nav.md` |
 
 ### 4.3 外观（ShadCN）
 
@@ -208,6 +261,7 @@ Element::from(
 - 换 VDOM / 弃 wgpu / 引入浏览器控件。  
 - 为「纯无头公共 API」另起一套与 `components/` 平行的完整产品面（可渐进抽出 headless builder，但默认文档与 prelude 仍指向样式组件）。  
 - **废除或边缘化 Builder / 纯 Rust 书写面**（或反之只保留 Builder、废弃 `ui!`）——双书写面均为一等公民，见 §3。  
+- **把用户 `id` 当作每个控件的必填 HTML 式属性**——身份轴拆分见 §4.2；过度必填是债务，不是设计目标。  
 - 移动 / 鸿蒙一等公民组件变体。  
 - 完整 CSSOM、DOM 选择器、Web 专有 a11y 树。
 
@@ -219,10 +273,10 @@ Element::from(
 
 - [ ] 分层：新状态机是否应在 `utils`/`primitives` 而非仅组件内复制  
 - [ ] 受控 / 非受控单一写入点  
-- [ ] `id` / `focus_id` 前缀文档或常量导出  
+- [ ] **身份**：未把 `id` 当作万金油；区分实例键 / `focus_id` / `template_id`（规范 §4.2）；展示型不强制用户起 id  
 - [ ] Theme token，无硬编码色  
 - [ ] **双书写面**：稳定面新 props 同时进 RSX 与 Builder（或文档标明例外）；互嵌仍编译  
-- [ ] Gallery 对应分区可见  
+- [ ] Gallery 对应分区可见；**示例不堆砌无必要 id**  
 - [ ] 库测或 `desktop_smoke` 条目（浮层 / 焦点至少其一）  
 - [ ] 若属稳定面：更新组件索引与 CHANGELOG 草稿  
 

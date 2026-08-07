@@ -18,10 +18,11 @@
 
 与常见 React 模式对齐：
 
-- **非受控（Uncontrolled）**：原语内部使用 `use_signal(scope_id, init)` 持有状态，适用于独立控件。
+- **非受控（Uncontrolled）**：原语内部使用 `use_signal(scope_id, init)` 持有状态，适用于独立控件。  
+  `scope_id` **不要**默认等同于「用户必须手写的 HTML 式 id」——优先 Owner 作用域（`use_scoped_signal`）或框架派生键；仅多实例/跨树持久时要求稳定用户键。详见 [COMPONENT_LIBRARY.md §4.2](COMPONENT_LIBRARY.md)。
 - **受控（Controlled）**：调用方持有 `Signal<T>`（或等价读写接口），原语只订阅/更新该信号，**不得**再为同一状态创建第二份 `use_signal`。
 
-实现时需避免「双源真理」：同一布尔值不能既写内部 signal 又写外部传入而不做单一写入点。
+实现时需避免「双源真理」：同一布尔值不能既写内部 signal 又写外部传入而不做单一写入点。亦需避免「身份真理」：不要用同一个用户 `id` 字符串同时冒充 focus、template、测试选择器而不文档化派生规则。
 
 ## 原语清单（演进中）
 
