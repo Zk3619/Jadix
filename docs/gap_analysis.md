@@ -364,8 +364,12 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 
 ## 相关文档
 
+- [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) — **迈向工程级权威纲领**（门槛、禁区、巩固期轨道）
+- [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) — **工程级完整实现计划**（Wave 1–4 / 工作包 / DoD）
+- [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) — **组件库权威规范**（shadcn 产品面 + headless 骨架）
+- [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) — **组件库专项实施计划**（C-WP / 与巩固期交错）
 - [PROJECT.md](PROJECT.md) — 愿景、分层架构与阶段计划
 - [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) — **阶段七～十二**工程级路线图（权威排期）
 - [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) — 三档更新与热重载模板契约
-- [headless.md](headless.md) — 无头组件模式
+- [headless.md](headless.md) — 无头组件模式（从属组件规范）
 - [desktop_smoke.md](desktop_smoke.md) — 真窗口冒烟清单（阶段七）

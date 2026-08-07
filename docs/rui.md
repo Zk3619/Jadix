@@ -16,6 +16,6 @@
 
 等分列辅助：`rui::layout::cols_equal_fr`（与 `grid-cols-N` 使用同一套轨函数）。
 
-列表拖拽：`drag_reorder_handle(list_id, index)` + 信号 `drag_commit_signal_key` / `drag_hover_signal_key`，提交后用 `apply_reorder_vec` 更新 `Vec`。完整示例见 `examples/hello_world` 中的 Grid + 排序演示。
+列表拖拽：`drag_reorder_handle(list_id, index)` + 信号 `drag_commit_signal_key` / `drag_hover_signal_key`，提交后用 `apply_reorder_vec` 更新 `Vec`。完整示例见 `examples/gallery` 中的 Grid + 排序演示。
 
 `for_keyed!` 的渲染闭包若含 `{ ... }` 花括号，不要直接塞进 `ui!` 里单层 `{ ... }` 子表达式（RSX 花括号扫描会与闭包冲突）；可改用 `reactive!(id, move || { ... for_keyed! ... })` 或提取为普通 Rust 函数。

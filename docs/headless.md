@@ -1,5 +1,7 @@
 # RUI 无头组件（Headless）契约
 
+> **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（组件库权威规范）。本文只展开三层边界与 Signal/a11y 细则；产品选型（默认 shadcn 样式面）与清单以规范为准。实施见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)。
+
 本文档说明 **primitives（无头层）**、**tokens（设计令牌）** 与 **components（样式层）** 的职责边界，以及如何与 `Signal`、`ui!`、`#[component]` 配合。与 [rui.md](rui.md) 中的分层模型一致。
 
 ## 三层职责
@@ -31,9 +33,17 @@
 
 复合组件（Dialog、Dropdown、Tabs）在无头逻辑稳定后，基于 `popup` / `toggle` 等与样式层组合实现。
 
-## 与 `ui!` 的关系
+## 与双书写面的关系（`ui!` ↔ Builder）
 
-宏展开仍生成 `Element` 构建器链。内置标签（如 `Button`、`Switch`）对应 `components::*` 的 builder；无头原语也可在 `#[component]` 或 `ui!` 中通过普通 Rust 调用组装。
+宏展开仍生成 `Element` 构建器链。内置标签（如 `Button`、`Switch`）对应 `components::*` 的 builder；**无标签的纯 Rust Builder / `vstack`·`interactive` 调用与标签等价**，可互嵌。
+
+| 写法 | 示例 |
+|------|------|
+| 标签 | `ui! { <Button variant="outline">"OK"</Button> }` |
+| Builder | `Element::from(button("ok").variant("outline").text("OK"))` |
+| 互嵌 | `ui!` 子节点 `{ Element::from(button(…)) }`；或 `hstack().child(ui! { <Label>"x"</Label> })` |
+
+无头原语亦可在 `#[component]`、`ui!` 或纯 Builder 树中组装。权威契约见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md)。
 
 ## 无障碍（AccessKit）
 

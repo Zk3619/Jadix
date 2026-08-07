@@ -60,11 +60,11 @@
 ### 6.1 执行命令
 
 - 默认 GPU 路径：
-  - `cargo run --example hello_world`
+  - `cargo run -p gallery`
 - 软件适配器 + CPU 文本混合：
-  - `RUI_FORCE_SOFTWARE=1 cargo run --example hello_world`
+  - `RUI_FORCE_SOFTWARE=1 cargo run -p gallery`
 - 可选文本优先保底（仅用于故障排查）：
-  - `RUI_FORCE_SOFTWARE=1 RUI_CPU_TEXT_HYBRID_TEXT_ONLY=1 cargo run --example hello_world`
+  - `RUI_FORCE_SOFTWARE=1 RUI_CPU_TEXT_HYBRID_TEXT_ONLY=1 cargo run -p gallery`
 
 ### 6.2 调试开关
 
@@ -75,7 +75,7 @@
 
 ### 6.3 实时输入用例
 
-在 `hello_world` 的 Emoji Regression 区块，逐项验证：
+在 `gallery` 的 Emoji Regression 区块，逐项验证：
 
 - 逐字输入：`😀 😁 😂`
 - 候选上屏：`👨‍👩‍👧‍👦`、`🧑‍💻`
@@ -191,7 +191,7 @@
 ### 9.4 灰度回归记录
 
 - 启动灰度：
-  - `set RUI_EMOJI_CUSTOM_GLYPH=1 && cargo run`（在 `examples/hello_world`）
+  - `set RUI_EMOJI_CUSTOM_GLYPH=1 && cargo run`（在 `examples/gallery`）
 - 必看日志：
   - `emoji_cache stats: mode=gray ...`
 - 注意：
@@ -214,7 +214,7 @@
 - 默认 SVG 目录：`assets/twemoji/svg`（需先按 §9.1 同步 SVG，或指向自定义目录）
 - 可用环境变量覆盖：`RUI_TWEMOJI_SVG_DIR`
 - 同步本地 SVG：见 §9.1（推荐默认 `all` 一次拉齐 PNG+SVG；仅需 SVG 时用 `-AssetKind svg`）；校验命名：§9.2 `verify_twemoji_svg_names.ps1`
-- 启动示例（在 `examples/hello_world`）：
+- 启动示例（在 `examples/gallery`）：
   - `set RUI_EMOJI_CUSTOM_GLYPH=1 && set RUI_EMOJI_SVG=1 && cargo run`
 
 ### 10.3 指标与降级阈值

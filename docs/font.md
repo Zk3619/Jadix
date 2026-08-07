@@ -74,7 +74,7 @@ Label 对齐 ShadCN 用了 **`leading-none`**，在 RUI 里对应 **`line_height
 
 ```powershell
 $env:RUI_TEXT_DEBUG = "1"
-cargo run -p hello_world
+cargo run -p gallery
 ```
 
 **过滤：**
@@ -83,9 +83,9 @@ cargo run -p hello_world
 |------------------|------|
 | `1` / `all` / `yes` / `true` | 打印所有文本节点 |
 | `input` | **输入框内联文本**：`template_id` 为 `__rui_input:…:text`（**含失焦**，不再要求本帧有光标） |
-| 其它任意字符串 | **子串匹配** `template_id`（不区分大小写），例如 `hw-s2`、`__rui_input`、`hw-s6`、`hw-s11` |
+| 其它任意字符串 | **子串匹配** `template_id`（不区分大小写），例如 `gal-s2`、`__rui_input`、`gal-s6`、`gal-s11` |
 
-`hello_world` 中为对照方便预留了 id：`hw-s2-input-a`、`hw-s6-label-cjk`、`hw-s11-virt-title`；输入框内联文本的 `template_id` 形如 `__rui_input:<field_id>:text`。
+`gallery` 中为对照方便预留了 id：`gal-s2-input-a`、`gal-s6-label-cjk`、`gal-s11-virt-title`；输入框内联文本的 `template_id` 形如 `__rui_input:<field_id>:text`。
 
 每行含：`tid`、`kind`（`input` 表示输入相关）、`caret=y|n`（本帧是否绘制 IME/插入符；失焦时为 `caret=n`）、`shape=adv|basic`（cosmic shaping）、`extra=`（`shape_suffix` 码位，Input 为 `U+2009` 薄空格）、`w`（字重）、`sz`/`lh`（逻辑像素）、`lh_src`（显式倍率或 `tw-v4≈…`）、`hit=reuse|reshape`、`req`/`attrs`、`=> […]`（**按 glyph 顺序**出现的全部字面，含拉丁/薄空格等）、`cjk=>[…]`（**仅**簇内带 CJK/全角等相关码位的 glyph 所用字面）、文本预览。
 
@@ -95,7 +95,7 @@ cargo run -p hello_world
 2. **Input 的 shaping 后缀**：`INPUT_LINE_SHAPE_SUFFIX` 为 **U+2009**（薄空格），只参与排版、不在 `Element::text` 里；shaping 缓冲末尾多了一个拉丁类码位，**`=> […]` 全量列表里常会多出 `Segoe UI`**。对比中文渲染时应以 **`cjk=>[…]`** 为准，并看 `extra=U+2009`。
 3. **行高**：未设 `leading` 的 Input 使用 `tailwind_default_leading_scale`（`lh_src=tw-v4≈…`）；带 `leading="normal"` 的 Label 为倍率 **1.5**。行高主要影响 `Metrics`，族名差异仍以上述字重 / fallback 为主。
 
-**读你终端里那段 `hw-s6-label-cjk`：**
+**读你终端里那段 `gal-s6-label-cjk`：**
 
 - `req=Segoe UI` / `attrs=Segoe UI`：来自 `best_font_family`，未单独设 `font_family`。
 - `=> [Yu Gothic | DengXian]`：中文等码位 **fallback** 到系统日文字体 / 等线，**不是**「族名从 Segoe 变成别的」的 bug，而是多字面混排时的正常现象。

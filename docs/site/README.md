@@ -11,6 +11,8 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress。
 | Custom components | 自定义组件 | [custom_components.md](../custom_components.md) |
 | Reactivity & hot reload | 响应式与热重载 | [reactivity_and_hot_reload.md](../reactivity_and_hot_reload.md) |
 | Headless patterns | Headless 模式 | [headless.md](../headless.md) |
+| Engineering-grade charter | 工程级权威纲领 | [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) |
+| Implementation plan | 工程级实现计划 | [ENGINEERING_IMPLEMENTATION_PLAN.md](../ENGINEERING_IMPLEMENTATION_PLAN.md) |
 | Gap analysis / roadmap | 差距与路线 | [gap_analysis.md](../gap_analysis.md) |
 | Stage 7–12 roadmap | 阶段七～十二 | [STAGE7_ROADMAP.md](../STAGE7_ROADMAP.md) |
 
@@ -26,7 +28,7 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress。
 ## Examples · 示例
 
 ```text
-cargo run -p hello_world
+cargo run -p gallery
 cargo run -p calculator
 cargo run -p gallery
 ```

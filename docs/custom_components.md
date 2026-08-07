@@ -1,12 +1,25 @@
 # Creating Custom Components in RUI
 
+> 分层与选型见权威规范 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（含 **§3 双书写面**）；无头细则见 [headless.md](headless.md)。
+
 RUI uses a layered architecture that makes it easy to build reusable, high-performance components using functional patterns and procedural macros.
+
+## Two equivalent ways to write UI
+
+Both are first-class and must stay interchangeable ([COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md)):
+
+| Style | Example |
+|-------|---------|
+| **A · `ui!` tags** | `ui! { <Button variant="outline">"OK"</Button> }` |
+| **B · Builder (no HTML-like tags)** | `Element::from(button("ok").variant("outline"))` |
+
+You can nest either form inside the other (`ui!` children may be `{ Element::from(button(…)) }`; builders may `.child(ui! { … })`). Prefer whichever fits the call site; do not treat tags as the only “modern” API.
 
 ## The `#[component]` Macro
 
-The primary way to define a component is using the `#[component]` attribute macro. This macro simplifies the definition of props and the construction of the component's internal tree.
+The primary way to define a **reusable** component is the `#[component]` attribute macro. The function body may return a tree built with **`ui!` and/or Builders**—both are valid.
 
-### Basic Syntax
+### Basic Syntax (`ui!`)
 
 ```rust
 use rui::prelude::*;
@@ -27,6 +40,28 @@ pub fn MyButton(label: String, primary: bool) -> Element {
     }
 }
 ```
+
+### Same idea with Builders only
+
+```rust
+use rui::components::button;
+use rui::core::tree::Element;
+use rui::primitives::r#box::vstack;
+
+// Pure Rust: no class-HTML tags required.
+fn counter_row(count_label: Element, on_inc: impl Fn() + 'static) -> Element {
+    Element::from(
+        vstack()
+            .gap("0.5rem")
+            .child(count_label)
+            .child(Element::from(
+                button("inc").variant("default").on_click(move |_| on_inc()),
+            )),
+    )
+}
+```
+
+(Exact Builder method names follow each component’s `//!` docs; the point is **parity of capability**, not a second component system.)
 
 ### How it Works
 
@@ -112,6 +147,7 @@ RUI components should use design tokens provided by the `DesignToken` system. Th
 ## Hot Reload Compatibility
 
 For a component to support hot reload:
-1.  It must use the `ui!` macro for its tree definition.
-2.  Avoid complex side effects during the `build` phase (function body).
-3.  State should strictly reside in `signals`.
+1.  Prefer the `ui!` macro for the hot-patched template region (or a `ui!` subtree with a stable `template_id`).
+2.  Pure Builder trees remain fully supported at runtime; they simply may not receive template hot patches.
+3.  Avoid complex side effects during the `build` phase (function body).
+4.  State should strictly reside in `signals`.

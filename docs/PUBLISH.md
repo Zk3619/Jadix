@@ -47,7 +47,7 @@ cargo fmt --all -- --check
 cargo clippy -p rui --all-targets -- -D warnings
 cargo test -p rui --lib
 cargo test -p rui --lib offscreen
-cargo check -p gallery   # 或 hello_world / calculator
+cargo check -p gallery   # 或 calculator
 ```
 
 可选：`cargo bench -p rui --bench layout_baseline`（见 `docs/size_and_memory.md` release checklist）。

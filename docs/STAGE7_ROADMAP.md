@@ -1,6 +1,7 @@
 # RUI 工程级后续发展路线图（阶段七～十二）
 
-依据 [gap_analysis.md](gap_analysis.md)、[PROJECT.md](PROJECT.md)。**底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`；差距在原生层、产品面与发布工程。
+依据 [gap_analysis.md](gap_analysis.md)、[PROJECT.md](PROJECT.md)。**底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`；差距在原生层、产品面与发布工程。  
+工程级门槛见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；巩固期可执行工作包见 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
 
 > 命名约定：只用「阶段七」…「阶段十二」，**不分** + / ++ / +++。
 

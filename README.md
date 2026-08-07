@@ -2,8 +2,8 @@
 
 > **GitHub Description (建议 / Suggested)**
 >
-> - 中文：基于 `winit + wgpu + taffy + glyphon` 的 Rust 原生 UI 框架，提供类 RSX 声明式 API、细粒度响应式与开发期热重载。
-> - English: A Rust-native UI framework built on `winit + wgpu + taffy + glyphon`, featuring RSX-like declarative APIs, fine-grained reactivity, and dev-time hot reload.
+> - 中文：基于 `winit + wgpu + taffy + glyphon` 的 Rust 原生 UI 框架，提供类 RSX 与纯 Rust Builder 双书写面、细粒度响应式与开发期热重载。
+> - English: A Rust-native UI framework built on `winit + wgpu + taffy + glyphon`, featuring dual authoring (RSX-like `ui!` and pure-Rust builders), fine-grained reactivity, and dev-time hot reload.
 
 ---
 
@@ -29,8 +29,12 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
 - **分层架构 | Layered architecture**  
   基于 `winit`（窗口/事件）、`wgpu`（GPU 渲染）、`taffy`（Flex/Grid 布局）、`glyphon`（文本）构建。
 
-- **声明式 UI 宏 | Declarative UI macro**  
-  提供 `ui!` 与 `#[component]`，支持类似前端组件化的开发体验。
+- **声明式 UI · 双书写面 | Dual authoring**  
+  - **中文**：`ui!` 类 RSX 标签与 `button()` / `*Builder` 纯 Rust 链式 API **同等一等公民**，可互嵌；不强制类 HTML 标签。详见 [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §3。  
+  - **English**: RSX-like `ui!` tags and pure-Rust `*Builder` APIs are **both first-class** and nestable; HTML-like tags are optional. See [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §3.
+
+- **组件宏 | Component macro**  
+  提供 `#[component]`，支持类似前端组件化的复用；函数体可用标签或 Builder 构建子树。
 
 - **细粒度响应式 | Fine-grained reactivity**  
   通过 `use_signal` 驱动状态更新，减少不必要重绘。
@@ -63,7 +67,7 @@ rust-native-ui/
 │  ├─ rui_macros/           # #[component] / ui! 宏 | Proc-macro crate
 │  └─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
 ├─ examples/
-│  └─ hello_world/          # 功能演示应用 | Showcase app
+│  └─ gallery/              # 组件与能力展示 | Component gallery
 └─ Docs/                    # 设计与规划文档 | Design and planning notes
 ```
 
@@ -79,7 +83,7 @@ rust-native-ui/
 ### 2) 运行示例 | Run the demo
 
 ```bash
-cargo run -p hello_world
+cargo run -p gallery
 ```
 
 ### 3) 启用开发期热重载（可选） | Enable dev hot reload (optional)
@@ -124,6 +128,27 @@ fn main() {
         ui! { <Counter /> }
     });
 }
+```
+
+同一棵树也可用 **Builder（无类 HTML 标签）** 拼装，并与 `ui!` 互嵌，例如：
+
+```rust
+use rui::components::button;
+use rui::core::tree::Element;
+use rui::primitives::r#box::vstack;
+use rui::ui;
+
+fn toolbar() -> Element {
+    Element::from(
+        vstack().gap("0.5rem").child(
+            // Builder 子树嵌进布局；亦可反过来在 ui! 里写 { Element::from(button(…)) }
+            Element::from(button("save").variant("outline")),
+        ),
+    )
+}
+
+// 标签树中嵌入 Builder 产物：
+// ui! { <VStack>{ toolbar() }</VStack> }
 ```
 
 ---

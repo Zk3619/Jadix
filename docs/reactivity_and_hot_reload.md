@@ -48,7 +48,7 @@
 - 快照 PartialEq **只含静态 props**；`Signal` / 闭包 / `Element` 排除。
 - **必填 Signal props**：宏用 `expect`（不再 `unwrap_or_default`），适合 Solid 式把 Signal 当 getter 传入。
 - 组件 effect 经 [`isolate_reads`](../crates/rui/src/core/reactivity.rs)：裸 `get()` 不订组件边界；字段更新靠 `ui!` 自动 bind / Show / For。
-- 试点：`hello_world` 的 `ReactiveStatusBadge`。
+- 试点：`gallery` 的 `ReactiveStatusBadge`。
 
 ## Owner / Context（阶段一 + 九）
 
