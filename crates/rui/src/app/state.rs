@@ -139,6 +139,7 @@ pub(super) struct AppState {
     last_text_ui_scale: f32,
     last_text_surface_size: [u32; 2],
     last_underline_instances: Vec<crate::renderer::InstanceInput>,
+    last_caret_instances: Vec<crate::renderer::InstanceInput>,
     last_caret_blink_phase: u128,
     cpu_text_profiler: CpuTextProfiler,
     shadow_tex_cache: std::collections::HashMap<u64, super::image_registry::GpuImageTexture>,
@@ -149,6 +150,9 @@ pub(super) struct AppState {
     pub(super) force_full_redraw: bool,
     /// After the first successful present, partial `LoadOp::Load` is allowed.
     has_presented_frame: bool,
+    /// Fingerprint of the last submitted GPU frame (instances + text chrome + caret).
+    /// Used to skip acquire/submit/present when a redraw was requested but nothing visual changed.
+    last_gpu_frame_fp: u64,
 }
 
 impl AppState {
@@ -236,6 +240,8 @@ impl AppState {
         let mut order: Vec<(wgpu::Backends, &'static str)> = if cfg!(target_os = "macos") {
             vec![(wgpu::Backends::METAL, "metal")]
         } else if cfg!(windows) {
+            // Prefer GL by default: smallest resident memory for a 2D UI.
+            // Override with RUI_GPU_BACKEND=dx12|vulkan when lower CPU overhead matters more.
             vec![
                 (wgpu::Backends::GL, "gl"),
                 (wgpu::Backends::DX12, "dx12"),
@@ -394,19 +400,29 @@ impl AppState {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        // Prefer vsync'd modes so continuous redraw (scroll/hover anim) tracks the display
+        // refresh instead of uncapped Mailbox (~150+ fps on some GL adapters).
         let present_mode = surface_caps
             .present_modes
             .iter()
             .copied()
-            .find(|m| matches!(m, wgpu::PresentMode::Mailbox))
+            .find(|m| matches!(m, wgpu::PresentMode::Fifo))
             .or_else(|| {
                 surface_caps
                     .present_modes
                     .iter()
                     .copied()
-                    .find(|m| matches!(m, wgpu::PresentMode::Fifo))
+                    .find(|m| matches!(m, wgpu::PresentMode::FifoRelaxed))
+            })
+            .or_else(|| {
+                surface_caps
+                    .present_modes
+                    .iter()
+                    .copied()
+                    .find(|m| matches!(m, wgpu::PresentMode::Mailbox))
             })
             .unwrap_or(surface_caps.present_modes[0]);
+        log::info!("surface present_mode: {present_mode:?}");
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -452,6 +468,7 @@ impl AppState {
         let mut text_renderer = RuiTextRenderer::new(&device, &queue, &config);
         // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
         crate::text::install_shared_font_system(text_renderer.font_system_mut());
+        crate::debug_stack::crumb("new_bootstrap: after text_renderer");
 
         Self {
             window,
@@ -523,6 +540,7 @@ impl AppState {
             last_text_ui_scale: 0.0,
             last_text_surface_size: [0, 0],
             last_underline_instances: Vec::new(),
+            last_caret_instances: Vec::new(),
             last_caret_blink_phase: 0,
             cpu_text_profiler: CpuTextProfiler::new(),
             shadow_tex_cache: std::collections::HashMap::new(),
@@ -531,6 +549,7 @@ impl AppState {
             damage_rect: None,
             force_full_redraw: true,
             has_presented_frame: false,
+            last_gpu_frame_fp: 0,
         }
     }
 
@@ -758,15 +777,23 @@ impl AppState {
             cursor = &mut cursor.children[index];
         }
         let status = patch(cursor);
+        let bounds = cursor.layout_bounds;
         if matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) {
             // Queue for render: mark_dirty + style/measure sync, then compute_layout from app root.
             if let Some(n) = cursor.layout_node {
                 self.pending_layout_dirty.push(n);
             }
         }
-
         self.template_paths.insert(template_id.to_string(), path);
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        if matches!(status, crate::core::tree::LayoutStatus::StyleChanged) {
+            // Paint-only text/style (e.g. bind_text counter with unchanged intrinsic width):
+            // force a full redraw so partial scissor / atlas reuse cannot keep stale glyphs.
+            self.mark_full_redraw();
+            if bounds[2] > 0.0 && bounds[3] > 0.0 {
+                self.union_damage(bounds);
+            }
+        }
         status
     }
 
@@ -1021,15 +1048,6 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
-        crate::components::input::sync_input_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::label::sync_label_selection_paint_subtree(
-            &mut self.root_element,
-            &mut sync_impact,
-        );
         crate::components::switch::sync_switch_checked_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -1055,6 +1073,17 @@ impl AppState {
                 &mut sync_impact,
             );
         }
+        // Input/label caret+selection after class variants so chrome resets cannot wipe
+        // `text_style.input_caret` before collect.
+        crate::components::input::sync_input_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::label::sync_label_selection_paint_subtree(
+            &mut self.root_element,
+            &mut sync_impact,
+        );
 
         use crate::core::tree::LayoutStatus;
         if sync_impact != LayoutStatus::Clean {
@@ -1129,14 +1158,18 @@ impl AppState {
 
         let (logical_w, logical_h) = self.logical_size();
         // StructureChanged (and cold start / portal hoist) still need a full Taffy rebuild.
-        // LayoutChanged uses mark_dirty + optional subtree compute_layout on the fast path.
+        // LayoutChanged: mark_dirty then compute from the **app root**. Do not use
+        // `pick_subtree_compute_root` — Taffy treats the compute node as a layout root and
+        // zeros its `location`, which collapses absolute positions for that whole branch
+        // (gallery `<Show>` / `bind_text` LayoutChanged: card title overlapping buttons).
+        // Root compute still reuses clean sibling caches via mark_dirty.
         let use_full_taffy_rebuild = self.layout_tree.root_node.is_none()
             || portal_moves > 0
             || matches!(
                 pre_chrome_layout_status,
                 crate::core::tree::LayoutStatus::StructureChanged
             );
-        let mut layout_subtree_root: Option<taffy::prelude::NodeId> = None;
+        let layout_subtree_root: Option<taffy::prelude::NodeId> = None;
         if !use_full_taffy_rebuild
             && (matches!(
                 layout_for_build,
@@ -1145,7 +1178,6 @@ impl AppState {
         {
             let dirty: std::collections::HashSet<_> =
                 self.pending_layout_dirty.drain(..).collect();
-            layout_subtree_root = self.layout_tree.pick_subtree_compute_root(&dirty);
             self.layout_tree
                 .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
         } else if use_full_taffy_rebuild {
@@ -1228,6 +1260,8 @@ impl AppState {
         let layout_done = Instant::now();
 
         let scaled_instances = scale_instances(&render_result.instances, self.ui_scale());
+        let scaled_input_chrome =
+            scale_instances(&render_result.input_chrome_instances, self.ui_scale());
         self.num_instances = render_result.instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
         #[cfg(debug_assertions)]
@@ -1295,6 +1329,11 @@ impl AppState {
             .iter()
             .any(|n| n.style.input_caret.is_some());
         let caret_phase = crate::renderer::caret_blink_phase();
+        if has_dynamic_text && self.last_caret_blink_phase != caret_phase {
+            // Blink toggles only underline instances — force a full present so a stale
+            // partial-damage scissor cannot freeze the caret on/off.
+            self.mark_full_redraw();
+        }
         let text_cache_valid = self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
             && self.last_text_surface_size == [self.config.width, self.config.height]
             && Self::text_nodes_equal(&self.text_nodes, &self.last_text_nodes_cache)
@@ -1302,9 +1341,10 @@ impl AppState {
             && self.text_renderer.pending_warmup.is_empty();
         let shadow_cached_keys: std::collections::HashSet<u64> =
             self.shadow_tex_cache.keys().copied().collect();
-        let (underline_instances, shadow_tex_draws) = if text_cache_valid {
+        let (underline_instances, caret_instances, shadow_tex_draws) = if text_cache_valid {
             (
                 self.last_underline_instances.clone(),
+                self.last_caret_instances.clone(),
                 self.last_shadow_tex_draws.clone(),
             )
         } else {
@@ -1336,6 +1376,7 @@ impl AppState {
             self.last_text_ui_scale = ui_scale;
             self.last_text_surface_size = [self.config.width, self.config.height];
             self.last_underline_instances = prep_out.underline_instances.clone();
+            self.last_caret_instances = prep_out.caret_instances.clone();
             self.last_shadow_tex_draws = prep_out.shadow_tex_draws.clone();
             self.last_caret_blink_phase = caret_phase;
             if self.text_backend == TextRendererBackend::CpuTextHybrid {
@@ -1347,10 +1388,77 @@ impl AppState {
             if prep_out.needs_warmup {
                 self.window.request_redraw();
             }
-            (prep_out.underline_instances, prep_out.shadow_tex_draws)
+            (
+                prep_out.underline_instances,
+                prep_out.caret_instances,
+                prep_out.shadow_tex_draws,
+            )
         };
         #[cfg(debug_assertions)]
         let text_done = Instant::now();
+
+        // Skip swapchain acquire/submit/present when this redraw produced the same GPU content
+        // as the last presented frame (e.g. scrollbar visibility timer wake with no fade yet).
+        {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            hasher.write(bytemuck::cast_slice(&scaled_instances));
+            hasher.write(bytemuck::cast_slice(&scaled_input_chrome));
+            for d in &scaled_tex {
+                d.texture_key.hash(&mut hasher);
+                d.opacity.to_bits().hash(&mut hasher);
+                for v in d.rect {
+                    v.to_bits().hash(&mut hasher);
+                }
+            }
+            hasher.write(bytemuck::cast_slice(&underline_instances));
+            hasher.write(bytemuck::cast_slice(&caret_instances));
+            // Text glyphs live in the atlas, not in rect instances — include content so
+            // StyleChanged counters (same box, new string) still present.
+            self.text_nodes.len().hash(&mut hasher);
+            for n in &self.text_nodes {
+                n.text.hash(&mut hasher);
+                n.shape_suffix.hash(&mut hasher);
+                n.template_id.hash(&mut hasher);
+                n.x.to_bits().hash(&mut hasher);
+                n.y.to_bits().hash(&mut hasher);
+                n.width.to_bits().hash(&mut hasher);
+                n.height.to_bits().hash(&mut hasher);
+                n.style.color.hash(&mut hasher);
+                n.style.size.to_bits().hash(&mut hasher);
+                n.style.weight.hash(&mut hasher);
+                // Caret index / selection must affect present even when underline instance
+                // bytes happen to collide (e.g. empty selection vs no caret).
+                match &n.style.input_caret {
+                    None => 0u8.hash(&mut hasher),
+                    Some(c) => {
+                        1u8.hash(&mut hasher);
+                        c.caret_byte_index.hash(&mut hasher);
+                        c.selection.hash(&mut hasher);
+                        c.overwrite_highlight.hash(&mut hasher);
+                        c.selection_bg.hash(&mut hasher);
+                    }
+                }
+            }
+            caret_phase.hash(&mut hasher);
+            shadow_tex_draws.len().hash(&mut hasher);
+            for d in &shadow_tex_draws {
+                d.cache_key.hash(&mut hasher);
+                for v in d.rect {
+                    v.to_bits().hash(&mut hasher);
+                }
+            }
+            let frame_fp = hasher.finish();
+            if self.has_presented_frame
+                && !self.force_full_redraw
+                && frame_fp == self.last_gpu_frame_fp
+            {
+                self.layout_status = crate::core::tree::LayoutStatus::Clean;
+                return Ok(());
+            }
+            self.last_gpu_frame_fp = frame_fp;
+        }
 
         // Acquire swapchain image as late as possible so CPU-side text/layout work can overlap
         // with present pacing; this typically reduces blocking time in get_current_texture().
@@ -1547,6 +1655,54 @@ impl AppState {
             }
 
             self.text_renderer.render(&mut render_pass);
+
+            // Input/Label caret + selection (logical→physical), above glyphs.
+            if allow_primitives && !scaled_input_chrome.is_empty() {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                let chrome_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Input Chrome Instance Buffer"),
+                            contents: bytemuck::cast_slice(&scaled_input_chrome),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..scaled_input_chrome.len() as u32,
+                );
+            }
+
+            // Legacy prepare_text caret path (kept empty; chrome comes from collect).
+            if !caret_instances.is_empty() {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                let caret_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Caret Instance Buffer"),
+                            contents: bytemuck::cast_slice(&caret_instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                render_pass.set_vertex_buffer(1, caret_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..caret_instances.len() as u32,
+                );
+            }
         }
         #[cfg(debug_assertions)]
         let encode_done = Instant::now();

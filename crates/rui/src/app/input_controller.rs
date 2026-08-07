@@ -9,6 +9,8 @@ use crate::utils::clipboard::{
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{caret_move_left, caret_move_right, delete_char_forward};
 
+use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
+
 fn input_type_for(rest: &str) -> InputType {
     let key = input_type_signal_key(rest);
     let raw =
@@ -30,28 +32,21 @@ impl super::App {
         match ime {
             Ime::Enabled => {
                 ime_active.set(true);
+                if ime_support::ime_diag_enabled() {
+                    log::info!("RUI_IME_DIAG Enabled fid={}", fid);
+                }
             }
             Ime::Disabled => {
                 ime_active.set(false);
-                if let Some(rest) = fid.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
-                    let sk = crate::components::input::input_preedit_sel_signal_key(rest);
-                    let tsk = crate::components::input::input_selection_signal_key(rest);
-                    let ak = crate::components::input::input_ime_anchor_signal_key(rest);
-                    let pre = crate::core::reactivity::use_signal(&pk, String::new);
-                    let sel =
-                        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
-                    let text_sel =
-                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
-                    let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
-                    pre.set(String::new());
-                    sel.set(None);
-                    text_sel.set(None);
-                    ime_anchor_sig.set(None);
+                if let Some(rest) = text_edit_rest(&fid) {
+                    Self::clear_ime_compose_state(rest);
+                }
+                if ime_support::ime_diag_enabled() {
+                    log::info!("RUI_IME_DIAG Disabled fid={}", fid);
                 }
             }
             Ime::Preedit(s, cursor) => {
-                if let Some(rest) = fid.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
+                if let Some(rest) = text_edit_rest(&fid) {
                     let vk = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
                     let pk = crate::components::input::input_preedit_signal_key(rest);
@@ -67,61 +62,81 @@ impl super::App {
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
                     let old_pre = pre.get();
+                    // 组字开始：删选区并锁定 anchor，避免 Commit 插错位 / 「吞字」。
                     if old_pre.is_empty() && !s.is_empty() {
                         let committed = val_sig.get();
-                        let mut a = caret_sig.get().unwrap_or(committed.len());
-                        a = a.min(committed.len());
-                        a = committed.floor_char_boundary(a);
-                        ime_anchor_sig.set(Some(a));
+                        let (new_val, anchor) =
+                            prepare_compose_anchor(&committed, caret_sig.get(), text_sel.get());
+                        if new_val != committed {
+                            val_sig.set(new_val);
+                            text_sel.set(None);
+                            caret_sig.set(Some(anchor));
+                        }
+                        ime_anchor_sig.set(Some(anchor));
                     }
-                    pre.set(s);
+                    // 空 Preedit（取消组字预览）只清显示；anchor 保留到 Commit / Disabled，
+                    // 避免 Win 上 Preedit("") 紧接 Commit 时丢锚点。
+                    pre.set(s.clone());
                     sel.set(cursor);
-                    text_sel.set(None);
+                    if !s.is_empty() {
+                        text_sel.set(None);
+                    }
+                    if ime_support::ime_diag_enabled() {
+                        log::debug!(
+                            "RUI_IME_DIAG Preedit rest={} len={} cursor={:?}",
+                            rest,
+                            s.chars().count(),
+                            cursor
+                        );
+                    }
                 }
             }
             Ime::Commit(s) => {
-                if let Some(rest) = fid.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
+                if let Some(rest) = text_edit_rest(&fid) {
                     let vk = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
                     let v = val_sig.get();
                     let ak = crate::components::input::input_ime_anchor_signal_key(rest);
                     let ime_anchor_sig = crate::core::reactivity::use_signal(&ak, || None::<usize>);
-                    let mut anchor = ime_anchor_sig.get().unwrap_or(v.len()).min(v.len());
+                    let mut anchor = ime_anchor_sig.get().unwrap_or_else(|| {
+                        let ck = crate::components::input::input_caret_signal_key(rest);
+                        crate::core::reactivity::use_signal(&ck, || None::<usize>)
+                            .get()
+                            .unwrap_or(v.len())
+                    });
+                    anchor = anchor.min(v.len());
                     anchor = v.floor_char_boundary(anchor);
                     let filtered = filter_typed_insert(rest, &v[..anchor], &s);
                     let new_caret = if filtered.is_empty() && !s.is_empty() {
                         // 全部被 type 过滤：仍清 preedit，不改 value。
                         anchor
                     } else {
-                        let mut new = String::new();
-                        new.push_str(&v[..anchor]);
-                        new.push_str(&filtered);
-                        new.push_str(&v[anchor..]);
-                        let new_caret = anchor + filtered.len();
+                        let (new, new_caret) = apply_ime_commit(&v, anchor, &filtered);
                         val_sig.set(new);
                         new_caret
                     };
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
-                    let sk = crate::components::input::input_preedit_sel_signal_key(rest);
-                    let tsk = crate::components::input::input_selection_signal_key(rest);
+                    Self::clear_ime_compose_state(rest);
                     let ck = crate::components::input::input_caret_signal_key(rest);
-                    let pre = crate::core::reactivity::use_signal(&pk, String::new);
-                    let sel =
-                        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
-                    let text_sel =
-                        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
-                    pre.set(String::new());
-                    sel.set(None);
-                    text_sel.set(None);
-                    ime_anchor_sig.set(None);
                     caret_sig.set(Some(new_caret));
+                    ime_support::record_ime_commit(rest, &filtered);
                 }
             }
         }
         if let Some(st) = (*self.state.borrow_mut()).as_mut() {
             st.window.request_redraw();
         }
+    }
+
+    fn clear_ime_compose_state(rest: &str) {
+        let pk = crate::components::input::input_preedit_signal_key(rest);
+        let sk = crate::components::input::input_preedit_sel_signal_key(rest);
+        let tsk = crate::components::input::input_selection_signal_key(rest);
+        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+        crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
+        crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None).set(None);
+        crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>).set(None);
+        crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
     }
 
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
@@ -197,7 +212,7 @@ impl super::App {
                     return true;
                 }
 
-                if !fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
+                if text_edit_rest(&fid).is_none() {
                     if clipboard_shortcut_modifiers(&self.modifiers) {
                         if let Key::Character(ch) = &event.logical_key {
                             if ch.as_str().eq_ignore_ascii_case("c") {

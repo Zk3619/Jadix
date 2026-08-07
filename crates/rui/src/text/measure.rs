@@ -239,6 +239,20 @@ fn measure_run_width(
     if text.is_empty() || text == "\n" {
         return 0.0;
     }
+    // Align with `prepare_text`:
+    // - default UI face is `best_font_family` (not a bare `Family::SansSerif` enum tag)
+    // - weight is snapped to an installed face (`500` → Segoe Semibold `600`)
+    // - ASCII non-input text uses Basic shaping in the default perf mode
+    let family = match family {
+        Family::SansSerif => crate::renderer::text_hit::best_font_family(font_system),
+        other => other,
+    };
+    let weight = crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+    let shaping = if text.is_ascii() {
+        Shaping::Basic
+    } else {
+        Shaping::Advanced
+    };
     let heuristic = heuristic_segment_width(text, size, weight);
     if font_system.db().faces().next().is_none() {
         return heuristic;
@@ -253,7 +267,7 @@ fn measure_run_width(
             Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(weight)),
-            Shaping::Advanced,
+            shaping,
         );
         buffer.shape_until_scroll(font_system, false);
         buffer
@@ -564,10 +578,13 @@ pub fn measure_leaf(
         let gaps = text.chars().count().saturating_sub(1) as f32;
         intrinsic_w = (intrinsic_w + gaps * letter_spacing).max(0.0);
     }
+    // Min-content: longest unbreakable segment. Shrinking below this forces mid-word wrap in
+    // glyphon (last-letter spill) and fake multi-line height from `layout`'s ceil heuristic.
+    let min_content = prepared.max_segment_width.min(intrinsic_w).max(1.0);
     let width = if let Some(w) = known_width {
-        w
+        w.max(1.0)
     } else if let Some(w) = avail_width {
-        intrinsic_w.min(w.max(1.0))
+        intrinsic_w.min(w.max(1.0)).max(min_content)
     } else {
         intrinsic_w
     };
@@ -579,6 +596,28 @@ pub fn measure_leaf(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measure_leaf_does_not_shrink_below_unbreakable_word() {
+        let text = "Secondary";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let intrinsic = intrinsic_width(&prepared);
+        assert!(intrinsic > 2.0, "sanity intrinsic={intrinsic}");
+        // Slightly narrower than intrinsic — old path wrapped mid-word and grew height.
+        let avail = (intrinsic - 1.0).max(1.0);
+        let (w, h) = measure_leaf(text, size, 500, lh, None, Some(avail), 0.0);
+        assert!(
+            w + 0.01 >= prepared.max_segment_width.min(intrinsic),
+            "width {w} should respect min-content {}",
+            prepared.max_segment_width
+        );
+        assert!(
+            (h - lh).abs() < 0.5,
+            "single unbreakable word should stay one line, got h={h} lh={lh}"
+        );
+    }
 
     #[test]
     fn prepare_layout_wraps_latin() {

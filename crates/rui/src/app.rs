@@ -44,6 +44,11 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
 mod damage;
 mod hot_reload;
 mod image_registry;
+mod ime_support;
+pub use ime_support::{
+    apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
+    prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
+};
 mod input_controller;
 mod lifecycle;
 pub mod multi_window;
@@ -156,6 +161,8 @@ struct App {
     scroll_signal_key_cache: std::collections::HashMap<String, ScrollViewportSignalKeys>,
     /// Throttle for optional scrollbar diagnostics (`RUI_SCROLLBAR_DIAG`).
     scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
+    /// Wake the event loop for caret blink without continuous `request_redraw`.
+    caret_wake_at: Option<std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
     accesskit_adapter: Option<accesskit_winit::Adapter>,
     #[cfg(debug_assertions)]

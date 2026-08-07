@@ -232,8 +232,11 @@ impl RuiTextRenderer {
     pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {
         let mut owned = Box::new(font_loader::create_font_system());
         log_color_font_capabilities(owned.db());
+        crate::debug_stack::crumb("RuiTextRenderer::new after color-font log");
         let ptr = &mut *owned as *mut FontSystem;
-        Self::with_font_ptr(device, queue, config, ptr, Some(owned))
+        let out = Self::with_font_ptr(device, queue, config, ptr, Some(owned));
+        crate::debug_stack::crumb("RuiTextRenderer::new done");
+        out
     }
 
     /// Secondary windows: shape/render against the primary [`FontSystem`] (same as measure TLS).
@@ -254,16 +257,22 @@ impl RuiTextRenderer {
         font_system: *mut FontSystem,
         owned_font_system: Option<Box<FontSystem>>,
     ) -> Self {
+        crate::debug_stack::crumb("with_font_ptr: SwashCache");
         let swash_cache = SwashCache::new();
+        crate::debug_stack::crumb("with_font_ptr: glyphon Cache");
         let cache = glyphon::Cache::new(device);
+        crate::debug_stack::crumb("with_font_ptr: TextAtlas::new");
         let mut text_atlas = TextAtlas::new(device, queue, &cache, config.format);
+        crate::debug_stack::crumb("with_font_ptr: TextRenderer::new");
         let text_renderer = TextRenderer::new(
             &mut text_atlas,
             device,
             wgpu::MultisampleState::default(),
             None,
         );
+        crate::debug_stack::crumb("with_font_ptr: Viewport::new");
         let viewport = Viewport::new(device, &cache);
+        crate::debug_stack::crumb("with_font_ptr: done");
 
         Self {
             font_system,

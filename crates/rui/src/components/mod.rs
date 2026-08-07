@@ -1,7 +1,10 @@
 //! # UI 组件层
 //!
-//! 面向 `ui!` 的可组合控件：按钮、输入、滚动区、浮层等。多数以 `#[component]` 暴露
-//! PascalCase 标签（如 `<Button>`）；少数仅提供函数 / Builder（如 [`dialog_panel`]、[`toast`]、[`dropdown`]）。
+//! 面向 `ui!` **与** 纯 Rust Builder 的可组合控件：按钮、输入、滚动区、浮层等。
+//! 多数以 `#[component]` 暴露 PascalCase 标签（如 `<Button>`），并导出等价的
+//! `fn` / `*Builder`（如 [`button`]、[`ButtonBuilder`]）；少数暂仅函数 / Builder
+//! （如 [`dialog_panel`]、[`toast`]、[`dropdown`]）。两种写法互嵌兼容，见
+//! `docs/COMPONENT_LIBRARY.md` §3（ADR-9）。
 //!
 //! 布局原语（`Box` / `HStack` / `VStack` / `GStack`）在 [`crate::primitives`]；本模块在其上拼装交互与样式。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留

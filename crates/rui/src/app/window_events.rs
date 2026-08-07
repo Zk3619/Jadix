@@ -69,6 +69,74 @@ impl super::App {
         )
     }
 
+    /// Logical caret X inside the focused field (padding + measured prefix), for IME cursor area.
+    fn estimate_ime_caret_x_in_field(
+        &mut self,
+        focus_id: &str,
+        visual: [f32; 4],
+        ui_scale: f32,
+    ) -> f32 {
+        let mut rb = self.state.borrow_mut();
+        let Some(st) = rb.as_mut() else {
+            return 8.0;
+        };
+        let pad = super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+            .map(|e| match e.style.padding.left {
+                taffy::style::LengthPercentage::Length(v) => v,
+                taffy::style::LengthPercentage::Percent(p) => visual[2] * p,
+            })
+            .unwrap_or(8.0);
+
+        let rest = super::ime_support::text_edit_rest(focus_id).unwrap_or("");
+        let vk = crate::components::input::input_value_signal_key(rest);
+        let pk = crate::components::input::input_preedit_signal_key(rest);
+        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+        let ck = crate::components::input::input_caret_signal_key(rest);
+        let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
+        let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
+        let anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>).peek();
+        let caret = crate::core::reactivity::use_signal(&ck, || None::<usize>).peek();
+        let display = super::tree_hit::input_display_text(&committed, &pre, anchor);
+        let caret_byte = if !pre.is_empty() {
+            let mut a = anchor.unwrap_or(committed.len()).min(committed.len());
+            a = committed.floor_char_boundary(a);
+            a + pre.len()
+        } else {
+            caret.unwrap_or(display.len()).min(display.len())
+        };
+        let caret_byte = display.floor_char_boundary(caret_byte);
+        let prefix = &display[..caret_byte];
+
+        fn first_text_style(el: &crate::core::tree::Element) -> Option<crate::style::TextStyle> {
+            if el.text.is_some() {
+                return Some(el.text_style.clone());
+            }
+            for c in &el.children {
+                if let Some(s) = first_text_style(c) {
+                    return Some(s);
+                }
+            }
+            None
+        }
+
+        let text_style = super::tree_hit::find_input_text_leaf_for_rest(&st.root_element, None, rest)
+            .map(|(_, _, style, _)| style)
+            .or_else(|| {
+                super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+                    .and_then(first_text_style)
+            })
+            .unwrap_or_default();
+
+        super::ime_support::estimate_caret_x_in_field(
+            Some(st.text_renderer.font_system_mut()),
+            prefix,
+            &text_style,
+            visual,
+            ui_scale,
+            pad,
+        )
+    }
+
     fn find_element_by_template_id<'a>(
         el: &'a crate::core::tree::Element,
         template_id: &str,
@@ -553,6 +621,13 @@ impl super::App {
         if let Some((rest, lo, hi)) = input_drag_sel_update {
             let sk = crate::components::input::input_selection_signal_key(&rest);
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+            let ck = crate::components::input::input_caret_signal_key(&rest);
+            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
+            // Selection chrome is paint-synced via peek — must request a frame or the
+            // highlight never appears until an unrelated redraw.
+            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                st.window.request_redraw();
+            }
         }
         if let Some((key, lo, hi)) = label_drag_sel_update {
             let sk = crate::components::label::label_selection_signal_key(&key);
@@ -901,6 +976,12 @@ impl super::App {
             }
 
             if let Some((rest, caret_ix)) = input_drag {
+                // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
+                // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
+                let focus_id =
+                    format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest.as_str());
+                crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                    .set(focus_id);
                 let ck = crate::components::input::input_caret_signal_key(&rest);
                 let sk = crate::components::input::input_selection_signal_key(&rest);
                 crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret_ix));
@@ -956,6 +1037,11 @@ impl super::App {
                             .set(None);
                     }
                 }
+                // Always repaint after an input drag so collapsed ranges clear and
+                // non-empty selections get a final highlight frame.
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
+                }
             }
             if let Some(key) = self.label_drag_key.take() {
                 let sk = crate::components::label::label_selection_signal_key(&key);
@@ -965,6 +1051,9 @@ impl super::App {
                         crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
                             .set(None);
                     }
+                }
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
                 }
             }
         }
@@ -1694,12 +1783,19 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                 let fid = focused.get();
-                let ime_data = if fid.starts_with(crate::components::INPUT_FOCUS_PREFIX) {
+                let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
                     super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fid, [0.0, 0.0])
                         .map(|(b, sa)| (b, sa, fid.clone()))
                 } else {
                     None
                 };
+                // Blink wake must follow painted carets, not only IME geometry. If
+                // `find_bounds_by_focus_id` misses for a frame, clearing `caret_wake_at`
+                // freezes the caret in its current on/off phase forever.
+                let has_input_caret = state
+                    .text_nodes
+                    .iter()
+                    .any(|n| n.style.input_caret.is_some());
 
                 let ui_scale = state.ui_scale();
 
@@ -2038,21 +2134,27 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .into_iter()
                     .map(|(rest, b, max, content)| (rest, (b, max, content)))
                     .collect();
-                // Keep the redraw pump alive when:
-                // - a scrollbar spring is still settling (fade-in / fade-out animation)
-                // - a `visible_until` timer is still ticking (scroll ended < 1500ms ago):
-                //   once it expires we need one more frame to flip the spring target to 0
-                //   and start the fade-out. Without this, the event loop goes idle and the
-                //   scrollbar stays opaque until an unrelated input event triggers a redraw.
                 let scrollbar_visibility_pending = self
                     .scrollbar_visible_until
                     .values()
                     .any(|&until| now < until);
-                if smooth_scroll_animating
-                    || scrollbar_fade_animating
-                    || scrollbar_visibility_pending
-                {
+                // Keep the redraw pump alive only while content is still animating.
+                // For the scrollbar `visible_until` hold window, sleep until the deadline via
+                // `about_to_wait` + WaitUntil (one wake starts fade-out) instead of ~1.5s of frames.
+                if smooth_scroll_animating || scrollbar_fade_animating {
                     window.request_redraw();
+                } else if scrollbar_visibility_pending {
+                    let earliest = self
+                        .scrollbar_visible_until
+                        .values()
+                        .copied()
+                        .filter(|&until| until > now)
+                        .min();
+                    if let Some(until) = earliest {
+                        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                            until,
+                        ));
+                    }
                 }
 
                 for (cb, is_hover) in hover_to_run {
@@ -2066,22 +2168,49 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     None => window.set_cursor(CursorIcon::Default),
                 }
 
-                if let Some((bounds, scroll_acc, _fid_clone)) = ime_data {
-                    window.request_redraw();
+                if let Some((bounds, scroll_acc, fid_clone)) = ime_data {
                     window.set_ime_allowed(true);
-                    // Prefer a caret-sized strip at the leading edge of the focused field
-                    // (scroll-adjusted). Full caret glyph X is still prepare_text-side; this
-                    // keeps the IME candidate window near the field under scroll/zoom.
-                    let caret_w = (2.0_f32 * ui_scale).max(1.0);
-                    let px = (bounds[0] - scroll_acc[0]) * ui_scale;
-                    let py = (bounds[1] - scroll_acc[1]) * ui_scale;
-                    let ph = (bounds[3] * ui_scale).max(1.0);
-                    window.set_ime_cursor_area(
-                        winit::dpi::PhysicalPosition::new(px as i32, py as i32),
-                        winit::dpi::PhysicalSize::new(caret_w as u32, ph as u32),
+                    // Visual field (logical) after ancestor scroll — refreshed every redraw so
+                    // ScrollArea motion / HiDPI `scale_factor` keep the OS IME window on the caret.
+                    let visual = [
+                        bounds[0] - scroll_acc[0],
+                        bounds[1] - scroll_acc[1],
+                        bounds[2],
+                        bounds[3],
+                    ];
+                    let caret_x_in_field =
+                        self.estimate_ime_caret_x_in_field(&fid_clone, visual, ui_scale);
+                    let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
+                        visual,
+                        caret_x_in_field,
+                        ui_scale,
                     );
+                    window.set_ime_cursor_area(
+                        winit::dpi::PhysicalPosition::new(px, py),
+                        winit::dpi::PhysicalSize::new(pw, ph),
+                    );
+                    super::ime_support::record_ime_cursor(super::ime_support::ImeCursorSnapshot {
+                        focus_id: fid_clone,
+                        physical_x: px,
+                        physical_y: py,
+                        physical_w: pw,
+                        physical_h: ph,
+                        ui_scale,
+                        visual_x: visual[0],
+                        visual_y: visual[1],
+                        caret_x_in_field,
+                    });
                 } else {
                     window.set_ime_allowed(false);
+                }
+
+                // Caret blink: wake ~once per phase (~520ms), not every frame.
+                if has_input_caret {
+                    let wake = crate::renderer::caret_blink_next_toggle_at();
+                    self.caret_wake_at = Some(wake);
+                    event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
+                } else {
+                    self.caret_wake_at = None;
                 }
 
                 if self.force_redraw_count > 0 {

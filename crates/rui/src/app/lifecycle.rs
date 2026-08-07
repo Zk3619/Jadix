@@ -215,10 +215,9 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             }
                         }
                     }
-                    _ => {
-                        if let Some(state) = (*self.state.borrow()).as_ref() {
-                            state.window.request_redraw();
-                        }
+                    AkWindowEvent::AccessibilityDeactivated => {
+                        // No visual change; do not pump redraw.
+                        log::debug!("accesskit: accessibility deactivated");
                     }
                 }
             }
@@ -232,17 +231,53 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 state.window.request_redraw();
             }
         }
+
+        let now = std::time::Instant::now();
+        let mut next_wake: Option<std::time::Instant> = None;
+
+        // Scrollbar auto-hide timer: wake once when `visible_until` expires so fade-out can start,
+        // instead of continuous request_redraw for the whole 1.5s hold.
+        let mut visibility_expired = false;
+        for &until in self.scrollbar_visible_until.values() {
+            if until <= now {
+                visibility_expired = true;
+            } else {
+                next_wake = Some(next_wake.map_or(until, |t| t.min(until)));
+            }
+        }
+        if visibility_expired {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+
+        if let Some(wake) = self.caret_wake_at {
+            if wake <= now {
+                self.caret_wake_at = None;
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
         // Long-press: wake at the 500ms deadline so we can synthesize ContextMenu.
         if let Some(lp) = &self.long_press {
             if !lp.fired {
                 let deadline = lp.start + std::time::Duration::from_millis(500);
-                let now = std::time::Instant::now();
                 if now >= deadline {
                     self.try_fire_long_press();
                 } else {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                    next_wake = Some(next_wake.map_or(deadline, |t| t.min(deadline)));
                 }
             }
+        }
+
+        if let Some(deadline) = next_wake {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 
@@ -265,24 +300,37 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             ));
             crate::app::reactive::reset_registered_anchors();
 
+            crate::debug_stack::reset_crumb_file();
+            crate::debug_stack::crumb("lifecycle: before root create_effect");
             // create_effect runs synchronously on registration. By the time it returns, the real
             // root has been reconciled and deferred fine-grained reactive anchors have mounted, so
             // making the window visible cannot expose the bootstrap root.
             let builder_ref = self.app_builder.clone();
             crate::core::reactivity::create_effect(move || {
+                crate::debug_stack::crumb("root_effect: before app_builder");
                 let new_root = (builder_ref.borrow_mut())();
+                crate::debug_stack::crumb(&format!(
+                    "root_effect: after app_builder children={}",
+                    new_root.children.len()
+                ));
                 if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                    crate::debug_stack::crumb("root_effect: before rebuild_ui");
                     st.rebuild_ui(new_root);
+                    crate::debug_stack::crumb("root_effect: after rebuild_ui");
                     st.window.request_redraw();
                 }
+                crate::debug_stack::crumb("root_effect: body done (flush_deferred next)");
             });
+            crate::debug_stack::crumb("lifecycle: after root create_effect");
 
+            crate::debug_stack::crumb("lifecycle: before accesskit");
             let adapter = Adapter::with_mixed_handlers(
                 event_loop,
                 &window,
                 AccessKitBootstrap,
                 self.event_loop_proxy.clone(),
             );
+            crate::debug_stack::crumb("lifecycle: after accesskit");
             window.set_visible(true);
             self.accesskit_adapter = Some(adapter);
         }
@@ -526,6 +574,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         scroll_metric_duplicate_warned: std::collections::HashSet::new(),
         scroll_signal_key_cache: std::collections::HashMap::new(),
         scroll_diag_last_log: std::collections::HashMap::new(),
+        caret_wake_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
         accesskit_adapter: None,
         #[cfg(debug_assertions)]

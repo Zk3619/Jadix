@@ -8,7 +8,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
@@ -83,6 +83,8 @@ pub struct ShadowTexDraw {
 /// `prepare_text_frame` 的完整输出。
 pub struct PrepareTextOutput {
     pub underline_instances: Vec<InstanceInput>,
+    /// Input/label caret hairlines — drawn *after* glyphon text so they stay visible.
+    pub caret_instances: Vec<InstanceInput>,
     pub shadow_new_bitmaps: Vec<ShadowNewBitmap>,
     pub shadow_tex_draws: Vec<ShadowTexDraw>,
     pub needs_warmup: bool,
@@ -394,7 +396,7 @@ fn preshape_budget() -> usize {
     })
 }
 
-fn caret_blink_visible() -> bool {
+pub(crate) fn caret_blink_visible() -> bool {
     caret_blink_phase().is_multiple_of(2)
 }
 
@@ -404,6 +406,18 @@ pub(crate) fn caret_blink_phase() -> u128 {
     start.elapsed().as_millis() / 520
 }
 
+/// Instant when the caret blink phase will flip next (for `ControlFlow::WaitUntil`).
+pub(crate) fn caret_blink_next_toggle_at() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    let elapsed_ms = start.elapsed().as_millis();
+    const PHASE_MS: u128 = 520;
+    let into = elapsed_ms % PHASE_MS;
+    let remain = (PHASE_MS - into).max(1);
+    Instant::now() + Duration::from_millis(remain as u64)
+}
+
+#[allow(dead_code)]
 fn input_line_height(style: &crate::style::TextStyle, scaled_size: f32, ui_scale: f32) -> f32 {
     if let Some(lh) = style.line_height_px {
         lh * ui_scale
@@ -955,6 +969,7 @@ pub fn prepare_text_frame(
         text_renderer.prepare(device, queue, config, std::iter::empty());
         return PrepareTextOutput {
             underline_instances: Vec::new(),
+            caret_instances: Vec::new(),
             shadow_new_bitmaps: Vec::new(),
             shadow_tex_draws: Vec::new(),
             needs_warmup: false,
@@ -1533,6 +1548,7 @@ pub fn prepare_text_frame(
     let _t1 = std::time::Instant::now();
 
     let mut underline_instances: Vec<InstanceInput> = Vec::new();
+    let caret_instances: Vec<InstanceInput> = Vec::new();
 
     // Chip/Mention backgrounds (`rui_chip` Attrs.metadata = span_index+1). Drawn under glyphs.
     for (i, info) in text_nodes.iter().enumerate() {
@@ -1903,241 +1919,8 @@ pub fn prepare_text_frame(
         }
     }
 
-    // 文本选区高亮（`::selection` / `selection:bg-primary`；实例 pass 先于 glyphon 文本，故在字下）
-    // 改写模式下闪烁高亮下一字符（`overwrite_highlight`）与选区共用同一套几何。
-    for (i, info) in text_nodes.iter().enumerate() {
-        let Some(caret) = info.style.input_caret.as_ref() else {
-            continue;
-        };
-        let display = info.text.as_str();
-        let range_opt: Option<(usize, usize)> = if let Some((sa, sb)) = caret.selection {
-            let mut s = sa.min(sb).min(display.len());
-            let mut e = sa.max(sb).min(display.len());
-            s = display.floor_char_boundary(s);
-            e = display.floor_char_boundary(e);
-            if s < e {
-                Some((s, e))
-            } else {
-                None
-            }
-        } else if let Some((a, b)) = caret.overwrite_highlight {
-            if !caret_blink_visible() {
-                None
-            } else {
-                let mut s = a.min(b).min(display.len());
-                let mut e = a.max(b).min(display.len());
-                s = display.floor_char_boundary(s);
-                e = display.floor_char_boundary(e);
-                if s < e {
-                    Some((s, e))
-                } else {
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let Some((s, e)) = range_opt else {
-            continue;
-        };
-        let Some(tb) = frame_meta.get(i).and_then(|x| x.as_ref()) else {
-            continue;
-        };
-        let x = tb.x;
-        let y = tb.y;
-        let box_w = tb.box_w;
-        let box_h = tb.box_h;
-        let scaled_size = tb.text_size;
-        let align = tb.align;
-        let clip_bounds = tb.clip_bounds;
-        let st = &info.style;
-
-        let family = if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
-        } else {
-            best_font_family(unsafe { &*text_renderer.font_system })
-        };
-        let is_icon = st.font_family.as_deref() == Some("lucide");
-        let requested_weight = if is_icon { 400 } else { st.weight };
-        let font_weight = crate::utils::font::normalize_weight_for_family(
-            unsafe { &*text_renderer.font_system }.db(),
-            family,
-            requested_weight,
-        );
-        let line_height = input_line_height(st, scaled_size, ui_scale);
-
-        let prefix_to_sel = measure_prefix_width(
-            unsafe { &mut *text_renderer.font_system },
-            &display[..s],
-            scaled_size,
-            line_height,
-            font_weight,
-            family,
-            box_w,
-        );
-        let sel_w = measure_prefix_width(
-            unsafe { &mut *text_renderer.font_system },
-            &display[s..e],
-            scaled_size,
-            line_height,
-            font_weight,
-            family,
-            box_w,
-        );
-        let text_w = tb.measured_text_w;
-        let content_w = text_w.min(box_w);
-        let text_left = match align {
-            glyphon::cosmic_text::Align::Center => x + (box_w - content_w) * 0.5,
-            glyphon::cosmic_text::Align::Right => x + (box_w - content_w),
-            _ => x,
-        };
-        let sel_x0 = text_left + prefix_to_sel.min(content_w);
-        let max_sel = (text_left + content_w - sel_x0).max(0.0);
-        let sel_w = sel_w.min(max_sel);
-
-        // 选区高度与文本布局使用同一 line-height，避免中文/下行字母时视觉不匹配。
-        let caret_h = line_height.min(box_h).max(1.0);
-        let sel_y = y + (box_h - caret_h) * 0.5;
-
-        let bg = caret.selection_bg;
-        let line_color = [
-            bg[0] as f32 / 255.0,
-            bg[1] as f32 / 255.0,
-            bg[2] as f32 / 255.0,
-            bg[3] as f32 / 255.0,
-        ];
-        if sel_w > 0.0 && caret_h > 0.0 {
-            if let Some([cx, cy, cw, ch]) =
-                clip_rect_to_bounds([sel_x0, sel_y, sel_w, caret_h], clip_bounds)
-            {
-                underline_instances.push(InstanceInput {
-                    rect_pos: [cx, cy],
-                    rect_size: [cw, ch],
-                    color: line_color,
-                    border_color: [0.0, 0.0, 0.0, 0.0],
-                    radii: [0.0, 0.0, 0.0, 0.0],
-                    border_width: 0.0,
-                    shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    shadow_offset: [0.0, 0.0],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_inset: 0.0,
-                    rotate_deg: 0.0,
-                    _padding: 0.0,
-                });
-            }
-        }
-    }
-
-    // 文本输入插入符（与下划线共用实例管线）
-    for (i, info) in text_nodes.iter().enumerate() {
-        let Some(caret) = info.style.input_caret.as_ref() else {
-            continue;
-        };
-        let display = info.text.as_str();
-        if let Some((sa, sb)) = caret.selection {
-            let mut s = sa.min(sb).min(display.len());
-            let mut e = sa.max(sb).min(display.len());
-            s = display.floor_char_boundary(s);
-            e = display.floor_char_boundary(e);
-            if s < e {
-                continue;
-            }
-        }
-        if let Some((a, b)) = caret.overwrite_highlight {
-            let s = a.min(b).min(display.len());
-            let e = a.max(b).min(display.len());
-            let s = display.floor_char_boundary(s);
-            let e = display.floor_char_boundary(e);
-            if s < e {
-                continue;
-            }
-        }
-        if !caret_blink_visible() {
-            continue;
-        }
-        let Some(tb) = frame_meta.get(i).and_then(|x| x.as_ref()) else {
-            continue;
-        };
-        let x = tb.x;
-        let y = tb.y;
-        let box_w = tb.box_w;
-        let box_h = tb.box_h;
-        let scaled_size = tb.text_size;
-        let align = tb.align;
-        let clip_bounds = tb.clip_bounds;
-        let st = &info.style;
-
-        let mut ix = caret.caret_byte_index.min(display.len());
-        ix = display.floor_char_boundary(ix);
-        let prefix = &display[..ix];
-
-        let family = if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
-        } else {
-            best_font_family(unsafe { &*text_renderer.font_system })
-        };
-        let is_icon = st.font_family.as_deref() == Some("lucide");
-        let requested_weight = if is_icon { 400 } else { st.weight };
-        let font_weight = crate::utils::font::normalize_weight_for_family(
-            unsafe { &*text_renderer.font_system }.db(),
-            family,
-            requested_weight,
-        );
-        let line_height = input_line_height(st, scaled_size, ui_scale);
-
-        let prefix_w = measure_prefix_width(
-            unsafe { &mut *text_renderer.font_system },
-            prefix,
-            scaled_size,
-            line_height,
-            font_weight,
-            family,
-            box_w,
-        );
-
-        let text_w = tb.measured_text_w;
-        let content_w = text_w.min(box_w);
-        let text_left = match align {
-            glyphon::cosmic_text::Align::Center => x + (box_w - content_w) * 0.5,
-            glyphon::cosmic_text::Align::Right => x + (box_w - content_w),
-            _ => x,
-        };
-        let caret_w = (1.0_f32 * ui_scale).max(1.0);
-        let mut caret_x = text_left + prefix_w.min(content_w);
-        caret_x = caret_x.min(x + box_w - caret_w);
-
-        // 光标高度与选区一致：直接跟随 line-height。
-        let caret_h = line_height.min(box_h).max(1.0);
-        let caret_y = y + (box_h - caret_h) * 0.5;
-
-        let c = st.color;
-        let line_color = [
-            c[0] as f32 / 255.0,
-            c[1] as f32 / 255.0,
-            c[2] as f32 / 255.0,
-            c[3] as f32 / 255.0,
-        ];
-        if let Some([cx, cy, cw, ch]) =
-            clip_rect_to_bounds([caret_x, caret_y, caret_w, caret_h], clip_bounds)
-        {
-            underline_instances.push(InstanceInput {
-                rect_pos: [cx, cy],
-                rect_size: [cw, ch],
-                color: line_color,
-                border_color: [0.0, 0.0, 0.0, 0.0],
-                radii: [0.0, 0.0, 0.0, 0.0],
-                border_width: 0.0,
-                shadow_color: [0.0, 0.0, 0.0, 0.0],
-                shadow_offset: [0.0, 0.0],
-                shadow_blur: 0.0,
-                shadow_spread: 0.0,
-                shadow_inset: 0.0,
-                rotate_deg: 0.0,
-                _padding: 0.0,
-            });
-        }
-    }
+    // Selection + caret chrome are emitted during layout collect (`input_chrome_instances`).
+    let _ = (&caret_instances, ui_scale);
 
     const WARMUP_BATCH_SIZE: usize = 4;
     if !initial_preshape && !text_renderer.pending_warmup.is_empty() {
@@ -2237,6 +2020,7 @@ pub fn prepare_text_frame(
 
     PrepareTextOutput {
         underline_instances,
+        caret_instances,
         shadow_new_bitmaps,
         shadow_tex_draws,
         needs_warmup: !text_renderer.pending_warmup.is_empty(),

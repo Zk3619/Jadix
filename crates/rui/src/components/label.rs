@@ -60,8 +60,20 @@ fn selection_bg_color() -> [u8; 4] {
     ]
 }
 
+/// Input 内联文本由 [`crate::components::input::sync_input_paint_subtree`] 写入 `input_caret`。
+/// 这些节点不是可选 Label（`selectable` 为 false → [`selectable_text_key`] 为 `None`），
+/// 若在「非 Label」分支里清空 `input_caret`，每帧都会抹掉光标/选区高亮。
+fn is_input_owned_text_node(el: &Element) -> bool {
+    el.template_id
+        .as_deref()
+        .is_some_and(|t| t.starts_with("__rui_input:") && t.ends_with(":text"))
+}
+
 fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
     let Some(key) = selectable_text_key(el) else {
+        if is_input_owned_text_node(el) {
+            return;
+        }
         if el.text_style.input_caret.is_some() {
             el.text_style.input_caret = None;
             *impact = LayoutStatus::StyleChanged;
@@ -394,7 +406,10 @@ impl LabelBuilder {
 impl From<LabelBuilder> for Element {
     fn from(builder: LabelBuilder) -> Element {
         let mut el: Element = builder.inner.into();
-        el.template_id = Some(builder.id);
+        // Prefer Solid-style bind identity adopted from a text child over the label's auto id.
+        if el.template_id.is_none() {
+            el.template_id = Some(builder.id);
+        }
         el
     }
 }
@@ -425,6 +440,27 @@ mod tests {
     use super::*;
     use crate::core::reactivity::use_signal;
     use crate::core::tree::Element;
+
+    #[test]
+    fn label_selection_sync_does_not_wipe_input_caret() {
+        use crate::style::InputCaretDraw;
+
+        let mut text = Element::new().text("hello");
+        text.template_id = Some("__rui_input:field:text".into());
+        text.text_style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: 5,
+            selection: Some((0, 5)),
+            selection_bg: [80, 120, 200, 90],
+            overwrite_highlight: None,
+        });
+        let mut root = Element::new().child(text);
+        let mut impact = LayoutStatus::Clean;
+        sync_label_selection_paint_subtree(&mut root, &mut impact);
+        assert!(
+            root.children[0].text_style.input_caret.is_some(),
+            "Input-owned input_caret must survive label selection sync"
+        );
+    }
 
     #[test]
     fn selectable_label_records_selection_range() {
@@ -465,5 +501,38 @@ mod tests {
             use_signal(LABEL_SELECTION_COPY_SIGNAL, String::new).get(),
             "hello"
         );
+    }
+
+    #[test]
+    fn label_child_preserves_bind_text_identity() {
+        use crate::app::reactive::{bind_text, reset_registered_anchors};
+        use crate::core::reactivity::{create_effect, dispose_effect};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        reset_registered_anchors();
+        let mounted = Rc::new(RefCell::new(None::<Element>));
+        let mounted_a = Rc::clone(&mounted);
+        let root = create_effect(move || {
+            let bound = bind_text("bind:label-adopt", || "Selected variant: default".to_string());
+            assert!(bound.on_unmount.is_some());
+            let hook = Rc::downgrade(bound.on_unmount.as_ref().unwrap());
+            let el: Element = label("lbl-auto").child(bound).into();
+            assert_eq!(el.text.as_deref(), Some("Selected variant: default"));
+            assert_eq!(el.template_id.as_deref(), Some("bind:label-adopt"));
+            assert!(
+                el.on_unmount.is_some(),
+                "adopting bind_text must keep unmount hook alive"
+            );
+            assert!(
+                hook.upgrade().is_some(),
+                "bind hook must not fire during Label adoption"
+            );
+            *mounted_a.borrow_mut() = Some(el);
+        });
+        assert!(mounted.borrow().is_some());
+        drop(mounted.borrow_mut().take());
+        dispose_effect(root);
+        reset_registered_anchors();
     }
 }

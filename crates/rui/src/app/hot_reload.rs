@@ -308,7 +308,7 @@ fn path_suffix_component_match(a: &str, b: &str) -> bool {
     }
     // Avoid ambiguous matches like `src/main.rs` that can appear in many files.
     // Real template ids from this project include at least 3 path components
-    // (e.g. `examples/hello_world/src/main.rs`).
+    // (e.g. `examples/gallery/src/main.rs`).
     if ac.len().min(bc.len()) < 3 {
         return false;
     }
@@ -338,23 +338,23 @@ mod tests {
     #[test]
     fn template_id_match_accepts_same_tail_components_with_same_line() {
         assert!(template_id_matches(
-            "d:/projects/rust-native-ui/examples/hello_world/src/main.rs:188",
-            "examples/hello_world/src/main.rs:188",
+            "d:/projects/rust-native-ui/examples/gallery/src/main.rs:188",
+            "examples/gallery/src/main.rs:188",
         ));
     }
 
     #[test]
     fn template_id_match_rejects_partial_segment_suffix_collisions() {
         assert!(!template_id_matches(
-            "d:/projects/rust-native-ui/examples/hello_world/src/main.rs:188",
-            "hello_world/src/domain.rs:188",
+            "d:/projects/rust-native-ui/examples/gallery/src/main.rs:188",
+            "gallery/src/domain.rs:188",
         ));
         assert!(!template_id_matches(
-            "d:/projects/rust-native-ui/examples/hello_world/src/main.rs:188",
-            "examples/hello_world/src/main.rs.bak:188",
+            "d:/projects/rust-native-ui/examples/gallery/src/main.rs:188",
+            "examples/gallery/src/main.rs.bak:188",
         ));
         assert!(!template_id_matches(
-            "d:/projects/rust-native-ui/examples/hello_world/src/main.rs:188",
+            "d:/projects/rust-native-ui/examples/gallery/src/main.rs:188",
             "src/main.rs:188",
         ));
     }
@@ -362,8 +362,8 @@ mod tests {
     #[test]
     fn template_id_match_requires_same_line() {
         assert!(!template_id_matches(
-            "examples/hello_world/src/main.rs:188",
-            "examples/hello_world/src/main.rs:189",
+            "examples/gallery/src/main.rs:188",
+            "examples/gallery/src/main.rs:189",
         ));
     }
 }

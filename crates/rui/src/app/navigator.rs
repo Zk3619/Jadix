@@ -467,29 +467,27 @@ fn clear_active_tick(host_id: &str) {
 }
 
 pub fn try_pop_active() -> bool {
-    ACTIVE_NAV.with(|c| {
-        let b = c.borrow();
-        let Some((_, pop)) = b.as_ref() else {
-            return false;
-        };
-        pop()
-    })
+    // Clone the callback out before invoking: `pop` may `state.set` → rebuild →
+    // host unmount → `clear_active_navigator` while this cell is still borrowed.
+    let Some(pop) = ACTIVE_NAV.with(|c| c.borrow().as_ref().map(|(_, pop)| Rc::clone(pop))) else {
+        return false;
+    };
+    pop()
 }
 
 /// 每帧推进活跃 Navigator 转场；若仍在动画则返回 true（应继续 redraw）。
 pub fn tick_active(dt: f32) -> bool {
-    ACTIVE_TICK.with(|c| {
-        let mut b = c.borrow_mut();
-        let Some((id, tick)) = b.as_ref().map(|(i, t)| (i.clone(), Rc::clone(t))) else {
-            return false;
-        };
-        let still = tick(dt);
-        if !still {
-            *b = None;
-            let _ = id;
-        }
-        still
-    })
+    // Same re-entrancy rule as `try_pop_active`: `tick` may rebuild or re-arm.
+    let Some((id, tick)) =
+        ACTIVE_TICK.with(|c| c.borrow().as_ref().map(|(i, t)| (i.clone(), Rc::clone(t))))
+    else {
+        return false;
+    };
+    let still = tick(dt);
+    if !still {
+        clear_active_tick(&id);
+    }
+    still
 }
 
 #[cfg(test)]
@@ -584,5 +582,31 @@ mod tests {
         while nav.tick(0.05) {}
         assert_eq!(nav.peek_stack().len(), 1);
         assert_eq!(nav.peek_stack()[0].route, R::Home);
+    }
+
+    #[test]
+    fn try_pop_active_allows_clear_during_callback() {
+        set_active_navigator(
+            "reenter_nav".into(),
+            Rc::new(|| {
+                clear_active_navigator("reenter_nav");
+                true
+            }) as Rc<dyn Fn() -> bool>,
+        );
+        assert!(try_pop_active());
+        assert!(!try_pop_active());
+    }
+
+    #[test]
+    fn tick_active_allows_clear_during_callback() {
+        set_active_tick(
+            "reenter_tick".into(),
+            Rc::new(|_dt| {
+                clear_active_tick("reenter_tick");
+                false
+            }) as Rc<dyn Fn(f32) -> bool>,
+        );
+        assert!(!tick_active(0.016));
+        assert!(!tick_active(0.016));
     }
 }

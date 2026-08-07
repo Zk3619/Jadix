@@ -13,6 +13,7 @@ pub use renderer as render;
 pub mod accesskit_bridge;
 pub mod app;
 pub mod components;
+pub(crate) mod debug_stack;
 pub mod primitives;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
 pub mod text;
@@ -40,6 +41,22 @@ mod layout_mark_dirty_tests;
 #[cfg(test)]
 #[path = "../test/headless_layout.rs"]
 mod headless_layout_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_button_text.rs"]
+mod diagnose_button_text_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_weight_clip.rs"]
+mod diagnose_weight_clip_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_showcase_collapse.rs"]
+mod diagnose_showcase_collapse_tests;
+
+#[cfg(test)]
+#[path = "../test/diagnose_input_caret.rs"]
+mod diagnose_input_caret_tests;
 
 /// Backward-compatible path for macro-generated code.
 pub mod tree {

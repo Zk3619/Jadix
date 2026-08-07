@@ -120,9 +120,25 @@ impl UnmountHook {
 
 impl Drop for UnmountHook {
     fn drop(&mut self) {
-        if let Some(f) = self.f.borrow_mut().take() {
-            // TLS may already be torn down at thread exit; ignore panics from AccessError.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let Some(f) = self.f.borrow_mut().take() else {
+            return;
+        };
+        // Skip if reactive TLS is already tearing down (HashMap/TLS dtor re-entrancy).
+        if !crate::core::reactivity::runtime_tls_alive() {
+            return;
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    }
+}
+
+impl Drop for Element {
+    fn drop(&mut self) {
+        // Default recursive `Vec<Element>` Drop overflows on tall UI trees (Gallery) with
+        // Windows' ~1MB stack in debug builds. Drain the subtree iteratively instead.
+        let mut stack = std::mem::take(&mut self.children);
+        while let Some(mut node) = stack.pop() {
+            stack.append(&mut node.children);
+            // `node` drops here with empty `children` → O(1) stack frame per element.
         }
     }
 }

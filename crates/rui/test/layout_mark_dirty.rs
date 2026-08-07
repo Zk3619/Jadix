@@ -1,4 +1,4 @@
-//! LayoutChanged path: subtree `mark_dirty` + compute from shared parent when possible.
+//! LayoutChanged path: subtree `mark_dirty` + compute from app root (not subtree parent).
 
 use crate::core::tree::{Element, LayoutTree};
 use taffy::style::Dimension;
@@ -20,9 +20,7 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
     let leaf_node = root.children[1].children[0]
         .layout_node
         .expect("leaf should have a taffy node after build");
-    let container_node = root.children[1]
-        .layout_node
-        .expect("container should have a taffy node");
+    let root_node = tree.root_node.expect("app root");
     assert!(
         !tree.is_node_dirty(leaf_node),
         "fresh compute should clear dirty"
@@ -46,10 +44,8 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
     );
 
     let dirty = std::collections::HashSet::from([leaf_node]);
-    let subtree = tree
-        .pick_subtree_compute_root(&dirty)
-        .expect("nested leaf should pick container parent");
-    assert_eq!(subtree, container_node);
+    // pick may succeed, but live path must still compute from app root (location safety).
+    let _picked = tree.pick_subtree_compute_root(&dirty);
     tree.build_and_layout_fast_ex(
         &mut root,
         200.0,
@@ -57,12 +53,12 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
         [0.0, 0.0],
         false,
         false,
-        Some(subtree),
+        None,
     );
     assert_eq!(
         tree.last_compute_root,
-        Some(subtree),
-        "LayoutChanged should compute from subtree parent when pick succeeds"
+        Some(root_node),
+        "LayoutChanged must compute from app root so subtree location is not zeroed"
     );
     let after_h = root.children[1].children[0].layout_bounds[3];
     assert!(
@@ -71,6 +67,6 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
     );
     assert!(
         !tree.is_node_dirty(leaf_node),
-        "subtree compute_layout should clear dirty"
+        "root compute_layout should clear dirty"
     );
 }

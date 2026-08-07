@@ -54,7 +54,7 @@ impl Spring {
             velocity: 0.0,
             stiffness,
             damping,
-            signal: Signal::new(initial),
+            signal: Signal::new_unowned(initial),
             affects_scrollbar_prepass,
         }));
 
@@ -72,7 +72,7 @@ impl Spring {
         }
         state.target = target;
         // Keep target updates from fan-out rebuilding effects synchronously.
-        state.signal.set_silent(state.current);
+        let _ = state.signal.try_set_silent(state.current);
     }
 
     pub fn get(&self) -> f32 {
@@ -167,7 +167,7 @@ impl CubicTween {
             x2,
             y2,
             active: false,
-            signal: Signal::new(initial),
+            signal: Signal::new_unowned(initial),
         }));
         CUBIC_TWEENS.with(|anim| {
             anim.borrow_mut().push(Rc::downgrade(&state));
@@ -184,7 +184,7 @@ impl CubicTween {
         s.target = target;
         s.elapsed = 0.0;
         s.active = (s.value - target).abs() >= 1e-5;
-        s.signal.set_silent(s.value);
+        let _ = s.signal.try_set_silent(s.value);
     }
 
     pub fn get(&self) -> f32 {
@@ -223,6 +223,16 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
             if let Some(spring) = list[i].upgrade() {
                 let mut s = spring.borrow_mut();
 
+                // Already at rest: skip integrate + signal write (avoids idle try_set noise).
+                if (s.current - s.target).abs() < SPRING_SETTLE_POS_EPS
+                    && s.velocity.abs() < SPRING_SETTLE_VEL_EPS
+                {
+                    s.current = s.target;
+                    s.velocity = 0.0;
+                    i += 1;
+                    continue;
+                }
+
                 let displacement = s.current - s.target;
                 let spring_force = -s.stiffness * displacement;
                 let damping_force = -s.damping * s.velocity;
@@ -251,6 +261,7 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
                     }
                 }
 
+                // Only write while (or just as) the spring is moving / snapping to target.
                 signals_to_update.push((s.signal, s.current));
                 i += 1;
             } else {
@@ -260,7 +271,10 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
     });
 
     for (sig, val) in signals_to_update {
-        sig.set(val);
+        if !sig.try_set(val) {
+            // Creating effect disposed a legacy owned signal; drop stale Weak next pass.
+            continue;
+        }
     }
 
     let mut cubic_running = false;
@@ -291,11 +305,31 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
         }
     });
     for (sig, val) in cubic_updates {
-        sig.set(val);
+        let _ = sig.try_set(val);
     }
 
     AnimationTick {
         any: spring_any_running || cubic_running,
         scrollbar_overlay,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::{create_effect, dispose_effect};
+
+    #[test]
+    fn named_spring_survives_creating_effect_dispose() {
+        let effect = create_effect(|| {
+            let _ = use_spring("test-spring-unowned", 0.0);
+        });
+        let spring = use_spring("test-spring-unowned", 0.0);
+        spring.set(1.0);
+        dispose_effect(effect);
+        // Tick must not panic after the creating effect's owner is gone.
+        let _ = tick_animations(1.0 / 60.0);
+        assert!(spring.0.borrow().signal.is_alive());
+        let _ = spring.peek();
     }
 }

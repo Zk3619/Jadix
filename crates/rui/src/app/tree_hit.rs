@@ -213,7 +213,9 @@ pub(super) fn find_input_text_leaf_for_rest(
     }
     if let Some(text) = &el.text {
         if let Some(id) = fid {
-            if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest) {
+            if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
+                || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
+            {
                 return Some((
                     el.layout_bounds,
                     text.clone(),

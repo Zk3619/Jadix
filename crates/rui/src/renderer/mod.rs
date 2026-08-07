@@ -17,7 +17,7 @@ pub mod textured_pipeline;
 pub mod twemoji_name;
 
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
-pub(crate) use prepare_text::caret_blink_phase;
+pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
 pub use prepare_text::prepare_text_frame;
 pub use text::RuiTextRenderer;
 pub use text_hit::{

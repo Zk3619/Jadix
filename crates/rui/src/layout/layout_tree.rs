@@ -114,6 +114,12 @@ fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextS
     }
 }
 
+/// Test hook: run the same inherit pass as `build_and_layout*_fast`.
+#[cfg(test)]
+pub(crate) fn cascade_inheritable_text_style_for_test(root: &mut Element) {
+    cascade_inheritable_text_style(root, None);
+}
+
 /// One `peek()` batch per scroll-area id per collect pass; shared by x/y scrollbar tracks on that area.
 struct ScrollAreaSignalsCached {
     vw: f32,
@@ -214,6 +220,8 @@ pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
     pub textured_draws: Vec<TexturedDraw>,
     pub text_nodes: Vec<TextLayoutInfo>,
+    /// Input/Label caret + selection chrome in logical px (drawn after glyphon text).
+    pub input_chrome_instances: Vec<InstanceInput>,
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
     pub hover_cursor: Option<crate::core::tree::CursorKind>,
     pub prof: LayoutProfileMs,
@@ -373,10 +381,11 @@ fn measured_text_leaf_size(
             let gaps = blob.chars().count().saturating_sub(1) as f32;
             intrinsic_w = (intrinsic_w + gaps * m.letter_spacing).max(0.0);
         }
+        let min_content = prepared.max_segment_width.min(intrinsic_w).max(1.0);
         let width = if let Some(w) = known_dimensions.width {
-            w
+            w.max(1.0)
         } else if let Some(w) = avail_width {
-            intrinsic_w.min(w.max(1.0))
+            intrinsic_w.min(w.max(1.0)).max(min_content)
         } else {
             intrinsic_w
         };
@@ -408,8 +417,13 @@ impl Default for LayoutTree {
 
 impl LayoutTree {
     pub fn new() -> Self {
+        let mut taffy = TaffyTree::new();
+        // Taffy defaults to integer pixel rounding. That floors glyph widths
+        // (e.g. Ghost 36.415 → 36), and glyphon then mid-word wraps the last letter.
+        // Subpixel layout is required for text measure/render to stay consistent.
+        taffy.disable_rounding();
         Self {
-            taffy: TaffyTree::new(),
+            taffy,
             root_node: None,
             text_measurements: HashMap::new(),
             measure_layout_cache: RefCell::new(HashMap::new()),
@@ -424,6 +438,10 @@ impl LayoutTree {
 
     /// If every dirty node shares the same parent, return that parent for subtree `compute_layout`.
     /// Divergent parents (or empty / root-level dirty) → `None` (caller uses app root).
+    ///
+    /// **Not used on the live LayoutChanged path:** computing from a non-root node zeros that
+    /// node's `location` (Taffy treats it as the layout root), collapsing absolute positions.
+    /// Prefer app-root `compute_layout` after [`Self::mark_dirty_nodes_in_tree`].
     pub fn pick_subtree_compute_root(
         &self,
         dirty: &std::collections::HashSet<NodeId>,
@@ -472,9 +490,8 @@ impl LayoutTree {
     /// `mark_dirty` explicitly so LayoutChanged paths that only refresh text measure are covered,
     /// and so tests can count dirty marks.
     ///
-    /// Note: LayoutChanged may `compute_layout` from a **shared parent** of dirty nodes when
-    /// [`Self::pick_subtree_compute_root`] succeeds; otherwise from the app root. Clean sibling
-    /// subtrees keep their cache either way.
+    /// Note: live LayoutChanged always `compute_layout` from the app root after mark_dirty so
+    /// parent `location` stays valid. Clean sibling subtrees keep their Taffy cache.
     pub fn mark_element_layout_dirty(&mut self, element: &Element) {
         let Some(node_id) = element.layout_node else {
             return;
@@ -611,6 +628,7 @@ impl LayoutTree {
         let mut instances = Vec::new();
         let mut textured_draws = Vec::new();
         let mut text_nodes = Vec::new();
+        let mut input_chrome_instances = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
 
@@ -627,6 +645,7 @@ impl LayoutTree {
             &mut instances,
             &mut textured_draws,
             &mut text_nodes,
+            &mut input_chrome_instances,
             &mut scroll_metrics,
             &mut hover_cursor,
             false,
@@ -640,6 +659,7 @@ impl LayoutTree {
             instances,
             textured_draws,
             text_nodes,
+            input_chrome_instances,
             scroll_metrics,
             hover_cursor,
             prof: LayoutProfileMs {
@@ -661,8 +681,8 @@ impl LayoutTree {
     /// push geometry into Taffy, even if chrome sync forces `!scroll_only` layout for other nodes.
     ///
     /// LayoutChanged path: callers should [`Self::mark_element_layout_dirty`] (or
-    /// [`Self::mark_dirty_nodes_in_tree`]) first. When `subtree_root` is `Some`, compute from that
-    /// node using its previous `final_layout` size as available space; otherwise from the app root.
+    /// [`Self::mark_dirty_nodes_in_tree`]) first. Prefer `subtree_root: None` (app root): a non-root
+    /// compute node gets `location = (0,0)` in Taffy and collapses absolute positions.
     pub fn build_and_layout_fast(
         &mut self,
         root: &mut Element,
@@ -765,6 +785,7 @@ impl LayoutTree {
         let mut instances = Vec::new();
         let mut textured_draws = Vec::new();
         let mut text_nodes = Vec::new();
+        let mut input_chrome_instances = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
 
@@ -789,6 +810,7 @@ impl LayoutTree {
             &mut instances,
             &mut textured_draws,
             &mut text_nodes,
+            &mut input_chrome_instances,
             &mut scroll_metrics,
             &mut hover_cursor,
             scroll_only,
@@ -802,6 +824,7 @@ impl LayoutTree {
             instances,
             textured_draws,
             text_nodes,
+            input_chrome_instances,
             scroll_metrics,
             hover_cursor,
             prof: LayoutProfileMs {
@@ -897,6 +920,7 @@ impl LayoutTree {
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
+        input_chrome_instances: &mut Vec<InstanceInput>,
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
         hover_cursor: &mut Option<crate::core::tree::CursorKind>,
         _scroll_only: bool,
@@ -1238,9 +1262,22 @@ impl LayoutTree {
                 width: lay_w,
                 height: lay_h,
                 clip_bounds: clip,
-                style: text_style,
+                style: text_style.clone(),
                 prepared,
             });
+            // Selection goes into main instances (under glyphs); caret into chrome (over glyphs).
+            push_input_chrome_instances(
+                instances,
+                input_chrome_instances,
+                text,
+                &text_style,
+                render_x,
+                render_y,
+                lay_w,
+                lay_h,
+                clip,
+                opacity,
+            );
         }
 
         // Recurse children
@@ -1296,6 +1333,7 @@ impl LayoutTree {
                     instances,
                     textured_draws,
                     text_nodes,
+                    input_chrome_instances,
                     scroll_metrics,
                     hover_cursor,
                     _scroll_only,
@@ -1341,6 +1379,7 @@ impl LayoutTree {
                     instances,
                     textured_draws,
                     text_nodes,
+                    input_chrome_instances,
                     scroll_metrics,
                     hover_cursor,
                     _scroll_only,
@@ -1604,10 +1643,145 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     }
 }
 
+fn prefix_width_logical(text: &str, byte_ix: usize, size: f32, weight: u16, line_height: f32) -> f32 {
+    let ix = text.floor_char_boundary(byte_ix.min(text.len()));
+    if ix == 0 {
+        return 0.0;
+    }
+    // `max_segment_width` is min-content (longest unbreakable segment), NOT the
+    // single-line advance. Latin+CJK prefixes like "1是" split into two segments;
+    // using max() places the caret roughly mid-"是". Use intrinsic (sum) instead.
+    let prepared = crate::text::prepare(&text[..ix], size, weight, line_height);
+    crate::text::intrinsic_width(&prepared)
+}
+
+fn push_input_chrome_instances(
+    selection_out: &mut Vec<InstanceInput>,
+    caret_out: &mut Vec<InstanceInput>,
+    text: &str,
+    style: &TextStyle,
+    x: f32,
+    y: f32,
+    box_w: f32,
+    box_h: f32,
+    clip: Option<[f32; 4]>,
+    opacity: f32,
+) {
+    let Some(caret) = style.input_caret.as_ref() else {
+        return;
+    };
+    let line_height = if let Some(lh) = style.line_height_px {
+        lh
+    } else if let Some(scale) = style.line_height_scale {
+        style.size * scale
+    } else {
+        style.size * crate::style::tailwind_default_leading_scale(style.size)
+    };
+    let caret_h = line_height.min(box_h).max(1.0);
+    let chrome_y = y + (box_h - caret_h) * 0.5;
+
+    let range_opt: Option<(usize, usize)> = if let Some((sa, sb)) = caret.selection {
+        let mut s = sa.min(sb).min(text.len());
+        let mut e = sa.max(sb).min(text.len());
+        s = text.floor_char_boundary(s);
+        e = text.floor_char_boundary(e);
+        if s < e {
+            Some((s, e))
+        } else {
+            None
+        }
+    } else if let Some((a, b)) = caret.overwrite_highlight {
+        if !crate::renderer::caret_blink_visible() {
+            None
+        } else {
+            let mut s = a.min(b).min(text.len());
+            let mut e = a.max(b).min(text.len());
+            s = text.floor_char_boundary(s);
+            e = text.floor_char_boundary(e);
+            if s < e {
+                Some((s, e))
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some((s, e)) = range_opt {
+        let prefix_w = prefix_width_logical(text, s, style.size, style.weight, line_height);
+        let sel_w = prefix_width_logical(text, e, style.size, style.weight, line_height) - prefix_w;
+        let sel_w = sel_w.min(box_w - prefix_w).max(0.0);
+        if sel_w > 0.0 {
+            let bg = caret.selection_bg;
+            let color = [
+                bg[0] as f32 / 255.0,
+                bg[1] as f32 / 255.0,
+                bg[2] as f32 / 255.0,
+                (bg[3] as f32 / 255.0) * opacity,
+            ];
+            let rect = intersect_rect(clip, [x + prefix_w.min(box_w), chrome_y, sel_w, caret_h]);
+            if rect[2] > 0.0 && rect[3] > 0.0 {
+                selection_out.push(InstanceInput {
+                    rect_pos: [rect[0], rect[1]],
+                    rect_size: [rect[2], rect[3]],
+                    color,
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    radii: [0.0, 0.0, 0.0, 0.0],
+                    border_width: 0.0,
+                    shadow_color: [0.0, 0.0, 0.0, 0.0],
+                    shadow_offset: [0.0, 0.0],
+                    shadow_blur: 0.0,
+                    shadow_spread: 0.0,
+                    shadow_inset: 0.0,
+                    rotate_deg: 0.0,
+                    _padding: 0.0,
+                });
+            }
+        }
+        return;
+    }
+
+    if !crate::renderer::caret_blink_visible() {
+        return;
+    }
+    let mut ix = caret.caret_byte_index.min(text.len());
+    ix = text.floor_char_boundary(ix);
+    let prefix_w = prefix_width_logical(text, ix, style.size, style.weight, line_height);
+    let caret_w = 2.0_f32;
+    let mut caret_x = x + prefix_w.min(box_w);
+    caret_x = caret_x.min(x + box_w - caret_w).max(x);
+    let c = style.color;
+    let color = [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        (c[3] as f32 / 255.0) * opacity,
+    ];
+    let rect = intersect_rect(clip, [caret_x, chrome_y, caret_w, caret_h]);
+    if rect[2] > 0.0 && rect[3] > 0.0 {
+        caret_out.push(InstanceInput {
+            rect_pos: [rect[0], rect[1]],
+            rect_size: [rect[2], rect[3]],
+            color,
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            radii: [0.0, 0.0, 0.0, 0.0],
+            border_width: 0.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
+            shadow_offset: [0.0, 0.0],
+            shadow_blur: 0.0,
+            shadow_spread: 0.0,
+            shadow_inset: 0.0,
+            rotate_deg: 0.0,
+            _padding: 0.0,
+        });
+    }
+}
+
 #[cfg(test)]
 mod prepared_text_attach_tests {
     use super::*;
-    use crate::style::TextStyle;
+    use crate::style::{InputCaretDraw, TextStyle};
 
     #[test]
     fn prepared_text_on_text_layout_info_roundtrips() {
@@ -1632,5 +1806,89 @@ mod prepared_text_attach_tests {
         assert!(metrics.line_count >= 1);
         let lines = crate::text::layout_lines(attached, info.width);
         assert_eq!(lines.len() as u32, metrics.line_count);
+    }
+
+    #[test]
+    fn latin_cjk_prefix_width_sums_segments_not_max() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+
+        let size = 14.0;
+        let lh = 21.0;
+        let weight = 400u16;
+        let mixed = "1是";
+        let after_cjk = mixed.len();
+        let w_mixed = prefix_width_logical(mixed, after_cjk, size, weight, lh);
+        let w_latin = prefix_width_logical("1", 1, size, weight, lh);
+        let w_cjk = prefix_width_logical("是", "是".len(), size, weight, lh);
+        // Bug used max(segment) ≈ w_cjk, placing caret mid-"是".
+        assert!(
+            w_mixed > w_cjk + w_latin * 0.5,
+            "prefix of \"1是\" must be ~sum, got mixed={w_mixed} latin={w_latin} cjk={w_cjk}"
+        );
+        assert!(
+            (w_mixed - (w_latin + w_cjk)).abs() < 1.0,
+            "expected ~latin+cjk, got mixed={w_mixed} vs {w_latin}+{w_cjk}"
+        );
+    }
+
+    #[test]
+    fn caret_after_cjk_in_latin_cjk_latin_is_past_glyph() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+
+        let text = "1是1";
+        // Caret after "是" (IME replace middle of "1111").
+        let caret_byte = "1是".len();
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.color = [0, 0, 0, 255];
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: caret_byte,
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        // Force blink-ON by retrying a few phases if needed.
+        let mut saw = false;
+        for _ in 0..6 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                0.0,
+                0.0,
+                200.0,
+                32.0,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(280));
+        }
+        assert!(saw, "caret chrome missing during blink ON");
+        let caret_x = chrome[0].rect_pos[0];
+        let after_cjk = prefix_width_logical(text, caret_byte, 14.0, 400, 21.0);
+        let only_cjk = prefix_width_logical("是", "是".len(), 14.0, 400, 21.0);
+        assert!(
+            (caret_x - after_cjk).abs() < 0.5,
+            "caret x={caret_x} should match intrinsic prefix={after_cjk}"
+        );
+        assert!(
+            caret_x > only_cjk + 1.0,
+            "caret must sit past mid-CJK (only_cjk={only_cjk}, caret_x={caret_x})"
+        );
     }
 }

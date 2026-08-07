@@ -709,7 +709,11 @@ impl From<ButtonBuilder> for Element {
                 } else if let Some(uo) = builder.text_style.underline_offset_px {
                     child.text_style.underline_offset = uo;
                 }
-                child = child.w("100%").text_center().min_w("0").flex_shrink(1.0);
+                // Content-sized caption: do not `min_w(0)` / `w(100%)` / shrink — those let a
+                // wrapping HStack compress the leaf below glyph width and force mid-word wrap
+                // (e.g. "Secondary" → "Secondar"/"y"), which also inflates height and collapses
+                // sibling card layout.
+                child = child.text_center().flex_shrink(0.0);
                 el = el.child(child);
             } else if let Some(text_content) = child.text.take() {
                 let mut color = text_color;
@@ -725,8 +729,7 @@ impl From<ButtonBuilder> for Element {
                 } else {
                     builder.text_style.size_px
                 };
-                // Button caption text should occupy the button content box width to avoid
-                // accidental over-shrink clipping in flex contexts (e.g. "MC"/"CE" -> "M"/"C").
+                // Keep caption min-content sized; parent `justify_center` / `items_center` centers it.
                 let text_node = build_text_node(
                     text_content,
                     TextNodeConfig {
@@ -742,10 +745,8 @@ impl From<ButtonBuilder> for Element {
                         ..builder.text_style
                     },
                 )
-                .w("100%")
                 .text_center()
-                .min_w("0")
-                .flex_shrink(1.0);
+                .flex_shrink(0.0);
                 el = el.child(text_node);
             } else {
                 el = el.child(child);

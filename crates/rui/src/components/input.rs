@@ -79,7 +79,7 @@ pub fn input_type_signal_key(id: &str) -> String {
 /// 仅在聚焦编辑时挂到 `text_shape_suffix`：失焦且纯 ASCII 走 Basic shaping 时该字位易缺字形，会被画成「乱码框」。
 pub const INPUT_LINE_SHAPE_SUFFIX: &str = "\u{2009}";
 
-fn focus_id_for_input(id: &str) -> String {
+pub(crate) fn focus_id_for_input(id: &str) -> String {
     format!("{INPUT_FOCUS_PREFIX}{id}")
 }
 
@@ -528,12 +528,16 @@ impl From<InputBuilder> for Element {
         let focus_key = "__rui_button_focus_id";
         let focus_visible_key = "__rui_focus_visible";
         let focused = use_signal(focus_key, String::new);
-        let focus_visible = use_signal(focus_visible_key, || false);
+        let _ = use_signal(focus_visible_key, || false);
 
         let fid = focus_id_for_input(&field_id);
         // `peek`：不把焦点/输入值订阅到根 `create_effect`，避免点击输入框、切焦点等触发整树 `rebuild_ui`
         //（会破坏 `<Reactive>` 占位协调）。外观由 `sync_input_paint_subtree` 每帧按 `peek` 刷新。
-        let is_focused = focused.peek() == fid && focus_visible.peek() && !builder.disabled;
+        //
+        // Caret / selection follow DOM focus (`focused == fid`), not `:focus-visible`.
+        // Mouse-down clears `__rui_focus_visible` before `on_click`; requiring it here made the
+        // caret and selection highlight disappear while the field still accepted typing.
+        let is_focused = focused.peek() == fid && !builder.disabled;
 
         let value_sig = use_signal(&input_value_signal_key(&field_id), String::new);
         let preedit_sig = use_signal(&input_preedit_signal_key(&field_id), String::new);
@@ -807,11 +811,10 @@ fn sync_one_input_paint(
     impact: &mut LayoutStatus,
 ) {
     let focus_key = "__rui_button_focus_id";
-    let focus_visible_key = "__rui_focus_visible";
     let focused = use_signal(focus_key, String::new);
-    let focus_visible = use_signal(focus_visible_key, || false);
     let fid = focus_id_for_input(&desc.base_id);
-    let is_focused = focused.peek() == fid && focus_visible.peek() && !desc.disabled;
+    // Same as builder path: caret/selection use DOM focus, not `:focus-visible`.
+    let is_focused = focused.peek() == fid && !desc.disabled;
 
     let committed = use_signal(&input_value_signal_key(&desc.base_id), String::new).peek();
     let preedit = use_signal(&input_preedit_signal_key(&desc.base_id), String::new).peek();
@@ -1038,7 +1041,8 @@ fn sync_one_input_paint(
 
         if text_el.text_style.input_caret != caret_draw {
             text_el.text_style.input_caret = caret_draw;
-            text_layout = true;
+            // Caret/selection is paint chrome — StyleChanged, not flex LayoutChanged.
+            text_style = true;
         }
     }
 

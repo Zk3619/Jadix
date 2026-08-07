@@ -491,8 +491,14 @@ fn stable_template_hash(source: &str) -> String {
 /// Tightened vs a bare zero-arg `.get()` scan:
 /// - receiver must be a path / field / index / paren / reference chain (not a call result);
 /// - also treats `.get_untracked()` as non-subscribing (ignored);
-/// - ignores `.get(...)` with arguments (e.g. `HashMap::get`).
+/// - ignores `.get(...)` with arguments (e.g. `HashMap::get`);
+/// - scans inside macro args (e.g. `format!("…{}", count.get())`) — syn's default visit
+///   does not walk macro token trees, which previously skipped auto `bind_text` lowering
+///   and left naked `.get()` under `isolate_reads` (gallery section body) with no subscriber.
 fn expr_reads_get(expr: &Expr) -> bool {
+    use syn::parse::Parser;
+    use syn::punctuated::Punctuated;
+
     struct Finder {
         found: bool,
     }
@@ -522,6 +528,30 @@ fn expr_reads_get(expr: &Expr) -> bool {
                 return;
             }
             syn::visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_macro(&mut self, node: &syn::ExprMacro) {
+            if self.found {
+                return;
+            }
+            // `format!("…{}", sig.get())`, `vec![a.get()]`, etc.: parse comma-separated exprs.
+            let tokens = node.mac.tokens.clone();
+            if let Ok(args) =
+                Punctuated::<Expr, syn::Token![,]>::parse_terminated.parse2(tokens.clone())
+            {
+                for arg in &args {
+                    self.visit_expr(arg);
+                    if self.found {
+                        return;
+                    }
+                }
+            } else if let Ok(inner) = syn::parse2::<Expr>(tokens) {
+                self.visit_expr(&inner);
+                if self.found {
+                    return;
+                }
+            }
+            syn::visit::visit_expr_macro(self, node);
         }
     }
     let mut finder = Finder { found: false };

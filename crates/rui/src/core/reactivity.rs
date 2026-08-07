@@ -13,6 +13,8 @@
 //! ## Named vs owned signals
 //!
 //! - [`create_signal`] — owned by the current scope; disposed with the owner.
+//! - [`Runtime::create_unowned_signal`] / [`Signal::new_unowned`] — not tied to an owner; for
+//!   animation backends held in [`use_signal`] that must outlive the creating effect.
 //! - [`use_signal`] — **global** keyed registry (intentionally survives rebuilds for Input focus,
 //!   scroll offsets, etc.).
 //! - [`use_scoped_signal`] — keyed relative to the current owner path; same local id under one
@@ -26,6 +28,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 thread_local! {
     static RUNTIME: RefCell<Rc<Runtime>> = RefCell::new(Runtime::new());
+}
+
+/// `true` while the reactivity thread-local is still usable (not in TLS destructor).
+pub(crate) fn runtime_tls_alive() -> bool {
+    RUNTIME.try_with(|_| ()).is_ok()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -88,6 +95,8 @@ pub struct Runtime {
     root_owner: RefCell<Option<OwnerId>>,
     owners: RefCell<HashMap<OwnerId, OwnerNode>>,
     pub signals: RefCell<HashMap<SignalId, Rc<RefCell<dyn Any>>>>,
+    /// Signals created with [`Self::create_unowned_signal`] (not listed on any owner).
+    unowned_signals: RefCell<HashSet<SignalId>>,
     pub named_signals: RefCell<HashMap<String, SignalId>>,
     named_signal_types: RefCell<HashMap<String, TypeId>>,
     effects: RefCell<HashMap<EffectId, EffectState>>,
@@ -109,6 +118,13 @@ pub struct Runtime {
     deferred_effects: RefCell<Vec<EffectId>>,
     /// Runs after the current memo/effect flush drains (Solid `createDeferred` catch-up).
     deferred_fns: RefCell<Vec<Box<dyn FnOnce()>>>,
+    /// Guard so `run_effect` → `flush_deferred_effects` stays iterative (avoids O(depth) stack).
+    flushing_deferred: Cell<bool>,
+    /// Guard so `notify` → `flush_pending` → `run_effect` → `notify` stays iterative.
+    flushing_pending: Cell<bool>,
+    /// In-flight `run_effect` nesting for this runtime (thread-local). Used to defer
+    /// `create_effect` while `current_effect` is temporarily cleared (`untrack` / memo).
+    effect_run_depth: Cell<usize>,
 }
 
 impl Runtime {
@@ -120,6 +136,7 @@ impl Runtime {
             root_owner: RefCell::new(None),
             owners: RefCell::new(HashMap::new()),
             signals: RefCell::new(HashMap::new()),
+            unowned_signals: RefCell::new(HashSet::new()),
             named_signals: RefCell::new(HashMap::new()),
             named_signal_types: RefCell::new(HashMap::new()),
             effects: RefCell::new(HashMap::new()),
@@ -136,6 +153,9 @@ impl Runtime {
             pending_memo_set: RefCell::new(HashSet::new()),
             deferred_effects: RefCell::new(Vec::new()),
             deferred_fns: RefCell::new(Vec::new()),
+            flushing_deferred: Cell::new(false),
+            flushing_pending: Cell::new(false),
+            effect_run_depth: Cell::new(0),
         })
     }
 
@@ -148,6 +168,22 @@ impl Runtime {
         if let Some(node) = self.owners.borrow_mut().get_mut(&owner) {
             node.signals.push(id);
         }
+        Signal {
+            id,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Like [`Self::create_signal`], but the value is **not** disposed with any owner.
+    ///
+    /// Use for long-lived animation values stored inside a [`use_signal`]-backed handle
+    /// (`Spring` / `CubicTween`): the creating effect may dispose while ticks still write.
+    pub fn create_unowned_signal<T: 'static>(&self, initial_value: T) -> Signal<T> {
+        let id = SignalId(NEXT_SIGNAL_ID.fetch_add(1, Ordering::Relaxed));
+        self.signals
+            .borrow_mut()
+            .insert(id, Rc::new(RefCell::new(initial_value)));
+        self.unowned_signals.borrow_mut().insert(id);
         Signal {
             id,
             marker: std::marker::PhantomData,
@@ -260,47 +296,48 @@ fn owner_depth(rt: &Runtime, id: OwnerId) -> u32 {
 }
 
 fn dispose_owner(rt: &Runtime, id: OwnerId) {
-    let Some(mut node) = rt.owners.borrow_mut().remove(&id) else {
-        return;
-    };
+    // Iterative teardown: Gallery mounts create tall owner trees; recursive dispose
+    // STATUS_STACK_OVERFLOW on Windows default stacks.
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        let Some(mut node) = rt.owners.borrow_mut().remove(&id) else {
+            continue;
+        };
 
-    if let Some(parent) = node.parent {
-        if let Some(parent_node) = rt.owners.borrow_mut().get_mut(&parent) {
-            parent_node.children.retain(|c| *c != id);
+        if let Some(parent) = node.parent {
+            if let Some(parent_node) = rt.owners.borrow_mut().get_mut(&parent) {
+                parent_node.children.retain(|c| *c != id);
+            }
         }
-    }
 
-    while let Some(cleanup) = node.cleanups.pop() {
-        cleanup();
-    }
+        while let Some(cleanup) = node.cleanups.pop() {
+            cleanup();
+        }
 
-    for child in std::mem::take(&mut node.children) {
-        dispose_owner(rt, child);
-    }
+        stack.extend(std::mem::take(&mut node.children));
 
-    for effect_id in std::mem::take(&mut node.effects) {
-        dispose_effect_inner(rt, effect_id, false);
-    }
+        for effect_id in std::mem::take(&mut node.effects) {
+            dispose_effect_inner(rt, effect_id, false);
+        }
 
-    for memo_id in std::mem::take(&mut node.memos) {
-        dispose_memo_inner(rt, memo_id);
-    }
+        for memo_id in std::mem::take(&mut node.memos) {
+            dispose_memo_inner(rt, memo_id);
+        }
 
-    for signal_id in std::mem::take(&mut node.signals) {
-        rt.signals.borrow_mut().remove(&signal_id);
-        rt.signal_subscribers.borrow_mut().remove(&signal_id);
-        rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
-    }
+        for signal_id in std::mem::take(&mut node.signals) {
+            rt.signals.borrow_mut().remove(&signal_id);
+            rt.signal_subscribers.borrow_mut().remove(&signal_id);
+            rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
+        }
 
-    // Temporaries from `borrow()` in an `if` condition live for the whole `if`
-    // expression (including the body). Split the read so `borrow_mut` is not nested.
-    let clear_current = *rt.current_owner.borrow() == Some(id);
-    if clear_current {
-        *rt.current_owner.borrow_mut() = node.parent;
-    }
-    let clear_root = *rt.root_owner.borrow() == Some(id);
-    if clear_root {
-        *rt.root_owner.borrow_mut() = None;
+        let clear_current = *rt.current_owner.borrow() == Some(id);
+        if clear_current {
+            *rt.current_owner.borrow_mut() = node.parent;
+        }
+        let clear_root = *rt.root_owner.borrow() == Some(id);
+        if clear_root {
+            *rt.root_owner.borrow_mut() = None;
+        }
     }
 }
 
@@ -378,12 +415,23 @@ fn track_signal_read(rt: &Runtime, signal_id: SignalId) {
 }
 
 fn run_effect(rt: &Runtime, effect_id: EffectId) {
+    let depth = rt.effect_run_depth.get() + 1;
+    rt.effect_run_depth.set(depth);
+    if depth > 512 {
+        eprintln!(
+            "[rui] run_effect stack depth={depth} effect_id={} — likely infinite effect re-entry",
+            effect_id.0
+        );
+        rt.effect_run_depth.set(depth - 1);
+        panic!("run_effect recursion limit (depth={depth})");
+    }
     let Some(state) = rt
         .effects
         .borrow()
         .get(&effect_id)
         .map(|s| (s.owner, Rc::clone(&s.f)))
     else {
+        rt.effect_run_depth.set(depth - 1);
         return;
     };
     let (owner, effect_fn) = state;
@@ -421,18 +469,40 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
     *rt.current_effect.borrow_mut() = prev_effect;
     *rt.current_owner.borrow_mut() = prev_owner;
     flush_deferred_effects(rt);
+    rt.effect_run_depth.set(depth - 1);
 }
 
 fn flush_deferred_effects(rt: &Runtime) {
+    // Nested `run_effect` must not recursively flush: a tall create_effect chain
+    // (gallery / many bind_text) would STATUS_STACK_OVERFLOW on Windows defaults.
+    if rt.flushing_deferred.get() {
+        return;
+    }
+    rt.flushing_deferred.set(true);
+    let mut rounds = 0usize;
     loop {
         let ids: Vec<EffectId> = std::mem::take(&mut *rt.deferred_effects.borrow_mut());
         if ids.is_empty() {
             break;
         }
+        rounds += 1;
+        if rounds == 1 || rounds % 50 == 0 {
+            crate::debug_stack::crumb(&format!(
+                "flush_deferred: round={rounds} batch={}",
+                ids.len()
+            ));
+        }
+        if rounds > 100_000 {
+            panic!("flush_deferred_effects exceeded 100k rounds — likely effect create loop");
+        }
         for id in ids {
             run_effect(rt, id);
         }
     }
+    if rounds > 0 {
+        crate::debug_stack::crumb(&format!("flush_deferred: done rounds={rounds}"));
+    }
+    rt.flushing_deferred.set(false);
 }
 
 fn enqueue_pending_effect(rt: &Runtime, id: EffectId) {
@@ -530,6 +600,11 @@ fn ensure_memo_fresh(rt: &Runtime, memo_id: MemoId) {
 
 /// Drain pending memos (by depth ascending) then effects (by depth ascending).
 fn flush_pending(rt: &Runtime) {
+    // Re-entrant notify during an in-flight flush must only enqueue; the outer loop drains.
+    if rt.flushing_pending.get() {
+        return;
+    }
+    rt.flushing_pending.set(true);
     loop {
         let memo_chunk: Vec<MemoId> = {
             let mut q = rt.pending_memos.borrow_mut();
@@ -584,6 +659,7 @@ fn flush_pending(rt: &Runtime) {
             if q.is_empty() {
                 let jobs = std::mem::take(&mut *rt.deferred_fns.borrow_mut());
                 if jobs.is_empty() {
+                    rt.flushing_pending.set(false);
                     return;
                 }
                 drop(q);
@@ -613,6 +689,7 @@ fn flush_pending(rt: &Runtime) {
         if rt.pending_memos.borrow().is_empty() && rt.pending_effects.borrow().is_empty() {
             let jobs = std::mem::take(&mut *rt.deferred_fns.borrow_mut());
             if jobs.is_empty() {
+                rt.flushing_pending.set(false);
                 return;
             }
             for job in jobs {
@@ -676,6 +753,24 @@ impl<T: Clone + 'static> Signal<T> {
         })
     }
 
+    /// Create a signal that is not disposed with the current owner (see
+    /// [`Runtime::create_unowned_signal`]).
+    pub fn new_unowned(value: T) -> Self {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            rt.create_unowned_signal(value)
+        })
+    }
+
+    /// `true` while this id still has storage in the runtime.
+    pub fn is_alive(&self) -> bool {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            let alive = rt.signals.borrow().contains_key(&self.id);
+            alive
+        })
+    }
+
     pub fn get(&self) -> T {
         RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
@@ -733,20 +828,25 @@ impl<T: Clone + 'static> Signal<T> {
 impl<T: Clone + PartialEq + 'static> Signal<T> {
     /// Update value without scheduling dependent effects / memos.
     pub fn set_silent(&self, new_value: T) {
+        if !self.try_set_silent(new_value) {
+            panic!("Signal::set_silent on disposed signal");
+        }
+    }
+
+    /// Like [`Self::set_silent`], but returns `false` if the signal was already disposed.
+    pub fn try_set_silent(&self, new_value: T) -> bool {
         RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
-            let any_val_rc = rt
-                .signals
-                .borrow()
-                .get(&self.id)
-                .cloned()
-                .expect("Signal::set_silent on disposed signal");
+            let Some(any_val_rc) = rt.signals.borrow().get(&self.id).cloned() else {
+                return false;
+            };
             let mut any_val = any_val_rc.borrow_mut();
             let typed_val = any_val.downcast_mut::<T>().expect("Signal type mismatch");
             if *typed_val != new_value {
                 *typed_val = new_value;
             }
-        });
+            true
+        })
     }
 
     pub fn set(&self, new_value: T) {
@@ -837,7 +937,15 @@ where
         }
         // Also record on parent? The effect's own owner holds it; parent holds the owner as child.
 
-        if rt.current_effect.borrow().is_some() {
+        // Defer when nested under an in-flight effect flush — including windows where
+        // `current_effect` is temporarily `None` (`untrack` / `run_memo`). Sync nesting
+        // there used to STATUS_STACK_OVERFLOW on Windows when Gallery registered hundreds
+        // of bind_/reactive_view effects during mount.
+        let should_defer = rt.current_effect.borrow().is_some()
+            || rt.flushing_deferred.get()
+            || rt.flushing_pending.get()
+            || rt.effect_run_depth.get() > 0;
+        if should_defer {
             rt.deferred_effects.borrow_mut().push(id);
         } else {
             run_effect(&rt, id);
@@ -890,13 +998,19 @@ pub fn clear_effects() {
         rt.pending_memo_set.borrow_mut().clear();
         rt.deferred_effects.borrow_mut().clear();
         rt.deferred_fns.borrow_mut().clear();
+        rt.flushing_deferred.set(false);
+        rt.flushing_pending.set(false);
+        rt.effect_run_depth.set(0);
         *rt.current_effect.borrow_mut() = None;
         *rt.current_memo.borrow_mut() = None;
         *rt.current_owner.borrow_mut() = None;
         *rt.root_owner.borrow_mut() = None;
-        // Owned signals were removed with owners; drop any stragglers that aren't named.
+        // Owned signals were removed with owners; keep named + unowned (animation) slots.
         let named: HashSet<SignalId> = rt.named_signals.borrow().values().copied().collect();
-        rt.signals.borrow_mut().retain(|id, _| named.contains(id));
+        let unowned = rt.unowned_signals.borrow().clone();
+        rt.signals
+            .borrow_mut()
+            .retain(|id, _| named.contains(id) || unowned.contains(id));
     });
 }
 
@@ -1864,6 +1978,38 @@ mod tests {
         // Regression: nested `root_owner.borrow()` across `dispose_owner` used to panic
         // with `RefCell already borrowed` (Windows abort → 0xC0000409).
         clear_effects();
+    }
+
+    /// Gallery-style mount: many `create_effect` calls happen while `untrack` cleared
+    /// `current_effect` (e.g. `bind_prop` initial apply / memo refresh). Those must defer
+    /// onto the iterative flush queue — sync nesting overflows the Windows default stack.
+    #[test]
+    fn create_effect_under_untrack_defers_without_stack_overflow() {
+        let runs = Rc::new(Cell::new(0_u32));
+        let (_handle, _) = create_root({
+            let runs = runs.clone();
+            move || {
+                create_effect({
+                    let runs = runs.clone();
+                    move || {
+                        fn nest(left: u32, runs: &Rc<Cell<u32>>) {
+                            if left == 0 {
+                                return;
+                            }
+                            let runs = Rc::clone(runs);
+                            untrack(|| {
+                                create_effect(move || {
+                                    runs.set(runs.get() + 1);
+                                    nest(left - 1, &runs);
+                                });
+                            });
+                        }
+                        nest(2048, &runs);
+                    }
+                });
+            }
+        });
+        assert_eq!(runs.get(), 2048);
     }
 
     #[test]

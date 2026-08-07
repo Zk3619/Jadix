@@ -75,7 +75,7 @@ struct AnchorRegistration {
 
 struct BindingRegistration {
     effect_id: Option<EffectId>,
-    hook: Rc<UnmountHook>,
+    hook: Weak<UnmountHook>,
 }
 
 /// Reset in-memory reactive anchor registrations (used by app lifecycle re-init).
@@ -104,7 +104,9 @@ pub fn reset_registered_anchors() {
             .collect()
     });
     for registration in bindings {
-        registration.hook.disarm();
+        if let Some(hook) = registration.hook.upgrade() {
+            hook.disarm();
+        }
         if let Some(effect_id) = registration.effect_id {
             dispose_effect(effect_id);
         }
@@ -443,7 +445,7 @@ where
         registry
             .borrow()
             .get(&bind_key)
-            .map(|registration| Rc::clone(&registration.hook))
+            .and_then(|registration| registration.hook.upgrade())
     });
     if let Some(hook) = existing_hook {
         return chain_unmount_hook(el, hook);
@@ -466,7 +468,7 @@ where
             bind_key.clone(),
             BindingRegistration {
                 effect_id: None,
-                hook: Rc::clone(&hook),
+                hook: Rc::downgrade(&hook),
             },
         );
     });
