@@ -17,6 +17,11 @@ pub(super) fn install_proxy(proxy: EventLoopProxy<RuiUserEvent>) {
     let _ = PROXY.set(proxy);
 }
 
+/// Borrow the installed event-loop proxy (used by multi-window / wake helpers).
+pub(super) fn proxy() -> Option<&'static EventLoopProxy<RuiUserEvent>> {
+    PROXY.get()
+}
+
 /// Schedule `f` on the UI thread and wake the event loop.
 ///
 /// If the app has not started yet, the closure is still queued and will run after the first
@@ -32,7 +37,7 @@ pub fn run_on_ui_thread(f: impl FnOnce() + Send + 'static) {
 }
 
 /// Drain and run all pending UI callbacks (called from the event loop).
-pub(super) fn drain_ui_tasks() {
+pub(crate) fn drain_ui_tasks() {
     let tasks: Vec<Box<dyn FnOnce() + Send>> = {
         let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
         q.drain(..).collect()
@@ -41,6 +46,10 @@ pub(super) fn drain_ui_tasks() {
         task();
     }
 }
+
+/// Serialize tests that drain the global UI task queue (resource / ui_bridge).
+#[cfg(test)]
+pub(crate) static UI_QUEUE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Spawn a background thread that eventually posts results back with [`run_on_ui_thread`].
 pub fn spawn_blocking<T, F, C>(work: F, on_ui: C)
@@ -62,6 +71,9 @@ mod tests {
 
     #[test]
     fn queue_drains_without_proxy() {
+        let _guard = UI_QUEUE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let flag = Arc::new(Mutex::new(false));
         let flag2 = Arc::clone(&flag);
         run_on_ui_thread(move || {

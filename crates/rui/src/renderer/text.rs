@@ -199,7 +199,10 @@ fn log_color_font_capabilities(db: &glyphon::fontdb::Database) {
 }
 
 pub struct RuiTextRenderer {
-    pub font_system: FontSystem,
+    /// Points at [`Self::owned_font_system`] or the primary window's FontSystem.
+    /// `Copy` raw pointer so call sites can borrow atlas/cache disjointly via `unsafe { &mut *fs }`.
+    pub(crate) font_system: *mut FontSystem,
+    owned_font_system: Option<Box<FontSystem>>,
     pub swash_cache: SwashCache,
     pub text_atlas: TextAtlas,
     pub text_renderer: TextRenderer,
@@ -211,10 +214,46 @@ pub struct RuiTextRenderer {
 }
 
 impl RuiTextRenderer {
-    pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {
-        let font_system = font_loader::create_font_system();
-        log_color_font_capabilities(font_system.db());
+    #[inline]
+    pub fn font_system_mut(&mut self) -> &mut FontSystem {
+        unsafe { &mut *self.font_system }
+    }
 
+    #[inline]
+    pub fn font_system(&self) -> &FontSystem {
+        unsafe { &*self.font_system }
+    }
+
+    /// Whether this renderer owns its FontSystem (primary) or shares the primary's.
+    pub fn shares_font_system(&self) -> bool {
+        self.owned_font_system.is_none()
+    }
+
+    pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {
+        let mut owned = Box::new(font_loader::create_font_system());
+        log_color_font_capabilities(owned.db());
+        let ptr = &mut *owned as *mut FontSystem;
+        Self::with_font_ptr(device, queue, config, ptr, Some(owned))
+    }
+
+    /// Secondary windows: shape/render against the primary [`FontSystem`] (same as measure TLS).
+    pub fn new_sharing_font_system(
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        shared: *mut FontSystem,
+    ) -> Self {
+        debug_assert!(!shared.is_null());
+        Self::with_font_ptr(device, queue, config, shared, None)
+    }
+
+    fn with_font_ptr(
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        font_system: *mut FontSystem,
+        owned_font_system: Option<Box<FontSystem>>,
+    ) -> Self {
         let swash_cache = SwashCache::new();
         let cache = glyphon::Cache::new(device);
         let mut text_atlas = TextAtlas::new(device, queue, &cache, config.format);
@@ -228,6 +267,7 @@ impl RuiTextRenderer {
 
         Self {
             font_system,
+            owned_font_system,
             swash_cache,
             text_atlas,
             text_renderer,
@@ -254,10 +294,11 @@ impl RuiTextRenderer {
             },
         );
 
+        let font_system = self.font_system;
         if let Err(err) = self.text_renderer.prepare_with_custom(
             device,
             queue,
-            &mut self.font_system,
+            unsafe { &mut *font_system },
             &mut self.text_atlas,
             &self.viewport,
             text_areas,

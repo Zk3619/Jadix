@@ -9,8 +9,13 @@
 
 pub mod r#box;
 pub mod interactive;
+pub mod path;
 pub mod text;
 
 pub use interactive::{interactive, InteractiveBuilder};
+pub use path::{
+    attach_polyline, draw_polyline_batch_stub, encode_points, pie_sector, polygon, polyline,
+    PathCommand, Point2,
+};
 pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
 pub use text::{icon, text, TextBuilder};

@@ -7,7 +7,7 @@
 | 档位 | API | 用途 |
 |------|-----|------|
 | 文本 / 单属性 | [`bind_text`](../crates/rui/src/app/reactive.rs) / `bind_prop` / [`bind_attr`](../crates/rui/src/app/reactive.rs) / [`bind_style`](../crates/rui/src/app/reactive.rs) / `bind_class` / `bind_*!` | 就地改 `text` / style / class / Button·Input chrome / Icon name，**不**重建子树。 |
-| 结构 | `reactive!` / `<Reactive>` / `reactive_view` / `reactive_component` / [`show_reactive`](../crates/rui/src/app/reactive.rs) / [`for_reactive`](../crates/rui/src/app/reactive.rs) | 挂载/卸载子树（菜单、Popover、条件块、列表、拖拽排序、VirtualList）。 |
+| 结构 | `reactive!` / `<Reactive>` / `reactive_view` / `reactive_component` / [`show_reactive`](../crates/rui/src/app/reactive.rs) / [`for_reactive`](../crates/rui/src/app/reactive.rs) / [`switch_reactive`](../crates/rui/src/app/reactive.rs) | 挂载/卸载子树（菜单、Popover、条件块、列表、多分支）。 |
 | 高频 chrome | `ReactiveSync` / Button·Input paint sync | `peek` + 帧前写回，不订根 effect。 |
 
 **根 effect 卫生：** 在根 `app_builder` 里裸写 `signal.get()`（且未走 `bind_*` / `<Show when={…get()}>` / `<For each={…get()}>` / `<Reactive>`）仍会订阅整棵 app。
@@ -34,10 +34,14 @@
 - `<Input invalid|disabled={…get()}>` → `bind_attr` + `apply_bound_input_*`
 - `<Icon name={…get()}>` → `bind_attr` + [`apply_bound_icon_name`](../crates/rui/src/utils/lucide.rs)
 
-## `<Show>` / `<For>`
+## `<Show>` / `<For>` / `<Switch>` / ErrorBoundary
 
 - `when` / `each` 含 `.get()` → `show_reactive` / `for_reactive`
 - 否则 → `show_scoped` / 直接 `Vec<Element>`
+- 多分支：[`switch_reactive`](../crates/rui/src/app/reactive.rs)（`key` + `render(&key)`）
+- 子树错误：[`error_boundary`](../crates/rui/src/app/error_boundary.rs) + [`throw_error`](../crates/rui/src/app/error_boundary.rs)
+
+`reactive_anchor` 注册时挂 [`on_cleanup`](../crates/rui/src/core/reactivity.rs)，owner dispose 时从 `REGISTERED_ANCHORS` 移除并 dispose effect。
 
 ## `#[component(reactive)]`（字段级 / getter-props）
 
@@ -46,16 +50,18 @@
 - 组件 effect 经 [`isolate_reads`](../crates/rui/src/core/reactivity.rs)：裸 `get()` 不订组件边界；字段更新靠 `ui!` 自动 bind / Show / For。
 - 试点：`hello_world` 的 `ReactiveStatusBadge`。
 
-## Owner / Context（阶段一）
+## Owner / Context（阶段一 + 九）
 
 | API | 用途 |
 |-----|------|
 | [`create_root`](../crates/rui/src/core/reactivity.rs) / `OwnerHandle` | 独立作用域；dispose 时级联清理 |
 | [`on_cleanup`](../crates/rui/src/core/reactivity.rs) | owner 销毁时 LIFO 回调 |
+| [`on_mount`](../crates/rui/src/core/reactivity.rs) | owner 首次 tick 跑一次（不随无关 signal 重跑） |
 | [`create_context`](../crates/rui/src/core/reactivity.rs) / `provide_context` / `use_context` | 沿 owner 父链查找 |
 | [`use_scoped_signal`](../crates/rui/src/core/reactivity.rs) | `{owner_path}::{local_id}`；全局持久状态仍用 `use_signal` |
 | [`Signal::with`](../crates/rui/src/core/reactivity.rs) / `update` | 借用读 / 原地写 |
 | [`create_memo`](../crates/rui/src/core/reactivity.rs) | 惰性 dirty；flush 按 depth，菱形无中间态 |
+| [`Store::produce`](../crates/rui/src/core/store.rs) | Solid 式原地更新（`update` 别名） |
 
 ## 结构岛（故意保留 `reactive!`）
 
@@ -68,8 +74,9 @@ Grid drag / Navigator / VirtualList / Portal 等拓扑变化场景继续用结�
 ## 相关源码
 
 - [app/reactive.rs](../crates/rui/src/app/reactive.rs)
+- [app/error_boundary.rs](../crates/rui/src/app/error_boundary.rs)
 - [utils/lucide.rs](../crates/rui/src/utils/lucide.rs)
 - [components/button.rs](../crates/rui/src/components/button.rs) / [input.rs](../crates/rui/src/components/input.rs)
 - [rui_macros](../crates/rui_macros/src/lib.rs)
 
-回归测试：`reactive_tests`、`bind_text_tests`、`core::reactivity::tests`。
+回归测试：`reactive_tests`、`bind_text_tests`、`core::reactivity::tests`、`headless_layout_tests`。

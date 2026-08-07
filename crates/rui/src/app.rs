@@ -2,15 +2,37 @@ use crate::core::tree::Element;
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
 
+use secondary_window::SecondaryUiBuilder;
+
 /// Wakes the event loop for hot reload (debug) and background tasks, and delivers
 /// [`accesskit_winit`] messages.
-#[derive(Debug)]
 pub(super) enum RuiUserEvent {
     #[cfg(debug_assertions)]
     HotReloadWake,
     /// A worker thread queued a closure via [`ui_bridge::run_on_ui_thread`].
     UiWake,
+    /// Create and show a secondary window (see [`multi_window::open_secondary_window`]).
+    OpenWindow {
+        title: String,
+        builder: SecondaryUiBuilder,
+    },
     AccessKit(accesskit_winit::Event),
+}
+
+impl std::fmt::Debug for RuiUserEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(debug_assertions)]
+            Self::HotReloadWake => f.write_str("HotReloadWake"),
+            Self::UiWake => f.write_str("UiWake"),
+            Self::OpenWindow { title, .. } => f
+                .debug_struct("OpenWindow")
+                .field("title", title)
+                .field("builder", &"SecondaryUiBuilder(..)")
+                .finish(),
+            Self::AccessKit(ev) => f.debug_tuple("AccessKit").field(ev).finish(),
+        }
+    }
 }
 
 impl From<accesskit_winit::Event> for RuiUserEvent {
@@ -24,21 +46,32 @@ mod hot_reload;
 mod image_registry;
 mod input_controller;
 mod lifecycle;
+pub mod multi_window;
 pub mod navigator;
 pub mod pending_images;
 pub mod pointer_events;
 pub mod portal_overlay;
 pub mod reactive;
+pub mod error_boundary;
+pub mod resource;
+pub mod router;
 pub mod runtime;
 mod scroll_support;
+mod secondary_window;
 mod state;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod tray;
 mod tree_hit;
 pub mod ui_bridge;
 mod window_events;
 pub mod window_keys;
 
+pub use multi_window::{open_secondary_window, open_secondary_window_title_only};
+pub use error_boundary::{error_boundary, throw_error};
+pub use resource::{create_resource, suspense, Resource, ResourceState};
+pub use router::Router;
+pub use tray::{tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
 pub use ui_bridge::{run_on_ui_thread, spawn_blocking};
 
 use crate::utils::drag_reorder::DragReorderState;
@@ -48,6 +81,15 @@ use state::AppState;
 use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
 type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
+
+/// Primary-pointer long-press tracker (500ms / 8px slop → synthesize right-click).
+struct LongPressTrack {
+    window_id: winit::window::WindowId,
+    start: std::time::Instant,
+    /// Physical cursor position at press.
+    pos: [f32; 2],
+    fired: bool,
+}
 
 struct App {
     state: std::rc::Rc<std::cell::RefCell<Option<AppState>>>,
@@ -63,6 +105,25 @@ struct App {
     last_click_pos: [f32; 2],
     click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
+    /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
+    content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
+    /// Primary touch finger id (winit `Touch.id`); secondary fingers feed pinch.
+    primary_touch_id: Option<u64>,
+    /// All active touch points for pinch (finger id → physical position).
+    active_touches: std::collections::HashMap<u64, winit::dpi::PhysicalPosition<f64>>,
+    /// Previous two-finger distance; `None` when not pinching.
+    pinch_prev_dist: Option<f32>,
+    /// Latest pinch scale factor (also mirrored to signal `__rui_pinch_scale`).
+    pinch_scale: f32,
+    /// Long-press → ContextMenu path while primary button/touch is held.
+    long_press: Option<LongPressTrack>,
+    /// Primary + secondary window slots (wired MVP).
+    window_registry: multi_window::WindowRegistry,
+    /// Secondary windows with independent UI trees / swapchains.
+    secondaries: std::collections::HashMap<
+        winit::window::WindowId,
+        secondary_window::SecondaryWindowState,
+    >,
     drag_reorder: Option<DragReorderState>,
     /// ??????? input `rest`?`input:{rest}` ?? id??
     input_drag_rest: Option<String>,
@@ -80,7 +141,8 @@ struct App {
     hover_scroll_axis: Option<(String, scroll_support::ScrollAxis)>,
     /// overlay scrollbar ???????????????/hover/???????
     scrollbar_visible_until: std::collections::HashMap<String, std::time::Instant>,
-    /// `scroll_behavior="smooth"` ??????px/s??????????????
+    /// Scroll fling velocity (px/s of offset) seeded by content-pan release; decayed each frame.
+    /// Wheel must not write here — it only moves `target_*` (see `handle_mouse_wheel`).
     scroll_velocity: std::collections::HashMap<String, [f32; 2]>,
     /// `scroll_behavior="smooth"`????????????/????????????????????
     smooth_active_until: std::collections::HashMap<String, std::time::Instant>,

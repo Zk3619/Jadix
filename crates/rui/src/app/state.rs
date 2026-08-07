@@ -37,7 +37,6 @@ use taffy::prelude::Dimension;
 #[cfg(debug_assertions)]
 static SCROLL_PREPASS_RECURSE_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(debug_assertions)]
-#[cfg(debug_assertions)]
 static SCROLL_PREPASS_RECURSE_VIEWPORTS_ONLY: AtomicUsize = AtomicUsize::new(0);
 #[cfg(debug_assertions)]
 static SCROLL_PREPASS_RECURSE_FULL: AtomicUsize = AtomicUsize::new(0);
@@ -63,8 +62,10 @@ pub(super) struct AppState {
     // and the winit Window/HWND are still alive (Windows GL/WGL otherwise panics in
     // make_current → workspace `panic = "abort"` → STATUS_STACK_BUFFER_OVERRUN 0xC0000409).
     pub(super) window: Arc<Window>,
-    pub(super) device: wgpu::Device,
-    pub(super) queue: wgpu::Queue,
+    /// Retained so secondary windows can `create_surface` on the same GPU backend.
+    pub(super) instance: wgpu::Instance,
+    pub(super) device: Arc<wgpu::Device>,
+    pub(super) queue: Arc<wgpu::Queue>,
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
     pub(super) size: winit::dpi::PhysicalSize<u32>,
@@ -81,6 +82,9 @@ pub(super) struct AppState {
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
     template_paths: HashMap<String, Vec<usize>>,
+    /// Taffy node ids that need `mark_dirty` + style/measure sync on the next LayoutChanged frame
+    /// (reconcile / bind paths). Cleared after apply. StructureChanged still does a full rebuild.
+    pending_layout_dirty: Vec<taffy::prelude::NodeId>,
     pub(super) num_instances: u32,
     pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
     pub(super) layout_status: crate::core::tree::LayoutStatus,
@@ -267,7 +271,7 @@ impl AppState {
     async fn acquire_adapter(
         window: &Arc<Window>,
         force_software: bool,
-    ) -> (wgpu::Surface<'static>, wgpu::Adapter) {
+    ) -> (wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter) {
         let candidates = Self::backend_candidates();
         if !force_software {
             for (backends, name) in &candidates {
@@ -289,7 +293,7 @@ impl AppState {
                     .await;
                 if let Some(adapter) = adapter {
                     log::info!("gpu backend: {name} ({})", adapter.get_info().name);
-                    return (surface, adapter);
+                    return (instance, surface, adapter);
                 }
                 log::debug!("backend {name}: no adapter");
             }
@@ -316,7 +320,7 @@ impl AppState {
                     "falling back to software adapter: {}",
                     adapter.get_info().name
                 );
-                return (surface, adapter);
+                return (instance, surface, adapter);
             }
         }
 
@@ -349,7 +353,7 @@ impl AppState {
         // user-mode drivers commit ~80 MB of private heaps at device creation, while
         // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
         // not need what DX12 buys, so GL leads and the others stay as fallbacks.
-        let (surface, adapter) = Self::acquire_adapter(&window, force_software).await;
+        let (instance, surface, adapter) = Self::acquire_adapter(&window, force_software).await;
         let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             TextRendererBackend::CpuTextHybrid
         } else {
@@ -379,6 +383,8 @@ impl AppState {
             )
             .await
             .unwrap();
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -443,10 +449,13 @@ impl AppState {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        let text_renderer = RuiTextRenderer::new(&device, &queue, &config);
+        let mut text_renderer = RuiTextRenderer::new(&device, &queue, &config);
+        // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
+        crate::text::install_shared_font_system(text_renderer.font_system_mut());
 
         Self {
             window,
+            instance,
             device,
             queue,
             surface,
@@ -463,6 +472,7 @@ impl AppState {
             text_renderer,
             root_element,
             template_paths: HashMap::new(),
+            pending_layout_dirty: Vec::new(),
             num_instances,
             text_nodes: render_result.text_nodes,
             layout_status: crate::core::tree::LayoutStatus::StructureChanged,
@@ -529,7 +539,12 @@ impl AppState {
             return;
         }
         self.damage_rect = Some(match self.damage_rect {
-            Some(existing) => super::damage::union_rects(existing, rect),
+            Some(existing) => {
+                // Prefer multi-rect helper so Stage-8 API stays live on the hot path.
+                super::damage::rects_union(&[existing, rect]).unwrap_or_else(|| {
+                    super::damage::union_rects(existing, rect)
+                })
+            }
             None => rect,
         });
     }
@@ -573,7 +588,11 @@ impl AppState {
             use crate::core::tree::LayoutStatus;
             LayoutStatus::StructureChanged
         } else {
-            Self::reconcile_elements(&mut root_element, &mut self.root_element)
+            let mut dirty = Vec::new();
+            let status =
+                Self::reconcile_elements(&mut root_element, &mut self.root_element, &mut dirty);
+            self.pending_layout_dirty.extend(dirty);
+            status
         };
         log::debug!("[rebuild_ui] END status={:?}", status);
         self.root_element = root_element;
@@ -586,6 +605,9 @@ impl AppState {
         anchor_id: &str,
         mut new_fragment: Element,
     ) -> crate::core::tree::LayoutStatus {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::trace_span!("app.reconcile_subtree", anchor_id).entered();
+
         use crate::core::tree::LayoutStatus;
 
         // Fine-grained anchors must resolve deterministically. `hot_reload::template_id_matches` is
@@ -596,7 +618,9 @@ impl AppState {
         let status = if let Some(old_subtree) =
             find_reactive_subtree_by_anchor_id_mut(&mut self.root_element, &want)
         {
-            let status = Self::reconcile_elements(&mut new_fragment, old_subtree);
+            let mut dirty = Vec::new();
+            let status = Self::reconcile_elements(&mut new_fragment, old_subtree, &mut dirty);
+            self.pending_layout_dirty.extend(dirty);
             *old_subtree = new_fragment;
             status
         } else {
@@ -618,6 +642,7 @@ impl AppState {
     fn reconcile_elements(
         new_el: &mut Element,
         old_el: &mut Element,
+        dirty: &mut Vec<taffy::prelude::NodeId>,
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
@@ -659,6 +684,9 @@ impl AppState {
                 || new_el.style != old_el.style
                 || new_el.image_texture != old_el.image_texture
             {
+                if let Some(n) = new_el.layout_node {
+                    dirty.push(n);
+                }
                 LayoutStatus::LayoutChanged
             } else if new_el.text_style != old_el.text_style {
                 LayoutStatus::StyleChanged
@@ -671,12 +699,12 @@ impl AppState {
             if new_all_keyed && old_all_keyed {
                 status = Self::merge_layout_status(
                     status,
-                    Self::reconcile_keyed_children(new_el, old_el),
+                    Self::reconcile_keyed_children(new_el, old_el, dirty),
                 );
             } else if new_el.children.len() == old_el.children.len() {
                 for (n_child, o_child) in new_el.children.iter_mut().zip(old_el.children.iter_mut())
                 {
-                    let child_status = Self::reconcile_elements(n_child, o_child);
+                    let child_status = Self::reconcile_elements(n_child, o_child, dirty);
                     status = Self::merge_layout_status(status, child_status);
                 }
             } else {
@@ -701,7 +729,8 @@ impl AppState {
         new_el: &mut Element,
         old_el: &mut Element,
     ) -> crate::core::tree::LayoutStatus {
-        Self::reconcile_elements(new_el, old_el)
+        let mut dirty = Vec::new();
+        Self::reconcile_elements(new_el, old_el, &mut dirty)
     }
 
     /// Solid-style in-place binding: mutate one mounted node by exact `template_id`.
@@ -729,6 +758,12 @@ impl AppState {
             cursor = &mut cursor.children[index];
         }
         let status = patch(cursor);
+        if matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) {
+            // Queue for render: mark_dirty + style/measure sync, then compute_layout from app root.
+            if let Some(n) = cursor.layout_node {
+                self.pending_layout_dirty.push(n);
+            }
+        }
 
         self.template_paths.insert(template_id.to_string(), path);
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
@@ -769,6 +804,7 @@ impl AppState {
     fn reconcile_keyed_children(
         new_el: &mut Element,
         old_el: &mut Element,
+        dirty: &mut Vec<taffy::prelude::NodeId>,
     ) -> crate::core::tree::LayoutStatus {
         use crate::core::tree::LayoutStatus;
 
@@ -789,7 +825,8 @@ impl AppState {
                 continue;
             };
             if let Some(mut old_child) = old_by_id.remove(&id) {
-                let child_status = Self::reconcile_elements(&mut new_child, &mut old_child);
+                let child_status =
+                    Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
                 status = Self::merge_layout_status(status, child_status);
             } else {
                 status = LayoutStatus::StructureChanged;
@@ -1007,11 +1044,13 @@ impl AppState {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
             let dark = crate::style::is_dark_theme();
+            let (viewport_w, _) = self.logical_size();
             crate::style::sync_class_variants_subtree(
                 &mut self.root_element,
                 mouse_pos,
                 focused.as_str(),
                 dark,
+                viewport_w,
                 &mut self.layout_tree,
                 &mut sync_impact,
             );
@@ -1089,13 +1128,29 @@ impl AppState {
         }
 
         let (logical_w, logical_h) = self.logical_size();
+        // StructureChanged (and cold start / portal hoist) still need a full Taffy rebuild.
+        // LayoutChanged uses mark_dirty + optional subtree compute_layout on the fast path.
         let use_full_taffy_rebuild = self.layout_tree.root_node.is_none()
             || portal_moves > 0
             || matches!(
                 pre_chrome_layout_status,
                 crate::core::tree::LayoutStatus::StructureChanged
-                    | crate::core::tree::LayoutStatus::LayoutChanged
             );
+        let mut layout_subtree_root: Option<taffy::prelude::NodeId> = None;
+        if !use_full_taffy_rebuild
+            && (matches!(
+                layout_for_build,
+                crate::core::tree::LayoutStatus::LayoutChanged
+            ) || !self.pending_layout_dirty.is_empty())
+        {
+            let dirty: std::collections::HashSet<_> =
+                self.pending_layout_dirty.drain(..).collect();
+            layout_subtree_root = self.layout_tree.pick_subtree_compute_root(&dirty);
+            self.layout_tree
+                .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
+        } else if use_full_taffy_rebuild {
+            self.pending_layout_dirty.clear();
+        }
         // Guard against stale 120px fallback tracks:
         // if this frame needs full Taffy rebuild but prepass stayed ViewportsOnly,
         // track/thumb styles may remain old while collect uses non-overlay geometry.
@@ -1146,13 +1201,14 @@ impl AppState {
                 || (scrollbar_skip_flex_layout
                     && scrollbar_update_resolved == ScrollbarUpdateMode::Full
                     && scroll_only);
-            self.layout_tree.build_and_layout_fast(
+            self.layout_tree.build_and_layout_fast_ex(
                 &mut self.root_element,
                 logical_w,
                 logical_h,
                 mouse_pos,
                 scroll_only,
                 scrollbar_overlay_collect,
+                layout_subtree_root,
             )
         };
         // Select 浮层：首帧用占位坐标，布局后按触发器/视口纠正并再 layout 一次。
@@ -1313,8 +1369,14 @@ impl AppState {
                 label: Some("Render Encoder"),
             });
 
-        let use_partial_damage =
-            self.has_presented_frame && !self.force_full_redraw && self.damage_rect.is_some();
+        let (logical_w, logical_h) = self.logical_size();
+        let damage_covers_viewport = self.damage_rect.is_some_and(|d| {
+            super::damage::damage_covers_full([0.0, 0.0, logical_w, logical_h], d)
+        });
+        let use_partial_damage = self.has_presented_frame
+            && !self.force_full_redraw
+            && self.damage_rect.is_some()
+            && !damage_covers_viewport;
         let clear_color = wgpu::Color {
             r: 0.95,
             g: 0.95,
@@ -1575,7 +1637,7 @@ const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// `ScrollbarBuilder::thickness` when ScrollArea does not override.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
-fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
+pub(super) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
     let self_is = el
         .focus_id
         .as_deref()

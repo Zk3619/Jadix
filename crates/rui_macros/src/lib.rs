@@ -68,6 +68,27 @@ impl Parse for RsxNode {
 
         let mut attributes = Vec::new();
         while !input.peek(Token![>]) && !input.peek(Token![/]) {
+            // Props spread: `..expr` or `..{expr}` (Solid-like `{...props}` MVP).
+            if input.peek(Token![..]) {
+                input.parse::<Token![..]>()?;
+                let attr_value: Expr = if input.peek(syn::token::Brace) {
+                    let content;
+                    braced!(content in input);
+                    content.parse().map_err(|e| {
+                        syn::Error::new(e.span(), format!("Failed to parse spread `..{{...}}`: {}", e))
+                    })?
+                } else {
+                    input.parse().map_err(|e| {
+                        syn::Error::new(e.span(), format!("Failed to parse spread `..expr`: {}", e))
+                    })?
+                };
+                attributes.push((
+                    syn::Ident::new("__spread", proc_macro2::Span::call_site()),
+                    attr_value,
+                ));
+                continue;
+            }
+
             let attr_name: Ident = if input.peek(Token![in]) {
                 input.parse::<Token![in]>().map_err(|e| {
                     syn::Error::new(e.span(), format!("Failed at keyword attr_name {}", e))
@@ -79,6 +100,12 @@ impl Parse for RsxNode {
                     syn::Error::new(e.span(), format!("Failed at keyword attr type: {}", e))
                 })?;
                 syn::Ident::new("type", proc_macro2::Span::call_site())
+            } else if input.peek(Token![ref]) {
+                // Solid-like `ref={signal}`；`ref` 是关键字。
+                input.parse::<Token![ref]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at keyword attr ref: {}", e))
+                })?;
+                syn::Ident::new("ref", proc_macro2::Span::call_site())
             } else {
                 input
                     .parse()
@@ -533,6 +560,8 @@ fn expand_node(
                 || name_str == "Popover"
                 || name_str == "ForKeyed"
                 || name_str == "For"
+                || name_str == "Fragment"
+                || name_str == "Dynamic"
             {
                 let get_attr = |name: &str| -> Option<&Expr> {
                     el.attributes
@@ -540,6 +569,60 @@ fn expand_node(
                         .find(|(k, _)| k == &syn::Ident::new(name, proc_macro2::Span::call_site()))
                         .map(|(_, v)| v)
                 };
+
+                if name_str == "Fragment" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    // Flat multi-child wrapper; runtime unpacks via `rui_fragment`.
+                    return quote! {
+                        {
+                            use rui::core::tree::IntoElementList;
+                            let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                            #( __list.extend((#expanded_children).into_element_list()); )*
+                            let mut __frag = rui::core::tree::Element::new();
+                            __frag.set_attr("rui_fragment", "1");
+                            __frag.children(__list)
+                        }
+                    };
+                }
+
+                if name_str == "Dynamic" {
+                    let Some(component_expr) = get_attr("component") else {
+                        return quote! { compile_error!("<Dynamic> requires `component={...}` attribute"); };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    if expanded_children.is_empty() {
+                        return quote! {
+                            {
+                                use rui::core::tree::IntoDynamicComponent;
+                                (#component_expr).into_dynamic_component()
+                            }
+                        };
+                    }
+                    return quote! {
+                        {
+                            use rui::core::tree::{IntoDynamicComponent, IntoElementList};
+                            let mut __rui_dyn = (#component_expr).into_dynamic_component();
+                            let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                            #( __list.extend((#expanded_children).into_element_list()); )*
+                            __rui_dyn = __rui_dyn.children(__list);
+                            __rui_dyn
+                        }
+                    };
+                }
 
                 if name_str == "Reactive" {
                     let Some(id_expr) = get_attr("id") else {
@@ -825,12 +908,23 @@ fn expand_node(
                 let mut prop_values = Vec::new();
                 let mut base_calls = Vec::new();
                 let mut chrome_binds: Vec<proc_macro2::TokenStream> = Vec::new();
+                let mut spread_expr: Option<&Expr> = None;
+                let mut ref_expr: Option<&Expr> = None;
 
                 for (attr, value) in &el.attributes {
                     let attr_str = attr.to_string();
                     let mut attr_name = attr_str.as_str();
                     if attr_name.starts_with("el.") {
                         attr_name = &attr_name[3..];
+                    }
+
+                    if matches!(attr_name, "spread" | "__spread") {
+                        spread_expr = Some(value);
+                        continue;
+                    }
+                    if attr_name == "ref" {
+                        ref_expr = Some(value);
+                        continue;
                     }
 
                     // Button / Input chrome attrs → bind_attr (Solid-style, no rebuild).
@@ -1304,15 +1398,43 @@ fn expand_node(
                     } else {
                         children_expr = quote! {
                             Some({
-                                let mut __v = rui::primitives::vstack();
-                                #( __v = __v.child(rui::core::tree::Element::from(#expanded_children)); )*
-                                rui::core::tree::Element::from(__v)
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
                             })
                         };
                     }
                 }
 
-                if chrome_binds.is_empty() {
+                let rest_ts = if let Some(spread) = spread_expr {
+                    quote! { ..#spread }
+                } else {
+                    quote! { ..Default::default() }
+                };
+
+                let ref_bind_ts = if let Some(ref_target) = ref_expr {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    quote! {
+                        if __rui_el.template_id.is_none() {
+                            __rui_el = __rui_el.template_id(
+                                format!("{}:{}:ref#{}", file!(), line!(), #idx),
+                            );
+                        }
+                        rui::core::tree::bind_element_ref(&(#ref_target), &__rui_el);
+                    }
+                } else {
+                    quote! {}
+                };
+
+                if chrome_binds.is_empty() && ref_expr.is_none() {
                     return quote! {
                         {
                             #[allow(clippy::needless_update)]
@@ -1320,7 +1442,7 @@ fn expand_node(
                                 base: #base_expr,
                                 children: #children_expr,
                                 #(#prop_names: #prop_values,)*
-                                ..Default::default()
+                                #rest_ts
                             });
                             __rui_comp
                         }
@@ -1333,9 +1455,10 @@ fn expand_node(
                             base: #base_expr,
                             children: #children_expr,
                             #(#prop_names: #prop_values,)*
-                            ..Default::default()
+                            #rest_ts
                         }).into();
                         #(#chrome_binds)*
+                        #ref_bind_ts
                         __rui_el
                     }
                 };
@@ -1438,6 +1561,19 @@ fn expand_node(
                     } else {
                         utility_calls.extend(parse_utility_calls(value));
                     }
+                    continue;
+                }
+                if attr_str == "ref" {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    dynamic_binds.push(quote! {
+                        if __rui_el.template_id.is_none() {
+                            __rui_el = __rui_el.template_id(
+                                format!("{}:{}:ref#{}", file!(), line!(), #idx),
+                            );
+                        }
+                        rui::core::tree::bind_element_ref(&(#value), &__rui_el);
+                    });
                     continue;
                 }
                 if attr_str == "id"
@@ -1646,12 +1782,10 @@ fn expand_node(
                             } else {
                                 element = quote! { #element.text_leading_relaxed() }
                             }
+                        } else if is_custom {
+                            element = quote! { #element.leading(rui::core::tree::IntoF32::into_f32(#value)) }
                         } else {
-                            if is_custom {
-                                element = quote! { #element.leading(rui::core::tree::IntoF32::into_f32(#value)) }
-                            } else {
-                                element = quote! { #element.text_leading(rui::core::tree::IntoF32::into_f32(#value)) }
-                            }
+                            element = quote! { #element.text_leading(rui::core::tree::IntoF32::into_f32(#value)) }
                         }
                     }
                     "size" => {

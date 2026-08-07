@@ -18,13 +18,34 @@ pub enum TextDirection {
     Rtl,
 }
 
-/// Rich-text span with optional color / weight / size overrides.
+/// Rich-inline span kind. Chip / Mention are atomic measure/break units.
+///
+/// Cosmic-text `Attrs::metadata` convention (`rui_chip`): for Chip/Mention spans,
+/// prepare_text sets `metadata = span_index + 1` (nonzero). Plain Text keeps `0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextSpanKind {
+    #[default]
+    Text,
+    Chip,
+    Mention,
+}
+
+/// Rich-text span with optional color / weight / size overrides and chip/mention chrome.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextSpan {
     pub text: String,
     pub color: Option<[u8; 4]>,
     pub weight: Option<u16>,
     pub size: Option<f32>,
+    pub kind: TextSpanKind,
+    pub background: Option<[u8; 4]>,
+    /// Horizontal padding; Chip/Mention measure width adds `2 * padding_x`.
+    pub padding_x: f32,
+    pub italic: bool,
+    pub monospace: bool,
+    pub underline: bool,
+    /// Optional hyperlink target (markdown `[label](url)`).
+    pub href: Option<String>,
 }
 
 impl TextSpan {
@@ -34,6 +55,13 @@ impl TextSpan {
             color: None,
             weight: None,
             size: None,
+            kind: TextSpanKind::Text,
+            background: None,
+            padding_x: 0.0,
+            italic: false,
+            monospace: false,
+            underline: false,
+            href: None,
         }
     }
 
@@ -49,6 +77,56 @@ impl TextSpan {
 
     pub fn size(mut self, size: f32) -> Self {
         self.size = Some(size);
+        self
+    }
+
+    pub fn chip(mut self) -> Self {
+        self.kind = TextSpanKind::Chip;
+        self
+    }
+
+    pub fn mention(mut self) -> Self {
+        self.kind = TextSpanKind::Mention;
+        // Distinct from chip: soft blue pill chrome when caller omits overrides.
+        if self.background.is_none() {
+            self.background = Some([37, 99, 235, 40]);
+        }
+        if self.color.is_none() {
+            self.color = Some([37, 99, 235, 255]);
+        }
+        if self.padding_x == 0.0 {
+            self.padding_x = 4.0;
+        }
+        self
+    }
+
+    pub fn background(mut self, color: [u8; 4]) -> Self {
+        self.background = Some(color);
+        self
+    }
+
+    pub fn padding_x(mut self, padding_x: f32) -> Self {
+        self.padding_x = padding_x;
+        self
+    }
+
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    pub fn monospace(mut self) -> Self {
+        self.monospace = true;
+        self
+    }
+
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
+        self
+    }
+
+    pub fn href(mut self, url: impl Into<String>) -> Self {
+        self.href = Some(url.into());
         self
     }
 }
@@ -198,7 +276,37 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_text_shadow, TextOverflow, TextStyle};
+    use super::{parse_text_shadow, TextOverflow, TextSpan, TextSpanKind, TextStyle};
+
+    #[test]
+    fn text_span_chip_builder() {
+        let s = TextSpan::new("alice")
+            .chip()
+            .background([40, 40, 50, 255])
+            .padding_x(6.0)
+            .color([200, 200, 255, 255]);
+        assert_eq!(s.kind, TextSpanKind::Chip);
+        assert_eq!(s.padding_x, 6.0);
+        assert_eq!(s.background, Some([40, 40, 50, 255]));
+        assert_eq!(s.color, Some([200, 200, 255, 255]));
+        let m = TextSpan::new("@bob").mention();
+        assert_eq!(m.kind, TextSpanKind::Mention);
+        assert_eq!(m.padding_x, 4.0);
+        assert_eq!(m.background, Some([37, 99, 235, 40]));
+        assert_eq!(m.color, Some([37, 99, 235, 255]));
+        let m_override = TextSpan::new("@bob")
+            .mention()
+            .padding_x(8.0)
+            .background([1, 2, 3, 4])
+            .color([5, 6, 7, 8]);
+        assert_eq!(m_override.padding_x, 8.0);
+        assert_eq!(m_override.background, Some([1, 2, 3, 4]));
+        assert_eq!(m_override.color, Some([5, 6, 7, 8]));
+        let plain = TextSpan::new("hi");
+        assert_eq!(plain.kind, TextSpanKind::Text);
+        assert_eq!(plain.padding_x, 0.0);
+        assert!(plain.background.is_none());
+    }
 
     #[test]
     fn text_style_overflow_and_selectable_defaults() {

@@ -635,9 +635,9 @@ impl From<InputBuilder> for Element {
             let shadow_color = if invalid {
                 parse_color("destructive").with_alpha(0.4)
             } else {
-                parse_color("ring")
+                crate::style::focus_ring_color()
             };
-            container = container.shadow(shadow_color, 3.0);
+            container = container.shadow(shadow_color, crate::style::FOCUS_RING_BLUR);
         } else if !builder.disabled {
             container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
         }
@@ -868,18 +868,18 @@ fn sync_one_input_paint(
         bg[3] *= 0.5;
     }
 
-    let (want_shadow_color, want_shadow_blur) = if is_focused {
-        let sc = if invalid {
-            parse_color("destructive").with_alpha(0.4)
+        let (want_shadow_color, want_shadow_blur) = if is_focused {
+            let sc = if invalid {
+                parse_color("destructive").with_alpha(0.4)
+            } else {
+                crate::style::focus_ring_color()
+            };
+            (sc, crate::style::FOCUS_RING_BLUR)
+        } else if !desc.disabled {
+            ([0.0, 0.0, 0.0, 0.06], 1.0)
         } else {
-            parse_color("ring")
+            ([0.0, 0.0, 0.0, 0.0], 0.0)
         };
-        (sc, 3.0)
-    } else if !desc.disabled {
-        ([0.0, 0.0, 0.0, 0.06], 1.0)
-    } else {
-        ([0.0, 0.0, 0.0, 0.0], 0.0)
-    };
 
     let caret_in_real = if is_focused {
         if show_placeholder {

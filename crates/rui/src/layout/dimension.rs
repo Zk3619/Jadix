@@ -62,6 +62,18 @@ impl IntoDimension for &str {
     }
 }
 
+impl IntoDimension for String {
+    fn into_dimension(self) -> Dimension {
+        self.as_str().into_dimension()
+    }
+}
+
+impl IntoDimension for &String {
+    fn into_dimension(self) -> Dimension {
+        self.as_str().into_dimension()
+    }
+}
+
 pub trait IntoLengthPercentage {
     fn into_length_percentage(self) -> LengthPercentage;
 }

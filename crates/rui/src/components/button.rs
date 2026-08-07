@@ -428,7 +428,8 @@ pub fn Button(
     el
 }
 
-pub fn button(id: &str) -> ButtonBuilder {
+pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
+    let id = id.as_ref();
     let size = ButtonSize::Default;
     let id = if id.trim().is_empty() {
         auto_button_id()

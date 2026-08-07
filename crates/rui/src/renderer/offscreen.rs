@@ -257,6 +257,31 @@ mod tests {
         assert!(images_match(&img, &decoded, 0));
     }
 
+    /// Pure-CPU synthetic 8×8 pattern golden (no GPU) for Stage 8 CI smoke.
+    #[test]
+    fn stage8_pattern_golden_cpu() {
+        let mut pixels = Vec::with_capacity(8 * 8 * 4);
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let on = ((x ^ y) & 1) == 0;
+                if on {
+                    pixels.extend_from_slice(&[0x22, 0xC5, 0x5E, 0xFF]); // green
+                } else {
+                    pixels.extend_from_slice(&[0x0F, 0x17, 0x2A, 0xFF]); // slate
+                }
+            }
+        }
+        let img = RgbaImage {
+            width: 8,
+            height: 8,
+            pixels,
+        };
+        // Roundtrip encode first, then assert against stored golden.
+        let decoded = decode_rgba_golden(&encode_rgba_golden(&img)).expect("roundtrip");
+        assert!(images_match(&img, &decoded, 0));
+        assert_matches_golden("stage8_pattern", &img, 0);
+    }
+
     #[test]
     fn golden_decode_rejects_foreign_bytes() {
         assert!(decode_rgba_golden(b"PNG\x00short").is_none());

@@ -5,6 +5,7 @@ pub mod input_hit;
 pub mod keyboard;
 pub mod lucide;
 pub mod popup;
+pub mod roving;
 pub mod text_node;
 pub mod virtual_list;
 
@@ -15,5 +16,6 @@ pub use popup::{
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_PLACEMENT,
     ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W,
 };
+pub use roving::{roving_edge, roving_move};
 pub use text_node::{apply_label_defaults, build_icon_text_node, build_text_node, TextNodeConfig};
 pub use virtual_list::visible_item_range;

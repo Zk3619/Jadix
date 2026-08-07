@@ -196,6 +196,20 @@ where
         );
     });
 
+    // Owner dispose also drops the registration (in addition to element unmount).
+    let cleanup_id = id.clone();
+    crate::core::reactivity::on_cleanup(move || {
+        let removed = REGISTERED_ANCHORS.with(|registry| registry.borrow_mut().remove(&cleanup_id));
+        if let Some(registration) = removed {
+            if let Some(hook) = registration.hook.upgrade() {
+                hook.disarm();
+            }
+            if let Some(effect_id) = registration.effect_id {
+                dispose_effect(effect_id);
+            }
+        }
+    });
+
     let effect_anchor_id = id.clone();
     let effect_id = create_effect(move || {
         let mut fragment = f();
@@ -610,6 +624,26 @@ where
     reactive_view(id, move || if when() { render() } else { Element::new() })
 }
 
+/// Solid-style `<Switch>`: read `key` inside a [`reactive_view`], then `render(&key)`.
+///
+/// Rebuilds only when `key` changes (`PartialEq`). Prefer over nested [`show_reactive`] for
+/// multi-arm branches.
+pub fn switch_reactive<K, F>(
+    anchor_id: impl Into<String>,
+    mut key: impl FnMut() -> K + 'static,
+    mut render: F,
+) -> Element
+where
+    K: PartialEq + Clone + 'static,
+    F: FnMut(&K) -> Element + 'static,
+{
+    let id = anchor_id.into();
+    reactive_view(id, move || {
+        let k = key();
+        render(&k)
+    })
+}
+
 /// Solid-style `<For each={list.get()}>`: rebuild the keyed children list inside a dedicated
 /// [`reactive_view`] so reading the list signal does not subscribe the root tree.
 pub fn for_reactive<F>(anchor_id: impl Into<String>, mut render_list: F) -> Element
@@ -726,5 +760,24 @@ mod intrinsic_width_tests {
     fn non_leaf_nodes_are_not_comparable() {
         let el = Element::new().children(vec![label("x")]);
         assert!(text_intrinsic_width(&el, "x").is_none());
+    }
+
+    #[test]
+    fn switch_reactive_builds_placeholder() {
+        use crate::core::reactivity::{create_effect, create_root, create_signal};
+        let (_o, tid) = create_root(|| {
+            let key = create_signal(0_i32);
+            let out = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+            let out2 = out.clone();
+            create_effect(move || {
+                let el = switch_reactive("sw-test", move || key.get(), |k| {
+                    Element::new().text(format!("arm-{k}"))
+                });
+                *out2.borrow_mut() = el.template_id.clone();
+            });
+            let tid = out.borrow().clone().expect("id");
+            tid
+        });
+        assert_eq!(tid, "sw-test");
     }
 }

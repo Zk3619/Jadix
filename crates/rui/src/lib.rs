@@ -33,6 +33,14 @@ mod components_reactive_sync_tests;
 #[path = "../test/bind_text.rs"]
 mod bind_text_tests;
 
+#[cfg(test)]
+#[path = "../test/layout_mark_dirty.rs"]
+mod layout_mark_dirty_tests;
+
+#[cfg(test)]
+#[path = "../test/headless_layout.rs"]
+mod headless_layout_tests;
+
 /// Backward-compatible path for macro-generated code.
 pub mod tree {
     pub use crate::core::tree::*;
@@ -41,6 +49,7 @@ pub mod tree {
 /// Backward-compatible path for existing user code.
 pub mod reactivity {
     pub use crate::core::reactivity::*;
+    pub use crate::core::resource::{Resource, ResourceState};
 }
 
 pub use core::tree::CursorKind;

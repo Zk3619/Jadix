@@ -39,6 +39,15 @@ impl<T: Clone + PartialEq + 'static> Store<T> {
         self.root.update(f);
     }
 
+    /// Solid-style `produce`: in-place mutable update (alias of [`Self::update`]).
+    ///
+    /// ```ignore
+    /// store.produce(|v| v.push(1));
+    /// ```
+    pub fn produce(&self, f: impl FnOnce(&mut T)) {
+        self.update(f);
+    }
+
     /// Peek without tracking (Solid `unwrap` / untracked read).
     pub fn peek(&self) -> T {
         self.root.peek()
@@ -81,6 +90,8 @@ mod tests {
             });
             assert_eq!(len.get(), 4);
             assert_eq!(store.get(), vec![1, 2, 3, 4]);
+            store.produce(|v| v.push(5));
+            assert_eq!(store.get(), vec![1, 2, 3, 4, 5]);
         });
     }
 }

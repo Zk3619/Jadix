@@ -1,5 +1,7 @@
 //! Build an [`accesskit::TreeUpdate`] snapshot from the RUI element tree for wiring to `accesskit_winit`.
-use accesskit::{Action, ActionRequest, Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate};
+use accesskit::{
+    Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate,
+};
 use std::hash::{Hash, Hasher};
 
 use crate::components::input::{input_value_signal_key, INPUT_FOCUS_PREFIX};
@@ -8,6 +10,18 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 
 const ROOT_ID: NodeId = NodeId(1);
+
+/// Attrs that force an AccessKit node even without focus/click/text.
+const A11Y_NAME_DESC_LIVE_ATTRS: &[&str] = &[
+    "aria-label",
+    "aria-description",
+    "aria-labelledby",
+    "aria-describedby",
+    "aria-live",
+    "accesskit_name",
+    "accesskit_description",
+    "accesskit_live",
+];
 
 pub(crate) fn node_id_for_key(key: &str) -> NodeId {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -42,10 +56,21 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "link" => Some(Role::Link),
         "list" => Some(Role::List),
         "listitem" | "list_item" => Some(Role::ListItem),
+        "listbox" | "list_box" => Some(Role::ListBox),
+        "menu" => Some(Role::Menu),
+        "menuitem" | "menu_item" => Some(Role::MenuItem),
+        "menubar" | "menu_bar" => Some(Role::MenuBar),
+        "option" => Some(Role::ListBoxOption),
         "image" => Some(Role::Image),
         "paragraph" => Some(Role::Paragraph),
         _ => None,
     }
+}
+
+fn has_a11y_name_desc_live_attr(el: &Element) -> bool {
+    A11Y_NAME_DESC_LIVE_ATTRS
+        .iter()
+        .any(|k| el.attrs.contains_key(*k))
 }
 
 fn should_be_accesskit_node(el: &Element) -> bool {
@@ -53,8 +78,25 @@ fn should_be_accesskit_node(el: &Element) -> bool {
         || el.on_click.is_some()
         || el.text.is_some()
         || el.attrs.contains_key("accesskit_role")
+        || has_a11y_name_desc_live_attr(el)
         || el.switch_checked_sync.is_some()
         || el.checkbox_sync.is_some()
+}
+
+fn parse_live(raw: &str) -> Option<Live> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "polite" => Some(Live::Polite),
+        "assertive" => Some(Live::Assertive),
+        "off" => Some(Live::Off),
+        _ => None,
+    }
+}
+
+fn live_attr_value(el: &Element) -> Option<&str> {
+    el.attrs
+        .get("accesskit_live")
+        .or_else(|| el.attrs.get("aria-live"))
+        .map(|s| s.as_str())
 }
 
 fn infer_role(el: &Element, fid: Option<&str>) -> Role {
@@ -73,6 +115,18 @@ fn infer_role(el: &Element, fid: Option<&str>) -> Role {
         Role::TabList
     } else if el.on_click.is_some() {
         Role::Button
+    } else if let Some(live) = live_attr_value(el).and_then(parse_live) {
+        match live {
+            Live::Assertive => Role::Alert,
+            Live::Polite => Role::Status,
+            Live::Off => {
+                if el.text.is_some() {
+                    Role::Label
+                } else {
+                    Role::GenericContainer
+                }
+            }
+        }
     } else if el.text.is_some() {
         Role::Label
     } else {
@@ -102,8 +156,30 @@ fn build_node(el: &Element, key: &str) -> Node {
         node.set_bounds(bounds);
     }
 
-    if let Some(text) = el.text.as_deref().filter(|t| !t.is_empty()) {
+    // Prefer explicit a11y name over text content fallback.
+    let label = el
+        .attrs
+        .get("accesskit_name")
+        .or_else(|| el.attrs.get("aria-label"))
+        .map(|s| s.as_str())
+        .filter(|t| !t.is_empty())
+        .or_else(|| el.text.as_deref().filter(|t| !t.is_empty()));
+    if let Some(text) = label {
         node.set_label(text.to_string());
+    }
+
+    if let Some(desc) = el
+        .attrs
+        .get("accesskit_description")
+        .or_else(|| el.attrs.get("aria-description"))
+        .map(|s| s.as_str())
+        .filter(|t| !t.is_empty())
+    {
+        node.set_description(desc.to_string());
+    }
+
+    if let Some(live) = live_attr_value(el).and_then(parse_live) {
+        node.set_live(live);
     }
 
     if el.on_click.is_some() {
@@ -317,5 +393,108 @@ mod tests {
         assert!(node.is_some());
         assert_eq!(node.unwrap().role(), Role::Label);
         assert_eq!(node.unwrap().label(), Some("Hello"));
+    }
+
+    #[test]
+    fn aria_label_and_description_override_text() {
+        let mut el = Element::new().text("fallback");
+        el.attrs
+            .insert("aria-label".to_string(), "Named".to_string());
+        el.attrs
+            .insert("aria-description".to_string(), "Described".to_string());
+        let root = Element::new().child(el);
+        let update = tree_update_from_elements(&root, None);
+        let id = node_id_for_key("rui:path:0");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(nid, _)| *nid == id)
+            .map(|(_, n)| n)
+            .expect("a11y node");
+        assert_eq!(node.label(), Some("Named"));
+        assert_eq!(node.description(), Some("Described"));
+    }
+
+    #[test]
+    fn accesskit_name_description_preferred_over_aria() {
+        let mut el = Element::new().text("fallback");
+        el.attrs
+            .insert("aria-label".to_string(), "Aria".to_string());
+        el.attrs
+            .insert("accesskit_name".to_string(), "AccessKit".to_string());
+        el.attrs
+            .insert("aria-description".to_string(), "AriaDesc".to_string());
+        el.attrs.insert(
+            "accesskit_description".to_string(),
+            "AccessKitDesc".to_string(),
+        );
+        let root = Element::new().child(el);
+        let update = tree_update_from_elements(&root, None);
+        let id = node_id_for_key("rui:path:0");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(nid, _)| *nid == id)
+            .map(|(_, n)| n)
+            .expect("a11y node");
+        assert_eq!(node.label(), Some("AccessKit"));
+        assert_eq!(node.description(), Some("AccessKitDesc"));
+    }
+
+    #[test]
+    fn live_region_attrs_include_node_and_set_live() {
+        let mut polite = Element::new();
+        polite
+            .attrs
+            .insert("aria-live".to_string(), "polite".to_string());
+        let mut assertive = Element::new();
+        assertive
+            .attrs
+            .insert("accesskit_live".to_string(), "assertive".to_string());
+        let root = Element::new().child(polite).child(assertive);
+        let update = tree_update_from_elements(&root, None);
+
+        let polite_id = node_id_for_key("rui:path:0");
+        let assertive_id = node_id_for_key("rui:path:1");
+        let polite_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == polite_id)
+            .map(|(_, n)| n)
+            .expect("polite live node");
+        let assertive_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == assertive_id)
+            .map(|(_, n)| n)
+            .expect("assertive live node");
+
+        assert_eq!(polite_node.role(), Role::Status);
+        assert_eq!(polite_node.live(), Some(Live::Polite));
+        assert_eq!(assertive_node.role(), Role::Alert);
+        assert_eq!(assertive_node.live(), Some(Live::Assertive));
+    }
+
+    #[test]
+    fn parses_menu_listbox_and_menubar_roles() {
+        assert_eq!(parse_accesskit_role("menu"), Some(Role::Menu));
+        assert_eq!(parse_accesskit_role("menuitem"), Some(Role::MenuItem));
+        assert_eq!(parse_accesskit_role("listbox"), Some(Role::ListBox));
+        assert_eq!(parse_accesskit_role("menubar"), Some(Role::MenuBar));
+        assert_eq!(parse_accesskit_role("textfield"), Some(Role::TextInput));
+
+        let mut menu = Element::new().template_id("m");
+        menu.attrs
+            .insert("accesskit_role".to_string(), "menu".to_string());
+        let root = Element::new().child(menu);
+        let update = tree_update_from_elements(&root, None);
+        let id = node_id_for_key("rui:tpl:m");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(nid, _)| *nid == id)
+            .map(|(_, n)| n)
+            .expect("menu node");
+        assert_eq!(node.role(), Role::Menu);
     }
 }

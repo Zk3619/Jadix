@@ -15,7 +15,7 @@ use wgpu::{Device, Queue, SurfaceConfiguration};
 
 use crate::core::tree::TextLayoutInfo;
 use crate::style::{
-    tailwind_default_leading_scale, TextDecorationStyle, TextDirection, TextOverflow,
+    tailwind_default_leading_scale, TextDecorationStyle, TextDirection, TextOverflow, TextSpanKind,
 };
 
 use super::emoji_detect;
@@ -812,34 +812,34 @@ fn load_font_fallback_raster(
 ) -> Option<super::text::EmojiRaster> {
     // Prefer a real color-emoji face; UI sans yields monochrome outline "emoji".
     let emoji_family = crate::utils::font::resolve_family(
-        text_renderer.font_system.db(),
+        unsafe { &*text_renderer.font_system }.db(),
         "Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, emoji, sans-serif",
     );
     let size = pixel_size.max(1) as f32;
     let mut buffer = glyphon::Buffer::new(
-        &mut text_renderer.font_system,
+        unsafe { &mut *text_renderer.font_system },
         glyphon::Metrics::new(size, size * 1.2),
     );
     buffer.set_size(
-        &mut text_renderer.font_system,
+        unsafe { &mut *text_renderer.font_system },
         Some(size * 2.0),
         Some(size * 2.0),
     );
     buffer.set_text(
-        &mut text_renderer.font_system,
+        unsafe { &mut *text_renderer.font_system },
         sequence,
         glyphon::Attrs::new()
             .family(emoji_family)
             .weight(glyphon::fontdb::Weight(font_weight)),
         glyphon::Shaping::Advanced,
     );
-    buffer.shape_until_scroll(&mut text_renderer.font_system, false);
+    buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
     for run in buffer.layout_runs() {
         for g in run.glyphs {
             let physical = g.physical((0.0, 0.0), 1.0);
             let image = text_renderer
                 .swash_cache
-                .get_image_uncached(&mut text_renderer.font_system, physical.cache_key)?;
+                .get_image_uncached(unsafe { &mut *text_renderer.font_system }, physical.cache_key)?;
             let w = image.placement.width as usize;
             let h = image.placement.height as usize;
             if w == 0 || h == 0 {
@@ -891,7 +891,7 @@ fn load_emoji_raster_chain(
     }
 
     // 3) System color-emoji font (CBDT/sbix) — only after Twemoji miss.
-    font_loader::ensure_emoji_font_fallback(&mut text_renderer.font_system);
+    font_loader::ensure_emoji_font_fallback(unsafe { &mut *text_renderer.font_system });
     load_font_fallback_raster(text_renderer, sequence, pixel_size, family, font_weight)
         .map(|r| resize_rgba_nn(&r, pixel_size.max(1)))
 }
@@ -1053,7 +1053,7 @@ pub fn prepare_text_frame(
             while text_renderer.shaped_cache.len() <= i {
                 text_renderer
                     .shaped_cache
-                    .push(make_dummy_cache_entry(&mut text_renderer.font_system));
+                    .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
             }
             frame_meta.push(None);
             continue;
@@ -1071,24 +1071,24 @@ pub fn prepare_text_frame(
             _ => Cow::Borrowed(info.text.as_str()),
         };
         font_loader::ensure_coverage_for_text(
-            &mut text_renderer.font_system,
+            unsafe { &mut *text_renderer.font_system },
             shape_text_for_coverage.as_ref(),
         );
 
         let family = if has_emoji {
             // Twemoji custom glyphs paint color emoji; keep layout on UI sans.
             // System emoji font opens only on Twemoji miss (ensure_emoji_font_fallback).
-            best_font_family(&text_renderer.font_system)
+            best_font_family(unsafe { &*text_renderer.font_system })
         } else if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
+            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
         } else {
-            best_font_family(&text_renderer.font_system)
+            best_font_family(unsafe { &*text_renderer.font_system })
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight };
         let font_weight = crate::utils::font::normalize_weight_for_family(
-            text_renderer.font_system.db(),
+            unsafe { &*text_renderer.font_system }.db(),
             family,
             requested_weight,
         );
@@ -1129,13 +1129,30 @@ pub fn prepare_text_frame(
         } else {
             shaping
         };
+        // Soft-wrap width for glyphon. When layout attached a PreparedText, consult
+        // `layout(&prepared, info.width)` for line-count / max-width hints and drive
+        // buffer size from the same logical avail width. Full glyph/buffer sharing with
+        // the layout-only FontSystem is still deferred (separate FontSystems).
+        let (buffer_soft_w, buffer_soft_h) = if let Some(ref prepared) = info.prepared {
+            let metrics = crate::text::layout(prepared, info.width.max(1.0));
+            let soft_w = (info.width.max(1.0) * ui_scale).max(1.0);
+            let soft_h = (metrics.height * ui_scale)
+                .max(scaled_h)
+                .max(line_height)
+                + 2.0;
+            let _ = metrics.line_count;
+            let _ = metrics.max_line_width;
+            (soft_w, soft_h)
+        } else {
+            (scaled_w.max(0.0), scaled_h + 2.0)
+        };
         let align = resolve_text_align(st.align, st.direction);
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
             && st.input_caret.is_none()
             && is_single_line_text_box(line_height, scaled_h)
         {
             Cow::Owned(truncate_with_ellipsis(
-                &mut text_renderer.font_system,
+                unsafe { &mut *text_renderer.font_system },
                 info.text.as_str(),
                 scaled_size,
                 line_height,
@@ -1187,7 +1204,7 @@ pub fn prepare_text_frame(
         while text_renderer.shaped_cache.len() <= i {
             text_renderer
                 .shaped_cache
-                .push(make_dummy_cache_entry(&mut text_renderer.font_system));
+                .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
         }
         let (measured_text_w, cache_hit) = {
             let entry = &mut text_renderer.shaped_cache[i];
@@ -1197,13 +1214,13 @@ pub fn prepare_text_frame(
             } else {
                 _shape_misses += 1;
                 let mut buffer = glyphon::Buffer::new(
-                    &mut text_renderer.font_system,
+                    unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
                 buffer.set_size(
-                    &mut text_renderer.font_system,
-                    Some(scaled_w),
-                    Some(scaled_h + 2.0),
+                    unsafe { &mut *text_renderer.font_system },
+                    Some(buffer_soft_w),
+                    Some(buffer_soft_h),
                 );
                 let attrs = glyphon::Attrs::new()
                     .family(family)
@@ -1239,15 +1256,27 @@ pub fn prepare_text_frame(
                                 lh.max(1.0),
                             ));
                         }
+                        if span.italic {
+                            a = a.style(glyphon::Style::Italic);
+                        }
+                        if span.monospace {
+                            a = a.family(glyphon::Family::Monospace);
+                        }
+                        // Chip/Mention/code backgrounds: metadata = span_index + 1.
+                        if span.background.is_some()
+                            || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
+                        {
+                            a = a.metadata(si + 1);
+                        }
                         owned.push((body, a));
                     }
                     let rich: Vec<(&str, glyphon::Attrs)> =
                         owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
-                    buffer.set_rich_text(&mut text_renderer.font_system, rich, attrs, shaping);
+                    buffer.set_rich_text(unsafe { &mut *text_renderer.font_system }, rich, attrs, shaping);
                 } else {
                     set_shaped_buffer_text(
                         &mut buffer,
-                        &mut text_renderer.font_system,
+                        unsafe { &mut *text_renderer.font_system },
                         shape_text.as_ref(),
                         attrs,
                         shaping,
@@ -1257,7 +1286,7 @@ pub fn prepare_text_frame(
                 for line in buffer.lines.iter_mut() {
                     line.set_align(Some(align));
                 }
-                buffer.shape_until_scroll(&mut text_renderer.font_system, false);
+                buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
                 let measured = buffer
                     .layout_runs()
                     .map(|run| run.line_w)
@@ -1304,14 +1333,14 @@ pub fn prepare_text_frame(
                         x,
                         y,
                         1.0,
-                        &mut text_renderer.font_system,
+                        unsafe { &mut *text_renderer.font_system },
                         &mut text_renderer.swash_cache,
                     ) {
                         Some((l, t)) => (l, t + emoji_baseline_layout_tweak(scaled_size)),
                         None => {
                             let prefix = shape_text.get(..start).unwrap_or("");
                             let left = measure_prefix_width(
-                                &mut text_renderer.font_system,
+                                unsafe { &mut *text_renderer.font_system },
                                 prefix,
                                 scaled_size,
                                 line_height,
@@ -1406,7 +1435,7 @@ pub fn prepare_text_frame(
                 lh_log,
                 st.input_caret.is_some(),
                 &text_renderer.shaped_cache[i].buffer,
-                &text_renderer.font_system,
+                unsafe { &*text_renderer.font_system },
                 cache_hit,
                 shaping,
             );
@@ -1416,7 +1445,7 @@ pub fn prepare_text_frame(
             family,
             font_weight,
             &text_renderer.shaped_cache[i].buffer,
-            &text_renderer.font_system,
+            unsafe { &*text_renderer.font_system },
         );
 
         let dy = 0.0;
@@ -1445,7 +1474,7 @@ pub fn prepare_text_frame(
                 let entry = &text_renderer.shaped_cache[i];
                 if let Some(bmp) = generate_shadow_bitmap(
                     &entry.buffer,
-                    &mut text_renderer.font_system,
+                    unsafe { &mut *text_renderer.font_system },
                     &mut text_renderer.swash_cache,
                     sc,
                     sdx,
@@ -1504,6 +1533,94 @@ pub fn prepare_text_frame(
     let _t1 = std::time::Instant::now();
 
     let mut underline_instances: Vec<InstanceInput> = Vec::new();
+
+    // Chip/Mention backgrounds (`rui_chip` Attrs.metadata = span_index+1). Drawn under glyphs.
+    for (i, info) in text_nodes.iter().enumerate() {
+        let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if !spans.iter().any(|s| s.background.is_some()) {
+            continue;
+        }
+        let Some(tb) = frame_meta.get(i).and_then(|x| x.as_ref()) else {
+            continue;
+        };
+        let entry = &text_renderer.shaped_cache[i];
+        for run in entry.buffer.layout_runs() {
+            let line_top = run.line_top;
+            let line_height = run.line_height;
+            let mut cur_meta: Option<usize> = None;
+            let mut min_x = 0.0_f32;
+            let mut max_x = 0.0_f32;
+            let flush_group =
+                |meta: usize, min_x: f32, max_x: f32, instances: &mut Vec<InstanceInput>| {
+                    let Some(span) = spans.get(meta.saturating_sub(1)) else {
+                        return;
+                    };
+                    let Some(bg) = span.background else {
+                        return;
+                    };
+                    if max_x <= min_x {
+                        return;
+                    }
+                    let pad = span.padding_x * ui_scale;
+                    let bx = tb.x + min_x - pad;
+                    let by = tb.y + line_top;
+                    let bw = (max_x - min_x) + 2.0 * pad;
+                    let bh = line_height.max(1.0);
+                    let radius = (bh * 0.25).min(6.0 * ui_scale);
+                    let Some([cx, cy, cw, ch]) =
+                        clip_rect_to_bounds([bx, by, bw, bh], tb.clip_bounds)
+                    else {
+                        return;
+                    };
+                    instances.push(InstanceInput {
+                        rect_pos: [cx, cy],
+                        rect_size: [cw, ch],
+                        color: [
+                            bg[0] as f32 / 255.0,
+                            bg[1] as f32 / 255.0,
+                            bg[2] as f32 / 255.0,
+                            bg[3] as f32 / 255.0,
+                        ],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        radii: [radius, radius, radius, radius],
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur: 0.0,
+                        shadow_spread: 0.0,
+                        shadow_inset: 0.0,
+                        rotate_deg: 0.0,
+                        _padding: 0.0,
+                    });
+                };
+            for g in run.glyphs.iter() {
+                let meta = g.metadata;
+                if meta == 0 {
+                    if let Some(m) = cur_meta.take() {
+                        flush_group(m, min_x, max_x, &mut underline_instances);
+                    }
+                    continue;
+                }
+                if cur_meta != Some(meta) {
+                    if let Some(m) = cur_meta.take() {
+                        flush_group(m, min_x, max_x, &mut underline_instances);
+                    }
+                    cur_meta = Some(meta);
+                    min_x = g.x;
+                    max_x = g.x + g.w;
+                } else {
+                    min_x = min_x.min(g.x);
+                    max_x = max_x.max(g.x + g.w);
+                }
+            }
+            if let Some(m) = cur_meta.take() {
+                flush_group(m, min_x, max_x, &mut underline_instances);
+            }
+        }
+    }
+
     for (i, tb) in frame_meta.iter().enumerate() {
         let Some(tb) = tb.as_ref() else {
             continue;
@@ -1836,21 +1953,21 @@ pub fn prepare_text_frame(
         let st = &info.style;
 
         let family = if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
+            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
         } else {
-            best_font_family(&text_renderer.font_system)
+            best_font_family(unsafe { &*text_renderer.font_system })
         };
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight };
         let font_weight = crate::utils::font::normalize_weight_for_family(
-            text_renderer.font_system.db(),
+            unsafe { &*text_renderer.font_system }.db(),
             family,
             requested_weight,
         );
         let line_height = input_line_height(st, scaled_size, ui_scale);
 
         let prefix_to_sel = measure_prefix_width(
-            &mut text_renderer.font_system,
+            unsafe { &mut *text_renderer.font_system },
             &display[..s],
             scaled_size,
             line_height,
@@ -1859,7 +1976,7 @@ pub fn prepare_text_frame(
             box_w,
         );
         let sel_w = measure_prefix_width(
-            &mut text_renderer.font_system,
+            unsafe { &mut *text_renderer.font_system },
             &display[s..e],
             scaled_size,
             line_height,
@@ -1956,21 +2073,21 @@ pub fn prepare_text_frame(
         let prefix = &display[..ix];
 
         let family = if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(text_renderer.font_system.db(), f)
+            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
         } else {
-            best_font_family(&text_renderer.font_system)
+            best_font_family(unsafe { &*text_renderer.font_system })
         };
         let is_icon = st.font_family.as_deref() == Some("lucide");
         let requested_weight = if is_icon { 400 } else { st.weight };
         let font_weight = crate::utils::font::normalize_weight_for_family(
-            text_renderer.font_system.db(),
+            unsafe { &*text_renderer.font_system }.db(),
             family,
             requested_weight,
         );
         let line_height = input_line_height(st, scaled_size, ui_scale);
 
         let prefix_w = measure_prefix_width(
-            &mut text_renderer.font_system,
+            unsafe { &mut *text_renderer.font_system },
             prefix,
             scaled_size,
             line_height,
@@ -2068,10 +2185,11 @@ pub fn prepare_text_frame(
                 custom_glyphs: &[],
             });
         }
+        let fs = text_renderer.font_system;
         if let Err(err) = text_renderer.text_renderer.prepare_with_custom(
             device,
             queue,
-            &mut text_renderer.font_system,
+            unsafe { &mut *fs },
             &mut text_renderer.text_atlas,
             &text_renderer.viewport,
             warmup_areas,
@@ -2083,10 +2201,11 @@ pub fn prepare_text_frame(
     }
 
     let text_area_count = text_areas.len();
+    let fs = text_renderer.font_system;
     if let Err(err) = text_renderer.text_renderer.prepare_with_custom(
         device,
         queue,
-        &mut text_renderer.font_system,
+        unsafe { &mut *fs },
         &mut text_renderer.text_atlas,
         &text_renderer.viewport,
         text_areas,

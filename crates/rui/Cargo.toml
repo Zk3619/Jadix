@@ -14,6 +14,10 @@ categories = ["gui"]
 default = []
 # Optional runtime logger initialization (env_logger).
 runtime-logging = ["dep:env_logger"]
+# Optional structured spans on hot paths (layout / reconcile). Off by default.
+tracing = ["dep:tracing"]
+# Stub gate for future native tray (see docs/tray.md). Compiles either way.
+system-tray = []
 # Add the D3D12 backend (~520 KiB: wgpu-hal dx12 + DXC + gpu-allocator). Off by default:
 # the GL backend renders the same UI and its driver commits ~80 MB less on Windows.
 # Enable when you need WARP software fallback or D3D12-specific behaviour.
@@ -43,6 +47,7 @@ glyphon = { workspace = true }
 pollster = { workspace = true }
 env_logger = { workspace = true, optional = true }
 log = { workspace = true }
+tracing = { workspace = true, optional = true }
 rui_macros = { path = "../rui_macros" }
 rui_style_tokens = { path = "../rui_style_tokens" }
 clipboard-rs = { workspace = true }
@@ -58,3 +63,7 @@ ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 png = "0.18.1"
 resvg = { version = "0.45.1", optional = true }
+
+[[bench]]
+name = "layout_baseline"
+harness = false

@@ -42,3 +42,7 @@
 `tabs_headless` 的 `focus_id` 使用前缀 `tabstrip:`（常量 `rui::primitives::TABSTRIP_FOCUS_PREFIX`），无障碍树中映射为 **TabList**。
 
 细粒度响应式与热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。
+
+## 无窗口布局测试
+
+不启 `winit` 窗口即可跑布局：构造 [`Element`](../crates/rui/src/core/tree.rs) 树，调用 [`LayoutTree::build_and_layout`](../crates/rui/src/layout/layout_tree.rs)，再断言 `layout_bounds` 宽高 > 0。库测见 `crates/rui/test/headless_layout.rs`（`cargo test -p rui --lib headless_build_and_layout`）。

@@ -12,7 +12,8 @@
 //! ## 注意
 //! - `target` 必须与对应视口的 `id` 一致。
 //! - `visibility`: auto | always | never（never 仍可能可滚内容）。
-//! - `children` 当前忽略；真正不占位的 overlay 条仍是 TODO（见下方注释）。
+//! - `children` 当前忽略。
+//! - Overlay：[`ScrollbarBuilder::overlay`] / attr `rui_scrollbar_overlay=1` → 绝对定位，不占 flex 宽。
 
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
@@ -23,15 +24,9 @@ use crate::core::tree::{Element, IntoDimension, IntoF32};
 use rui_macros::component;
 use taffy::prelude::*;
 
-// TODO(scrollbar-overlay):
-// 仅记录方案，不在当前提交中实现：
-// 1) 支持“真正内嵌 overlay 滚动条（不占内容宽度）”；
-// 2) 需要布局层补充绝对定位/叠层能力，或改为 ScrollArea 内置 `scrollbar=true`；
-// 3) 目标是滚动条渲染在滚动区域内部右侧/底部，内容区尺寸不因滚动条缩窄。
-//
-// Note:
-// 先前出现过“滚动条不可见/区域不可滚动但指针可命中”的问题；
-// 根因在滚动指标采集与重绘时机，修复位于 `app.rs` 的 scroll metrics 逻辑。
+// Overlay MVP: `overlay(true)` / `rui_scrollbar_overlay=1` sets absolute + zero flex grow/shrink
+// so the track paints over the viewport edge instead of consuming cross-axis flex space.
+// Deeper ScrollArea-builtin overlay + inset sync remains future work.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollbarOrientation {
@@ -84,6 +79,8 @@ pub struct ScrollbarBuilder {
     position: Position,
     inset: Rect<LengthPercentageAuto>,
     z_index: i32,
+    /// When true, track is absolute-positioned and does not consume flex cross size.
+    overlay: bool,
 }
 
 pub fn scrollbar(id: &str) -> ScrollbarBuilder {
@@ -101,6 +98,7 @@ pub fn scrollbar(id: &str) -> ScrollbarBuilder {
         position: Position::Relative,
         inset: Rect::auto(),
         z_index: 0,
+        overlay: false,
     }
 }
 
@@ -259,6 +257,22 @@ impl ScrollbarBuilder {
     }
     pub fn z_index(mut self, z: i32) -> Self {
         self.z_index = z;
+        self
+    }
+
+    /// Overlay mode: absolute track that does not consume sibling flex width/height.
+    ///
+    /// Also sets attr `rui_scrollbar_overlay=1` on the built element for runtime detection.
+    pub fn overlay(mut self, enabled: bool) -> Self {
+        self.overlay = enabled;
+        if enabled {
+            self.position = Position::Absolute;
+            self.flex_grow = 0.0;
+            self.flex_shrink = 0.0;
+            if self.z_index == 0 {
+                self.z_index = 10;
+            }
+        }
         self
     }
 }
@@ -421,9 +435,22 @@ impl From<ScrollbarBuilder> for Element {
             Position::Relative => track.relative(),
         };
 
-        track
+        let mut track = track
             .inset_rect(builder.inset)
             .z_index(builder.z_index)
-            .child(thumb)
+            .child(thumb);
+        if builder.overlay {
+            track.set_attr("rui_scrollbar_overlay", "1");
+            // Absolute + no flex contribution: pin to the trailing edge of the containing block.
+            match builder.orientation {
+                ScrollbarOrientation::Vertical => {
+                    track = track.absolute().right(0.0).top(0.0).bottom(0.0);
+                }
+                ScrollbarOrientation::Horizontal => {
+                    track = track.absolute().left(0.0).right(0.0).bottom(0.0);
+                }
+            }
+        }
+        track
     }
 }

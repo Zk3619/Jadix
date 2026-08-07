@@ -2,7 +2,8 @@
 //!
 //! ## Ownership model
 //!
-//! Every [`create_signal`], [`create_effect`], [`create_memo`], and [`on_cleanup`] attaches to the
+//! Every [`create_signal`], [`create_effect`], [`create_memo`], [`on_cleanup`], and [`on_mount`]
+//! attaches to the
 //! **current owner**. When that owner is disposed (explicitly, or because its parent effect
 //! re-runs), children owners, effects, owned signals, and cleanups cascade away.
 //!
@@ -106,6 +107,8 @@ pub struct Runtime {
     pending_memos: RefCell<VecDeque<MemoId>>,
     pending_memo_set: RefCell<HashSet<MemoId>>,
     deferred_effects: RefCell<Vec<EffectId>>,
+    /// Runs after the current memo/effect flush drains (Solid `createDeferred` catch-up).
+    deferred_fns: RefCell<Vec<Box<dyn FnOnce()>>>,
 }
 
 impl Runtime {
@@ -132,6 +135,7 @@ impl Runtime {
             pending_memos: RefCell::new(VecDeque::new()),
             pending_memo_set: RefCell::new(HashSet::new()),
             deferred_effects: RefCell::new(Vec::new()),
+            deferred_fns: RefCell::new(Vec::new()),
         })
     }
 
@@ -578,7 +582,16 @@ fn flush_pending(rt: &Runtime) {
             let mut q = rt.pending_effects.borrow_mut();
             let mut set = rt.pending_effect_set.borrow_mut();
             if q.is_empty() {
-                return;
+                let jobs = std::mem::take(&mut *rt.deferred_fns.borrow_mut());
+                if jobs.is_empty() {
+                    return;
+                }
+                drop(q);
+                drop(set);
+                for job in jobs {
+                    job();
+                }
+                continue;
             }
             let drained: Vec<EffectId> = q.drain(..).collect();
             set.clear();
@@ -598,9 +611,20 @@ fn flush_pending(rt: &Runtime) {
         }
         // Effects may have dirtied more memos / effects.
         if rt.pending_memos.borrow().is_empty() && rt.pending_effects.borrow().is_empty() {
-            return;
+            let jobs = std::mem::take(&mut *rt.deferred_fns.borrow_mut());
+            if jobs.is_empty() {
+                return;
+            }
+            for job in jobs {
+                job();
+            }
+            // Deferred writes may enqueue more work — continue the loop.
         }
     }
+}
+
+fn enqueue_deferred_fn(rt: &Runtime, f: Box<dyn FnOnce()>) {
+    rt.deferred_fns.borrow_mut().push(f);
 }
 
 fn notify_signal_subscribers(rt: &Runtime, signal_id: SignalId) {
@@ -726,30 +750,36 @@ impl<T: Clone + PartialEq + 'static> Signal<T> {
     }
 
     pub fn set(&self, new_value: T) {
+        if !self.try_set(new_value) {
+            panic!("Signal::set on disposed signal");
+        }
+    }
+
+    /// Like [`Self::set`], but returns `false` if the signal was already disposed.
+    pub fn try_set(&self, new_value: T) -> bool {
         let changed = RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
-            let any_val_rc = rt
-                .signals
-                .borrow()
-                .get(&self.id)
-                .cloned()
-                .expect("Signal::set on disposed signal");
+            let any_val_rc = rt.signals.borrow().get(&self.id).cloned()?;
             let mut any_val = any_val_rc.borrow_mut();
             let typed_val = any_val.downcast_mut::<T>().expect("Signal type mismatch");
             if *typed_val == new_value {
-                false
+                Some(false)
             } else {
                 *typed_val = new_value;
-                true
+                Some(true)
             }
         });
-        if !changed {
-            return;
+        match changed {
+            None => false,
+            Some(false) => true,
+            Some(true) => {
+                RUNTIME.with(|rt_rc| {
+                    let rt = rt_rc.borrow();
+                    notify_signal_subscribers(&rt, self.id);
+                });
+                true
+            }
         }
-        RUNTIME.with(|rt_rc| {
-            let rt = rt_rc.borrow();
-            notify_signal_subscribers(&rt, self.id);
-        });
     }
 
     /// In-place update; notifies subscribers only when the new value differs.
@@ -811,6 +841,10 @@ where
             rt.deferred_effects.borrow_mut().push(id);
         } else {
             run_effect(&rt, id);
+            // `create_deferred` may have queued catch-up writes during the initial run.
+            if !rt.deferred_fns.borrow().is_empty() {
+                flush_pending(&rt);
+            }
         }
         id
     })
@@ -855,6 +889,7 @@ pub fn clear_effects() {
         rt.pending_memos.borrow_mut().clear();
         rt.pending_memo_set.borrow_mut().clear();
         rt.deferred_effects.borrow_mut().clear();
+        rt.deferred_fns.borrow_mut().clear();
         *rt.current_effect.borrow_mut() = None;
         *rt.current_memo.borrow_mut() = None;
         *rt.current_owner.borrow_mut() = None;
@@ -890,6 +925,25 @@ where
         let mut owners = rt.owners.borrow_mut();
         if let Some(node) = owners.get_mut(&owner) {
             node.cleanups.push(Box::new(f));
+        }
+    });
+}
+
+/// Run `f` once when the current owner is first set up (Solid `onMount`).
+///
+/// Implemented as a no-dep effect that takes the callback on the first tick, so it does **not**
+/// re-run when unrelated signals change. Reading signals inside `f` is untracked.
+///
+/// Re-mounting (owner disposed and a new owner created, or a parent effect re-creating children)
+/// schedules a fresh `on_mount`.
+pub fn on_mount<F>(f: F)
+where
+    F: FnOnce() + 'static,
+{
+    let slot = RefCell::new(Some(f));
+    create_effect(move || {
+        if let Some(cb) = slot.borrow_mut().take() {
+            untrack(cb);
         }
     });
 }
@@ -1185,11 +1239,18 @@ pub fn is_tracking() -> bool {
 // Memo (lazy + dirty flag; flushed in depth order before effects)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy)]
 pub struct Memo<T> {
     id: MemoId,
     signal: Signal<T>,
 }
+
+impl<T> Clone for Memo<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Memo<T> {}
 
 impl<T: Clone + PartialEq + 'static> Memo<T> {
     pub fn get(&self) -> T {
@@ -1288,6 +1349,130 @@ where
             signal,
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// Solid-aligned helpers: on / createSelector / createDeferred
+// ---------------------------------------------------------------------------
+
+/// Run `f` when `deps` changes. Only `deps` is tracked; the body runs under [`untrack`]
+/// (Solid `on(deps, fn)`).
+///
+/// `f` receives `(current, previous)`. On the first run `previous` is `None`.
+pub fn on<D, F>(mut deps: impl FnMut() -> D + 'static, mut f: F) -> EffectId
+where
+    D: Clone + PartialEq + 'static,
+    F: FnMut(&D, Option<&D>) + 'static,
+{
+    let prev: Rc<RefCell<Option<D>>> = Rc::new(RefCell::new(None));
+    create_effect(move || {
+        let input = deps();
+        let previous = prev.borrow().clone();
+        untrack(|| {
+            f(&input, previous.as_ref());
+        });
+        *prev.borrow_mut() = Some(input);
+    })
+}
+
+/// Fine-grained equality selector (Solid `createSelector`).
+///
+/// `selector.is(key)` returns whether `source()` currently equals `key`. Subscribers of a given
+/// key only re-run when that key's selected boolean flips (not on every unrelated source change).
+pub struct Selector<T: 'static> {
+    selected: Memo<T>,
+    /// Owner that created the selector — per-key memos attach here so reader effects can re-run
+    /// without disposing the cache.
+    owner: OwnerId,
+    cache: Rc<RefCell<HashMap<T, Memo<bool>>>>,
+}
+
+impl<T> Clone for Selector<T> {
+    fn clone(&self) -> Self {
+        Self {
+            selected: self.selected,
+            owner: self.owner,
+            cache: Rc::clone(&self.cache),
+        }
+    }
+}
+
+impl<T: Clone + Eq + std::hash::Hash + 'static> Selector<T> {
+    /// Whether `key` is the current selection. Tracks a per-key memo.
+    pub fn is(&self, key: T) -> bool {
+        let memo = {
+            let mut cache = self.cache.borrow_mut();
+            if let Some(m) = cache.get(&key) {
+                *m
+            } else {
+                let selected = self.selected;
+                let owner = self.owner;
+                let key_for_memo = key.clone();
+                let memo = untrack(|| {
+                    RUNTIME.with(|rt_rc| {
+                        let rt = rt_rc.borrow();
+                        let prev_owner = *rt.current_owner.borrow();
+                        let prev_effect = *rt.current_effect.borrow();
+                        *rt.current_owner.borrow_mut() = Some(owner);
+                        // Don't attach the memo-creating work to the reader effect.
+                        *rt.current_effect.borrow_mut() = None;
+                        let m = create_memo(move || selected.with(|s| s == &key_for_memo));
+                        *rt.current_owner.borrow_mut() = prev_owner;
+                        *rt.current_effect.borrow_mut() = prev_effect;
+                        m
+                    })
+                });
+                cache.insert(key, memo);
+                memo
+            }
+        };
+        memo.get()
+    }
+}
+
+/// Create a [`Selector`] over `source` (Solid `createSelector`).
+pub fn create_selector<T, F>(source: F) -> Selector<T>
+where
+    T: Clone + Eq + std::hash::Hash + PartialEq + 'static,
+    F: FnMut() -> T + 'static,
+{
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let owner = ensure_owner(&rt);
+        Selector {
+            selected: create_memo(source),
+            owner,
+            cache: Rc::new(RefCell::new(HashMap::new())),
+        }
+    })
+}
+
+/// Deferred view of `source` (Solid `createDeferred` MVP).
+///
+/// Readers see the previous value until the current reactive flush finishes; then the deferred
+/// signal catches up. This is a single-flush deferral (not idle/timeout scheduling).
+pub fn create_deferred<T, F>(mut source: F) -> Signal<T>
+where
+    T: Clone + PartialEq + 'static,
+    F: FnMut() -> T + 'static,
+{
+    let initial = untrack(&mut source);
+    let deferred = create_signal(initial);
+    create_effect(move || {
+        let next = source();
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            enqueue_deferred_fn(
+                &rt,
+                Box::new(move || {
+                    if deferred.peek() != next {
+                        deferred.set(next);
+                    }
+                }),
+            );
+        });
+    });
+    deferred
 }
 
 pub use crate::style::{
@@ -1609,6 +1794,32 @@ mod tests {
     }
 
     #[test]
+    fn on_mount_runs_once_not_on_signal_change() {
+        let mounts = Rc::new(Cell::new(0_u32));
+        let (_owner, sig) = create_root({
+            let mounts = mounts.clone();
+            move || {
+                let s = Signal::new(0_i32);
+                on_mount({
+                    let mounts = mounts.clone();
+                    move || mounts.set(mounts.get() + 1)
+                });
+                // A separate effect that tracks the signal — must not re-trigger on_mount.
+                create_effect({
+                    move || {
+                        let _ = s.get();
+                    }
+                });
+                s
+            }
+        });
+        assert_eq!(mounts.get(), 1);
+        sig.set(1);
+        sig.set(2);
+        assert_eq!(mounts.get(), 1, "on_mount must not re-run on signal changes");
+    }
+
+    #[test]
     fn context_provide_and_use_walks_owners() {
         let ctx = create_context::<String>();
         let (_root, value) = create_root(|| {
@@ -1653,5 +1864,83 @@ mod tests {
         // Regression: nested `root_owner.borrow()` across `dispose_owner` used to panic
         // with `RefCell already borrowed` (Windows abort → 0xC0000409).
         clear_effects();
+    }
+
+    #[test]
+    fn on_tracks_only_deps_and_passes_previous() {
+        let a = Signal::new(1_i32);
+        let b = Signal::new(100_i32);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        on(
+            move || a.get(),
+            {
+                let seen = seen.clone();
+                move |cur, prev| {
+                    // Reading b inside body must not subscribe.
+                    let _ = b.peek();
+                    seen.borrow_mut().push((*cur, prev.copied()));
+                }
+            },
+        );
+        assert_eq!(*seen.borrow(), vec![(1, None)]);
+        b.set(200);
+        assert_eq!(*seen.borrow(), vec![(1, None)]);
+        a.set(2);
+        assert_eq!(*seen.borrow(), vec![(1, None), (2, Some(1))]);
+    }
+
+    #[test]
+    fn create_selector_only_notifies_flipped_keys() {
+        let selected = Signal::new("a".to_string());
+        let selector = create_selector(move || selected.get());
+        let a_runs = Rc::new(Cell::new(0_u32));
+        let b_runs = Rc::new(Cell::new(0_u32));
+        create_effect({
+            let selector = selector.clone();
+            let a_runs = a_runs.clone();
+            move || {
+                a_runs.set(a_runs.get() + 1);
+                let _ = selector.is("a".to_string());
+            }
+        });
+        create_effect({
+            let selector = selector.clone();
+            let b_runs = b_runs.clone();
+            move || {
+                b_runs.set(b_runs.get() + 1);
+                let _ = selector.is("b".to_string());
+            }
+        });
+        assert_eq!(a_runs.get(), 1);
+        assert_eq!(b_runs.get(), 1);
+        // a → c: a flips true→false; b stays false.
+        selected.set("c".to_string());
+        assert_eq!(a_runs.get(), 2);
+        assert_eq!(b_runs.get(), 1);
+        // c → b: b flips false→true; a stays false.
+        selected.set("b".to_string());
+        assert_eq!(a_runs.get(), 2);
+        assert_eq!(b_runs.get(), 2);
+    }
+
+    #[test]
+    fn create_deferred_lags_one_flush() {
+        let source = Signal::new(1_i32);
+        let deferred = create_deferred(move || source.get());
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        create_effect({
+            let seen = seen.clone();
+            move || {
+                seen.borrow_mut().push(deferred.get());
+            }
+        });
+        // Initial deferred catch-up already flushed after create_effect.
+        assert_eq!(deferred.peek(), 1);
+        assert_eq!(*seen.borrow(), vec![1]);
+
+        source.set(2);
+        // After full flush, deferred has caught up and effect observed 2.
+        assert_eq!(deferred.peek(), 2);
+        assert_eq!(*seen.borrow(), vec![1, 2]);
     }
 }

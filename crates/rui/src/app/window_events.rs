@@ -8,6 +8,32 @@ use super::state::ScrollbarUpdateMode;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 
 impl super::App {
+    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId) {
+        let Some(sec) = self.secondaries.get_mut(&id) else {
+            return;
+        };
+        let inner = sec.window.inner_size();
+        if self.is_suspended || inner.width == 0 || inner.height == 0 {
+            if !self.is_suspended && (inner.width == 0 || inner.height == 0) {
+                sec.window.request_redraw();
+            }
+            return;
+        }
+        match sec.render() {
+            Ok(()) => {}
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                sec.recover_surface();
+                sec.window.request_redraw();
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                log::error!("secondary window: GPU out of memory");
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                sec.window.request_redraw();
+            }
+        }
+    }
+
     fn fmt_lp(v: taffy::prelude::LengthPercentage) -> String {
         match v {
             taffy::prelude::LengthPercentage::Length(px) => format!("{px:.1}px"),
@@ -91,6 +117,105 @@ impl super::App {
         self.smooth_active_until.insert(rest.to_string(), until);
     }
 
+    /// Advance content pan / sample fling velocity while primary pointer is down.
+    fn tick_content_scroll_drag(&mut self, x: f32, y: f32) {
+        const ARM_PX: f32 = 4.0;
+        let now = std::time::Instant::now();
+        let Some((rest, dx, dy, just_armed)) = (|| {
+            let drag = self.content_scroll_drag.as_mut()?;
+            let dt = now.duration_since(drag.last_t).as_secs_f32().max(1e-4);
+            let dx = x - drag.last_x;
+            let dy = y - drag.last_y;
+            let mut just_armed = false;
+            if !drag.armed {
+                let dist = (x - drag.origin_x).hypot(y - drag.origin_y);
+                if dist < ARM_PX {
+                    drag.last_x = x;
+                    drag.last_y = y;
+                    drag.last_t = now;
+                    return None;
+                }
+                drag.armed = true;
+                just_armed = true;
+            }
+            // Finger move (dx,dy) → content follows → offset changes by (-dx,-dy).
+            let inst_vx = -dx / dt;
+            let inst_vy = -dy / dt;
+            drag.vel[0] = drag.vel[0] * 0.65 + inst_vx * 0.35;
+            drag.vel[1] = drag.vel[1] * 0.65 + inst_vy * 0.35;
+            let rest = drag.rest.clone();
+            drag.last_x = x;
+            drag.last_y = y;
+            drag.last_t = now;
+            Some((rest, dx, dy, just_armed))
+        })() else {
+            return;
+        };
+
+        if just_armed {
+            self.scroll_velocity.insert(rest.clone(), [0.0, 0.0]);
+        }
+
+        let (max_x, max_y) = self
+            .scroll_metrics_cache
+            .get(&rest)
+            .map(|(_, [mx, my], _)| (*mx, *my))
+            .unwrap_or((f32::MAX, f32::MAX));
+        let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest);
+        let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest);
+        let cur_x = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32).peek();
+        let cur_y = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).peek();
+        let next_x = (cur_x - dx).clamp(0.0, max_x);
+        let next_y = (cur_y - dy).clamp(0.0, max_y);
+        super::scroll_support::set_scroll_offset_with_behavior(&rest, next_x, next_y, true);
+        self.bump_smooth_active_until(&rest, now);
+        crate::core::reactivity::use_signal(
+            &crate::core::scroll_viewport::scroll_activity_signal_key(&rest),
+            || 0.0_f32,
+        )
+        .set_silent(1.0);
+        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+            st.window.request_redraw();
+        }
+    }
+
+    /// On pointer-up after an armed content pan: seed `scroll_velocity` for inertia.
+    fn finish_content_scroll_drag(&mut self) {
+        let Some(drag) = self.content_scroll_drag.take() else {
+            return;
+        };
+        if !drag.armed {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let [vx, vy] = drag.vel;
+        // Drop tiny flicks (likely tap jitter).
+        if vx.hypot(vy) < 80.0 {
+            self.scroll_velocity.insert(drag.rest.clone(), [0.0, 0.0]);
+            return;
+        }
+        self.scroll_velocity.insert(drag.rest.clone(), [vx, vy]);
+        // Nudge targets so smooth easing has somewhere to go while velocity integrates.
+        let (max_x, max_y) = self
+            .scroll_metrics_cache
+            .get(&drag.rest)
+            .map(|(_, [mx, my], _)| (*mx, *my))
+            .unwrap_or((0.0, 0.0));
+        let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&drag.rest);
+        let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&drag.rest);
+        let cur_x = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32).peek();
+        let cur_y = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).peek();
+        // ~120ms of coast projected into the target.
+        let coast = 0.12;
+        let tx = (cur_x + vx * coast).clamp(0.0, max_x);
+        let ty = (cur_y + vy * coast).clamp(0.0, max_y);
+        super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, tx, ty, false);
+        self.bump_smooth_active_until(&drag.rest, now);
+        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+            st.window.request_redraw();
+        }
+    }
+
     fn hover_key(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
         let a = match axis {
             super::scroll_support::ScrollAxis::X => "x",
@@ -156,6 +281,8 @@ impl super::App {
         };
 
         self.cursor_pos = position;
+        let phys_x = position.x as f32;
+        let phys_y = position.y as f32;
         let scale = state.window.scale_factor() as f32;
         let x = position.x as f32 / scale.max(1.0);
         let y = position.y as f32 / scale.max(1.0);
@@ -231,7 +358,7 @@ impl super::App {
                     let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
                     let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
                     let ix = crate::renderer::hit_test_input_text_index(
-                        &mut state.text_renderer.font_system,
+                        state.text_renderer.font_system_mut(),
                         &display_owned,
                         mx,
                         my,
@@ -258,7 +385,7 @@ impl super::App {
                     let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
                     let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
                     let ix = crate::renderer::hit_test_input_text_index(
-                        &mut state.text_renderer.font_system,
+                        state.text_renderer.font_system_mut(),
                         &display_el,
                         mx,
                         my,
@@ -332,6 +459,7 @@ impl super::App {
         }
 
         drop(state_borrow);
+        self.note_long_press_move(phys_x, phys_y);
 
         // Apply hover state after releasing the state borrow.
         // 1) Clear previous axis-hover if changed
@@ -414,6 +542,13 @@ impl super::App {
             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
             }
+        } else if self.content_scroll_drag.is_some()
+            && self.scrollbar_drag.is_none()
+            && self.input_drag_rest.is_none()
+            && self.label_drag_key.is_none()
+            && self.drag_reorder.is_none()
+        {
+            self.tick_content_scroll_drag(x, y);
         }
         if let Some((rest, lo, hi)) = input_drag_sel_update {
             let sk = crate::components::input::input_selection_signal_key(&rest);
@@ -482,7 +617,7 @@ impl super::App {
             {
                 let ui_scale = scale.max(1.0);
                 let ix = crate::renderer::hit_test_input_text_index(
-                    &mut state.text_renderer.font_system,
+                    state.text_renderer.font_system_mut(),
                     &display_el,
                     x + leaf_scroll[0],
                     y + leaf_scroll[1],
@@ -505,7 +640,7 @@ impl super::App {
             {
                 let ui_scale = scale.max(1.0);
                 let ix = crate::renderer::hit_test_input_text_index(
-                    &mut state.text_renderer.font_system,
+                    state.text_renderer.font_system_mut(),
                     &display_el,
                     x + leaf_scroll[0],
                     y + leaf_scroll[1],
@@ -676,6 +811,35 @@ impl super::App {
                 }
             }
 
+            // Arm a potential content pan (deepest scroll viewport under the pointer).
+            if self.scrollbar_drag.is_none()
+                && self.drag_reorder.is_none()
+                && input_drag.is_none()
+                && label_drag.is_none()
+            {
+                let mut chain = Vec::new();
+                super::scroll_support::collect_scroll_rest_chain_at(
+                    &state.root_element,
+                    x,
+                    y,
+                    [0.0, 0.0],
+                    &mut chain,
+                );
+                if let Some(rest) = chain.first() {
+                    let now = std::time::Instant::now();
+                    self.content_scroll_drag = Some(super::scroll_support::ContentScrollDrag {
+                        rest: rest.clone(),
+                        origin_x: x,
+                        origin_y: y,
+                        last_x: x,
+                        last_y: y,
+                        last_t: now,
+                        vel: [0.0, 0.0],
+                        armed: false,
+                    });
+                }
+            }
+
             let capture = super::pointer_capture_id();
             let path = if let Some(ref id) = capture {
                 if let Some(el) =
@@ -745,6 +909,7 @@ impl super::App {
                 self.input_drag_rest = Some(rest);
                 self.input_drag_anchor = caret_ix;
                 self.label_drag_key = None;
+                self.content_scroll_drag = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
             } else if let Some((key, caret_ix)) = label_drag {
@@ -754,6 +919,7 @@ impl super::App {
                 self.label_drag_key = Some(key);
                 self.label_drag_anchor = caret_ix;
                 self.input_drag_rest = None;
+                self.content_scroll_drag = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
             }
@@ -764,8 +930,10 @@ impl super::App {
                 }
             }
         } else {
+            drop(state_borrow);
             self.left_button_down = false;
             self.scrollbar_drag = None;
+            self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
                 crate::core::reactivity::use_signal(&hk, || None::<usize>).set(None);
@@ -779,7 +947,6 @@ impl super::App {
                     }
                 }
             }
-            drop(state_borrow);
             if let Some(rest) = self.input_drag_rest.take() {
                 let sk = crate::components::input::input_selection_signal_key(&rest);
                 let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
@@ -1159,8 +1326,58 @@ impl super::App {
             }
         }
 
+        // Fling inertia: integrate `scroll_velocity` into targets, then exponential friction decay.
+        // Wheel must not write here (see handle_mouse_wheel); only content-pan release seeds velocity.
+        const INERTIA_FRICTION_PER_SEC: f32 = 4.5;
+        let mut inertia_ops = Vec::new();
+        for (rest, vel) in self.scroll_velocity.iter_mut() {
+            if vel[0].abs() < 0.01 && vel[1].abs() < 0.01 {
+                continue;
+            }
+            let max_pair = self
+                .scroll_metrics_cache
+                .get(rest)
+                .map(|(_, [mx, my], _)| (*mx, *my));
+            let Some((max_x, max_y)) = max_pair else {
+                continue;
+            };
+            let [nvx, nvy] = super::scroll_support::decay_scroll_velocity(
+                vel[0],
+                vel[1],
+                scroll_dt,
+                INERTIA_FRICTION_PER_SEC,
+            );
+            let dx = vel[0] * scroll_dt;
+            let dy = vel[1] * scroll_dt;
+            *vel = [nvx, nvy];
+            inertia_ops.push((rest.clone(), dx, dy, max_x, max_y, nvx, nvy));
+        }
+        let mut inertia_animating = false;
+        for (rest, dx, dy, max_x, max_y, nvx, nvy) in inertia_ops {
+            let tx_key = crate::core::scroll_viewport::scroll_target_x_signal_key(&rest);
+            let ty_key = crate::core::scroll_viewport::scroll_target_y_signal_key(&rest);
+            let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest);
+            let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest);
+            let sx = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32);
+            let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
+            let tx = crate::core::reactivity::use_signal(&tx_key, || sx.peek());
+            let ty = crate::core::reactivity::use_signal(&ty_key, || sy.peek());
+            let next_x = (tx.peek() + dx).clamp(0.0, max_x);
+            let next_y = (ty.peek() + dy).clamp(0.0, max_y);
+            tx.set_silent(next_x);
+            ty.set_silent(next_y);
+            if nvx.abs() > 0.01 || nvy.abs() > 0.01 {
+                inertia_animating = true;
+                self.bump_smooth_active_until(&rest, now);
+            }
+        }
+        if inertia_animating {
+            smooth_scroll_animating = true;
+        }
+
         // First-order exponential smoothing toward wheel targets — no velocity ring / overshoot
         // (previous mass–spring used ζ≈0.98, slightly under-damped). τ chosen near Chromium smooth-scroll.
+        // Content-pan fling seeds `scroll_velocity` above; this loop eases `offset` toward `target`.
         const SMOOTH_SCROLL_TAU_SEC: f32 = 0.095;
         /// Cap per-frame blend so a long `dt` (e.g. first frame after idle) or a single wheel tick
         /// never moves more than ~this fraction of remaining distance in one frame — avoids a visible
@@ -1243,10 +1460,8 @@ impl super::App {
                     cur_y = target_y;
                     ty.set_silent(target_y);
                 }
-                if let Some(v) = self.scroll_velocity.get_mut(rest) {
-                    v[0] = 0.0;
-                    v[1] = 0.0;
-                }
+                // Do not zero `scroll_velocity` here: fling inertia decays in the block above.
+                // Thumb drag still clears velocity in the `else` branch.
                 if (target_x - cur_x).abs() > SMOOTH_SCROLL_ANIM_EPS
                     || (target_y - cur_y).abs() > SMOOTH_SCROLL_ANIM_EPS
                 {
@@ -1854,13 +2069,16 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if let Some((bounds, scroll_acc, _fid_clone)) = ime_data {
                     window.request_redraw();
                     window.set_ime_allowed(true);
+                    // Prefer a caret-sized strip at the leading edge of the focused field
+                    // (scroll-adjusted). Full caret glyph X is still prepare_text-side; this
+                    // keeps the IME candidate window near the field under scroll/zoom.
+                    let caret_w = (2.0_f32 * ui_scale).max(1.0);
                     let px = (bounds[0] - scroll_acc[0]) * ui_scale;
                     let py = (bounds[1] - scroll_acc[1]) * ui_scale;
-                    let pw = (bounds[2] * ui_scale).max(1.0);
                     let ph = (bounds[3] * ui_scale).max(1.0);
                     window.set_ime_cursor_area(
                         winit::dpi::PhysicalPosition::new(px as i32, py as i32),
-                        winit::dpi::PhysicalSize::new(pw as u32, ph as u32),
+                        winit::dpi::PhysicalSize::new(caret_w as u32, ph as u32),
                     );
                 } else {
                     window.set_ime_allowed(false);
@@ -1918,6 +2136,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     };
                     self.last_click_at = Some(now);
                     self.last_click_pos = [x, y];
+                    self.begin_long_press(id, [x, y]);
+                }
+                if element_state == ElementState::Released {
+                    self.cancel_long_press();
                 }
                 self.handle_mouse_input(id, element_state);
                 if element_state == ElementState::Released {

@@ -263,3 +263,15 @@ Win11 计算器的精髓在于其流畅的按压缩放动画、主题切换的�
 - 确保动画是在 GPU 端计算（通过 Uniform Buffer 传递时间变量），而不是在 CPU 端每帧重新计算 taffy 布局，从而保持极低的 CPU 占用率（这对于笔记本续航至关重要）。
 
 **总结**：你目前的优化成果已经是一份教科书级别的 Rust 性能调优报告。**保持当前的 wgpu 架构，接受 4.4MB 的体积和 26MB 的内存，把才华挥洒在渲染管线优化和开发者工具链上，是这个框架走向成熟的最佳路径。**
+
+---
+
+## Release checklist（体积 / 性能）
+
+发布或打 tag 前建议：
+
+1. **体积**：`cargo build -p calculator --release`，记录 exe 大小；对照本节历史表。
+2. **内存**：可选跑 `examples/gpu_probe` + 计算器，确认 GL 默认路径 Private Bytes 未回退。
+3. **布局基线**：`cargo bench -p rui --bench layout_baseline`（见 `crates/rui/benches/layout_baseline.rs`）；可选 `--features tracing`。
+4. **测试**：`cargo test -p rui --lib` + CI `offscreen` job（`RUI_FORCE_SOFTWARE=1`）。
+5. **Features**：默认精简；文档列出 `bundled-*` / `emoji-svg` / `backend-dx12` / `system-tray` 对体积的影响（见 [PUBLISH.md](PUBLISH.md)）。

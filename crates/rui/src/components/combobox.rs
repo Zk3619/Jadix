@@ -1,6 +1,7 @@
 //! # Combobox
 //!
 //! 可过滤下拉：Input 触发器 + 选项列表；复用 portal / floating sync。
+//! 打开时 ArrowUp/Down 走 [`crate::utils::roving`]（roving tabindex）。
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_view;
@@ -14,6 +15,7 @@ use crate::tokens;
 use crate::utils::popup::{
     mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
 };
+use crate::utils::roving::{roving_edge, roving_move};
 use winit::keyboard::{Key, NamedKey};
 
 pub struct ComboboxBuilder {
@@ -73,6 +75,8 @@ impl From<ComboboxBuilder> for Element {
         } = builder;
         let open_key = format!("{id}__combo_open");
         let open = use_signal(open_key.as_str(), || false);
+        let active_key = format!("{id}__combo_active");
+        let active = use_signal(active_key.as_str(), || 0usize);
         let vk = input_value_signal_key(&id);
         let val = value.unwrap_or_else(|| use_signal(vk.as_str(), String::new));
         // Keep external signal in sync with input's keyed store when provided.
@@ -84,21 +88,71 @@ impl From<ComboboxBuilder> for Element {
             let val_sig = use_signal(input_value_signal_key(&id).as_str(), String::new);
             let query = val_sig.get();
             let _ = open.get();
+            let active_ix = active.get();
             let o_focus = open;
+            let a_sig = active;
+            let opts_for_keys = options.clone();
             let mut trigger: Element = input(&id).placeholder(placeholder.as_str()).into();
             trigger = trigger
-                .on_click(move || o_focus.set(true))
+                .on_click(move || {
+                    a_sig.set(0);
+                    o_focus.set(true);
+                })
                 .on_key_down(move |ev| {
-                    if matches!(
-                        ev.logical_key,
-                        Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Enter)
-                    ) {
-                        o_focus.set(true);
-                        return true;
-                    }
-                    if matches!(ev.logical_key, Key::Named(NamedKey::Escape)) {
-                        o_focus.set(false);
-                        return true;
+                    let q = val_sig.peek().to_ascii_lowercase();
+                    let filtered: Vec<_> = opts_for_keys
+                        .iter()
+                        .filter(|(_, l)| q.is_empty() || l.to_ascii_lowercase().contains(&q))
+                        .cloned()
+                        .collect();
+                    let n = filtered.len();
+                    match &ev.logical_key {
+                        Key::Named(NamedKey::ArrowDown) => {
+                            if !o_focus.peek() {
+                                a_sig.set(0);
+                                o_focus.set(true);
+                            } else if let Some(next) = roving_move(n, a_sig.peek(), 1) {
+                                a_sig.set(next);
+                            }
+                            return true;
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            if o_focus.peek() {
+                                if let Some(next) = roving_move(n, a_sig.peek(), -1) {
+                                    a_sig.set(next);
+                                }
+                                return true;
+                            }
+                        }
+                        Key::Named(NamedKey::Home) if o_focus.peek() => {
+                            if let Some(i) = roving_edge(n, false) {
+                                a_sig.set(i);
+                            }
+                            return true;
+                        }
+                        Key::Named(NamedKey::End) if o_focus.peek() => {
+                            if let Some(i) = roving_edge(n, true) {
+                                a_sig.set(i);
+                            }
+                            return true;
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            if !o_focus.peek() {
+                                a_sig.set(0);
+                                o_focus.set(true);
+                                return true;
+                            }
+                            if let Some((ov, _)) = filtered.get(a_sig.peek()) {
+                                val_sig.set(ov.clone());
+                                o_focus.set(false);
+                                return true;
+                            }
+                        }
+                        Key::Named(NamedKey::Escape) => {
+                            o_focus.set(false);
+                            return true;
+                        }
+                        _ => {}
                     }
                     false
                 });
@@ -114,22 +168,29 @@ impl From<ComboboxBuilder> for Element {
                         .cloned()
                         .collect();
                     let mut rows = vstack().w("100%");
+                    rows.el.attrs
+                        .insert("accesskit_role".to_string(), "listbox".to_string());
                     for (i, (ov, ol)) in filtered.iter().enumerate() {
                         let v_sig = val_sig;
                         let o_sig = open;
+                        let a_row = active;
                         let ov = ov.clone();
                         let ol = ol.clone();
                         let bid = format!("{id}__opt{i}");
-                        let row: Element = button(&bid)
-                            .variant("ghost")
+                        let highlighted = i == active_ix;
+                        let mut row: Element = button(&bid)
+                            .variant(if highlighted { "secondary" } else { "ghost" })
                             .size("sm")
                             .w("100%")
                             .on_click(move || {
+                                a_row.set(i);
                                 v_sig.set(ov.clone());
                                 o_sig.set(false);
                             })
                             .text(ol)
                             .into();
+                        row.attrs
+                            .insert("accesskit_role".to_string(), "option".to_string());
                         rows = rows.child(row);
                     }
                     let scroll_id = format!("{id}:menu_scroll");
@@ -146,6 +207,8 @@ impl From<ComboboxBuilder> for Element {
                         .border_width(1.0)
                         .border_color(tokens::border())
                         .absolute();
+                    menu.attrs
+                        .insert("accesskit_role".to_string(), "menu".to_string());
                     mark_floating(&mut menu, &id, &trigger_fid, placement);
                     menu.set_attr("rui_floating_match_trigger", "1");
                     menu = panel_block_clicks(menu, oz.panel);

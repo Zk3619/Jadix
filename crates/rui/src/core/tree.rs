@@ -291,8 +291,40 @@ pub trait IntoElementList {
 }
 
 impl IntoElementList for Element {
-    fn into_element_list(self) -> Vec<Element> {
-        vec![self]
+    fn into_element_list(mut self) -> Vec<Element> {
+        if self.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
+            std::mem::take(&mut self.children)
+        } else {
+            vec![self]
+        }
+    }
+}
+
+/// Bind an element's `template_id` into a reactive slot (`ref={...}` macro DX).
+pub fn bind_element_ref(slot: &Signal<Option<String>>, el: &Element) {
+    if let Some(tid) = el.template_id.as_ref() {
+        slot.set(Some(tid.clone()));
+    }
+}
+
+/// Resolve `<Dynamic component={...}>`: `FnOnce() -> impl IntoElement` or an [`Element`].
+pub trait IntoDynamicComponent {
+    fn into_dynamic_component(self) -> Element;
+}
+
+impl IntoDynamicComponent for Element {
+    fn into_dynamic_component(self) -> Element {
+        self
+    }
+}
+
+impl<F, R> IntoDynamicComponent for F
+where
+    F: FnOnce() -> R,
+    R: IntoElement,
+{
+    fn into_dynamic_component(self) -> Element {
+        self().into_element()
     }
 }
 
@@ -1319,6 +1351,11 @@ impl Element {
         self.style.flex_shrink = 0.0;
         self
     }
+
+    /// Parse markdown-inspired inline markup into [`Self::text_spans`].
+    pub fn markdown_inline(self, src: impl AsRef<str>) -> Self {
+        self.text_spans(crate::text::parse_markdown_inline(src.as_ref()))
+    }
     pub fn text_direction(mut self, dir: crate::style::TextDirection) -> Self {
         self.text_style.direction = dir;
         self
@@ -1433,5 +1470,60 @@ mod p1_builder_tests {
         let el = Element::new().fixed();
         assert_eq!(el.style.position, Position::Absolute);
         assert!(el.style.position_fixed);
+    }
+
+    #[test]
+    fn unpack_fragment_children_expands_rui_fragment() {
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        let frag = frag
+            .child(Element::new().text("a"))
+            .child(Element::new().text("b"));
+        let kids = Element::unpack_fragment_children(Some(frag));
+        assert_eq!(kids.len(), 2);
+        assert_eq!(kids[0].text.as_deref(), Some("a"));
+        assert_eq!(kids[1].text.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn unpack_fragment_children_keeps_plain_element() {
+        let el = Element::new().text("only");
+        let kids = Element::unpack_fragment_children(Some(el));
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].text.as_deref(), Some("only"));
+    }
+
+    #[test]
+    fn unpack_fragment_children_none_is_empty() {
+        assert!(Element::unpack_fragment_children(None).is_empty());
+    }
+
+    #[test]
+    fn into_element_list_flattens_rui_fragment() {
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        let frag = frag
+            .child(Element::new().text("a"))
+            .child(Element::new().text("b"));
+        let kids = frag.into_element_list();
+        assert_eq!(kids.len(), 2);
+        assert_eq!(kids[0].text.as_deref(), Some("a"));
+        assert_eq!(kids[1].text.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn bind_element_ref_writes_template_id() {
+        let slot = crate::core::reactivity::create_signal(None::<String>);
+        let el = Element::new().template_id("tid:ref");
+        bind_element_ref(&slot, &el);
+        assert_eq!(slot.get().as_deref(), Some("tid:ref"));
+    }
+
+    #[test]
+    fn into_dynamic_component_calls_closure() {
+        let el = (|| Element::new().text("dyn")).into_dynamic_component();
+        assert_eq!(el.text.as_deref(), Some("dyn"));
+        let el2 = Element::new().text("plain").into_dynamic_component();
+        assert_eq!(el2.text.as_deref(), Some("plain"));
     }
 }

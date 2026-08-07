@@ -112,6 +112,18 @@ pub enum KnownUtility<'a> {
     LetterSpacing(f32),
     TextDirectionLtr,
     TextDirectionRtl,
+    /// `transition-opacity` — marks element for opacity transitions (`rui_transition=opacity`).
+    TransitionOpacity,
+    /// `transition-transform` — marks element for transform transitions (`rui_transition=transform`).
+    TransitionTransform,
+    /// `animate-spin` — continuous rotate (`rui_animate=spin`).
+    AnimateSpin,
+    /// `animate-none` — clear animation (`rui_animate=none`).
+    AnimateNone,
+    /// Marker: this element is a `group` / `group/name` for `group-hover:` descendants.
+    GroupMarker { name: Option<&'a str> },
+    /// Marker: this element is a `peer` / `peer/name` for following siblings' `peer-hover:`.
+    PeerMarker { name: Option<&'a str> },
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -182,8 +194,51 @@ fn spacing_value(token: &str, prefix: &str) -> Option<String> {
     Some(format!("{px}px"))
 }
 
+fn negate_px_string(v: &str) -> String {
+    let v = v.trim();
+    if let Some(rest) = v.strip_prefix('-') {
+        rest.to_string()
+    } else {
+        format!("-{v}")
+    }
+}
+
+fn negate_margin_or_translate(known: KnownUtility<'_>) -> Option<KnownUtility<'_>> {
+    Some(match known {
+        KnownUtility::Margin(v) => KnownUtility::Margin(negate_px_string(&v)),
+        KnownUtility::MarginX(v) => KnownUtility::MarginX(negate_px_string(&v)),
+        KnownUtility::MarginY(v) => KnownUtility::MarginY(negate_px_string(&v)),
+        KnownUtility::MarginT(v) => KnownUtility::MarginT(negate_px_string(&v)),
+        KnownUtility::MarginR(v) => KnownUtility::MarginR(negate_px_string(&v)),
+        KnownUtility::MarginB(v) => KnownUtility::MarginB(negate_px_string(&v)),
+        KnownUtility::MarginL(v) => KnownUtility::MarginL(negate_px_string(&v)),
+        KnownUtility::TranslateX(px) => KnownUtility::TranslateX(-px),
+        KnownUtility::TranslateY(px) => KnownUtility::TranslateY(-px),
+        _ => return None,
+    })
+}
+
+fn is_negatable_spacing_token(token: &str) -> bool {
+    token.starts_with("m-")
+        || token.starts_with("mx-")
+        || token.starts_with("my-")
+        || token.starts_with("mt-")
+        || token.starts_with("mr-")
+        || token.starts_with("mb-")
+        || token.starts_with("ml-")
+        || token.starts_with("translate-x-")
+        || token.starts_with("translate-y-")
+}
+
 /// Classify a bare utility token (no `hover:` / `dark:` prefixes).
 pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
+    // Negative spacing: `-m-4`, `-translate-x-2`, …
+    if let Some(rest) = token.strip_prefix('-') {
+        if is_negatable_spacing_token(rest) {
+            return classify_utility(rest).and_then(negate_margin_or_translate);
+        }
+    }
+
     match token {
         "flex" | "flex-row" => return Some(KnownUtility::FlexRow),
         "flex-col" => return Some(KnownUtility::FlexCol),
@@ -207,7 +262,26 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "self-end" => return Some(KnownUtility::AlignSelf("end")),
         "self-stretch" => return Some(KnownUtility::AlignSelf("stretch")),
         "self-baseline" => return Some(KnownUtility::AlignSelf("baseline")),
+        "transition-opacity" => return Some(KnownUtility::TransitionOpacity),
+        "transition-transform" => return Some(KnownUtility::TransitionTransform),
+        "animate-spin" => return Some(KnownUtility::AnimateSpin),
+        "animate-none" => return Some(KnownUtility::AnimateNone),
+        "group" => return Some(KnownUtility::GroupMarker { name: None }),
+        "peer" => return Some(KnownUtility::PeerMarker { name: None }),
         _ => {}
+    }
+
+    if let Some(name) = token.strip_prefix("group/") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Some(KnownUtility::GroupMarker { name: Some(name) });
+        }
+    }
+    if let Some(name) = token.strip_prefix("peer/") {
+        let name = name.trim();
+        if !name.is_empty() {
+            return Some(KnownUtility::PeerMarker { name: Some(name) });
+        }
     }
 
     if let Some(raw) = token.strip_prefix("grid-cols-") {
@@ -535,6 +609,50 @@ mod tests {
         assert!(matches!(
             classify_utility("fixed"),
             Some(KnownUtility::PositionFixed)
+        ));
+    }
+
+    #[test]
+    fn negative_margin_and_translate() {
+        assert!(matches!(
+            classify_utility("-m-4"),
+            Some(KnownUtility::Margin(ref v)) if v == "-16px"
+        ));
+        assert!(matches!(
+            classify_utility("-mx-2"),
+            Some(KnownUtility::MarginX(ref v)) if v == "-8px"
+        ));
+        assert!(matches!(
+            classify_utility("-mt-1"),
+            Some(KnownUtility::MarginT(ref v)) if v == "-4px"
+        ));
+        assert!(matches!(
+            classify_utility("-translate-x-4"),
+            Some(KnownUtility::TranslateX(px)) if (px - (-16.0)).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("-translate-y-2"),
+            Some(KnownUtility::TranslateY(px)) if (px - (-8.0)).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn transition_and_animate_classify() {
+        assert!(matches!(
+            classify_utility("transition-opacity"),
+            Some(KnownUtility::TransitionOpacity)
+        ));
+        assert!(matches!(
+            classify_utility("transition-transform"),
+            Some(KnownUtility::TransitionTransform)
+        ));
+        assert!(matches!(
+            classify_utility("animate-spin"),
+            Some(KnownUtility::AnimateSpin)
+        ));
+        assert!(matches!(
+            classify_utility("animate-none"),
+            Some(KnownUtility::AnimateNone)
         ));
     }
 }

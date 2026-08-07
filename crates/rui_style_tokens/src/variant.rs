@@ -2,6 +2,13 @@
 
 use crate::catalog::is_known_utility;
 
+/// Default Tailwind min-width breakpoints (logical px).
+pub const BREAKPOINT_SM: u32 = 640;
+pub const BREAKPOINT_MD: u32 = 768;
+pub const BREAKPOINT_LG: u32 = 1024;
+pub const BREAKPOINT_XL: u32 = 1280;
+pub const BREAKPOINT_2XL: u32 = 1536;
+
 /// One interaction / theme / data selector stacked on a utility.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum VariantSelector {
@@ -11,6 +18,18 @@ pub enum VariantSelector {
     Active,
     Disabled,
     Dark,
+    /// Responsive `sm:` / `md:` / … — matches when viewport width ≥ `min_width`.
+    Breakpoint {
+        min_width: u32,
+    },
+    /// `group-hover` / `group-hover/name` — ancestor with matching `group` is hovered.
+    GroupHover {
+        name: Option<String>,
+    },
+    /// `peer-hover` / `peer-hover/name` — previous sibling with matching `peer` is hovered.
+    PeerHover {
+        name: Option<String>,
+    },
     /// `data-[state=open]` → key=`state`, value=`open`
     Data {
         key: String,
@@ -27,7 +46,40 @@ impl VariantSelector {
             "active" => Some(Self::Active),
             "disabled" => Some(Self::Disabled),
             "dark" => Some(Self::Dark),
+            "sm" => Some(Self::Breakpoint {
+                min_width: BREAKPOINT_SM,
+            }),
+            "md" => Some(Self::Breakpoint {
+                min_width: BREAKPOINT_MD,
+            }),
+            "lg" => Some(Self::Breakpoint {
+                min_width: BREAKPOINT_LG,
+            }),
+            "xl" => Some(Self::Breakpoint {
+                min_width: BREAKPOINT_XL,
+            }),
+            "2xl" => Some(Self::Breakpoint {
+                min_width: BREAKPOINT_2XL,
+            }),
+            "group-hover" => Some(Self::GroupHover { name: None }),
+            "peer-hover" => Some(Self::PeerHover { name: None }),
             _ => {
+                if let Some(name) = prefix.strip_prefix("group-hover/") {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        return Some(Self::GroupHover {
+                            name: Some(name.to_string()),
+                        });
+                    }
+                }
+                if let Some(name) = prefix.strip_prefix("peer-hover/") {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        return Some(Self::PeerHover {
+                            name: Some(name.to_string()),
+                        });
+                    }
+                }
                 // data-[state=open] or data-[open] (boolean attr style → value "true")
                 let rest = prefix.strip_prefix("data-[")?.strip_suffix(']')?;
                 if let Some((k, v)) = rest.split_once('=') {
@@ -76,8 +128,7 @@ pub fn parse_class_token(token: &str) -> ClassToken {
             rest = after;
             continue;
         }
-        // Unknown prefix — treat whole remainder including this segment as utility
-        // (e.g. future `sm:` breakpoints stay unknown utilities).
+        // Unknown prefix — treat whole remainder including this segment as utility.
         break;
     }
     // If we broke out with an unknown prefix, restore full token as utility when no variants consumed.
@@ -85,7 +136,7 @@ pub fn parse_class_token(token: &str) -> ClassToken {
         // Had colons but first prefix wasn't a known variant — keep whole token.
         token.to_string()
     } else if !variants.is_empty() && !is_known_utility(rest) && rest.contains(':') {
-        // e.g. hover:sm:bg-red — sm unknown; keep `sm:bg-red` as utility for warning
+        // e.g. hover:group-hover:bg-red — unknown; keep remainder as utility for warning
         rest.to_string()
     } else {
         rest.to_string()
@@ -145,5 +196,65 @@ mod tests {
         let t = parse_class_token("bg-[#ff00aa]");
         assert!(t.variants.is_empty());
         assert_eq!(t.utility, "bg-[#ff00aa]");
+    }
+
+    #[test]
+    fn breakpoint_sm_bg() {
+        let t = parse_class_token("sm:bg-red");
+        assert_eq!(
+            t.variants,
+            vec![VariantSelector::Breakpoint {
+                min_width: BREAKPOINT_SM
+            }]
+        );
+        assert_eq!(t.utility, "bg-red");
+    }
+
+    #[test]
+    fn breakpoint_2xl_stacked() {
+        let t = parse_class_token("md:hover:p-4");
+        assert_eq!(
+            t.variants,
+            vec![
+                VariantSelector::Breakpoint {
+                    min_width: BREAKPOINT_MD
+                },
+                VariantSelector::Hover
+            ]
+        );
+        assert_eq!(t.utility, "p-4");
+    }
+
+    #[test]
+    fn group_hover_and_named() {
+        let t = parse_class_token("group-hover:bg-accent");
+        assert_eq!(
+            t.variants,
+            vec![VariantSelector::GroupHover { name: None }]
+        );
+        assert_eq!(t.utility, "bg-accent");
+        let named = parse_class_token("group-hover/card:opacity-50");
+        assert_eq!(
+            named.variants,
+            vec![VariantSelector::GroupHover {
+                name: Some("card".into())
+            }]
+        );
+        assert_eq!(named.utility, "opacity-50");
+    }
+
+    #[test]
+    fn peer_hover_and_named() {
+        let t = parse_class_token("peer-hover:underline");
+        assert_eq!(t.variants, vec![VariantSelector::PeerHover { name: None }]);
+        assert_eq!(t.utility, "underline");
+        let named = parse_class_token("peer-hover/input:border-primary");
+        assert_eq!(
+            named.variants,
+            vec![VariantSelector::PeerHover {
+                name: Some("input".into())
+            }]
+        );
+        assert_eq!(named.utility, "border-primary");
     }
 }

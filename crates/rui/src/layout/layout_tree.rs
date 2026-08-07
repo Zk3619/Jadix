@@ -235,6 +235,9 @@ pub struct TextLayoutInfo {
     pub height: f32,
     pub clip_bounds: Option<[f32; 4]>,
     pub style: TextStyle,
+    /// Layout-time [`crate::text::PreparedText`] when the leaf was measured via `prepare`.
+    /// Render may use it for wrap hints; measure + primary/secondary shaping share one FontSystem.
+    pub prepared: Option<crate::text::PreparedText>,
 }
 
 /// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集.
@@ -248,6 +251,12 @@ pub struct LayoutTree {
     visited_nodes: std::collections::HashSet<NodeId>,
     /// Track all nodes currently in the taffy tree.
     total_nodes: std::collections::HashSet<NodeId>,
+    /// Test spy: how many times [`Self::mark_element_layout_dirty`] called `taffy.mark_dirty`.
+    #[cfg(test)]
+    pub(crate) mark_dirty_calls: u32,
+    /// Test spy: last node passed to `compute_layout_with_measure` (app root or subtree parent).
+    #[cfg(test)]
+    pub(crate) last_compute_root: Option<NodeId>,
 }
 
 /// Text leaf measure meta (line-height aligned with TextStyle).
@@ -260,6 +269,8 @@ struct TextMeasureMeta {
     line_height_scale: Option<f32>,
     weight: u16,
     letter_spacing: f32,
+    /// When set, leaf measure uses [`crate::text::prepare_rich`] instead of concat-only prepare.
+    spans: Option<Vec<crate::style::TextSpan>>,
 }
 
 /// 单次 `compute_layout` 内对 `measured_text_leaf_size` ?memo（Taffy 会对同一叶多次探测）.
@@ -355,15 +366,33 @@ fn measured_text_leaf_size(
         _ => Cow::Borrowed(m.text.as_str()),
     };
 
-    let (width, height) = crate::text::measure_leaf(
-        blob.as_ref(),
-        size,
-        m.weight,
-        single_line_height,
-        known_dimensions.width,
-        avail_width,
-        m.letter_spacing,
-    );
+    let (width, height) = if let Some(spans) = m.spans.as_ref().filter(|s| !s.is_empty()) {
+        let prepared = crate::text::prepare_rich(spans, size, m.weight, single_line_height);
+        let mut intrinsic_w = crate::text::intrinsic_width(&prepared);
+        if m.letter_spacing.abs() > f32::EPSILON {
+            let gaps = blob.chars().count().saturating_sub(1) as f32;
+            intrinsic_w = (intrinsic_w + gaps * m.letter_spacing).max(0.0);
+        }
+        let width = if let Some(w) = known_dimensions.width {
+            w
+        } else if let Some(w) = avail_width {
+            intrinsic_w.min(w.max(1.0))
+        } else {
+            intrinsic_w
+        };
+        let metrics = crate::text::layout(&prepared, width.max(1.0));
+        (width, metrics.height.max(single_line_height))
+    } else {
+        crate::text::measure_leaf(
+            blob.as_ref(),
+            size,
+            m.weight,
+            single_line_height,
+            known_dimensions.width,
+            avail_width,
+            m.letter_spacing,
+        )
+    };
     let height = match known_dimensions.height {
         Some(h) => height.max(h),
         None => height,
@@ -386,7 +415,48 @@ impl LayoutTree {
             measure_layout_cache: RefCell::new(HashMap::new()),
             visited_nodes: std::collections::HashSet::new(),
             total_nodes: std::collections::HashSet::new(),
+            #[cfg(test)]
+            mark_dirty_calls: 0,
+            #[cfg(test)]
+            last_compute_root: None,
         }
+    }
+
+    /// If every dirty node shares the same parent, return that parent for subtree `compute_layout`.
+    /// Divergent parents (or empty / root-level dirty) → `None` (caller uses app root).
+    pub fn pick_subtree_compute_root(
+        &self,
+        dirty: &std::collections::HashSet<NodeId>,
+    ) -> Option<NodeId> {
+        if dirty.is_empty() {
+            return None;
+        }
+        let app_root = self.root_node?;
+        let mut common_parent: Option<NodeId> = None;
+        for &n in dirty {
+            if n == app_root {
+                return None;
+            }
+            let parent = self.taffy.parent(n)?;
+            match common_parent {
+                None => common_parent = Some(parent),
+                Some(p) if p != parent => return None,
+                Some(_) => {}
+            }
+        }
+        let parent = common_parent?;
+        if parent == app_root {
+            // Parent is the app root: prefer viewport-sized root compute in the caller.
+            return None;
+        }
+        // Need a prior layout size to treat `parent` as a local compute root.
+        let Ok(layout) = self.taffy.layout(parent) else {
+            return None;
+        };
+        if layout.size.width <= 0.0 || layout.size.height <= 0.0 {
+            return None;
+        }
+        Some(parent)
     }
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {
@@ -396,6 +466,83 @@ impl LayoutTree {
         }
     }
 
+    /// Push `element` style + text measure into Taffy and mark that node dirty.
+    ///
+    /// Taffy's `set_style` already calls `mark_dirty` (node + ancestors). We still call
+    /// `mark_dirty` explicitly so LayoutChanged paths that only refresh text measure are covered,
+    /// and so tests can count dirty marks.
+    ///
+    /// Note: LayoutChanged may `compute_layout` from a **shared parent** of dirty nodes when
+    /// [`Self::pick_subtree_compute_root`] succeeds; otherwise from the app root. Clean sibling
+    /// subtrees keep their cache either way.
+    pub fn mark_element_layout_dirty(&mut self, element: &Element) {
+        let Some(node_id) = element.layout_node else {
+            return;
+        };
+        self.update_taffy_node_style(element);
+        self.sync_text_measure(element);
+        let _ = self.taffy.mark_dirty(node_id);
+        #[cfg(test)]
+        {
+            self.mark_dirty_calls = self.mark_dirty_calls.saturating_add(1);
+        }
+    }
+
+    /// Refresh the leaf text measure entry used by `compute_layout_with_measure`.
+    pub fn sync_text_measure(&mut self, element: &Element) {
+        let Some(node_id) = element.layout_node else {
+            return;
+        };
+        if let Some(text) = &element.text {
+            if element.children.is_empty() {
+                let size = element.text_style.size;
+                self.text_measurements.insert(
+                    node_id,
+                    TextMeasureMeta {
+                        size,
+                        text: text.clone(),
+                        shape_suffix: element.text_shape_suffix.clone(),
+                        is_icon: element.text_style.font_family.as_deref() == Some("lucide"),
+                        line_height_px: element.text_style.line_height_px,
+                        line_height_scale: element.text_style.line_height_scale,
+                        weight: element.text_style.weight,
+                        letter_spacing: element.text_style.letter_spacing,
+                        spans: element.text_spans.clone(),
+                    },
+                );
+                return;
+            }
+        }
+        self.text_measurements.remove(&node_id);
+    }
+
+    /// Whether taffy's cache for `node` is empty (needs recompute).
+    pub fn is_node_dirty(&self, node: NodeId) -> bool {
+        self.taffy.dirty(node).unwrap_or(false)
+    }
+
+    /// Walk `root` and call [`Self::mark_element_layout_dirty`] for each node in `dirty`.
+    pub fn mark_dirty_nodes_in_tree(
+        &mut self,
+        root: &Element,
+        dirty: &std::collections::HashSet<NodeId>,
+    ) {
+        if dirty.is_empty() {
+            return;
+        }
+        fn walk(tree: &mut LayoutTree, el: &Element, dirty: &std::collections::HashSet<NodeId>) {
+            if let Some(n) = el.layout_node {
+                if dirty.contains(&n) {
+                    tree.mark_element_layout_dirty(el);
+                }
+            }
+            for child in &el.children {
+                walk(tree, child, dirty);
+            }
+        }
+        walk(self, root, dirty);
+    }
+
     pub fn build_and_layout(
         &mut self,
         root: &mut Element,
@@ -403,6 +550,15 @@ impl LayoutTree {
         height: f32,
         mouse_pos: [f32; 2],
     ) -> RenderResult {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::trace_span!(
+            "layout_tree.build_and_layout",
+            width,
+            height,
+            children = root.children.len()
+        )
+        .entered();
+
         let t_rebuild_begin = Instant::now();
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
@@ -437,15 +593,19 @@ impl LayoutTree {
         self.measure_layout_cache.borrow_mut().clear();
         let tm = &self.text_measurements;
         let mcache = &self.measure_layout_cache;
-        self.taffy
-            .compute_layout_with_measure(
-                root_node,
-                available_space,
-                |known_dimensions, available_space, node_id, _context, _style| {
-                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-                },
-            )
-            .unwrap();
+        {
+            #[cfg(feature = "tracing")]
+            let _taffy_span = tracing::trace_span!("layout_tree.taffy_compute").entered();
+            self.taffy
+                .compute_layout_with_measure(
+                    root_node,
+                    available_space,
+                    |known_dimensions, available_space, node_id, _context, _style| {
+                        measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+                    },
+                )
+                .unwrap();
+        }
         let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0;
 
         let mut instances = Vec::new();
@@ -499,6 +659,10 @@ impl LayoutTree {
     /// When `scrollbar_overlay_collect` is true, track/thumb draw rects use live scroll signals
     /// (same contract as a `ViewportsOnly` prepass without Full). Use whenever that prepass did not
     /// push geometry into Taffy, even if chrome sync forces `!scroll_only` layout for other nodes.
+    ///
+    /// LayoutChanged path: callers should [`Self::mark_element_layout_dirty`] (or
+    /// [`Self::mark_dirty_nodes_in_tree`]) first. When `subtree_root` is `Some`, compute from that
+    /// node using its previous `final_layout` size as available space; otherwise from the app root.
     pub fn build_and_layout_fast(
         &mut self,
         root: &mut Element,
@@ -507,6 +671,28 @@ impl LayoutTree {
         mouse_pos: [f32; 2],
         scroll_only: bool,
         scrollbar_overlay_collect: bool,
+    ) -> RenderResult {
+        self.build_and_layout_fast_ex(
+            root,
+            width,
+            height,
+            mouse_pos,
+            scroll_only,
+            scrollbar_overlay_collect,
+            None,
+        )
+    }
+
+    /// Like [`Self::build_and_layout_fast`], with an optional subtree compute root.
+    pub fn build_and_layout_fast_ex(
+        &mut self,
+        root: &mut Element,
+        width: f32,
+        height: f32,
+        mouse_pos: [f32; 2],
+        scroll_only: bool,
+        scrollbar_overlay_collect: bool,
+        subtree_root: Option<NodeId>,
     ) -> RenderResult {
         let root_node = self
             .root_node
@@ -524,26 +710,53 @@ impl LayoutTree {
         let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
 
         let taffy_compute_ms = if !scroll_only {
-            let available_space = Size {
-                width: AvailableSpace::Definite(width),
-                height: AvailableSpace::Definite(height),
+            let (compute_node, available_space) = if let Some(sub) = subtree_root {
+                if let Ok(layout) = self.taffy.layout(sub) {
+                    (
+                        sub,
+                        Size {
+                            width: AvailableSpace::Definite(layout.size.width),
+                            height: AvailableSpace::Definite(layout.size.height),
+                        },
+                    )
+                } else {
+                    (
+                        root_node,
+                        Size {
+                            width: AvailableSpace::Definite(width),
+                            height: AvailableSpace::Definite(height),
+                        },
+                    )
+                }
+            } else {
+                (
+                    root_node,
+                    Size {
+                        width: AvailableSpace::Definite(width),
+                        height: AvailableSpace::Definite(height),
+                    },
+                )
             };
 
             let t_compute_begin = Instant::now();
             self.measure_layout_cache.borrow_mut().clear();
             let tm = &self.text_measurements;
             let mcache = &self.measure_layout_cache;
+            #[cfg(test)]
+            {
+                self.last_compute_root = Some(compute_node);
+            }
             // Note: We assume the caller has updated any necessary styles (like scrollbar thumbs)
             // using update_taffy_node_style before calling this.
-            self.taffy
-                .compute_layout_with_measure(
-                    root_node,
-                    available_space,
-                    |known_dimensions, available_space, node_id, _context, _style| {
-                        measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-                    },
-                )
-                .unwrap();
+            if let Err(err) = self.taffy.compute_layout_with_measure(
+                compute_node,
+                available_space,
+                |known_dimensions, available_space, node_id, _context, _style| {
+                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+                },
+            ) {
+                log::error!("taffy compute_layout_with_measure failed: {err:?}");
+            }
             t_compute_begin.elapsed().as_secs_f32() * 1000.0
         } else {
             0.0
@@ -659,6 +872,7 @@ impl LayoutTree {
                         line_height_scale: element.text_style.line_height_scale,
                         weight: element.text_style.weight,
                         letter_spacing: element.text_style.letter_spacing,
+                        spans: element.text_spans.clone(),
                     },
                 );
             }
@@ -980,6 +1194,40 @@ impl LayoutTree {
                 let a = ((f32::from(text_style.color[3]) * opacity).round() as u16).min(255) as u8;
                 text_style.color[3] = a;
             }
+            let is_icon = text_style.font_family.as_deref() == Some("lucide");
+            let prepared = if is_icon {
+                None
+            } else {
+                let line_height = if let Some(lh) = text_style.line_height_px {
+                    lh
+                } else if let Some(scale) = text_style.line_height_scale {
+                    text_style.size * scale
+                } else {
+                    text_style.size * crate::style::tailwind_default_leading_scale(text_style.size)
+                };
+                if let Some(spans) = element.text_spans.as_ref().filter(|s| !s.is_empty()) {
+                    Some(crate::text::prepare_rich(
+                        spans,
+                        text_style.size,
+                        text_style.weight,
+                        line_height,
+                    ))
+                } else {
+                    let blob: std::borrow::Cow<'_, str> = match element.text_shape_suffix.as_deref()
+                    {
+                        Some(suf) if !suf.is_empty() => {
+                            std::borrow::Cow::Owned(format!("{}{}", text, suf))
+                        }
+                        _ => std::borrow::Cow::Borrowed(text.as_str()),
+                    };
+                    Some(crate::text::prepare(
+                        blob.as_ref(),
+                        text_style.size,
+                        text_style.weight,
+                        line_height,
+                    ))
+                }
+            };
             text_nodes.push(TextLayoutInfo {
                 text: text.clone(),
                 shape_suffix: element.text_shape_suffix.clone(),
@@ -991,6 +1239,7 @@ impl LayoutTree {
                 height: lay_h,
                 clip_bounds: clip,
                 style: text_style,
+                prepared,
             });
         }
 
@@ -1352,5 +1601,36 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
         [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
     } else {
         rect
+    }
+}
+
+#[cfg(test)]
+mod prepared_text_attach_tests {
+    use super::*;
+    use crate::style::TextStyle;
+
+    #[test]
+    fn prepared_text_on_text_layout_info_roundtrips() {
+        let prepared = crate::text::prepare("hello prepared attach", 14.0, 400, 21.0);
+        let info = TextLayoutInfo {
+            text: "hello prepared attach".into(),
+            shape_suffix: None,
+            spans: None,
+            template_id: Some("t-prepared".into()),
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 42.0,
+            clip_bounds: None,
+            style: TextStyle::default(),
+            prepared: Some(prepared.clone()),
+        };
+        let attached = info.prepared.as_ref().expect("prepared attached");
+        assert_eq!(attached.segment_count(), prepared.segment_count());
+        assert!((attached.max_segment_width - prepared.max_segment_width).abs() < f32::EPSILON);
+        let metrics = crate::text::layout(attached, info.width);
+        assert!(metrics.line_count >= 1);
+        let lines = crate::text::layout_lines(attached, info.width);
+        assert_eq!(lines.len() as u32, metrics.line_count);
     }
 }

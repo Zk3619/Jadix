@@ -9,6 +9,7 @@ mod animation;
 mod color;
 mod color_space;
 mod element_style;
+mod focus_ring;
 mod tailwind_leading;
 mod text_style;
 mod theme;
@@ -28,6 +29,9 @@ pub use color_space::{
 pub use element_style::{
     parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,
 };
+pub use focus_ring::{
+    apply_focus_ring_shadow, focus_ring_color, focus_ring_shadow_matches, FOCUS_RING_BLUR,
+};
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,
     TAILWIND_TEXT_3XL_LEADING_SCALE, TAILWIND_TEXT_4XL_LEADING_SCALE,
@@ -36,7 +40,7 @@ pub use tailwind_leading::{
 };
 pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextDecorationStyle, TextDirection, TextOverflow, TextSpan,
-    TextStyle,
+    TextSpanKind, TextStyle,
 };
 pub use theme::{
     get_theme, is_dark_theme, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,

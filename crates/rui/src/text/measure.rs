@@ -22,6 +22,31 @@ pub struct PreparedText {
     pub max_segment_width: f32,
 }
 
+impl PreparedText {
+    /// Number of measure/break segments (for tests and render hints).
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Slice of segments `[start, end)` as a new prepared paragraph (for variable-width wrap).
+    pub(crate) fn sub_prepared(&self, start: usize, end: usize) -> PreparedText {
+        let end = end.min(self.segments.len());
+        let start = start.min(end);
+        let segments = self.segments[start..end].to_vec();
+        let max_segment_width = segments
+            .iter()
+            .map(|s| s.width)
+            .fold(0.0_f32, f32::max);
+        PreparedText {
+            segments,
+            size: self.size,
+            weight: self.weight,
+            line_height: self.line_height,
+            max_segment_width,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PreparedSegment {
     /// Segment text (owned so prepared values can live in a cache).
@@ -40,6 +65,17 @@ pub struct TextLayoutMetrics {
     pub max_line_width: f32,
 }
 
+/// One soft-wrapped (or hard-broken) line from [`layout_lines`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedLine {
+    /// Inclusive start segment index into [`PreparedText`] segments.
+    pub start_seg: usize,
+    /// Exclusive end segment index.
+    pub end_seg: usize,
+    pub width: f32,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct PrepareKey {
     text_hash: u64,
@@ -52,7 +88,16 @@ struct PrepareKey {
 thread_local! {
     static PREPARE_CACHE: RefCell<HashMap<PrepareKey, PreparedText>> =
         RefCell::new(HashMap::new());
-    static LAYOUT_FONT_SYSTEM: RefCell<Option<FontSystem>> = const { RefCell::new(None) };
+    static LAYOUT_FONT_SYSTEM: RefCell<LayoutFsSlot> = const { RefCell::new(LayoutFsSlot::Empty) };
+}
+
+/// Layout measure FontSystem slot: owned (tests / headless) or shared with the renderer.
+enum LayoutFsSlot {
+    Empty,
+    Owned(Box<FontSystem>),
+    /// Non-owning pointer to [`crate::renderer::text::RuiTextRenderer::font_system`].
+    /// Valid from [`install_shared_font_system`] until [`clear_shared_font_system`] / shutdown.
+    Shared(*mut FontSystem),
 }
 
 /// Drop cached segment widths after fonts are (lazily) added so measure/render stay aligned.
@@ -60,24 +105,63 @@ pub fn invalidate_prepare_cache() {
     PREPARE_CACHE.with(|c| c.borrow_mut().clear());
 }
 
-/// Release the layout-only [`FontSystem`] and measure cache (call on app shutdown).
+/// Point layout measure at the renderer's [`FontSystem`] so fontdb / coverage stay single-sourced.
+///
+/// Call after creating [`crate::renderer::text::RuiTextRenderer`], before layout/measure.
+/// Clears the prepare cache so widths are recomputed against the shared DB.
+pub fn install_shared_font_system(font_system: &mut FontSystem) {
+    invalidate_prepare_cache();
+    LAYOUT_FONT_SYSTEM.with(|cell| {
+        *cell.borrow_mut() = LayoutFsSlot::Shared(font_system as *mut FontSystem);
+    });
+}
+
+/// Drop the shared pointer (does not free the renderer FontSystem). Call before dropping GPU text.
+pub fn clear_shared_font_system() {
+    invalidate_prepare_cache();
+    LAYOUT_FONT_SYSTEM.with(|cell| {
+        if matches!(*cell.borrow(), LayoutFsSlot::Shared(_)) {
+            *cell.borrow_mut() = LayoutFsSlot::Empty;
+        }
+    });
+}
+
+/// Raw pointer to the install shared FontSystem (for secondary window shaping). UI thread only.
+pub fn shared_font_system_ptr() -> Option<*mut FontSystem> {
+    LAYOUT_FONT_SYSTEM.with(|cell| match *cell.borrow() {
+        LayoutFsSlot::Shared(ptr) if !ptr.is_null() => Some(ptr),
+        _ => None,
+    })
+}
+
+/// Release owned layout FontSystem (if any) and the measure cache (call on app shutdown).
 pub fn shutdown_layout_text() {
     invalidate_prepare_cache();
     LAYOUT_FONT_SYSTEM.with(|cell| {
-        *cell.borrow_mut() = None;
+        *cell.borrow_mut() = LayoutFsSlot::Empty;
     });
 }
 
 fn with_layout_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
     LAYOUT_FONT_SYSTEM.with(|cell| {
         let mut slot = cell.borrow_mut();
-        if slot.is_none() {
-            let mut fs = font_loader::create_font_system();
-            // Re-apply in case create path skipped a default (empty DB / missing faces).
-            font_loader::apply_default_families(fs.db_mut());
-            *slot = Some(fs);
+        match &mut *slot {
+            LayoutFsSlot::Shared(ptr) => {
+                // SAFETY: pointer installed for AppState lifetime; UI is single-threaded.
+                let fs = unsafe { &mut **ptr };
+                f(fs)
+            }
+            LayoutFsSlot::Owned(fs) => f(fs),
+            LayoutFsSlot::Empty => {
+                let mut fs = font_loader::create_font_system();
+                font_loader::apply_default_families(fs.db_mut());
+                *slot = LayoutFsSlot::Owned(Box::new(fs));
+                match &mut *slot {
+                    LayoutFsSlot::Owned(fs) => f(fs),
+                    _ => unreachable!("just installed Owned"),
+                }
+            }
         }
-        f(slot.as_mut().expect("layout font system"))
     })
 }
 
@@ -197,6 +281,65 @@ pub fn prepare(text: &str, size: f32, weight: u16, line_height: f32) -> Prepared
     prepare_with_family(text, size, weight, line_height, Family::SansSerif)
 }
 
+/// Prepare rich-inline spans: plain Text runs use [`split_segments`]; Chip/Mention are
+/// one atomic segment with `width = measure(text) + 2 * padding_x` and `break_after = true`.
+pub fn prepare_rich(
+    spans: &[crate::style::TextSpan],
+    default_size: f32,
+    default_weight: u16,
+    line_height: f32,
+) -> PreparedText {
+    use crate::style::TextSpanKind;
+
+    let mut segments = Vec::new();
+    let mut max_seg = 0.0_f32;
+    let family = Family::SansSerif;
+    with_layout_font_system(|font_system| {
+        for span in spans {
+            let size = span.size.unwrap_or(default_size);
+            let weight = span.weight.unwrap_or(default_weight);
+            let lh = if (size - default_size).abs() > f32::EPSILON {
+                line_height * (size / default_size.max(1.0))
+            } else {
+                line_height
+            };
+            match span.kind {
+                TextSpanKind::Text => {
+                    for (seg, break_after) in split_segments(&span.text) {
+                        let width =
+                            measure_run_width(font_system, &seg, size, lh, weight, family);
+                        max_seg = max_seg.max(width);
+                        segments.push(PreparedSegment {
+                            text: seg,
+                            width,
+                            break_after,
+                        });
+                    }
+                }
+                TextSpanKind::Chip | TextSpanKind::Mention => {
+                    let text_w =
+                        measure_run_width(font_system, &span.text, size, lh, weight, family);
+                    let width = text_w + 2.0 * span.padding_x;
+                    max_seg = max_seg.max(width);
+                    segments.push(PreparedSegment {
+                        text: span.text.clone(),
+                        width,
+                        break_after: true,
+                    });
+                }
+            }
+        }
+    });
+
+    PreparedText {
+        segments,
+        size: default_size,
+        weight: default_weight,
+        line_height,
+        max_segment_width: max_seg,
+    }
+}
+
 pub fn prepare_with_family(
     text: &str,
     size: f32,
@@ -255,12 +398,75 @@ pub fn prepare_with_family(
     prepared
 }
 
+/// Soft-wrap prepared segments into concrete lines (segment ranges + concatenated text).
+///
+/// Mirrors [`layout`] break decisions for the common case (soft wrap + hard `\n`).
+/// Oversized single segments that exceed `avail_width` stay on one logical line
+/// (glyph-level split remains render-side).
+pub fn layout_lines(prepared: &PreparedText, avail_width: f32) -> Vec<PreparedLine> {
+    let avail = avail_width.max(1.0);
+    let mut lines: Vec<PreparedLine> = Vec::new();
+    let mut start = 0usize;
+    let mut line_w = 0.0_f32;
+    let mut line_text = String::new();
+    let mut can_break_after = false;
+
+    let flush = |lines: &mut Vec<PreparedLine>,
+                 start: &mut usize,
+                 end: usize,
+                 line_w: &mut f32,
+                 line_text: &mut String| {
+        lines.push(PreparedLine {
+            start_seg: *start,
+            end_seg: end,
+            width: *line_w,
+            text: std::mem::take(line_text),
+        });
+        *start = end;
+        *line_w = 0.0;
+    };
+
+    for (i, seg) in prepared.segments.iter().enumerate() {
+        if seg.text == "\n" {
+            flush(&mut lines, &mut start, i, &mut line_w, &mut line_text);
+            // Skip the newline segment itself.
+            start = i + 1;
+            continue;
+        }
+        // Soft-wrap only at a prior break opportunity (`break_after` on previous segment).
+        if line_w > 0.0
+            && can_break_after
+            && line_w + seg.width > avail
+            && seg.width <= avail
+        {
+            flush(&mut lines, &mut start, i, &mut line_w, &mut line_text);
+        }
+        line_w += seg.width;
+        line_text.push_str(&seg.text);
+        can_break_after = seg.break_after;
+    }
+    if start < prepared.segments.len() || lines.is_empty() {
+        flush(
+            &mut lines,
+            &mut start,
+            prepared.segments.len(),
+            &mut line_w,
+            &mut line_text,
+        );
+    }
+    lines
+}
+
 /// Pure arithmetic wrap over prepared segment widths.
+///
+/// Soft breaks occur only after a segment with [`PreparedSegment::break_after`]
+/// (whitespace / CJK / chip·mention); hard `\n` always breaks.
 pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
     let avail = avail_width.max(1.0);
     let mut line_count = 1u32;
     let mut line_w = 0.0_f32;
     let mut max_line_width = 0.0_f32;
+    let mut can_break_after = false;
     // Hard cap: prevents a single pathological segment from claiming millions of lines.
     const MAX_EXTRA_LINES_PER_SEG: u32 = 64;
     const MAX_TOTAL_LINES: u32 = 4_096;
@@ -270,9 +476,14 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
             max_line_width = max_line_width.max(line_w);
             line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = 0.0;
+            can_break_after = false;
             continue;
         }
-        if line_w > 0.0 && line_w + seg.width > avail && seg.width <= avail {
+        if line_w > 0.0
+            && can_break_after
+            && line_w + seg.width > avail
+            && seg.width <= avail
+        {
             max_line_width = max_line_width.max(line_w);
             line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = seg.width;
@@ -308,8 +519,8 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
             max_line_width = max_line_width.max(avail);
         } else {
             line_w += seg.width;
-            let _ = seg.break_after;
         }
+        can_break_after = seg.break_after;
     }
     max_line_width = max_line_width.max(line_w);
 
@@ -426,5 +637,128 @@ mod tests {
         let (w, h) = measure_leaf(text, 16.0, 400, 24.0, None, Some(320.0), 0.0);
         assert!(w.is_finite() && h.is_finite(), "non-finite {w}x{h}");
         assert!(h < 24.0 * 64.0, "height too large: {h}");
+    }
+
+    #[test]
+    fn layout_lines_matches_line_count_for_latin_wrap() {
+        let p = prepare("hello world from rui text measure", 14.0, 400, 14.0 * 1.5);
+        let narrow = layout(&p, 80.0);
+        let lines = layout_lines(&p, 80.0);
+        assert_eq!(lines.len() as u32, narrow.line_count);
+        assert!(lines.iter().all(|l| !l.text.is_empty() || l.width == 0.0));
+    }
+
+    #[test]
+    fn layout_lines_hard_newline() {
+        let p = prepare("a\nb\nc", 12.0, 400, 16.0);
+        let lines = layout_lines(&p, 10_000.0);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "a");
+        assert_eq!(lines[1].text, "b");
+        assert_eq!(lines[2].text, "c");
+    }
+
+    #[test]
+    fn prepare_rich_chip_wider_than_plain() {
+        let text = "HelloChip";
+        let pad = 6.0;
+        let plain = prepare(text, 14.0, 400, 21.0);
+        let rich = prepare_rich(
+            &[crate::style::TextSpan::new(text).chip().padding_x(pad)],
+            14.0,
+            400,
+            21.0,
+        );
+        assert_eq!(rich.segment_count(), 1);
+        assert!(
+            rich.max_segment_width > plain.max_segment_width + pad,
+            "chip width {} should exceed plain {} by ~2*pad",
+            rich.max_segment_width,
+            plain.max_segment_width
+        );
+        let expected_extra = 2.0 * pad;
+        assert!(
+            (rich.max_segment_width - plain.max_segment_width - expected_extra).abs() < 0.5
+                || rich.max_segment_width >= plain.max_segment_width + expected_extra - 0.5,
+            "expected +{expected_extra} padding, plain={} chip={}",
+            plain.max_segment_width,
+            rich.max_segment_width
+        );
+    }
+
+    #[test]
+    fn prepare_rich_chip_is_atomic_under_narrow_layout() {
+        let text = "Hello World Chip";
+        let plain = prepare(text, 14.0, 400, 21.0);
+        assert!(
+            plain.segment_count() > 1,
+            "plain should split on spaces, got {}",
+            plain.segment_count()
+        );
+        let rich = prepare_rich(
+            &[crate::style::TextSpan::new(text).chip().padding_x(8.0)],
+            14.0,
+            400,
+            21.0,
+        );
+        assert_eq!(rich.segment_count(), 1);
+        let lines = layout_lines(&rich, 40.0);
+        assert_eq!(lines.len(), 1, "atomic chip must stay on one logical line");
+        assert_eq!(lines[0].text, text);
+        // Mid-segment split would produce a line whose text is a proper prefix of the chip.
+        assert!(
+            !lines.iter().any(|l| text.starts_with(&l.text)
+                && l.text != text
+                && !l.text.is_empty()),
+            "chip must not split mid-segment"
+        );
+    }
+
+    #[test]
+    fn prepare_rich_text_then_chip_wraps_after_break_opportunity() {
+        // "Hi " (word + space break_after) + chip — narrow width forces wrap after the space.
+        let spans = [
+            crate::style::TextSpan::new("Hi "),
+            crate::style::TextSpan::new("ChipLabel").chip().padding_x(4.0),
+        ];
+        let rich = prepare_rich(&spans, 14.0, 400, 21.0);
+        assert!(
+            rich.segments.len() >= 2,
+            "expected text segments + chip, got {}",
+            rich.segments.len()
+        );
+        assert!(
+            rich.segments.last().is_some_and(|s| s.break_after),
+            "chip must advertise break_after"
+        );
+        let chip_w = rich.segments.last().unwrap().width;
+        // Width just under "Hi "+chip so wrap must occur at the space opportunity.
+        let avail = chip_w + 1.0;
+        let lines = layout_lines(&rich, avail);
+        assert!(
+            lines.len() >= 2,
+            "expected wrap before chip, got {} lines (avail={avail})",
+            lines.len()
+        );
+        assert!(
+            lines.last().is_some_and(|l| l.text.contains("ChipLabel")),
+            "chip should sit on its own line after wrap"
+        );
+    }
+
+    #[test]
+    fn shared_font_system_measure_works() {
+        let mut render_fs = font_loader::create_font_system();
+        font_loader::apply_default_families(render_fs.db_mut());
+        install_shared_font_system(&mut render_fs);
+        let p = prepare("shared-fs-probe", 14.0, 400, 21.0);
+        assert!(p.max_segment_width > 0.0);
+        let m = layout(&p, 10_000.0);
+        assert_eq!(m.line_count, 1);
+        clear_shared_font_system();
+        // After clear, measure falls back to owned FontSystem.
+        let p2 = prepare("owned-fs-probe", 14.0, 400, 21.0);
+        assert!(p2.max_segment_width > 0.0);
+        shutdown_layout_text();
     }
 }

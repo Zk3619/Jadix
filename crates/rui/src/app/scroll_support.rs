@@ -17,6 +17,44 @@ pub(super) struct ScrollbarDragState {
     pub(super) grab_offset: f32,
 }
 
+/// Primary-pointer content pan over a scroll viewport (touch / mouse drag → fling).
+#[derive(Clone, Debug)]
+pub(super) struct ContentScrollDrag {
+    pub(super) rest: String,
+    pub(super) origin_x: f32,
+    pub(super) origin_y: f32,
+    pub(super) last_x: f32,
+    pub(super) last_y: f32,
+    pub(super) last_t: std::time::Instant,
+    /// Offset-space velocity (px/s): positive increases scroll offset.
+    pub(super) vel: [f32; 2],
+    /// True once movement exceeds the arm threshold (avoids fighting taps).
+    pub(super) armed: bool,
+}
+
+/// Exponential friction decay for fling inertia (`vx`/`vy` in px/s of scroll offset).
+///
+/// `friction_per_sec` ≈ how many e-folds of speed drop per second (higher = stops sooner).
+pub(super) fn decay_scroll_velocity(
+    vx: f32,
+    vy: f32,
+    dt: f32,
+    friction_per_sec: f32,
+) -> [f32; 2] {
+    let dt = dt.max(0.0);
+    let damp = (-friction_per_sec * dt).exp();
+    let mut nx = vx * damp;
+    let mut ny = vy * damp;
+    const STOP_PX_PER_SEC: f32 = 12.0;
+    if nx.abs() < STOP_PX_PER_SEC {
+        nx = 0.0;
+    }
+    if ny.abs() < STOP_PX_PER_SEC {
+        ny = 0.0;
+    }
+    [nx, ny]
+}
+
 fn collect_descendant_extent(
     el: &Element,
     max_right: &mut f32,
@@ -299,4 +337,21 @@ pub fn get_system_scroll_lines() -> f32 {
         }
     }
     3.0 // Default for other OS or failure
+}
+
+#[cfg(test)]
+mod inertia_tests {
+    use super::decay_scroll_velocity;
+
+    #[test]
+    fn decay_scroll_velocity_reduces_and_stops() {
+        let [vx, vy] = decay_scroll_velocity(400.0, -200.0, 0.016, 4.5);
+        assert!(vx.abs() < 400.0 && vx > 0.0);
+        assert!(vy.abs() < 200.0 && vy < 0.0);
+        let mut v = [400.0_f32, 0.0];
+        for _ in 0..120 {
+            v = decay_scroll_velocity(v[0], v[1], 0.016, 4.5);
+        }
+        assert_eq!(v, [0.0, 0.0]);
+    }
 }

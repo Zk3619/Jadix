@@ -70,3 +70,6 @@ jobs:
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
       - name: Offscreen clear/readback + golden
         run: cargo test -p rui --lib offscreen -- --nocapture
+      - name: Library unit tests (smoke)
+        # Golden / smoke companion: fast lib tests without full workspace matrix cost.
+        run: cargo test -p rui --lib
