@@ -24,7 +24,11 @@ fn focused_cjk_input_has_no_shape_suffix() {
     let mut impact = LayoutStatus::Clean;
     sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
 
-    let text_el = el.children.first().expect("input text child");
+    let text_el = el
+        .children
+        .first()
+        .and_then(|wrap| wrap.children.first())
+        .expect("input text child");
     assert_eq!(text_el.text.as_deref(), Some("你好"));
     assert!(
         text_el.text_shape_suffix.is_none(),
@@ -48,10 +52,14 @@ fn focused_ascii_input_has_no_shape_suffix() {
     let mut impact = LayoutStatus::Clean;
     sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
 
-    let text_el = el.children.first().expect("input text child");
+    let text_el = el
+        .children
+        .first()
+        .and_then(|wrap| wrap.children.first())
+        .expect("input text child");
     assert!(
         text_el.text_shape_suffix.is_none(),
-        "focused ASCII also skips U+2009 (Advanced via input_caret); got {:?}",
+        "focused ASCII also skips U+2009; Input text always Advanced (stable vs caret); got {:?}",
         text_el.text_shape_suffix
     );
 }

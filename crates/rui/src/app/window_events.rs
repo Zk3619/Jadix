@@ -414,20 +414,13 @@ impl super::App {
                     let pk = crate::components::input::input_preedit_signal_key(rest);
                     let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
                     let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
-                    let ak = crate::components::input::input_ime_anchor_signal_key(rest);
-                    let ime_anchor =
-                        crate::core::reactivity::use_signal(&ak, || None::<usize>).get();
-                    let display_owned = if committed.is_empty() && pre.is_empty() {
-                        display_el.clone()
-                    } else {
-                        super::tree_hit::input_display_text(&committed, &pre, ime_anchor)
-                    };
                     let ui_scale = scale.max(1.0);
                     let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
                     let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    // Hit against the painted leaf text (password may be masked `•`).
                     let ix = crate::renderer::hit_test_input_text_index(
                         state.text_renderer.font_system_mut(),
-                        &display_owned,
+                        &display_el,
                         mx,
                         my,
                         bounds,
@@ -437,7 +430,7 @@ impl super::App {
                     let caret_ix = if committed.is_empty() && pre.is_empty() {
                         0
                     } else {
-                        ix
+                        crate::components::input::caret_index_from_display_hit(rest, ix)
                     };
                     let lo = self.input_drag_anchor.min(caret_ix);
                     let hi = self.input_drag_anchor.max(caret_ix);
@@ -707,7 +700,7 @@ impl super::App {
                 let caret_ix = if committed.is_empty() && pre.is_empty() {
                     0
                 } else {
-                    ix
+                    crate::components::input::caret_index_from_display_hit(&rest, ix)
                 };
                 input_drag = Some((rest, caret_ix));
             } else if let Some((key, bounds, display_el, style, leaf_scroll)) =
@@ -1498,8 +1491,22 @@ impl super::App {
                 .scroll_max_lowpass
                 .entry(rest.clone())
                 .or_insert([raw_max_x, raw_max_y]);
-            let target_x_lp = tx.peek().clamp(0.0, lp[0].min(raw_max_x));
-            let target_y_lp = ty.peek().clamp(0.0, lp[1].min(raw_max_y));
+            // Persist clamped targets when max shrinks (e.g. viewport grew until content
+            // fits). Offset-only clamp left a stale target; smooth-scroll then re-sought it
+            // after a later shrink and scrolled the top out of view.
+            let (sx_clamped, tx_clamped) =
+                super::scroll_support::clamp_scroll_offset_and_target(old_sx, tx.peek(), raw_max_x);
+            let (sy_clamped, ty_clamped) =
+                super::scroll_support::clamp_scroll_offset_and_target(old_sy, ty.peek(), raw_max_y);
+            if (tx.peek() - tx_clamped).abs() > 0.01 {
+                tx.set_silent(tx_clamped);
+            }
+            if (ty.peek() - ty_clamped).abs() > 0.01 {
+                ty.set_silent(ty_clamped);
+            }
+            let _ = (sx_clamped, sy_clamped);
+            let target_x_lp = tx_clamped.clamp(0.0, lp[0].min(raw_max_x));
+            let target_y_lp = ty_clamped.clamp(0.0, lp[1].min(raw_max_y));
 
             let is_dragging_this = self
                 .scrollbar_drag
@@ -1509,8 +1516,8 @@ impl super::App {
             if behavior.eq_ignore_ascii_case("smooth") && !is_dragging_this {
                 // Clamp to raw extent only: low-pass max lags behind during layout changes and can
                 // fight the smooth animator (perceived stutter).
-                let mut target_x = tx.peek().clamp(0.0, raw_max_x);
-                let mut target_y = ty.peek().clamp(0.0, raw_max_y);
+                let mut target_x = tx_clamped;
+                let mut target_y = ty_clamped;
                 // Edge snap: avoid tiny residual oscillation near 0/max bounds.
                 if target_x <= SMOOTH_SCROLL_EDGE_SNAP_PX {
                     target_x = 0.0;
@@ -1527,7 +1534,16 @@ impl super::App {
                 if (target_x - old_sx).abs() < SMOOTH_IDLE_EPS
                     && (target_y - old_sy).abs() < SMOOTH_IDLE_EPS
                 {
-                    pre_render_data.push((rest.clone(), old_sx, old_sy, old_sx, old_sy, sx, sy));
+                    // Idle, but still clamp offset into max (stale offset after max shrink).
+                    pre_render_data.push((
+                        rest.clone(),
+                        old_sx,
+                        old_sy,
+                        sx_clamped,
+                        sy_clamped,
+                        sx,
+                        sy,
+                    ));
                     continue;
                 }
                 let raw_alpha = 1.0 - (-scroll_dt / SMOOTH_SCROLL_TAU_SEC).exp();
@@ -1855,8 +1871,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     } else {
                         ty.peek().clamp(0.0, raw_max_y)
                     };
-                    let new_sx = sx.peek();
-                    let new_sy = sy.peek();
+                    // Keep target signals inside the live max (same expand→shrink bug as pre-render).
+                    if (tx.peek() - target_x).abs() > 0.01 {
+                        tx.set_silent(target_x);
+                    }
+                    if (ty.peek() - target_y).abs() > 0.01 {
+                        ty.set_silent(target_y);
+                    }
+                    let new_sx = sx.peek().clamp(0.0, raw_max_x);
+                    let new_sy = sy.peek().clamp(0.0, raw_max_y);
+                    // Signal-only: `re_borrow` was dropped so we cannot touch the element tree here;
+                    // next pre-render applies offsets via `update_scroll_offset_in_place`.
+                    if (sx.peek() - new_sx).abs() > 0.01 {
+                        sx.set_silent(new_sx);
+                    }
+                    if (sy.peek() - new_sy).abs() > 0.01 {
+                        sy.set_silent(new_sy);
+                    }
 
                     let overflow_x =
                         crate::core::reactivity::use_signal(keys.overflow_x.as_str(), || {

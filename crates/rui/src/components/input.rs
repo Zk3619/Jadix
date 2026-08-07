@@ -5,21 +5,25 @@
 //!
 //! ## 用法
 //! ```ignore
-//! <Input id="email" type="email" />
-//! <Input id="pw" type="password" placeholder="密码" />
+//! <Input id="email" type="email" clearable=true />
+//! <Input id="pw" type="password" password_toggle=true clearable=true placeholder="密码" />
 //! <Input id="n" type="number" />
-//! <Input id="q" type="search" />
+//! <Input id="q" type="search" clearable=true />
 //! ```
 //!
 //! ## `type`（对齐 HTML `<input type>` 文本族）
 //! | 值 | 行为 |
 //! |----|------|
 //! | `text`（默认） | 明文 |
-//! | `password` | 显示为 `•`，底层仍存原文 |
+//! | `password` | 显示为 `•`，底层仍存原文；可选 `password_toggle` 睁眼/闭眼 |
 //! | `number` | 仅允许数字、可选 `-` / `.`；非法非空 → 自动 invalid |
 //! | `tel` | 过滤电话字符；非空格式失败 → 自动 invalid |
 //! | `email` / `url` | 宽松字符过滤；非空格式失败 → 自动 invalid |
 //! | `search` | 同 text；空 placeholder 默认 `Search…` |
+//!
+//! ## 可选尾饰
+//! - `clearable`：有内容时显示叉号，点击清空。
+//! - `password_toggle`：仅 `type=password`；切换掩码 / 明文。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
@@ -36,9 +40,10 @@ use crate::core::tree::{
 };
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, BoxBuilder};
+use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::lucide::lucide_glyph;
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 
 /// `focus_id` 前缀；与 `Button` 的普通 id 区分。
@@ -72,6 +77,19 @@ pub fn input_ime_anchor_signal_key(id: &str) -> String {
 }
 pub fn input_type_signal_key(id: &str) -> String {
     format!("__rui_input_type_{}", id)
+}
+pub fn input_password_reveal_signal_key(id: &str) -> String {
+    format!("__rui_input_pw_reveal_{}", id)
+}
+
+pub(crate) fn input_text_template_id(id: &str) -> String {
+    format!("__rui_input:{id}:text")
+}
+pub(crate) fn input_clear_template_id(id: &str) -> String {
+    format!("__rui_input:{id}:clear")
+}
+pub(crate) fn input_reveal_template_id(id: &str) -> String {
+    format!("__rui_input:{id}:reveal")
 }
 
 /// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
@@ -325,6 +343,47 @@ fn map_byte_index_to_masked(real: &str, real_byte: usize, masked: &str) -> usize
         .unwrap_or(masked.len())
 }
 
+/// 将掩码 display 上的字节下标映射回明文（按 Unicode 标量一一对应）。
+pub fn map_masked_byte_index_to_real(real: &str, masked_byte: usize) -> usize {
+    let masked = mask_password(real);
+    let byte = masked.floor_char_boundary(masked_byte.min(masked.len()));
+    let chars = masked[..byte].chars().count();
+    real.char_indices()
+        .nth(chars)
+        .map(|(i, _)| i)
+        .unwrap_or(real.len())
+}
+
+/// Hit-test on the painted Input string → caret index in committed/real display space.
+///
+/// Password fields paint `•` while the caret signal stays in plaintext bytes; without this
+/// remap, clicking / dragging stores masked indices and toggling reveal misplaces the caret.
+pub fn caret_index_from_display_hit(rest: &str, display_ix: usize) -> usize {
+    let committed = use_signal(&input_value_signal_key(rest), String::new).peek();
+    let preedit = use_signal(&input_preedit_signal_key(rest), String::new).peek();
+    if committed.is_empty() && preedit.is_empty() {
+        return 0;
+    }
+    let ime_anchor = use_signal(&input_ime_anchor_signal_key(rest), || None::<usize>).peek();
+    let real_display = if preedit.is_empty() {
+        committed
+    } else {
+        let mut a = ime_anchor.unwrap_or(committed.len()).min(committed.len());
+        a = committed.floor_char_boundary(a);
+        format!("{}{}{}", &committed[..a], preedit, &committed[a..])
+    };
+    let ty = InputType::parse(
+        &use_signal(&input_type_signal_key(rest), || InputType::Text.as_str().to_string()).peek(),
+    );
+    let reveal = use_signal(&input_password_reveal_signal_key(rest), || false).peek();
+    let ix = if ty.is_password() && !reveal {
+        map_masked_byte_index_to_real(&real_display, display_ix)
+    } else {
+        display_ix
+    };
+    real_display.floor_char_boundary(ix.min(real_display.len()))
+}
+
 fn map_byte_range_to_masked(real: &str, lo: usize, hi: usize, masked: &str) -> (usize, usize) {
     (
         map_byte_index_to_masked(real, lo, masked),
@@ -349,6 +408,8 @@ pub struct InputBuilder {
     disabled: bool,
     invalid: bool,
     input_type: InputType,
+    clearable: bool,
+    password_toggle: bool,
     text_size_px: f32,
     font_weight: u16,
     line_height_px: Option<f32>,
@@ -363,6 +424,8 @@ pub fn Input(
     placeholder: String,
     disabled: bool,
     invalid: bool,
+    clearable: bool,
+    password_toggle: bool,
     input_type: Option<String>,
     text_size: Option<f32>,
     mut on_click: crate::core::tree::Handler,
@@ -372,7 +435,9 @@ pub fn Input(
     let mut builder = input(&id)
         .placeholder(placeholder)
         .disabled(disabled)
-        .invalid(invalid);
+        .invalid(invalid)
+        .clearable(clearable)
+        .password_toggle(password_toggle);
     if let Some(t) = input_type {
         builder = builder.input_type(t);
     }
@@ -426,6 +491,8 @@ pub fn input(id: &str) -> InputBuilder {
         disabled: false,
         invalid: false,
         input_type: InputType::Text,
+        clearable: false,
+        password_toggle: false,
         // shadcn/ui Input：`text-sm`；类名通常不含 font-medium → 400。
         text_size_px: 0.875 * 16.0,
         font_weight: 400,
@@ -450,6 +517,16 @@ impl InputBuilder {
     /// HTML `type`：[`InputType`] 或 `"password"` / `"number"` 等字符串。
     pub fn input_type(mut self, t: impl Into<InputType>) -> Self {
         self.input_type = t.into();
+        self
+    }
+    /// 有内容时显示清除按钮。
+    pub fn clearable(mut self, v: bool) -> Self {
+        self.clearable = v;
+        self
+    }
+    /// `type=password` 时显示睁眼/闭眼切换。
+    pub fn password_toggle(mut self, v: bool) -> Self {
+        self.password_toggle = v;
         self
     }
     pub fn w(mut self, width: impl IntoDimension) -> Self {
@@ -515,6 +592,81 @@ impl InputBuilder {
     pub fn children(self, _children: impl IntoIterator<Item = Element>) -> Self {
         self
     }
+}
+
+fn lucide_named(name: &str) -> String {
+    lucide_glyph(name).unwrap_or_else(|| "?".into())
+}
+
+fn input_adornment_button(
+    template_id: String,
+    glyph: String,
+    disabled: bool,
+    on_click: impl FnMut() + 'static,
+) -> Element {
+    let icon = build_icon_text_node(glyph)
+        .text_size(14.0)
+        .text_color(parse_text_color("muted-foreground"));
+    let mut btn: Element = r#box()
+        .flex_shrink(0.0)
+        .w("1.25rem")
+        .h("1.25rem")
+        .min_w("1.25rem")
+        .items_center()
+        .justify_center()
+        .rounded("0.25rem")
+        .into();
+    btn = btn.child(icon);
+    btn.template_id = Some(template_id);
+    if disabled {
+        btn.cursor_not_allowed()
+    } else {
+        btn.cursor_kind(crate::core::tree::CursorKind::Pointer)
+            .on_click(on_click)
+    }
+}
+
+fn set_adornment_visible(btn: &mut Element, visible: bool) -> bool {
+    let mut changed = false;
+    let want_opacity = if visible { 1.0 } else { 0.0 };
+    if (btn.style.opacity - want_opacity).abs() > 0.001 {
+        btn.style.opacity = want_opacity;
+        changed = true;
+    }
+    if visible {
+        if btn.pointer_events_mode() != crate::core::tree::PointerEvents::Auto {
+            btn.attrs.remove(crate::core::tree::ATTR_POINTER_EVENTS);
+            changed = true;
+        }
+    } else if btn.pointer_events_mode() != crate::core::tree::PointerEvents::None {
+        btn.set_attr(
+            crate::core::tree::ATTR_POINTER_EVENTS,
+            crate::core::tree::PointerEvents::None.as_str(),
+        );
+        changed = true;
+    }
+    // Keep a stable 1.25rem slot so clear/eye gap never jumps when visibility flips.
+    let w = taffy::style::Dimension::Length(1.25 * 16.0);
+    if btn.style.size.width != w {
+        btn.style.size.width = w;
+        btn.style.min_size.width = w;
+        changed = true;
+    }
+    changed
+}
+
+fn set_adornment_icon_glyph(btn: &mut Element, glyph: &str) -> bool {
+    let Some(icon) = btn.children.first_mut() else {
+        return false;
+    };
+    if icon.text.as_deref() == Some(glyph)
+        && icon.text_style.font_family.as_deref() == Some("lucide")
+    {
+        return false;
+    }
+    icon.text = Some(glyph.to_string());
+    icon.text_style.font_family = Some("lucide".into());
+    true
 }
 
 impl From<InputBuilder> for Element {
@@ -605,7 +757,12 @@ impl From<InputBuilder> for Element {
             0
         };
 
-        let mask = builder.input_type.is_password() && !show_placeholder;
+        let reveal = if builder.input_type.is_password() && builder.password_toggle {
+            use_signal(&input_password_reveal_signal_key(&field_id), || false).peek()
+        } else {
+            false
+        };
+        let mask = builder.input_type.is_password() && !reveal && !show_placeholder;
         let display_text = if mask {
             mask_password(&real_display)
         } else {
@@ -664,10 +821,16 @@ impl From<InputBuilder> for Element {
                 leading_scale: builder.leading_scale,
                 font_family: None,
             },
-        )
-        .w("100%");
+        );
         text_el.text_shape_suffix = None;
-        text_el.template_id = Some(format!("__rui_input:{}:text", field_id));
+        text_el.template_id = Some(input_text_template_id(&field_id));
+        // flex_grow only — avoid w(100%) fighting trailing adornment slots.
+        let mut text_wrap: Element = hstack()
+            .flex_grow(1.0)
+            .min_w("0")
+            .items_center()
+            .into();
+        text_wrap = text_wrap.child(text_el.w("100%"));
 
         if is_focused {
             let mut pc = parse_color("primary");
@@ -712,15 +875,84 @@ impl From<InputBuilder> for Element {
                 } else {
                     None
                 };
-            text_el.text_style.input_caret = Some(InputCaretDraw {
-                caret_byte_index: caret_byte,
-                selection: sel_draw,
-                selection_bg,
-                overwrite_highlight,
-            });
+            if let Some(text_el) = text_wrap.children.first_mut() {
+                text_el.text_style.input_caret = Some(InputCaretDraw {
+                    caret_byte_index: caret_byte,
+                    selection: sel_draw,
+                    selection_bg,
+                    overwrite_highlight,
+                });
+            }
+        }
+
+        let show_password_toggle = builder.password_toggle && builder.input_type.is_password();
+        let has_adornments = builder.clearable || show_password_toggle;
+        if has_adornments {
+            container = container.gap("0.25rem");
         }
 
         let mut el: Element = container.into();
+        el = el.child(text_wrap);
+
+        if builder.clearable {
+            let fid_clear = fid.clone();
+            let focus_key_clear = focus_key;
+            let id_clear = field_id.clone();
+            let disabled_clear = builder.disabled;
+            let mut clear_btn = input_adornment_button(
+                input_clear_template_id(&field_id),
+                lucide_named("x"),
+                disabled_clear,
+                move || {
+                    if disabled_clear {
+                        return;
+                    }
+                    use_signal(&input_value_signal_key(&id_clear), String::new).set(String::new());
+                    use_signal(&input_preedit_signal_key(&id_clear), String::new).set(String::new());
+                    use_signal(&input_caret_signal_key(&id_clear), || None::<usize>).set(Some(0));
+                    use_signal(&input_selection_signal_key(&id_clear), || {
+                        None::<(usize, usize)>
+                    })
+                    .set(None);
+                    use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>)
+                        .set(None);
+                    use_signal(focus_key_clear, String::new).set(fid_clear.clone());
+                    use_signal("__rui_focus_visible", || false).set(true);
+                },
+            );
+            let show_clear = is_focused && (!committed.is_empty() || !preedit.is_empty());
+            let _ = set_adornment_visible(&mut clear_btn, show_clear && !builder.disabled);
+            el = el.child(clear_btn);
+        }
+
+        if show_password_toggle {
+            let fid_rev = fid.clone();
+            let focus_key_rev = focus_key;
+            let id_rev = field_id.clone();
+            let disabled_rev = builder.disabled;
+            let eye_glyph = if reveal {
+                lucide_named("eye-off")
+            } else {
+                lucide_named("eye")
+            };
+            let mut reveal_btn = input_adornment_button(
+                input_reveal_template_id(&field_id),
+                eye_glyph,
+                disabled_rev,
+                move || {
+                    if disabled_rev {
+                        return;
+                    }
+                    let sig = use_signal(&input_password_reveal_signal_key(&id_rev), || false);
+                    sig.set(!sig.peek());
+                    use_signal(focus_key_rev, String::new).set(fid_rev.clone());
+                    use_signal("__rui_focus_visible", || false).set(true);
+                },
+            );
+            let _ = set_adornment_visible(&mut reveal_btn, is_focused && !builder.disabled);
+            el = el.child(reveal_btn);
+        }
+
         el = if builder.disabled {
             el.cursor_not_allowed()
         } else {
@@ -741,11 +973,13 @@ impl From<InputBuilder> for Element {
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
             input_type: builder.input_type.as_str().to_string(),
+            clearable: builder.clearable,
+            password_toggle: show_password_toggle,
         };
 
         let disabled = builder.disabled;
         let id_for_click = fid.clone();
-        let mut out: Element = interactive(el.child(text_el))
+        let mut out: Element = interactive(el)
             .focus_id(fid)
             .focusable(!disabled)
             .on_click(move || {
@@ -848,7 +1082,16 @@ fn sync_one_input_paint(
         format!("{}{}{}", &committed[..a], preedit, &committed[a..])
     };
 
-    let mask = input_ty.is_password() && !show_placeholder;
+    let reveal = if desc.password_toggle && input_ty.is_password() {
+        use_signal(
+            &input_password_reveal_signal_key(&desc.base_id),
+            || false,
+        )
+        .peek()
+    } else {
+        false
+    };
+    let mask = input_ty.is_password() && !reveal && !show_placeholder;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -962,8 +1205,20 @@ fn sync_one_input_paint(
         return;
     }
 
+    let text_tid = input_text_template_id(&desc.base_id);
+    let text_el = find_descendant_by_template_id_mut(el, &text_tid);
+    let Some(text_el) = text_el else {
+        if container_layout {
+            layout_tree.update_taffy_node_style(el);
+            *impact = impact.merge(LayoutStatus::LayoutChanged);
+        } else if container_style {
+            layout_tree.update_taffy_node_style(el);
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        return;
+    };
+
     {
-        let text_el = &mut el.children[0];
         if text_el.text.as_deref() != Some(display_text.as_str()) {
             text_el.text = Some(display_text.clone());
             text_layout = true;
@@ -973,9 +1228,8 @@ fn sync_one_input_paint(
             text_el.text_shape_suffix = want_suffix;
             text_layout = true;
         }
-        let want_tid = Some(format!("__rui_input:{}:text", desc.base_id));
-        if text_el.template_id != want_tid {
-            text_el.template_id = want_tid;
+        if text_el.template_id.as_deref() != Some(text_tid.as_str()) {
+            text_el.template_id = Some(text_tid.clone());
             text_layout = true;
         }
         if text_el.text_style.color != text_color {
@@ -1043,22 +1297,78 @@ fn sync_one_input_paint(
         }
     }
 
-    if container_layout || container_style {
+    let adorn_layout = false;
+    let mut adorn_style = false;
+    if desc.clearable {
+        let clear_tid = input_clear_template_id(&desc.base_id);
+        if let Some(btn) = find_descendant_by_template_id_mut(el, &clear_tid) {
+            let show =
+                is_focused && (!committed.is_empty() || !preedit.is_empty()) && !desc.disabled;
+            if set_adornment_visible(btn, show) {
+                adorn_style = true;
+            }
+        }
+    }
+    if desc.password_toggle {
+        let reveal_tid = input_reveal_template_id(&desc.base_id);
+        if let Some(btn) = find_descendant_by_template_id_mut(el, &reveal_tid) {
+            let glyph = if reveal {
+                lucide_named("eye-off")
+            } else {
+                lucide_named("eye")
+            };
+            if set_adornment_icon_glyph(btn, &glyph) {
+                adorn_style = true;
+            }
+            if set_adornment_visible(btn, is_focused && !desc.disabled) {
+                adorn_style = true;
+            }
+        }
+    }
+
+    if container_layout || container_style || adorn_layout {
         layout_tree.update_taffy_node_style(el);
     }
-    if let Some(text_el) = el.children.get_mut(0) {
+    if let Some(text_el) = find_descendant_by_template_id_mut(el, &text_tid) {
         if text_el.layout_node.is_some() && (text_layout || text_style) {
             layout_tree.update_taffy_node_style(text_el);
         }
     }
+    if adorn_style {
+        for tid in [
+            input_clear_template_id(&desc.base_id),
+            input_reveal_template_id(&desc.base_id),
+        ] {
+            if let Some(btn) = find_descendant_by_template_id_mut(el, &tid) {
+                if btn.layout_node.is_some() {
+                    layout_tree.update_taffy_node_style(btn);
+                }
+            }
+        }
+    }
 
-    let layout_hit = container_layout || text_layout;
-    let style_hit = !layout_hit && (container_style || text_style);
+    let layout_hit = container_layout || text_layout || adorn_layout;
+    let style_hit = !layout_hit && (container_style || text_style || adorn_style);
     if layout_hit {
         *impact = impact.merge(LayoutStatus::LayoutChanged);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
     }
+}
+
+fn find_descendant_by_template_id_mut<'a>(
+    el: &'a mut Element,
+    tid: &str,
+) -> Option<&'a mut Element> {
+    if el.template_id.as_deref() == Some(tid) {
+        return Some(el);
+    }
+    for child in &mut el.children {
+        if let Some(found) = find_descendant_by_template_id_mut(child, tid) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 impl crate::core::tree::IntoElementList for InputBuilder {

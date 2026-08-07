@@ -35,11 +35,13 @@ fn focused_input_emits_selection_chrome_in_collect() {
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
     sync_paint_like_app(&mut el, &mut tree, &mut impact);
+    let caret = el
+        .children
+        .first()
+        .and_then(|wrap| wrap.children.first())
+        .and_then(|c| c.text_style.input_caret.as_ref());
     assert!(
-        el.children
-            .first()
-            .and_then(|c| c.text_style.input_caret.as_ref())
-            .is_some(),
+        caret.is_some(),
         "sync must install input_caret (and label sync must not wipe it)"
     );
 

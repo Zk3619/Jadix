@@ -32,6 +32,57 @@ fn expr_as_i32(value: &Expr) -> Option<i32> {
     }
 }
 
+/// HTML-ish bool attrs: `true` / `"true"` / `"1"` / `"yes"` / `"on"` (and false counterparts).
+fn parse_bool_str(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn expr_as_bool_compat(value: &Expr) -> Option<bool> {
+    match value {
+        Expr::Lit(l) => match &l.lit {
+            syn::Lit::Bool(b) => Some(b.value),
+            syn::Lit::Str(s) => parse_bool_str(&s.value()),
+            syn::Lit::Int(i) => match i.base10_parse::<i64>().ok()? {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn is_boolish_attr(name: &str) -> bool {
+    matches!(
+        name,
+        "clearable"
+            | "password_toggle"
+            | "passwordToggle"
+            | "disabled"
+            | "invalid"
+            | "absolute"
+            | "relative"
+            | "checked"
+            | "open"
+            | "active"
+            | "required"
+            | "readonly"
+            | "read_only"
+            | "readOnly"
+            | "multiple"
+            | "selected"
+            | "default"
+            | "underline"
+            | "box_shadow_inset"
+            | "boxShadowInset"
+    )
+}
+
 struct RsxElement {
     name: Ident,
     attributes: Vec<(Ident, Expr)>,
@@ -1071,6 +1122,8 @@ fn expand_node(
                             | "flex_basis"
                             | "absolute"
                             | "relative"
+                            | "pointer_events"
+                            | "pointerEvents"
                             | "top"
                             | "right"
                             | "bottom"
@@ -1324,6 +1377,7 @@ fn expand_node(
                                 "textShadowBlur" => "text_shadow_blur",
                                 "textShadowOffsetX" => "text_shadow_offset_x",
                                 "textShadowOffsetY" => "text_shadow_offset_y",
+                                "pointerEvents" => "pointer_events",
                                 _ => attr_name,
                             };
                             let method_ident = syn::Ident::new(method, attr.span());
@@ -1348,6 +1402,13 @@ fn expand_node(
                                 }
                                 "box_shadow" | "text_shadow" | "border_style" | "outline_style" => {
                                     quote! { #value }
+                                }
+                                "absolute" | "relative" | "underline" | "box_shadow_inset" => {
+                                    if let Some(b) = expr_as_bool_compat(value) {
+                                        quote! { #b }
+                                    } else {
+                                        quote! { rui::core::tree::parse_bool_like(#value) }
+                                    }
                                 }
                                 _ => quote! { #value },
                             };
@@ -1374,6 +1435,18 @@ fn expand_node(
                             "on_click" | "onClick" | "on_change" | "onChange"
                         ) {
                             quote! { Some(rui::core::tree::Handler::from(rui::core::tree::ZeroArgFn(#value))) }
+                        } else if is_boolish_attr(attr_name) {
+                            if let Some(b) = expr_as_bool_compat(value) {
+                                quote! { Some(#b) }
+                            } else if !in_reactive_boundary && expr_reads_get(value) {
+                                quote! {
+                                    Some(rui::core::reactivity::untrack(|| {
+                                        rui::core::tree::parse_bool_like(#value)
+                                    }))
+                                }
+                            } else {
+                                quote! { Some(rui::core::tree::parse_bool_like(#value)) }
+                            }
                         } else if !in_reactive_boundary && expr_reads_get(value) {
                             // Avoid subscribing the parent effect during props construction.
                             quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
@@ -2020,8 +2093,27 @@ fn expand_node(
                     "align_self" => element = quote! { #element.align_self_kw(#value) },
                     "flex_basis" => element = quote! { #element.flex_basis(#value) },
 
-                    "absolute" => element = quote! { #element.absolute(#value) },
-                    "relative" => element = quote! { #element.relative(#value) },
+                    "absolute" => {
+                        if let Some(b) = expr_as_bool_compat(value) {
+                            element = quote! { #element.absolute(#b) };
+                        } else {
+                            element = quote! {
+                                #element.absolute(rui::core::tree::parse_bool_like(#value))
+                            };
+                        }
+                    }
+                    "relative" => {
+                        if let Some(b) = expr_as_bool_compat(value) {
+                            element = quote! { #element.relative(#b) };
+                        } else {
+                            element = quote! {
+                                #element.relative(rui::core::tree::parse_bool_like(#value))
+                            };
+                        }
+                    }
+                    "pointer_events" | "pointerEvents" => {
+                        element = quote! { #element.pointer_events(#value) }
+                    }
                     "top" => element = quote! { #element.top(#value) },
                     "right" => element = quote! { #element.right(#value) },
                     "bottom" => element = quote! { #element.bottom(#value) },
