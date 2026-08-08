@@ -1,20 +1,30 @@
 //! # Tabs
 //!
-//! Headless TabList（对齐 solid-ui / Kobalte Tabs 的「根行为」）：选中 index + ←/→，
-//! **不绘制可见标签 UI**。标签行与面板内容由应用自建。
+//! 对齐 solid-ui / Kobalte Tabs：
+//! - [`tabs_headless`] / [`Tabs`]：无头 TabList（选中 index + ←/→），**不绘制**可见标签 UI
+//! - [`tabs_list`] / [`TabsList`]：可见 TabsList 样式壳（`bg-muted` 连体条带），值用 `Signal<String>`
 //!
 //! ## 用法
 //! ```ignore
+//! // 无头：自绘标签行 + 面板
 //! <Tabs id="main" count={3}>…自绘…</Tabs>
 //! Element::from(tabs_headless("hello_tabs", 3).selected_signal(tab_idx))
-//! // 面板：<Show when={tab_idx.get() == 0}>…</Show>
+//!
+//! // 可见条带（solid-ui TabsList / TabsTrigger 外观）
+//! Element::from(
+//!   tabs_list("view")
+//!     .value_signal(view)
+//!     .options(vec![("list".into(), "List".into()), ("grid".into(), "Grid".into())]),
+//! )
+//! // 面板：<Show when={view.get() == "list"}>…</Show>
 //! ```
 //!
 //! ## 注意
-//! - 选中 index 由组件内 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Reactive>`。
-//! - `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
+//! - 无头选中 index 由组件内 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Reactive>`。
+//! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
 use crate::app::reactive::reactive_view;
+use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;
@@ -22,6 +32,8 @@ use rui_macros::component;
 
 /// AccessKit / 焦点约定前缀。
 pub const TABSTRIP_FOCUS_PREFIX: &str = "tabstrip:";
+
+// ── Headless TabList ──────────────────────────────────────────────────────────
 
 pub struct TabsHeadlessBuilder {
     id: String,
@@ -134,4 +146,82 @@ pub fn Tabs(id: String, count: usize, children: Option<Element>) -> Element {
 
 pub fn tabs_headless_root(id: impl Into<String>, tab_count: usize) -> Element {
     tabs_headless(id, tab_count).into()
+}
+
+// ── Styled TabsList（solid-ui TabsList / TabsTrigger）─────────────────────────
+
+/// 可见 TabsList 样式壳：单选连体条带（ToggleGroup `joined` + outline）。
+pub struct TabsListBuilder {
+    id: String,
+    options: Vec<(String, String)>,
+    value: Option<Signal<String>>,
+    default_value: String,
+}
+
+pub fn tabs_list(id: impl Into<String>) -> TabsListBuilder {
+    TabsListBuilder {
+        id: id.into(),
+        options: Vec::new(),
+        value: None,
+        default_value: String::new(),
+    }
+}
+
+impl TabsListBuilder {
+    pub fn options(mut self, opts: Vec<(String, String)>) -> Self {
+        self.options = opts;
+        self
+    }
+    pub fn value_signal(mut self, s: Signal<String>) -> Self {
+        self.value = Some(s);
+        self
+    }
+    pub fn default_value(mut self, v: impl Into<String>) -> Self {
+        self.default_value = v.into();
+        self
+    }
+}
+
+impl From<TabsListBuilder> for Element {
+    fn from(builder: TabsListBuilder) -> Self {
+        let TabsListBuilder {
+            id,
+            options,
+            value,
+            default_value,
+        } = builder;
+        let mut b = toggle_group(&id)
+            .multiple(false)
+            .default_value(default_value)
+            .options(options)
+            .variant("outline")
+            .joined(true);
+        if let Some(sig) = value {
+            b = b.value_signal(sig);
+        }
+        let mut el: Element = b.into();
+        el.set_attr("rui_tabs_list", "1");
+        el
+    }
+}
+
+/// RSX `<TabsList>`：solid-ui 风格可见标签条。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn TabsList(
+    id: String,
+    value: Option<Signal<String>>,
+    default_value: String,
+    options: Option<Vec<(String, String)>>,
+    children: Option<Element>,
+) -> Element {
+    let _ = children;
+    let mut b = tabs_list(id).default_value(default_value);
+    if let Some(sig) = value {
+        b = b.value_signal(sig);
+    }
+    if let Some(opts) = options {
+        b = b.options(opts);
+    }
+    b.into()
 }

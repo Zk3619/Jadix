@@ -11,9 +11,9 @@
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_component_live;
 use crate::components::button::button;
-use crate::components::picker_stub::{stub_label, stub_trigger, stub_trigger_focus_id};
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_color, Element};
+use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element};
+use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
@@ -21,6 +21,65 @@ use crate::utils::popup::{
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
+
+fn trigger_focus_id(id: &str) -> String {
+    format!("{id}:trigger")
+}
+
+fn trigger_label(text: &str) -> Element {
+    build_text_node(
+        text,
+        TextNodeConfig {
+            size_px: 0.875 * 16.0,
+            weight: 400,
+            color: parse_text_color("foreground"),
+            ..Default::default()
+        },
+    )
+}
+
+/// ColorPicker 触发器壳（样式本文件内维护，勿再抽公共 stub）。
+fn picker_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> Element {
+    let mut border = parse_color("input");
+    let mut bg = parse_color("transparent");
+    if disabled {
+        border[3] *= 0.5;
+        bg[3] *= 0.5;
+    }
+    let mut row: Element = hstack()
+        .h("2.25rem")
+        .w("100%")
+        .min_w("0")
+        .rounded("0.375rem")
+        .px("0.75rem")
+        .gap("0.5rem")
+        .items_center()
+        .bg(bg)
+        .border(border, 1.0)
+        .shadow([0.0, 0.0, 0.0, 0.06], 1.0)
+        .into();
+    row = row
+        .child(leading)
+        .child(Element::from(
+            hstack()
+                .flex_grow(1.0)
+                .min_w("0")
+                .items_center()
+                .child(main),
+        ));
+    let cursor = if disabled {
+        row.cursor_not_allowed()
+    } else {
+        row.cursor_kind(CursorKind::Pointer)
+    };
+    let trigger_fid = trigger_focus_id(id);
+    let mut out: Element = interactive(cursor)
+        .focus_id(trigger_fid.as_str())
+        .focusable(!disabled)
+        .into();
+    out.template_id = Some(trigger_fid);
+    out
+}
 
 const PRESET_SWATCHES: &[&str] = &[
     "#000000", "#ffffff", "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6",
@@ -116,8 +175,8 @@ fn build_color_picker_view(
     swatch = swatch.bg(swatch_color);
     swatch.style.border_width = 1.0;
     swatch.style.border_color = parse_color("border");
-    let main = stub_label(&hex, false);
-    let mut trigger = stub_trigger(&id, swatch, main, disabled);
+    let main = trigger_label(&hex);
+    let mut trigger = picker_trigger(&id, swatch, main, disabled);
     if !disabled {
         let open_t = open;
         trigger = trigger.on_click(move || open_t.set(!open_t.peek()));
@@ -202,7 +261,7 @@ fn build_color_picker_view(
             mark_floating(
                 &mut panel,
                 &id,
-                &stub_trigger_focus_id(&id),
+                &trigger_focus_id(&id),
                 PopupPlacement::BottomStart,
             );
             panel.set_attr("rui_floating_match_trigger", "0");

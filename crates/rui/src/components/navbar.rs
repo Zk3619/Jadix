@@ -1,6 +1,8 @@
 //! # Navbar
 //!
 //! 顶栏布局壳：左侧 brand / 中间 slots / 右侧 actions。
+//! 链接导览请嵌 [`crate::components::navigation_menu`]；页面栈见
+//! [`crate::app::navigator::navigation_host`]。
 
 use crate::core::tree::Element;
 use crate::primitives::r#box::hstack;

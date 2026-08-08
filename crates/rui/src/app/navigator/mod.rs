@@ -1,14 +1,19 @@
 //! 页面 / 视图导航栈（与 [`crate::app::portal_overlay`] 浮层栈分离）。
 //!
-//! - 每窗口 / 每 NavigationHost 一个 [`Navigator`]
+//! - 每窗口 / 每 [`navigation_host`] 一个 [`Navigator`]
 //! - typed `Route: Clone + Eq + Hash`
 //! - 默认 keep-alive；root 路由 `bring_to_front` / 重复 `push` 会**截断栈**
 //! - Esc：先 portal_overlay，再 [`try_pop_active`]
 //! - Host 卸载：[`Element::on_unmount`](crate::core::tree::Element::on_unmount) 清除 active 注册（不删命名信号，避免首帧 rebuild 误伤）
 //! - 显式释放：[`Navigator::dispose`]
 //! - 转场：[`Transition`] + [`FrameState`]；由 [`tick_active`] 推进
+//! - 栈 → Element：[`navigation_host`]（[`host`]）
 //!
 //! z（Host 渲染）：`Host = 100 + i*10`，`Sheet = 500 + i*50`。
+
+mod host;
+
+pub use host::{navigation_host, NavigationHostBuilder, NavigationHostFrame};
 
 use std::cell::RefCell;
 use std::collections::HashSet;

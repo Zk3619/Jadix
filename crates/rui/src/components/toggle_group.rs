@@ -3,7 +3,7 @@
 //! 对齐 solid-ui / Kobalte **ToggleGroup**：一组两态按钮。
 //! - `multiple=false`（默认）：单选，值 `Signal<String>`（空串表示未选）
 //! - `multiple=true`：多选，值用 `Signal<Vec<String>>`
-//! - `joined=true`：连体分段外观（Segmented 使用）
+//! - `joined=true`：连体分段外观（[`crate::components::tabs_list`] 使用）
 //! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //!
 //! ## 用法
@@ -105,7 +105,7 @@ impl ToggleGroupBuilder {
         self.variant = v.into();
         self
     }
-    /// 连体分段：共享外框、段间无缝、首尾圆角（Segmented）。
+    /// 连体分段：共享外框、段间无缝、首尾圆角（TabsList）。
     pub fn joined(mut self, v: bool) -> Self {
         self.joined = v;
         self

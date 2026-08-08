@@ -1,17 +1,14 @@
-//! # NavigationHost
+//! NavigationHost：把 [`super::Navigator`] 页面栈渲染为 Element 树。
 //!
-//! 渲染 [`crate::app::navigator::Navigator`] 页面栈：
 //! - Host：内容区叠放；埋层 `pointer_events_none`
 //! - Sheet：portal + underlay（点击 pop）
-//! - 根节点挂 [`Navigator::unmount_hook`]，从树移除时清除 active 注册（命名信号由 [`Navigator::dispose`] 显式释放）
+//! - 根节点挂 [`super::Navigator::unmount_hook`]；命名信号由 [`super::Navigator::dispose`] 显式释放
 //!
-//! 栈 / 转场 progress 由组件内 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Reactive>`。
+//! 栈 / 转场 progress 由 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Reactive>`。
 
 use std::hash::Hash;
 
-use crate::app::navigator::{
-    host_z, sheet_z, Frame, FrameState, Navigator, Presentation, Transition,
-};
+use super::{host_z, sheet_z, Frame, FrameState, Navigator, Presentation, Transition};
 use crate::app::reactive::reactive_view;
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;

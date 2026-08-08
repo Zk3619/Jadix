@@ -14,16 +14,87 @@
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_component_live;
 use crate::components::button::button;
-use crate::components::picker_stub::{lucide, stub_label, stub_trigger, stub_trigger_focus_id};
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::Element;
+use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element};
+use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating, panel_block_clicks, PopupPlacement,
 };
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
+
+fn trigger_focus_id(id: &str) -> String {
+    format!("{id}:trigger")
+}
+
+fn trigger_label(text: &str, muted: bool) -> Element {
+    let color = if muted {
+        parse_text_color("muted-foreground")
+    } else {
+        parse_text_color("foreground")
+    };
+    build_text_node(
+        text,
+        TextNodeConfig {
+            size_px: 0.875 * 16.0,
+            weight: 400,
+            color,
+            ..Default::default()
+        },
+    )
+}
+
+fn lucide_icon(hex: u32) -> Element {
+    let glyph = char::from_u32(hex).unwrap_or('?').to_string();
+    build_icon_text_node(glyph)
+        .text_size(14.0)
+        .text_color(parse_text_color("muted-foreground"))
+}
+
+/// Date / TimePicker 触发器壳（样式本文件内维护，勿再抽公共 stub）。
+fn picker_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> Element {
+    let mut border = parse_color("input");
+    let mut bg = parse_color("transparent");
+    if disabled {
+        border[3] *= 0.5;
+        bg[3] *= 0.5;
+    }
+    let mut row: Element = hstack()
+        .h("2.25rem")
+        .w("100%")
+        .min_w("0")
+        .rounded("0.375rem")
+        .px("0.75rem")
+        .gap("0.5rem")
+        .items_center()
+        .bg(bg)
+        .border(border, 1.0)
+        .shadow([0.0, 0.0, 0.0, 0.06], 1.0)
+        .into();
+    row = row
+        .child(leading)
+        .child(Element::from(
+            hstack()
+                .flex_grow(1.0)
+                .min_w("0")
+                .items_center()
+                .child(main),
+        ));
+    let cursor = if disabled {
+        row.cursor_not_allowed()
+    } else {
+        row.cursor_kind(CursorKind::Pointer)
+    };
+    let trigger_fid = trigger_focus_id(id);
+    let mut out: Element = interactive(cursor)
+        .focus_id(trigger_fid.as_str())
+        .focusable(!disabled)
+        .into();
+    out.template_id = Some(trigger_fid);
+    out
+}
 
 /// DatePicker 的 HTML 对齐模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -237,8 +308,8 @@ fn build_date_picker_view(
         current.clone()
     };
     let muted = current.is_empty();
-    let icon = lucide(0xe063);
-    let trigger_shell = stub_trigger(&id, icon, stub_label(&display, muted), disabled);
+    let icon = lucide_icon(0xe063);
+    let trigger_shell = picker_trigger(&id, icon, trigger_label(&display, muted), disabled);
     let open_t = open;
     let year_t = year;
     let month_t = month;
@@ -463,7 +534,7 @@ fn build_date_picker_view(
                 }
             }
 
-            let trigger_fid = stub_trigger_focus_id(&id);
+            let trigger_fid = trigger_focus_id(&id);
             let mut floating = panel;
             floating = floating.absolute();
             mark_floating(
@@ -568,8 +639,8 @@ fn build_time_picker_view(
         current
     };
     let muted = display == "Pick a time…";
-    let icon = lucide(0xe087);
-    let mut trigger = stub_trigger(&id, icon, stub_label(&display, muted), disabled);
+    let icon = lucide_icon(0xe087);
+    let mut trigger = picker_trigger(&id, icon, trigger_label(&display, muted), disabled);
     if !disabled {
         let open_t = open;
         let hour_t = hour;
@@ -657,7 +728,7 @@ fn build_time_picker_view(
             mark_floating(
                 &mut panel,
                 &id,
-                &stub_trigger_focus_id(&id),
+                &trigger_focus_id(&id),
                 PopupPlacement::BottomStart,
             );
             panel.set_attr("rui_floating_match_trigger", "0");

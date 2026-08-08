@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod drag_reorder;
+pub mod file_dialog;
 pub mod font;
 pub mod input_hit;
 pub mod keyboard;
@@ -10,11 +11,16 @@ pub mod text_field;
 pub mod text_node;
 pub mod virtual_list;
 
+pub use file_dialog::{
+    file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
+    pick_folder, pick_folder_into,
+};
 pub use lucide::{apply_bound_icon_name, lucide_glyph};
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
     disarm_underlay_close, mark_floating, mark_portal, mark_portal_mount, panel_block_clicks,
-    path_hits_floating_trigger, portal_panel, portal_panel_mount, sync_floating_placement,
+    path_hits_floating_trigger, portal_panel, portal_panel_mount, swallow_clicks,
+    sync_floating_placement,
     underlay_close_is_armed, underlay_close_on_click, FLOATING_TRIGGER_GAP,
     FLOATING_VIEWPORT_MARGIN, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_H,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W,
