@@ -292,7 +292,7 @@ pub struct Element {
     pub template_id: Option<String>,
     /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
     pub button_hover_paint: Option<ButtonHoverPaint>,
-    /// 若存在，则每帧由 [`crate::components::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
+    /// 若存在，则每帧由 [`crate::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
     pub input_paint_sync: Option<TextEditPaintSync>,
     /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and updates track bg + thumb alignment.
     pub switch_checked_sync: Option<Signal<bool>>,
@@ -1071,6 +1071,12 @@ impl Element {
     }
     pub fn box_shadow_blur(mut self, blur: f32) -> Self {
         self.style.shadow_blur = blur.max(0.0);
+        self
+    }
+
+    /// Backdrop blur radius in logical px (`0` disables). See [`crate::style::Style::backdrop_blur`].
+    pub fn backdrop_blur(mut self, blur: impl IntoF32) -> Self {
+        self.style.backdrop_blur = blur.into_f32().max(0.0);
         self
     }
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {

@@ -1,16 +1,15 @@
 //! # AlertDialog
 //!
-//! 确认对话框：标题 + 正文 + Cancel / Confirm。
+//! 确认对话框：Header（标题）/ Body（说明）/ Footer（Cancel · Confirm）。
+//! Body 可滚动；Footer 固定。复用 [`crate::dialog_shell`]；**独立产品 API**。
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
+use crate::dialog_shell::{dialog_content_frame, modal_sync, DialogSections};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
-use crate::tokens;
-use crate::utils::popup::{panel_block_clicks, portal_panel, underlay_close_on_click};
 
 pub struct AlertDialogBuilder {
     id: String,
@@ -81,12 +80,19 @@ impl From<AlertDialogBuilder> for Element {
 
         reactive_view(view_id, move || {
             let _ = open.get();
-            let Some(oz) = portal_sync(&id, open, OverlayKind::Modal, OverlayMode::Stacked) else {
+            let Some(zs) = modal_sync(&id, open) else {
                 return Element::new();
             };
             if !open.peek() {
                 return Element::new();
             }
+
+            let header: Element = vstack()
+                .w("100%")
+                .child(text(title.as_str()).size(18.0).weight(600.0))
+                .into();
+
+            let body: Element = text(description.as_str()).size(14.0).weight(400.0).into();
 
             let o_cancel = open;
             let cancel_cb = on_cancel.clone();
@@ -114,7 +120,7 @@ impl From<AlertDialogBuilder> for Element {
                 .text(confirm_label.clone())
                 .into();
 
-            let actions: Element = hstack()
+            let footer: Element = hstack()
                 .gap("0.5rem")
                 .justify("end")
                 .w("100%")
@@ -122,24 +128,16 @@ impl From<AlertDialogBuilder> for Element {
                 .child(confirm)
                 .into();
 
-            let mut panel: Element = vstack()
-                .gap("0.75rem")
-                .p("1.25rem")
-                .max_w("24rem")
-                .child(text(title.as_str()).size(18.0).weight(600.0))
-                .child(text(description.as_str()).size(14.0).weight(400.0))
-                .child(actions)
-                .into();
-            panel = panel
-                .bg(tokens::background())
-                .rounded("0.5rem")
-                .border_style("solid")
-                .border_width(1.0)
-                .border_color(tokens::border());
-
-            let mut root = vstack().child(underlay_close_on_click(open, oz.underlay));
-            root = root.child(portal_panel(panel_block_clicks(panel, oz.panel), oz.panel));
-            root.into()
+            dialog_content_frame(
+                open,
+                &zs,
+                DialogSections {
+                    header: Some(header),
+                    body,
+                    footer: Some(footer),
+                    body_scroll_id: format!("{id}__body"),
+                },
+            )
         })
     }
 }

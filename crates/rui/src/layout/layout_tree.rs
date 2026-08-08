@@ -173,8 +173,10 @@ fn count_rui_portal_nodes(node: &Element) -> usize {
         if c.attrs.get(ATTR_PORTAL_SLOT).is_some() {
             continue;
         }
+        // Match `hoist_portal_rec_with_slots`: nested `rui_portal` nodes are lifted
+        // out of their parent before the parent itself is lifted.
         if c.attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
-            n += 1;
+            n += 1 + count_rui_portal_nodes(c);
         } else {
             n += count_rui_portal_nodes(c);
         }
@@ -667,6 +669,8 @@ pub struct OverlayPaintBand {
     pub textured_start: usize,
     pub text_start: usize,
     pub chrome_start: usize,
+    /// Max [`crate::style::Style::backdrop_blur`] on this band's root (logical px).
+    pub backdrop_blur: f32,
 }
 
 /// Resolved `[start, end)` ranges for drawing one overlay band.
@@ -698,6 +702,7 @@ impl OverlayPaintSplit {
                     textured_start: self.textured_start.min(textured_len),
                     text_start: self.text_start.min(text_len),
                     chrome_start: self.chrome_start.min(chrome_len),
+                    backdrop_blur: 0.0,
                 }]
             } else {
                 Vec::new()
@@ -1935,13 +1940,15 @@ impl LayoutTree {
                                     instances: &Vec<InstanceInput>,
                                     textured_draws: &Vec<TexturedDraw>,
                                     text_nodes: &Vec<TextLayoutInfo>,
-                                    input_chrome_instances: &Vec<InstanceInput>| {
+                                    input_chrome_instances: &Vec<InstanceInput>,
+                                    band_root: &Element| {
             if is_body_portal_layer {
                 overlay_split.bands.push(OverlayPaintBand {
                     instance_start: instances.len(),
                     textured_start: textured_draws.len(),
                     text_start: text_nodes.len(),
                     chrome_start: input_chrome_instances.len(),
+                    backdrop_blur: band_root.style.backdrop_blur.max(0.0),
                 });
             }
         };
@@ -1963,6 +1970,7 @@ impl LayoutTree {
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
+                    child,
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     if child
@@ -2026,6 +2034,7 @@ impl LayoutTree {
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
+                    &element.children[i],
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     let c = &element.children[i];

@@ -1,97 +1,346 @@
-//! # Dialog（面板）
+//! # Dialog
 //!
-//! 样式化模态内容面板：标题 + body。遮罩 / 居中可由调用方组合；
-//! 面板本身已 [`portal_panel`](crate::utils::popup::portal_panel) 提升，并登记
-//! [`crate::app::portal_overlay`] 栈（Esc LIFO）。
+//! 对齐 solid-ui / shadcn **复合 Dialog**：
+//!
+//! ```text
+//! Dialog
+//! ├── DialogTrigger          // 可选；无组件子节点时默认 Label
+//! └── DialogContent          // 默认右上角 ghost 关闭；可调遮罩色 / 模糊 / 点击关闭
+//!     ├── DialogHeader / DialogTitle / DialogDescription
+//!     ├── DialogBody
+//!     └── DialogFooter       // 也可用 Button + open.set(false)
+//! ```
+//!
+//! 共享壳见 [`crate::dialog_shell`]。`ui!` 中 `<Dialog>` / `<DialogContent>` 由宏展开。
 //!
 //! ## 用法
 //! ```ignore
-//! Element::from(
-//!     dialog_panel(open_sig, "标题").child(move || ui! { <Label>"内容"</Label> })
-//! )
+//! ui! {
+//!     <Dialog id="edit" open={open}>
+//!         <DialogTrigger>
+//!             <Button>Dialog</Button>
+//!         </DialogTrigger>
+//!         <DialogContent
+//!             overlay_blur={8.0}
+//!             close_on_overlay_click={true}
+//!         >
+//!             <DialogHeader>
+//!                 <DialogTitle>Edit Profile</DialogTitle>
+//!                 <DialogDescription>Make changes…</DialogDescription>
+//!             </DialogHeader>
+//!             <DialogBody>{/* … */}</DialogBody>
+//!             <DialogFooter>
+//!                 <Button variant="outline" on_click={move || open.set(false)}>
+//!                     Cancel
+//!                 </Button>
+//!                 <Button>Save</Button>
+//!             </DialogFooter>
+//!         </DialogContent>
+//!     </Dialog>
+//! }
 //! ```
-//!
-//! ## 注意
-//! - `open` 由组件内 [`crate::app::reactive::reactive_view`] 边界订阅，无需手动 `<Show>` / `<Reactive>`。
-//! - `.child` 接收 `Fn() -> Element`，以便开闭时重复构建内容。
-//! - z-index 由 portal_overlay 栈深度分配。
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use std::sync::OnceLock;
+
 use crate::app::reactive::reactive_view;
-use crate::core::reactivity::Signal;
+use crate::components::button::button;
+use crate::components::label::label;
+use crate::components::scroll_area::scroll_area;
+use crate::core::reactivity::{
+    create_context, provide_context, use_context, use_signal, Context, Signal,
+};
 use crate::core::tree::Element;
+use crate::dialog_shell::{dialog_shell_frame, modal_sync, DialogOverlayOpts};
+use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;
-use crate::tokens;
-use crate::utils::popup::portal_panel;
+use crate::style::parse_text_color;
+use crate::utils::lucide_glyph;
+use crate::utils::text_node::build_icon_text_node;
+use rui_macros::component;
 
-pub struct DialogBuilder {
-    open: Signal<bool>,
-    title: String,
-    body: Option<Box<dyn Fn() -> Element>>,
-    id: Option<String>,
+/// Root 上下文：`open` + 稳定实例 `id`。
+#[derive(Clone)]
+pub struct DialogCtx {
+    pub open: Signal<bool>,
+    pub id: String,
 }
 
-/// 样式化模态面板；见模块文档。
-pub fn dialog_panel(open: Signal<bool>, title: impl Into<String>) -> DialogBuilder {
+fn dialog_context() -> Context<DialogCtx> {
+    static CTX: OnceLock<Context<DialogCtx>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<DialogCtx>)
+}
+
+/// 读取最近的 [`Dialog`] 上下文。
+pub fn use_dialog() -> Option<DialogCtx> {
+    use_context(dialog_context())
+}
+
+/// 关闭最近的 Dialog（无上下文时为 no-op）。
+pub fn dialog_close() {
+    if let Some(ctx) = use_dialog() {
+        ctx.open.set(false);
+    }
+}
+
+/// 打开最近的 Dialog（无上下文时为 no-op）。
+pub fn dialog_open() {
+    if let Some(ctx) = use_dialog() {
+        ctx.open.set(true);
+    }
+}
+
+/// 提供 Dialog 上下文并构建子树（`ui!` `<Dialog>` / Builder 共用）。
+pub fn dialog_scope(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    let id = id.into();
+    let open = open.unwrap_or_else(|| use_signal(format!("{id}__open").as_str(), || false));
+    provide_context(
+        dialog_context(),
+        DialogCtx {
+            open,
+            id: id.clone(),
+        },
+    );
+    let mut root = body();
+    if root.template_id.is_none() {
+        root.template_id = Some(format!("{id}__dialog"));
+    }
+    root
+}
+
+/// Builder：`.open(sig).child(|| …)` → [`dialog_scope`]。
+pub struct DialogBuilder {
+    id: String,
+    open: Option<Signal<bool>>,
+}
+
+pub fn dialog(id: impl Into<String>) -> DialogBuilder {
     DialogBuilder {
-        open,
-        title: title.into(),
-        body: None,
-        id: None,
+        id: id.into(),
+        open: None,
     }
 }
 
 impl DialogBuilder {
-    pub fn id(mut self, id: impl Into<String>) -> Self {
-        self.id = Some(id.into());
+    pub fn open(mut self, open: Signal<bool>) -> Self {
+        self.open = Some(open);
         self
     }
 
-    pub fn child(mut self, build: impl Fn() -> Element + 'static) -> Self {
-        self.body = Some(Box::new(build));
-        self
+    pub fn open_signal(self, open: Signal<bool>) -> Self {
+        self.open(open)
+    }
+
+    /// 在上下文内构建 Trigger / Content 等子树。
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        dialog_scope(self.id, self.open, body)
     }
 }
 
-impl From<DialogBuilder> for Element {
-    fn from(builder: DialogBuilder) -> Self {
-        let DialogBuilder {
-            open,
-            title,
-            body,
-            id,
-        } = builder;
-        let id = id.unwrap_or_else(|| format!("dialog:{title}"));
-        let view_id = format!("{id}__dialog_view");
-        let template_id = id.clone();
+fn require_dialog(part: &str) -> DialogCtx {
+    use_dialog().unwrap_or_else(|| {
+        panic!("{part} must be used within <Dialog> / dialog_scope");
+    })
+}
 
-        let mut root = reactive_view(view_id, move || {
-            let is_open = open.get();
-            let Some(oz) = portal_sync(&id, open, OverlayKind::Modal, OverlayMode::Stacked) else {
-                return Element::new();
-            };
-            if !is_open {
-                return Element::new();
-            }
-
-            let mut panel: Element = vstack()
-                .gap("0.75rem")
-                .p("1.25rem")
-                .rounded("0.5rem")
-                .max_w("28rem")
-                .into();
-            panel = panel.bg(tokens::background());
-            panel.style.border_width = 1.0;
-            panel.style.border_color = tokens::border();
-            let title_el: Element = text(title.as_str()).size(18.0).weight(600.0).into();
-            panel = panel.child(title_el);
-            if let Some(build) = &body {
-                panel = panel.child(build());
-            }
-            portal_panel(panel, oz.panel)
-        });
-        root.template_id = Some(template_id);
-        root
+/// `ui!` 多子节点会先打成匿名 VStack；Header/Footer 再拆开接到自己的布局上。
+fn take_packed_children(mut el: Element) -> Vec<Element> {
+    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
+    if bare && el.children.len() > 1 {
+        std::mem::take(&mut el.children)
+    } else {
+        vec![el]
     }
+}
+
+fn is_text_leaf(el: &Element) -> bool {
+    el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
+}
+
+fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
+    let prev = el.on_click.clone();
+    let mut handler = handler;
+    el = el.on_click(move || {
+        if let Some(ref rc) = prev {
+            rc.borrow_mut()();
+        }
+        handler();
+    });
+    el
+}
+
+/// solid-ui `DialogTrigger`：子节点为组件时挂载打开；纯文本则默认 [`Label`]。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogTrigger(id: String, children: Option<Element>) -> Element {
+    let ctx = require_dialog("DialogTrigger");
+    let open = ctx.open;
+    let trigger_id = if id.is_empty() {
+        format!("{}__trigger", ctx.id)
+    } else {
+        id
+    };
+
+    match children {
+        None => interactive(label(trigger_id.as_str()).text("Open").into())
+            .on_click(move || open.set(true))
+            .into(),
+        Some(c) if is_text_leaf(&c) => {
+            let t = c.text.clone().unwrap_or_default();
+            interactive(label(trigger_id.as_str()).text(t).into())
+                .on_click(move || open.set(true))
+                .into()
+        }
+        Some(c) => chain_click(c, move || open.set(true)),
+    }
+}
+
+/// `DialogContent` 遮罩与 chrome 选项（`ui!` / [`dialog_content`] 共用）。
+#[derive(Clone, Debug)]
+pub struct DialogContentOpts {
+    /// 右上角仅图标 ghost 关闭钮；默认 `true`（对齐 solid-ui / shadcn）。
+    pub show_close: bool,
+    /// 遮罩色（语义 token / hex）；`None` → 纯黑。
+    pub overlay_color: Option<String>,
+    /// 遮罩不透明度 0…1；`None` → `0.5`。
+    pub overlay_opacity: Option<f32>,
+    /// 点击遮罩是否关闭；默认 `true`。
+    pub close_on_overlay_click: bool,
+    /// 遮罩 backdrop 模糊半径（逻辑 px）；`0` / `None` → 关闭。
+    pub overlay_blur: Option<f32>,
+}
+
+impl Default for DialogContentOpts {
+    fn default() -> Self {
+        Self {
+            show_close: true,
+            overlay_color: None,
+            overlay_opacity: None,
+            close_on_overlay_click: true,
+            overlay_blur: None,
+        }
+    }
+}
+
+/// solid-ui `DialogContent`：Portal + Overlay + 面板壳。
+/// `ui!` 中由宏编成此函数（子树在打开时惰性重建，同 Popover）。
+pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'static) -> Element {
+    let ctx = require_dialog("DialogContent");
+    let open = ctx.open;
+    let id = ctx.id.clone();
+    let view_id = format!("{id}__dialog_view");
+    let overlay = DialogOverlayOpts::from_parts(
+        opts.overlay_color.as_deref(),
+        opts.overlay_opacity,
+        opts.close_on_overlay_click,
+        opts.overlay_blur.unwrap_or(0.0),
+    );
+    let show_close = opts.show_close;
+
+    reactive_view(view_id, move || {
+        let is_open = open.get();
+        let Some(zs) = modal_sync(&id, open) else {
+            return Element::new();
+        };
+        if !is_open {
+            return Element::new();
+        }
+
+        let mut inner = body();
+        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
+        let chrome_close = if show_close {
+            // Leave room so title/description don't sit under the absolute close control.
+            inner = inner.pr("2rem");
+            let o = open;
+            let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
+            let icon = build_icon_text_node(glyph).text_size(16.0);
+            Some(
+                button(format!("{id}:chrome_close"))
+                    .variant("ghost")
+                    .size("icon-sm")
+                    .on_click(move || o.set(false))
+                    .child(icon)
+                    .into(),
+            )
+        } else {
+            None
+        };
+        dialog_shell_frame(open, &zs, inner, &overlay, chrome_close)
+    })
+}
+
+/// 固定顶栏（不滚动）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogHeader(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    Element::from(
+        vstack()
+            .w("100%")
+            .gap("0.375rem")
+            .flex_shrink(0.0)
+            .children(kids),
+    )
+}
+
+/// 标题。
+///
+/// 必须显式设 `foreground`：[`crate::style::TextStyle`] 默认色是白，叠在浅色面板上会“消失”。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogTitle(children: Option<Element>) -> Element {
+    let fg = parse_text_color("foreground");
+    match children {
+        Some(c) => c.text_size(18.0).font_weight(600.0).text_color(fg),
+        None => Element::from(text("").size(18.0).weight(600.0).color(fg)),
+    }
+}
+
+/// 说明文案。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogDescription(children: Option<Element>) -> Element {
+    let muted = parse_text_color("muted-foreground");
+    match children {
+        Some(c) => c.text_size(14.0).font_weight(400.0).text_color(muted),
+        None => Element::from(text("").size(14.0).weight(400.0).color(muted)),
+    }
+}
+
+/// Header 与 Footer 之间的**唯一滚动区**。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogBody(children: Option<Element>) -> Element {
+    let ctx = require_dialog("DialogBody");
+    let child = children.unwrap_or_else(Element::new);
+    let scroll_id = format!("{}__body", ctx.id);
+    scroll_area(scroll_id.as_str())
+        .overflow_x("hidden")
+        .overflow_y("auto")
+        .scrollbar_visibility("auto")
+        .w("100%")
+        .min_h("0")
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .child(child)
+        .into()
+}
+
+/// 固定底栏（不滚动）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn DialogFooter(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    Element::from(
+        crate::primitives::r#box::hstack()
+            .w("100%")
+            .gap("0.5rem")
+            .justify("end")
+            .flex_shrink(0.0)
+            .children(kids),
+    )
 }

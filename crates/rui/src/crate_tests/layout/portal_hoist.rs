@@ -288,3 +288,58 @@ fn hoist_clears_previous_host_mount_when_source_gone() {
         "closing local portal must clear host mount"
     );
 }
+
+/// Dialog-shaped tree: underlay + stage portals as siblings; panel is not a portal.
+#[test]
+fn hoist_dialog_stage_keeps_inner_panel() {
+    let mut underlay = Element::new().template_id("dlg-underlay");
+    underlay.set_attr("rui_portal", "1");
+    underlay.set_attr(ATTR_PORTAL_KEY, "underlay:1000");
+
+    let panel = Element::new().w(320.0).h(200.0).template_id("dlg-panel");
+    let mut stage = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("dlg-stage")
+        .child(panel);
+    stage.set_attr("rui_portal", "1");
+    stage.set_attr(ATTR_PORTAL_KEY, "panel:1001");
+
+    let mut root = Element::new().w(800.0).h(600.0).children([
+        Element::new().child(underlay).child(stage),
+    ]);
+
+    assert_eq!(hoist_portal_subtrees(&mut root), 2);
+    assert_eq!(count_in_layer(&root), 2);
+    let stage = portal_layer(&root)
+        .unwrap()
+        .children
+        .iter()
+        .find(|c| c.attrs.get(ATTR_PORTAL_KEY).map(|s| s.as_str()) == Some("panel:1001"))
+        .expect("stage in layer");
+    assert_eq!(
+        stage.children.len(),
+        1,
+        "panel must remain a child of the hoisted stage"
+    );
+    assert_eq!(
+        stage.children[0].template_id.as_deref(),
+        Some("dlg-panel")
+    );
+}
+
+/// Nested `rui_portal` lift count must match (regression for debug_assert pending vs lifted).
+#[test]
+fn hoist_nested_portals_count_matches_lifted() {
+    let mut inner = Element::new().template_id("nested-inner");
+    inner.set_attr("rui_portal", "1");
+    inner.set_attr(ATTR_PORTAL_KEY, "inner");
+    let mut outer = Element::new().template_id("nested-outer").child(inner);
+    outer.set_attr("rui_portal", "1");
+    outer.set_attr(ATTR_PORTAL_KEY, "outer");
+
+    let mut root = Element::new().child(outer);
+    // Must not panic on lifted.len() == pending (both 2).
+    assert_eq!(hoist_portal_subtrees(&mut root), 2);
+    assert_eq!(count_in_layer(&root), 2);
+}

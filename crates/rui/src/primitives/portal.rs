@@ -8,7 +8,7 @@
 //! `rui_portal_slot` marker stays in the source tree so the portal remains “wanted”
 //! across frames (Solid keep-alive) — overlays must not be destroyed and recreated every
 //! paint. Select / Dialog / Popover / Dropdown mark panels with
-//! [`crate::utils::popup::portal_panel`]; this component is for app-authored overlays.
+//! [`crate::utils::popup::portal_panel`]; this primitive is for app-authored overlays.
 //!
 //! ## Solid semantics (required)
 //! - Default mount = root [`PORTAL_LAYER_ID`](crate::layout::layout_tree::PORTAL_LAYER_ID)
@@ -42,13 +42,14 @@
 //! - Dismissal for menus/popovers follows ShadCN/Radix “pointer outside” (stable portal key),
 //!   not a one-frame flash.
 
+#![allow(non_snake_case)]
+
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
 use rui_macros::component;
 
 /// Portal：标记 `rui_portal`，布局时提升到根叠层或 `mount` 宿主（对齐 Solid `<Portal>`）。
 #[component(crate_path = "crate")]
-#[allow(non_snake_case)]
 pub fn Portal(id: String, mount: Option<String>, children: Option<Element>) -> Element {
     let mut inner = children.unwrap_or_else(Element::new);
     inner.template_id = Some(id.clone());

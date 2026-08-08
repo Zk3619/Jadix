@@ -449,6 +449,11 @@ impl BoxBuilder {
         self.el = self.el.box_shadow_blur(blur);
         self
     }
+
+    pub fn backdrop_blur(mut self, blur: impl crate::core::tree::IntoF32) -> Self {
+        self.el = self.el.backdrop_blur(blur);
+        self
+    }
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
         self.el = self.el.box_shadow_offset_x(dx);
         self

@@ -9,8 +9,7 @@ use std::cell::Cell;
 
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
-use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::r#box;
+use crate::primitives::overlay::overlay;
 
 thread_local! {
     /// After opening an overlay, ignore underlay closes until the pointer is released.
@@ -516,21 +515,10 @@ pub fn portal_panel_mount(mut inner: Element, z: i32, mount: impl AsRef<str>) ->
 /// Use for **modal** overlays (Dialog / Sheet / Alert). Non-modal Popover / Menu / Select
 /// should omit this and rely on [`crate::app::portal_overlay::try_dismiss_outside_press`]
 /// so only the panel blocks pointer events (SolidJS / Radix dismissable layer).
+///
+/// 实现委托 [`crate::primitives::overlay`]（无默认着色；调用方可再 `.bg(...)`）。
 pub fn underlay_close_on_click(open: Signal<bool>, z: i32) -> Element {
-    let mut el: Element = interactive(r#box().into())
-        .on_click(move || {
-            if !UNDERLAY_CLOSE_ARMED.get() {
-                return;
-            }
-            open.set(false);
-        })
-        .into();
-    el = el.absolute().inset(0.0).w("100%").h("100%");
-    el.set_attr(
-        crate::layout::layout_tree::ATTR_PORTAL_KEY,
-        format!("underlay:{z}"),
-    );
-    portal_panel(el, z)
+    overlay(z).close_on_click(open).into()
 }
 
 /// True when `path` hits the trigger focus id of any hoisted floating panel.
@@ -573,7 +561,14 @@ fn collect_floating_triggers(el: &Element, out: &mut std::collections::HashSet<S
     }
 }
 
+/// 吞掉点击，避免穿透到 underlay（不 portal；用于已在 portal 舞台内的面板）。
+pub fn swallow_clicks(inner: Element) -> Element {
+    inner.on_click(|| {})
+}
+
 /// 面板包装：吞掉点击，避免穿透到 underlay；并 portal 提升。
+///
+/// 勿再包一层 [`portal_panel`]：嵌套 `rui_portal` 会把内层面板 hoist 出居中舞台。
 pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
     if inner
         .attrs
@@ -586,8 +581,7 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
             .unwrap_or_else(|| format!("panel:{z}"));
         inner.set_attr(crate::layout::layout_tree::ATTR_PORTAL_KEY, key);
     }
-    inner = inner.on_click(|| {});
-    portal_panel(inner, z)
+    portal_panel(swallow_clicks(inner), z)
 }
 
 #[cfg(test)]
