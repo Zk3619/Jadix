@@ -64,7 +64,6 @@ pub mod stepper;
 pub mod switch;
 pub mod tabs;
 pub mod textarea;
-pub(crate) mod text_edit;
 pub mod toast;
 pub mod toggle;
 pub mod toggle_group;
