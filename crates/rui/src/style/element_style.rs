@@ -287,6 +287,9 @@ pub struct Style {
     pub aspect_ratio: Option<f32>,
     /// Emulate CSS `position: fixed` (taffy has no Fixed): Absolute layout + ignore ancestor scroll.
     pub position_fixed: bool,
+    /// CSS-like `backdrop-filter: blur(Npx)` radius in logical px. `0` = off.
+    /// Consumed by fullscreen modal underlays ([`crate::primitives::overlay`]); general elements TBD.
+    pub backdrop_blur: f32,
 }
 
 impl Default for Style {
@@ -360,6 +363,7 @@ impl Default for Style {
             scale: 1.0,
             aspect_ratio: None,
             position_fixed: false,
+            backdrop_blur: 0.0,
         }
     }
 }

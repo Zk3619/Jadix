@@ -8,7 +8,8 @@ use winit::window::Window;
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
-    InstanceInput, RuiPipeline, RuiTextRenderer, TexturedInstanceInput, TexturedQuadPipeline,
+    BackdropBlurPipeline, InstanceInput, RuiPipeline, RuiTextRenderer, TexturedInstanceInput,
+    TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -71,6 +72,7 @@ pub(super) struct AppState {
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     pub(super) pipeline: RuiPipeline,
     textured_pipeline: TexturedQuadPipeline,
+    backdrop_blur: BackdropBlurPipeline,
     image_textures: std::collections::HashMap<String, super::image_registry::GpuImageTexture>,
     textured_instance_buffer: wgpu::Buffer,
     textured_instance_capacity: usize,
@@ -471,6 +473,7 @@ impl AppState {
 
         let pipeline = RuiPipeline::new(&device, &config);
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
+        let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
         let textured_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Textured instance buffer"),
@@ -516,6 +519,7 @@ impl AppState {
             size,
             pipeline,
             textured_pipeline,
+            backdrop_blur,
             image_textures: std::collections::HashMap::new(),
             textured_instance_buffer,
             textured_instance_capacity: 256,
@@ -1123,7 +1127,7 @@ impl AppState {
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect.
-        crate::components::text_edit::sync_text_edit_paint_subtree(
+        crate::text_edit::sync_text_edit_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
@@ -1651,6 +1655,179 @@ impl AppState {
             None
         };
 
+        let max_backdrop_blur_logical = overlay_split
+            .bands
+            .iter()
+            .map(|b| b.backdrop_blur)
+            .fold(0.0_f32, f32::max);
+        let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
+            && Self::cpu_hybrid_text_only());
+        // Fullscreen modal underlay blur: capture page → blur → composite under overlays.
+        let use_backdrop_blur = allow_primitives
+            && max_backdrop_blur_logical > 0.5
+            && overlay_inst_start > 0
+            && !use_partial_damage;
+        if use_backdrop_blur {
+            self.backdrop_blur.ensure_size(
+                &self.device,
+                self.config.width,
+                self.config.height,
+                self.config.format,
+            );
+            if let Some(scene_view) = self.backdrop_blur.scene_view() {
+                {
+                    let mut page_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Backdrop Scene Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: scene_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(clear_color),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    page_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    page_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        0..overlay_inst_start as u32,
+                    );
+                    if overlay_tex_start > 0 {
+                        let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
+                        let mut ti = 0;
+                        while ti < overlay_tex_start {
+                            let key = scaled_tex[ti].texture_key.clone();
+                            let Some(gpu_img) = self.image_textures.get(&key) else {
+                                ti += 1;
+                                continue;
+                            };
+                            let run = scaled_tex[ti..overlay_tex_start]
+                                .iter()
+                                .take_while(|d| d.texture_key == key)
+                                .count();
+                            let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
+                                .iter()
+                                .map(|d| TexturedInstanceInput {
+                                    rect_pos: [d.rect[0], d.rect[1]],
+                                    rect_size: [d.rect[2], d.rect[3]],
+                                    tint: [1.0, 1.0, 1.0, d.opacity],
+                                })
+                                .collect();
+                            if !insts.is_empty() {
+                                if insts.len() > self.textured_instance_capacity {
+                                    let new_cap = insts.len().max(256);
+                                    self.textured_instance_buffer =
+                                        self.device.create_buffer(&wgpu::BufferDescriptor {
+                                            label: Some("Textured instance buffer"),
+                                            size: (tex_stride * new_cap) as u64,
+                                            usage: wgpu::BufferUsages::VERTEX
+                                                | wgpu::BufferUsages::COPY_DST,
+                                            mapped_at_creation: false,
+                                        });
+                                    self.textured_instance_capacity = new_cap;
+                                }
+                                self.queue.write_buffer(
+                                    &self.textured_instance_buffer,
+                                    0,
+                                    bytemuck::cast_slice(&insts),
+                                );
+                                page_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                                page_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                                page_pass.set_vertex_buffer(
+                                    0,
+                                    self.textured_pipeline.vertex_buffer.slice(..),
+                                );
+                                page_pass
+                                    .set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
+                                page_pass.set_index_buffer(
+                                    self.textured_pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                page_pass.draw_indexed(
+                                    0..self.textured_pipeline.num_indices,
+                                    0,
+                                    0..insts.len() as u32,
+                                );
+                            }
+                            ti += run;
+                        }
+                    }
+                    if !underline_instances.is_empty() {
+                        page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                        page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                        let underline_buffer =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Underline Instance Buffer (scene)"),
+                                    contents: bytemuck::cast_slice(&underline_instances),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        page_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                        page_pass.set_index_buffer(
+                            self.pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        page_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..underline_instances.len() as u32,
+                        );
+                    }
+                    self.text_renderer.render(&mut page_pass);
+                    if overlay_chrome_start > 0 {
+                        page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                        page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                        let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
+                        let chrome_buffer =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Input Chrome Instance Buffer (scene)"),
+                                    contents: bytemuck::cast_slice(chrome_slice),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        page_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                        page_pass.set_index_buffer(
+                            self.pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        page_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..chrome_slice.len() as u32,
+                        );
+                    }
+                }
+                self.backdrop_blur.blur(
+                    &self.device,
+                    &self.queue,
+                    &mut encoder,
+                    max_backdrop_blur_logical * ui_scale,
+                );
+                // Same UV space as capture — not TexturedQuadPipeline (Y-flipped for images).
+                self.backdrop_blur
+                    .blit_to(&self.queue, &mut encoder, &view);
+            }
+        }
+
+        let color_load = if use_backdrop_blur {
+            wgpu::LoadOp::Load
+        } else {
+            color_load
+        };
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -1679,10 +1856,9 @@ impl AppState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
-            let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
-                && Self::cpu_hybrid_text_only());
             // Page layer: rects under page glyphs (Solid/CSS stacking with portal overlays).
-            if allow_primitives && overlay_inst_start > 0 {
+            // Skipped when backdrop blur already composited the page.
+            if allow_primitives && overlay_inst_start > 0 && !use_backdrop_blur {
                 render_pass.draw_indexed(
                     0..self.pipeline.num_indices,
                     0,
@@ -1690,7 +1866,7 @@ impl AppState {
                 );
             }
 
-            if allow_primitives && overlay_tex_start > 0 {
+            if allow_primitives && overlay_tex_start > 0 && !use_backdrop_blur {
                 let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
                 let mut ti = 0;
                 while ti < overlay_tex_start {
@@ -1748,34 +1924,36 @@ impl AppState {
                 }
             }
 
-            for sd in &shadow_tex_draws {
-                let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
-                    continue;
-                };
-                let inst = TexturedInstanceInput {
-                    rect_pos: [sd.rect[0], sd.rect[1]],
-                    rect_size: [sd.rect[2], sd.rect[3]],
-                    tint: [1.0, 1.0, 1.0, 1.0],
-                };
-                let shadow_inst_buf =
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shadow instance"),
-                            contents: bytemuck::cast_slice(&[inst]),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-                render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                render_pass.set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
-                render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
-                render_pass.set_index_buffer(
-                    self.textured_pipeline.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
-                render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
+            if !use_backdrop_blur {
+                for sd in &shadow_tex_draws {
+                    let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
+                        continue;
+                    };
+                    let inst = TexturedInstanceInput {
+                        rect_pos: [sd.rect[0], sd.rect[1]],
+                        rect_size: [sd.rect[2], sd.rect[3]],
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                    };
+                    let shadow_inst_buf =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Shadow instance"),
+                                contents: bytemuck::cast_slice(&[inst]),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+                    render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
+                    render_pass.set_index_buffer(
+                        self.textured_pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
+                }
             }
 
-            if !underline_instances.is_empty() {
+            if !underline_instances.is_empty() && !use_backdrop_blur {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
@@ -1798,10 +1976,12 @@ impl AppState {
                 );
             }
 
-            self.text_renderer.render(&mut render_pass);
+            if !use_backdrop_blur {
+                self.text_renderer.render(&mut render_pass);
+            }
 
             // Page input chrome above page glyphs, below portal overlay.
-            if allow_primitives && overlay_chrome_start > 0 {
+            if allow_primitives && overlay_chrome_start > 0 && !use_backdrop_blur {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));

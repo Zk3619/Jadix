@@ -1,5 +1,6 @@
 //! GPU 与文本渲染：管线、实例数据、glyphon 封装及每帧文本准备。
 
+pub mod backdrop_blur;
 pub mod cpu_text;
 pub mod emoji_detect;
 pub mod emoji_layout;
@@ -16,6 +17,7 @@ pub(crate) mod text_prepare_debug;
 pub mod textured_pipeline;
 pub mod twemoji_name;
 
+pub use backdrop_blur::BackdropBlurPipeline;
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
 pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
 pub use prepare_text::prepare_text_frame;
