@@ -539,6 +539,15 @@ fn emoji_mode_label() -> &'static str {
     }
 }
 
+fn textarea_diag_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("RUI_TEXTAREA_DIAG")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
 fn apply_letter_spacing_approx(text: &str, spacing_px: f32, font_size: f32) -> String {
     if spacing_px.abs() < 0.5 || text.is_empty() {
         return text.to_string();
@@ -1194,6 +1203,9 @@ pub fn prepare_text_frame(
             let content_h = (metrics.height * ui_scale)
                 .max(hard_lines * line_height)
                 .max(line_height);
+            // Input/Textarea: never couple soft_h to leaf/chrome (`scaled_h`). Gallery
+            // symptom: drag-taller reveals lines 1→2→3 while empty grows — a short
+            // height_opt drops layout_runs, chrome bg reads as a "white cover".
             let soft_h = if is_input_text {
                 content_h + ink_fudge
             } else {
@@ -1216,6 +1228,13 @@ pub fn prepare_text_frame(
                 scaled_h.max(content_h).max(line_height) + ink_fudge
             };
             (scaled_w.max(0.0), soft_h)
+        };
+        // Unbounded height_opt for Input/Textarea: `Some(content soft_h)` still races with
+        // shaped_cache index reuse / stale short windows. `None` keeps every hard line.
+        let buffer_height_opt: Option<f32> = if is_input_text {
+            None
+        } else {
+            Some(buffer_soft_h)
         };
         let align = resolve_text_align(st.align, st.direction);
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
@@ -1288,18 +1307,20 @@ pub fn prepare_text_frame(
             if cache_hit && is_input_text {
                 let hard = info.text.split('\n').count().max(1);
                 let runs = entry.buffer.layout_runs().count();
-                let buf_h = entry.buffer.size().1.unwrap_or(0.0);
-                if runs < hard || buf_h + 0.5 < buffer_soft_h {
+                // Input path pins height_opt=None. Any leftover finite window (even if
+                // tall enough for soft_h) can still drop runs after edits — force miss.
+                let finite_height = entry.buffer.size().1.is_some();
+                if runs < hard || finite_height {
                     cache_hit = false;
                 }
             }
             let measured_text_w = if cache_hit {
                 if is_input_text {
-                    // Refresh content-tall window + clear scroll even on hit (no chrome stretch).
+                    // Pin unbounded / content-tall window + clear scroll on hit.
                     entry.buffer.set_size(
                         unsafe { &mut *text_renderer.font_system },
                         Some(buffer_soft_w),
-                        Some(buffer_soft_h),
+                        buffer_height_opt,
                     );
                     entry
                         .buffer
@@ -1320,13 +1341,11 @@ pub fn prepare_text_frame(
                     unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
-                // Input/Textarea: finite height_opt sized to *content* (not chrome).
-                // `None` also shapes all lines, but a later cache hit can revive a short
-                // window; always pin `Some(content soft_h)` + Scroll::default().
+                // Input/Textarea: `None` height shapes every hard line (external clip).
                 buffer.set_size(
                     unsafe { &mut *text_renderer.font_system },
                     Some(buffer_soft_w),
-                    Some(buffer_soft_h),
+                    buffer_height_opt,
                 );
                 let attrs = glyphon::Attrs::new()
                     .family(family)
@@ -1835,6 +1854,34 @@ pub fn prepare_text_frame(
         }
 
         let bounds = text_bounds_from_clip(tb.clip_bounds, config);
+        if let Some(info) = text_nodes.get(i) {
+            if textarea_diag_enabled()
+                && super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref())
+            {
+                let runs: Vec<_> = entry
+                    .buffer
+                    .layout_runs()
+                    .map(|r| (r.line_i, r.line_top, r.line_height))
+                    .collect();
+                let hard_n = info.text.split('\n').count();
+                let clip_h = tb.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+                eprintln!(
+                    "[TA-DIAG] tid={:?} text={:?} leaf_h={:.1} clip_h={:.1} \
+                     bounds_h={} top={} bottom={} buf_h={:?} hard={} runs_len={} runs={:?}",
+                    info.template_id,
+                    info.text,
+                    tb.box_h,
+                    clip_h,
+                    bounds.bottom - bounds.top,
+                    bounds.top,
+                    bounds.bottom,
+                    entry.buffer.size().1,
+                    hard_n,
+                    runs.len(),
+                    runs,
+                );
+            }
+        }
         text_areas.push(glyphon::TextArea {
             buffer: &entry.buffer,
             left: tb.x,

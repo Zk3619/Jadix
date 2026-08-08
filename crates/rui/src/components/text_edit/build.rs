@@ -198,6 +198,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .h(height)
             .relative(true)
             .flex_col()
+            .flex_shrink(0.0)
             .rounded("0.375rem")
     } else {
         single_line_container.expect("single-line text edit requires single_line_container")
@@ -303,21 +304,24 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     }
 
     let text_region: Element = if multiline {
-        // Fill chrome; clip overflow. Engine scroll viewport disabled — stale
-        // scroll_offset was shifting glyphs/caret into a flat band inside a tall box.
-        Element::new()
+        // Absolute fill of chrome so overflow clip always matches the field box.
+        // Flex `h(100%)`+`min_h(0)` could leave a short clip while chrome bg stayed
+        // tall — gallery: only line 1 visible until drag grew the clip window.
+        // Engine scroll viewport stays disabled (stale scroll_offset flattened glyphs).
+        let mut region = Element::new()
+            .absolute()
+            .inset(0.0)
             .w("100%")
             .h("100%")
-            .flex_grow(1.0)
-            .min_h(0.0)
-            .min_w("0")
             .flex_col()
             .flex_items("start")
             .px("0.75rem")
             .py("0.5rem")
             .overflow_x("hidden")
             .overflow_y("hidden")
-            .child(text_el)
+            .child(text_el);
+        region.template_id = Some(format!("__rui_textarea:{field_id}:region"));
+        region
     } else {
         hstack()
             .flex_grow(1.0)

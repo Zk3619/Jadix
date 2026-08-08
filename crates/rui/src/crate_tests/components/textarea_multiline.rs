@@ -158,6 +158,145 @@ fn textarea_leaf_height_ignores_chrome_resize() {
     );
 }
 
+/// Gallery symptom: short chrome shows 1 of 3 lines; dragging taller reveals lines AND
+/// grows empty space. Distinguish flex-shrunk leaf (bad) vs overflow clip (ok).
+#[test]
+fn textarea_short_chrome_clips_content_tall_leaf_not_flex_shrink() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-ml-short-clip";
+    let tid = input_text_template_id(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+    let pad_y = 0.5 * 16.0;
+    // Barely ~1 line visible inside chrome (rows padding).
+    let chrome_short = lh + pad_y * 2.0 + 4.0;
+    let chrome_mid = lh * 2.0 + pad_y * 2.0 + 4.0;
+    let chrome_tall = lh * 6.0 + pad_y * 2.0;
+
+    use_signal(&input_value_signal_key(id), String::new).set("啊\n啊\n啊".into());
+    let h_key = crate::utils::text_field::textarea_height_signal_key(id);
+    use_signal(&h_key, || 0.0_f32).set(chrome_short);
+
+    let el: Element = textarea(id).rows(4).resizable(true).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(400.0).h(500.0).child(el);
+    let result_short = tree.build_and_layout(&mut root, 400.0, 500.0, [-1.0, -1.0]);
+    let leaf_short = find_tid(&root, &tid).expect("text leaf");
+    let leaf_h_short = leaf_short.layout_bounds[3];
+    let chrome_h_short = root.children[0].layout_bounds[3];
+    let info_short = result_short
+        .text_nodes
+        .iter()
+        .find(|n| n.template_id.as_deref() == Some(tid.as_str()))
+        .expect("text info short");
+    let clip_h_short = info_short.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+
+    // Grow through mid → tall like a drag.
+    for chrome in [chrome_mid, chrome_tall] {
+        use_signal(&h_key, || 0.0_f32).set(chrome);
+        let mut impact = LayoutStatus::Clean;
+        sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+        let _ = tree.build_and_layout_fast(&mut root, 400.0, 500.0, [-1.0, -1.0], false, false);
+    }
+    let result_tall = tree.build_and_layout_fast(&mut root, 400.0, 500.0, [-1.0, -1.0], false, false);
+    let leaf_h_tall = find_tid(&root, &tid).expect("text leaf tall").layout_bounds[3];
+    let chrome_h_tall = root.children[0].layout_bounds[3];
+    let info_tall = result_tall
+        .text_nodes
+        .iter()
+        .find(|n| n.template_id.as_deref() == Some(tid.as_str()))
+        .expect("text info tall");
+    let clip_h_tall = info_tall.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+
+    eprintln!(
+        "[diag] chrome_short={chrome_h_short:.1} leaf_short={leaf_h_short:.1} clip_short={clip_h_short:.1} info_h_short={:.1}",
+        info_short.height
+    );
+    eprintln!(
+        "[diag] chrome_tall={chrome_h_tall:.1} leaf_tall={leaf_h_tall:.1} clip_tall={clip_h_tall:.1} info_h_tall={:.1}",
+        info_tall.height
+    );
+
+    // Content-driven leaf must stay ~3 lines; chrome is clamped to rows min (~4lh).
+    assert!(
+        leaf_h_short > lh * 2.7,
+        "text leaf must stay content-tall (leaf={leaf_h_short} lh={lh} chrome={chrome_h_short})"
+    );
+    assert!(
+        (leaf_h_short - leaf_h_tall).abs() < 1.0,
+        "leaf must not grow with chrome drag (short={leaf_h_short} tall={leaf_h_tall})"
+    );
+    assert!(
+        clip_h_tall > clip_h_short + lh * 0.5,
+        "clip window should grow with chrome (short={clip_h_short} tall={clip_h_tall})"
+    );
+    // At rows=4 min chrome, clip is taller than 3-line leaf — so "only first line
+    // visible when small" is NOT explained by overflow clipping the leaf.
+    assert!(
+        clip_h_short + 0.5 >= leaf_h_short,
+        "min chrome should fully fit content leaf (clip={clip_h_short} leaf={leaf_h_short}); \
+         if gallery still hides lines 2–3, look at glyphon soft_h / paint, not flex shrink"
+    );
+}
+
+/// Chrome uses `flex_shrink(0)` + absolute text_region fill: parent flex must not
+/// crush the field or leave a short clip while the white chrome stays tall.
+#[test]
+fn textarea_parent_flex_shrink_does_not_crush_leaf_height() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-ml-parent-shrink";
+    let tid = input_text_template_id(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+
+    use_signal(&input_value_signal_key(id), String::new).set("啊\n啊\n啊".into());
+    let h_key = crate::utils::text_field::textarea_height_signal_key(id);
+    use_signal(&h_key, || 0.0_f32).set(280.0);
+
+    let el: Element = textarea(id).rows(4).resizable(true).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new()
+        .w(400.0)
+        .h(lh * 1.6)
+        .flex_col()
+        .child(el);
+    let result = tree.build_and_layout(&mut root, 400.0, lh * 1.6, [-1.0, -1.0]);
+    let leaf_h = find_tid(&root, &tid).expect("text leaf").layout_bounds[3];
+    let chrome_h = root.children[0].layout_bounds[3];
+    let info = result
+        .text_nodes
+        .iter()
+        .find(|n| n.template_id.as_deref() == Some(tid.as_str()))
+        .expect("text info");
+    let clip_h = info.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+
+    eprintln!("[diag-parent-shrink] chrome={chrome_h:.1} leaf={leaf_h:.1} clip={clip_h:.1}");
+
+    assert!(
+        leaf_h > lh * 2.7,
+        "leaf must stay ~3 lines under parent pressure (leaf={leaf_h})"
+    );
+    // Prefer keeping the signaled chrome height over being crushed by a short parent.
+    assert!(
+        chrome_h > 200.0,
+        "flex_shrink(0) chrome should keep height under parent pressure (chrome={chrome_h})"
+    );
+    assert!(
+        (clip_h - chrome_h).abs() < 1.0,
+        "absolute text_region clip must fill chrome (clip={clip_h} chrome={chrome_h})"
+    );
+    assert!(
+        clip_h + 0.5 >= leaf_h,
+        "clip must fit content leaf (clip={clip_h} leaf={leaf_h})"
+    );
+}
+
 /// Glyph Metrics must stay at style font_size/line_box — never track chrome/leaf height.
 #[test]
 fn textarea_shaped_line_height_matches_style_not_chrome() {
