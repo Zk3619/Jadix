@@ -113,6 +113,25 @@ impl Parse for RsxNode {
             return Ok(RsxNode::Expr(expr));
         }
 
+        // Bare text children: `<Button>Dialog</Button>` / `<DialogTrigger>Edit Profile</DialogTrigger>`
+        // (consecutive idents joined with spaces). Not used when the next token is `<`.
+        if input.peek(Ident) {
+            let first: Ident = input.parse()?;
+            let span = first.span();
+            let mut parts = vec![first.to_string()];
+            while input.peek(Ident) {
+                let next: Ident = input.parse()?;
+                parts.push(next.to_string());
+            }
+            let joined = parts.join(" ");
+            let lit = syn::LitStr::new(&joined, span);
+            let expr = syn::Expr::Lit(syn::ExprLit {
+                attrs: Vec::new(),
+                lit: syn::Lit::Str(lit),
+            });
+            return Ok(RsxNode::Expr(expr));
+        }
+
         // Otherwise it must be `<`
         input.parse::<Token![<]>()?;
         let name: Ident = input.parse()?;
@@ -639,6 +658,8 @@ fn expand_node(
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
+                || name_str == "Dialog"
+                || name_str == "DialogContent"
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Fragment"
@@ -650,6 +671,113 @@ fn expand_node(
                         .find(|(k, _)| k == &syn::Ident::new(name, proc_macro2::Span::call_site()))
                         .map(|(_, v)| v)
                 };
+
+                if name_str == "Dialog" {
+                    // Provide context *before* building Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        // Fragment so Trigger can sit in parent HStack/VStack without an extra column.
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Dialog#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "DialogContent" {
+                    let show_close = get_attr("show_close")
+                        .or_else(|| get_attr("showClose"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let overlay_color = get_attr("overlay_color")
+                        .or_else(|| get_attr("overlayColor"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_opacity = get_attr("overlay_opacity")
+                        .or_else(|| get_attr("overlayOpacity"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_overlay = get_attr("close_on_overlay_click")
+                        .or_else(|| get_attr("closeOnOverlayClick"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let overlay_blur = get_attr("overlay_blur")
+                        .or_else(|| get_attr("overlayBlur"))
+                        .or_else(|| get_attr("backdrop_blur"))
+                        .or_else(|| get_attr("backdropBlur"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::dialog_content(
+                            rui::components::DialogContentOpts {
+                                show_close: #show_close,
+                                overlay_color: #overlay_color,
+                                overlay_opacity: #overlay_opacity,
+                                close_on_overlay_click: #close_on_overlay,
+                                overlay_blur: #overlay_blur,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
 
                 if name_str == "Fragment" {
                     let mut expanded_children = Vec::new();
@@ -1178,6 +1306,8 @@ fn expand_node(
                             | "boxShadowColor"
                             | "box_shadow_blur"
                             | "boxShadowBlur"
+                            | "backdrop_blur"
+                            | "backdropBlur"
                             | "box_shadow_offset_x"
                             | "boxShadowOffsetX"
                             | "box_shadow_offset_y"
@@ -1368,6 +1498,7 @@ fn expand_node(
                                 "boxShadow" | "box-shadow" => "box_shadow",
                                 "boxShadowColor" => "box_shadow_color",
                                 "boxShadowBlur" => "box_shadow_blur",
+                                "backdropBlur" => "backdrop_blur",
                                 "boxShadowOffsetX" => "box_shadow_offset_x",
                                 "boxShadowOffsetY" => "box_shadow_offset_y",
                                 "boxShadowSpread" => "box_shadow_spread",
@@ -2013,6 +2144,9 @@ fn expand_node(
                     }
                     "box_shadow_blur" | "boxShadowBlur" => {
                         element = quote! { #element.box_shadow_blur(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "backdrop_blur" | "backdropBlur" => {
+                        element = quote! { #element.backdrop_blur(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
                     "box_shadow_offset_x" | "boxShadowOffsetX" => {
                         element = quote! { #element.box_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }

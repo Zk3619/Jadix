@@ -7,14 +7,14 @@
 //! 侧栏分区：基础 · 表单 · 浮层 · 数据 · 导航 · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`
 
-use rui::app::navigator::{Navigator, Presentation, PushOptions};
+use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
-use rui::components::{navigation_host, tabs_headless, TABSTRIP_FOCUS_PREFIX};
+use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
 use rui::core::reactivity::{use_signal, Signal};
 use rui::core::tree::Element;
-use rui::primitives::{hstack, r#box, vstack};
+use rui::primitives::{hstack, r#box, vstack, Portal, PortalProps};
 use rui::style::{parse_color, parse_text_color};
 use rui::ui;
 use std::collections::HashSet;
@@ -231,14 +231,34 @@ fn InputShowcase() -> rui::core::tree::Element {
 #[component]
 fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
     ui! {
-        <MyCard title="2b) Picker placeholders (WIP)">
+        <MyCard title="2b) Pickers (file dialog · color · date · time)">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "file / directory / color / date* / time — 分模块占位（非 Input type）"
+                    "文件/目录走 utils::file_dialog 能力；颜色/日期/时间为组件。"
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <FilePicker id="gal-file" accept="image/*" flex_grow="1" />
-                    <DirectoryPicker id="gal-dir" flex_grow="1" />
+                    <Button
+                        id="gal-file"
+                        variant="outline"
+                        size="sm"
+                        flex_grow="1"
+                        on_click={move || {
+                            let _ = rui::utils::pick_files_into("gal-file", "image/*", false);
+                        }}
+                    >
+                        "Choose image…"
+                    </Button>
+                    <Button
+                        id="gal-dir"
+                        variant="outline"
+                        size="sm"
+                        flex_grow="1"
+                        on_click={move || {
+                            let _ = rui::utils::pick_folder_into("gal-dir");
+                        }}
+                    >
+                        "Choose folder…"
+                    </Button>
                     <ColorPicker id="gal-color" value="#3b82f6" flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
@@ -319,8 +339,8 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"Box-shadow — outset"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0.25rem 0.25rem 0.75rem 0 ring" />
-                        <Label text_size="0.6rem" color="muted-foreground">"blur + ring"</Label>
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0.25rem 0.25rem 0.75rem 0 black" />
+                        <Label text_size="0.6rem" color="muted-foreground">"blur + black"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
@@ -328,11 +348,11 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.6rem" color="muted-foreground">"dx&lt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0 0 0.5rem -0.125rem border" />
+                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0 0 0.5rem -0.125rem foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"spread&lt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" box_shadow="0 0.125rem 0.25rem 0.25rem muted-foreground" />
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" box_shadow="0 0.125rem 0.25rem 0.25rem foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"spread&gt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
@@ -340,12 +360,12 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.6rem" color="muted-foreground">"直角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="1.25rem" box_shadow="0 0.375rem 1rem 0 ring" />
+                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="1.25rem" box_shadow="0 0.375rem 1rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"大圆角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem"
-                            box_shadow_color="primary"
+                            box_shadow_color="foreground"
                             box_shadow_offset_x="0.375"
                             box_shadow_offset_y="0.375"
                             box_shadow_blur="0.625"
@@ -361,7 +381,7 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.6rem" color="muted-foreground">"inset 均匀"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="0.5rem" box_shadow="inset 0.125rem 0.125rem 0.5rem 0 ring" />
+                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="0.5rem" box_shadow="inset 0.125rem 0.125rem 0.5rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset+offset"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
@@ -370,15 +390,15 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
-                            box_shadow="inset -0.125rem -0.125rem 0.5rem -0.0625 border" />
+                            box_shadow="inset -0.125rem -0.125rem 0.5rem -0.0625 foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 负 offset+负 spread"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0" box_shadow="inset 0 0.25rem 0.75rem 0 muted-foreground" />
+                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0" box_shadow="inset 0 0.25rem 0.75rem 0 foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 直角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="primary" rounded="1rem" box_shadow="inset 0 0 1rem 0.125rem primary" />
+                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="1rem" box_shadow="inset 0 0 1rem 0.125rem black" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 大圆角"</Label>
                     </VStack>
                 </HStack>
@@ -386,15 +406,15 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                 <HStack gap="1rem" wrap="wrap" items="start">
                     <VStack gap="0.35rem" items="start">
                         <Label text_size="1.1rem" font_weight="800" color="foreground"
-                            text_shadow="0.125rem 0.125rem 0.25rem muted-foreground">
+                            text_shadow="0.125rem 0.125rem 0.25rem black">
                             "简写 dx/dy/blur"
                         </Label>
-                        <Label text_size="0.65rem" color="muted-foreground">"简写 + 语义色"</Label>
+                        <Label text_size="0.65rem" color="muted-foreground">"简写 + black"</Label>
                     </VStack>
                     <VStack gap="0.35rem" items="start">
                         // text_shadow_* 子属性与简写统一：裸数默认按 rem 解释，建议显式写 rem/px 提升可读性。
-                        <Label text_size="1.1rem" font_weight="800" color="primary-foreground"
-                            text_shadow_color="foreground"
+                        <Label text_size="1.1rem" font_weight="800" color="foreground"
+                            text_shadow_color="black"
                             text_shadow_offset_x="0.1875rem"
                             text_shadow_offset_y="0.1875rem"
                             text_shadow_blur="0.375rem">
@@ -404,28 +424,28 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                     </VStack>
                     <VStack gap="0.35rem" items="start">
                         <Label text_size="1.1rem" font_weight="800" color="destructive"
-                            text_shadow="-0.0625rem -0.0625rem 0.125rem muted-foreground">
+                            text_shadow="-0.0625rem -0.0625rem 0.125rem black">
                             "负偏移"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"左上浅影"</Label>
                     </VStack>
                     <VStack gap="0.35rem" items="start">
-                        <Label text_size="1.1rem" font_weight="800" color="secondary-foreground"
-                            text_shadow="0 0.25rem 0.75rem border">
+                        <Label text_size="1.1rem" font_weight="800" color="foreground"
+                            text_shadow="0 0.25rem 0.75rem black">
                             "重模糊"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"仅 dy + 大 blur"</Label>
                     </VStack>
                     <VStack gap="0.35rem" items="start">
-                        <Label text_size="1.1rem" font_weight="800" color="accent-foreground"
-                            text_shadow="0.25rem 0 0 ring">
+                        <Label text_size="1.1rem" font_weight="800" color="foreground"
+                            text_shadow="0.25rem 0 0 black">
                             "横向偏移"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"blur=0"</Label>
                     </VStack>
                     <VStack gap="0.35rem" items="start">
                         <Label text_size="0.95rem" font_weight="700" color="foreground" leading="tight"
-                            text_shadow="0.0625rem 0.0625rem 0.1875rem muted-foreground">
+                            text_shadow="0.0625rem 0.0625rem 0.1875rem black">
                             "多行 Label\n第二行仍应有阴影"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"换行"</Label>
@@ -1191,14 +1211,14 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
 fn TextareaComboboxShowcase() -> Element {
     let notes = use_signal("gal_textarea_notes", String::new);
     let combo = use_signal("gal_combo_city", || "sh".to_string());
-    let seg = use_signal("gal_segmented_view", || "list".to_string());
+    let tab_view = use_signal("gal_tabs_list_view", || "list".to_string());
     let align = use_signal("gal_toggle_align", || "left".to_string());
 
     ui! {
-        <MyCard title="Textarea · Combobox · Segmented · ToggleGroup">
+        <MyCard title="Textarea · Combobox · TabsList · ToggleGroup">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "多行输入、可过滤 Combobox、分段控件与 ToggleGroup。"
+                    "多行输入、可过滤 Combobox、TabsList 与 ToggleGroup。"
                 </Label>
                 <Textarea id="gal-textarea" placeholder="多行备注…" rows={4} value={notes} />
                 <Label text_size="0.875rem" leading="normal">{ format!("Textarea: {}", notes.get()) }</Label>
@@ -1215,8 +1235,8 @@ fn TextareaComboboxShowcase() -> Element {
                 ) }
                 <Label text_size="0.875rem">{ format!("Combobox: {}", combo.get()) }</Label>
                 { Element::from(
-                    segmented("gal-seg")
-                        .value_signal(seg)
+                    tabs_list("gal-tabs")
+                        .value_signal(tab_view)
                         .default_value("list")
                         .options(vec![
                             ("list".into(), "List".into()),
@@ -1224,7 +1244,7 @@ fn TextareaComboboxShowcase() -> Element {
                             ("map".into(), "Map".into()),
                         ]),
                 ) }
-                <Label text_size="0.875rem">{ format!("Segmented: {}", seg.get()) }</Label>
+                <Label text_size="0.875rem">{ format!("TabsList: {}", tab_view.get()) }</Label>
                 { Element::from(
                     toggle_group("gal-align")
                         .value_signal(align)
@@ -1249,7 +1269,6 @@ fn OverlayFeedbackShowcase() -> Element {
     let sheet_open = use_signal("gal_sheet_open", || false);
     let progress_val = use_signal("gal_progress", || 0.45f32);
     let open_cmd = cmd_open;
-    let open_dialog = dialog_open;
     let open_alert = alert_open;
     let open_sheet = sheet_open;
     let bump = progress_val;
@@ -1263,18 +1282,55 @@ fn OverlayFeedbackShowcase() -> Element {
             log::info!("gallery command: ping");
         }))
         .into();
-    let dialog_el: Element = dialog_panel(dialog_open, "Gallery Dialog")
-        .id("gal-dialog")
-        .child(|| {
-            ui! {
-                <VStack gap="0.5rem">
-                    <Label text_size="0.875rem" color="muted-foreground">
-                        "Esc 关闭；面板经 portal_overlay 栈管理。"
-                    </Label>
-                </VStack>
-            }
-        })
-        .into();
+    let dialog_el: Element = {
+        let open = dialog_open;
+        ui! {
+            <Dialog id="gal-dialog" open={open}>
+                <DialogTrigger>
+                    <Button id="gal-dialog-open" variant="outline" size="sm">Dialog</Button>
+                </DialogTrigger>
+                <DialogContent overlay_blur={8.0}>
+                    <DialogHeader>
+                        <DialogTitle>Gallery Dialog</DialogTitle>
+                        <DialogDescription>
+                            "Header / 可滚动 Body / Footer。中间区域滚动，底栏固定。"
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogBody>
+                        <VStack gap="0.5rem">
+                            <Label text_size="0.875rem">"行 1 — 演示长内容"</Label>
+                            <Label text_size="0.875rem">"行 2"</Label>
+                            <Label text_size="0.875rem">"行 3"</Label>
+                            <Label text_size="0.875rem">"行 4"</Label>
+                            <Label text_size="0.875rem">"行 5"</Label>
+                            <Label text_size="0.875rem">"行 6"</Label>
+                            <Label text_size="0.875rem">"行 7"</Label>
+                            <Label text_size="0.875rem">"行 8"</Label>
+                        </VStack>
+                    </DialogBody>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            on_click={move || open.set(false)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="default"
+                            size="sm"
+                            on_click={move || {
+                                toast_push("Dialog confirmed", 1500);
+                                open.set(false);
+                            }}
+                        >
+                            Confirm
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        }
+    };
     let alert_el: Element = alert_dialog("gal-alert", "确认操作")
         .open_signal(alert_open)
         .description("此操作仅作 Gallery 演示，不会修改数据。")
@@ -1327,9 +1383,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     <Button id="gal-cmd-open" variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
                         "Command"
                     </Button>
-                    <Button id="gal-dialog-open" variant="outline" size="sm" on_click={move || open_dialog.set(true)}>
-                        "Dialog"
-                    </Button>
+                    { dialog_el }
                     <Button id="gal-alert-open" variant="outline" size="sm" on_click={move || open_alert.set(true)}>
                         "Alert"
                     </Button>
@@ -1353,7 +1407,6 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>{ "Bump +10%" }</Button>
                 </VStack>
                 { cmd_el }
-                { dialog_el }
                 { alert_el }
                 { sheet_el }
             </VStack>
@@ -1370,25 +1423,16 @@ fn DataChartShowcase() -> Element {
         s
     });
 
-    let table_el: Element = data_table("gal-table")
+    let table_el: Element = table("gal-table")
         .columns([
-            DataColumn {
-                header: "Name".into(),
-                width: 120.0,
-            },
-            DataColumn {
-                header: "Role".into(),
-                width: 100.0,
-            },
-            DataColumn {
-                header: "Score".into(),
-                width: 80.0,
-            },
+            TableColumn::new("name", "Name").width(120.0),
+            TableColumn::new("role", "Role").width(100.0),
+            TableColumn::new("score", "Score").width(80.0),
         ])
         .row_count(40)
         .height(200.0)
         .selected_signal(table_sel)
-        .render_cell(|r, c| match c {
+        .cell(|r, c| match c {
             0 => format!("Item {r:02}"),
             1 => if r % 2 == 0 { "Admin" } else { "User" }.into(),
             _ => format!("{}", 60 + (r % 40)),
@@ -1465,12 +1509,12 @@ fn DataChartShowcase() -> Element {
         .into();
 
     ui! {
-        <MyCard title="DataTable · TreeView · Chart · Carousel">
+        <MyCard title="Table · TreeView · Chart · Carousel">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "数据面：表格 / 树 / 柱状与折线 / 轮播。"
+                    "数据面：Table（columns+cell，可排序）/ 树 / 柱状与折线 / 轮播。"
                 </Label>
-                <Label font_weight="600" text_size="0.875rem">{ "DataTable" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "Table" }</Label>
                 { table_el }
                 <Label text_size="0.875rem">
                     { format!("Selected row: {:?}", table_sel.get()) }
@@ -1483,6 +1527,60 @@ fn DataChartShowcase() -> Element {
                 { line }
                 <Label font_weight="600" text_size="0.875rem">{ "Carousel" }</Label>
                 { carousel_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn NavbarNavigationMenuShowcase() -> Element {
+    let picked = use_signal("gal_navmenu_picked", || "—".to_string());
+    let nav_menu: Element = navigation_menu("gal-navmenu")
+        .link("overview", "Overview", {
+            let picked = picked;
+            move || picked.set("Overview".into())
+        })
+        .trigger(
+            "comp",
+            "Components",
+            vec![
+                NavigationMenuLink::new("alert", "Alert Dialog", {
+                    let picked = picked;
+                    move || picked.set("Alert Dialog".into())
+                })
+                .description("Modal confirmation surface"),
+                NavigationMenuLink::new("tabs", "Tabs", {
+                    let picked = picked;
+                    move || picked.set("Tabs".into())
+                })
+                .description("Headless strip + TabsList shell"),
+            ],
+        )
+        .link("about", "About", {
+            let picked = picked;
+            move || picked.set("About".into())
+        })
+        .into();
+    let brand: Element = label("gal-nav-brand").text("RUI").into();
+    let action: Element = button("gal-nav-action")
+        .variant("outline")
+        .size("sm")
+        .text("Action")
+        .into();
+    let bar: Element = navbar("gal-navbar")
+        .brand(brand)
+        .center_child(nav_menu)
+        .action(action)
+        .into();
+
+    ui! {
+        <MyCard title="Navbar · NavigationMenu">
+            <VStack w="100%" gap="0.75rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Navbar 是布局壳；center 嵌 NavigationMenu（链接导览，非 Menubar 命令、非页面栈）。"
+                </Label>
+                { bar }
+                <Label text_size="0.875rem">{ format!("Selected: {}", picked.get()) }</Label>
             </VStack>
         </MyCard>
     }
@@ -1601,6 +1699,7 @@ fn gallery_section_body(section: &str) -> Element {
         "navigation" => ui! {
             <VStack w="100%" gap="1rem" p="1.5rem">
                 <Label text_size="1.25rem" font_weight="700">"导航"</Label>
+                <NavbarNavigationMenuShowcase />
                 <MenubarStepperShowcase />
                 <NavigatorShowcase />
                 <SelectPopoverTabShowcase />
