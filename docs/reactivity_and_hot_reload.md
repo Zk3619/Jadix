@@ -81,4 +81,4 @@ Grid drag / Navigator / VirtualList / Portal 等拓扑变化场景继续用结�
 - [components/button.rs](../crates/rui/src/components/button.rs) / [input.rs](../crates/rui/src/components/input.rs)
 - [rui_macros](../crates/rui_macros/src/lib.rs)
 
-回归测试：`reactive_tests`、`bind_text_tests`、`core::reactivity::tests`、`headless_layout_tests`。
+回归测试：`crate_tests::reactive`、`core::reactivity::tests`、`crate_tests::layout::headless_smoke`。

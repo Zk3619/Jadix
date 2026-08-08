@@ -32,6 +32,8 @@
 | `toggle` | 布尔切换、disabled、受控/非受控 |
 | `popup` | 打开状态、锚点、点击外部关闭、Escape（依赖键盘路由） |
 
+Input 与 Textarea 为独立样式壳；共享编辑能力在 `utils/text_field`，共享 chrome 构建/绘制在私有模块 `components/text_edit`。
+
 复合组件（Dialog、Dropdown、Tabs）在无头逻辑稳定后，基于 `popup` / `toggle` 等与样式层组合实现。
 
 ## 与双书写面的关系（`ui!` ↔ Builder）
@@ -56,4 +58,4 @@
 
 ## 无窗口布局测试
 
-不启 `winit` 窗口即可跑布局：构造 [`Element`](../crates/rui/src/core/tree.rs) 树，调用 [`LayoutTree::build_and_layout`](../crates/rui/src/layout/layout_tree.rs)，再断言 `layout_bounds` 宽高 > 0。库测见 `crates/rui/test/headless_layout.rs`（`cargo test -p rui --lib headless_build_and_layout`）。
+不启 `winit` 窗口即可跑布局：构造 [`Element`](../crates/rui/src/core/tree.rs) 树，调用 [`LayoutTree::build_and_layout`](../crates/rui/src/layout/layout_tree.rs)，再断言 `layout_bounds` 宽高 > 0。库测见 `crates/rui/src/crate_tests/layout/headless_smoke.rs`（`cargo test -p rui --lib headless_build_and_layout`）。

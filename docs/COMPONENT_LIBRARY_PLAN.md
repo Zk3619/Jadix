@@ -51,7 +51,7 @@
 | 项 | 事实 |
 |----|------|
 | 组件源文件 | `components/` ≈ 49 模块（含 stub / 辅助） |
-| 自动化覆盖 | 库测以响应式/布局/bind 为主（如 `components_reactive_sync`、`bind_text`）；**多数组件无行为/像素验收**；另有 `diagnose_*` 说明产品路径仍在排障 |
+| 自动化覆盖 | 库测以响应式/布局/bind 为主（`src/crate_tests/`）；**多数组件无行为/像素验收** |
 | Golden | 总计划基线：缺组件场景矩阵（仅少量 offscreen） |
 | 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖** |
 | 原语 | `primitives/`：box / interactive / text / path；**无**独立 popup/toggle 模块 |
@@ -153,9 +153,9 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `crates/rui/test/`；可选 offscreen |
-| **任务** | ① Button / Input / Dialog / Tabs / Checkbox\|Switch：`build_and_layout` 宽高 > 0；② 已有 reactive sync 保持绿；③ 将有价值的 `diagnose_*` 升为正式回归测或关闭并修根因 |
-| **验收** | `cargo test -p rui --lib` 含上述布局/行为测；diagnose 不长期当「唯一文档」 |
+| **路径** | `crates/rui/src/crate_tests/`；可选 offscreen |
+| **任务** | ① Button / Input / Dialog / Tabs / Checkbox\|Switch：`build_and_layout` 宽高 > 0；② 已有 reactive sync 保持绿；③ 场景回归按 reactive/layout/components/interaction 维护（原 `diagnose_*` 已升为正式测） |
+| **验收** | `cargo test -p rui --lib` 含上述布局/行为测 |
 | **状态** | ☐ |
 
 ### C-WP-V.3 P0 修障冲刺

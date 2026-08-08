@@ -114,7 +114,7 @@ flowchart TB
 | Store 加深 | `produce` 式原地更新 | `core/store.rs` |
 | Anchors 挂 Owner | REGISTERED_* 随 owner 回收 | `app/reactive.rs` |
 | ID 策略 | scoped `template_id` / `focus_id` 辅助 | gap §3.2 |
-| Headless 布局测试 | 无窗口 `build_and_layout` + bounds | `test/` |
+| Headless 布局测试 | 无窗口 `build_and_layout` + bounds | `src/crate_tests/layout/` |
 | DX 文档 | reactivity / headless 更新 | docs |
 
 **验收**：Resource 失败可被 ErrorBoundary 接住；Switch 有测；headless 布局测进 CI。
