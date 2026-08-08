@@ -124,6 +124,7 @@ pub(super) fn cursor_kind_to_winit(c: CursorKind) -> CursorIcon {
         CursorKind::Pointer => CursorIcon::Pointer,
         CursorKind::Text => CursorIcon::Text,
         CursorKind::NotAllowed => CursorIcon::NotAllowed,
+        CursorKind::NwseResize => CursorIcon::NwseResize,
     }
 }
 
@@ -242,14 +243,22 @@ pub(super) fn find_input_text_leaf_for_rest(
     None
 }
 
-/// 指针 `(x,y)` 是否落在某 `input:` 的文本叶上；返回 `rest`、盒、`display` 与样式（用于按下时命中）。
+/// 指针 `(x,y)` 是否落在某 `input:` / `textarea:` 文本叶上。
+/// 返回 `(rest, bounds, display, style, scroll, focus_id)`。
 pub(super) fn find_input_text_at(
     el: &Element,
     inherited_fid: Option<&str>,
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
-) -> Option<(String, [f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+) -> Option<(
+    String,
+    [f32; 4],
+    String,
+    crate::style::TextStyle,
+    [f32; 2],
+    String,
+)> {
     if pointer_events_blocked(el) {
         return None;
     }
@@ -290,15 +299,20 @@ pub(super) fn find_input_text_at(
     }
     if let Some(text) = &el.text {
         if let Some(id) = fid {
-            if let Some(rest) = id.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
+            let rest = id
+                .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
+                .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
+            if let Some(rest) = rest {
                 if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
                     // Note: Here we still return el.scroll_offset for specific input metrics.
+                    // Fourth tuple slot carries the full focus_id so callers keep `textarea:` vs `input:`.
                     return Some((
                         rest.to_string(),
                         [vx, vy, b[2], b[3]],
                         text.clone(),
                         el.text_style.clone(),
                         el.scroll_offset,
+                        id.to_string(),
                     ));
                 }
             }

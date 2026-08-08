@@ -2,7 +2,7 @@
 
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
+    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
 };
 use crate::layout::layout_tree::LayoutTree;
 
@@ -136,12 +136,22 @@ fn repeated_hoist_without_source_clears_layer() {
     let mut root = Element::new().children([Element::new().w(100.0)]);
     let mut ghost = Element::new().w("100%").h("100%");
     ghost.set_attr(ATTR_HOISTED_PORTAL, "1");
+    ghost.set_attr(ATTR_PORTAL_KEY, "ghost");
     root.children.push(ghost);
 
-    assert_eq!(hoist_portal_subtrees(&mut root), 0);
-    // Empty layer still exists as the Solid body mount point.
+    // No slot / rui_portal source → retention prune drops the orphan and reports dirty.
+    assert!(
+        hoist_portal_subtrees(&mut root) >= 1,
+        "orphan hoisted nodes must be pruned"
+    );
     let layer = portal_layer(&root).expect("empty portal layer");
     assert!(layer.children.is_empty());
+    assert!(
+        root.children
+            .iter()
+            .all(|c| c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) != Some("1")),
+        "orphans outside the layer must also be pruned"
+    );
 }
 
 #[test]

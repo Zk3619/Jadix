@@ -551,6 +551,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         click_count: 0,
         scrollbar_drag: None,
         content_scroll_drag: None,
+        textarea_resize_drag: None,
         primary_touch_id: None,
         active_touches: std::collections::HashMap::new(),
         pinch_prev_dist: None,

@@ -1189,6 +1189,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
 
 #[component]
 fn TextareaComboboxShowcase() -> Element {
+    let notes = use_signal("gal_textarea_notes", String::new);
     let combo = use_signal("gal_combo_city", || "sh".to_string());
     let seg = use_signal("gal_segmented_view", || "list".to_string());
     let align = use_signal("gal_toggle_align", || "left".to_string());
@@ -1199,7 +1200,8 @@ fn TextareaComboboxShowcase() -> Element {
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "多行输入、可过滤 Combobox、分段控件与 ToggleGroup。"
                 </Label>
-                <Textarea id="gal-textarea" placeholder="多行备注…" rows={4} />
+                <Textarea id="gal-textarea" placeholder="多行备注…" rows={4} value={notes} />
+                <Label text_size="0.875rem" leading="normal">{ format!("Textarea: {}", notes.get()) }</Label>
                 { Element::from(
                     combobox("gal-combo")
                         .value_signal(combo)

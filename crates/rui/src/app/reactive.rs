@@ -360,10 +360,11 @@ where
 /// Solid-style in-place text binding (like setting a DOM text node). Prefer this for
 /// labels/counters — it does **not** rebuild a subtree.
 ///
-/// Layout impact mirrors the browser: when intrinsic width grows (or exceeds the mounted
-/// box), return [`LayoutStatus::LayoutChanged`] so flex parents — e.g. ShadCN-style
-/// `inline-flex` + `whitespace-nowrap` buttons — widen instead of soft-wrapping into a
-/// stale box. Equal/shrinking width stays paint-only [`LayoutStatus::StyleChanged`].
+/// Layout impact mirrors the browser: when intrinsic width **or height** grows (or exceeds the
+/// mounted box), return [`LayoutStatus::LayoutChanged`] so flex parents — e.g. ShadCN-style
+/// `inline-flex` + `whitespace-nowrap` buttons, or Labels echoing multiline Textarea — resize
+/// instead of painting into a stale box. Equal/shrinking metrics stay paint-only
+/// [`LayoutStatus::StyleChanged`].
 pub fn bind_text<F>(anchor_id: impl Into<String>, compute: F) -> Element
 where
     F: FnMut() -> String + 'static,
@@ -381,12 +382,23 @@ where
             let before_w = text_intrinsic_width(el, old);
             let after_w = text_intrinsic_width(el, next.as_str());
             let box_w = el.layout_bounds[2];
-            let needs_layout = match (before_w, after_w) {
+            let box_h = el.layout_bounds[3];
+            let avail = if box_w > 1.0 { box_w } else { f32::MAX };
+            let before_h = text_layout_height(el, old, avail);
+            let after_h = text_layout_height(el, next.as_str(), avail);
+            let width_grew = match (before_w, after_w) {
                 (Some(before), Some(after)) => {
                     after > before + 0.01 || (box_w > 1.0 && after > box_w + 0.01)
                 }
                 _ => true,
             };
+            let height_grew = match (before_h, after_h) {
+                (Some(before), Some(after)) => {
+                    after > before + 0.01 || (box_h > 1.0 && after > box_h + 0.01)
+                }
+                _ => true,
+            };
+            let needs_layout = width_grew || height_grew;
             el.text = Some(next);
             el.style.flex_shrink = 0.0;
             if needs_layout {
@@ -398,26 +410,44 @@ where
     )
 }
 
+fn plain_text_leaf(el: &Element) -> bool {
+    el.children.is_empty()
+        && el.text_shape_suffix.is_none()
+        && el.text_spans.is_none()
+        && el.text_style.font_family.as_deref() != Some("lucide")
+}
+
+fn text_line_height_px(el: &Element) -> f32 {
+    let size = el.text_style.size;
+    el.text_style
+        .line_height_px
+        .or_else(|| el.text_style.line_height_scale.map(|s| size * s))
+        .unwrap_or_else(|| size * crate::style::tailwind_default_leading_scale(size))
+}
+
 /// Intrinsic single-line width of `text` under `el`'s text style.
 ///
 /// `None` when the node is not a plain text leaf, in which case callers must assume the layout
 /// changed.
 pub(crate) fn text_intrinsic_width(el: &Element, text: &str) -> Option<f32> {
-    if !el.children.is_empty()
-        || el.text_shape_suffix.is_some()
-        || el.text_spans.is_some()
-        || el.text_style.font_family.as_deref() == Some("lucide")
-    {
+    if !plain_text_leaf(el) {
         return None;
     }
     let size = el.text_style.size;
-    let line_height = el
-        .text_style
-        .line_height_px
-        .or_else(|| el.text_style.line_height_scale.map(|s| size * s))
-        .unwrap_or_else(|| size * crate::style::tailwind_default_leading_scale(size));
+    let line_height = text_line_height_px(el);
     let prepared = crate::text::prepare(text, size, el.text_style.weight, line_height);
     Some(crate::text::intrinsic_width(&prepared))
+}
+
+/// Wrapped / hard-newline height under `avail_width` (use `f32::MAX` when unconstrained).
+pub(crate) fn text_layout_height(el: &Element, text: &str, avail_width: f32) -> Option<f32> {
+    if !plain_text_leaf(el) {
+        return None;
+    }
+    let size = el.text_style.size;
+    let line_height = text_line_height_px(el);
+    let prepared = crate::text::prepare(text, size, el.text_style.weight, line_height);
+    Some(crate::text::layout(&prepared, avail_width.max(1.0)).height)
 }
 
 /// Attach a Solid-style binding to an existing element (style/class/text patches).
@@ -772,6 +802,17 @@ mod intrinsic_width_tests {
     fn non_leaf_nodes_are_not_comparable() {
         let el = Element::new().children(vec![label("x")]);
         assert!(text_intrinsic_width(&el, "x").is_none());
+    }
+
+    #[test]
+    fn hard_newline_grows_layout_height() {
+        let el = label("a");
+        let before = text_layout_height(&el, "a", f32::MAX).expect("measurable");
+        let after = text_layout_height(&el, "a\nb", f32::MAX).expect("measurable");
+        assert!(
+            after > before + 0.5,
+            "hard newline must grow height for bind_text LayoutChanged: {before} vs {after}"
+        );
     }
 
     #[test]

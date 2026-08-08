@@ -69,6 +69,8 @@ pub struct HitPathEntry {
     pub on_click: Option<Rc<RefCell<dyn FnMut()>>>,
     pub on_context_menu: Option<PointerHandler>,
     pub on_double_click: Option<PointerHandler>,
+    /// Element was marked `rui_hoisted_portal` (Solid body overlay surface).
+    pub hoisted_portal: bool,
 }
 
 /// Collect the hit path from root to the deepest hit node (inclusive).
@@ -97,23 +99,41 @@ fn hit_path_rec(
     if pointer_events_blocked(el) {
         return false;
     }
+
+    // Solid body portal layer: escape ancestor scroll offsets (same as paint collect).
+    let scroll_acc = if el.template_id.as_deref()
+        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+        || el.style.position_fixed
+    {
+        [0.0_f32, 0.0_f32]
+    } else {
+        scroll_acc
+    };
+
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    // Root portal layer must not reject hits via its own box when children extend
+    // visually (layer is a stacking shell; children carry geometry).
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
         && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
     {
         return false;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
     // Record this node before descending (root → leaf order).
@@ -125,6 +145,11 @@ fn hit_path_rec(
         on_click: el.on_click.clone(),
         on_context_menu: el.on_context_menu.clone(),
         on_double_click: el.on_double_click.clone(),
+        hoisted_portal: el
+            .attrs
+            .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1"),
     });
 
     let mut child_hit = false;

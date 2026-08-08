@@ -4,9 +4,7 @@ use std::cell::RefCell;
 
 /// 文本编辑焦点：`input:{rest}` / `textarea:{rest}` → `rest`。
 pub(crate) fn text_edit_rest(focus_id: &str) -> Option<&str> {
-    focus_id
-        .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
-        .or_else(|| focus_id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX))
+    crate::utils::text_field::text_edit_rest(focus_id)
 }
 
 pub(crate) fn is_text_edit_focus(focus_id: &str) -> bool {

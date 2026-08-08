@@ -423,14 +423,15 @@ pub(crate) fn caret_blink_next_toggle_at() -> Instant {
 
 #[allow(dead_code)]
 fn input_line_height(style: &crate::style::TextStyle, scaled_size: f32, ui_scale: f32) -> f32 {
-    if let Some(lh) = style.line_height_px {
+    let lh = if let Some(lh) = style.line_height_px {
         lh * ui_scale
     } else {
         let scale = style
             .line_height_scale
-            .unwrap_or_else(|| tailwind_default_leading_scale(style.size));
+            .unwrap_or_else(|| crate::utils::text_field::text_edit_default_leading_scale());
         scaled_size * scale
-    }
+    };
+    lh.max(scaled_size * crate::utils::text_field::text_edit_default_leading_scale())
 }
 
 fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4]> {
@@ -1112,7 +1113,7 @@ pub fn prepare_text_frame(
             requested_weight,
         );
         let scaled_size = st.size * ui_scale;
-        let line_height = if is_icon {
+        let mut line_height = if is_icon {
             scaled_size
         } else if let Some(line_height_px) = st.line_height_px {
             line_height_px * ui_scale
@@ -1125,6 +1126,14 @@ pub fn prepare_text_frame(
 
         let is_input_text =
             super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref());
+        // Input/Textarea: never allow leading-none / cascade to crush Metrics below
+        // leading-normal — that packs CJK into a flat strip while the caret (style lh)
+        // still looks normal-height.
+        if is_input_text {
+            let min_lh = scaled_size
+                * crate::utils::text_field::text_edit_default_leading_scale();
+            line_height = line_height.max(min_lh);
+        }
         // Input field text must keep a stable shaping mode across focus: caret install used to
         // flip ASCII placeholders (e.g. password "Password") from Basic → Advanced and tighten
         // glyph advances. Labels may still use Basic for scroll perf.
@@ -1174,15 +1183,39 @@ pub fn prepare_text_frame(
             };
             let metrics = crate::text::layout(prepared, layout_w);
             let soft_w = (layout_w * ui_scale).max(1.0);
-            let soft_h = (metrics.height * ui_scale)
-                .max(scaled_h)
-                .max(line_height)
-                + 2.0;
+            // Input/Textarea: buffer height follows *content* only. Never `.max(scaled_h)` —
+            // a stretched leaf (viewport-tall) would make soft_h track textarea resize.
+            let hard_lines = info.text.split('\n').count().max(1) as f32;
+            let ink_fudge = if is_input_text {
+                crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
+            } else {
+                2.0
+            };
+            let content_h = (metrics.height * ui_scale)
+                .max(hard_lines * line_height)
+                .max(line_height);
+            let soft_h = if is_input_text {
+                content_h + ink_fudge
+            } else {
+                content_h.max(scaled_h) + ink_fudge
+            };
             let _ = metrics.line_count;
             let _ = metrics.max_line_width;
             (soft_w, soft_h)
         } else {
-            (scaled_w.max(0.0), scaled_h + 2.0)
+            let hard_lines = info.text.split('\n').count().max(1) as f32;
+            let ink_fudge = if is_input_text {
+                crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
+            } else {
+                2.0
+            };
+            let content_h = hard_lines * line_height.max(1.0);
+            let soft_h = if is_input_text {
+                content_h.max(line_height) + ink_fudge
+            } else {
+                scaled_h.max(content_h).max(line_height) + ink_fudge
+            };
+            (scaled_w.max(0.0), soft_h)
         };
         let align = resolve_text_align(st.align, st.direction);
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
@@ -1247,8 +1280,39 @@ pub fn prepare_text_frame(
         }
         let (measured_text_w, cache_hit) = {
             let entry = &mut text_renderer.shaped_cache[i];
-            let cache_hit = entry.key_hash == key_hash;
+            let mut cache_hit = entry.key_hash == key_hash;
+            // Input/Textarea: cosmic only shapes lines inside `height_opt`. A cache hit
+            // that keeps a 1-line-tall buffer after `\n` was added drops later runs and
+            // the caret (gallery: first line ok, rest blank). Force reshape when the
+            // buffer window is shorter than content or yields fewer runs than hard lines.
+            if cache_hit && is_input_text {
+                let hard = info.text.split('\n').count().max(1);
+                let runs = entry.buffer.layout_runs().count();
+                let buf_h = entry.buffer.size().1.unwrap_or(0.0);
+                if runs < hard || buf_h + 0.5 < buffer_soft_h {
+                    cache_hit = false;
+                }
+            }
             let measured_text_w = if cache_hit {
+                if is_input_text {
+                    // Refresh content-tall window + clear scroll even on hit (no chrome stretch).
+                    entry.buffer.set_size(
+                        unsafe { &mut *text_renderer.font_system },
+                        Some(buffer_soft_w),
+                        Some(buffer_soft_h),
+                    );
+                    entry
+                        .buffer
+                        .set_scroll(glyphon::cosmic_text::Scroll::default());
+                    entry
+                        .buffer
+                        .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                    entry.measured_text_w = entry
+                        .buffer
+                        .layout_runs()
+                        .map(|run| run.line_w)
+                        .fold(0.0_f32, f32::max);
+                }
                 entry.measured_text_w
             } else {
                 _shape_misses += 1;
@@ -1256,6 +1320,9 @@ pub fn prepare_text_frame(
                     unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
+                // Input/Textarea: finite height_opt sized to *content* (not chrome).
+                // `None` also shapes all lines, but a later cache hit can revive a short
+                // window; always pin `Some(content soft_h)` + Scroll::default().
                 buffer.set_size(
                     unsafe { &mut *text_renderer.font_system },
                     Some(buffer_soft_w),
@@ -1325,7 +1392,14 @@ pub fn prepare_text_frame(
                 for line in buffer.lines.iter_mut() {
                     line.set_align(Some(align));
                 }
+                if is_input_text {
+                    // Never inherit a leftover buffer scroll from a prior cache entry shape.
+                    buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
+                }
                 buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                if is_input_text {
+                    buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
+                }
                 let measured = buffer
                     .layout_runs()
                     .map(|run| run.line_w)

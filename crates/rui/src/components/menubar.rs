@@ -10,7 +10,7 @@ use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+    mark_floating, panel_block_clicks, PopupPlacement,
 };
 
 #[derive(Clone)]
@@ -99,7 +99,6 @@ impl From<MenubarBuilder> for Element {
                     portal_sync(&sid, open, OverlayKind::Menu, OverlayMode::Stacked)
                 {
                     if open.peek() {
-                        root = root.child(underlay_close_on_click(open, oz.underlay));
                         let mut menu = vstack().gap("0.125rem").p("0.25rem").min_w("8rem");
                         for (i, item) in items.iter().enumerate() {
                             let run = item.on_select.clone();

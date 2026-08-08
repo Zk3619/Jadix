@@ -14,13 +14,13 @@
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_component_live;
 use crate::components::button::button;
-use crate::components::picker_stub::{lucide, stub_label, stub_trigger};
+use crate::components::picker_stub::{lucide, stub_label, stub_trigger, stub_trigger_focus_id};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+    apply_stored_floating_place, mark_floating, panel_block_clicks, PopupPlacement,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -265,8 +265,6 @@ fn build_date_picker_view(
 
     if let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked) {
         if open.peek() {
-            view = view.child(underlay_close_on_click(open, oz.underlay));
-
             let mut panel: Element = vstack()
                 .gap("0.5rem")
                 .p("0.75rem")
@@ -277,7 +275,8 @@ fn build_date_picker_view(
                 .rounded("0.375rem")
                 .border_style("solid")
                 .border_width(1.0)
-                .border_color(tokens::border());
+                .border_color(tokens::border())
+                .shadow([0.0, 0.0, 0.0, 0.12], 8.0);
 
             let y_sig = year;
             let m_sig = month;
@@ -464,7 +463,7 @@ fn build_date_picker_view(
                 }
             }
 
-            let trigger_fid = id.clone();
+            let trigger_fid = stub_trigger_focus_id(&id);
             let mut floating = panel;
             floating = floating.absolute();
             mark_floating(
@@ -475,6 +474,7 @@ fn build_date_picker_view(
             );
             floating.set_attr("rui_floating_match_trigger", "0");
             floating.set_attr("rui_floating_w", "17.5rem");
+            apply_stored_floating_place(&mut floating, &id);
             floating = panel_block_clicks(floating, oz.panel);
             view = view.child(floating);
         }
@@ -593,8 +593,6 @@ fn build_time_picker_view(
 
     if let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked) {
         if open.peek() {
-            view = view.child(underlay_close_on_click(open, oz.underlay));
-
             let mut hours_col: Element = vstack().gap("0.125rem").max_h("10rem").into();
             for hh in 0u32..24 {
                 let h_sig = hour;
@@ -654,10 +652,17 @@ fn build_time_picker_view(
                 .border_style("solid")
                 .border_width(1.0)
                 .border_color(tokens::border())
+                .shadow([0.0, 0.0, 0.0, 0.12], 8.0)
                 .absolute();
-            mark_floating(&mut panel, &id, &id, PopupPlacement::BottomStart);
+            mark_floating(
+                &mut panel,
+                &id,
+                &stub_trigger_focus_id(&id),
+                PopupPlacement::BottomStart,
+            );
             panel.set_attr("rui_floating_match_trigger", "0");
             panel.set_attr("rui_floating_w", "12rem");
+            apply_stored_floating_place(&mut panel, &id);
             panel = panel_block_clicks(panel, oz.panel);
             view = view.child(panel);
         }

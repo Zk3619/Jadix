@@ -3,9 +3,9 @@
 
 use crate::components::input::{
     focus_id_for_input, input, input_selection_signal_key, input_value_signal_key,
-    sync_input_paint_subtree,
 };
 use crate::components::label::sync_label_selection_paint_subtree;
+use crate::components::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -13,10 +13,10 @@ use crate::renderer::font_loader;
 use crate::style::InputCaretDraw;
 use crate::text::install_shared_font_system;
 
-/// Live frame order: class variants → `sync_input_paint` → `sync_label_selection`.
+/// Live frame order: class variants → text_edit paint → `sync_label_selection`.
 /// Label sync must not wipe Input-owned `input_caret`.
 fn sync_paint_like_app(el: &mut Element, tree: &mut LayoutTree, impact: &mut LayoutStatus) {
-    sync_input_paint_subtree(el, tree, impact);
+    sync_text_edit_paint_subtree(el, tree, impact);
     sync_label_selection_paint_subtree(el, impact);
 }
 

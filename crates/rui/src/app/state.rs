@@ -78,6 +78,15 @@ pub(super) struct AppState {
     instance_buffer_capacity: usize,
     pub(super) layout_tree: LayoutTree,
     pub(super) text_renderer: RuiTextRenderer,
+    /// Separate glyphon pipeline for portal overlay glyphs so page + overlay text can be
+    /// prepared together and drawn in one Clear pass (page → overlay rects → overlay text)
+    /// without a GLES-fragile `LoadOp::Load` second pass that erased sidebar chrome.
+    ///
+    /// Band 0 of stacked portals. Additional bands use [`Self::overlay_band_text_renderers`]
+    /// so each portal child can paint `rects → text` before the next child (correct occlusion).
+    overlay_text_renderer: RuiTextRenderer,
+    /// Extra glyphon pipelines for portal paint bands beyond the first (share FontSystem).
+    overlay_band_text_renderers: Vec<RuiTextRenderer>,
     pub(super) root_element: Element,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
@@ -447,7 +456,14 @@ impl AppState {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
+            // Prefer opaque: on Windows GLES the first listed mode is often premultiplied
+            // transparency, which shows the desktop/terminal through undrawn pixels.
+            alpha_mode: surface_caps
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
+                .unwrap_or(surface_caps.alpha_modes[0]),
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -485,6 +501,9 @@ impl AppState {
         let mut text_renderer = RuiTextRenderer::new(&device, &queue, &config);
         // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
         crate::text::install_shared_font_system(text_renderer.font_system_mut());
+        let font_ptr: *mut glyphon::FontSystem = text_renderer.font_system_mut();
+        let overlay_text_renderer =
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
         crate::debug_stack::crumb("new_bootstrap: after text_renderer");
 
         Self {
@@ -504,6 +523,8 @@ impl AppState {
             instance_buffer_capacity: scaled_instances.len(),
             layout_tree,
             text_renderer,
+            overlay_text_renderer,
+            overlay_band_text_renderers: Vec::new(),
             root_element,
             template_paths: HashMap::new(),
             pending_layout_dirty: Vec::new(),
@@ -595,6 +616,21 @@ impl AppState {
             let pad = inst.shadow_blur + inst.shadow_spread.abs() + 8.0;
             acc.max(pad)
         })
+    }
+
+    /// Grow shared-font overlay text pipelines so each portal paint band can prepare independently.
+    fn ensure_overlay_band_text_renderers(&mut self, band_count: usize) {
+        let extra_needed = band_count.saturating_sub(1);
+        while self.overlay_band_text_renderers.len() < extra_needed {
+            let font_ptr = self.text_renderer.font_system_mut() as *mut glyphon::FontSystem;
+            self.overlay_band_text_renderers
+                .push(RuiTextRenderer::new_sharing_font_system(
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    font_ptr,
+                ));
+        }
     }
 
     pub(super) fn rebuild_ui(&mut self, root_element: Element) {
@@ -1087,7 +1123,7 @@ impl AppState {
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect.
-        crate::components::input::sync_input_paint_subtree(
+        crate::components::text_edit::sync_text_edit_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
@@ -1271,11 +1307,31 @@ impl AppState {
         #[cfg(debug_assertions)]
         let layout_done = Instant::now();
 
+        let overlay_split = render_result.overlay_split;
         let scaled_instances = scale_instances(&render_result.instances, self.ui_scale());
         let scaled_input_chrome =
             scale_instances(&render_result.input_chrome_instances, self.ui_scale());
         self.num_instances = render_result.instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
+        let overlay_inst_start = overlay_split
+            .instance_start
+            .min(scaled_instances.len());
+        let overlay_text_start = overlay_split.text_start.min(self.text_nodes.len());
+        let overlay_tex_start = overlay_split
+            .textured_start
+            .min(render_result.textured_draws.len());
+        let overlay_chrome_start = overlay_split
+            .chrome_start
+            .min(scaled_input_chrome.len());
+        // Portal overlays span arbitrary screen regions; partial-damage scissors leave
+        // stale page chrome and clipped panels (esp. GLES). Always clear the full frame.
+        if overlay_inst_start < scaled_instances.len()
+            || overlay_text_start < self.text_nodes.len()
+            || overlay_tex_start < render_result.textured_draws.len()
+            || overlay_chrome_start < scaled_input_chrome.len()
+        {
+            self.mark_full_redraw();
+        }
         #[cfg(debug_assertions)]
         {
             let p = &render_result.prof;
@@ -1346,9 +1402,16 @@ impl AppState {
             // partial-damage scissor cannot freeze the caret on/off.
             self.mark_full_redraw();
         }
-        let text_cache_valid = self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
+        // Portal overlay text must be prepared/rendered in a second pass (after overlay rects).
+        // Skip the single-buffer text cache whenever overlay glyphs exist.
+        let has_overlay_text = overlay_text_start < self.text_nodes.len();
+        let text_cache_valid = !has_overlay_text
+            && self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
             && self.last_text_surface_size == [self.config.width, self.config.height]
-            && Self::text_nodes_equal(&self.text_nodes, &self.last_text_nodes_cache)
+            && Self::text_nodes_equal(
+                &self.text_nodes[..overlay_text_start],
+                &self.last_text_nodes_cache,
+            )
             && (!has_dynamic_text || self.last_caret_blink_phase == caret_phase)
             && self.text_renderer.pending_warmup.is_empty();
         let shadow_cached_keys: std::collections::HashSet<u64> =
@@ -1366,7 +1429,7 @@ impl AppState {
                 &self.device,
                 &self.queue,
                 &self.config,
-                &self.text_nodes,
+                &self.text_nodes[..overlay_text_start],
                 ui_scale,
                 text_force_fast_mode,
                 &shadow_cached_keys,
@@ -1384,7 +1447,7 @@ impl AppState {
                 self.shadow_tex_cache.insert(bm.cache_key, gpu);
                 self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
             }
-            self.last_text_nodes_cache = self.text_nodes.clone();
+            self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
             self.last_text_ui_scale = ui_scale;
             self.last_text_surface_size = [self.config.width, self.config.height];
             self.last_underline_instances = prep_out.underline_instances.clone();
@@ -1394,7 +1457,7 @@ impl AppState {
             if self.text_backend == TextRendererBackend::CpuTextHybrid {
                 self.cpu_text_profiler.record(
                     (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
-                    self.text_nodes.len(),
+                    overlay_text_start,
                 );
             }
             if prep_out.needs_warmup {
@@ -1406,6 +1469,70 @@ impl AppState {
                 prep_out.shadow_tex_draws,
             )
         };
+
+        // Prepare overlay glyphs per portal paint band (separate atlas/renderer each) so the
+        // Clear pass can draw `band rects → band text → next band` and higher panels occlude
+        // lower glyphs — still one Clear, no GLES LoadOp::Load.
+        let overlay_band_ranges = overlay_split.band_ranges(
+            scaled_instances.len(),
+            scaled_tex.len(),
+            self.text_nodes.len(),
+            scaled_input_chrome.len(),
+        );
+        self.ensure_overlay_band_text_renderers(overlay_band_ranges.len());
+        let mut overlay_band_underlines: Vec<Vec<InstanceInput>> =
+            Vec::with_capacity(overlay_band_ranges.len());
+        let mut overlay_needs_warmup = false;
+        for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+            let text_lo = band.text.0;
+            let text_hi = band.text.1;
+            let shadow_cached_keys: std::collections::HashSet<u64> =
+                self.shadow_tex_cache.keys().copied().collect();
+            let overlay_prep = if band_i == 0 {
+                prepare_text_frame(
+                    &mut self.overlay_text_renderer,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &self.text_nodes[text_lo..text_hi],
+                    ui_scale,
+                    text_force_fast_mode,
+                    &shadow_cached_keys,
+                    &self.shadow_rect_cache,
+                )
+            } else {
+                prepare_text_frame(
+                    &mut self.overlay_band_text_renderers[band_i - 1],
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &self.text_nodes[text_lo..text_hi],
+                    ui_scale,
+                    text_force_fast_mode,
+                    &shadow_cached_keys,
+                    &self.shadow_rect_cache,
+                )
+            };
+            for bm in &overlay_prep.shadow_new_bitmaps {
+                let gpu = super::image_registry::upload_rgba8(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &bm.rgba,
+                    bm.width,
+                    bm.height,
+                );
+                self.shadow_tex_cache.insert(bm.cache_key, gpu);
+                self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
+            }
+            if overlay_prep.needs_warmup {
+                overlay_needs_warmup = true;
+            }
+            overlay_band_underlines.push(overlay_prep.underline_instances);
+        }
+        if overlay_needs_warmup {
+            self.window.request_redraw();
+        }
         #[cfg(debug_assertions)]
         let text_done = Instant::now();
 
@@ -1554,20 +1681,25 @@ impl AppState {
             );
             let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
                 && Self::cpu_hybrid_text_only());
-            if allow_primitives && self.num_instances > 0 {
-                render_pass.draw_indexed(0..self.pipeline.num_indices, 0, 0..self.num_instances);
+            // Page layer: rects under page glyphs (Solid/CSS stacking with portal overlays).
+            if allow_primitives && overlay_inst_start > 0 {
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..overlay_inst_start as u32,
+                );
             }
 
-            if allow_primitives && !scaled_tex.is_empty() {
+            if allow_primitives && overlay_tex_start > 0 {
                 let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
                 let mut ti = 0;
-                while ti < scaled_tex.len() {
+                while ti < overlay_tex_start {
                     let key = scaled_tex[ti].texture_key.clone();
                     let Some(gpu_img) = self.image_textures.get(&key) else {
                         ti += 1;
                         continue;
                     };
-                    let run = scaled_tex[ti..]
+                    let run = scaled_tex[ti..overlay_tex_start]
                         .iter()
                         .take_while(|d| d.texture_key == key)
                         .count();
@@ -1668,16 +1800,17 @@ impl AppState {
 
             self.text_renderer.render(&mut render_pass);
 
-            // Input/Label caret + selection (logical→physical), above glyphs.
-            if allow_primitives && !scaled_input_chrome.is_empty() {
+            // Page input chrome above page glyphs, below portal overlay.
+            if allow_primitives && overlay_chrome_start > 0 {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
                 let chrome_buffer =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("Input Chrome Instance Buffer"),
-                            contents: bytemuck::cast_slice(&scaled_input_chrome),
+                            contents: bytemuck::cast_slice(chrome_slice),
                             usage: wgpu::BufferUsages::VERTEX,
                         });
                 render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
@@ -1688,7 +1821,7 @@ impl AppState {
                 render_pass.draw_indexed(
                     0..self.pipeline.num_indices,
                     0,
-                    0..scaled_input_chrome.len() as u32,
+                    0..chrome_slice.len() as u32,
                 );
             }
 
@@ -1714,6 +1847,144 @@ impl AppState {
                     0,
                     0..caret_instances.len() as u32,
                 );
+            }
+
+            // Portal overlay: per-band `rects → text` so stacked panels occlude correctly
+            // (still one Clear pass — no GLES LoadOp::Load).
+            for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+                if allow_primitives && band.instance.0 < band.instance.1 {
+                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        band.instance.0 as u32..band.instance.1 as u32,
+                    );
+                }
+
+                if allow_primitives && band.textured.0 < band.textured.1 {
+                    let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
+                    let mut ti = band.textured.0;
+                    while ti < band.textured.1 {
+                        let key = scaled_tex[ti].texture_key.clone();
+                        let Some(gpu_img) = self.image_textures.get(&key) else {
+                            ti += 1;
+                            continue;
+                        };
+                        let run = scaled_tex[ti..band.textured.1]
+                            .iter()
+                            .take_while(|d| d.texture_key == key)
+                            .count();
+                        let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
+                            .iter()
+                            .map(|d| TexturedInstanceInput {
+                                rect_pos: [d.rect[0], d.rect[1]],
+                                rect_size: [d.rect[2], d.rect[3]],
+                                tint: [1.0, 1.0, 1.0, d.opacity],
+                            })
+                            .collect();
+                        if !insts.is_empty() {
+                            if insts.len() > self.textured_instance_capacity {
+                                let new_cap = insts.len().max(256);
+                                self.textured_instance_buffer =
+                                    self.device.create_buffer(&wgpu::BufferDescriptor {
+                                        label: Some("Textured instance buffer"),
+                                        size: (tex_stride * new_cap) as u64,
+                                        usage: wgpu::BufferUsages::VERTEX
+                                            | wgpu::BufferUsages::COPY_DST,
+                                        mapped_at_creation: false,
+                                    });
+                                self.textured_instance_capacity = new_cap;
+                            }
+                            self.queue.write_buffer(
+                                &self.textured_instance_buffer,
+                                0,
+                                bytemuck::cast_slice(&insts),
+                            );
+                            render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                            render_pass.set_vertex_buffer(
+                                0,
+                                self.textured_pipeline.vertex_buffer.slice(..),
+                            );
+                            render_pass
+                                .set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                self.textured_pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(
+                                0..self.textured_pipeline.num_indices,
+                                0,
+                                0..insts.len() as u32,
+                            );
+                        }
+                        ti += run;
+                    }
+                }
+
+                if allow_primitives && band.chrome.0 < band.chrome.1 {
+                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                    let chrome_buffer =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Overlay Input Chrome Buffer"),
+                                contents: bytemuck::cast_slice(chrome_slice),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+                    render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        0..chrome_slice.len() as u32,
+                    );
+                }
+
+                if let Some(ul) = overlay_band_underlines.get(band_i) {
+                    if !ul.is_empty() {
+                        render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                        let underline_buffer =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Overlay Underline Buffer"),
+                                    contents: bytemuck::cast_slice(ul),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            self.pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        render_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..ul.len() as u32,
+                        );
+                    }
+                }
+
+                if band.text.0 < band.text.1 {
+                    if band_i == 0 {
+                        self.overlay_text_renderer.render(&mut render_pass);
+                    } else {
+                        self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
+                    }
+                }
             }
         }
         #[cfg(debug_assertions)]

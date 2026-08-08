@@ -20,79 +20,9 @@ pub mod text;
 pub mod tokens;
 pub mod utils;
 
-/// Crate-local tests live under `crates/rui/test/` and compile inside the library
-/// (via `#[path]`) so they can access `pub(crate)` helpers.
+/// Crate-local scenario tests (`pub(crate)` access) in `src/crate_tests/`.
 #[cfg(test)]
-#[path = "../test/reactive.rs"]
-mod reactive_tests;
-
-#[cfg(test)]
-#[path = "../test/components_reactive_sync.rs"]
-mod components_reactive_sync_tests;
-
-#[cfg(test)]
-#[path = "../test/bind_text.rs"]
-mod bind_text_tests;
-
-#[cfg(test)]
-#[path = "../test/layout_mark_dirty.rs"]
-mod layout_mark_dirty_tests;
-
-#[cfg(test)]
-#[path = "../test/headless_layout.rs"]
-mod headless_layout_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_button_text.rs"]
-mod diagnose_button_text_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_button_bind_text.rs"]
-mod diagnose_button_bind_text_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_input_shape_suffix.rs"]
-mod diagnose_input_shape_suffix_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_input_adornments.rs"]
-mod diagnose_input_adornments_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_weight_clip.rs"]
-mod diagnose_weight_clip_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_showcase_collapse.rs"]
-mod diagnose_showcase_collapse_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_input_caret.rs"]
-mod diagnose_input_caret_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_scroll_clip_border.rs"]
-mod diagnose_scroll_clip_border_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_scroll_content_shrink.rs"]
-mod diagnose_scroll_content_shrink_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_sidebar_shell_width.rs"]
-mod diagnose_sidebar_shell_width_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_portal_hoist_flex.rs"]
-mod diagnose_portal_hoist_flex_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_portal_scroll_passthrough.rs"]
-mod diagnose_portal_scroll_passthrough_tests;
-
-#[cfg(test)]
-#[path = "../test/diagnose_pointer_events.rs"]
-mod diagnose_pointer_events_tests;
+mod crate_tests;
 
 /// Backward-compatible path for macro-generated code.
 pub mod tree {

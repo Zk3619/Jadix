@@ -1,4 +1,4 @@
-//! Internal helpers for integration tests under `crates/rui/tests/`.
+//! Helpers for crate-local scenario tests under `src/crate_tests/`.
 
 use super::state::AppState;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};

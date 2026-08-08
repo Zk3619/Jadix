@@ -12,7 +12,7 @@ use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+    mark_floating, panel_block_clicks, PopupPlacement,
 };
 
 pub struct ContextMenuItem {
@@ -86,7 +86,6 @@ impl ContextMenuBuilder {
             if !is_open {
                 return Element::new();
             }
-            let underlay = underlay_close_on_click(menu_open, oz.underlay);
             let mut rows = vstack().w("10rem");
             for (i, it) in items.iter().enumerate() {
                 let cb = it.on_click.clone();
@@ -116,8 +115,7 @@ impl ContextMenuBuilder {
                 .into();
             mark_floating(&mut panel, &id, &trigger_fid, placement);
             panel = panel.absolute();
-            let panel = panel_block_clicks(panel, oz.panel);
-            vstack().child(underlay).child(panel).into()
+            panel_block_clicks(panel, oz.panel)
         });
 
         vstack().child(trigger).child(menu).into()

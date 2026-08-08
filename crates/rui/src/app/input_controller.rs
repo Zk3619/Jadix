@@ -68,7 +68,7 @@ impl super::App {
                         let (new_val, anchor) =
                             prepare_compose_anchor(&committed, caret_sig.get(), text_sel.get());
                         if new_val != committed {
-                            val_sig.set(new_val);
+                            crate::utils::text_field::commit_value_sig(rest, val_sig, new_val);
                             text_sel.set(None);
                             caret_sig.set(Some(anchor));
                         }
@@ -112,7 +112,7 @@ impl super::App {
                         anchor
                     } else {
                         let (new, new_caret) = apply_ime_commit(&v, anchor, &filtered);
-                        val_sig.set(new);
+                        crate::utils::text_field::commit_value_sig(rest, val_sig, new);
                         new_caret
                     };
                     Self::clear_ime_compose_state(rest);
@@ -294,7 +294,7 @@ impl super::App {
                                                 let text = filter_typed_insert(rest, &s, &text);
                                                 if !text.is_empty() {
                                                     s.insert_str(insert_at, &text);
-                                                    val_sig.set(s);
+                                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                                     text_sel_sig.set(None);
                                                     caret_sig.set(Some(insert_at + text.len()));
                                                 }
@@ -306,7 +306,7 @@ impl super::App {
                                                 let text = filter_typed_insert(rest, &s, &text);
                                                 if !text.is_empty() {
                                                     s.insert_str(insert_at, &text);
-                                                    val_sig.set(s);
+                                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                                     caret_sig.set(Some(insert_at + text.len()));
                                                 }
                                             }
@@ -321,7 +321,7 @@ impl super::App {
                                         if lo < hi && hi <= s.len() {
                                             clipboard_set_text(&s[lo..hi]);
                                             s.replace_range(lo..hi, "");
-                                            val_sig.set(s);
+                                            crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                             text_sel_sig.set(None);
                                             caret_sig.set(Some(lo));
                                         }
@@ -394,7 +394,7 @@ impl super::App {
                                     let hi = a.max(b);
                                     if lo < hi && hi <= s.len() {
                                         s.replace_range(lo..hi, "");
-                                        val_sig.set(s);
+                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                         text_sel_sig.set(None);
                                         caret_sig.set(Some(lo));
                                     }
@@ -402,7 +402,7 @@ impl super::App {
                                     let mut c = caret_sig.get().unwrap_or(s.len()).min(s.len());
                                     c = s.floor_char_boundary(c);
                                     if delete_char_forward(&mut s, c) {
-                                        val_sig.set(s);
+                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                         caret_sig.set(Some(c));
                                     }
                                 }
@@ -433,13 +433,13 @@ impl super::App {
                                 let hi = a.max(b);
                                 if lo < hi && hi <= s.len() {
                                     s.replace_range(lo..hi, "");
-                                    val_sig.set(s.clone());
+                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s.clone());
                                     text_sel_sig.set(None);
                                     caret_sig.set(Some(lo));
                                 } else if lo == hi && lo <= s.len() && lo > 0 {
                                     let prev = s.floor_char_boundary(lo - 1);
                                     s.replace_range(prev..lo, "");
-                                    val_sig.set(s);
+                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                     text_sel_sig.set(None);
                                     caret_sig.set(Some(prev));
                                 }
@@ -449,7 +449,7 @@ impl super::App {
                                 if caret > 0 {
                                     let prev = s.floor_char_boundary(caret - 1);
                                     s.replace_range(prev..caret, "");
-                                    val_sig.set(s);
+                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                     caret_sig.set(Some(prev));
                                 }
                             }
@@ -478,7 +478,7 @@ impl super::App {
                                 };
                                 if !text.is_empty() {
                                     s.insert_str(insert_at, &text);
-                                    val_sig.set(s);
+                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                     text_sel_sig.set(None);
                                     caret_sig.set(Some(insert_at + text.len()));
                                 }
@@ -507,11 +507,11 @@ impl super::App {
                                         let first = s[insert_at..].chars().next().unwrap();
                                         let olen = first.len_utf8();
                                         s.replace_range(insert_at..insert_at + olen, &text);
-                                        val_sig.set(s);
+                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                         caret_sig.set(Some(insert_at + text.len()));
                                     } else {
                                         s.insert_str(insert_at, &text);
-                                        val_sig.set(s);
+                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
                                         caret_sig.set(Some(insert_at + text.len()));
                                     }
                                 }

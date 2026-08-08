@@ -4,7 +4,9 @@ use accesskit::{
 };
 use std::hash::{Hash, Hasher};
 
-use crate::components::input::{input_value_signal_key, INPUT_FOCUS_PREFIX};
+use crate::utils::text_field::{
+    input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
+};
 use crate::components::tabs::TABSTRIP_FOCUS_PREFIX;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
@@ -109,7 +111,9 @@ fn infer_role(el: &Element, fid: Option<&str>) -> Role {
         Role::Switch
     } else if el.checkbox_sync.is_some() {
         Role::CheckBox
-    } else if fid.is_some_and(|f| f.starts_with(INPUT_FOCUS_PREFIX)) {
+    } else if fid.is_some_and(|f| {
+        f.starts_with(INPUT_FOCUS_PREFIX) || f.starts_with(TEXTAREA_FOCUS_PREFIX)
+    }) {
         Role::TextInput
     } else if fid.is_some_and(|f| f.starts_with(TABSTRIP_FOCUS_PREFIX)) {
         Role::TabList
@@ -202,7 +206,10 @@ fn build_node(el: &Element, key: &str) -> Node {
             Toggled::False
         });
     } else if role == Role::TextInput {
-        if let Some(rest) = fid.and_then(|f| f.strip_prefix(INPUT_FOCUS_PREFIX)) {
+        if let Some(rest) = fid.and_then(|f| {
+            f.strip_prefix(INPUT_FOCUS_PREFIX)
+                .or_else(|| f.strip_prefix(TEXTAREA_FOCUS_PREFIX))
+        }) {
             let vk = input_value_signal_key(rest);
             let v = use_signal(&vk, String::new).get();
             node.set_value(v);

@@ -1,8 +1,7 @@
 //! Focused Input must not attach Latin U+2009 shape_suffix (baseline / font mixing).
 
-use crate::components::input::{
-    focus_id_for_input, input, input_value_signal_key, sync_input_paint_subtree,
-};
+use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
+use crate::components::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -22,7 +21,7 @@ fn focused_cjk_input_has_no_shape_suffix() {
     let mut el: Element = input(id).into();
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
 
     let text_el = el
         .children
@@ -50,7 +49,7 @@ fn focused_ascii_input_has_no_shape_suffix() {
     let mut el: Element = input(id).into();
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
 
     let text_el = el
         .children

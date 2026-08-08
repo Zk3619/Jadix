@@ -1,12 +1,15 @@
 //! Empty fullscreen portal layer must not steal wheel/scroll hit chain from shell scroll areas.
+//! Body-mounted portals must escape ancestor overflow clipping (Solid `<Portal>` → document.body).
 
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
 use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
 };
 use crate::layout::layout_tree::LayoutTree;
+use crate::renderer::pipeline::InstanceInput;
+use crate::utils::popup::panel_block_clicks;
 
 #[test]
 fn empty_portal_layer_does_not_block_scroll_chain_underneath() {
@@ -126,5 +129,79 @@ fn hoist_then_layout_keeps_scroll_chain_under_empty_portals() {
         chain.first().map(String::as_str),
         Some("side-nav"),
         "after hoist, empty portal must not block sidebar; got {chain:?}"
+    );
+}
+
+#[test]
+fn body_portal_escapes_scroll_overflow_clip() {
+    // Solid: `<Portal>` into document.body is outside cropping layouts.
+    // Panel is authored inside a 200×200 overflow:scroll host but must paint past its edge.
+    let mut scroller = Element::new()
+        .w(200.0)
+        .h(200.0)
+        .overflow_x("scroll")
+        .overflow_y("scroll")
+        .template_id("crop-scroll");
+
+    let mut panel = Element::new()
+        .bg([1.0, 1.0, 1.0, 1.0])
+        .w(120.0)
+        .h(100.0)
+        .absolute()
+        .left(120.0)
+        .top(50.0);
+    panel.set_attr(ATTR_PORTAL_KEY, "panel:escape-clip");
+    panel = panel_block_clicks(panel, 1001);
+
+    let host = Element::new()
+        .relative()
+        .w(200.0)
+        .h(200.0)
+        .child(panel);
+    scroller = scroller.child(host);
+
+    let mut root = Element::new().w(800.0).h(600.0).child(scroller);
+    // build_and_layout hoists internally; explicit hoist asserts the mount target.
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    let layer = root
+        .children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        .expect("body portal layer");
+    assert!(
+        layer.style.position_fixed,
+        "body portal layer must be viewport-fixed"
+    );
+    assert_eq!(
+        layer.children.len(),
+        1,
+        "panel must live on the body portal layer, not under the scroller"
+    );
+    assert!(
+        layer.children[0].style.position_fixed,
+        "body-mounted panel must be position_fixed"
+    );
+
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+    assert!(
+        result.overlay_split.instance_start < result.instances.len(),
+        "overlay paint split must include portal instances"
+    );
+    let overlay = &result.instances[result.overlay_split.instance_start..];
+    let panel_inst = overlay
+        .iter()
+        .find(|i| i.color[3] > 0.5 && (i.rect_size[0] - 120.0).abs() < 2.0)
+        .expect("panel background instance in overlay suffix");
+
+    assert!(
+        panel_inst.clip_size == InstanceInput::NO_CLIP_SIZE || panel_inst.clip_size[0] < 0.0,
+        "body portal must not inherit scroll clip; clip_size={:?}",
+        panel_inst.clip_size
+    );
+    let right = panel_inst.rect_pos[0] + panel_inst.rect_size[0];
+    assert!(
+        right > 200.5,
+        "panel must paint past the scroll viewport’s right edge (Solid escape cropping); right={right}"
     );
 }

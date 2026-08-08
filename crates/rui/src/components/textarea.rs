@@ -1,22 +1,23 @@
 //! # Textarea
 //!
-//! 多行文本输入：复用 Input 信号键族；`focus_id` 为 `textarea:{id}`；Enter 插入换行。
+//! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
+//! 共享 chrome 构建/绘制在 [`crate::components::text_edit`]（私有）。
+//! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
+//! 内容溢出时在内部滚动视口滚动；默认右下角可拖拽改高。
 
-use crate::components::input::input_value_signal_key;
-use crate::core::reactivity::use_signal;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::components::input::InputType;
+use crate::components::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
-use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::r#box;
-use crate::primitives::text::text;
-use crate::tokens;
 use rui_macros::component;
 
-/// `focus_id` 前缀；与单行 `input:` 区分，供 input_controller 识别多行。
-pub const TEXTAREA_FOCUS_PREFIX: &str = "textarea:";
+pub use crate::utils::text_field::{textarea_focus_id, TEXTAREA_FOCUS_PREFIX};
 
-pub fn textarea_focus_id(id: &str) -> String {
-    format!("{TEXTAREA_FOCUS_PREFIX}{id}")
-}
+const DEFAULT_TEXT_SIZE_PX: f32 = 0.875 * 16.0;
+const DEFAULT_FONT_WEIGHT: u16 = 400;
+const DEFAULT_RESIZE_MAX_H: f32 = 480.0;
 
 /// Signal key reuse: value/caret/selection share Input's key helpers by id.
 pub fn textarea(id: &str) -> TextareaBuilder {
@@ -26,6 +27,9 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         rows: 4,
         disabled: false,
         invalid: bool::default(),
+        value: None,
+        resizable: true,
+        resize_max_h: None,
     }
 }
 
@@ -35,6 +39,9 @@ pub struct TextareaBuilder {
     rows: u32,
     disabled: bool,
     invalid: bool,
+    value: Option<Signal<String>>,
+    resizable: bool,
+    resize_max_h: Option<f32>,
 }
 
 impl TextareaBuilder {
@@ -57,54 +64,69 @@ impl TextareaBuilder {
         self.invalid = v;
         self
     }
+
+    /// 右下角拖拽三角改高；默认开启。
+    pub fn resizable(mut self, yes: bool) -> Self {
+        self.resizable = yes;
+        self
+    }
+
+    pub fn resize_max_h(mut self, px: f32) -> Self {
+        self.resize_max_h = Some(px.max(32.0));
+        self
+    }
+
+    /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
+    pub fn value_signal(mut self, s: Signal<String>) -> Self {
+        self.value = Some(s);
+        self
+    }
 }
 
 impl From<TextareaBuilder> for Element {
-    fn from(b: TextareaBuilder) -> Self {
+    fn from(b: TextareaBuilder) -> Element {
         let TextareaBuilder {
             id,
             placeholder,
             rows,
             disabled,
             invalid,
+            value,
+            resizable,
+            resize_max_h,
         } = b;
-        let vk = input_value_signal_key(&id);
-        let value = use_signal(&vk, String::new).get();
-        let display = if value.is_empty() && !placeholder.is_empty() {
-            placeholder
+
+        let field_id = if id.is_empty() {
+            static RT_EMPTY_TEXTAREA_ID: AtomicU64 = AtomicU64::new(0);
+            format!(
+                "__rui_textarea_rt_{}",
+                RT_EMPTY_TEXTAREA_ID.fetch_add(1, Ordering::Relaxed)
+            )
         } else {
-            value
+            id
         };
-        let min_h = rows as f32 * 20.0 + 16.0;
-        let border = if invalid {
-            [0.8, 0.2, 0.2, 1.0]
-        } else {
-            tokens::border()
-        };
-        let fid = textarea_focus_id(&id);
-        let focus_id_for_click = fid.clone();
-        let mut box_el: Element = r#box()
-            .w("100%")
-            .min_h(min_h)
-            .p("0.5rem")
-            .rounded("0.375rem")
-            .bg(tokens::input())
-            .border_style("solid")
-            .border_width(1.0)
-            .border_color(border)
-            .child(text(display).size(14.0))
-            .into();
-        box_el = box_el.focus_id(fid).focusable(true);
-        if disabled {
-            box_el
-        } else {
-            interactive(box_el)
-                .on_click(move || {
-                    use_signal("__rui_button_focus_id", String::new)
-                        .set(focus_id_for_click.clone());
-                })
-                .into()
-        }
+
+        let resize_max_h = resize_max_h.unwrap_or(DEFAULT_RESIZE_MAX_H);
+
+        build_text_edit_element(TextEditBuildParams {
+            field_id,
+            placeholder,
+            disabled,
+            invalid,
+            input_type: InputType::Text,
+            clearable: false,
+            password_toggle: false,
+            text_size_px: DEFAULT_TEXT_SIZE_PX,
+            font_weight: DEFAULT_FONT_WEIGHT,
+            line_height_px: None,
+            leading_scale: None,
+            value,
+            single_line_container: None,
+            multiline: true,
+            rows,
+            resizable,
+            resize_max_h,
+        })
     }
 }
 
@@ -116,6 +138,9 @@ pub fn Textarea(
     rows: Option<u32>,
     disabled: bool,
     invalid: bool,
+    resizable: Option<bool>,
+    resize_max_h: Option<f32>,
+    value: Option<Signal<String>>,
     children: Option<Element>,
 ) -> Element {
     let _ = children;
@@ -126,20 +151,58 @@ pub fn Textarea(
     if let Some(r) = rows {
         b = b.rows(r);
     }
+    if let Some(r) = resizable {
+        b = b.resizable(r);
+    }
+    if let Some(h) = resize_max_h {
+        b = b.resize_max_h(h);
+    }
+    if let Some(sig) = value {
+        b = b.value_signal(sig);
+    }
     b.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::input::{input_caret_signal_key, input_value_signal_key};
+    use crate::core::reactivity::use_signal;
+    use crate::utils::text_field::{textarea_resize_focus_id, TEXTAREA_RESIZE_FOCUS_PREFIX};
 
-    use crate::components::input::{input_caret_signal_key, input_selection_signal_key};
+    fn find_focus(el: &Element, want: &str) -> bool {
+        if el.focus_id.as_deref() == Some(want) {
+            return true;
+        }
+        el.children.iter().any(|c| find_focus(c, want))
+    }
 
     #[test]
     fn textarea_focus_prefix() {
         assert_eq!(textarea_focus_id("bio"), "textarea:bio");
-        let _el: Element = textarea("bio").rows(3).placeholder("Say hi").into();
-        let _ = input_caret_signal_key("bio");
-        let _ = input_selection_signal_key("bio");
+        let el: Element = textarea("bio").rows(3).placeholder("Say hi").into();
+        assert_eq!(el.focus_id.as_deref(), Some("textarea:bio"));
+    }
+
+    #[test]
+    fn textarea_default_resize_grip() {
+        let el: Element = textarea("bio").rows(3).into();
+        let grip = textarea_resize_focus_id("bio");
+        assert!(grip.starts_with(TEXTAREA_RESIZE_FOCUS_PREFIX));
+        assert!(find_focus(&el, &grip), "expected resize grip focus_id");
+    }
+
+    #[test]
+    fn textarea_resizable_false_omits_grip() {
+        let el: Element = textarea("bio").resizable(false).into();
+        assert!(!find_focus(&el, &textarea_resize_focus_id("bio")));
+    }
+
+    #[test]
+    fn textarea_value_signal_keys() {
+        let _ = use_signal(&input_value_signal_key("t1"), String::new);
+        let _ = use_signal(&input_caret_signal_key("t1"), || None::<usize>);
+        let el: Element = textarea("t1").into();
+        assert_eq!(el.focus_id.as_deref(), Some("textarea:t1"));
     }
 }

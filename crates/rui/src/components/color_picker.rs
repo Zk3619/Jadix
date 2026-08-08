@@ -11,13 +11,13 @@
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_component_live;
 use crate::components::button::button;
-use crate::components::picker_stub::{stub_label, stub_trigger};
+use crate::components::picker_stub::{stub_label, stub_trigger, stub_trigger_focus_id};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, Element};
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+    apply_stored_floating_place, mark_floating, panel_block_clicks, PopupPlacement,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -130,8 +130,6 @@ fn build_color_picker_view(
 
     if let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked) {
         if open.peek() {
-            view = view.child(underlay_close_on_click(open, oz.underlay));
-
             let mut grid: Element = hstack().w("100%").gap("0.375rem").wrap("wrap").into();
             for (i, sw) in PRESET_SWATCHES.iter().enumerate() {
                 let v_sig = val;
@@ -197,10 +195,20 @@ fn build_color_picker_view(
                 .border_style("solid")
                 .border_width(1.0)
                 .border_color(tokens::border())
+                .shadow([0.0, 0.0, 0.0, 0.12], 8.0)
+                .overflow_x("hidden")
+                .overflow_y("auto")
                 .absolute();
-            mark_floating(&mut panel, &id, &id, PopupPlacement::BottomStart);
+            mark_floating(
+                &mut panel,
+                &id,
+                &stub_trigger_focus_id(&id),
+                PopupPlacement::BottomStart,
+            );
             panel.set_attr("rui_floating_match_trigger", "0");
             panel.set_attr("rui_floating_w", "14rem");
+            panel.set_attr("rui_floating_max_h", "20rem");
+            apply_stored_floating_place(&mut panel, &id);
             panel = panel_block_clicks(panel, oz.panel);
             view = view.child(panel);
         }

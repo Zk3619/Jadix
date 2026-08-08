@@ -1,9 +1,9 @@
 //! Input clearable + password_toggle adornments.
 
 use crate::components::input::{
-    focus_id_for_input, input, input_password_reveal_signal_key, input_value_signal_key,
-    sync_input_paint_subtree, InputType,
+    focus_id_for_input, input, input_password_reveal_signal_key, input_value_signal_key, InputType,
 };
+use crate::components::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -42,7 +42,7 @@ fn clearable_shows_clear_when_nonempty_and_clears_value() {
 
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
 }
 
 #[test]
@@ -73,7 +73,7 @@ fn password_toggle_reveals_plaintext() {
 
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
 
     let display = find_text(&el, &text_tid).unwrap().to_string();
     assert_eq!(display, "secret");
@@ -114,7 +114,7 @@ fn adornment_slots_keep_stable_width_when_hidden() {
         .set(crate::components::input::focus_id_for_input(id));
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
     let clear_w2 = el
         .children
         .iter()
@@ -161,7 +161,7 @@ fn focused_nonempty_makes_clear_and_eye_opaque() {
     use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
     let mut tree = LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
-    sync_input_paint_subtree(&mut el, &mut tree, &mut impact);
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
     assert_eq!(
         adorn_opacity(&el, &clear_tid),
         Some(1.0),

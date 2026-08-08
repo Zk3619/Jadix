@@ -1,6 +1,7 @@
 //! Gallery-shaped RSX: `clearable="true"` / `password_toggle="true"` must mount and paint.
 
 use rui::components::input::{input_value_signal_key, INPUT_FOCUS_PREFIX};
+// `ui!` resolves component tags via these imports in the caller's scope.
 use rui::components::{Input, InputProps};
 use rui::core::reactivity::use_signal;
 use rui::layout::layout_tree::LayoutTree;

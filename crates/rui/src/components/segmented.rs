@@ -49,7 +49,8 @@ impl From<SegmentedBuilder> for Element {
             .multiple(false)
             .default_value(default_value)
             .options(options)
-            .variant("outline");
+            .variant("outline")
+            .joined(true);
         if let Some(sig) = value {
             b = b.value_signal(sig);
         }

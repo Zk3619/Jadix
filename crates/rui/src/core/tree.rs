@@ -18,6 +18,8 @@ pub enum CursorKind {
     Pointer,
     Text,
     NotAllowed,
+    /// 对角缩放（Textarea 右下角 grip）。
+    NwseResize,
 }
 
 /// Pointer hit policy for [`Element`] (`rui_pointer_events`), RN-aligned subset.
@@ -114,9 +116,9 @@ pub struct ButtonHoverPaint {
     pub hover_easing: String,
 }
 
-/// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。
+/// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input/Textarea 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。
 #[derive(Debug, Clone)]
-pub struct InputPaintSync {
+pub struct TextEditPaintSync {
     pub base_id: String,
     pub placeholder: String,
     pub invalid: bool,
@@ -131,7 +133,18 @@ pub struct InputPaintSync {
     pub clearable: bool,
     /// `type=password` 时显示睁眼/闭眼切换明文。
     pub password_toggle: bool,
+    /// `true` → `textarea:{id}` 焦点与多行编辑；`false` → `input:{id}`。
+    pub multiline: bool,
+    /// 多行内部滚动视口 rest id（`{id}__ta_scroll`）；单行为 `None`。
+    pub scroll_rest: Option<String>,
+    /// 多行可拖拽改高。
+    pub resizable: bool,
+    pub resize_min_h: f32,
+    pub resize_max_h: f32,
 }
+
+/// 兼容旧名：与 [`TextEditPaintSync`] 相同。
+pub type InputPaintSync = TextEditPaintSync;
 
 /// Generic signal-to-element synchronization hook.
 ///
@@ -279,8 +292,8 @@ pub struct Element {
     pub template_id: Option<String>,
     /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
     pub button_hover_paint: Option<ButtonHoverPaint>,
-    /// 若存在，则每帧由 [`crate::components::input::sync_input_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
-    pub input_paint_sync: Option<InputPaintSync>,
+    /// 若存在，则每帧由 [`crate::components::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
+    pub input_paint_sync: Option<TextEditPaintSync>,
     /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and updates track bg + thumb alignment.
     pub switch_checked_sync: Option<Signal<bool>>,
     /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.

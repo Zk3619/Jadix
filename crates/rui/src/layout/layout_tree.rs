@@ -35,6 +35,15 @@ pub const ATTR_HOISTED_PORTAL: &str = "rui_hoisted_portal";
 /// Optional Solid-style `mount` target: host [`Element::template_id`] (see [`Portal`] mount prop).
 pub const ATTR_PORTAL_MOUNT: &str = "rui_portal_mount";
 
+/// Stable identity for a portal surface (underlay / panel). Required for cross-frame retention.
+pub const ATTR_PORTAL_KEY: &str = "rui_portal_key";
+
+/// Zero-size marker left in the source tree after a portal node is lifted (Solid keep-alive).
+pub const ATTR_PORTAL_SLOT: &str = "rui_portal_slot";
+
+/// Remembers `rui_portal_mount` on a hoisted node so remount can target the same host.
+const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
+
 /// Portal stacking shells must not steal pointer / wheel hits from content underneath.
 ///
 /// True when the node opts into [`PointerEvents::BoxNone`], or is the root
@@ -49,65 +58,80 @@ pub fn portal_hit_passthrough(el: &Element) -> bool {
 
 /// Lift `rui_portal=1` subtrees onto their mount host (Solid `<Portal mount={…}>`).
 ///
+/// Aligns with Solid’s Portal model: **move** content to a mount and **keep it alive** while
+/// the portal is still declared — not destroy-and-recreate every frame.
+///
 /// - Default / missing host → stable root layer [`PORTAL_LAYER_ID`] (`document.body`).
-/// - `rui_portal_mount=<template_id>` → that host's children (local overlay stack).
+///   Body mount is viewport-fixed and **escapes ancestor overflow cropping** (Solid’s
+///   “outside of an cropping layout”).
+/// - `rui_portal_mount=<template_id>` → that host's children (local overlay stack; still
+///   subject to that host’s ancestors’ overflow, matching Solid `mount={el}`).
 /// - Unknown mount id → falls back to the root layer.
-/// - Strips prior [`ATTR_HOISTED_PORTAL`] nodes each pass (no orphan accumulation).
-/// - Returns how many subtrees were lifted; non-zero → full Taffy rebuild (`AppState::render`).
+/// - Fresh lifts replace in-source nodes with [`ATTR_PORTAL_SLOT`] markers so the reactive
+///   tree still expresses “this portal is wanted” after the move.
+/// - Stable frames (no fresh `rui_portal=1`): **do not** tear down the portal layer — only
+///   prune keys that are no longer wanted. Rewriting the layer every frame while skipping
+///   Taffy rebuild desyncs `element.children` vs `taffy.children` (OOB panic in collect).
+/// - Returns a non-zero “structure dirty” count when the portal tree changed (caller must
+///   full-rebuild Taffy).
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
-    strip_hoisted_portals(root);
-    ensure_portal_layer(root);
+    let dirty = ensure_portal_layer(root);
+
+    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    collect_portal_slot_keys(root, &mut wanted);
+
+    let pending = count_rui_portal_nodes(root);
+    if pending == 0 {
+        // Retention path: leave live hoisted nodes in place; drop closed keys only.
+        return dirty + prune_unwanted_hoisted(root, &wanted);
+    }
+
+    let mut prev = take_all_hoisted(root);
 
     let mut lifted = Vec::new();
-    hoist_portal_rec(root, &mut lifted);
-    let n = lifted.len();
+    hoist_portal_rec_with_slots(root, &mut lifted);
+    debug_assert_eq!(lifted.len(), pending);
 
-    // (mount_id, node) — empty mount_id means root layer.
-    let mut placements: Vec<(String, Element)> = Vec::with_capacity(lifted.len());
+    let mut fresh_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut root_bucket = Vec::new();
+    let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
+
     for mut node in lifted {
         let mount = node
             .attrs
-            .remove(ATTR_PORTAL_MOUNT)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .get(ATTR_PORTAL_MOUNT)
+            .cloned()
             .unwrap_or_default();
-        node.attrs.remove("rui_portal");
-        node.set_attr(ATTR_HOISTED_PORTAL, "1");
-        // Empty / wrapper portals must not steal scroll; interactive underlays keep `auto`.
-        if node.pointer_events_mode() == crate::core::tree::PointerEvents::Auto
-            && portal_root_defaults_to_box_none(&node)
-        {
-            node.set_attr(
-                crate::core::tree::ATTR_POINTER_EVENTS,
-                crate::core::tree::PointerEvents::BoxNone.as_str(),
-            );
-        }
-        // Absolute so overlays never flex-split the shell / host flow.
-        if node.style.position != taffy::style::Position::Absolute {
-            node.style.position = taffy::style::Position::Absolute;
-        }
-        placements.push((mount, node));
+        let key = portal_key_of(&node);
+        wanted.insert(key.clone());
+        fresh_keys.insert(key.clone());
+        prev.remove(&key);
+        prepare_hoisted_node(&mut node, &key);
+        place_hoisted(
+            root,
+            node,
+            mount.trim(),
+            &mut root_bucket,
+            &mut host_buckets,
+        );
     }
 
-    // Resolve hosts after lift so we never target a node that was itself portaled away.
-    // Empty path (mount == root) falls back to the body layer — never flex-split the shell.
-    let mut root_bucket = Vec::new();
-    let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
-    for (mount, node) in placements {
-        if mount.is_empty() {
-            root_bucket.push(node);
+    for (key, node) in prev {
+        if !wanted.contains(&key) || fresh_keys.contains(&key) {
             continue;
         }
-        let mut path = Vec::new();
-        if find_template_id_path(root, &mount, &mut path) && !path.is_empty() {
-            if let Some((_, kids)) = host_buckets.iter_mut().find(|(p, _)| *p == path) {
-                kids.push(node);
-            } else {
-                host_buckets.push((path, vec![node]));
-            }
-        } else {
-            root_bucket.push(node);
-        }
+        let mount = node
+            .attrs
+            .get(ATTR_HOISTED_MOUNT)
+            .cloned()
+            .unwrap_or_default();
+        place_hoisted(
+            root,
+            node,
+            mount.trim(),
+            &mut root_bucket,
+            &mut host_buckets,
+        );
     }
 
     let layer_idx = root
@@ -118,6 +142,9 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     {
         let layer = &mut root.children[layer_idx];
         layer.style.position = taffy::style::Position::Absolute;
+        layer.style.position_fixed = true;
+        layer.style.overflow.x = taffy::style::Overflow::Visible;
+        layer.style.overflow.y = taffy::style::Overflow::Visible;
         if layer.pointer_events_mode() == crate::core::tree::PointerEvents::Auto {
             layer.set_attr(
                 crate::core::tree::ATTR_POINTER_EVENTS,
@@ -133,7 +160,219 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
         host.children.append(&mut kids);
     }
 
+    // Layer membership was rewritten — always force a Taffy rebuild this frame.
+    pending.max(1).max(dirty)
+}
+
+fn count_rui_portal_nodes(node: &Element) -> usize {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return 0;
+    }
+    let mut n = 0;
+    for c in &node.children {
+        if c.attrs.get(ATTR_PORTAL_SLOT).is_some() {
+            continue;
+        }
+        if c.attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
+            n += 1;
+        } else {
+            n += count_rui_portal_nodes(c);
+        }
+    }
     n
+}
+
+/// Drop hoisted nodes whose portal key is no longer declared by a slot / open overlay.
+/// Returns how many nodes were removed (non-zero → Taffy rebuild).
+fn prune_unwanted_hoisted(
+    root: &mut Element,
+    wanted: &std::collections::HashSet<String>,
+) -> usize {
+    let mut dropped = 0usize;
+    if let Some(layer) = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+    {
+        let before = layer.children.len();
+        layer.children.retain(|c| {
+            if c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) != Some("1") {
+                return true;
+            }
+            wanted.contains(&portal_key_of(c))
+        });
+        dropped += before.saturating_sub(layer.children.len());
+    }
+    dropped += prune_hoisted_from_hosts(root, wanted);
+    dropped
+}
+
+fn prune_hoisted_from_hosts(
+    node: &mut Element,
+    wanted: &std::collections::HashSet<String>,
+) -> usize {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return 0;
+    }
+    let mut dropped = 0usize;
+    let mut i = 0;
+    while i < node.children.len() {
+        if node.children[i]
+            .attrs
+            .get(ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1")
+        {
+            if wanted.contains(&portal_key_of(&node.children[i])) {
+                i += 1;
+            } else {
+                node.children.remove(i);
+                dropped += 1;
+            }
+        } else {
+            dropped += prune_hoisted_from_hosts(&mut node.children[i], wanted);
+            i += 1;
+        }
+    }
+    dropped
+}
+
+fn place_hoisted(
+    root: &Element,
+    node: Element,
+    mount: &str,
+    root_bucket: &mut Vec<Element>,
+    host_buckets: &mut Vec<(Vec<usize>, Vec<Element>)>,
+) {
+    if mount.is_empty() {
+        root_bucket.push(node);
+        return;
+    }
+    let mut path = Vec::new();
+    if find_template_id_path(root, mount, &mut path) && !path.is_empty() {
+        if let Some((_, kids)) = host_buckets.iter_mut().find(|(p, _)| *p == path) {
+            kids.push(node);
+        } else {
+            host_buckets.push((path, vec![node]));
+        }
+    } else {
+        root_bucket.push(node);
+    }
+}
+
+fn portal_key_of(el: &Element) -> String {
+    if let Some(k) = el.attrs.get(ATTR_PORTAL_KEY) {
+        let t = k.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(k) = el
+        .attrs
+        .get("rui_floating")
+        .or_else(|| el.attrs.get("rui_select_menu"))
+    {
+        return format!("floating:{k}");
+    }
+    if let Some(tid) = el.template_id.as_deref() {
+        return format!("tid:{tid}");
+    }
+    format!("z:{}", el.style.z_index)
+}
+
+fn prepare_hoisted_node(node: &mut Element, key: &str) {
+    let mount = node
+        .attrs
+        .remove(ATTR_PORTAL_MOUNT)
+        .unwrap_or_default();
+    node.attrs.remove("rui_portal");
+    node.set_attr(ATTR_HOISTED_PORTAL, "1");
+    node.set_attr(ATTR_PORTAL_KEY, key);
+    if !mount.trim().is_empty() {
+        node.set_attr(ATTR_HOISTED_MOUNT, mount.trim());
+    }
+    if node.pointer_events_mode() == crate::core::tree::PointerEvents::Auto
+        && portal_root_defaults_to_box_none(node)
+    {
+        node.set_attr(
+            crate::core::tree::ATTR_POINTER_EVENTS,
+            crate::core::tree::PointerEvents::BoxNone.as_str(),
+        );
+    }
+    if node.style.position != taffy::style::Position::Absolute {
+        node.style.position = taffy::style::Position::Absolute;
+    }
+    // Default body mount (Solid → document.body): viewport-fixed so scrolled
+    // ancestors cannot shift or crop the overlay. Local `mount=` hosts keep
+    // absolute positioning inside that host's containing block.
+    if mount.trim().is_empty() {
+        node.style.position_fixed = true;
+    }
+}
+
+fn make_portal_slot(key: &str) -> Element {
+    let mut slot = Element::new()
+        .absolute()
+        .w(0.0)
+        .h(0.0)
+        .pointer_events_none();
+    slot.set_attr(ATTR_PORTAL_SLOT, key);
+    slot.set_attr(ATTR_PORTAL_KEY, key);
+    slot
+}
+
+fn collect_portal_slot_keys(node: &Element, out: &mut std::collections::HashSet<String>) {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return;
+    }
+    if let Some(k) = node.attrs.get(ATTR_PORTAL_SLOT) {
+        let t = k.trim();
+        if !t.is_empty() {
+            out.insert(t.to_string());
+        }
+    }
+    for c in &node.children {
+        collect_portal_slot_keys(c, out);
+    }
+}
+
+fn take_all_hoisted(root: &mut Element) -> HashMap<String, Element> {
+    let mut out = HashMap::new();
+    if let Some(layer) = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+    {
+        for kid in std::mem::take(&mut layer.children) {
+            if kid.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") {
+                let key = portal_key_of(&kid);
+                out.insert(key, kid);
+            }
+        }
+    }
+    take_hoisted_from_hosts(root, &mut out);
+    out
+}
+
+fn take_hoisted_from_hosts(node: &mut Element, out: &mut HashMap<String, Element>) {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return;
+    }
+    let mut i = 0;
+    while i < node.children.len() {
+        if node.children[i]
+            .attrs
+            .get(ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1")
+        {
+            let kid = node.children.remove(i);
+            out.insert(portal_key_of(&kid), kid);
+        } else {
+            take_hoisted_from_hosts(&mut node.children[i], out);
+            i += 1;
+        }
+    }
 }
 
 fn portal_root_defaults_to_box_none(el: &Element) -> bool {
@@ -144,35 +383,43 @@ fn portal_root_defaults_to_box_none(el: &Element) -> bool {
         && el.on_double_click.is_none()
 }
 
-fn strip_hoisted_portals(node: &mut Element) {
-    node.children.retain(|c| {
-        c.attrs
-            .get(ATTR_HOISTED_PORTAL)
-            .map(|s| s.as_str())
-            != Some("1")
-    });
-    for c in &mut node.children {
-        strip_hoisted_portals(c);
-    }
-}
-
-fn ensure_portal_layer(root: &mut Element) {
-    if root
+fn ensure_portal_layer(root: &mut Element) -> usize {
+    if let Some(idx) = root
         .children
         .iter()
-        .any(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        .position(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
     {
-        return;
+        // Keep the layer last so collect paint splits as a contiguous overlay suffix.
+        // Moving without a Taffy rebuild desyncs children → white blocks / missing text.
+        let mut dirty = 0usize;
+        if idx + 1 != root.children.len() {
+            let layer = root.children.remove(idx);
+            root.children.push(layer);
+            dirty = 1;
+        }
+        let layer = root
+            .children
+            .last_mut()
+            .expect("portal layer present after ensure");
+        // Solid body mount: viewport-fixed, never inherit ancestor overflow cropping.
+        layer.style.position = taffy::style::Position::Absolute;
+        layer.style.position_fixed = true;
+        layer.style.overflow.x = taffy::style::Overflow::Visible;
+        layer.style.overflow.y = taffy::style::Overflow::Visible;
+        return dirty;
     }
     root.children.push(
+        // Absolute fill via inset only — avoid w/h 100% on a flex-parent child (over-constrained
+        // absolute sizing has crushed sidebar/main width in the gallery shell).
         Element::new()
-            .absolute()
+            .fixed()
             .inset(0.0)
-            .w("100%")
-            .h("100%")
+            .overflow_x("visible")
+            .overflow_y("visible")
             .pointer_events_box_none()
             .template_id(PORTAL_LAYER_ID),
     );
+    1
 }
 
 fn find_template_id_path(node: &Element, id: &str, path: &mut Vec<usize>) -> bool {
@@ -201,17 +448,24 @@ fn element_mut_by_path<'a>(root: &'a mut Element, path: &[usize]) -> &'a mut Ele
     cur
 }
 
-fn hoist_portal_rec(node: &mut Element, lifted: &mut Vec<Element>) {
+fn hoist_portal_rec_with_slots(node: &mut Element, lifted: &mut Vec<Element>) {
     let mut i = 0;
     while i < node.children.len() {
         if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID) {
             i += 1;
             continue;
         }
-        hoist_portal_rec(&mut node.children[i], lifted);
+        if node.children[i].attrs.get(ATTR_PORTAL_SLOT).is_some() {
+            i += 1;
+            continue;
+        }
+        hoist_portal_rec_with_slots(&mut node.children[i], lifted);
         if node.children[i].attrs.get("rui_portal").map(|s| s.as_str()) == Some("1") {
             let n = node.children.remove(i);
+            let key = portal_key_of(&n);
+            node.children.insert(i, make_portal_slot(&key));
             lifted.push(n);
+            i += 1;
         } else {
             i += 1;
         }
@@ -385,6 +639,102 @@ pub struct LayoutProfileMs {
     pub collect_ms: f32,
 }
 
+/// Split points for Solid/CSS stacking: page paint, then portal overlay paint.
+///
+/// Global “all rects then all text” would draw page glyphs *over* popover fills
+/// (looks like a missing/transparent panel background). Portal content is collected
+/// as a contiguous suffix once [`PORTAL_LAYER_ID`] is entered (layer is last on root).
+///
+/// Within the overlay suffix, each direct child of the portal layer is a **paint band**
+/// (underlay / panel). Bands are drawn as `rects → text → next band` so a higher-z
+/// panel’s background correctly occludes lower panels’ glyphs.
+#[derive(Clone, Debug, Default)]
+pub struct OverlayPaintSplit {
+    pub instance_start: usize,
+    pub textured_start: usize,
+    pub text_start: usize,
+    pub chrome_start: usize,
+    /// Starts of each portal-layer child paint band (z / tree order). Empty → treat the
+    /// whole overlay suffix as a single band.
+    pub bands: Vec<OverlayPaintBand>,
+    marked: bool,
+}
+
+/// Start indices (into the layout collect buffers) for one portal-layer child.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OverlayPaintBand {
+    pub instance_start: usize,
+    pub textured_start: usize,
+    pub text_start: usize,
+    pub chrome_start: usize,
+}
+
+/// Resolved `[start, end)` ranges for drawing one overlay band.
+#[derive(Clone, Copy, Debug)]
+pub struct OverlayBandRange {
+    pub instance: (usize, usize),
+    pub textured: (usize, usize),
+    pub text: (usize, usize),
+    pub chrome: (usize, usize),
+}
+
+impl OverlayPaintSplit {
+    /// Expand [`Self::bands`] (or a single synthetic band) into end-exclusive ranges.
+    pub fn band_ranges(
+        &self,
+        instance_len: usize,
+        textured_len: usize,
+        text_len: usize,
+        chrome_len: usize,
+    ) -> Vec<OverlayBandRange> {
+        let starts: Vec<OverlayPaintBand> = if self.bands.is_empty() {
+            if self.instance_start < instance_len
+                || self.textured_start < textured_len
+                || self.text_start < text_len
+                || self.chrome_start < chrome_len
+            {
+                vec![OverlayPaintBand {
+                    instance_start: self.instance_start.min(instance_len),
+                    textured_start: self.textured_start.min(textured_len),
+                    text_start: self.text_start.min(text_len),
+                    chrome_start: self.chrome_start.min(chrome_len),
+                }]
+            } else {
+                Vec::new()
+            }
+        } else {
+            self.bands.clone()
+        };
+        let mut out = Vec::with_capacity(starts.len());
+        for (i, b) in starts.iter().enumerate() {
+            let next = starts.get(i + 1);
+            out.push(OverlayBandRange {
+                instance: (
+                    b.instance_start.min(instance_len),
+                    next.map(|n| n.instance_start.min(instance_len))
+                        .unwrap_or(instance_len),
+                ),
+                textured: (
+                    b.textured_start.min(textured_len),
+                    next.map(|n| n.textured_start.min(textured_len))
+                        .unwrap_or(textured_len),
+                ),
+                text: (
+                    b.text_start.min(text_len),
+                    next.map(|n| n.text_start.min(text_len))
+                        .unwrap_or(text_len),
+                ),
+                chrome: (
+                    b.chrome_start.min(chrome_len),
+                    next.map(|n| n.chrome_start.min(chrome_len))
+                        .unwrap_or(chrome_len),
+                ),
+            });
+        }
+        out
+    }
+}
+
 /// 一次布局+收集的产出.
 pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
@@ -392,6 +742,8 @@ pub struct RenderResult {
     pub text_nodes: Vec<TextLayoutInfo>,
     /// Input/Label caret + selection chrome in logical px (drawn after glyphon text).
     pub input_chrome_instances: Vec<InstanceInput>,
+    /// Index splits: `[0..start)` = page, `[start..)` = portal overlay stack.
+    pub overlay_split: OverlayPaintSplit,
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
     pub hover_cursor: Option<crate::core::tree::CursorKind>,
     pub prof: LayoutProfileMs,
@@ -595,10 +947,11 @@ fn measured_text_leaf_size(
             m.nowrap,
         )
     };
-    let height = match known_dimensions.height {
-        Some(h) => height.max(h),
-        None => height,
-    };
+    // Never raise height from known_dimensions: flex Stretch would inflate text leaves to
+    // the ScrollArea/Textarea viewport, so leaf (and soft_h.max(scaled_h)) tracked chrome
+    // resize instead of content — gallery "text render height grows with drag".
+    // Definite `style.size.height` is applied by Taffy via node_size, not this max().
+    let _ = known_dimensions.height;
     taffy::geometry::Size { width, height }
 }
 
@@ -771,6 +1124,9 @@ impl LayoutTree {
         )
         .entered();
 
+        // Invariant: never layout/paint unhoisted `rui_portal` nodes (Solid keep-alive + body mount).
+        let _ = hoist_portal_subtrees(root);
+
         let t_rebuild_begin = Instant::now();
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
@@ -826,6 +1182,7 @@ impl LayoutTree {
         let mut input_chrome_instances = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
+        let mut overlay_split = OverlayPaintSplit::default();
 
         let t_collect_begin = Instant::now();
         self.collect_instances_mut(
@@ -847,14 +1204,22 @@ impl LayoutTree {
             false,
             None,
             &mut None,
+            &mut overlay_split,
         );
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
+        if !overlay_split.marked {
+            overlay_split.instance_start = instances.len();
+            overlay_split.textured_start = textured_draws.len();
+            overlay_split.text_start = text_nodes.len();
+            overlay_split.chrome_start = input_chrome_instances.len();
+        }
 
         RenderResult {
             instances,
             textured_draws,
             text_nodes,
             input_chrome_instances,
+            overlay_split,
             scroll_metrics,
             hover_cursor,
             prof: LayoutProfileMs {
@@ -909,6 +1274,12 @@ impl LayoutTree {
         scrollbar_overlay_collect: bool,
         subtree_root: Option<NodeId>,
     ) -> RenderResult {
+        // Solid invariant: portals must be on their mount before any layout/collect.
+        let portal_dirty = hoist_portal_subtrees(root);
+        if portal_dirty > 0 || self.root_node.is_none() {
+            return self.build_and_layout(root, width, height, mouse_pos);
+        }
+
         let root_node = self
             .root_node
             .expect("fast path requires existing root_node");
@@ -983,6 +1354,7 @@ impl LayoutTree {
         let mut input_chrome_instances = Vec::new();
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
+        let mut overlay_split = OverlayPaintSplit::default();
 
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
         let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
@@ -1012,14 +1384,22 @@ impl LayoutTree {
             scrollbar_overlay_collect,
             None,
             &mut scroll_cache_slot,
+            &mut overlay_split,
         );
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
+        if !overlay_split.marked {
+            overlay_split.instance_start = instances.len();
+            overlay_split.textured_start = textured_draws.len();
+            overlay_split.text_start = text_nodes.len();
+            overlay_split.chrome_start = input_chrome_instances.len();
+        }
 
         RenderResult {
             instances,
             textured_draws,
             text_nodes,
             input_chrome_instances,
+            overlay_split,
             scroll_metrics,
             hover_cursor,
             prof: LayoutProfileMs {
@@ -1124,7 +1504,25 @@ impl LayoutTree {
         scrollbar_overlay_collect: bool,
         thumb_geometry_override: Option<[f32; 4]>,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+        overlay_split: &mut OverlayPaintSplit,
     ) -> [f32; 2] {
+        // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
+        // Reset clip + scroll accumulation when entering the root portal layer so hoisted
+        // overlays never inherit ScrollArea (or other overflow) clips from page ancestors.
+        let is_body_portal_layer = element.template_id.as_deref() == Some(PORTAL_LAYER_ID);
+        let (parent_clip, scroll_acc) = if is_body_portal_layer {
+            (None, [0.0_f32, 0.0_f32])
+        } else {
+            (parent_clip, scroll_acc)
+        };
+
+        if is_body_portal_layer && !overlay_split.marked {
+            overlay_split.instance_start = instances.len();
+            overlay_split.textured_start = textured_draws.len();
+            overlay_split.text_start = text_nodes.len();
+            overlay_split.chrome_start = input_chrome_instances.len();
+            overlay_split.marked = true;
+        }
         element.layout_node = Some(node);
         let layout = match self.taffy.layout(node) {
             Ok(l) => *l,
@@ -1241,7 +1639,9 @@ impl LayoutTree {
         }
 
         // Collect main instance (solid / gradient strips + shadows).
-        // Geometry stays full `render_rect`; overflow is fragment-clipped via `.with_clip(clip)`.
+        // Geometry stays full `render_rect`. CSS overflow clips *descendants* only — the
+        // element's own background / border / outset shadow must use `parent_clip`, otherwise
+        // a scrolled panel's soft rounded shadow is sliced into a sharp axis-aligned box.
         // Baking `visible_rect` into pos/size made scrolled borders stick to the viewport edge.
         let border_w = if element.style.border_style == crate::style::LineStyle::None {
             0.0
@@ -1251,7 +1651,8 @@ impl LayoutTree {
         let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
-        if (has_bg || has_border || has_shadow) && visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
+        let paint_visible = intersect_rect(parent_clip, render_rect);
+        if (has_bg || has_border || has_shadow) && paint_visible[2] > 0.0 && paint_visible[3] > 0.0 {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
             if let Some(grad) = element.style.bg_gradient {
@@ -1305,7 +1706,7 @@ impl LayoutTree {
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             _pad: 0.0,
                         }
-                        .with_clip(clip),
+                        .with_clip(parent_clip),
                     );
                 }
                 if has_border || has_shadow {
@@ -1327,7 +1728,7 @@ impl LayoutTree {
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             _pad: 0.0,
                         }
-                        .with_clip(clip),
+                        .with_clip(parent_clip),
                     );
                 }
             } else {
@@ -1349,7 +1750,7 @@ impl LayoutTree {
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         _pad: 0.0,
                     }
-                    .with_clip(clip),
+                    .with_clip(parent_clip),
                 );
             }
             for sh in &element.style.extra_shadows {
@@ -1374,7 +1775,7 @@ impl LayoutTree {
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         _pad: 0.0,
                     }
-                    .with_clip(clip),
+                    .with_clip(parent_clip),
                 );
             }
         }
@@ -1530,8 +1931,39 @@ impl LayoutTree {
         let mut max_right = abs_x + lay_w;
         let mut max_bottom = abs_y + lay_h;
 
+        let push_portal_band = |overlay_split: &mut OverlayPaintSplit,
+                                    instances: &Vec<InstanceInput>,
+                                    textured_draws: &Vec<TexturedDraw>,
+                                    text_nodes: &Vec<TextLayoutInfo>,
+                                    input_chrome_instances: &Vec<InstanceInput>| {
+            if is_body_portal_layer {
+                overlay_split.bands.push(OverlayPaintBand {
+                    instance_start: instances.len(),
+                    textured_start: textured_draws.len(),
+                    text_start: text_nodes.len(),
+                    chrome_start: input_chrome_instances.len(),
+                });
+            }
+        };
+
         if !any_z {
             for (i, child) in element.children.iter_mut().enumerate() {
+                if i >= child_nodes.len() {
+                    log::error!(
+                        "layout/taffy child desync: element has {} children, taffy node {:?} has {} — skip (portal hoist must full-rebuild)",
+                        element.children.len(),
+                        node,
+                        child_nodes.len()
+                    );
+                    break;
+                }
+                push_portal_band(
+                    overlay_split,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     if child
                         .focus_id
@@ -1564,6 +1996,7 @@ impl LayoutTree {
                     scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
+                    overlay_split,
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
@@ -1578,6 +2011,22 @@ impl LayoutTree {
                     .then(a.cmp(&b))
             });
             for i in order {
+                if i >= child_nodes.len() {
+                    log::error!(
+                        "layout/taffy child desync (z-ordered): element has {} children, taffy node {:?} has {}",
+                        element.children.len(),
+                        node,
+                        child_nodes.len()
+                    );
+                    continue;
+                }
+                push_portal_band(
+                    overlay_split,
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     let c = &element.children[i];
                     if c.focus_id
@@ -1610,6 +2059,7 @@ impl LayoutTree {
                     scrollbar_overlay_collect,
                     thumb_ov,
                     scroll_signals_cache,
+                    overlay_split,
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
@@ -1879,6 +2329,63 @@ fn prefix_width_logical(text: &str, byte_ix: usize, size: f32, weight: u16, line
     crate::text::intrinsic_width(&prepared)
 }
 
+/// Hard-`\n` lines as `(byte_start, line_body)` — trailing empty line after final `\n` included.
+fn hard_line_slices(text: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (i, ch) in text.char_indices() {
+        if ch == '\n' {
+            out.push((start, &text[start..i]));
+            start = i + 1;
+        }
+    }
+    out.push((start, &text[start..]));
+    out
+}
+
+use crate::utils::text_field::caret_line_and_local;
+
+fn push_chrome_rect(
+    out: &mut Vec<InstanceInput>,
+    clip: Option<[f32; 4]>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: [f32; 4],
+) {
+    // Keep full caret/selection geometry; GPU clip via with_clip. Baking intersect into
+    // rect_size made a short scroll/viewport clip shrink the caret into a flat stub that
+    // matched the squashed glyph band.
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let visible = intersect_rect(clip, [x, y, w, h]);
+    if visible[2] <= 0.0 || visible[3] <= 0.0 {
+        return;
+    }
+    out.push(
+        InstanceInput {
+            rect_pos: [x, y],
+            rect_size: [w, h],
+            color,
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            radii: [0.0, 0.0, 0.0, 0.0],
+            border_width: 0.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
+            shadow_offset: [0.0, 0.0],
+            shadow_blur: 0.0,
+            shadow_spread: 0.0,
+            shadow_inset: 0.0,
+            rotate_deg: 0.0,
+            clip_pos: [0.0, 0.0],
+            clip_size: InstanceInput::NO_CLIP_SIZE,
+            _pad: 0.0,
+        }
+        .with_clip(clip),
+    );
+}
+
 fn push_input_chrome_instances(
     selection_out: &mut Vec<InstanceInput>,
     caret_out: &mut Vec<InstanceInput>,
@@ -1901,8 +2408,29 @@ fn push_input_chrome_instances(
     } else {
         style.size * crate::style::tailwind_default_leading_scale(style.size)
     };
-    let caret_h = line_height.min(box_h).max(1.0);
-    let chrome_y = y + (box_h - caret_h) * 0.5;
+    let lines = hard_line_slices(text);
+    let line_count = lines.len().max(1);
+    // Only hard/soft multi-line text — never infer from leaf box_h (ink pad would
+    // false-trigger and make single-line Input caret look "full field height").
+    let multi_line_layout = line_count > 1;
+    let caret_h =
+        crate::utils::text_field::text_edit_caret_height_px(line_height, style.size);
+    let sel_h = if multi_line_layout {
+        line_height.max(1.0)
+    } else {
+        caret_h.min(line_height).max(1.0)
+    };
+    let line_origin_y = |line_i: usize| -> f32 {
+        if multi_line_layout {
+            y + line_i as f32 * line_height
+        } else {
+            y + (box_h - line_height).max(0.0) * 0.5
+        }
+    };
+    let line_top_y = |line_i: usize| -> f32 { line_origin_y(line_i) };
+    let caret_y = |line_i: usize| -> f32 {
+        line_origin_y(line_i) + (line_height - caret_h) * 0.5
+    };
 
     let range_opt: Option<(usize, usize)> = if let Some((sa, sb)) = caret.selection {
         let mut s = sa.min(sb).min(text.len());
@@ -1933,36 +2461,54 @@ fn push_input_chrome_instances(
     };
 
     if let Some((s, e)) = range_opt {
-        let prefix_w = prefix_width_logical(text, s, style.size, style.weight, line_height);
-        let sel_w = prefix_width_logical(text, e, style.size, style.weight, line_height) - prefix_w;
-        let sel_w = sel_w.min(box_w - prefix_w).max(0.0);
-        if sel_w > 0.0 {
-            let bg = caret.selection_bg;
-            let color = [
-                bg[0] as f32 / 255.0,
-                bg[1] as f32 / 255.0,
-                bg[2] as f32 / 255.0,
-                (bg[3] as f32 / 255.0) * opacity,
-            ];
-            let rect = intersect_rect(clip, [x + prefix_w.min(box_w), chrome_y, sel_w, caret_h]);
-            if rect[2] > 0.0 && rect[3] > 0.0 {
-                selection_out.push(InstanceInput {
-                    rect_pos: [rect[0], rect[1]],
-                    rect_size: [rect[2], rect[3]],
+        let bg = caret.selection_bg;
+        let color = [
+            bg[0] as f32 / 255.0,
+            bg[1] as f32 / 255.0,
+            bg[2] as f32 / 255.0,
+            (bg[3] as f32 / 255.0) * opacity,
+        ];
+        let (start_line, start_local) = caret_line_and_local(text, s);
+        let (end_line, end_local) = caret_line_and_local(text, e);
+        for line_i in start_line..=end_line.min(line_count.saturating_sub(1)) {
+            let Some((_, line_body)) = lines.get(line_i) else {
+                continue;
+            };
+            let from = if line_i == start_line { start_local } else { 0 };
+            let to = if line_i == end_line {
+                end_local.min(line_body.len())
+            } else {
+                line_body.len()
+            };
+            if from >= to && !(from == 0 && to == 0 && line_i < end_line) {
+                // Empty middle/end lines still get a thin caret-width highlight when selected through.
+                if from == to && line_body.is_empty() && start_line != end_line {
+                    push_chrome_rect(
+                        selection_out,
+                        clip,
+                        x,
+                        line_top_y(line_i),
+                        4.0_f32.min(box_w),
+                        sel_h,
+                        color,
+                    );
+                }
+                continue;
+            }
+            let prefix_w =
+                prefix_width_logical(line_body, from, style.size, style.weight, line_height);
+            let end_w = prefix_width_logical(line_body, to, style.size, style.weight, line_height);
+            let sel_w = (end_w - prefix_w).min(box_w - prefix_w).max(0.0);
+            if sel_w > 0.0 {
+                push_chrome_rect(
+                    selection_out,
+                    clip,
+                    x + prefix_w.min(box_w),
+                    line_top_y(line_i),
+                    sel_w,
+                    sel_h,
                     color,
-                    border_color: [0.0, 0.0, 0.0, 0.0],
-                    radii: [0.0, 0.0, 0.0, 0.0],
-                    border_width: 0.0,
-                    shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    shadow_offset: [0.0, 0.0],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_inset: 0.0,
-                    rotate_deg: 0.0,
-                    clip_pos: [0.0, 0.0],
-                    clip_size: InstanceInput::NO_CLIP_SIZE,
-                    _pad: 0.0,
-                });
+                );
             }
         }
         return;
@@ -1973,7 +2519,12 @@ fn push_input_chrome_instances(
     }
     let mut ix = caret.caret_byte_index.min(text.len());
     ix = text.floor_char_boundary(ix);
-    let prefix_w = prefix_width_logical(text, ix, style.size, style.weight, line_height);
+    let (line_i, local) = caret_line_and_local(text, ix);
+    let line_body = lines
+        .get(line_i)
+        .map(|(_, body)| *body)
+        .unwrap_or("");
+    let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
     let caret_w = 2.0_f32;
     let mut caret_x = x + prefix_w.min(box_w);
     caret_x = caret_x.min(x + box_w - caret_w).max(x);
@@ -1984,26 +2535,15 @@ fn push_input_chrome_instances(
         c[2] as f32 / 255.0,
         (c[3] as f32 / 255.0) * opacity,
     ];
-    let rect = intersect_rect(clip, [caret_x, chrome_y, caret_w, caret_h]);
-    if rect[2] > 0.0 && rect[3] > 0.0 {
-        caret_out.push(InstanceInput {
-            rect_pos: [rect[0], rect[1]],
-            rect_size: [rect[2], rect[3]],
-            color,
-            border_color: [0.0, 0.0, 0.0, 0.0],
-            radii: [0.0, 0.0, 0.0, 0.0],
-            border_width: 0.0,
-            shadow_color: [0.0, 0.0, 0.0, 0.0],
-            shadow_offset: [0.0, 0.0],
-            shadow_blur: 0.0,
-            shadow_spread: 0.0,
-            shadow_inset: 0.0,
-            rotate_deg: 0.0,
-            clip_pos: [0.0, 0.0],
-            clip_size: InstanceInput::NO_CLIP_SIZE,
-            _pad: 0.0,
-        });
-    }
+    push_chrome_rect(
+        caret_out,
+        clip,
+        caret_x,
+        caret_y(line_i.min(line_count.saturating_sub(1))),
+        caret_w,
+        caret_h,
+        color,
+    );
 }
 
 #[cfg(test)]
@@ -2037,6 +2577,13 @@ mod prepared_text_attach_tests {
     }
 
     #[test]
+    fn hard_line_slices_keeps_trailing_empty_line() {
+        let lines = hard_line_slices("a\n");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1], (2, ""));
+    }
+
+    #[test]
     fn latin_cjk_prefix_width_sums_segments_not_max() {
         let mut fs = crate::renderer::font_loader::create_font_system();
         crate::renderer::font_loader::apply_default_families(fs.db_mut());
@@ -2058,6 +2605,58 @@ mod prepared_text_attach_tests {
         assert!(
             (w_mixed - (w_latin + w_cjk)).abs() < 1.0,
             "expected ~latin+cjk, got mixed={w_mixed} vs {w_latin}+{w_cjk}"
+        );
+    }
+
+    #[test]
+    fn multiline_caret_slightly_taller_than_line_and_centered() {
+        let text = "asd\nadj";
+        let lh = 21.0_f32;
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.color = [0, 0, 0, 255];
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        let mut saw = false;
+        for _ in 0..6 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                0.0,
+                0.0,
+                200.0,
+                lh * 2.0,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "multiline caret chrome missing during blink ON");
+        let caret_h = chrome[0].rect_size[1];
+        let caret_y = chrome[0].rect_pos[1];
+        assert!(
+            caret_h > lh && caret_h <= lh + 2.0,
+            "caret should be slightly taller than line height (h={caret_h}, lh={lh})"
+        );
+        let expected_y = lh + (lh - caret_h) * 0.5;
+        assert!(
+            (caret_y - expected_y).abs() < 0.5,
+            "caret should be vertically centered on line 1 (y={caret_y}, expected={expected_y})"
         );
     }
 
@@ -2117,6 +2716,250 @@ mod prepared_text_attach_tests {
         assert!(
             caret_x > only_cjk + 1.0,
             "caret must sit past mid-CJK (only_cjk={only_cjk}, caret_x={caret_x})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod portal_hoist_tests {
+    use super::*;
+    use crate::utils::popup::panel_block_clicks;
+
+    fn layer_children(root: &Element) -> &[Element] {
+        root.children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .map(|c| c.children.as_slice())
+            .unwrap_or(&[])
+    }
+
+    #[test]
+    fn portal_content_survives_second_hoist_pass() {
+        // Solid keep-alive: after lift, source keeps a slot; next hoist must retain the panel.
+        let mut panel = Element::new().bg([1.0, 1.0, 1.0, 1.0]).w(160.0).h(80.0);
+        panel.set_attr(ATTR_PORTAL_KEY, "panel:test");
+        panel = panel_block_clicks(panel, 1001);
+
+        let mut root = Element::new().w(800.0).h(600.0).child(panel);
+        let moved1 = hoist_portal_subtrees(&mut root);
+        assert_eq!(moved1, 1, "first pass lifts the panel");
+        assert_eq!(layer_children(&root).len(), 1);
+        let bg = layer_children(&root)[0].style.bg_color;
+        assert!(bg[3] > 0.0, "panel chrome must survive hoist");
+
+        assert!(
+            root.children
+                .iter()
+                .any(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_some()),
+            "slot marker must remain in source tree"
+        );
+
+        let moved2 = hoist_portal_subtrees(&mut root);
+        assert_eq!(moved2, 0, "retention path must not rewrite the layer");
+        assert_eq!(
+            layer_children(&root).len(),
+            1,
+            "hoisted panel must persist while slot is wanted"
+        );
+        let bg2 = layer_children(&root)[0].style.bg_color;
+        assert_eq!(bg2, bg, "background style must not be stripped on retain");
+        // Identity retained: same node object still has opaque chrome.
+        assert!(
+            layer_children(&root)[0].style.bg_color[3] > 0.99,
+            "panel background must stay opaque"
+        );
+    }
+
+    #[test]
+    fn portal_overlay_paint_split_after_page_content() {
+        let mut page = Element::new().w(200.0).h(40.0).bg([0.9, 0.9, 0.9, 1.0]);
+        page = page.child(Element::new().text("page"));
+
+        let mut panel = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(120.0)
+            .h(60.0)
+            .absolute()
+            .left(20.0)
+            .top(20.0);
+        panel.set_attr(ATTR_PORTAL_KEY, "panel:split");
+        panel = panel_block_clicks(panel, 1001);
+        panel = panel.child(Element::new().text("overlay"));
+
+        let mut root = Element::new().w(800.0).h(600.0).child(page).child(panel);
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.marked,
+            "portal layer must mark the overlay paint split"
+        );
+        assert!(
+            result.overlay_split.instance_start < result.instances.len(),
+            "overlay must contribute rect instances"
+        );
+        assert!(
+            result.overlay_split.text_start < result.text_nodes.len(),
+            "overlay must contribute text nodes after the split"
+        );
+        // Page glyphs are collected before the portal suffix.
+        assert!(result
+            .text_nodes[..result.overlay_split.text_start]
+            .iter()
+            .any(|t| t.text == "page"));
+        assert!(result.text_nodes[result.overlay_split.text_start..]
+            .iter()
+            .any(|t| t.text == "overlay"));
+        assert!(
+            !result.overlay_split.bands.is_empty(),
+            "each portal child should open a paint band"
+        );
+    }
+
+    #[test]
+    fn stacked_portal_panels_get_separate_paint_bands() {
+        // Two overlapping panels: band1's instances must start after band0's texts would
+        // otherwise paint over band1's fill if all overlay rects were drawn before all text.
+        let page = Element::new().w(100.0).h(40.0).bg([0.95, 0.95, 0.95, 1.0]);
+
+        let mut lower = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(160.0)
+            .h(120.0)
+            .absolute()
+            .left(10.0)
+            .top(50.0)
+            .z_index(1000);
+        lower.set_attr(ATTR_PORTAL_KEY, "panel:lower");
+        lower = panel_block_clicks(lower, 1000);
+        lower = lower.child(Element::new().text("lower-glyph"));
+
+        let mut upper = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(160.0)
+            .h(120.0)
+            .absolute()
+            .left(80.0)
+            .top(80.0)
+            .z_index(1010);
+        upper.set_attr(ATTR_PORTAL_KEY, "panel:upper");
+        upper = panel_block_clicks(upper, 1010);
+        upper = upper.child(Element::new().text("upper-glyph"));
+
+        let mut root = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .child(page)
+            .child(lower)
+            .child(upper);
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.bands.len() >= 2,
+            "expected ≥2 portal bands, got {}",
+            result.overlay_split.bands.len()
+        );
+        let ranges = result.overlay_split.band_ranges(
+            result.instances.len(),
+            result.textured_draws.len(),
+            result.text_nodes.len(),
+            result.input_chrome_instances.len(),
+        );
+        assert!(ranges.len() >= 2);
+        let a = ranges[ranges.len() - 2];
+        let b = ranges[ranges.len() - 1];
+        assert!(a.text.0 < a.text.1, "lower band must include text");
+        assert!(
+            b.instance.0 >= a.instance.1 || b.instance.0 > a.instance.0,
+            "upper band instances follow lower band"
+        );
+        assert!(
+            b.text.0 >= a.text.1,
+            "upper band text follows lower band text"
+        );
+        assert!(
+            result.text_nodes[a.text.0..a.text.1]
+                .iter()
+                .any(|t| t.text == "lower-glyph")
+        );
+        assert!(
+            result.text_nodes[b.text.0..b.text.1]
+                .iter()
+                .any(|t| t.text == "upper-glyph")
+        );
+    }
+
+    #[test]
+    fn portal_drops_when_slot_removed() {
+        let mut panel = Element::new().w(100.0).h(40.0);
+        panel.set_attr(ATTR_PORTAL_KEY, "panel:close");
+        let mut root = Element::new().child(panel_block_clicks(panel, 1001));
+        assert_eq!(hoist_portal_subtrees(&mut root), 1);
+        assert_eq!(layer_children(&root).len(), 1);
+
+        // Overlay closed: reactive tree no longer declares the portal/slot.
+        root.children.retain(|c| {
+            c.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+                || c.attrs.get(ATTR_PORTAL_SLOT).is_none()
+        });
+
+        let _ = hoist_portal_subtrees(&mut root);
+        assert!(
+            layer_children(&root).is_empty(),
+            "closing must drop hoisted content when no longer wanted"
+        );
+    }
+
+    #[test]
+    fn overflow_scroll_does_not_clip_own_outset_shadow() {
+        // Regression: pairing overflow with box-shadow used to scissor the element's own
+        // paint to its border box, turning a soft rounded shadow into a sharp 90° corner.
+        let mut panel = Element::new()
+            .w(120.0)
+            .h(80.0)
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .rounded(8.0)
+            .shadow([0.0, 0.0, 0.0, 0.25], 8.0)
+            .overflow_y("auto")
+            .absolute()
+            .left(40.0)
+            .top(40.0);
+        panel = panel.child(Element::new().w(100.0).h(200.0).bg([0.5, 0.5, 0.5, 1.0]));
+
+        let mut root = Element::new().w(800.0).h(600.0).child(panel);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+
+        let panel_inst = result
+            .instances
+            .iter()
+            .find(|i| {
+                i.shadow_blur > 0.0
+                    && i.color[3] > 0.5
+                    && (i.rect_size[0] - 120.0).abs() < 1.0
+                    && (i.rect_size[1] - 80.0).abs() < 1.0
+            })
+            .expect("panel chrome with shadow");
+        assert!(
+            panel_inst.clip_size == InstanceInput::NO_CLIP_SIZE || panel_inst.clip_size[0] < 0.0,
+            "own overflow must not clip outset shadow; clip_size={:?}",
+            panel_inst.clip_size
+        );
+
+        let child_clipped = result.instances.iter().any(|i| {
+            i.color[0] > 0.4
+                && i.color[0] < 0.6
+                && i.clip_size[0] > 0.0
+                && i.clip_size[1] > 0.0
+                && (i.clip_size[0] - 120.0).abs() < 2.0
+                && (i.clip_size[1] - 80.0).abs() < 2.0
+        });
+        assert!(
+            child_clipped,
+            "overflow must still clip descendants to the panel box"
         );
     }
 }

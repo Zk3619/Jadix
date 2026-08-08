@@ -7,13 +7,14 @@ use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::input::{input, input_value_signal_key};
+use crate::utils::text_field::bind_controlled_value;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, underlay_close_on_click, PopupPlacement,
+    mark_floating, panel_block_clicks, PopupPlacement,
 };
 use crate::utils::roving::{roving_edge, roving_move};
 use winit::keyboard::{Key, NamedKey};
@@ -78,9 +79,11 @@ impl From<ComboboxBuilder> for Element {
         let active_key = format!("{id}__combo_active");
         let active = use_signal(active_key.as_str(), || 0usize);
         let vk = input_value_signal_key(&id);
-        let val = value.unwrap_or_else(|| use_signal(vk.as_str(), String::new));
-        // Keep external signal in sync with input's keyed store when provided.
-        let _ = val;
+        if let Some(sig) = value {
+            bind_controlled_value(&id, sig);
+        } else {
+            let _ = use_signal(vk.as_str(), String::new);
+        }
         let view_id = format!("{id}__combo_view");
         let trigger_fid = format!("input:{id}");
 
@@ -160,7 +163,6 @@ impl From<ComboboxBuilder> for Element {
             let mut root = vstack().child(trigger);
             if let Some(oz) = portal_sync(&id, open, OverlayKind::Menu, OverlayMode::Stacked) {
                 if open.peek() {
-                    root = root.child(underlay_close_on_click(open, oz.underlay));
                     let q = query.to_ascii_lowercase();
                     let filtered: Vec<_> = options
                         .iter()
@@ -194,12 +196,14 @@ impl From<ComboboxBuilder> for Element {
                         rows = rows.child(row);
                     }
                     let scroll_id = format!("{id}:menu_scroll");
+                    // ShadCN ComboboxContent: w = anchor, min-w = anchor+1.75rem, max-h-96.
                     let mut menu: Element = scroll_area(&scroll_id)
                         .overflow_y("auto")
-                        .w("100%")
+                        .w("auto")
+                        .h("auto")
                         .child(rows)
                         .into();
-                    menu = menu.max_h("12rem");
+                    menu = menu.max_h("24rem");
                     menu = menu
                         .bg(tokens::background())
                         .rounded("0.375rem")
@@ -211,6 +215,8 @@ impl From<ComboboxBuilder> for Element {
                         .insert("accesskit_role".to_string(), "menu".to_string());
                     mark_floating(&mut menu, &id, &trigger_fid, placement);
                     menu.set_attr("rui_floating_match_trigger", "1");
+                    menu.set_attr("rui_floating_min_w", "trigger+1.75rem");
+                    menu.set_attr("rui_floating_max_h", "24rem");
                     menu = panel_block_clicks(menu, oz.panel);
                     root = root.child(menu);
                 }

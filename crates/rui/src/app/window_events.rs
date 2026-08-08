@@ -515,6 +515,7 @@ impl super::App {
                 crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
                 crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
                 crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
                 _ => winit::window::CursorIcon::Default,
             });
         }
@@ -603,8 +604,20 @@ impl super::App {
             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
             }
+        } else if let Some(drag) = self.textarea_resize_drag.as_ref() {
+            let dy = y - drag.start_cursor_y;
+            let new_h = (drag.start_h + dy).clamp(drag.min_h, drag.max_h);
+            let h_key = crate::utils::text_field::textarea_height_signal_key(&drag.field_id);
+            let sig = crate::core::reactivity::use_signal(&h_key, || drag.start_h);
+            if (sig.peek() - new_h).abs() > 0.5 {
+                sig.set(new_h);
+                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                    st.window.request_redraw();
+                }
+            }
         } else if self.content_scroll_drag.is_some()
             && self.scrollbar_drag.is_none()
+            && self.textarea_resize_drag.is_none()
             && self.input_drag_rest.is_none()
             && self.label_drag_key.is_none()
             && self.drag_reorder.is_none()
@@ -635,9 +648,13 @@ impl super::App {
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
         }
-        match cursor_pick {
-            Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),
-            None => window.set_cursor(CursorIcon::Default),
+        if self.textarea_resize_drag.is_some() {
+            window.set_cursor(CursorIcon::NwseResize);
+        } else {
+            match cursor_pick {
+                Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),
+                None => window.set_cursor(CursorIcon::Default),
+            }
         }
     }
 
@@ -677,10 +694,10 @@ impl super::App {
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
 
-        let mut input_drag: Option<(String, usize)> = None;
+        let mut input_drag: Option<(String, usize, String)> = None;
         let mut label_drag: Option<(String, usize)> = None;
         if element_state == ElementState::Pressed {
-            if let Some((rest, bounds, display_el, style, leaf_scroll)) =
+            if let Some((rest, bounds, display_el, style, leaf_scroll, focus_id)) =
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
@@ -702,7 +719,7 @@ impl super::App {
                 } else {
                     crate::components::input::caret_index_from_display_hit(&rest, ix)
                 };
-                input_drag = Some((rest, caret_ix));
+                input_drag = Some((rest, caret_ix, focus_id));
             } else if let Some((key, bounds, display_el, style, leaf_scroll)) =
                 super::tree_hit::find_selectable_text_at(&state.root_element, x, y, [0.0, 0.0])
             {
@@ -856,6 +873,53 @@ impl super::App {
                 if let Some(fid) =
                     super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
                 {
+                    if let Some(field_id) = fid
+                        .strip_prefix(crate::utils::text_field::TEXTAREA_RESIZE_FOCUS_PREFIX)
+                    {
+                        let h_key =
+                            crate::utils::text_field::textarea_height_signal_key(field_id);
+                        let start_h =
+                            crate::core::reactivity::use_signal(&h_key, || 0.0_f32).peek();
+                        let (min_h, max_h) = super::tree_hit::find_element_by_focus_id(
+                            &state.root_element,
+                            &fid,
+                        )
+                        .map(|grip| {
+                            let min = grip
+                                .attrs
+                                .get("__rui_ta_resize_min")
+                                .and_then(|s| s.parse::<f32>().ok())
+                                .unwrap_or(start_h.max(32.0));
+                            let max = grip
+                                .attrs
+                                .get("__rui_ta_resize_max")
+                                .and_then(|s| s.parse::<f32>().ok())
+                                .unwrap_or(480.0)
+                                .max(min);
+                            (min, max)
+                        })
+                        .unwrap_or((start_h.max(32.0), 480.0_f32.max(start_h)));
+                        drop(state_borrow);
+                        self.textarea_resize_drag = Some(super::TextareaResizeDrag {
+                            field_id: field_id.to_string(),
+                            start_cursor_y: y,
+                            start_h,
+                            min_h,
+                            max_h,
+                        });
+                        self.content_scroll_drag = None;
+                        self.input_drag_rest = None;
+                        self.label_drag_key = None;
+                        let focus_visible =
+                            crate::core::reactivity::use_signal("__rui_focus_visible", || false);
+                        focus_visible.set(false);
+                        self.left_button_down = true;
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                            st.window.set_cursor(winit::window::CursorIcon::NwseResize);
+                            st.window.request_redraw();
+                        }
+                        return;
+                    }
                     if let Some((list_id, idx)) =
                         crate::utils::drag_reorder::parse_drag_item_focus_id(&fid)
                     {
@@ -882,6 +946,7 @@ impl super::App {
             // Arm a potential content pan (deepest scroll viewport under the pointer).
             if self.scrollbar_drag.is_none()
                 && self.drag_reorder.is_none()
+                && self.textarea_resize_drag.is_none()
                 && input_drag.is_none()
                 && label_drag.is_none()
             {
@@ -920,6 +985,11 @@ impl super::App {
                         on_click: el.on_click.clone(),
                         on_context_menu: el.on_context_menu.clone(),
                         on_double_click: el.on_double_click.clone(),
+                        hoisted_portal: el
+                            .attrs
+                            .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+                            .map(|s| s.as_str())
+                            == Some("1"),
                     }]
                 } else {
                     super::pointer_events::hit_path(&state.root_element, x, y)
@@ -968,11 +1038,9 @@ impl super::App {
                 }
             }
 
-            if let Some((rest, caret_ix)) = input_drag {
+            if let Some((rest, caret_ix, focus_id)) = input_drag {
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
                 // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
-                let focus_id =
-                    format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest.as_str());
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
                     .set(focus_id);
                 let ck = crate::components::input::input_caret_signal_key(&rest);
@@ -1007,6 +1075,7 @@ impl super::App {
             drop(state_borrow);
             self.left_button_down = false;
             self.scrollbar_drag = None;
+            self.textarea_resize_drag = None;
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -1792,6 +1861,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         crate::core::tree::CursorKind::NotAllowed => {
                             winit::window::CursorIcon::NotAllowed
                         }
+                        crate::core::tree::CursorKind::NwseResize => {
+                            winit::window::CursorIcon::NwseResize
+                        }
                         _ => winit::window::CursorIcon::Default,
                     });
                 }
@@ -2303,6 +2375,35 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
                 self.handle_mouse_input(id, element_state);
                 if element_state == ElementState::Released {
+                    // Click handlers run first (open → disarm). Outside dismiss only if still
+                    // armed from a prior release; then arm for the next gesture.
+                    //
+                    // Never call `open.set` / reconcile while AppState is borrowed — that
+                    // panics at `runtime::try_reconcile_subtree` (`RefCell already borrowed`).
+                    let should_outside_dismiss = {
+                        let state_borrow = self.state.borrow();
+                        match state_borrow.as_ref() {
+                            Some(state) if state.window.id() == id => {
+                                let scale = state.window.scale_factor() as f32;
+                                let x = self.cursor_pos.x as f32 / scale;
+                                let y = self.cursor_pos.y as f32 / scale;
+                                let path =
+                                    super::pointer_events::hit_path(&state.root_element, x, y);
+                                !super::portal_overlay::hit_path_on_hoisted_portal(&path)
+                                    && !crate::utils::popup::path_hits_floating_trigger(
+                                        &state.root_element,
+                                        &path,
+                                    )
+                            }
+                            _ => false,
+                        }
+                    };
+                    if should_outside_dismiss
+                        && super::portal_overlay::try_dismiss_outside_press()
+                    {
+                        super::runtime::request_redraw();
+                    }
+                    crate::utils::popup::arm_underlay_close();
                     if let Some(state) = (*self.state.borrow()).as_ref() {
                         if state.window.id() != id {
                             return;

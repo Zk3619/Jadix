@@ -87,6 +87,15 @@ use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
 type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
+/// Textarea 右下角 resize grip 拖拽状态。
+struct TextareaResizeDrag {
+    field_id: String,
+    start_cursor_y: f32,
+    start_h: f32,
+    min_h: f32,
+    max_h: f32,
+}
+
 /// Primary-pointer long-press tracker (500ms / 8px slop → synthesize right-click).
 struct LongPressTrack {
     window_id: winit::window::WindowId,
@@ -112,6 +121,8 @@ struct App {
     scrollbar_drag: Option<ScrollbarDragState>,
     /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
     content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
+    /// Textarea 右下角拖拽改高。
+    textarea_resize_drag: Option<TextareaResizeDrag>,
     /// Primary touch finger id (winit `Touch.id`); secondary fingers feed pinch.
     primary_touch_id: Option<u64>,
     /// All active touch points for pinch (finger id → physical position).

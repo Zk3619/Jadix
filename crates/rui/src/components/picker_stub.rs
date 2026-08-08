@@ -42,6 +42,11 @@ fn stub_badge(text: &str) -> Element {
     ))
 }
 
+/// 触发器 `focus_id`（与 Select `{id}:trigger` 对齐，供 `mark_floating` 锚定）。
+pub(crate) fn stub_trigger_focus_id(id: &str) -> String {
+    format!("{id}:trigger")
+}
+
 /// 与 Input 同高的触发器壳。
 pub(crate) fn stub_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> Element {
     let mut border = parse_color("input");
@@ -77,8 +82,12 @@ pub(crate) fn stub_trigger(id: &str, leading: Element, main: Element, disabled: 
     } else {
         row.cursor_kind(CursorKind::Pointer)
     };
-    let mut out: Element = interactive(cursor).focus_id(id).focusable(!disabled).into();
-    out.template_id = Some(id.to_string());
+    let trigger_fid = stub_trigger_focus_id(id);
+    let mut out: Element = interactive(cursor)
+        .focus_id(trigger_fid.as_str())
+        .focusable(!disabled)
+        .into();
+    out.template_id = Some(trigger_fid);
     out
 }
 

@@ -24,7 +24,7 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use crate::tokens;
-use crate::utils::popup::{panel_block_clicks, underlay_close_on_click, PopupPlacement};
+use crate::utils::popup::{panel_block_clicks, PopupPlacement};
 use rui_macros::component;
 
 pub struct SelectBuilder {
@@ -33,13 +33,13 @@ pub struct SelectBuilder {
     default_value: String,
     options: Vec<(String, String)>,
     placeholder: String,
-    /// 触发器宽度；默认 `12rem`。
+    /// 触发器宽度；默认 `auto`（ShadCN `w-fit`）。
     trigger_width: String,
-    /// 浮层宽度；`None` 表示与触发器同宽（`match_trigger`）。
+    /// 浮层固定宽度；`None` 时由 `match_trigger` / 内容决定。
     menu_width: Option<String>,
-    /// 浮层最大高度；超出可滚动。
-    max_height: String,
-    /// 允许菜单宽覆盖/大于触发器（显式 `menu_width` 时生效）。
+    /// 浮层最大高度；`None` = 仅视口可用高度（Radix `--available-height`）。
+    max_height: Option<String>,
+    /// `true`：浮层宽 = 触发器；`false`：内容宽，`min-width ≥ max(触发器, 8rem)`（Select popper）。
     match_trigger: bool,
     placement: PopupPlacement,
     children: Vec<Element>,
@@ -84,10 +84,13 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         default_value: String::new(),
         options: Vec::new(),
         placeholder: "Select…".into(),
-        trigger_width: "12rem".into(),
+        // ShadCN SelectTrigger: w-fit
+        trigger_width: "auto".into(),
         menu_width: None,
-        max_height: "16rem".into(),
-        match_trigger: true,
+        // ShadCN: max-h = available only (no baked 16rem in the engine).
+        max_height: None,
+        // ShadCN popper viewport: min-w = trigger, content may grow (not forced equal width).
+        match_trigger: false,
         placement: PopupPlacement::BottomStart,
         children: Vec::new(),
     }
@@ -126,7 +129,7 @@ impl SelectBuilder {
     }
 
     pub fn max_height(mut self, h: impl Into<String>) -> Self {
-        self.max_height = h.into();
+        self.max_height = Some(h.into());
         self
     }
 
@@ -178,7 +181,7 @@ struct SelectRenderProps {
     placeholder: String,
     trigger_width: String,
     menu_width: Option<String>,
-    max_height: String,
+    max_height: Option<String>,
     match_trigger: bool,
     placement: PopupPlacement,
 }
@@ -233,7 +236,6 @@ fn build_select_view(
 
     if let Some(oz) = overlay_z {
         let p = place.peek();
-        view = view.child(underlay_close_on_click(open, oz.underlay));
 
         let mut rows: Element = vstack().gap("2px").p("4px").into();
         for (idx, (opt_v, opt_l)) in options.into_iter().enumerate() {
@@ -255,18 +257,16 @@ fn build_select_view(
         }
 
         let scroll_id = format!("{id}:menu_scroll");
-        let menu_w_s = format!("{}px", p.w.max(32.0));
-        let menu_max_h_s = format!("{}px", p.max_h.max(48.0));
+        // ShadCN Select (popper): width auto, min-w ≥ trigger; content height up to available.
         let mut menu: Element = scroll_area(&scroll_id)
             .overflow_x("hidden")
             .overflow_y("auto")
             .scrollbar_visibility("auto")
-            .w(menu_w_s.as_str())
+            .w("auto")
             .h("auto")
             .child(rows)
             .into();
         menu = menu
-            .max_h(menu_max_h_s.as_str())
             .bg(tokens::background())
             .rounded("0.375rem")
             .border_style("solid")
@@ -275,6 +275,9 @@ fn build_select_view(
             .absolute()
             .left(p.x)
             .top(p.y);
+        if let Some(mh) = &max_height {
+            menu = menu.max_h(mh.as_str());
+        }
         menu.set_attr("rui_floating", id.as_str());
         menu.set_attr("rui_floating_trigger", trigger_id.as_str());
         // Keep legacy attrs for one release of compatibility with sync_floating_placement.
@@ -292,8 +295,12 @@ fn build_select_view(
             menu.set_attr("rui_floating_w", mw.as_str());
             menu.set_attr("rui_select_menu_w", mw.as_str());
         }
-        menu.set_attr("rui_floating_max_h", max_height.as_str());
-        menu.set_attr("rui_select_max_h", max_height.as_str());
+        // ShadCN `min-w-[8rem]` + popper `min-w-(--trigger-width)` → max of both via sync.
+        menu.set_attr("rui_floating_min_w", "8rem");
+        if let Some(mh) = &max_height {
+            menu.set_attr("rui_floating_max_h", mh.as_str());
+            menu.set_attr("rui_select_max_h", mh.as_str());
+        }
         let place_attr = match placement {
             PopupPlacement::BottomStart => "bottom-start",
             PopupPlacement::BottomEnd => "bottom-end",

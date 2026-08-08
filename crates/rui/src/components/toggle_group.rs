@@ -3,6 +3,7 @@
 //! 对齐 solid-ui / Kobalte **ToggleGroup**：一组两态按钮。
 //! - `multiple=false`（默认）：单选，值 `Signal<String>`（空串表示未选）
 //! - `multiple=true`：多选，值用 `Signal<Vec<String>>`
+//! - `joined=true`：连体分段外观（Segmented 使用）
 //! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //!
 //! ## 用法
@@ -30,6 +31,7 @@ pub struct ToggleGroupBuilder {
     options: Vec<(String, String)>,
     disabled: bool,
     variant: String,
+    joined: bool,
 }
 
 /// RSX `<ToggleGroup>`：选项走 `options` 更稳妥；亦可用 builder。
@@ -70,6 +72,7 @@ pub fn toggle_group(id: impl Into<String>) -> ToggleGroupBuilder {
         options: Vec::new(),
         disabled: false,
         variant: "outline".into(),
+        joined: false,
     }
 }
 
@@ -102,25 +105,39 @@ impl ToggleGroupBuilder {
         self.variant = v.into();
         self
     }
+    /// 连体分段：共享外框、段间无缝、首尾圆角（Segmented）。
+    pub fn joined(mut self, v: bool) -> Self {
+        self.joined = v;
+        self
+    }
 }
 
 fn toggle_chip_colors(
     pressed: bool,
     disabled: bool,
     outline: bool,
+    joined: bool,
 ) -> ([f32; 4], [f32; 4], [u8; 4]) {
     let mut bg = if pressed {
-        parse_color("accent")
+        if joined {
+            parse_color("background")
+        } else {
+            parse_color("accent")
+        }
     } else {
         parse_color("transparent")
     };
-    let mut border = if outline {
+    let mut border = if outline && !joined {
         parse_color("input")
     } else {
         parse_color("transparent")
     };
     let mut fg = if pressed {
-        parse_text_color("accent-foreground")
+        if joined {
+            parse_text_color("foreground")
+        } else {
+            parse_text_color("accent-foreground")
+        }
     } else {
         parse_text_color("foreground")
     };
@@ -132,6 +149,19 @@ fn toggle_chip_colors(
     (bg, border, fg)
 }
 
+fn joined_radii(index: usize, count: usize, r: f32) -> [f32; 4] {
+    if count <= 1 {
+        return [r, r, r, r];
+    }
+    if index == 0 {
+        [r, 0.0, 0.0, r]
+    } else if index + 1 == count {
+        [0.0, r, r, 0.0]
+    } else {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+}
+
 fn item_el(
     group_id: &str,
     value: &str,
@@ -139,16 +169,27 @@ fn item_el(
     pressed: bool,
     disabled: bool,
     outline: bool,
+    joined: bool,
+    index: usize,
+    count: usize,
     on_click: impl FnMut() + 'static,
 ) -> Element {
-    let (bg, border, fg) = toggle_chip_colors(pressed, disabled, outline);
+    let (bg, border, fg) = toggle_chip_colors(pressed, disabled, outline, joined);
+    let border_w = if outline && !joined { 1.0 } else { 0.0 };
     let mut chip: Element = r#box()
         .px("0.75rem")
         .py("0.375rem")
-        .rounded("0.375rem")
         .bg(bg)
-        .border(border, if outline { 1.0 } else { 0.0 })
+        .border(border, border_w)
         .into();
+    if joined {
+        chip.style.radii = joined_radii(index, count, 0.25 * 16.0);
+        if pressed {
+            chip = chip.shadow([0.0, 0.0, 0.0, 0.08], 2.0);
+        }
+    } else {
+        chip = chip.rounded("0.375rem");
+    }
     chip = chip.child(build_text_node(
         label,
         TextNodeConfig {
@@ -176,6 +217,7 @@ impl From<ToggleGroupBuilder> for Element {
     fn from(builder: ToggleGroupBuilder) -> Self {
         let outline = builder.variant == "outline";
         let disabled = builder.disabled;
+        let joined = builder.joined;
         let group_id = builder.id.clone();
         let multiple = builder.multiple;
         let option_values: Vec<String> = builder
@@ -183,8 +225,20 @@ impl From<ToggleGroupBuilder> for Element {
             .iter()
             .map(|(value, _)| value.clone())
             .collect();
+        let count = builder.options.len();
 
-        let mut row: Element = hstack().gap("0.25rem").items_center().into();
+        let mut row: Element = if joined {
+            hstack()
+                .gap("0")
+                .items_center()
+                .p("0.125rem")
+                .rounded("0.375rem")
+                .bg(parse_color("muted"))
+                .border(parse_color("input"), 1.0)
+                .into()
+        } else {
+            hstack().gap("0.25rem").items_center().into()
+        };
 
         if multiple {
             let scope = format!("{}__tg_multi", builder.id);
@@ -192,7 +246,7 @@ impl From<ToggleGroupBuilder> for Element {
                 .value_multi
                 .unwrap_or_else(|| use_signal(scope.as_str(), Vec::new));
             let selected = sig.peek();
-            for (val, label) in builder.options {
+            for (i, (val, label)) in builder.options.into_iter().enumerate() {
                 let pressed = selected.iter().any(|v| v == &val);
                 let sig_c = sig;
                 let v_c = val.clone();
@@ -203,6 +257,9 @@ impl From<ToggleGroupBuilder> for Element {
                     pressed,
                     disabled,
                     outline,
+                    joined,
+                    i,
+                    count,
                     move || {
                         if disabled {
                             return;
@@ -219,9 +276,14 @@ impl From<ToggleGroupBuilder> for Element {
             }
             let sync_sig = sig;
             row = row.reactive_sync(move |root, _layout_tree| {
-                sync_toggle_group_pressed(root, &option_values, outline, disabled, |value| {
-                    sync_sig.peek().iter().any(|v| v == value)
-                })
+                sync_toggle_group_pressed(
+                    root,
+                    &option_values,
+                    outline,
+                    disabled,
+                    joined,
+                    |value| sync_sig.peek().iter().any(|v| v == value),
+                )
             });
         } else {
             let scope = format!("{}__tg", builder.id);
@@ -230,7 +292,7 @@ impl From<ToggleGroupBuilder> for Element {
                 .value_single
                 .unwrap_or_else(|| use_signal(scope.as_str(), || default));
             let current = sig.peek();
-            for (val, label) in builder.options {
+            for (i, (val, label)) in builder.options.into_iter().enumerate() {
                 let pressed = current == val;
                 let sig_c = sig;
                 let v_c = val.clone();
@@ -241,6 +303,9 @@ impl From<ToggleGroupBuilder> for Element {
                     pressed,
                     disabled,
                     outline,
+                    joined,
+                    i,
+                    count,
                     move || {
                         if disabled {
                             return;
@@ -256,9 +321,14 @@ impl From<ToggleGroupBuilder> for Element {
             let sync_sig = sig;
             row = row.reactive_sync(move |root, _layout_tree| {
                 let current = sync_sig.peek();
-                sync_toggle_group_pressed(root, &option_values, outline, disabled, |value| {
-                    current == *value
-                })
+                sync_toggle_group_pressed(
+                    root,
+                    &option_values,
+                    outline,
+                    disabled,
+                    joined,
+                    |value| current == *value,
+                )
             });
         }
 
@@ -272,12 +342,16 @@ fn sync_toggle_group_pressed(
     option_values: &[String],
     outline: bool,
     disabled: bool,
+    joined: bool,
     mut is_pressed: impl FnMut(&str) -> bool,
 ) -> crate::core::tree::LayoutStatus {
     let mut changed = false;
-    for (option, value) in root.children.iter_mut().zip(option_values.iter()) {
+    let count = option_values.len();
+    let border_w = if outline && !joined { 1.0 } else { 0.0 };
+    for (i, (option, value)) in root.children.iter_mut().zip(option_values.iter()).enumerate() {
         let pressed = is_pressed(value.as_str());
-        let (want_bg, want_border, want_fg) = toggle_chip_colors(pressed, disabled, outline);
+        let (want_bg, want_border, want_fg) =
+            toggle_chip_colors(pressed, disabled, outline, joined);
         if option.style.bg_color != want_bg {
             option.style.bg_color = want_bg;
             changed = true;
@@ -286,9 +360,28 @@ fn sync_toggle_group_pressed(
             option.style.border_color = want_border;
             changed = true;
         }
-        if option.style.border_width != if outline { 1.0 } else { 0.0 } {
-            option.style.border_width = if outline { 1.0 } else { 0.0 };
+        if option.style.border_width != border_w {
+            option.style.border_width = border_w;
             changed = true;
+        }
+        if joined {
+            let want_radii = joined_radii(i, count, 0.25 * 16.0);
+            if option.style.radii != want_radii {
+                option.style.radii = want_radii;
+                changed = true;
+            }
+            let (want_shadow, want_blur) = if pressed {
+                ([0.0, 0.0, 0.0, 0.08], 2.0)
+            } else {
+                ([0.0, 0.0, 0.0, 0.0], 0.0)
+            };
+            if (option.style.shadow_blur - want_blur).abs() > 0.01
+                || (option.style.shadow_color[3] - want_shadow[3]).abs() > 0.001
+            {
+                option.style.shadow_color = want_shadow;
+                option.style.shadow_blur = want_blur;
+                changed = true;
+            }
         }
         if let Some(label) = option.children.get_mut(0) {
             if label.text_style.color != want_fg {

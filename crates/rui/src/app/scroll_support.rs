@@ -317,7 +317,7 @@ pub(super) fn clamp_scroll_offset_and_target(offset: f32, target: f32, max: f32)
     (offset.clamp(0.0, max), target.clamp(0.0, max))
 }
 
-pub(super) fn set_scroll_offset_with_behavior(
+pub(crate) fn set_scroll_offset_with_behavior(
     rest: &str,
     target_x: f32,
     target_y: f32,
