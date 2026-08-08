@@ -15,6 +15,10 @@ pub mod app;
 pub mod components;
 pub(crate) mod debug_stack;
 pub mod primitives;
+/// Input/Textarea 私有 chrome（非产品组件；见 [`components::input`] / [`components::textarea`]）。
+pub(crate) mod text_edit;
+/// Dialog / AlertDialog 共享模态壳（非产品组件）。
+pub(crate) mod dialog_shell;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
 pub mod text;
 pub mod tokens;

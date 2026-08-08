@@ -5,7 +5,7 @@ use crate::components::input::{
     focus_id_for_input, input, input_selection_signal_key, input_value_signal_key,
 };
 use crate::components::label::sync_label_selection_paint_subtree;
-use crate::components::text_edit::sync_text_edit_paint_subtree;
+use crate::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;

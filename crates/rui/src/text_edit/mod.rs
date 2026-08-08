@@ -1,6 +1,7 @@
-﻿//! Input / Textarea 共享 chrome（**私有**，不进 prelude / 公开 API）。
+﻿//! Input / Textarea 共享 chrome（**crate 私有**，不在 `components/`，不进公开 API）。
 //!
-//! 产品面仍是 [`super::input`] 与 [`super::textarea`]；编辑能力在 [`crate::utils::text_field`]。
+//! 产品面：[`crate::components::input`] / [`crate::components::textarea`]；
+//! 编辑能力：[`crate::utils::text_field`]。
 
 mod build;
 mod paint;
