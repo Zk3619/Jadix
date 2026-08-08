@@ -1,8 +1,9 @@
 # 工程级差距分析（Gap Analysis）
 
-> 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`Docs/`
-> 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法
-> 日期：2026-08-07（阶段六合并完成：含 createResource / Suspense / markdown inline）
+> **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。  
+> 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`docs/`  
+> 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法  
+> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）
 
 三个问题：**距离工程级 UI 框架还差什么**、**类 SolidJS 能力还缺什么**、**还需要哪些组件**。
 
@@ -14,16 +15,14 @@
 | P1 | 影响可用性 / 完整度，但不阻塞架构演进 |
 | P2 | 打磨项，可延后 |
 
-**统计（阶段六后）**：开放差距主要为发布与组件产品面（P0 **0** / P1 **0** / P2 清单 **全关**）；SolidJS 能力已对齐 **20/28**（另有 3 项部分对齐）；组件 **已有 26 / 占位 3 / 缺失 21**。  
-阶段一已关闭：Owner / `onCleanup` / Context / scoped ID / 惰性 memo / `with`+`update` / CI+LICENSE / 脏区文档纠偏。  
-阶段二已关闭：utility 单一真源 / 未知类名告警 / 变体引擎 / Theme 切换+dark token / 完整色阶 / `ui!` span / `.get()` 收紧 / `#[component]` 泛型+文档。  
-阶段三已关闭：事件冒泡/捕获/pointer capture / 右键·双击·文件拖放 / 脏区 scissor MVP / opacity+translate / AccessKit 层级+Action / 静态文本可选中+ellipsis / 离屏 golden 骨架。  
-阶段四已关闭：统一 floating sync / Tooltip·ContextMenu·Combobox / VirtualList·DataTable·TreeView / Form·Textarea / Toast·Resizable·FilePicker(rfd)。**仍开放**：crates.io 发布与文档站。  
-阶段五已关闭：[`text/measure`](../crates/rui/src/text/measure.rs) prepare/layout + 布局接入 / `create_store`+`store_select` / `run_on_ui_thread` 线程桥 / template_id 路径索引 + bind_text 同宽→StyleChanged / CI 离屏冒烟+golden。  
-P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspect-ratio` / 富文本 spans / RTL+letter-spacing / 热路径 soft-fail / 宏未知属性 `#[deprecated]`。  
-**阶段六已关闭**（原 P2 打磨/深化合并为一项，不再分 +/++）：`on`/`createSelector`/`createDeferred` / 断点·变体·动效 / a11y live / Fragment·spreading·ref·Dynamic / 触摸·惯性·长按·pinch / tracing+bench / 多窗口+次窗 UI 树 / FontSystem 共享（含次窗）/ soft-wrap·chip·mention·`break_after` / 子树根 compute / **`createResource`+`Suspense`** / **markdown inline**。
+**统计（阶段六后 · 历史口径）**：阶段清单 P0/P1/P2 项已关；开放面转为巩固期工程门槛（真窗冒烟、crates.io、文档站、组件 golden、稳定面 CV）。  
+阶段一～六关闭摘要见下文 §7；阶段七～十二 MVP 见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。
 
-> **接线复核（2026-08-07）**：阶段六合并后：`cargo test -p rui --lib` 184 passed、`clippy -D warnings` 干净。
+> **勘误（2026-08-09）**  
+> - 体量现约 **5.3 万行 / 182 `.rs`**（文内旧「3.3 万 / 121」为阶段六时点）。  
+> - Solid 表：`ErrorBoundary`、`switch_reactive`、`on_mount` **已落地**（勿再读 §5 旧「无」）。  
+> - 组件清单以 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5 为准（约 45 模块），勿再依赖本节「26/3/21」旧计数。  
+> - 巩固期开放 P0：冒烟签署、crates.io、文档站正文、CHANGELOG——见纲领 §4.4 / 总计划 §1。
 
 ---
 
@@ -65,7 +64,7 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 
 ## 2. 总体判断
 
-以 Alpha 期自绘框架衡量，完成度偏高：核心约 **3.3 万行** Rust（`crates/` 下 121 个 `.rs`）、`winit + wgpu + taffy + glyphon` 全自绘栈、Solid 式 Owner / Signal / Memo / Context、按 `template_id` 的子树 reconcile，组件面已铺到表格 / 浮层 / 表单，热重载与体积 / 内存均有实测文档。骨架方向已经选对。
+以 Alpha 期自绘框架衡量，完成度偏高：`winit + wgpu + taffy + glyphon` 全自绘栈、Solid 式 Owner / Signal / Memo / Context、按 `template_id` 的子树 reconcile，组件面已铺到表格 / 浮层 / 表单，热重载与体积 / 内存均有实测文档。骨架方向已经选对。（体量时点数见文首勘误。）
 
 细粒度更新这一层做得比预期扎实。[`bind_text` / `bind_prop` / `bind_class` / `bind_style`](../crates/rui/src/app/reactive.rs) 这套显式绑定，加上子树 reconcile，方向完全正确。热重载链路也超出同规模项目的常见水平。
 
@@ -74,13 +73,7 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 **阶段三（事件与渲染）已落地**：[`pointer_events`](../crates/rui/src/app/pointer_events.rs) 冒泡/捕获/capture；脏区 [`damage`](../crates/rui/src/app/damage.rs)+scissor；AccessKit 层级与 Action；静态文本选区；[`renderer/offscreen`](../crates/rui/src/renderer/offscreen.rs) golden 骨架。  
 **阶段四（组件与生态）已落地 MVP**：[`sync_floating_placement`](../crates/rui/src/utils/popup.rs)；Tooltip / ContextMenu / Combobox；VirtualList / DataTable / TreeView；Form / Textarea；ToastHost / Resizable / FilePicker(`rfd`)。
 
-接下来卡住「发布级」的**不是再换一条哲学路线，而是原生层与工程层的打磨**（§1 已说明为什么不换底座）。完整排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)：
-
-1. **阶段七 · 原生闭环**——IME / 焦点环 / 键盘导航 / AccessKit。
-2. **阶段八 · 文本与布局**——块级 markdown、绕排、damage、组件 golden。
-3. **阶段九 · 响应式 DX**——ErrorBoundary / Switch / Store produce / headless 布局测。
-4. **阶段十～十一 · 产品与外壳**——组件密度、Router、托盘。
-5. **阶段十二 · 发布**——crates.io + 文档站 + CI。
+接下来卡住「发布级」的**不是再换一条哲学路线，而是原生层与工程层的打磨**（§1 已说明为什么不换底座）。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)；**巩固期执行**见 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
 
 ---
 
@@ -217,9 +210,7 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 
 ## 5. SolidJS 能力对齐
 
-已对齐 **20** 项、部分对齐 **3** 项、完全缺失 **5** 项。
-
-> 按 §1 的收窄口径读这张表：它衡量的是**细粒度响应式编程模型**的覆盖度，不是「与 solid-main 整仓对齐度」。表里剩下的缺口主要是 `ErrorBoundary` / `<Switch>`；`mergeProps` 一类是 DX 便利，可长期空着。DOM / SSR / hydration 相关的 Solid API 不在对齐范围内。
+> **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。
 
 | Solid API | RUI 对应 | 状态 | 备注 |
 |-----------|----------|------|------|
@@ -232,33 +223,33 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 | `on(deps, fn)` | `on` | 有 | 阶段六；仅跟踪 deps，body 走 `untrack` |
 | `createRoot` / Owner | `create_root` / `OwnerHandle` | 有 | 阶段一 |
 | `onCleanup` | `on_cleanup` | 有 | 阶段一 |
-| `onMount` | — | 部分 | |
+| `onMount` | `on_mount` | 有 | 阶段九 MVP |
 | `createContext` / `useContext` | `create_context` / `provide_context` / `use_context` | 有 | 阶段一 |
-| `createStore` / `produce` | `create_store` / `store_select` | 有 | 阶段五 MVP；完整 proxy/`produce` 仍可加深 |
+| `createStore` / `produce` | `create_store` / `store_select` / produce | 有 | MVP；完整 proxy 仍可加深（巩固期 WP-2.5） |
 | `reconcile` | `for_keyed` | 部分 | |
-| `createResource` | [`create_resource`](../crates/rui/src/app/resource.rs) | 有 | 阶段六；`spawn_blocking` + stale-while-revalidate |
-| `Suspense` | [`suspense`](../crates/rui/src/app/resource.rs) | 有 | 阶段六；TLS 跟踪 `Resource::get` |
-| `ErrorBoundary` | — | 无 | |
-| `createSelector` | `create_selector` / `Selector::is` | 有 | 阶段六；per-key memo |
+| `createResource` | [`create_resource`](../crates/rui/src/app/resource.rs) | 有 | 阶段六 |
+| `Suspense` | [`suspense`](../crates/rui/src/app/resource.rs) | 有 | 阶段六 |
+| `ErrorBoundary` | [`error_boundary`](../crates/rui/src/app/error_boundary.rs) | 有 | 阶段九 MVP；e2e 契约测见巩固期 WP-2.5 |
+| `createSelector` | `create_selector` / `Selector::is` | 有 | 阶段六 |
 | `createDeferred` / transition | `create_deferred` | 有 | 阶段六；单 flush 延迟，非 idle |
 | `<Show>` | `show_reactive` / `show_scoped` | 有 | |
 | `<For>` | `for_reactive` / `for_keyed` | 有 | |
 | `<Index>` | `for_each` | 部分 | |
-| `<Switch>` / `<Match>` | — | 无 | |
+| `<Switch>` / `<Match>` | `switch_reactive` | 有 | 阶段九 MVP |
 | `<Dynamic>` | `<Dynamic component={…}>` | 有 | 阶段六 |
 | `<Portal>` | `Portal` | 有 | |
-| `children()` helper | — | 无 | |
-| `mergeProps` / `splitProps` | — | 无 | |
+| `children()` helper | — | 无 | 可长期空缺 |
+| `mergeProps` / `splitProps` | — | 无 | 可长期空缺 |
 | 细粒度属性绑定 | `bind_*` | 有 | 亮点 |
-| DevTools | — | 无 | |
+| DevTools | — | 无 | Backlog |
 
 ---
 
 ## 6. 组件清单
 
-阶段四后 **已有 26 / 占位 3 / 缺失 21**。关键 P0 产品空洞（定位引擎、Tooltip、ContextMenu、Combobox、VirtualList、DataTable、TreeView、Form、Textarea、Toast、Resizable、FilePicker）均有 MVP。阶段十 MVP 已补：AlertDialog、Sheet、Menubar、Command、Chart（矩形条）、DatePicker/ColorPicker 可交互、Router / 托盘 stub / Gallery；仍缺深化与块级 markdown 等（见 §7）。
+历史计数「26 / 3 / 21」已过时。**现行清单**见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5（约 45 模块）。关键产品空洞（定位引擎、Tooltip、ContextMenu、Combobox、VirtualList、Table、TreeView、Form、Textarea、Toast、Resizable、FilePicker、AlertDialog、Sheet、Menubar、Command、Chart、Date/Color、Carousel、Gallery）均有 MVP；Router wired、托盘 stub。
 
-**以 EUI 作完整度标尺**（不作架构参照，见 §1）。逐项对照 [`Reference/EUI-NEO-main/components`](../Reference/EUI-NEO-main/components) 后，RUI 明确落后的产品面：
+**以 EUI 作完整度标尺**（不作架构参照，见 §1）。仍明显落后的产品面：
 
 | EUI 已有 | RUI 现状 | 说明 |
 |----------|----------|------|
@@ -365,11 +356,12 @@ P1 打磨已关闭：渐变条带 + 多层阴影 + rotate/scale / `fixed`+`aspec
 ## 相关文档
 
 - [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) — **迈向工程级权威纲领**（门槛、禁区、巩固期轨道）
-- [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) — **工程级完整实现计划**（Wave 1–4 / 工作包 / DoD）
+- [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) — **巩固期执行源**（Wave 1–4 / 工作包 / DoD）
 - [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) — **组件库权威规范**（shadcn 产品面 + headless 骨架）
 - [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) — **组件库专项实施计划**（C-WP / 与巩固期交错）
 - [PROJECT.md](PROJECT.md) — 愿景、分层架构与阶段计划
-- [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) — **阶段七～十二**工程级路线图（权威排期）
+- [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) — 阶段七～十二历史排期（执行已移交巩固期计划）
 - [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) — 三档更新与热重载模板契约
 - [headless.md](headless.md) — 无头组件模式（从属组件规范）
-- [desktop_smoke.md](desktop_smoke.md) — 真窗口冒烟清单（阶段七）
+- [desktop_smoke.md](desktop_smoke.md) — 真窗口冒烟清单
+- [archive/README.md](archive/README.md) — 已冻结历史文档

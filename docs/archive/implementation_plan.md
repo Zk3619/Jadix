@@ -1,3 +1,5 @@
+> **已冻结归档**（2026-08-09）。非权威；说明见 [README.md](README.md)。
+
 # Root Cause & Unification Proposal
 
 I have successfully traced the root cause of the "Dubai" font appearing in your terminal logs, and I have a clear plan to achieve 100% consistent fonts across all platforms (Windows, macOS, Linux).

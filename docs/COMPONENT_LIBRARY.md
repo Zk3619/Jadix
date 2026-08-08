@@ -2,10 +2,10 @@
 
 > **文档地位**：组件产品面的**单一权威规范**。选型、分层、API 契约、清单与质量门以本文为准。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；执行排期见 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)；与巩固期总计划 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 并行，不另开架构分叉。  
-> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`、`examples/gallery`、[`headless.md`](headless.md)、[`gap_analysis.md`](gap_analysis.md)。  
-> **日期**：2026-08-07  
+> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils,dialog_shell,text_edit}`、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
+> **日期**：2026-08-09  
 
-交叉文档：[`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)
+交叉文档：[`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md)
 
 ---
 
@@ -48,25 +48,32 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
             ▼
   components/          ← 外观 + 变体 + 产品 API（ShadCN）
             │  组合
-     ┌──────┼──────────────┐
-     ▼      ▼              ▼
- primitives/  tokens/   utils/popup·roving·keyboard
- (布局叶子)   (语义色)   (浮层几何 / 键盘原语)
+     ┌──────┼──────────────────┐
+     ▼      ▼                  ▼
+ primitives/  tokens/     utils/popup·roving·keyboard·text_field
+ (布局叶子)   (语义色)     (浮层几何 / 键盘 / 文本编辑共享)
      │
      ▼
- style/theme + utility 变体引擎 + focus_ring
+ style/theme + color_space(OKLCH) + utility 变体 + focus_ring
+
+ 私有（非产品面）：text_edit/ · dialog_shell/
 ```
 
 ### 2.1 职责与禁区
 
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
-| 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive` | 写死 primary 色、圆角、阴影等视觉常量 |
-| 行为工具 | `utils/popup.rs`、`roving.rs`、`keyboard.rs` | 浮层标记与 placement、roving 移动、键路由 | 绑定某一组件的外观变体 |
-| 设计令牌 | `style/theme.rs`、`tokens/`、`rui_style_tokens` | 语义色、radius、utility 真源、dark | 业务状态机 |
-| 样式组件 | `components/` | 组合以上，暴露 shadcn API | 把复杂开合/焦点状态机只藏在样式层且不可测 |
+| 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal` | 写死 primary 色、圆角、阴影等视觉常量 |
+| 行为工具 | `utils/popup.rs`、`roving.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、键路由、受控文本写入 | 绑定某一组件的外观变体 |
+| 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
+| 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；塞非产品私有实现 |
+| 私有壳 | `text_edit/`、`dialog_shell/`（`pub(crate)`） | Input/Textarea chrome；Dialog/AlertDialog 共享模态壳 | 当作公开 API 文档化或 prelude 导出 |
 
-现状缺口（须按计划下沉，见实施计划 C-WP）：`popup` / `toggle` 行为仍大量内嵌于各组件；`primitives/` 模块注释已写明 Tabs/Toggle 暂在 `components/`——**允许过渡，不允许永久扩散**。
+现状缺口（须按计划下沉，见实施计划 C-WP）：
+
+- **浮层**：几何已统一在 `utils/popup`；开合状态仍大量内嵌各组件——允许过渡，禁止第二套 placement。  
+- **Toggle**：仍在 `components/toggle`（及 Checkbox/Switch）；**尚未**抽出独立 `primitives/toggle` 或 `utils/toggle_state`——**允许过渡，不允许永久扩散**。  
+- **Tabs / Toggle**：`primitives/mod.rs` 注释已写明暂在 `components/`。
 
 ### 2.2 与 Web 对标的正确映射
 
@@ -96,7 +103,7 @@ RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止�
    - `ui!` 子树可嵌入 `{ Element::from(button(…).variant(…)) }` 或任意已构建的 `Element`；
    - Builder / `vstack`·`hstack` 的 `.child(…)` 可接收 `ui! { … }` 的结果或 `#[component]` 产物。  
 3. **API 面等价**：稳定面组件凡在 RSX 暴露的 props（`variant` / `size` / `disabled` / 受控 signal / `on_click` 等），Builder 须有对应链式方法（或文档标明「仅 RSX 糖」的极少数例外，且例外不得承载唯一行为路径）。  
-4. **仅 Builder 的控件**（如部分 `dialog_panel` / `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder）。  
+4. **仅 Builder 的控件**（如部分 `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder）。  
 5. **热重载**：`template_id` 主要服务含 `ui!` 的模板；纯 Builder 树仍是一等运行时能力，不因无热补丁而降级为「非推荐」。  
 6. **文档与示例**：Getting Started / 组件索引应**至少各给一种写法的完整片段**；标杆组件（Button、Input）两种都展示。
 
@@ -136,7 +143,7 @@ Element::from(
 - **RSX**：PascalCase 标签（`<Button>`）；实现侧 `#[component]` 与/或 Builder `From` → `Element`。  
 - **Builder**：`snake_case` 入口函数（如 `button`、`input`）+ `*Builder` 链式方法；与标签**同一模块导出**。  
 - 函数名可与标签同名（模块已 `allow(non_snake_case)`）时，须在文档区分「标签用 PascalCase / 调用用模块路径」。  
-- 少数暂仅 Builder / 函数：`dialog_panel`、`toast`、`dropdown` 等——文档与 Gallery 须标明；补标签属增强，不阻塞 Builder 一等地位。
+- 少数暂仅 Builder / 函数：`toast`、`dropdown` 等——文档与 Gallery 须标明；补标签属增强，不阻塞 Builder 一等地位。Dialog 为复合标签（`Dialog` / `DialogTrigger` / `DialogContent` / …）+ `dialog` Builder。
 
 ### 4.2 身份与状态（`id` 勿过度使用）
 
@@ -205,9 +212,10 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |------|------|
 | `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `destructive` / `link`…） |
 | `size` | `xs` / `sm` / `default` / `lg` / `icon*` 等；与 Button 已实现对齐者优先复用 |
-| 颜色 | 经 `parse_color("primary")` 等语义名；禁止组件内硬编码与 Theme 无关的 OKLCH |
+| 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
+| `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](color.md) |
 | 焦点环 | 默认走 `style/focus_ring` + theme `ring`；`focus-visible` 行为与冒烟表一致 |
-| 动效 | hover/focus 可用 spring/cubic；paint sync 优先，避免整树 rebuild |
+| 动效 | hover/focus 可用 spring/cubic（Button 已用 spring + 线性 sRGB lerp）；paint sync 优先，避免整树 rebuild |
 
 ### 4.4 浮层
 
@@ -229,21 +237,23 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 ---
 
-## 5. 组件清单（代码事实 · 2026-08-07）
+## 5. 组件清单（代码事实 · 2026-08-09）
 
-来源：`components/mod.rs` + Gallery 分区。状态口径：**MVP** = 可演示；**工程** = 满足 §1；**Stub/实验** = README / SemVer 实验面。
+来源：`components/mod.rs` + Gallery 分区。状态口径：**MVP** = 可演示；**工程** = 满足 §1；**实验** = SemVer 实验面。分桶验证（verified/broken）见计划 C-WP-0.2（仍 ☐）。
 
 ### 5.1 按 Gallery 分区
 
-| 分区 | 组件（文件） | 基线目标 |
-|------|----------------|----------|
-| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Segmented、Progress、Image、Badge 类若有 | Button/Label → 工程；其余 MVP→工程 |
-| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker、FilePicker/DirectoryPicker | Input/Form → 工程；选器键盘深化对齐巩固期 W3 |
-| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command、Portal、FocusTrap | 统一 popup + Esc；Dialog/Tooltip 优先工程 |
-| **数据** | VirtualList、DataTable、TreeView、Chart（Bar/Line）、Carousel、Stepper | VirtualList 依赖测宽；Chart/Path 深化；Masonry 延后 |
-| **导航** | Tabs、Menubar、Navbar、Sidebar、NavigationHost、Router 相关宿主 | Tabs headless + 外壳对齐 W3 |
+| 分区 | 组件（`components/` 模块） | 基线目标 |
+|------|----------------------------|----------|
+| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label → 工程；其余 MVP→工程 |
+| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Form → 工程；选器键盘深化对齐巩固期 W3 |
+| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command、FocusTrap；（共享壳 `dialog_shell`） | 统一 popup + Esc；Dialog/Tooltip 优先工程；Portal 在 `primitives/` |
+| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | Table 对齐 TanStack columns+data；VirtualList 依赖测宽；Chart/Path 深化 |
+| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Navbar=布局壳；NavigationMenu=链接导览（≠ Menubar）；页面栈 `app::navigator::navigation_host`；桌面 Router 在 `app::router` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | 滚动 focus 前缀与 IME 光标区协同 |
-| **文本** | Label 选区、markdown inline、（块级 md 深化） | 与文本管线同源 |
+| **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 与文本管线同源 |
+
+**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`text_field`→`utils/`；Segmented/Badge 若未单独成模块，可用 ToggleGroup / Label 组合或列入实验规划，**勿在清单假装已导出**。
 
 ### 5.2 稳定面 vs 实验面（发布口径草案）
 
@@ -251,8 +261,8 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |-----------------------------|--------------------------------------------------|
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、AlertDialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
-| Form（校验 Context）、Select、Combobox（基础开合） | TreeView 大数据、DataTable 高级排序筛选 |
-| Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节 |
+| Form（校验 Context）、Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化 |
+| Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨 |
 
 最终表以巩固期 **WP-4.1** CHANGELOG 为准；本文草案供组件 PR 归类。
 
@@ -307,10 +317,9 @@ cargo check -p gallery
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 巩固期 Wave 1–4
 COMPONENT_LIBRARY.md               ← 本文件（组件权威规范）
-COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次
-headless.md                        ← 三层契约细则（从属本规范）
-custom_components.md               ← 用户扩展指南（双书写面示例）
-gap_analysis.md §6                 ← 历史清单与 EUI 密度对照
+COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次（含 CV 门禁）
+headless.md / custom_components.md / keyboard_nav.md / color.md
+gap_analysis.md §6                 ← 历史 EUI 密度对照（非清单真源）
 ```
 
 争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。

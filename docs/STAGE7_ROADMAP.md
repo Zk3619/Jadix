@@ -1,7 +1,8 @@
 # RUI 工程级后续发展路线图（阶段七～十二）
 
-依据 [gap_analysis.md](gap_analysis.md)、[PROJECT.md](PROJECT.md)。**底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`；差距在原生层、产品面与发布工程。  
-工程级门槛见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；巩固期可执行工作包见 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
+> **历史排期（非巩固期执行源）**。阶段七～十二 **MVP 勾选已完成**；深化与 Beta DoD 请跟 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)。门槛见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。
+
+依据 [gap_analysis.md](gap_analysis.md)、[PROJECT.md](PROJECT.md)。**底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`；差距在原生层、产品面与发布工程。
 
 > 命名约定：只用「阶段七」…「阶段十二」，**不分** + / ++ / +++。
 
@@ -50,14 +51,14 @@ flowchart TB
 
 ---
 
-## 现状锚点（阶段六后）
+## 现状锚点（阶段六后 · 历史；2026-08-09 勘误）
 
-- P0/P1/P2 清单项已关；开放面是**产品空洞、原生打磨、发布**。
-- Solid：**20/28**；缺 `ErrorBoundary` / `<Switch>`；部分 `onMount` / reconcile / Index。
-- 组件：约 **26 实装 / 3 占位 / ~21 缺失**（相对 EUI 标尺）。
-- 已有但未「产品闭环」：IME 接线、Button 焦点环、FocusTrap、Navigator 栈、次窗、markdown **inline**、子树 compute MVP、离屏 golden MVP。
+- 阶段清单 P0/P1/P2 已关；开放面转为巩固期：**真窗冒烟签署、组件 golden≥5、crates.io、文档站、稳定面 CV**。
+- Solid：`ErrorBoundary` / `switch_reactive` / `on_mount` **已落地**（旧「缺」作废）；部分 reconcile / Index；`mergeProps` 等可长期空缺。
+- 组件：约 **45** 公开模块（见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5）；相对 EUI 仍缺 VirtualMasonry、图表深度等。
+- MVP 已有、工程未闭环：IME 代码路径、焦点环、FocusTrap、Router/次窗、块级 md MVP、2 个 offscreen golden、Gallery 八分区。
 
-原则：**先堵原生与文本坑，再铺产品组件，最后发布**；每阶段交付可测 MVP。
+原则（历史）：**先堵原生与文本坑，再铺产品组件，最后发布**。现执行节奏见巩固期计划。
 
 ---
 
@@ -165,14 +166,11 @@ flowchart TB
 
 ---
 
-## 建议执行节奏
+## 建议执行节奏（历史；已移交）
 
-1. **立即**：阶段七 ∥ 阶段九前半（ErrorBoundary/Switch）
-2. **中段**：阶段八 ∥ 阶段十 A/B（选器与 Command）
-3. **图表与 Masonry**：阶段八行高可信后做十 D/E
-4. **外壳与发布**：十一依赖十的导航；十二贯穿（golden/文档可早开）
+阶段七～十二 MVP 已落地。后续节奏以巩固期 **Wave 1–4** 为准，勿再按本节日历开新阶段编号。
 
-**明确不做**：换 VDOM/EUI DSL；弃 wgpu 追体积；完整 Solid DOM/SSR；移动端一等公民（仅留抽象）。
+**明确不做**：换 VDOM/EUI DSL；弃 wgpu 追体积；完整 Solid DOM/SSR；移动端一等公民（仅留抽象）——与纲领禁区一致。
 
 ---
 

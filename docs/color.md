@@ -1,5 +1,7 @@
 # RUI 颜色方案
 
+> **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §4.3（外观）与纲领样式层。组件内禁止硬编码与 Theme 无关的色值。
+
 本仓库的 UI 颜色分四层理解；实现上 **A（令牌）** 与 **B（混合）** 已落地在 `crates/rui/src/style/color_space.rs` 与默认主题中。
 
 ## 1. OKLab / OKLCH 作为设计令牌空间

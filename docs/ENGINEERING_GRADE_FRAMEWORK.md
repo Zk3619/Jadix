@@ -1,9 +1,9 @@
 # 迈向工程级：Rust 原生跨平台 UI 框架（权威纲领）
 
 > **文档地位**：本文件是 RUI 从「可运行 Alpha」迈向「工程级 / 可发布」的**单一权威纲领**。  
-> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
-> **审计日期**：2026-08-07  
-> **版本口径**：阶段一～十二 **MVP 已落地**；本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
+> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)（阶段七～十二历史排期）、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
+> **审计日期**：2026-08-09（基线相对 2026-08-07 刷新）  
+> **版本口径**：阶段一～十二 **MVP 已落地**；巩固期执行以 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 为准。本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
 
 ---
 
@@ -12,13 +12,14 @@
 RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element/taffy 树 + `winit/wgpu/taffy/glyphon` 自绘栈** 是正确底座。  
 工程级差距**不再是「换哲学」**，而是把原生输入、文本可信度、组件深度、发布工程与质量门从 **MVP 打磨到可承诺的 SemVer 面**。
 
-| 维度 | 现状（代码事实） | 工程级门槛 |
-|------|------------------|------------|
-| 代码体量 | `crates/` ≈ **4.2 万行** / **153** 个 `.rs`；组件约 **49** 个源文件 | API 稳定面文档化；破坏性变更可追踪 |
-| 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / ErrorBoundary / Switch | 热路径无全局表泄漏；Store produce 语义完整 |
-| 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 mark_dirty | 细粒度 damage 默认路径；测宽≡绘制 |
-| 桌面可用 | IME / 焦点环 / AccessKit / 多窗 / Router stub / 托盘 stub | 三平台真窗口冒烟绿；读屏主路径可用 |
-| 发布 | CI 三平台 + offscreen golden；`PUBLISH.md`；文档站 stub | `cargo add rui` 可用；文档站有 Getting Started |
+| 维度 | 现状（代码事实 · 2026-08-09） | 工程级门槛 |
+|------|-------------------------------|------------|
+| 代码体量 | `crates/` ≈ **5.3 万行** / **182** 个 `.rs`；`components/` **45** 个模块（含 `mod.rs` 共 46 文件） | API 稳定面文档化；破坏性变更可追踪 |
+| 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / **ErrorBoundary** / **`switch_reactive`** / `on_mount` | 热路径无全局表泄漏；`REGISTERED_*` 挂 Owner；Store produce 契约完整 |
+| 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty` | 细粒度 damage 默认路径；测宽≡绘制 |
+| 桌面可用 | IME 光标区代码路径；焦点环 / roving / FocusTrap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **stub** | 三平台真窗口冒烟签署；读屏主路径可演示 |
+| 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（**2** 场景：clear + `stage8_pattern`） | ≥5 组件 golden；真窗冒烟或等价 |
+| 发布 | `PUBLISH.md`；文档站 stub；**无 CHANGELOG / 未 crates.io** | `cargo add rui` 可用；文档站有 Getting Started |
 
 ---
 
@@ -90,8 +91,11 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 布局 | `taffy` | Flex / Grid | 不换布局算法 |
 | 响应式 | 自研 Solid 式（`core/reactivity`、`store`、`resource`） | Signal / Owner / Effect | 不对齐 DOM/SSR |
 | 样式 | `rui_style_tokens` + utility 变体引擎 | Tailwind/Uno 心智、theme、dark | 不实现完整 CSSOM |
-| 组件 | primitives → tokens → components | ShadCN 式无头 + 外观 | 交互状态不进纯样式层 |
+| 组件 | primitives → tokens → components；行为工具在 `utils/` | ShadCN 式无头骨架 + 样式产品面 | 交互状态机不永久粘在样式层；浮层几何走 `utils/popup` |
+| 颜色 | `style/color_space` + `theme`（OKLCH 令牌 → display sRGB） | 与 shadcn v4 语义色同源；CPU 混色用 linear / Oklab | 不接完整 ICC / HDR（见 [`color.md`](color.md)） |
 | DX | `rui_macros` + `rui_hot_reload_cli` + 公开 `*Builder` | `ui!` 与纯 Rust Builder **双书写面**；热补丁 `template_id` | 热重载不替代正确性测试；**不废弃无标签写法** |
+
+**锁定栈（不可再开选型分叉）**：`winit` + `accesskit_winit` · `wgpu` · `taffy` · `glyphon`/`cosmic-text` · `palette`（OKLCH）。否决：Skia 主线、弃 wgpu 追体积、stretch、完整 CSSOM。选型过程见 [`archive/Tech-Select.md`](archive/Tech-Select.md)。
 
 工作区 crate：
 
@@ -136,10 +140,10 @@ crates/
 | 事件 | 冒泡/捕获/pointer capture；右键双击；文件拖放；触摸惯性/长按/pinch |
 | 渲染 | damage+scissor MVP；opacity/translate/rotate/scale；多层阴影；渐变条带；离屏 golden |
 | 文本 | prepare/layout + 缓存；inline + **块级** markdown MVP；变宽绕排 MVP；RTL/letter-spacing；FontSystem 共享 |
-| 原生 | IME 光标区；焦点环 token；roving；AccessKit Role/Action/live |
-| 组件 | 浮层引擎、表单、表格、树、虚拟列表、Command/Menubar、Date/Color、Chart MVP、Gallery |
-| 外壳 | Router / 次窗 / 托盘 stub / 剪贴板助手 |
-| 工程 | 三平台 CI；`RUI_FORCE_SOFTWARE` offscreen；tracing feature；layout bench；`PUBLISH.md` |
+| 原生 | IME 光标区（库测 + 诊断钩子）；焦点环 token；roving；FocusTrap；AccessKit Role/Action/live（lifecycle 接线） |
+| 组件 | 浮层引擎、`dialog_shell` 共享模态壳、表单、表格、树、虚拟列表、Command/Menubar、Date/Color、Chart Bar/Line MVP、Carousel、Gallery 八分区 |
+| 外壳 | **Router**（历史 back/forward 有测）/ **次窗 wired MVP** / 托盘 stub / 剪贴板助手 |
+| 工程 | 三平台 CI；`RUI_FORCE_SOFTWARE` offscreen（2 golden）；tracing feature；layout bench；`PUBLISH.md`；库测分布在 `crate_tests/` + 模块内测 |
 
 ### 4.2 Solid 对齐口径（编程模型，非整仓）
 
@@ -147,32 +151,32 @@ crates/
 
 | 状态 | 代表 API |
 |------|----------|
-| 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / ErrorBoundary / Show / For / Switch / Dynamic / Portal / selector / deferred / `bind_*` |
-| 部分 | `onMount`（有）、keyed reconcile、`Index` |
+| 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`** |
+| 部分 | keyed reconcile、`Index`；Store 完整 proxy 语义；Anchors/`REGISTERED_*` → Owner |
 | 可长期空缺 | `mergeProps` / `splitProps` / `children()` helper / DevTools |
 
 ### 4.3 组件面（相对 EUI 密度标尺）
 
-组件源文件约 **49**（含 stub / 辅助）；产品空洞相对 EUI 仍主要在：
+`components/` 约 **45** 个公开模块；私有壳 `dialog_shell` / `text_edit` 不计入产品面。相对 EUI 的产品空洞主要在：
 
-- 图表深度（Pie / 真实 path 绘制 vs 矩形条 MVP）
+- 图表深度（Pie / 真实 path 批处理 vs 矩形条 + path stub）
 - VirtualMasonry（依赖可信行高）
-- 块级 markdown / 编辑器级富文本的产品打磨
-- 各控件键盘与 a11y 的「系统控件级」一致性
+- 块级 markdown 产品打磨；选器键盘与本地化
+- 各控件键盘 / a11y 的「系统控件级」一致性；稳定面分桶与 CV 验证（见组件计划）
 
-**原则**：用 EUI 量密度，不用 EUI 换架构。
+**原则**：用 EUI 量密度，不用 EUI 换架构。清单权威：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §5。
 
 ### 4.4 MVP ≠ 工程级：仍开放的深化面
 
 | 优先级 | 主题 | 说明 |
 |--------|------|------|
-| P0 发布 | crates.io 实发 + 文档站正文 | stub / checklist 已有；缺真实 `cargo publish` 与可浏览站点 |
-| P0 原生 | 三平台真窗口冒烟自动化或签署清单 | 见 [`desktop_smoke.md`](desktop_smoke.md) |
-| P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界情况 | 虚拟列表 / masonry 的前置 |
-| P1 渲染 | 按元素 rect 的细粒度 damage；结构变更外的默认路径 | scissor MVP 可继续加深 |
+| P0 发布 | crates.io 实发 + 文档站正文 + CHANGELOG | stub / checklist 已有；缺真实 `cargo publish` |
+| P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
+| P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
+| P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
 | P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键 |
-| P1 组件 | Gallery 覆盖率；Chart/Path；Date/Time 本地化与键盘 | 产品可感差距 |
-| P2 | DevTools、backdrop-blur 缓存、移动/鸿蒙一等公民 | 明确延后 |
+| P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
+| P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
 
 ---
 
@@ -226,18 +230,19 @@ crates/
 
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md      ← 本纲领（为何 + 门槛 + 禁区）
-ENGINEERING_IMPLEMENTATION_PLAN.md  ← 巩固期完整实现计划（WP / 波次 / DoD）
+ENGINEERING_IMPLEMENTATION_PLAN.md  ← 巩固期完整实现计划（WP / 波次 / DoD）★执行源
 COMPONENT_LIBRARY.md                ← 组件库权威规范（shadcn 面 + headless 骨架）
 COMPONENT_LIBRARY_PLAN.md           ← 组件专项 C-WP（与巩固期交错）
-PROJECT.md                          ← 愿景与早期阶段叙事
-gap_analysis.md                     ← 差距清单与阶段勾选（审计底稿）
-STAGE7_ROADMAP.md                   ← 阶段七～十二排期与验收
-reactivity_and_hot_reload.md        ← 更新契约
-headless.md / custom_components.md  ← 三层契约细则 / 用户扩展（从属组件规范）
-desktop_smoke.md                    ← 真窗口冒烟
-PUBLISH.md / site/README.md         ← 发布与文档站
-size_and_memory.md                  ← 体积内存事实
+│
+├─ 从属手册：reactivity_and_hot_reload · headless · custom_components
+│            keyboard_nav · ime · desktop_smoke · color · font_strategy · font
+│            multi_window · tray · glyphon_audit · size_and_memory
+│            PUBLISH · emoji_gpu_compat_matrix · site/README
+├─ 历史审计（非执行源）：gap_analysis · STAGE7_ROADMAP · PROJECT
+└─ archive/                         ← 选型过程 / 早期随笔（已冻结，仅供追溯）
 ```
+
+争议处理：架构与禁区以本纲领 + ADR 为准；组件选型以 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 为准；排期勾选以两份 `*_PLAN.md` 为准。
 
 ---
 
@@ -339,21 +344,25 @@ flowchart LR
 
 | 文档 | 用途 |
 |------|------|
-| [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) | **巩固期完整实现计划**（WP / 四波次 / DoD） |
+| [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) | **巩固期完整实现计划**（WP / 四波次 / DoD）★执行源 |
 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) | **组件库权威规范**（默认 shadcn 面 + headless 骨架） |
 | [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) | 组件专项实施计划（C-WP） |
-| [gap_analysis.md](gap_analysis.md) | 差距审计与阶段勾选底稿 |
-| [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) | 阶段七～十二排期与验收 |
+| [gap_analysis.md](gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
+| [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
 | [PROJECT.md](PROJECT.md) | 愿景与分层初衷 |
 | [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) | 三档更新与热重载契约 |
 | [headless.md](headless.md) | 无头三层契约（从属组件规范） |
 | [custom_components.md](custom_components.md) | 用户自定义组件指南 |
+| [color.md](color.md) | OKLCH 令牌 / 线性混色 / outline≠CSS outline |
+| [keyboard_nav.md](keyboard_nav.md) | Tab / Escape / FocusTrap / roving |
 | [desktop_smoke.md](desktop_smoke.md) | 真窗口冒烟 |
 | [ime.md](ime.md) | WP-1.1 IME 验收与诊断 |
+| [glyphon_audit.md](glyphon_audit.md) | 文本管线核对（坚持 glyphon 中期） |
 | [PUBLISH.md](PUBLISH.md) | crates.io 清单 |
 | [size_and_memory.md](size_and_memory.md) | 体积与内存事实 |
 | [font_strategy.md](font_strategy.md) | 字体打包策略 |
 | [site/README.md](site/README.md) | 文档站大纲 stub |
+| [archive/](archive/README.md) | 已冻结历史文档（选型 / 早期随笔） |
 
 ---
 

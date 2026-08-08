@@ -61,15 +61,18 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
 ## 工作区结构 | Workspace Structure
 
 ```text
-rust-native-ui/
+rui/
 ├─ crates/
 │  ├─ rui/                  # 核心运行时与组件系统 | Core runtime and components
 │  ├─ rui_macros/           # #[component] / ui! 宏 | Proc-macro crate
+│  ├─ rui_style_tokens/     # utility 真源 | Shared style tokens
 │  └─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
 ├─ examples/
 │  └─ gallery/              # 组件与能力展示 | Component gallery
-└─ Docs/                    # 设计与规划文档 | Design and planning notes
+└─ docs/                    # 权威纲领 / 计划 / 从属手册（见下）
 ```
+
+**文档入口 | Docs entry**：[ENGINEERING_GRADE_FRAMEWORK.md](docs/ENGINEERING_GRADE_FRAMEWORK.md) · [ENGINEERING_IMPLEMENTATION_PLAN.md](docs/ENGINEERING_IMPLEMENTATION_PLAN.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [COMPONENT_LIBRARY_PLAN.md](docs/COMPONENT_LIBRARY_PLAN.md)
 
 ---
 
@@ -155,7 +158,7 @@ fn toolbar() -> Element {
 
 ## 细粒度原语（阶段 3/4）| Fine-grained Primitives (Stage 3/4)
 
-设计与热重载约定见 **[Docs/reactivity_and_hot_reload.md](Docs/reactivity_and_hot_reload.md)**。
+设计与热重载约定见 **[docs/reactivity_and_hot_reload.md](docs/reactivity_and_hot_reload.md)**。
 
 - **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
   Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.

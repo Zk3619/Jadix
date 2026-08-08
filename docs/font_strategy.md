@@ -1,5 +1,7 @@
 # 字体策略（Stage 8）
 
+> 从属文本轨道（巩固期 WP-2.1 / golden 确定性）。Dubai→Inter 根因与提案过程见 [archive/implementation_plan.md](archive/implementation_plan.md)（**勿与** `ENGINEERING_IMPLEMENTATION_PLAN.md` 混淆）。
+
 短计划：UI 默认西文用 **Inter**（或平台 UI 字体），CJK / emoji / 符号仍走懒加载回退。实现入口见 [`font_loader.rs`](../crates/rui/src/renderer/font_loader.rs)。
 
 ## 原则

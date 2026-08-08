@@ -1,3 +1,5 @@
+> **已冻结归档**（2026-08-09）。非权威；说明见 [README.md](README.md)。
+
 > 我正在着手开发类前端的Rust原生UI组件及框架，受 SolidJS+TailwindCSS + UnoCSS + ShadCN/UI + Lucide Icon + Dioxus + Iced + egui 的启发，使用 wgpu + winit + Glyphon 创建渲染底层，手动实现 SolidJS 信号机制及类前端的编写方式。目前实现了一个简单的基本的渲染基座和类ShadCN/UI的label、button组件且已经针对windows进行了测试。我完全可以自己尝试探索诸多平台的兼容以达到类似flutter 一处编写到处运行的目的，而且因为rust严格的编译器，在当前AI时代，使用AI辅助开发非常轻松(虽然rust编译器时常无法检测出ui渲染时的错误，如重复借用)
 
 太棒了！听到你正在着手开发这样一个框架，我感到非常兴奋。**"Rust 版的 SolidJS + ShadCN"** 正是很多 Rust 开发者梦寐以求的生态拼图。

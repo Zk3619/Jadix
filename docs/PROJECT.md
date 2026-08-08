@@ -1,5 +1,9 @@
 # PROJECT: Rust Native UI Stack (SolidJS + Tailwind + ShadCN 风格)
 
+> **愿景与早期阶段叙事**（非巩固期执行源）。  
+> **权威四件套**：[ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) · [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) · [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) · [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)  
+> 历史选型过程见 [archive/](archive/README.md)。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。
+
 ## 1. 项目愿景与目标 (Vision & Goals)
 
 本项目旨在从底层构建一个 **纯 Rust 原生、跨平台、极高性能的桌面/移动端 UI 技术栈**。
@@ -95,7 +99,7 @@ rect!(
 *   **任务 3.2:** 事件系统的完善（射线检测 Hit Testing）。将 `winit` 捕获的鼠标/键盘事件精准路由到排版计算好坐标的 Node 节点。
 *   **任务 3.3:** 数据绑定机制。当 Signal 触发修改时排期 (Schedule) 受影响的 UI Node 参数。
 *   **任务 3.4:** Dirty Tracking。计算出需要重绘的矩形区域（脏区），让 `wgpu` 执行 Scissor 测试，仅渲染变动部分以降低功耗。
-    - **现状（2026-08）：** 响应式层已做子树 reconcile + 按需 `request_redraw`；GPU 侧仍为每帧全屏 `LoadOp::Clear`，**尚未**实现 scissor / swapchain damage。文档与实现以此为准，勿再宣称「已有脏区重绘」。
+    - **现状（2026-08-09）：** 脏区 scissor MVP 已落地（`damage` + Load/scissor）；结构变更仍可走全帧 Clear。细粒度「默认路径」深化见巩固期 WP-2.2。
 
 ### Stage 4: 样式层 (UnoCSS 理念) 与动画引擎 (Week 10-12)
 **目标：提供类 UnoCSS、灵活并具备 Attributify 体验的样式宏声明，以及平滑的动效支持。**
@@ -135,15 +139,9 @@ rect!(
 *   **任务 6.2:** 基础组件开发：`Button`, `Input`, `Checkbox`, `RadioGroup`, `Slider` 等。
 *   **任务 6.3:** 复杂覆盖层组件开发：利用引擎能力处理 Z-Index、焦点管理以及 Portal 技术，开发 `Select`, `Dialog`, `Popover`, `Toast`。
 
-### Stage 7: 抛光与企业级特性 (Long-term)
-**目标：开源并吸引社区参与，补充核心外围能力。**
+### Stage 7+: 抛光与工程级发布（已移交巩固期）
 
-**排期摘要：** 见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。**运行时**已集成 `accesskit_winit` + 每帧树更新；剩余工作见该文档（Headless CI、Router、文档站等）。
-
-*   **任务 7.1:** 全面接入 `accesskit` 提供系统级无障碍支持（屏幕阅读器，自动化测试挂载点）。
-*   **任务 6.2:** Headless 测试环境。支持不唤起窗口直接在内存绘制供集成测试比对视觉差异。
-*   **任务 6.3:** Router 系统搭建（适配桌面端状态路由）。
-*   **任务 6.4:** 撰写翔实的中英文文档站与完整的 Examples 系统。
+阶段七～十二 **MVP 已落地**（见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) / [gap_analysis.md](gap_analysis.md) §7）。后续 Beta DoD、WP 勾选以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) 为准；组件稳定面以 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) 为准。
 
 ---
-*Generated based on pure Rust graphics primitive design references.*
+*愿景文档；实现进度以权威四件套与代码为准。*

@@ -1,4 +1,6 @@
-# Glyphon / 文本管线核对（对照 Docs/test.md）
+# Glyphon / 文本管线核对
+
+> 从属巩固期文本轨道（WP-2.1）。早期选型随笔已归档：[archive/test.md](archive/test.md)（**非**测试计划）。中期结论：**坚持 glyphon**；长期关注 parley/swash/vello。
 
 基于当前实现 [crates/rui/src/renderer/text.rs](../crates/rui/src/renderer/text.rs) 的快速核对结论：
 
@@ -10,4 +12,4 @@
 | 批处理 | 文本通过 `glyphon` 的 `TextRenderer` 在 render pass 中提交；与矩形实例批处理分离，属预期结构 |
 | DPI / scale | `AppState::ui_scale` 与 `scale_instances`、surface 尺寸联动；换屏或 `ScaleFactorChanged` 会标记布局脏 |
 
-后续优化（非阻塞）：监控 Atlas 体积、在极大动态文本场景下评估异步 shaping（test.md 所述后台线程方案）。
+后续优化（非阻塞）：监控 Atlas 体积、在极大动态文本场景下评估异步 shaping（见 archive/test.md 所述后台线程方案）。

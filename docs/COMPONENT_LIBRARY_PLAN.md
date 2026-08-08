@@ -3,8 +3,8 @@
 > **文档地位**：把 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 落成**可执行工作包（C-WP）**。  
 > **与总计划关系**：不替代 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)；组件专项与巩固期 **W1–W4 交错**。重叠项（焦点环、a11y、golden、Gallery）以总计划验收为准，本计划补**分层下沉、API 归一、清单工程化**。  
 > **前提**：阶段一～十二组件 MVP 已落地；选型已定为 **shadcn 产品面 + headless 骨架**，书写为 **`ui!` ↔ Builder 双轨兼容**（ADR-6 / ADR-9，不可再分叉）。  
-> **执行原则（2026-08-07 修订）**：**先验证稳定面、再行为下沉与 API 归一**。大量组件仍属「Gallery 可演示、库测/冒烟未盖住」——**禁止**在未过 CV 门禁前大面积做 C1/C2 重构。  
-> **日期**：2026-08-07  
+> **执行原则**：**先验证稳定面、再行为下沉与 API 归一**。大量组件仍属「Gallery 可演示、库测/冒烟未盖住」——**禁止**在未过 CV 门禁前大面积做 C1/C2 重构。  
+> **日期**：2026-08-09（基线与勾选相对 2026-08-07 刷新）  
 
 ---
 
@@ -46,20 +46,21 @@
 
 ---
 
-## 1. 基线事实（计划起点）
+## 1. 基线事实（2026-08-09）
 
 | 项 | 事实 |
 |----|------|
-| 组件源文件 | `components/` ≈ 49 模块（含 stub / 辅助） |
-| 自动化覆盖 | 库测以响应式/布局/bind 为主（`src/crate_tests/`）；**多数组件无行为/像素验收** |
-| Golden | 总计划基线：缺组件场景矩阵（仅少量 offscreen） |
-| 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖** |
-| 原语 | `primitives/`：box / interactive / text / path；**无**独立 popup/toggle 模块 |
-| 浮层 | `utils/popup.rs` 统一 placement；各组件自行组合 open 状态 |
-| 主题 | `style/theme.rs` 对齐 shadcn v4 OKLCH；light/dark |
-| Gallery | 侧栏：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于；示例侧常堆 `gal-*` **id**（示范习惯 ≠ API 必填） |
+| 组件模块 | `components/` **45** 个模块（含 `mod.rs` 共 46 文件）；私有 `dialog_shell` / `text_edit` 不计入产品面 |
+| 自动化覆盖 | `crate_tests/`：reactive / layout / components（Button·Input·Textarea）/ interaction；**多数组件仍无行为/像素验收** |
+| Golden | 仅 2 个 offscreen fixtures；**缺** Button/Input/Dialog/… 组件场景矩阵 |
+| 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖**；三平台未签署 |
+| 原语 | `primitives/`：box / interactive / overlay / text / path / portal；**无**独立 toggle 模块 |
+| 浮层 | `utils/popup.rs` 统一 placement；`dialog_shell` 共享 Dialog/AlertDialog 模态壳；开合状态仍多在各组件 |
+| 主题 | `style/theme.rs` + `color_space.rs` 对齐 shadcn v4 OKLCH；light/dark（见 [`color.md`](color.md)） |
+| Gallery | 八分区**已落地**（与总计划 WP-3.1 同步 ☑）；示例侧常堆 `gal-*` **id**（示范习惯 ≠ API 必填） |
 | **身份债** | 多数 Builder 首位强制 `id`；全局 `use_signal("{id}__…")` 把实例键与 focus/锚点揉在一起 → 规范 §4.2 / C-WP-V.5 |
 | 总计划重叠 | W1 焦点/a11y；W2 golden；W3 Gallery/选器/浮层打磨；W4 发布与索引 |
+| CV 门禁 | **未通过**（C-WP-0.2 / V.* 仍 ☐）→ **禁止**开 C1 大重构 |
 
 **推论**：当前是「密度高、信任低」，且 **`id` 使用面过宽**。计划价值在**分桶 + 门禁 + 身份卫生 + 与 W1/W2 对齐的验证**，不在尽快抽 headless。
 
@@ -120,7 +121,7 @@ flowchart TB
 | **路径** | 规范 §5；可选 `docs/component_inventory.md` 或 site 索引 stub |
 | **任务** | ① 按 Gallery 分区列出全部公开 API；② 每项标 **`experimental` / `stable-candidate` / `verified` / `broken`**；③ 每项附 **id 策略**（必填实例键 / 可选 / 展示型不要求 / 仅内部自动）；④ 稳定候选默认 ≤ 规范 §5.2 草案；⑤ 与 gap §6 EUI 对照只保留密度标尺 |
 | **验收** | 表与 `components/mod.rs` pub use 一致；**broken 不得进 C1**；id 策略列可对接 C-WP-V.5 |
-| **状态** | ☐ |
+| **状态** | ☐ 规范 §5.1 已按模块刷新；verified/broken 分桶表仍缺 |
 
 ### C-WP-0.3 Prelude / 导出与双书写面策略
 
@@ -129,7 +130,7 @@ flowchart TB
 | **路径** | `crates/rui/src/lib.rs` 或 `prelude`；规范 §3 |
 | **任务** | ① 默认 prelude re-export 样式组件标签入口 **与** 对应 Builder/`fn`；② 低层 popup 可不进 prelude；③ **ADR-9** 禁止废除无标签写法 |
 | **验收** | 标签与纯 Builder 均可编译；规范 §3 有互嵌示例 |
-| **状态** | ☐ |
+| **状态** | ☐ 双书写面已在模块 `//!` 与规范落地；**尚无**独立 `rui::prelude` 模块 |
 
 **C0 退出**：互链完成；分桶表可评审；prelude + 双书写面策略有结论。
 
@@ -156,7 +157,7 @@ flowchart TB
 | **路径** | `crates/rui/src/crate_tests/`；可选 offscreen |
 | **任务** | ① Button / Input / Dialog / Tabs / Checkbox\|Switch：`build_and_layout` 宽高 > 0；② 已有 reactive sync 保持绿；③ 场景回归按 reactive/layout/components/interaction 维护（原 `diagnose_*` 已升为正式测） |
 | **验收** | `cargo test -p rui --lib` 含上述布局/行为测 |
-| **状态** | ☐ |
+| **状态** | ☐ 已有 Button/Input/Textarea/`headless_smoke`/showcase_collapse 等；**未**按稳定候选矩阵关门 |
 
 ### C-WP-V.3 P0 修障冲刺
 
@@ -199,10 +200,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`app/portal_overlay`、Dialog / Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
-| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
+| **路径** | `utils/popup.rs`、`app/portal_overlay`、`dialog_shell`、Dialog / Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
+| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、`dialog_shell`；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
 | **验收** | 审计表关闭或仅剩标注实验；Escape 顶层单测或 smoke 条目 |
-| **状态** | ☐ |
+| **状态** | ☐（**前置：CV 通过**）placement/`dialog_shell` 已存在；契约审计与冒烟未关门 |
 | **对齐** | 总计划 WP-1.2、WP-3.4 |
 
 ### C-WP-1.2 Toggle / 布尔控件 headless 抽取
@@ -313,7 +314,7 @@ flowchart TB
 | **路径** | `examples/gallery` |
 | **任务** | ① 稳定面组件均有入口；② 浮层区含 Dialog/Tooltip/Toast/Command；③ 关于页链到规范与冒烟文档 |
 | **验收** | 总计划 WP-3.1；清单表打勾 |
-| **状态** | ☐ |
+| **状态** | ☑ 八分区侧栏已落地（与 WP-3.1 同步）；稳定面「每组件一入口」随 C-WP-0.2 分桶后复核 |
 | **对齐** | WP-3.1 |
 
 ### C-WP-3.2 选器与 Command 键盘
@@ -429,10 +430,11 @@ flowchart TB
 
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md
-ENGINEERING_IMPLEMENTATION_PLAN.md   ← 巩固期总 WP
+ENGINEERING_IMPLEMENTATION_PLAN.md   ← 巩固期总 WP（★执行源）
 COMPONENT_LIBRARY.md                 ← 组件权威规范
 COMPONENT_LIBRARY_PLAN.md            ← 本文件（含 CV 门禁）
-headless.md / custom_components.md / keyboard_nav.md
+headless.md / custom_components.md / keyboard_nav.md / color.md
+archive/                             ← 选型与早期随笔（已冻结）
 ```
 
 ---

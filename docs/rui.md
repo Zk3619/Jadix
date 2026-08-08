@@ -1,4 +1,6 @@
-# RUI 开发笔记
+# RUI 开发笔记（scratchpad）
+
+> **非正式**。权威规范见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) / [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。本文件仅记 Grid utility、拖拽等零碎实现备忘。
 
 ## Grid 与 `class` / `tw` 常用 utility
 

@@ -1,11 +1,11 @@
 # RUI 工程级实现计划（巩固期）
 
-> **文档地位**：把 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) 的六条门槛与三轨，落成**可执行工作包（WP）**。  
+> **文档地位**：把 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) 的六条门槛与三轨，落成**可执行工作包（WP）**。巩固期**唯一执行源**（阶段七～十二历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)，不再并行开新阶段编号）。  
 > **前提**：阶段一～十二 **MVP 已完成**；本计划只做「MVP → 工程可承诺」。  
 > **底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`（禁区见纲领 §7）。  
-> **日期**：2026-08-07  
+> **日期**：2026-08-09（基线与进度相对 2026-08-07 刷新）  
 
-交叉文档：[gap_analysis.md](gap_analysis.md) · [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md)
+交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
 
 ---
 
@@ -26,18 +26,21 @@
 
 ---
 
-## 1. 基线事实（计划起点）
+## 1. 基线事实（2026-08-09）
 
 | 项 | 事实 |
 |----|------|
-| 代码 | `crates/` ≈ 4.2 万行 / 153 `.rs`；组件 ~49 源文件 |
+| 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有 `dialog_shell` / `text_edit` |
+| 响应式 | ErrorBoundary / `switch_reactive` / `on_mount` / Store produce **已有**；`REGISTERED_*`→Owner 仍开放 |
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
-| Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**） |
-| Gallery | 侧栏分区：基础 / 表单 / 浮层 / 数据 / 导航 / 布局 / 文本 |
-| 托盘 | `system-tray` feature 门闸；**原生未接线**（`tray.md`） |
-| 发布 | `PUBLISH.md` 齐；**未实发 crates.io**；文档站为 stub |
+| Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
+| Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
+| 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
+| 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
 | 冒烟 | `desktop_smoke.md` 清单存在；**三平台未签署** |
-| 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文 |
+| 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文、CHANGELOG/SemVer 面 |
+
+**进度摘要（诚实口径）**：W1.1 代码路径与库测已合入、手工冒烟未签；W1.2/1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -77,7 +80,7 @@ flowchart TB
 | **路径** | `app/input_controller.rs`、`app/ime_support.rs`、`app/window_events.rs`、`components/input.rs`、`components/textarea.rs` |
 | **任务** | ① preedit 稳定上屏不丢字；② `set_ime_cursor_area` 随 ScrollArea / 缩放更新；③ 中日韩至少一种 IME 回归测（可手工 + 日志断言接口） |
 | **验收** | `desktop_smoke` #3–#4 在开发机 Win 通过；滚动后候选窗不漂移。细则：[ime.md](ime.md) |
-| **状态** | ☑ 代码+库测已合入；☐ 手工 #3–#4 待签署 |
+| **状态** | ☑ 代码+库测已合入（`ime_support` / 诊断钩子）；☐ 手工 #3–#4 待签署 |
 
 ### WP-1.2 焦点环与 Tab / roving
 
@@ -86,7 +89,8 @@ flowchart TB
 | **路径** | `style/focus_ring.rs`、`style/theme.rs`、`utils/roving.rs`、`components/focus_trap.rs`、Combobox / ContextMenu / Menubar / Tabs |
 | **任务** | ① 可聚焦控件默认 `focus-visible` 环（ring token）；② 应用级 Tab 序文档化；③ 列表/菜单 roving 单测；④ Escape 仅关顶层浮层契约测 |
 | **验收** | smoke #5–#7；roving 单测进 `cargo test -p rui --lib` |
-| **状态** | ☐ |
+| **状态** | ☐ 部分能力已在（focus_ring / roving 测 / FocusTrap / Combobox 方向键）；未按本 WP 验收关闭 |
+| **进展** | 细则见 [keyboard_nav.md](keyboard_nav.md) |
 
 ### WP-1.3 AccessKit 主路径
 
@@ -95,7 +99,7 @@ flowchart TB
 | **路径** | `accesskit_bridge.rs`、Input / Button / Combobox（或 Menu） |
 | **任务** | ① TextField / Button / ListBox 或 Menu Role 正确；② 焦点与 Action 同步；③ 文档：一条读屏复现步骤（Narrator / VoiceOver / Orca 任选） |
 | **验收** | smoke #9 至少一平台签署；`docs/desktop_smoke.md` 或新 `docs/a11y_smoke.md` 写清步骤 |
-| **状态** | ☐ |
+| **状态** | ☐ 桥 + lifecycle `Adapter` 已接线；读屏签署与主路径文档未完成 |
 
 ### WP-1.4 三平台真窗口冒烟签署
 
@@ -122,7 +126,8 @@ flowchart TB
 | **路径** | `text/measure.rs`、`text/wrap_variable.rs`、`renderer/prepare_text.rs`、`layout/layout_tree.rs` |
 | **任务** | ① 固定用例：ASCII / CJK / soft-wrap / chip·mention 断行；② 断言 `layout_lines*` 行数·行宽与 prepare 消费一致（容差文档化）；③ 无字体环境启发式不 panic |
 | **验收** | 库测 `text_align_*`（命名自定）CI 绿；VirtualList 固定字号行高可断言 |
-| **状态** | ☐ |
+| **状态** | ☐ `text/measure` + wrap_variable + 部分 textarea/glyphon 诊断测已有；命名对齐矩阵未关门 |
+| **进展** | [glyphon_audit.md](glyphon_audit.md) 确认中期坚持 glyphon |
 
 ### WP-2.2 细粒度 damage 默认路径
 
@@ -131,7 +136,7 @@ flowchart TB
 | **路径** | `app/damage.rs`、`app/state.rs`、render 提交路径 |
 | **任务** | ① 结构未变：`rects_union` → scissor / Load；② 结构变更才全帧 Clear；③ 计数器 `bind_text` 同宽场景不触发全屏 Clear（可测或 tracing 断言） |
 | **验收** | 单测或 debug 计数；文档一句说明默认策略 |
-| **状态** | ☐ |
+| **状态** | ☐ scissor/damage MVP 已有；「默认路径可证明」未验收 |
 
 ### WP-2.3 子树布局上溢升父
 
@@ -140,7 +145,7 @@ flowchart TB
 | **路径** | `layout/layout_tree.rs`（`pick_subtree_compute_root`、`mark_dirty`） |
 | **任务** | 尺寸上溢时升父/根的规则固化 + 单测（嵌套 flex 改子宽） |
 | **验收** | `layout_mark_dirty` / 新测覆盖升父；无错误裁剪 |
-| **状态** | ☐ |
+| **状态** | ☐ `mark_dirty` + crate_tests 已有；上溢升父规则未固化验收 |
 
 ### WP-2.4 Anchors / Bindings 挂 Owner + scoped ID
 
@@ -158,7 +163,7 @@ flowchart TB
 | **路径** | `core/store.rs`、`app/resource.rs`、`app/error_boundary.rs` |
 | **任务** | ① `produce` 语义与文档示例；② Resource Err → ErrorBoundary 端到端测；③ 标明实验 API（若尚不承诺） |
 | **验收** | 库测覆盖 produce + EB；SemVer 面草稿记入 CHANGELOG 草案 |
-| **状态** | ☐ |
+| **状态** | ☐ API 已存在；契约测 + CHANGELOG 草案未完成 |
 
 ### WP-2.6 组件 golden 骨架（5 场景）
 
@@ -167,7 +172,7 @@ flowchart TB
 | **路径** | `renderer/offscreen.rs`、`crates/rui/tests/golden/`、CI `offscreen` job |
 | **任务** | 落地场景：**Button**、**Input**、**Dialog**、**VirtualList**（或列表行）、**Markdown 块**；稳定哈希 / RGBA 比对；`RUI_UPDATE_GOLDEN=1` 流程写入 docs |
 | **验收** | CI 跑通 ≥5 golden；更新失败时有明确重录说明 |
-| **状态** | ☐ |
+| **状态** | ☐ 现仅 2 fixtures（clear + stage8_pattern）；组件场景未录 |
 | **注意** | 软件渲染确定性：固定尺寸、禁动画、固定字体策略（见 [font_strategy.md](font_strategy.md)） |
 
 **Wave 2 退出**：对齐测 + ≥5 golden CI；damage 策略可陈述；Owner 注册表无泄漏测。
@@ -194,7 +199,7 @@ flowchart TB
 | **路径** | `primitives/path.rs`、`components/chart.rs`、renderer path 提交 |
 | **任务** | ① path 可描边/填充进批处理；② Line 真实折线；③ Pie MVP（扇区或近似）；④ Gallery 页 |
 | **验收** | 三种图至少两种可交互演示；非整矩形 stub |
-| **状态** | ☐ |
+| **状态** | ☐ Bar/Line MVP + path stub；Pie / 批处理未产品化 |
 
 ### WP-3.3 Date / Time / Color 键盘与格式
 
@@ -203,16 +208,16 @@ flowchart TB
 | **路径** | `components/date_picker.rs`、`color_picker.rs`、Time 相关 |
 | **任务** | 方向键改值；Enter 确认；Escape 关闭；ISO / 本地显示格式文档化 |
 | **验收** | Gallery 可纯键盘完成一次选日期/颜色 |
-| **状态** | ☐ |
+| **状态** | ☐ 交互 MVP 已有；键盘闭环未验收 |
 
 ### WP-3.4 浮层与 Command / Menubar a11y 打磨
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs` |
-| **任务** | 与 WP-1.2/1.3 对齐：焦点陷阱、类型即搜（Command）、菜单 Role |
+| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`dialog_shell` |
+| **任务** | 与 WP-1.2/1.3 对齐：焦点陷阱、类型即搜（Command）、菜单 Role；Dialog 走共享壳 |
 | **验收** | smoke #6–#7 + Command 打开关闭单测或手工清单项 |
-| **状态** | ☐ |
+| **状态** | ☐ popup/Esc/`dialog_shell` 已有；产品化打磨未关门 |
 
 ### WP-3.5 Router + 次窗协作
 
@@ -221,7 +226,7 @@ flowchart TB
 | **路径** | `app/router.rs`、`app/navigator.rs`、`app/multi_window.rs`、`docs/multi_window.md` |
 | **任务** | 侧栏路由 + 历史后退/前进示例；次窗焦点不破坏主窗；文档补协作图 |
 | **验收** | 示例或 gallery「外壳」页：两页历史可回退 |
-| **状态** | ☐ |
+| **状态** | ☐ Router/次窗 **wired MVP**（含历史单测 / 多窗文档）；Gallery 外壳演示页未完成 |
 
 ### WP-3.6 系统托盘原生接线（可选 feature）
 
@@ -385,13 +390,13 @@ cargo check -p gallery
 
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md     ← 为何 / 门槛 / 禁区（纲领）
-ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：WP / 波次 / DoD（执行）
+ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：WP / 波次 / DoD（★执行源）
 COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + headless 骨架）
 COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
-STAGE7_ROADMAP.md                  ← 历史阶段七～十二 MVP 排期
-gap_analysis.md                    ← 审计底稿与勾选
-PUBLISH.md / desktop_smoke.md      ← 发布与冒烟操作手册
-headless.md / custom_components.md ← 三层契约与用户扩展（从属组件规范）
+STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
+PUBLISH.md / desktop_smoke.md / ime.md
+headless.md / custom_components.md / color.md / keyboard_nav.md
+archive/                           ← 选型与早期随笔（已冻结）
 ```
 
 组件产品面的选型与分层**不在此重开辩论**；**双书写面（`ui!` ↔ Builder）兼容**见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md) / 纲领 ADR-9。重叠验收（焦点 / a11y / Gallery / golden / 文档索引）与 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 双清单勾选即可。
