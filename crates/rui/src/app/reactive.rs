@@ -360,10 +360,10 @@ where
 /// Solid-style in-place text binding (like setting a DOM text node). Prefer this for
 /// labels/counters — it does **not** rebuild a subtree.
 ///
-/// Layout impact mirrors the browser: when intrinsic width **or height** grows (or exceeds the
-/// mounted box), return [`LayoutStatus::LayoutChanged`] so flex parents — e.g. ShadCN-style
-/// `inline-flex` + `whitespace-nowrap` buttons, or Labels echoing multiline Textarea — resize
-/// instead of painting into a stale box. Equal/shrinking metrics stay paint-only
+/// Layout impact mirrors the browser: when intrinsic width **grows** (or exceeds the mounted
+/// box), or when layout height **changes** (grow or shrink — Labels echoing multiline Textarea
+/// must collapse when lines are deleted), return [`LayoutStatus::LayoutChanged`]. Equal-width /
+/// equal-height updates (digit counters `"10"`→`"11"`) stay paint-only
 /// [`LayoutStatus::StyleChanged`].
 pub fn bind_text<F>(anchor_id: impl Into<String>, compute: F) -> Element
 where
@@ -379,26 +379,7 @@ where
                 return LayoutStatus::Clean;
             }
             let old = el.text.as_deref().unwrap_or("");
-            let before_w = text_intrinsic_width(el, old);
-            let after_w = text_intrinsic_width(el, next.as_str());
-            let box_w = el.layout_bounds[2];
-            let box_h = el.layout_bounds[3];
-            let avail = if box_w > 1.0 { box_w } else { f32::MAX };
-            let before_h = text_layout_height(el, old, avail);
-            let after_h = text_layout_height(el, next.as_str(), avail);
-            let width_grew = match (before_w, after_w) {
-                (Some(before), Some(after)) => {
-                    after > before + 0.01 || (box_w > 1.0 && after > box_w + 0.01)
-                }
-                _ => true,
-            };
-            let height_grew = match (before_h, after_h) {
-                (Some(before), Some(after)) => {
-                    after > before + 0.01 || (box_h > 1.0 && after > box_h + 0.01)
-                }
-                _ => true,
-            };
-            let needs_layout = width_grew || height_grew;
+            let needs_layout = bind_text_metric_needs_layout(el, old, next.as_str());
             el.text = Some(next);
             el.style.flex_shrink = 0.0;
             if needs_layout {
@@ -408,6 +389,31 @@ where
             }
         },
     )
+}
+
+/// Whether a `bind_text` string change must reflow (vs paint-only).
+pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str) -> bool {
+    let before_w = text_intrinsic_width(el, old);
+    let after_w = text_intrinsic_width(el, next);
+    let box_w = el.layout_bounds[2];
+    let box_h = el.layout_bounds[3];
+    let avail = if box_w > 1.0 { box_w } else { f32::MAX };
+    let before_h = text_layout_height(el, old, avail);
+    let after_h = text_layout_height(el, next, avail);
+    let width_grew = match (before_w, after_w) {
+        (Some(before), Some(after)) => {
+            after > before + 0.01 || (box_w > 1.0 && after > box_w + 0.01)
+        }
+        _ => true,
+    };
+    // Height grow *or* shrink: multiline echo Labels must collapse when lines are deleted.
+    let height_changed = match (before_h, after_h) {
+        (Some(before), Some(after)) => {
+            (after - before).abs() > 0.01 || (box_h > 1.0 && after > box_h + 0.01)
+        }
+        _ => true,
+    };
+    width_grew || height_changed
 }
 
 fn plain_text_leaf(el: &Element) -> bool {
@@ -812,6 +818,20 @@ mod intrinsic_width_tests {
         assert!(
             after > before + 0.5,
             "hard newline must grow height for bind_text LayoutChanged: {before} vs {after}"
+        );
+    }
+
+    #[test]
+    fn hard_newline_shrink_requests_layout() {
+        let el = label("a\nb\nc");
+        assert!(
+            bind_text_metric_needs_layout(&el, "a\nb\nc", "a"),
+            "deleting hard lines must LayoutChanged so echo Labels collapse"
+        );
+        let same = label("10");
+        assert!(
+            !bind_text_metric_needs_layout(&same, "10", "11"),
+            "equal-metric digit counters stay paint-only"
         );
     }
 

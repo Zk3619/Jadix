@@ -2070,7 +2070,32 @@ impl LayoutTree {
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let content_w = (max_right - abs_x).max(layout.size.width);
-                let content_h = (max_bottom - abs_y).max(layout.size.height);
+                let mut content_h = (max_bottom - abs_y).max(layout.size.height);
+                // Textarea: floor content_h by explicit Length children + padding. A flex-sized
+                // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
+                // still holds the real field-sizing-content height.
+                if rest.ends_with("__ta_scroll") {
+                    let pad_y = match (
+                        &element.style.padding.top,
+                        &element.style.padding.bottom,
+                    ) {
+                        (
+                            taffy::style::LengthPercentage::Length(t),
+                            taffy::style::LengthPercentage::Length(b),
+                        ) => *t + *b,
+                        _ => 0.0,
+                    };
+                    let mut floor = layout.size.height;
+                    for child in &element.children {
+                        if let taffy::style::Dimension::Length(h) = child.style.size.height {
+                            floor = floor.max(h + pad_y);
+                        }
+                        if let taffy::style::Dimension::Length(h) = child.style.min_size.height {
+                            floor = floor.max(h + pad_y);
+                        }
+                    }
+                    content_h = content_h.max(floor);
+                }
                 scroll_metrics.push((
                     rest.to_string(),
                     [abs_x, abs_y, layout.size.width, layout.size.height],
@@ -2606,6 +2631,49 @@ mod prepared_text_attach_tests {
             (w_mixed - (w_latin + w_cjk)).abs() < 1.0,
             "expected ~latin+cjk, got mixed={w_mixed} vs {w_latin}+{w_cjk}"
         );
+    }
+
+    /// Multi-line selection highlight is glyph-tight per line (no EOL/box fill).
+    #[test]
+    fn multiline_selection_rects_are_glyph_tight_per_line() {
+        let text = "啊\n啊\n啊";
+        let lh = 21.0_f32;
+        let box_w = 280.0_f32;
+        let glyph_w = prefix_width_logical("啊", "啊".len(), 14.0, 400, lh);
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.color = [0, 0, 0, 255];
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: Some((0, text.len())),
+            selection_bg: [80, 120, 200, 90],
+            overwrite_highlight: None,
+        });
+
+        let mut selection = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            10.0,
+            20.0,
+            box_w,
+            lh * 3.0 + 4.0,
+            None,
+            1.0,
+        );
+        assert_eq!(selection.len(), 3);
+        for r in &selection {
+            assert!(
+                (r.rect_size[0] - glyph_w).abs() < 2.0,
+                "selected line must stay glyph-tight (no EOL fill), got w={} glyph≈{glyph_w}",
+                r.rect_size[0]
+            );
+        }
     }
 
     #[test]

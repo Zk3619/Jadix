@@ -1042,7 +1042,30 @@ pub fn prepare_text_frame(
                 b[3] * ui_scale,
             ]
         });
-        let node_rect = [x, y, scaled_w.max(0.0), scaled_h.max(0.0)];
+        // Input/Textarea: leaf box can match the scrollport while the buffer holds more
+        // hard lines. After scroll_offset moves `y` up, a short node_rect can miss the
+        // clip entirely and skip shaping — looks like "clip locked to textarea height".
+        let is_input_text_early =
+            super::text_prepare_debug::is_input_inline_text(info.template_id.as_deref());
+        let visibility_h = if is_input_text_early {
+            let hard = info.text.split('\n').count().max(1) as f32;
+            let lh = st
+                .line_height_px
+                .unwrap_or_else(|| {
+                    let scale = st
+                        .line_height_scale
+                        .unwrap_or_else(|| tailwind_default_leading_scale(st.size));
+                    st.size * scale
+                })
+                .max(1.0)
+                * ui_scale;
+            scaled_h
+                .max(hard * lh)
+                .max(scaled_clip.map(|c| c[3]).unwrap_or(0.0))
+        } else {
+            scaled_h
+        };
+        let node_rect = [x, y, scaled_w.max(0.0), visibility_h.max(0.0)];
         let visible = clip_rect_to_bounds(node_rect, scaled_clip)
             .and_then(|c| clip_rect_to_bounds(c, Some(viewport_clip)))
             .is_some();

@@ -154,7 +154,9 @@ fn gallery_like_textarea_dumps_subtree_geometry() {
     install_shared_font_system(&mut fs);
 
     let id = "gal-textarea-dump";
-    let notes = use_signal("gal_textarea_notes_dump", || "啊\n啊\n啊".to_string());
+    let notes = use_signal("gal_textarea_notes_dump", || {
+        "啊\n啊\n啊\n啊\n啊\n啊\n啊\n啊\n啊\n啊".to_string()
+    });
     bind_controlled_value(id, notes);
     let el: Element = textarea(id)
         .rows(4)
@@ -163,33 +165,31 @@ fn gallery_like_textarea_dumps_subtree_geometry() {
         .into();
     let mut tree = LayoutTree::new();
     let mut root = Element::new().w(900.0).h(800.0).child(el);
-    let _ = tree.build_and_layout(&mut root, 900.0, 800.0, [-1.0, -1.0]);
-
-    fn dump(el: &Element, depth: usize) {
-        let pad = "  ".repeat(depth);
-        let h = match el.style.size.height {
-            taffy::style::Dimension::Length(v) => format!("len({v:.1})"),
-            taffy::style::Dimension::Percent(v) => format!("pct({v:.2})"),
-            taffy::style::Dimension::Auto => "auto".into(),
-        };
-        eprintln!(
-            "{pad}tid={:?} focus={:?} pos={:?} h={h} grow={} shrink={} overflow_y={:?} \
-             bounds={:?} scroll={:?} text={:?}",
-            el.template_id,
-            el.focus_id,
-            el.style.position,
-            el.style.flex_grow,
-            el.style.flex_shrink,
-            el.style.overflow.y,
-            el.layout_bounds,
-            el.scroll_offset,
-            el.text
-                .as_ref()
-                .map(|t| t.chars().take(12).collect::<String>()),
-        );
-        for c in &el.children {
-            dump(c, depth + 1);
-        }
-    }
-    dump(&root.children[0], 0);
+    let result = tree.build_and_layout(&mut root, 900.0, 800.0, [-1.0, -1.0]);
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let tid = input_text_template_id(id);
+    let info = result
+        .text_nodes
+        .iter()
+        .find(|n| n.template_id.as_deref() == Some(tid.as_str()))
+        .expect("text");
+    let (_id, bounds, max_scroll, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(r, ..)| r == &rest)
+        .expect("ta scroll metrics");
+    let clip_h = info.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+    assert!(
+        info.height > clip_h + 20.0,
+        "gallery 10-line leaf must exceed clip (leaf={} clip={})",
+        info.height,
+        clip_h
+    );
+    assert!(
+        max_scroll[1] > 20.0,
+        "gallery 10-line textarea must scroll (max={} content={} vp={})",
+        max_scroll[1],
+        content[1],
+        bounds[3]
+    );
 }

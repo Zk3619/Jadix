@@ -333,7 +333,10 @@ pub(crate) fn set_scroll_offset_with_behavior(
     let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
     let tx = crate::core::reactivity::use_signal(&tx_key, || sx.get());
     let ty = crate::core::reactivity::use_signal(&ty_key, || sy.get());
-    let _behavior = crate::core::reactivity::use_signal(&behavior_key, || "auto".to_string()).get();
+    let _behavior = crate::core::reactivity::use_signal(&behavior_key, || {
+        crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+    })
+    .get();
 
     if immediate {
         sx.set_silent(target_x);

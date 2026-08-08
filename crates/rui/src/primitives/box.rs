@@ -27,7 +27,7 @@ impl BoxBuilder {
         Self {
             el: Element::new(),
             scroll_id: None,
-            scroll_behavior: "auto".to_string(),
+            scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
             hover_mode: "scrollbar".to_string(),
         }
     }

@@ -180,8 +180,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         crate::utils::text_field::textarea_default_height(rows, line_box, pad_y);
     let resize_min_h = default_h;
     let resize_max_h = resize_max_h.max(resize_min_h);
-    // Reserved for a future clamped scroll viewport (`textarea_scroll_rest`).
-    let _scroll_rest = if multiline {
+    let scroll_rest = if multiline {
         Some(crate::utils::text_field::textarea_scroll_rest(&field_id))
     } else {
         None
@@ -245,7 +244,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             line_box,
             10_000.0,
         );
-        text_el = text_el.h(content_h);
+        text_el = text_el.h(content_h).min_h(content_h);
     } else {
         // Single-line: pin one line box so Input `items_center` centers the row.
         // Extra bottom ink lives in glyphon soft_h, not leaf height (else glyphs sit high).
@@ -304,10 +303,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     }
 
     let text_region: Element = if multiline {
-        // Absolute fill of chrome so overflow clip always matches the field box.
+        // Absolute fill of chrome so the clip/scrollport always matches the field box.
         // Flex `h(100%)`+`min_h(0)` could leave a short clip while chrome bg stayed
         // tall — gallery: only line 1 visible until drag grew the clip window.
-        // Engine scroll viewport stays disabled (stale scroll_offset flattened glyphs).
+        // overflow-y auto + scroll viewport: content taller than chrome scrolls; paint
+        // sync clamps stale sy when content shrinks so glyphs don't flatten.
+        let rest = scroll_rest
+            .as_deref()
+            .expect("multiline text edit always has scroll_rest");
         let mut region = Element::new()
             .absolute()
             .inset(0.0)
@@ -317,9 +320,15 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .flex_items("start")
             .px("0.75rem")
             .py("0.5rem")
-            .overflow_x("hidden")
-            .overflow_y("hidden")
             .child(text_el);
+        region = crate::core::scroll_viewport::activate_scroll_viewport(
+            region,
+            rest,
+            "hidden",
+            "scroll",
+            "smooth",
+            "area",
+        );
         region.template_id = Some(format!("__rui_textarea:{field_id}:region"));
         region
     } else {
@@ -341,6 +350,32 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
 
     let mut el: Element = container.into();
     el = el.child(text_region);
+
+    if multiline {
+        // Overlay Y scrollbar (ScrollArea-style). Visibility auto: show on hover/scroll
+        // when content overflows the chrome.
+        let rest = scroll_rest
+            .as_deref()
+            .expect("multiline text edit always has scroll_rest");
+        use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
+        use crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key;
+        use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
+            "inside".to_string()
+        })
+        .set("inside".to_string());
+        let vbar: Element = scrollbar(&format!("__rui_v_scrollbar_{rest}"))
+            .target(rest.to_string())
+            .orientation(ScrollbarOrientation::Vertical)
+            .visibility("auto")
+            .thickness(8.0)
+            .overlay(true)
+            .z_index(1000)
+            .top(4.0)
+            .bottom(14.0) // leave room for resize grip
+            .right(2.0)
+            .into();
+        el = el.child(vbar);
+    }
 
     if resizable {
         let resize_fid = crate::utils::text_field::textarea_resize_focus_id(&field_id);
@@ -454,7 +489,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         clearable: !multiline && clearable,
         password_toggle: show_password_toggle,
         multiline,
-        scroll_rest: None, // scroll viewport disabled until offset clamp is solid
+        scroll_rest,
         resizable,
         resize_min_h,
         resize_max_h,

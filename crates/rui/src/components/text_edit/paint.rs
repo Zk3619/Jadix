@@ -325,6 +325,7 @@ fn sync_one_text_edit_paint(
         };
         if (cur_h - want_h).abs() > 0.5 {
             text_el.style.size.height = taffy::style::Dimension::Length(want_h);
+            text_el.style.min_size.height = taffy::style::Dimension::Length(want_h);
             text_el.style.flex_shrink = 0.0;
             text_layout = true;
         }
@@ -387,10 +388,6 @@ fn sync_one_text_edit_paint(
             let sy = use_signal(&sy_key, || 0.0_f32).peek();
             let sx = use_signal(&sx_key, || 0.0_f32).peek();
             let ch = use_signal(&ch_key, || 0.0_f32).peek();
-            // Prefer live layout bounds over stale content_h signals: after chrome
-            // resize / first frames, ch can stay huge while the text leaf is only a
-            // few lines — that keeps max_sy high and leaves a stale sy that crops
-            // glyphs into a flat strip at the top of the textarea.
             let vp_fid = crate::core::scroll_viewport::focus_id_for_scroll_viewport(rest);
             let mut vp_h_layout = 0.0_f32;
             for child in el.children.iter() {
@@ -400,21 +397,58 @@ fn sync_one_text_edit_paint(
                 }
             }
             let text_tid = input_text_template_id(&desc.base_id);
-            let text_h_layout = find_descendant_by_template_id_ref(el, &text_tid)
-                .map(|t| t.layout_bounds[3])
-                .unwrap_or(0.0);
-            let vh_eff = vh.max(vp_h_layout);
-            let ch_eff = if text_h_layout > 1.0 {
-                text_h_layout
+            let (text_h_layout, text_w_layout) = find_descendant_by_template_id_ref(el, &text_tid)
+                .map(|t| (t.layout_bounds[3], t.layout_bounds[2]))
+                .unwrap_or((0.0, 0.0));
+            // Content height from the string — do NOT trust a short leaf box alone.
+            // A flex/clip-sized leaf (≈ viewport) made content_fits=true and zeroed sy every
+            // frame while the store still held N hard lines (gallery: only ~5 lines visible).
+            let avail = if text_w_layout > 8.0 {
+                text_w_layout
             } else {
-                ch
+                10_000.0
             };
+            let content_h_text = crate::utils::text_field::text_edit_content_height_px(
+                &display_text,
+                desc.text_size_px,
+                desc.font_weight,
+                line_height,
+                avail,
+            );
+            // Prefer the live scrollport box. Avoid `vh.max(...)` — a stale huge viewport
+            // signal would make content_fits=true and clear sy every frame.
+            let vh_eff = if vp_h_layout > 1.0 {
+                vp_h_layout
+            } else if vh > 1.0 {
+                vh
+            } else {
+                (el.layout_bounds[3] - line_height * 0.25).max(0.0)
+            };
+            let ch_eff = content_h_text.max(text_h_layout);
+            let _ = ch; // post-render metrics own the signal; paint must not shrink-poison it
+            if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
+                use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
+            }
+            if ch_eff > 1.0 && (ch_eff - ch).abs() > 0.5 && ch_eff >= ch {
+                // Only raise content_h here; never shrink below post-render metrics mid-frame.
+                use_signal(&ch_key, || 0.0_f32).set_silent(ch_eff);
+            }
             let max_sy = (ch_eff - vh_eff).max(0.0);
-            let content_fits =
-                text_h_layout > 1.0 && vh_eff > 1.0 && text_h_layout <= vh_eff + 0.5;
+            let content_fits = vh_eff > 1.0 && content_h_text <= vh_eff + 0.5;
+            // Only pull scroll to the caret when the caret *moves* (typing / arrows).
+            // Running this every focused frame clamps sy to caret_top — wheel/scrollbar
+            // cannot travel past the caret (gallery: "只能滚动极小值").
+            let last_caret_key = format!("__rui_ta_scroll_caret_{}", desc.base_id);
+            let last_caret = use_signal(&last_caret_key, || None::<usize>).peek();
+            let caret_moved = last_caret != Some(caret_byte);
+            if caret_moved {
+                use_signal(&last_caret_key, || None::<usize>).set_silent(Some(caret_byte));
+            }
             let new_sy = if content_fits && sy > 0.5 {
                 Some(0.0)
-            } else if is_focused {
+            } else if sy > max_sy + 0.5 {
+                Some(max_sy)
+            } else if is_focused && caret_moved && vh_eff >= line_height * 0.5 {
                 crate::utils::text_field::ensure_caret_visible_scroll_y(
                     &display_text,
                     caret_byte,

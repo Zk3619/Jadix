@@ -7,7 +7,10 @@ use crate::utils::clipboard::{
     shortcut_modifiers as clipboard_shortcut_modifiers,
 };
 use crate::utils::input_hit::collect_focusable_ids;
-use crate::utils::keyboard::{caret_move_left, caret_move_right, delete_char_forward};
+use crate::utils::keyboard::{
+    caret_line_end, caret_line_home, caret_move_left, caret_move_right, caret_move_vertical,
+    delete_char_forward,
+};
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
 
@@ -377,14 +380,45 @@ impl super::App {
                                 }
                                 nav_handled = true;
                             }
-                            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::Home) => {
+                            Key::Named(NamedKey::Home) => {
                                 text_sel_sig.set(None);
-                                caret_sig.set(Some(0));
+                                let dest = if self.modifiers.control_key() || !multiline {
+                                    0
+                                } else {
+                                    caret_line_home(&s, caret)
+                                };
+                                caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
-                            Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::End) => {
+                            Key::Named(NamedKey::End) => {
                                 text_sel_sig.set(None);
-                                caret_sig.set(Some(s.len()));
+                                let dest = if self.modifiers.control_key() || !multiline {
+                                    s.len()
+                                } else {
+                                    caret_line_end(&s, caret)
+                                };
+                                caret_sig.set(Some(dest));
+                                nav_handled = true;
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                text_sel_sig.set(None);
+                                let dest = if multiline {
+                                    caret_move_vertical(&s, caret, -1)
+                                } else {
+                                    // Single-line: Up jumps to start (common field behavior).
+                                    0
+                                };
+                                caret_sig.set(Some(dest));
+                                nav_handled = true;
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                text_sel_sig.set(None);
+                                let dest = if multiline {
+                                    caret_move_vertical(&s, caret, 1)
+                                } else {
+                                    s.len()
+                                };
+                                caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::Delete) => {

@@ -205,15 +205,36 @@ pub(super) fn find_focus_id_at(
 }
 
 /// 命中最上层含 `input:` 继承焦点的文本叶（用于拖选时按 `rest` 查找布局与样式）。
+///
+/// 返回的 bounds 为**屏幕/可视坐标**（已扣祖先 `scroll_acc`），与
+/// [`find_input_text_at`] 及指针 `(x,y)` 同一空间。切勿返回未滚动的
+/// `layout_bounds`，否则 ScrollArea 内拖选会把 `my` clamp 到错误行，表现为
+/// 「点选一字却跨行选中」。
 pub(super) fn find_input_text_leaf_for_rest(
     el: &Element,
     inherited_fid: Option<&str>,
     rest: &str,
 ) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    find_input_text_leaf_for_rest_acc(el, inherited_fid, rest, [0.0, 0.0])
+}
+
+fn find_input_text_leaf_for_rest_acc(
+    el: &Element,
+    inherited_fid: Option<&str>,
+    rest: &str,
+    scroll_acc: [f32; 2],
+) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    let mut next_acc = scroll_acc;
+    if el.style.overflow.x != taffy::style::Overflow::Visible {
+        next_acc[0] += el.scroll_offset[0];
+    }
+    if el.style.overflow.y != taffy::style::Overflow::Visible {
+        next_acc[1] += el.scroll_offset[1];
+    }
     let fid = el.focus_id.as_deref().or(inherited_fid);
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_input_text_leaf_for_rest(child, fid, rest) {
+            if let Some(r) = find_input_text_leaf_for_rest_acc(child, fid, rest, next_acc) {
                 return Some(r);
             }
         }
@@ -221,7 +242,7 @@ pub(super) fn find_input_text_leaf_for_rest(
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_input_text_leaf_for_rest(child, fid, rest) {
+            if let Some(r) = find_input_text_leaf_for_rest_acc(child, fid, rest, next_acc) {
                 return Some(r);
             }
         }
@@ -231,8 +252,11 @@ pub(super) fn find_input_text_leaf_for_rest(
             if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
                 || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
             {
+                let b = el.layout_bounds;
+                let vx = b[0] - scroll_acc[0];
+                let vy = b[1] - scroll_acc[1];
                 return Some((
-                    el.layout_bounds,
+                    [vx, vy, b[2], b[3]],
                     text.clone(),
                     el.text_style.clone(),
                     el.scroll_offset,
@@ -326,13 +350,29 @@ fn is_selectable_static_text(el: &Element) -> bool {
 }
 
 /// 拖选进行中按稳定键查找可选静态文本叶（布局、展示串与样式）。
+/// Bounds 为可视坐标（扣祖先 scroll），与指针坐标同空间。
 pub(super) fn find_selectable_text_leaf_for_key(
     el: &Element,
     key: &str,
 ) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    find_selectable_text_leaf_for_key_acc(el, key, [0.0, 0.0])
+}
+
+fn find_selectable_text_leaf_for_key_acc(
+    el: &Element,
+    key: &str,
+    scroll_acc: [f32; 2],
+) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    let mut next_acc = scroll_acc;
+    if el.style.overflow.x != taffy::style::Overflow::Visible {
+        next_acc[0] += el.scroll_offset[0];
+    }
+    if el.style.overflow.y != taffy::style::Overflow::Visible {
+        next_acc[1] += el.scroll_offset[1];
+    }
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_selectable_text_leaf_for_key(child, key) {
+            if let Some(r) = find_selectable_text_leaf_for_key_acc(child, key, next_acc) {
                 return Some(r);
             }
         }
@@ -340,7 +380,7 @@ pub(super) fn find_selectable_text_leaf_for_key(
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_selectable_text_leaf_for_key(child, key) {
+            if let Some(r) = find_selectable_text_leaf_for_key_acc(child, key, next_acc) {
                 return Some(r);
             }
         }
@@ -349,8 +389,11 @@ pub(super) fn find_selectable_text_leaf_for_key(
         && crate::components::label::selectable_text_key(el).as_deref() == Some(key)
     {
         if let Some(text) = &el.text {
+            let b = el.layout_bounds;
+            let vx = b[0] - scroll_acc[0];
+            let vy = b[1] - scroll_acc[1];
             return Some((
-                el.layout_bounds,
+                [vx, vy, b[2], b[3]],
                 text.clone(),
                 el.text_style.clone(),
                 el.scroll_offset,
@@ -599,4 +642,38 @@ pub(super) fn dispatch_key_for_focused(el: &Element, focus_id: &str, event: &Key
         }
     }
     false
+}
+
+#[cfg(test)]
+mod drag_select_bounds_tests {
+    use super::*;
+    use taffy::style::Overflow;
+
+    #[test]
+    fn input_leaf_for_rest_returns_visual_bounds_under_scroll() {
+        // Scroll parent moved content up by 100; leaf abs y=250 → visual y=150.
+        let mut leaf = Element::new().w(300.0).h(67.0);
+        leaf.layout_bounds = [10.0, 250.0, 300.0, 67.0];
+        leaf.text = Some("的\n啊\n啊\n我".into());
+        leaf.focus_id = Some("textarea:ta-scroll-sel".into());
+
+        let mut viewport = Element::new().w(400.0).h(200.0);
+        viewport.style.overflow.y = Overflow::Hidden;
+        viewport.scroll_offset = [0.0, 100.0];
+        viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        viewport = viewport.child(leaf);
+
+        let (bounds, text, _, _) =
+            find_input_text_leaf_for_rest(&viewport, None, "ta-scroll-sel").expect("leaf");
+        assert_eq!(text.lines().count(), 4);
+        assert!(
+            (bounds[1] - 150.0).abs() < 0.5,
+            "drag-select bounds must be visual (abs 250 − scroll 100), got y={}",
+            bounds[1]
+        );
+        assert!(
+            (bounds[0] - 10.0).abs() < 0.5 && (bounds[2] - 300.0).abs() < 0.5,
+            "bounds={bounds:?}"
+        );
+    }
 }

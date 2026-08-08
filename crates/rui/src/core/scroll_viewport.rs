@@ -19,6 +19,9 @@
 //! // 或布局原语 + id（overflow 为 scroll|auto 时激活）
 //! <VStack id="list" overflow_y="auto" h="200">…</VStack>
 //! ```
+//!
+//! 默认 [`DEFAULT_SCROLL_BEHAVIOR`] 为 [`SCROLL_BEHAVIOR_SMOOTH`]；瞬时跳转用
+//! [`SCROLL_BEHAVIOR_JUMP`]。
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -31,6 +34,35 @@ pub const SCROLL_VIEWPORT_FOCUS_PREFIX: &str = "scroll:";
 
 /// 兼容旧名；字面值与 [`SCROLL_VIEWPORT_FOCUS_PREFIX`] 相同。
 pub const SCROLL_AREA_FOCUS_PREFIX: &str = SCROLL_VIEWPORT_FOCUS_PREFIX;
+
+/// 平滑追靶（滚轮 / 程序改 `target_*` 时指数靠近）。
+pub const SCROLL_BEHAVIOR_SMOOTH: &str = "smooth";
+/// 瞬时跳转（无缓动）。
+pub const SCROLL_BEHAVIOR_JUMP: &str = "jump";
+/// 未显式指定时的滚动行为。
+pub const DEFAULT_SCROLL_BEHAVIOR: &str = SCROLL_BEHAVIOR_SMOOTH;
+
+/// 规范化 `scroll_behavior`：仅 `smooth` / `jump`；其它（含空串）→ 默认 smooth。
+pub fn normalize_scroll_behavior(mode: &str) -> &'static str {
+    let m = mode.trim();
+    if m.eq_ignore_ascii_case(SCROLL_BEHAVIOR_SMOOTH) {
+        SCROLL_BEHAVIOR_SMOOTH
+    } else if m.eq_ignore_ascii_case(SCROLL_BEHAVIOR_JUMP) {
+        SCROLL_BEHAVIOR_JUMP
+    } else {
+        DEFAULT_SCROLL_BEHAVIOR
+    }
+}
+
+#[inline]
+pub fn scroll_behavior_is_smooth(mode: &str) -> bool {
+    normalize_scroll_behavior(mode) == SCROLL_BEHAVIOR_SMOOTH
+}
+
+#[inline]
+pub fn scroll_behavior_is_jump(mode: &str) -> bool {
+    normalize_scroll_behavior(mode) == SCROLL_BEHAVIOR_JUMP
+}
 
 /// Pre-formatted signal id strings for one viewport `rest` id.
 /// Caching avoids per-frame `format!` when many nested viewports exist.
@@ -210,7 +242,7 @@ pub fn activate_scroll_viewport(
 ) -> Element {
     let overflow_x = overflow_x.as_ref();
     let overflow_y = overflow_y.as_ref();
-    let scroll_behavior = scroll_behavior.as_ref();
+    let scroll_behavior = normalize_scroll_behavior(scroll_behavior.as_ref());
     let hover_mode = hover_mode.as_ref();
 
     let sx = use_signal(&scroll_offset_x_signal_key(id), || 0.0_f32).peek();
@@ -269,7 +301,7 @@ pub fn scroll_viewport(id: &str) -> ScrollViewportBuilder {
         el: Element::new().w("100%").h("100%"),
         overflow_x: "auto".to_string(),
         overflow_y: "auto".to_string(),
-        scroll_behavior: "auto".to_string(),
+        scroll_behavior: DEFAULT_SCROLL_BEHAVIOR.to_string(),
         hover_mode: "scrollbar".to_string(),
     }
 }
@@ -301,6 +333,7 @@ impl ScrollViewportBuilder {
         self
     }
 
+    /// `"smooth"`（默认）或 `"jump"`（瞬时）。
     pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
         self.scroll_behavior = mode.into();
         self
@@ -403,5 +436,22 @@ impl From<ScrollViewportBuilder> for Element {
 impl super::tree::IntoElementList for ScrollViewportBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod scroll_behavior_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_accepts_smooth_and_jump_only() {
+        assert_eq!(normalize_scroll_behavior("smooth"), SCROLL_BEHAVIOR_SMOOTH);
+        assert_eq!(normalize_scroll_behavior("SMOOTH"), SCROLL_BEHAVIOR_SMOOTH);
+        assert_eq!(normalize_scroll_behavior("jump"), SCROLL_BEHAVIOR_JUMP);
+        assert_eq!(normalize_scroll_behavior(""), DEFAULT_SCROLL_BEHAVIOR);
+        assert_eq!(normalize_scroll_behavior("nope"), DEFAULT_SCROLL_BEHAVIOR);
+        assert!(scroll_behavior_is_smooth("smooth"));
+        assert!(scroll_behavior_is_jump("jump"));
+        assert!(!scroll_behavior_is_jump("nope"));
     }
 }

@@ -14,7 +14,9 @@
 //!
 //! ## 注意
 //! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
-//! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior="smooth"` 可选。
+//! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior` 默认
+//!   [`smooth`](crate::core::scroll_viewport::SCROLL_BEHAVIOR_SMOOTH)，瞬时跳转用
+//!   [`jump`](crate::core::scroll_viewport::SCROLL_BEHAVIOR_JUMP)。
 //! - 独立外挂条见 [`crate::components::Scrollbar`]。
 
 use crate::components::base::BaseComponentBuilder;
@@ -26,7 +28,8 @@ use rui_macros::component;
 
 // ── re-export viewport 契约（兼容 `scroll_area::…` 旧路径）──────────────────
 pub use crate::core::scroll_viewport::{
-    scroll_activity_signal_key, scroll_behavior_signal_key, scroll_content_h_signal_key,
+    normalize_scroll_behavior, scroll_activity_signal_key, scroll_behavior_is_jump,
+    scroll_behavior_is_smooth, scroll_behavior_signal_key, scroll_content_h_signal_key,
     scroll_content_w_signal_key, scroll_hover_mode_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_overflow_allows_scrollbar, scroll_overflow_x_signal_key,
     scroll_overflow_y_signal_key, scroll_scrollbar_inset_signal_key,
@@ -34,7 +37,8 @@ pub use crate::core::scroll_viewport::{
     scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
     scroll_target_x_signal_key, scroll_target_y_signal_key, scroll_viewport_h_signal_key,
     scroll_viewport_w_signal_key, signal_keys_for_rest_cached, ScrollAreaSignalKeys,
-    ScrollViewportSignalKeys, SCROLL_AREA_FOCUS_PREFIX, SCROLL_VIEWPORT_FOCUS_PREFIX,
+    ScrollViewportSignalKeys, DEFAULT_SCROLL_BEHAVIOR, SCROLL_AREA_FOCUS_PREFIX,
+    SCROLL_BEHAVIOR_JUMP, SCROLL_BEHAVIOR_SMOOTH, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 
 const SCROLLBAR_EDGE_PAD: f32 = 2.0;
@@ -63,7 +67,7 @@ pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
         base: BaseComponentBuilder::new(Element::new().w("100%").h("100%").flex_col()),
         overflow_x: "auto".to_string(),
         overflow_y: "auto".to_string(),
-        scroll_behavior: "auto".to_string(),
+        scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
         hover_mode: "scrollbar".to_string(),
         scrollbar_visibility: "auto".to_string(),
         scrollbar_inset_x: "inside".to_string(),
@@ -182,6 +186,7 @@ impl ScrollAreaBuilder {
         self
     }
 
+    /// `"smooth"`（默认）或 `"jump"`（瞬时）。
     pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
         self.scroll_behavior = mode.into();
         self

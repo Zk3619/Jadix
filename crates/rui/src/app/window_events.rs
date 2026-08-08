@@ -830,10 +830,14 @@ impl super::App {
                                     crate::core::scroll_viewport::scroll_behavior_signal_key(&rest);
                                 let behavior =
                                     crate::core::reactivity::use_signal(&behavior_key, || {
-                                        "auto".to_string()
+                                        crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR
+                                            .to_string()
                                     })
                                     .get();
-                                let immediate = !behavior.eq_ignore_ascii_case("smooth");
+                                let immediate =
+                                    crate::core::scroll_viewport::scroll_behavior_is_jump(
+                                        &behavior,
+                                    );
                                 match axis {
                                     super::scroll_support::ScrollAxis::X => {
                                         let cur_y = crate::core::reactivity::use_signal(
@@ -1166,6 +1170,38 @@ impl super::App {
             }
         }
 
+        // Focused multiline field: prefer its inner scrollport when the pointer is over the
+        // field chrome. Outer ScrollArea must not steal wheel while content overflows.
+        {
+            let focused =
+                crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+            if let Some(field) = crate::utils::text_field::text_edit_rest(&focused) {
+                if focused.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX) {
+                    let ta_rest = crate::utils::text_field::textarea_scroll_rest(field);
+                    let resize_fid =
+                        crate::utils::text_field::textarea_resize_focus_id(field);
+                    let scroll_fid =
+                        crate::core::scroll_viewport::focus_id_for_scroll_viewport(&ta_rest);
+                    let over_field = super::tree_hit::find_focus_id_at(
+                        &state.root_element,
+                        x,
+                        y,
+                        [0.0, 0.0],
+                    )
+                    .is_some_and(|hit| {
+                        hit == focused || hit == scroll_fid || hit == resize_fid
+                    });
+                    if over_field
+                        && metrics_for_rest(&ta_rest)
+                            .is_some_and(|(_, [_, max_y], _)| max_y > 0.5)
+                    {
+                        target_rests.retain(|r| r != &ta_rest);
+                        target_rests.insert(0, ta_rest);
+                    }
+                }
+            }
+        }
+
         // We'll capture at most one scroll area (deepest first); metrics are loaded lazily
         // to avoid precomputing extent for every ancestor on each wheel tick.
         let mut captured: Option<(String, f32, f32, f32, f32)> = None;
@@ -1238,8 +1274,12 @@ impl super::App {
                 )
             };
             let behavior =
-                crate::core::reactivity::use_signal(&behavior_key, || "auto".to_string()).peek();
-            let is_smooth_mode = behavior.eq_ignore_ascii_case("smooth");
+                crate::core::reactivity::use_signal(&behavior_key, || {
+                    crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+                })
+                .peek();
+            let is_smooth_mode =
+                crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
 
             let sx = crate::core::reactivity::use_signal(&offset_x_key, || 0.0_f32);
             let sy = crate::core::reactivity::use_signal(&offset_y_key, || 0.0_f32);
@@ -1549,9 +1589,10 @@ impl super::App {
             let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32);
             let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
             let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
-            let behavior =
-                crate::core::reactivity::use_signal(keys.behavior.as_str(), || "auto".to_string())
-                    .peek();
+            let behavior = crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+                crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+            })
+            .peek();
             let old_sx = sx.peek();
             let old_sy = sy.peek();
             let raw_max_x = mx.max(0.0);
@@ -1560,6 +1601,13 @@ impl super::App {
                 .scroll_max_lowpass
                 .entry(rest.clone())
                 .or_insert([raw_max_x, raw_max_y]);
+            // Content grew (e.g. textarea newlines) — raise soft max before target clamp.
+            if raw_max_x > lp[0] + 0.5 {
+                lp[0] = raw_max_x;
+            }
+            if raw_max_y > lp[1] + 0.5 {
+                lp[1] = raw_max_y;
+            }
             // Persist clamped targets when max shrinks (e.g. viewport grew until content
             // fits). Offset-only clamp left a stale target; smooth-scroll then re-sought it
             // after a later shrink and scrolled the top out of view.
@@ -1582,7 +1630,9 @@ impl super::App {
                 .as_ref()
                 .is_some_and(|d| d.rest == *rest);
 
-            if behavior.eq_ignore_ascii_case("smooth") && !is_dragging_this {
+            if crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior)
+                && !is_dragging_this
+            {
                 // Clamp to raw extent only: low-pass max lags behind during layout changes and can
                 // fight the smooth animator (perceived stutter).
                 let mut target_x = tx_clamped;
@@ -1905,9 +1955,19 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         .entry(rest.clone())
                         .or_insert([raw_max_x, raw_max_y]);
                     // Low-pass raw extent so clamp(tx, max) does not jitter frame-to-frame (middle-scroll bounce).
+                    // Snap *up* immediately when content grows (textarea hard newlines) — a stale
+                    // lp≈0 after an empty field would clamp wheel targets to 0 and look unscrollable.
                     const LP: f32 = 0.78;
-                    lp[0] = lp[0] * LP + raw_max_x * (1.0 - LP);
-                    lp[1] = lp[1] * LP + raw_max_y * (1.0 - LP);
+                    if raw_max_x > lp[0] + 0.5 {
+                        lp[0] = raw_max_x;
+                    } else {
+                        lp[0] = lp[0] * LP + raw_max_x * (1.0 - LP);
+                    }
+                    if raw_max_y > lp[1] + 0.5 {
+                        lp[1] = raw_max_y;
+                    } else {
+                        lp[1] = lp[1] * LP + raw_max_y * (1.0 - LP);
+                    }
                     let soft_max_x = lp[0].min(raw_max_x);
                     let soft_max_y = lp[1].min(raw_max_y);
 
@@ -1929,10 +1989,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
                     let behavior =
                         crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
-                            "auto".to_string()
+                            crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
                         })
                         .peek();
-                    let is_smooth_mode = behavior.eq_ignore_ascii_case("smooth");
+                    let is_smooth_mode =
+                        crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
                     let target_x = if is_smooth_mode {
                         tx.peek().clamp(0.0, soft_max_x)
                     } else {

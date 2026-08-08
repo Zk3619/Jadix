@@ -1,3 +1,19 @@
+use crate::utils::text_field::caret_line_and_local;
+
+/// Hard-`\n` lines as `(byte_start, line_body)` — trailing empty line after final `\n` included.
+fn hard_line_slices(text: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for (i, ch) in text.char_indices() {
+        if ch == '\n' {
+            out.push((start, &text[start..i]));
+            start = i + 1;
+        }
+    }
+    out.push((start, &text[start..]));
+    out
+}
+
 /// `caret` 为 UTF-8 字符边界上的字节下标（插入点）。
 pub fn caret_move_left(s: &str, caret: usize) -> usize {
     let caret = caret.min(s.len());
@@ -26,6 +42,54 @@ pub fn caret_move_right(s: &str, caret: usize) -> usize {
     caret + c.len_utf8()
 }
 
+/// Home：当前 hard 行行首。
+pub fn caret_line_home(s: &str, caret: usize) -> usize {
+    let (line_i, _) = caret_line_and_local(s, caret);
+    hard_line_slices(s)
+        .get(line_i)
+        .map(|(start, _)| *start)
+        .unwrap_or(0)
+}
+
+/// End：当前 hard 行行尾（不含 `\n`）。
+pub fn caret_line_end(s: &str, caret: usize) -> usize {
+    let (line_i, _) = caret_line_and_local(s, caret);
+    hard_line_slices(s)
+        .get(line_i)
+        .map(|(start, body)| start + body.len())
+        .unwrap_or_else(|| s.len())
+}
+
+/// ↑/↓：按 hard 行上下移动，尽量保持字符列；已在首/末行则原地不动。
+pub fn caret_move_vertical(s: &str, caret: usize, delta_lines: i32) -> usize {
+    if delta_lines == 0 || s.is_empty() {
+        return s.floor_char_boundary(caret.min(s.len()));
+    }
+    let lines = hard_line_slices(s);
+    let (line_i, local) = caret_line_and_local(s, caret);
+    let Some((start, body)) = lines.get(line_i).copied() else {
+        return s.floor_char_boundary(caret.min(s.len()));
+    };
+    let col = s[start..start + local.min(body.len())].chars().count();
+    let target = if delta_lines < 0 {
+        line_i.saturating_sub((-delta_lines) as usize)
+    } else {
+        (line_i + delta_lines as usize).min(lines.len().saturating_sub(1))
+    };
+    if target == line_i {
+        return s.floor_char_boundary(caret.min(s.len()));
+    }
+    let (t_start, t_body) = lines[target];
+    let mut n = 0usize;
+    for (i, _) in t_body.char_indices() {
+        if n == col {
+            return t_start + i;
+        }
+        n += 1;
+    }
+    t_start + t_body.len()
+}
+
 /// 展示串：`preedit` 插入 `committed` 的 `ime_anchor`。
 pub fn input_display_text(committed: &str, preedit: &str, ime_anchor: Option<usize>) -> String {
     if preedit.is_empty() {
@@ -45,4 +109,44 @@ pub fn delete_char_forward(s: &mut String, caret: usize) -> bool {
     let end = caret + ch.len_utf8();
     s.replace_range(caret..end, "");
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_end_stay_on_hard_line() {
+        let s = "的\n啊\n我";
+        let mid = "的\n".len() + "啊".len(); // end of line 1 "啊"
+        assert_eq!(caret_line_home(s, mid), "的\n".len());
+        assert_eq!(caret_line_end(s, "的\n".len()), "的\n".len() + "啊".len());
+        assert_eq!(caret_line_home(s, 0), 0);
+        assert_eq!(caret_line_end(s, s.len()), s.len());
+    }
+
+    #[test]
+    fn arrow_vertical_moves_between_hard_lines() {
+        let s = "的\n啊\n我";
+        let on_second = "的\n".len(); // start of "啊"
+        let up = caret_move_vertical(s, on_second, -1);
+        assert_eq!(up, 0);
+        let down = caret_move_vertical(s, on_second, 1);
+        assert_eq!(down, "的\n啊\n".len());
+        // First line Up stays; last line Down stays.
+        assert_eq!(caret_move_vertical(s, 0, -1), 0);
+        assert_eq!(caret_move_vertical(s, s.len(), 1), s.len());
+    }
+
+    #[test]
+    fn arrow_vertical_preserves_char_column() {
+        let s = "abc\nxy";
+        let after_b = "ab".len();
+        let down = caret_move_vertical(s, after_b, 1);
+        assert_eq!(down, "abc\n".len() + "xy".len()); // col 2 clamps to end of "xy"
+        let s2 = "ab\nxyz";
+        let after_a = "a".len();
+        let down2 = caret_move_vertical(s2, after_a, 1);
+        assert_eq!(down2, "ab\n".len() + "x".len());
+    }
 }
