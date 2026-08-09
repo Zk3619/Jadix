@@ -1247,6 +1247,10 @@ fn expand_node(
                             | "flex_shrink"
                             | "grow"
                             | "shrink"
+                            | "aria_label"
+                            | "aria-label"
+                            | "accesskit_name"
+                            | "accesskit_role"
                             | "flex_basis"
                             | "absolute"
                             | "relative"
@@ -1335,6 +1339,25 @@ fn expand_node(
                     );
 
                     if is_base {
+                        // a11y attrs apply on the finished Element (not BaseComponentBuilder).
+                        if matches!(attr_name, "aria_label" | "aria-label") {
+                            chrome_binds.push(quote! {
+                                __rui_el = __rui_el.aria_label(#value);
+                            });
+                            continue;
+                        }
+                        if attr_name == "accesskit_name" {
+                            chrome_binds.push(quote! {
+                                __rui_el = __rui_el.accesskit_name(#value);
+                            });
+                            continue;
+                        }
+                        if attr_name == "accesskit_role" {
+                            chrome_binds.push(quote! {
+                                __rui_el = __rui_el.accesskit_role(#value);
+                            });
+                            continue;
+                        }
                         // Dynamic class / color base attrs → bind on resulting Element.
                         if !in_reactive_boundary && expr_reads_get(value) {
                             let idx = *node_counter;
@@ -2197,6 +2220,11 @@ fn expand_node(
                     "disabled" => element = quote! { #element.disabled(#value) },
                     "placeholder" => element = quote! { #element.placeholder(#value) },
                     "invalid" => element = quote! { #element.invalid(#value) },
+                    "aria_label" | "aria-label" => {
+                        element = quote! { #element.aria_label(#value) }
+                    }
+                    "accesskit_name" => element = quote! { #element.accesskit_name(#value) },
+                    "accesskit_role" => element = quote! { #element.accesskit_role(#value) },
 
                     "grow" | "flex_grow" | "flexGrow" => {
                         element = quote! { #element.flex_grow(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }

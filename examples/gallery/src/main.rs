@@ -178,7 +178,13 @@ fn InputShowcase() -> rui::core::tree::Element {
                     "text / password / number / email / tel / url / search — type 过滤与非空校验；clearable 叉号清除；password_toggle 睁眼/闭眼"
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                <Input id="gal-s2-input-a" placeholder="Placeholder…" clearable="true" flex_grow="1" />
+                <Input
+                        id="gal-s2-input-a"
+                        placeholder="Placeholder…"
+                        aria_label="Gallery demo name"
+                        clearable="true"
+                        flex_grow="1"
+                    />
                     <Input id="gal-s2-input-b" placeholder="Invalid" invalid=true clearable="true" flex_grow="1" />
                     <Input id="gal-s2-input-pw" type="password" password_toggle="true" clearable="true" flex_grow="1" />
                     <Input id="gal-s2-input-num" type="number" clearable=true flex_grow="1" />

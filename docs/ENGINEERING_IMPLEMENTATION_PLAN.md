@@ -99,7 +99,8 @@ flowchart TB
 | **路径** | `accesskit_bridge.rs`、Input / Button / Combobox（或 Menu） |
 | **任务** | ① TextField / Button / ListBox 或 Menu Role 正确；② 焦点与 Action 同步；③ 文档：一条读屏复现步骤（Narrator / VoiceOver / Orca 任选） |
 | **验收** | smoke #9 至少一平台签署；`docs/desktop_smoke.md` 或新 `docs/a11y_smoke.md` 写清步骤 |
-| **状态** | ☐ 桥 + lifecycle `Adapter` 已接线；读屏签署与主路径文档未完成 |
+| **状态** | ☑ 代码+库测+文档已合入（TextInput/Button/ComboBox/ListBox/Menu* Role；Focus/Click；placeholder/`aria-label` 名；[a11y_smoke.md](a11y_smoke.md) Narrator 步骤）；☐ Win Narrator smoke #9 待签署 |
+| **进展** | Gallery `gal-s2-input-a` 带 `aria_label="Gallery demo name"` 供 #9 |
 
 ### WP-1.4 三平台真窗口冒烟签署
 

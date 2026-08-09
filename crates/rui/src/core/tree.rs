@@ -1012,6 +1012,16 @@ impl Element {
         self.attrs.insert("accesskit_role".to_string(), role.into());
         self
     }
+    /// Accessible name (preferred over `aria-label` / text / placeholder).
+    pub fn accesskit_name(mut self, name: impl Into<String>) -> Self {
+        self.attrs.insert("accesskit_name".to_string(), name.into());
+        self
+    }
+    /// ARIA label (fallback name when `accesskit_name` is absent).
+    pub fn aria_label(mut self, name: impl Into<String>) -> Self {
+        self.attrs.insert("aria-label".to_string(), name.into());
+        self
+    }
     pub fn bg(mut self, color: [f32; 4]) -> Self {
         self.style.bg_color = color;
         self

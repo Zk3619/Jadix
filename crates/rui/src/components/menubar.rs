@@ -109,6 +109,7 @@ impl From<MenubarBuilder> for Element {
         let n_sections = section_ids.len();
 
         let mut row: Element = hstack().gap("0.25rem").items_center().w("100%").into();
+        row = row.accesskit_role("menubar");
         for (sec_i, section) in sections.into_iter().enumerate() {
             let sid = format!("{id}:{}", section.id);
             let title = section.title.clone();
@@ -153,6 +154,7 @@ impl From<MenubarBuilder> for Element {
                     })
                     .text(title.clone())
                     .into();
+                trigger = trigger.accesskit_role("menuitem");
 
                 let open_keys = open;
                 let active_keys = active;
@@ -231,6 +233,7 @@ impl From<MenubarBuilder> for Element {
                                 })
                                 .text(item.label.clone())
                                 .into();
+                            row = row.accesskit_role("menuitem");
                             row = row.on_key_down(move |ev| {
                                 if ev.state != ElementState::Pressed || ev.repeat {
                                     return false;
@@ -272,6 +275,7 @@ impl From<MenubarBuilder> for Element {
                             .border_color(tokens::border())
                             .absolute(true)
                             .into();
+                        panel = panel.accesskit_role("menu");
                         mark_floating(
                             &mut panel,
                             &sid,

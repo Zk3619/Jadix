@@ -156,7 +156,7 @@ impl ContextMenuBuilder {
                 let label = it.label.clone();
                 let bid = format!("{id}__item{i}");
                 let highlighted = i == active_ix;
-                let row: Element = button(&bid)
+                let mut row: Element = button(&bid)
                     .variant(if highlighted { "secondary" } else { "ghost" })
                     .size("sm")
                     .w("100%")
@@ -167,6 +167,7 @@ impl ContextMenuBuilder {
                     })
                     .text(label)
                     .into();
+                row = row.accesskit_role("menuitem");
                 rows = rows.child(row);
             }
             let mut panel: Element = r#box()
@@ -178,6 +179,7 @@ impl ContextMenuBuilder {
                 .p("0.25rem")
                 .child(rows)
                 .into();
+            panel = panel.accesskit_role("menu");
             mark_floating(&mut panel, &id, &trigger_fid, placement);
             panel = panel.absolute();
             panel_block_clicks(panel, oz.panel)

@@ -478,7 +478,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
 
     let sync = TextEditPaintSync {
         base_id: field_id.clone(),
-        placeholder,
+        placeholder: placeholder.clone(),
         invalid: explicit_invalid,
         disabled,
         text_size_px,
@@ -508,9 +508,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         .into();
     out.template_id = Some(field_id);
     out.input_paint_sync = Some(sync);
-    if multiline {
-        out.attrs
-            .insert("accesskit_role".to_string(), "textinput".to_string());
+    out.attrs
+        .insert("accesskit_role".to_string(), "textinput".to_string());
+    if !placeholder.is_empty() {
+        out.attrs.insert("placeholder".to_string(), placeholder);
     }
     out
 }

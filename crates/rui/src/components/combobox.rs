@@ -97,6 +97,9 @@ impl From<ComboboxBuilder> for Element {
             let opts_for_keys = options.clone();
             let mut trigger: Element = input(&id).placeholder(placeholder.as_str()).into();
             trigger = trigger
+                .accesskit_role("combobox")
+                .accesskit_name(placeholder.as_str());
+            trigger = trigger
                 .on_click(move || {
                     a_sig.set(0);
                     o_focus.set(true);
@@ -211,8 +214,7 @@ impl From<ComboboxBuilder> for Element {
                         .border_width(1.0)
                         .border_color(tokens::border())
                         .absolute();
-                    menu.attrs
-                        .insert("accesskit_role".to_string(), "menu".to_string());
+                    // ListBox role lives on the options stack (`rows`); outer chrome stays unlabeled.
                     mark_floating(&mut menu, &id, &trigger_fid, placement);
                     menu.set_attr("rui_floating_match_trigger", "1");
                     menu.set_attr("rui_floating_min_w", "trigger+1.75rem");

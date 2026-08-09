@@ -59,6 +59,7 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "list" => Some(Role::List),
         "listitem" | "list_item" => Some(Role::ListItem),
         "listbox" | "list_box" => Some(Role::ListBox),
+        "combobox" | "combo_box" => Some(Role::ComboBox),
         "menu" => Some(Role::Menu),
         "menuitem" | "menu_item" => Some(Role::MenuItem),
         "menubar" | "menu_bar" => Some(Role::MenuBar),
@@ -160,14 +161,24 @@ fn build_node(el: &Element, key: &str) -> Node {
         node.set_bounds(bounds);
     }
 
-    // Prefer explicit a11y name over text content fallback.
+    // Prefer explicit a11y name → visible text → Input placeholder (Narrator smoke).
     let label = el
         .attrs
         .get("accesskit_name")
         .or_else(|| el.attrs.get("aria-label"))
         .map(|s| s.as_str())
         .filter(|t| !t.is_empty())
-        .or_else(|| el.text.as_deref().filter(|t| !t.is_empty()));
+        .or_else(|| el.text.as_deref().filter(|t| !t.is_empty()))
+        .or_else(|| {
+            if role == Role::TextInput || role == Role::ComboBox {
+                el.attrs
+                    .get("placeholder")
+                    .map(|s| s.as_str())
+                    .filter(|t| !t.is_empty())
+            } else {
+                None
+            }
+        });
     if let Some(text) = label {
         node.set_label(text.to_string());
     }
@@ -488,6 +499,7 @@ mod tests {
         assert_eq!(parse_accesskit_role("menuitem"), Some(Role::MenuItem));
         assert_eq!(parse_accesskit_role("listbox"), Some(Role::ListBox));
         assert_eq!(parse_accesskit_role("menubar"), Some(Role::MenuBar));
+        assert_eq!(parse_accesskit_role("combobox"), Some(Role::ComboBox));
         assert_eq!(parse_accesskit_role("textfield"), Some(Role::TextInput));
 
         let mut menu = Element::new().template_id("m");
@@ -503,5 +515,52 @@ mod tests {
             .map(|(_, n)| n)
             .expect("menu node");
         assert_eq!(node.role(), Role::Menu);
+    }
+
+    #[test]
+    fn input_prefix_is_text_input_with_value_and_placeholder_name() {
+        use crate::components::input::input_value_signal_key;
+        use crate::core::reactivity::use_signal;
+
+        let id = "a11y_smoke_input";
+        use_signal(&input_value_signal_key(id), String::new).set("hello".to_string());
+        let mut el = Element::new()
+            .focus_id(format!("input:{id}"))
+            .focusable(true);
+        el.attrs
+            .insert("placeholder".to_string(), "Search…".to_string());
+        let root = Element::new().child(el);
+        let update = tree_update_from_elements(&root, Some(&format!("input:{id}")));
+        let nid = node_id_for_key(&format!("input:{id}"));
+        let node = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == nid)
+            .map(|(_, n)| n)
+            .expect("input node");
+        assert_eq!(node.role(), Role::TextInput);
+        assert_eq!(node.label(), Some("Search…"));
+        assert_eq!(node.value(), Some("hello"));
+        assert_eq!(update.focus, nid);
+    }
+
+    #[test]
+    fn button_role_advertises_click_and_focus() {
+        let btn = Element::new()
+            .focus_id("a11y-btn")
+            .focusable(true)
+            .on_click(|| {});
+        let root = Element::new().child(btn);
+        let update = tree_update_from_elements(&root, None);
+        let nid = node_id_for_key("a11y-btn");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == nid)
+            .map(|(_, n)| n)
+            .expect("button node");
+        assert_eq!(node.role(), Role::Button);
+        assert!(node.supports_action(Action::Click));
+        assert!(node.supports_action(Action::Focus));
     }
 }
