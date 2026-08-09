@@ -1,4 +1,4 @@
-﻿//! Input / Textarea 共享 chrome（**crate 私有**，不在 `components/`，不进公开 API）。
+﻿//! Input / Textarea 共享 chrome（[`crate::components::internal`]，不进公开 API / prelude）。
 //!
 //! 产品面：[`crate::components::input`] / [`crate::components::textarea`]；
 //! 编辑能力：[`crate::utils::text_field`]。

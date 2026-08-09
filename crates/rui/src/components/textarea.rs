@@ -1,14 +1,14 @@
 //! # Textarea
 //!
 //! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
-//! 共享 chrome 构建/绘制在 [`crate::text_edit`]（crate 私有，非产品组件）。
+//! 共享 chrome 构建/绘制在 [`crate::components::internal::text_edit`]。
 //! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
 //! 内容溢出时在内部滚动视口滚动；默认右下角可拖拽改高。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::input::InputType;
-use crate::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use rui_macros::component;

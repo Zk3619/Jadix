@@ -229,13 +229,14 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 控件类 | Role / 行为（最低） |
 |--------|---------------------|
-| Button / Toggle | Button；pressed 时 toggled |
-| Input / Textarea | TextField；值与焦点同步 |
+| Button / Toggle | Button；名称取自后代可见文案或 `aria-label`；pressed 时 toggled |
+| Input / Textarea | TextField；值与焦点同步；可用 `aria-labelledby` 关联 Label |
+| Label（静态） | **不进 Tab**；进 a11y 树为 Label（文本在 `value`）；关联控件用 `accesskit_id` + `aria-labelledby` |
 | Tabs 条带 | TabList（`tabstrip:`） |
 | Checkbox / Switch | 可 toggled |
 | 菜单 / Command / Combobox | 打开关闭 + 键盘移动（深化见巩固期 WP） |
 
-细节实现以 `a11y/bridge.rs` 为准；新增前缀必须同时改 bridge 与本文或 `keyboard_nav.md`。
+细节实现以 `a11y/bridge.rs` 为准；读屏步骤见 [`a11y_smoke.md`](a11y_smoke.md)；新增前缀必须同时改 bridge 与本文或 `keyboard_nav.md`。
 
 ---
 

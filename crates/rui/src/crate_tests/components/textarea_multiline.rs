@@ -2,7 +2,7 @@
 
 use crate::components::input::input_value_signal_key;
 use crate::components::textarea::textarea;
-use crate::text_edit::sync_text_edit_paint_subtree;
+use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;

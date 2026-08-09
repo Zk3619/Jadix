@@ -1249,8 +1249,11 @@ fn expand_node(
                             | "shrink"
                             | "aria_label"
                             | "aria-label"
+                            | "aria_labelledby"
+                            | "aria-labelledby"
                             | "accesskit_name"
                             | "accesskit_role"
+                            | "accesskit_id"
                             | "flex_basis"
                             | "absolute"
                             | "relative"
@@ -1346,6 +1349,12 @@ fn expand_node(
                             });
                             continue;
                         }
+                        if matches!(attr_name, "aria_labelledby" | "aria-labelledby") {
+                            chrome_binds.push(quote! {
+                                __rui_el = __rui_el.aria_labelledby(#value);
+                            });
+                            continue;
+                        }
                         if attr_name == "accesskit_name" {
                             chrome_binds.push(quote! {
                                 __rui_el = __rui_el.accesskit_name(#value);
@@ -1355,6 +1364,12 @@ fn expand_node(
                         if attr_name == "accesskit_role" {
                             chrome_binds.push(quote! {
                                 __rui_el = __rui_el.accesskit_role(#value);
+                            });
+                            continue;
+                        }
+                        if attr_name == "accesskit_id" {
+                            chrome_binds.push(quote! {
+                                __rui_el = __rui_el.accesskit_id(#value);
                             });
                             continue;
                         }
@@ -2223,8 +2238,12 @@ fn expand_node(
                     "aria_label" | "aria-label" => {
                         element = quote! { #element.aria_label(#value) }
                     }
+                    "aria_labelledby" | "aria-labelledby" => {
+                        element = quote! { #element.aria_labelledby(#value) }
+                    }
                     "accesskit_name" => element = quote! { #element.accesskit_name(#value) },
                     "accesskit_role" => element = quote! { #element.accesskit_role(#value) },
+                    "accesskit_id" => element = quote! { #element.accesskit_id(#value) },
 
                     "grow" | "flex_grow" | "flexGrow" => {
                         element = quote! { #element.flex_grow(rui::core::tree::IntoF32Raw::into_f32_raw(#value)) }

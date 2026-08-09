@@ -15,10 +15,6 @@ pub mod app;
 pub mod components;
 pub(crate) mod debug_stack;
 pub mod primitives;
-/// Input/Textarea 私有 chrome（非产品组件；见 [`components::input`] / [`components::textarea`]）。
-pub(crate) mod text_edit;
-/// Dialog / AlertDialog 共享模态壳（非产品组件）。
-pub(crate) mod dialog_shell;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
 pub mod text;
 pub mod tokens;
@@ -129,4 +125,7 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
 }
 
-pub use utils::visible_item_range;
+pub use utils::{
+    activate_focus_trap, deactivate_focus_trap, sync_focus_trap, visible_item_range,
+    FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
+};

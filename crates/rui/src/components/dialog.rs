@@ -11,7 +11,7 @@
 //!     └── DialogFooter       // 也可用 Button + open.set(false)
 //! ```
 //!
-//! 共享壳见 [`crate::dialog_shell`]。`ui!` 中 `<Dialog>` / `<DialogContent>` 由宏展开。
+//! 共享壳见 [`crate::components::internal::dialog_shell`]。`ui!` 中 `<Dialog>` / `<DialogContent>` 由宏展开。
 //!
 //! ## 用法
 //! ```ignore
@@ -50,7 +50,9 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::dialog_shell::{dialog_shell_frame, modal_sync, DialogOverlayOpts};
+use crate::components::internal::dialog_shell::{
+    dialog_shell_frame, modal_sync, DialogOverlayOpts,
+};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::vstack;
 use crate::primitives::text::text;

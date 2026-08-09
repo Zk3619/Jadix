@@ -8,8 +8,8 @@
 //!
 //! 布局原语（`Box` / `HStack` / `VStack` / `GStack` / [`crate::primitives::Portal`]）在
 //! [`crate::primitives`]；本模块在其上拼装**产品组件**（Button、Input、Dialog…）。
-//! 私有实现不放本目录：Input/Textarea chrome → [`crate::text_edit`]；
-//! Dialog/AlertDialog 共享壳 → [`crate::dialog_shell`]。
+//! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`；Dialog/AlertDialog → `dialog_shell`），
+//! 不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留
 //! [`ScrollArea`] / [`Scrollbar`] / RSX [`ScrollViewport`] 等产品层封装。
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
@@ -21,10 +21,13 @@
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
 //! - Tabs headless 条带自带 [`crate::app::reactive::reactive_view`]；面板仍可用 `<Show>` 或 `#[component(reactive)]`。
-//! - 颜色 / 日期选择器：[`color_picker`] / [`date_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]（能力，非组件）。
+//! - 颜色 / 日期选择器：[`color_picker`] / [`date_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
 //!   页面栈宿主在 [`crate::app::navigator::navigation_host`]（非本层、非 NavigationMenu）。
 #![allow(non_snake_case)]
+
+/// 组件库私有实现（不进产品面）。
+pub(crate) mod internal;
 
 pub mod base;
 pub mod button;
@@ -38,7 +41,6 @@ pub mod date_picker;
 pub mod table;
 pub mod dialog;
 pub mod dropdown;
-pub mod focus_trap;
 pub mod form;
 pub mod image;
 pub mod input;
@@ -98,7 +100,6 @@ pub use dialog::{
     DialogTitle, DialogTitleProps, DialogTrigger, DialogTriggerProps,
 };
 pub use dropdown::{dropdown, DropdownBuilder};
-pub use focus_trap::{FocusTrap, FocusTrapProps, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY};
 pub use form::{
     clear_all_errors, clear_field_error, form_errors_signal, form_field, form_provider,
     form_validate, set_field_error, FormState,

@@ -145,20 +145,8 @@ impl super::App {
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
         if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
-                let trap_ring = crate::core::reactivity::use_signal(
-                    crate::components::FOCUS_TRAP_RING_KEY,
-                    String::new,
-                );
-                let ring = trap_ring.peek();
-                let mut ids: Vec<String> = if !ring.is_empty() {
-                    ring.split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                // Explicit FocusTrap wins; else Tab prefers top stacked overlay panel.
+                let mut ids = crate::utils::focus_trap_ring_ids();
+                // Explicit focus trap wins; else Tab prefers top stacked overlay panel.
                 if ids.is_empty() {
                     if let Some(st) = (*self.state.borrow()).as_ref() {
                         if let Some(z) = crate::app::portal_overlay::top_stacked_panel_z() {

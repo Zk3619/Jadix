@@ -60,7 +60,7 @@ fn selection_bg_color() -> [u8; 4] {
     ]
 }
 
-/// Input 内联文本由 [`crate::text_edit::sync_text_edit_paint_subtree`] 写入 `input_caret`。
+/// Input 内联文本由 [`crate::components::internal::text_edit::sync_text_edit_paint_subtree`] 写入 `input_caret`。
 /// 这些节点不是可选 Label（`selectable` 为 false → [`selectable_text_key`] 为 `None`），
 /// 若在「非 Label」分支里清空 `input_caret`，每帧都会抹掉光标/选区高亮。
 fn is_input_owned_text_node(el: &Element) -> bool {
@@ -409,6 +409,10 @@ impl From<LabelBuilder> for Element {
         // Prefer Solid-style bind identity adopted from a text child over the label's auto id.
         if el.template_id.is_none() {
             el.template_id = Some(builder.id);
+        }
+        // Static text enters AccessKit as Label (not Tab-focusable); see `a11y::bridge` + a11y_smoke.
+        if !el.attrs.contains_key("accesskit_role") {
+            el = el.accesskit_role("label");
         }
         el
     }

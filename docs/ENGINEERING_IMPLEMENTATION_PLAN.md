@@ -37,10 +37,10 @@
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
 | 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
-| 冒烟 | `desktop_smoke.md`：Win #3–#7（WP-1.1 / WP-1.2）已签；**#1–#2/#8–#9 与 macOS/Linux 未签** |
+| 冒烟 | `desktop_smoke.md`：Win #3–#7（WP-1.1 / WP-1.2）、**#9（WP-1.3 Narrator）**已签；**#1–#2/#8 与 macOS/Linux 未签** |
 | 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测+Win #5–#7 已签；W1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测+Win #5–#7 已签；**W1.3 代码+库测+Win Narrator #9 已签**；W2.x 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -99,8 +99,8 @@ flowchart TB
 | **路径** | `a11y/bridge.rs`、Input / Button / Combobox（或 Menu） |
 | **任务** | ① TextField / Button / ListBox 或 Menu Role 正确；② 焦点与 Action 同步；③ 文档：一条读屏复现步骤（Narrator / VoiceOver / Orca 任选） |
 | **验收** | smoke #9 至少一平台签署；`docs/desktop_smoke.md` 或新 `docs/a11y_smoke.md` 写清步骤 |
-| **状态** | ☑ 桥迁 `a11y/` + 库测 + 文档（Role/Focus/Click；空/`template_id` path 消歧）；☐ Win Narrator smoke #9 待签署 |
-| **进展** | Gallery `gal-s2-input-a` + [a11y_smoke.md](a11y_smoke.md)；**边界**：本 WP = 桥防御与读屏主路径；组件空 id / 强制 id 收敛 → [element_identity.md](element_identity.md) + C-WP-V.5/2.6（非本 WP） |
+| **状态** | ☑ 桥迁 `a11y/` + 库测 + 文档；☑ Win 开发机 Narrator smoke #9 签署（2026-08-10，Kingdom / Win 10.0.26200；Input 名/值、Button 文案、Label 鼠标指针朗读；Caps 项导航未验证） |
+| **进展** | Gallery `gal-s2-input-a` + [a11y_smoke.md](a11y_smoke.md)；Button 后代文案；Document + Label `value`；**边界**：组件空 id → [element_identity.md](element_identity.md) + C-WP-V.5/2.6 |
 
 ### WP-1.4 三平台真窗口冒烟签署
 
@@ -346,7 +346,7 @@ flowchart TB
 - [ ] `cargo publish` 三 crate 成功；干净环境最小窗口可跑（WP-4.3）
 - [ ] 文档站：Getting Started + 更新契约 + 组件索引（WP-4.4）
 - [ ] 三平台真窗口冒烟 #1–#8 签署（WP-1.4）
-- [ ] AccessKit 主路径可演示并有文档（WP-1.3）
+- [x] AccessKit 主路径可演示并有文档（WP-1.3；Win Narrator #9 已签）
 - [ ] 测宽绘制对齐测 + ≥5 组件 golden CI（WP-2.1、WP-2.6、WP-4.5）
 - [ ] gap / 纲领开放 **P0 = 0**（冒烟、crates、文档站）
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1、WP-4.7）

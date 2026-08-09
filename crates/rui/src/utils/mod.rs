@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod drag_reorder;
 pub mod file_dialog;
+pub mod focus_trap;
 pub mod font;
 pub mod input_hit;
 pub mod keyboard;
@@ -14,6 +15,10 @@ pub mod virtual_list;
 pub use file_dialog::{
     file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
     pick_folder, pick_folder_into,
+};
+pub use focus_trap::{
+    activate_focus_trap, deactivate_focus_trap, focus_trap_ring_ids, sync_focus_trap,
+    FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
 pub use lucide::{apply_bound_icon_name, lucide_glyph};
 pub use popup::{

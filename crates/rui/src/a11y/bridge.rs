@@ -15,6 +15,14 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 
 const ROOT_ID: NodeId = NodeId(1);
+/// Stable key for the Document node under Window (Narrator / browse content).
+pub(crate) const DOCUMENT_NODE_KEY: &str = "rui:document";
+/// App focus signal value when AccessKit focuses the Document (reading mode entry).
+pub(crate) const DOCUMENT_FOCUS_ID: &str = "__rui_a11y_document";
+
+fn document_node_id() -> NodeId {
+    node_id_for_key(DOCUMENT_NODE_KEY)
+}
 
 /// Attrs that force an AccessKit node even without focus/click/text.
 const A11Y_NAME_DESC_LIVE_ATTRS: &[&str] = &[
@@ -26,6 +34,8 @@ const A11Y_NAME_DESC_LIVE_ATTRS: &[&str] = &[
     "accesskit_name",
     "accesskit_description",
     "accesskit_live",
+    "accesskit_id",
+    "accesskit_labelled_by",
 ];
 
 pub(crate) fn node_id_for_key(key: &str) -> NodeId {
@@ -40,13 +50,18 @@ fn node_id_for_focus(fid: &str) -> NodeId {
 
 /// Stable key for AccessKit nodes.
 ///
-/// `focus_id` is preferred (must stay bare so [`node_id_for_focus`] matches).
-/// Empty `focus_id` / `template_id` (RSX anon components default `id` to `""`) and
-/// reused `template_id` values are not globally unique — fall back to / disambiguate
-/// with the element path so TreeUpdate never lists the same child twice.
+/// Order: non-empty `focus_id` → `accesskit_id` (Label / labelled-by targets) →
+/// path-qualified `template_id` → path. Empty strings are never keys.
 pub(crate) fn stable_node_key(el: &Element, path: &str) -> String {
     if let Some(fid) = el.focus_id.as_deref().filter(|s| !s.is_empty()) {
         fid.to_string()
+    } else if let Some(aid) = el
+        .attrs
+        .get("accesskit_id")
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        aid.to_string()
     } else if let Some(tid) = el.template_id.as_deref().filter(|s| !s.is_empty()) {
         // template_id is reconcile identity within a slot, not a global a11y id.
         format!("rui:tpl:{tid}@{path}")
@@ -162,36 +177,167 @@ fn bounds_from_layout(b: [f32; 4]) -> Option<Rect> {
     }
 }
 
-fn build_node(el: &Element, key: &str) -> Node {
-    let fid = el.focus_id.as_deref();
-    let role = infer_role(el, fid);
-    let mut node = Node::new(role);
-
-    if let Some(bounds) = bounds_from_layout(el.layout_bounds) {
-        node.set_bounds(bounds);
+fn union_rect(a: Rect, b: Rect) -> Rect {
+    Rect {
+        x0: a.x0.min(b.x0),
+        y0: a.y0.min(b.y0),
+        x1: a.x1.max(b.x1),
+        y1: a.y1.max(b.y1),
     }
+}
 
-    // Prefer explicit a11y name → visible text → Input placeholder (Narrator smoke).
-    let label = el
+/// Prefer this node's layout box; otherwise union descendants (text often lays out on children).
+fn effective_bounds(el: &Element) -> Option<Rect> {
+    if let Some(r) = bounds_from_layout(el.layout_bounds) {
+        return Some(r);
+    }
+    let mut acc: Option<Rect> = None;
+    for child in &el.children {
+        if let Some(cb) = effective_bounds(child) {
+            acc = Some(match acc {
+                None => cb,
+                Some(a) => union_rect(a, cb),
+            });
+        }
+    }
+    acc
+}
+
+/// Visible text on this element and descendants (Button captions live on child text nodes).
+fn collect_visible_text(el: &Element) -> String {
+    let mut parts = Vec::new();
+    collect_visible_text_into(el, &mut parts);
+    parts.join(" ")
+}
+
+fn collect_visible_text_into(el: &Element, parts: &mut Vec<String>) {
+    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(t.to_string());
+    }
+    for child in &el.children {
+        collect_visible_text_into(child, parts);
+    }
+}
+
+/// Controls that expose a name from descendant text (ARIA name-from-contents).
+fn uses_name_from_contents(el: &Element) -> bool {
+    if el.on_click.is_some() {
+        return true;
+    }
+    matches!(
+        el.attrs
+            .get("accesskit_role")
+            .and_then(|r| parse_accesskit_role(r)),
+        Some(
+            Role::Button
+                | Role::MenuItem
+                | Role::ListBoxOption
+                | Role::Link
+                | Role::CheckBox
+                | Role::Switch
+        )
+    )
+}
+
+/// Plain text leaf that should fold into an ancestor's accessible name, not a sibling Label.
+fn is_plain_text_name_leaf(el: &Element) -> bool {
+    if el.text.as_deref().map(str::trim).is_none_or(|s| s.is_empty()) {
+        return false;
+    }
+    if el.on_click.is_some() {
+        return false;
+    }
+    if el.focus_id.as_deref().is_some_and(|s| !s.is_empty()) {
+        return false;
+    }
+    if el.attrs.contains_key("accesskit_role")
+        || el.attrs.contains_key("accesskit_id")
+        || has_a11y_name_desc_live_attr(el)
+    {
+        return false;
+    }
+    if el.switch_checked_sync.is_some() || el.checkbox_sync.is_some() {
+        return false;
+    }
+    el.children.iter().all(is_plain_text_name_leaf_or_empty)
+}
+
+fn is_plain_text_name_leaf_or_empty(el: &Element) -> bool {
+    if el.text.as_deref().map(str::trim).is_some_and(|s| !s.is_empty()) {
+        return is_plain_text_name_leaf(el);
+    }
+    el.on_click.is_none()
+        && el.focus_id.as_deref().map_or(true, |s| s.is_empty())
+        && !el.attrs.contains_key("accesskit_role")
+        && !has_a11y_name_desc_live_attr(el)
+        && el.switch_checked_sync.is_none()
+        && el.checkbox_sync.is_none()
+        && el.children.iter().all(is_plain_text_name_leaf_or_empty)
+}
+
+fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
+    if let Some(text) = el
         .attrs
         .get("accesskit_name")
         .or_else(|| el.attrs.get("aria-label"))
         .map(|s| s.as_str())
         .filter(|t| !t.is_empty())
-        .or_else(|| el.text.as_deref().filter(|t| !t.is_empty()))
-        .or_else(|| {
-            if role == Role::TextInput || role == Role::ComboBox {
-                el.attrs
-                    .get("placeholder")
-                    .map(|s| s.as_str())
-                    .filter(|t| !t.is_empty())
-            } else {
-                None
-            }
-        });
-    if let Some(text) = label {
-        node.set_label(text.to_string());
+    {
+        return Some(text.to_string());
     }
+    let collected = collect_visible_text(el);
+    if !collected.is_empty() {
+        return Some(collected);
+    }
+    if role == Role::TextInput || role == Role::ComboBox {
+        return el
+            .attrs
+            .get("placeholder")
+            .map(|s| s.as_str())
+            .filter(|t| !t.is_empty())
+            .map(|s| s.to_string());
+    }
+    None
+}
+
+fn apply_labelled_by(el: &Element, node: &mut Node) {
+    let Some(refs) = el
+        .attrs
+        .get("accesskit_labelled_by")
+        .or_else(|| el.attrs.get("aria-labelledby"))
+        .map(|s| s.as_str())
+    else {
+        return;
+    };
+    let ids: Vec<NodeId> = refs
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(node_id_for_key)
+        .collect();
+    if !ids.is_empty() {
+        node.set_labelled_by(ids);
+    }
+}
+
+fn build_node(el: &Element, key: &str) -> Node {
+    let fid = el.focus_id.as_deref();
+    let role = infer_role(el, fid);
+    let mut node = Node::new(role);
+
+    if let Some(bounds) = effective_bounds(el) {
+        node.set_bounds(bounds);
+    }
+
+    // AccessKit: Role::Label Name comes from `value` (`label_comes_from_value`); controls use `label`.
+    if let Some(text) = resolve_accessible_text(el, role) {
+        if role == Role::Label {
+            node.set_value(text);
+        } else {
+            node.set_label(text);
+        }
+    }
+
+    apply_labelled_by(el, &mut node);
 
     if let Some(desc) = el
         .attrs
@@ -269,7 +415,14 @@ fn walk_subtree(
     nodes: &mut Vec<(NodeId, Node)>,
     parent_child_ids: &mut Vec<NodeId>,
     used: &mut std::collections::HashSet<u64>,
+    under_name_from_contents: bool,
 ) {
+    // Fold plain caption text into the ancestor control name (avoid "按钮" + nested Label).
+    if under_name_from_contents && is_plain_text_name_leaf(el) {
+        return;
+    }
+
+    let absorb = under_name_from_contents || uses_name_from_contents(el);
     let mut child_ids: Vec<NodeId> = Vec::new();
     for (i, child) in el.children.iter().enumerate() {
         let child_path = if path.is_empty() {
@@ -277,7 +430,7 @@ fn walk_subtree(
         } else {
             format!("{path}/{i}")
         };
-        walk_subtree(child, &child_path, nodes, &mut child_ids, used);
+        walk_subtree(child, &child_path, nodes, &mut child_ids, used, absorb);
     }
 
     if should_be_accesskit_node(el) {
@@ -292,15 +445,27 @@ fn walk_subtree(
     }
 }
 
-/// Hierarchical tree: window root with nested AccessKit nodes mirroring the element tree.
+/// Hierarchical tree: Window → Document → element a11y nodes.
+///
+/// A Document child is required for Narrator/browse-style reading of static Labels;
+/// Tab alone only visits focusable controls (by design).
 pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> TreeUpdate {
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
-    let mut root_children: Vec<NodeId> = Vec::new();
+    let mut content_children: Vec<NodeId> = Vec::new();
     let mut used = std::collections::HashSet::new();
+    let doc_id = document_node_id();
     used.insert(ROOT_ID.0);
+    used.insert(doc_id.0);
 
     for (i, child) in root.children.iter().enumerate() {
-        walk_subtree(child, &i.to_string(), &mut nodes, &mut root_children, &mut used);
+        walk_subtree(
+            child,
+            &i.to_string(),
+            &mut nodes,
+            &mut content_children,
+            &mut used,
+            false,
+        );
     }
 
     // Root element itself may be an a11y node (unusual but supported).
@@ -308,22 +473,33 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
         let preferred = stable_node_key(root, "root");
         let (key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
         let mut node = build_node(root, &key);
-        node.set_children(root_children);
+        node.set_children(content_children);
         nodes.push((id, node));
-        root_children = vec![id];
+        content_children = vec![id];
     }
+
+    let mut document = Node::new(Role::Document);
+    if let Some(bounds) = effective_bounds(root) {
+        document.set_bounds(bounds);
+    }
+    // Lets AT request Focus to enter reading/browse context (not app Tab order).
+    document.add_action(Action::Focus);
+    document.set_children(content_children);
+    nodes.push((doc_id, document));
 
     let mut root_node = Node::new(Role::Window);
-    if let Some(bounds) = bounds_from_layout(root.layout_bounds) {
+    if let Some(bounds) = effective_bounds(root) {
         root_node.set_bounds(bounds);
     }
-    root_node.set_children(root_children);
+    root_node.set_children(vec![doc_id]);
     nodes.push((ROOT_ID, root_node));
 
-    let focus = focused_fid
-        .filter(|s| !s.is_empty())
-        .map(node_id_for_focus)
-        .unwrap_or(ROOT_ID);
+    let focus = match focused_fid.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(DOCUMENT_FOCUS_ID) => doc_id,
+        Some(fid) => node_id_for_focus(fid),
+        // Prefer Document so Narrator starts in content/reading context, not empty Window.
+        None => doc_id,
+    };
 
     TreeUpdate {
         nodes,
@@ -337,15 +513,22 @@ fn find_element_by_node_id<'a>(
     target: NodeId,
     path: &str,
     used: &mut std::collections::HashSet<u64>,
+    under_name_from_contents: bool,
 ) -> Option<&'a Element> {
-    // Match walk_subtree order: children first, then this node (post-order id alloc).
+    // Must mirror [`walk_subtree`] folding so NodeId allocation stays aligned.
+    if under_name_from_contents && is_plain_text_name_leaf(el) {
+        return None;
+    }
+    let absorb = under_name_from_contents || uses_name_from_contents(el);
     for (i, child) in el.children.iter().enumerate() {
         let child_path = if path.is_empty() {
             i.to_string()
         } else {
             format!("{path}/{i}")
         };
-        if let Some(found) = find_element_by_node_id(child, target, &child_path, used) {
+        if let Some(found) =
+            find_element_by_node_id(child, target, &child_path, used, absorb)
+        {
             return Some(found);
         }
     }
@@ -380,11 +563,18 @@ fn apply_accesskit_action(el: &Element, request: &ActionRequest) -> bool {
 
 /// Handle an AccessKit action request against the current element tree.
 pub fn dispatch_accesskit_action(root: &Element, request: &ActionRequest) -> bool {
+    if request.target == document_node_id() && matches!(request.action, Action::Focus) {
+        use_signal("__rui_button_focus_id", String::new).set(DOCUMENT_FOCUS_ID.to_string());
+        return true;
+    }
+
     let mut used = std::collections::HashSet::new();
     used.insert(ROOT_ID.0);
+    used.insert(document_node_id().0);
     // Same path scheme as [`tree_update_from_elements`].
     for (i, child) in root.children.iter().enumerate() {
-        if let Some(el) = find_element_by_node_id(child, request.target, &i.to_string(), &mut used)
+        if let Some(el) =
+            find_element_by_node_id(child, request.target, &i.to_string(), &mut used, false)
         {
             return apply_accesskit_action(el, request);
         }
@@ -412,6 +602,10 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn document_children(update: &TreeUpdate) -> Vec<NodeId> {
+        child_ids_of(&update.nodes, document_node_id())
+    }
+
     #[test]
     fn hierarchical_tree_nests_children() {
         let mut panel = Element::new().template_id("panel");
@@ -425,11 +619,14 @@ mod tests {
         let update = tree_update_from_elements(&root, None);
         let panel_id = node_id_for_key("rui:tpl:panel@0");
         let btn_id = node_id_for_key("btn1");
+        let doc_id = document_node_id();
 
         assert!(update.nodes.iter().any(|(id, _)| *id == panel_id));
         assert!(update.nodes.iter().any(|(id, _)| *id == btn_id));
-        assert_eq!(child_ids_of(&update.nodes, ROOT_ID), vec![panel_id]);
+        assert_eq!(child_ids_of(&update.nodes, ROOT_ID), vec![doc_id]);
+        assert_eq!(document_children(&update), vec![panel_id]);
         assert_eq!(child_ids_of(&update.nodes, panel_id), vec![btn_id]);
+        assert_eq!(update.focus, doc_id);
     }
 
     fn assert_no_duplicate_children(update: &TreeUpdate) {
@@ -455,11 +652,11 @@ mod tests {
 
         let update = tree_update_from_elements(&root, None);
         assert_no_duplicate_children(&update);
-        let root_kids = child_ids_of(&update.nodes, ROOT_ID);
-        assert_eq!(root_kids.len(), 3);
-        assert_ne!(root_kids[0], root_kids[1]);
-        assert_ne!(root_kids[0], root_kids[2]);
-        assert_ne!(root_kids[1], root_kids[2]);
+        let kids = document_children(&update);
+        assert_eq!(kids.len(), 3);
+        assert_ne!(kids[0], kids[1]);
+        assert_ne!(kids[0], kids[2]);
+        assert_ne!(kids[1], kids[2]);
     }
 
     #[test]
@@ -474,7 +671,7 @@ mod tests {
         let update = tree_update_from_elements(&root, None);
         assert_no_duplicate_children(&update);
         assert_eq!(
-            child_ids_of(&update.nodes, ROOT_ID),
+            document_children(&update),
             vec![
                 node_id_for_key("rui:tpl:shared@0"),
                 node_id_for_key("rui:tpl:shared@1"),
@@ -489,7 +686,7 @@ mod tests {
         let root = Element::new().child(a).child(b);
         let update = tree_update_from_elements(&root, None);
         assert_no_duplicate_children(&update);
-        let kids = child_ids_of(&update.nodes, ROOT_ID);
+        let kids = document_children(&update);
         // Post-order: child 0 allocated before child 1; first keeps bare focus_id.
         assert_eq!(kids[0], node_id_for_key("same"));
         assert_eq!(kids[1], node_id_for_key("rui:path:1"));
@@ -502,11 +699,38 @@ mod tests {
         let update = tree_update_from_elements(&root, None);
         assert_no_duplicate_children(&update);
         let root_a11y = node_id_for_key("rui:path:root");
-        assert_eq!(child_ids_of(&update.nodes, ROOT_ID), vec![root_a11y]);
+        assert_eq!(child_ids_of(&update.nodes, ROOT_ID), vec![document_node_id()]);
+        assert_eq!(document_children(&update), vec![root_a11y]);
         assert_eq!(
             child_ids_of(&update.nodes, root_a11y),
             vec![node_id_for_key("inner")]
         );
+    }
+
+    #[test]
+    fn document_contains_static_label_with_value() {
+        let label = Element::new().text("Card title").accesskit_role("label");
+        let root = Element::new().child(label);
+        let update = tree_update_from_elements(&root, None);
+        let doc = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == document_node_id())
+            .map(|(_, n)| n)
+            .expect("document");
+        assert_eq!(doc.role(), Role::Document);
+        assert!(doc.supports_action(Action::Focus));
+
+        let lid = node_id_for_key("rui:path:0");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == lid)
+            .map(|(_, n)| n)
+            .expect("label");
+        assert_eq!(node.role(), Role::Label);
+        assert_eq!(node.value(), Some("Card title"));
+        assert_eq!(document_children(&update), vec![lid]);
     }
 
     #[test]
@@ -547,7 +771,9 @@ mod tests {
             .map(|(_, n)| n);
         assert!(node.is_some());
         assert_eq!(node.unwrap().role(), Role::Label);
-        assert_eq!(node.unwrap().label(), Some("Hello"));
+        // AccessKit: Label role exposes caption via `value`, not `label`.
+        assert_eq!(node.unwrap().value(), Some("Hello"));
+        assert_eq!(node.unwrap().label(), None);
     }
 
     #[test]
@@ -566,7 +792,8 @@ mod tests {
             .find(|(nid, _)| *nid == id)
             .map(|(_, n)| n)
             .expect("a11y node");
-        assert_eq!(node.label(), Some("Named"));
+        assert_eq!(node.role(), Role::Label);
+        assert_eq!(node.value(), Some("Named"));
         assert_eq!(node.description(), Some("Described"));
     }
 
@@ -592,7 +819,8 @@ mod tests {
             .find(|(nid, _)| *nid == id)
             .map(|(_, n)| n)
             .expect("a11y node");
-        assert_eq!(node.label(), Some("AccessKit"));
+        assert_eq!(node.role(), Role::Label);
+        assert_eq!(node.value(), Some("AccessKit"));
         assert_eq!(node.description(), Some("AccessKitDesc"));
     }
 
@@ -699,5 +927,62 @@ mod tests {
         assert_eq!(node.role(), Role::Button);
         assert!(node.supports_action(Action::Click));
         assert!(node.supports_action(Action::Focus));
+    }
+
+    #[test]
+    fn button_name_from_descendant_text_not_nested_label() {
+        // Matches real Button chrome: focusable root + child text node (no root.el.text).
+        let caption = Element::new().text("Save draft");
+        let btn = Element::new()
+            .focus_id("save-btn")
+            .focusable(true)
+            .on_click(|| {})
+            .child(caption);
+        let root = Element::new().child(btn);
+        let update = tree_update_from_elements(&root, None);
+        let nid = node_id_for_key("save-btn");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == nid)
+            .map(|(_, n)| n)
+            .expect("button node");
+        assert_eq!(node.role(), Role::Button);
+        assert_eq!(node.label(), Some("Save draft"));
+        // Caption folded into name — no extra Label child under the button.
+        assert!(node.children().is_empty());
+    }
+
+    #[test]
+    fn label_associates_via_aria_labelledby_and_accesskit_id() {
+        let mut lbl = Element::new().text("Email");
+        lbl.attrs
+            .insert("accesskit_id".to_string(), "email-lbl".to_string());
+        let mut input = Element::new()
+            .focus_id("input:email")
+            .focusable(true);
+        input
+            .attrs
+            .insert("aria-labelledby".to_string(), "email-lbl".to_string());
+        let root = Element::new().child(lbl).child(input);
+        let update = tree_update_from_elements(&root, None);
+
+        let lid = node_id_for_key("email-lbl");
+        let iid = node_id_for_key("input:email");
+        let label = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == lid)
+            .map(|(_, n)| n)
+            .expect("label");
+        let field = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == iid)
+            .map(|(_, n)| n)
+            .expect("input");
+        assert_eq!(label.role(), Role::Label);
+        assert_eq!(label.value(), Some("Email"));
+        assert_eq!(field.labelled_by(), &[lid]);
     }
 }

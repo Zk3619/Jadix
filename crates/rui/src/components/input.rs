@@ -35,7 +35,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, IntoDimension, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, r#box, BoxBuilder};

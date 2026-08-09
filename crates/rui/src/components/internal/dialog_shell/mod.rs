@@ -1,4 +1,4 @@
-//! Dialog / AlertDialog 共享模态壳（**crate 私有**，对齐 solid-ui `DialogContent`）。
+//! Dialog / AlertDialog 共享模态壳（[`crate::components::internal`]，对齐 solid-ui `DialogContent`）。
 //!
 //! 产品面：[`crate::components::dialog`] / [`crate::components::alert_dialog`]。
 //!

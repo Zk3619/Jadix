@@ -1117,11 +1117,11 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
 
     ui! {
         <VStack w="100%" gap="0">
-            <MyCard title="11) Image · Portal · FocusTrap · VirtualList">
+            <MyCard title="11) Image · Portal · focus_trap · VirtualList">
                 <Reactive id={PRIMITIVES_SHOWCASE_REACTIVE}>
                     <VStack gap="0.75rem" w="100%">
                         <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                            "GPU Image (queue_image_rgba8 + <Image>). Portal 默认挂到根叠层（body）；也可 mount 到子容器 template_id。FocusTrap 限制 Tab。VirtualList：Reactive + visible_item_range（此处 200 行演示）。"
+                            "GPU Image (queue_image_rgba8 + <Image>). Portal 默认挂到根叠层（body）；也可 mount 到子容器 template_id。focus_trap（utils）限制 Tab。VirtualList：Reactive + visible_item_range（此处 200 行演示）。"
                         </Label>
                         <HStack gap="0.75rem" items="start" wrap="wrap">
                             <VStack gap="0.25rem">
@@ -1137,7 +1137,11 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     <Button id="prim-local-portal-toggle" variant="outline" on_click={move || local_open.set(!local_open.get())}>
                                         { if local_open.get() { "关闭局部 Portal" } else { "打开局部 Portal" } }
                                     </Button>
-                                    <Button id="prim-trap-toggle" variant="secondary" on_click={move || trap_on.set(!trap_on.get())}>
+                                    <Button id="prim-trap-toggle" variant="secondary" on_click={move || {
+                                        let next = !trap_on.get();
+                                        trap_on.set(next);
+                                        rui::sync_focus_trap("prim-trap", next, "trap-a,trap-b");
+                                    }}>
                                         { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
                                     </Button>
                                 </HStack>
@@ -1146,13 +1150,11 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                         "局部宿主 prim-portal-host（mount 叠层裁剪在此框内）"
                                     </Label>
                                 </Rect>
-                                <FocusTrap id="prim-trap" active={trap_on.get()} order="trap-a,trap-b">
-                                    <HStack gap="0.5rem" items="center" wrap="wrap">
-                                        <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
-                                        <Button id="trap-a" variant="default">"A"</Button>
-                                        <Button id="trap-b" variant="outline">"B"</Button>
-                                    </HStack>
-                                </FocusTrap>
+                                <HStack gap="0.5rem" items="center" wrap="wrap">
+                                    <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
+                                    <Button id="trap-a" variant="default">"A"</Button>
+                                    <Button id="trap-b" variant="outline">"B"</Button>
+                                </HStack>
                             </VStack>
                         </HStack>
                         <Label id="gal-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>

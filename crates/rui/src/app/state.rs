@@ -1133,7 +1133,7 @@ impl AppState {
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect.
-        crate::text_edit::sync_text_edit_paint_subtree(
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,

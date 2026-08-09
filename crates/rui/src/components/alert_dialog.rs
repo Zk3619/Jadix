@@ -1,13 +1,15 @@
 //! # AlertDialog
 //!
 //! 确认对话框：Header（标题）/ Body（说明）/ Footer（Cancel · Confirm）。
-//! Body 可滚动；Footer 固定。复用 [`crate::dialog_shell`]；**独立产品 API**。
+//! Body 可滚动；Footer 固定。复用 [`crate::components::internal::dialog_shell`]；**独立产品 API**。
 
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
-use crate::dialog_shell::{dialog_content_frame, modal_sync, DialogSections};
+use crate::components::internal::dialog_shell::{
+    dialog_content_frame, modal_sync, DialogSections,
+};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 
