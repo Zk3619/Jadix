@@ -8,6 +8,7 @@
 //! 运行：`cargo run -p gallery`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
+use rui::app::open_secondary_window;
 use rui::component;
 use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
@@ -1273,6 +1274,7 @@ fn TextareaComboboxShowcase() -> Element {
 fn OverlayFeedbackShowcase() -> Element {
     let cmd_open = use_signal("gal_cmd_open", || false);
     let dialog_open = use_signal("gal_dialog_open", || false);
+    let dialog_select = use_signal("gal_dialog_select", || "opt-a".to_string());
     let alert_open = use_signal("gal_alert_open", || false);
     let sheet_open = use_signal("gal_sheet_open", || false);
     let progress_val = use_signal("gal_progress", || 0.45f32);
@@ -1292,6 +1294,7 @@ fn OverlayFeedbackShowcase() -> Element {
         .into();
     let dialog_el: Element = {
         let open = dialog_open;
+        let nested_select = dialog_select;
         ui! {
             <Dialog id="gal-dialog" open={open}>
                 <DialogTrigger>
@@ -1301,19 +1304,34 @@ fn OverlayFeedbackShowcase() -> Element {
                     <DialogHeader>
                         <DialogTitle>Gallery Dialog</DialogTitle>
                         <DialogDescription>
-                            "Header / 可滚动 Body / Footer。中间区域滚动，底栏固定。"
+                            "desktop_smoke #7：Body 内含 Select；先开下拉再 Esc，应只关顶层浮层。"
                         </DialogDescription>
                     </DialogHeader>
                     <DialogBody>
-                        <VStack gap="0.5rem">
+                        <VStack gap="0.5rem" w="100%">
+                            <Label text_size="0.875rem" font_weight="600">
+                                "嵌套浮层（Select）"
+                            </Label>
+                            { Element::from(
+                                select("gal-dialog-nested-select")
+                                    .value_signal(nested_select)
+                                    .default_value("opt-a")
+                                    .trigger_width("100%")
+                                    .options(vec![
+                                        ("opt-a".into(), "Option A".into()),
+                                        ("opt-b".into(), "Option B".into()),
+                                        ("opt-c".into(), "Option C".into()),
+                                    ]),
+                            ) }
+                            <Label text_size="0.75rem" color="muted-foreground">
+                                { format!("Selected: {}", nested_select.get()) }
+                            </Label>
                             <Label text_size="0.875rem">"行 1 — 演示长内容"</Label>
                             <Label text_size="0.875rem">"行 2"</Label>
                             <Label text_size="0.875rem">"行 3"</Label>
                             <Label text_size="0.875rem">"行 4"</Label>
                             <Label text_size="0.875rem">"行 5"</Label>
                             <Label text_size="0.875rem">"行 6"</Label>
-                            <Label text_size="0.875rem">"行 7"</Label>
-                            <Label text_size="0.875rem">"行 8"</Label>
                         </VStack>
                     </DialogBody>
                     <DialogFooter>
@@ -1385,7 +1403,7 @@ fn OverlayFeedbackShowcase() -> Element {
         <MyCard title="Command · Dialog · Alert · Sheet · Toast · Tooltip · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：命令面板、模态、确认框、侧滑、Toast、Tooltip、进度条。"
+                    "浮层与反馈：命令面板、模态、确认框、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button id="gal-cmd-open" variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
@@ -1402,6 +1420,35 @@ fn OverlayFeedbackShowcase() -> Element {
                         toast_push("Toast from Gallery", 3000);
                     }}>
                         "Toast"
+                    </Button>
+                    <Button
+                        id="gal-secondary-open"
+                        variant="secondary"
+                        size="sm"
+                        on_click={move || {
+                            match open_secondary_window("RUI Gallery — Secondary", || {
+                                ui! {
+                                    <VStack w="100%" h="100%" p="1.5rem" gap="0.75rem" bg="background">
+                                        <Label font_weight="700" text_size="1.125rem">
+                                            "Secondary window"
+                                        </Label>
+                                        <Label text_size="0.875rem" color="muted-foreground">
+                                            "desktop_smoke #8：关闭本窗后主窗应仍存活、无 panic。"
+                                        </Label>
+                                    </VStack>
+                                }
+                            }) {
+                                Ok(()) => {
+                                    toast_push("Secondary window opened", 2000);
+                                }
+                                Err(e) => {
+                                    log::warn!("open_secondary_window: {e}");
+                                    toast_push(format!("次窗失败: {e}"), 3000);
+                                }
+                            }
+                        }}
+                    >
+                        "Secondary window"
                     </Button>
                     { tip }
                 </HStack>

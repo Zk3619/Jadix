@@ -1912,10 +1912,15 @@ impl LayoutTree {
 
         // Recurse children
         let mut next_scroll_acc = scroll_acc;
-        if element.style.overflow.x != taffy::style::Overflow::Visible {
+        // `scroll:` viewports always contribute offset (even if overflow was cleared to Visible).
+        let is_scroll_viewport = element
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
+        if is_scroll_viewport || element.style.overflow.x != taffy::style::Overflow::Visible {
             next_scroll_acc[0] += element.scroll_offset[0];
         }
-        if element.style.overflow.y != taffy::style::Overflow::Visible {
+        if is_scroll_viewport || element.style.overflow.y != taffy::style::Overflow::Visible {
             next_scroll_acc[1] += element.scroll_offset[1];
         }
 

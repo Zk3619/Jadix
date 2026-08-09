@@ -133,22 +133,43 @@ pub(super) fn find_bounds_by_focus_id(
     focus_id: &str,
     scroll_acc: [f32; 2],
 ) -> Option<([f32; 4], [f32; 2])> {
+    // Prefer the match under the largest ancestor scroll (duplicate focus_id ghosts outside
+    // ScrollArea would otherwise win DFS with scroll_acc=0 and freeze IME candidates).
+    let mut best: Option<([f32; 4], [f32; 2])> = None;
+    find_bounds_by_focus_id_best(el, focus_id, scroll_acc, &mut best);
+    best
+}
+
+fn find_bounds_by_focus_id_best(
+    el: &Element,
+    focus_id: &str,
+    scroll_acc: [f32; 2],
+    best: &mut Option<([f32; 4], [f32; 2])>,
+) {
     if el.focus_id.as_deref() == Some(focus_id) {
-        return Some((el.layout_bounds, scroll_acc));
+        let score = scroll_acc[0].abs() + scroll_acc[1].abs();
+        let replace = match best {
+            None => true,
+            Some((_, sa)) => score > sa[0].abs() + sa[1].abs() + 0.5,
+        };
+        if replace {
+            *best = Some((el.layout_bounds, scroll_acc));
+        }
     }
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
+    let is_scroll_viewport = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
+    if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
         next_acc[0] += el.scroll_offset[0];
     }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
+    if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
         next_acc[1] += el.scroll_offset[1];
     }
     for c in &el.children {
-        if let Some(res) = find_bounds_by_focus_id(c, focus_id, next_acc) {
-            return Some(res);
-        }
+        find_bounds_by_focus_id_best(c, focus_id, next_acc, best);
     }
-    None
 }
 
 pub(super) fn find_focus_id_at(
@@ -322,6 +343,10 @@ pub(super) fn find_input_text_at(
         }
     }
     if let Some(text) = &el.text {
+        // Clear / reveal adornments use Lucide icon glyphs — not editable field text.
+        if el.text_style.font_family.as_deref() == Some("lucide") {
+            return None;
+        }
         if let Some(id) = fid {
             let rest = id
                 .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
@@ -694,6 +719,69 @@ mod focused_key_dispatch_tests {
         click.borrow_mut()();
         assert_eq!(*state.borrow(), 1);
         assert!(open.peek());
+    }
+}
+
+#[cfg(test)]
+mod ime_scroll_bounds_tests {
+    use super::*;
+    use taffy::style::Overflow;
+
+    #[test]
+    fn find_bounds_by_focus_id_accumulates_scroll_for_ime_visual() {
+        // Same space as window_events IME path: layout_bounds − scroll_acc.
+        let mut input = Element::new().w(200.0).h(32.0);
+        input.layout_bounds = [20.0, 300.0, 200.0, 32.0];
+        input.focus_id = Some("input:gal-s2-input-a".into());
+
+        let mut viewport = Element::new().w(400.0).h(200.0);
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 120.0];
+        viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        viewport = viewport.child(input);
+
+        let (bounds, scroll_acc) =
+            find_bounds_by_focus_id(&viewport, "input:gal-s2-input-a", [0.0, 0.0])
+                .expect("input focus");
+        let visual_y = bounds[1] - scroll_acc[1];
+        assert!(
+            (scroll_acc[1] - 120.0).abs() < 0.5,
+            "scroll_acc={scroll_acc:?}"
+        );
+        assert!(
+            (visual_y - 180.0).abs() < 0.5,
+            "IME visual y must track scroll (300−120), got {visual_y}"
+        );
+
+        viewport.scroll_offset = [0.0, 200.0];
+        let (bounds2, sa2) =
+            find_bounds_by_focus_id(&viewport, "input:gal-s2-input-a", [0.0, 0.0]).unwrap();
+        assert!(((bounds2[1] - sa2[1]) - 100.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn find_bounds_prefers_scrolled_duplicate_focus_id() {
+        let mut ghost = Element::new();
+        ghost.focus_id = Some("input:dup".into());
+        ghost.layout_bounds = [20.0, 400.0, 200.0, 32.0];
+
+        let mut real = Element::new();
+        real.focus_id = Some("input:dup".into());
+        real.layout_bounds = [20.0, 400.0, 200.0, 32.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:root-scroll".into());
+        viewport.style.overflow.y = Overflow::Visible; // overflow wrong, but scroll: still counts
+        viewport.scroll_offset = [0.0, 220.0];
+        viewport = viewport.child(real);
+
+        let root = Element::new().child(ghost).child(viewport);
+        let (bounds, sa) = find_bounds_by_focus_id(&root, "input:dup", [0.0, 0.0]).unwrap();
+        assert!(
+            (sa[1] - 220.0).abs() < 0.5,
+            "must prefer scrolled match, sa={sa:?}"
+        );
+        assert!(((bounds[1] - sa[1]) - 180.0).abs() < 0.5);
     }
 }
 

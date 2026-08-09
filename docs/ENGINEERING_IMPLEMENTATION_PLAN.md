@@ -37,10 +37,10 @@
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
 | 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
-| 冒烟 | `desktop_smoke.md`：Win #3–#7（WP-1.1 / WP-1.2）、**#9（WP-1.3 Narrator）**已签；**#1–#2/#8 与 macOS/Linux 未签** |
-| 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文、CHANGELOG/SemVer 面 |
+| 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
+| 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测+Win #5–#7 已签；**W1.3 代码+库测+Win Narrator #9 已签**；W2.x 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）：W1.1 #3/#4、W1.2 #5–#7、W1.3 #9、W1.4 Win 列 #1–#8 已签；AccessKit 可演示。macOS / Linux 冒烟仍 ☐。W2.x 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -80,7 +80,7 @@ flowchart TB
 | **路径** | `app/input_controller.rs`、`app/ime_support.rs`、`app/window_events.rs`、`components/input.rs`、`components/textarea.rs` |
 | **任务** | ① preedit 稳定上屏不丢字；② `set_ime_cursor_area` 随 ScrollArea / 缩放更新；③ 中日韩至少一种 IME 回归测（可手工 + 日志断言接口） |
 | **验收** | `desktop_smoke` #3–#4 在开发机 Win 通过；滚动后候选窗不漂移。细则：[ime.md](ime.md) |
-| **状态** | ☑ 代码+库测已合入；☑ Win 开发机 smoke #3–#4 签署（2026-08-09，Kingdom / Win 10.0.26200；`ime_support` 6/6 绿） |
+| **状态** | ☑ 代码+库测已合入；☑ Win smoke #3（2026-08-09，中文）；☑ Win smoke #4（2026-08-10；跟随 + 滚出视口贴边不失焦）；☐ 日/韩 IME 可选未测 |
 
 ### WP-1.2 焦点环与 Tab / roving
 
@@ -108,11 +108,11 @@ flowchart TB
 |--|--|
 | **路径** | [desktop_smoke.md](desktop_smoke.md)；示例 `gallery` |
 | **任务** | ① Win / macOS / Linux 各填表；② 失败项开 issue 标签 `smoke`；③ 可选：半自动脚本记录窗口创建（不强制 CI 真窗） |
-| **验收** | 表中 #1–#8 三列均有签署（#9 至少一平台） |
-| **状态** | ☐ |
+| **验收** | 表中 #1–#8 至少开发机一列全签（升 Beta 前三列均需签署）；#9 至少一平台 |
+| **状态** | ☑ **开发机 Win #1–#9 签署**（2026-08-10，Kingdom / Win 10.0.26200；Gallery；#3 中文 IME，日/韩未测）；☐ macOS / Linux 待签（不阻塞本机 Wave 1→2） |
 | **依赖** | WP-1.1～1.3 修完阻塞项后再签 |
 
-**Wave 1 退出**：冒烟 #1–#8 全绿；AccessKit 主路径可演示。
+**Wave 1 退出**：☑ **开发机（Win）达成**（2026-08-10）— 冒烟 #1–#8 Win 列全绿；AccessKit 主路径可演示（#9）。macOS / Linux 冒烟列仍开放，计入升 Beta 前补签（§8）。
 
 ---
 
@@ -345,7 +345,7 @@ flowchart TB
 
 - [ ] `cargo publish` 三 crate 成功；干净环境最小窗口可跑（WP-4.3）
 - [ ] 文档站：Getting Started + 更新契约 + 组件索引（WP-4.4）
-- [ ] 三平台真窗口冒烟 #1–#8 签署（WP-1.4）
+- [ ] 三平台真窗口冒烟 #1–#8 签署（WP-1.4；**Win 已签**，macOS/Linux 待补）
 - [x] AccessKit 主路径可演示并有文档（WP-1.3；Win Narrator #9 已签）
 - [ ] 测宽绘制对齐测 + ≥5 组件 golden CI（WP-2.1、WP-2.6、WP-4.5）
 - [ ] gap / 纲领开放 **P0 = 0**（冒烟、crates、文档站）
@@ -358,7 +358,7 @@ flowchart TB
 | 周 | 焦点 |
 |----|------|
 | 1 | WP-1.1～1.3；并行起草 WP-4.1 CHANGELOG / 承诺面 |
-| 2 | WP-1.4 签署；启动 WP-2.1、WP-2.4 |
+| 2 | WP-1.4 Win 已签 → 启动 WP-2.1、WP-2.4；macOS/Linux 冒烟可并行补签 |
 | 3–4 | WP-2.2、2.3、2.5、2.6（golden 五场景） |
 | 5–6 | WP-3.1～3.5；托盘 WP-3.6 视进度 |
 | 7 | WP-4.2～4.6；冻结 API |

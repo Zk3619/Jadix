@@ -425,10 +425,16 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 }
                 crate::utils::text_field::commit_value(&id_clear, String::new());
                 use_signal(&input_preedit_signal_key(&id_clear), String::new).set(String::new());
+                use_signal(&input_preedit_sel_signal_key(&id_clear), || {
+                    None::<(usize, usize)>
+                })
+                .set(None);
                 use_signal(&input_caret_signal_key(&id_clear), || None::<usize>).set(Some(0));
                 use_signal(&input_selection_signal_key(&id_clear), || None::<(usize, usize)>)
                     .set(None);
                 use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>).set(None);
+                // Drop system candidate / composition — clearing value alone leaves TIP UI up.
+                crate::app::ime_support::cancel_os_ime_composition();
                 use_signal(focus_key_clear, String::new).set(fid_clear.clone());
                 use_signal("__rui_focus_visible", || false).set(true);
             },

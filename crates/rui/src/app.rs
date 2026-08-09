@@ -44,7 +44,7 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
 mod damage;
 mod hot_reload;
 mod image_registry;
-mod ime_support;
+pub(crate) mod ime_support;
 pub use ime_support::{
     apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
@@ -174,6 +174,14 @@ struct App {
     scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
     /// Wake the event loop for caret blink without continuous `request_redraw`.
     caret_wake_at: Option<std::time::Instant>,
+    /// Last value passed to `Window::set_ime_allowed` (avoid per-frame ImmAssociateContextEx).
+    ime_allowed_latched: bool,
+    /// Latest `WindowEvent::Focused` for the primary window. Used to stop IME HWND
+    /// drive / re-enable while caret blink still redraws in the background.
+    os_window_focused: bool,
+    /// Soft-blur: wait before cancelling IME so clicking the candidate chrome
+    /// (which can briefly steal winit focus) does not abort composition.
+    ime_os_blur_at: Option<std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
     accesskit_adapter: Option<accesskit_winit::Adapter>,
     #[cfg(debug_assertions)]

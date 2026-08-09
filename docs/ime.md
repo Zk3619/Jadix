@@ -15,6 +15,8 @@
 | Preedit / Commit / Disabled | [`input_controller.rs`](../crates/rui/src/app/input_controller.rs) |
 | 光标区几何 + diag | [`ime_support.rs`](../crates/rui/src/app/ime_support.rs) |
 | 每帧刷新 cursor area | [`window_events.rs`](../crates/rui/src/app/window_events.rs)（redraw 后） |
+| Win 组字定位 | [`ime_support.rs`](../crates/rui/src/app/ime_support.rs)：`IMR`/Imm 锚组字起点；**仅滚动帧**候选 HWND ΔY；锚点 Y clamp 到视口（滚出窗外贴顶/底，**不失焦**）；程序内/OS 失焦：preedit 折入 value 但去掉音节分隔 `'`；结束组字用 Disabled 排空 OS 回声（非定时器）；不建系统 caret |
+| 滚动跟随几何 | 优先本帧 `text_nodes` 视觉坐标（`painted`）；焦点盒 − `scroll_acc` 为回退；`scroll:` 视口始终计入 offset |
 | Input / Textarea 信号 | [`input.rs`](../crates/rui/src/components/input.rs)、[`textarea.rs`](../crates/rui/src/components/textarea.rs) |
 
 `input:` 与 `textarea:` 共用同一套 value / preedit / caret / ime_anchor 信号键族。
@@ -71,7 +73,10 @@ RUI_IME_DIAG cursor fid=... phys=(...) scale=...
 |------|------|
 | 将 Input 放在可滚动区域（或使用含 Input 的 ScrollArea 示例） | — |
 | 聚焦 Input，开始组字（候选窗出现） | 候选窗靠近 caret |
-| **保持组字**，滚动 ScrollArea | 候选窗跟随字段/caret 移动，不留在滚动前的屏幕坐标 |
+| **保持组字**，滚动 ScrollArea | 候选窗跟随字段；焦点保持；滚动应仍可接受 |
+| 继续滚到字段**完全离开**窗口客户区 | **不失焦**；组字继续；候选停在视口顶/底缘不再跟出窗外（日志可有 `offscreen-clamp`） |
+| 点击其他输入框 / 其他组件（程序内失焦） | 强制结束组字：未上屏 preedit **折入** value，但去掉音节分隔 `'`；已上屏保留；不整框清空 |
+| 失焦 / 切走窗口 | 同上：preedit 折入（去 `'`）；已上屏保留 |
 | 改变 Windows 显示缩放（100%↔150%）后重开示例再测 | `scale` 日志变化；候选窗仍对齐（允许 ±数 px） |
 
 失败时：附 `RUI_IME_DIAG` 日志、OS/IME 名称、是否 `RUI_FORCE_SOFTWARE`，开 issue 标签 `smoke` / `ime`。
@@ -93,8 +98,8 @@ assert!(!text.is_empty());
 ## 通过标准（WP-1.1 Done）
 
 - [x] 库测 `ime_support` 绿  
-- [x] 手工：Win 上 smoke **#3** 通过（2026-08-09，Kingdom / Win 10.0.26200）  
-- [x] 手工：Win 上 smoke **#4** 通过（滚动中候选窗跟随）  
+- [x] 手工：Win 上 smoke **#3** 通过（2026-08-09，Kingdom / Win 10.0.26200；中文）  
+- [x] 手工：Win 上 smoke **#4** 通过（2026-08-10；候选跟随 + 滚出视口贴边不失焦）  
 - [ ] （可选）日文或韩文任测一组字路径  
 
 签署栏见 [desktop_smoke.md](desktop_smoke.md)。

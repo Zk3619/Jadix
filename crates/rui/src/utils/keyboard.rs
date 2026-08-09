@@ -111,9 +111,70 @@ pub fn delete_char_forward(s: &mut String, caret: usize) -> bool {
     true
 }
 
+/// Select-all range `(0, len)` on UTF-8 char boundaries (always valid for paint/clipboard).
+pub fn select_all_range(s: &str) -> Option<(usize, usize)> {
+    if s.is_empty() {
+        return None;
+    }
+    Some((0, s.len()))
+}
+
+/// Shift-extend: keep the fixed anchor, move the active end to `new_caret`.
+///
+/// When there is no selection yet, `old_caret` becomes the anchor.
+pub fn extend_selection(
+    old_caret: usize,
+    existing: Option<(usize, usize)>,
+    new_caret: usize,
+) -> (usize, usize) {
+    let anchor = match existing {
+        Some((a, b)) if a != b => {
+            let lo = a.min(b);
+            let hi = a.max(b);
+            if old_caret == hi {
+                lo
+            } else if old_caret == lo {
+                hi
+            } else {
+                old_caret
+            }
+        }
+        _ => old_caret,
+    };
+    (anchor, new_caret)
+}
+
+/// Normalize an unordered selection to `(lo, hi)` with `lo < hi`, or `None` if empty/invalid.
+pub fn normalized_selection(s: &str, sel: Option<(usize, usize)>) -> Option<(usize, usize)> {
+    let (a, b) = sel?;
+    let lo = a.min(b).min(s.len());
+    let hi = a.max(b).min(s.len());
+    let lo = s.floor_char_boundary(lo);
+    let hi = s.floor_char_boundary(hi);
+    if lo < hi {
+        Some((lo, hi))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_all_and_extend_selection() {
+        assert_eq!(select_all_range(""), None);
+        assert_eq!(select_all_range("你好"), Some((0, "你好".len())));
+        // New selection: anchor at old caret
+        assert_eq!(extend_selection(3, None, 1), (3, 1));
+        // Extend from existing: caret was at hi → keep lo
+        assert_eq!(extend_selection(5, Some((2, 5)), 7), (2, 7));
+        // Extend from existing: caret was at lo → keep hi
+        assert_eq!(extend_selection(2, Some((2, 5)), 0), (5, 0));
+        assert_eq!(normalized_selection("abcd", Some((3, 1))), Some((1, 3)));
+        assert_eq!(normalized_selection("abcd", Some((2, 2))), None);
+    }
 
     #[test]
     fn home_end_stay_on_hard_line() {

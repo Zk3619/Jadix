@@ -1,5 +1,6 @@
 use clipboard_rs::{Clipboard, ClipboardContext};
-use winit::keyboard::ModifiersState;
+use winit::event::KeyEvent;
+use winit::keyboard::{Key, KeyCode, ModifiersState, PhysicalKey};
 
 /// Windows/Linux 用 Ctrl，macOS 用 Cmd（Super）。
 pub fn shortcut_modifiers(m: &ModifiersState) -> bool {
@@ -10,6 +11,26 @@ pub fn shortcut_modifiers(m: &ModifiersState) -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         m.control_key()
+    }
+}
+
+/// Edit shortcut letter under Ctrl/Cmd: prefer `logical_key`, fall back to `physical_key`
+/// (some layouts omit `Key::Character` while the modifier is held).
+pub fn edit_shortcut_letter(event: &KeyEvent) -> Option<char> {
+    if let Key::Character(ch) = &event.logical_key {
+        let mut it = ch.chars();
+        if let (Some(c), None) = (it.next(), it.next()) {
+            if c.is_ascii_alphabetic() {
+                return Some(c.to_ascii_lowercase());
+            }
+        }
+    }
+    match event.physical_key {
+        PhysicalKey::Code(KeyCode::KeyA) => Some('a'),
+        PhysicalKey::Code(KeyCode::KeyC) => Some('c'),
+        PhysicalKey::Code(KeyCode::KeyV) => Some('v'),
+        PhysicalKey::Code(KeyCode::KeyX) => Some('x'),
+        _ => None,
     }
 }
 

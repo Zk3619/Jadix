@@ -262,6 +262,17 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Deferred IME hard-release after OS blur (see `ime_os_blur_at`).
+        if let Some(at) = self.ime_os_blur_at {
+            if at <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(at, |t| t.min(at)));
+            }
+        }
+
         // Long-press: wake at the 500ms deadline so we can synthesize ContextMenu.
         if let Some(lp) = &self.long_press {
             if !lp.fired {
@@ -454,6 +465,25 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             WindowEvent::Ime(ime) => {
                 self.handle_ime_event(ime);
             }
+            WindowEvent::Focused(focused) => {
+                let is_primary = (*self.state.borrow())
+                    .as_ref()
+                    .is_some_and(|state| state.window.id() == id);
+                if !is_primary {
+                    // ignore secondary focus for IME ownership
+                } else if focused {
+                    self.os_window_focused = true;
+                    self.ime_os_blur_at = None;
+                } else {
+                    // Defer hard release: TIP candidate UI may briefly steal focus.
+                    self.os_window_focused = false;
+                    self.ime_os_blur_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(
+                        self.ime_os_blur_at.unwrap(),
+                    ));
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let _ = self.handle_keyboard_input(event);
             }
@@ -576,6 +606,9 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         scroll_signal_key_cache: std::collections::HashMap::new(),
         scroll_diag_last_log: std::collections::HashMap::new(),
         caret_wake_at: None,
+        ime_allowed_latched: false,
+        os_window_focused: true,
+        ime_os_blur_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
         accesskit_adapter: None,
         #[cfg(debug_assertions)]

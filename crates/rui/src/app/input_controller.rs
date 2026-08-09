@@ -3,13 +3,13 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
 use crate::utils::clipboard::{
-    get_text as clipboard_get_text, sanitize_pasted_line, set_text as clipboard_set_text,
-    shortcut_modifiers as clipboard_shortcut_modifiers,
+    edit_shortcut_letter, get_text as clipboard_get_text, sanitize_pasted_line,
+    set_text as clipboard_set_text, shortcut_modifiers as clipboard_shortcut_modifiers,
 };
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{
     caret_line_end, caret_line_home, caret_move_left, caret_move_right, caret_move_vertical,
-    delete_char_forward,
+    delete_char_forward, extend_selection, normalized_selection, select_all_range,
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
@@ -32,20 +32,57 @@ impl super::App {
         let ime_active =
             crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
         let fid = focused.get();
+        let password_focus = text_edit_rest(&fid)
+            .map(|rest| input_type_for(rest).is_password())
+            .unwrap_or(false);
         match ime {
             Ime::Enabled => {
+                ime_support::clear_ime_end_drain();
+                if password_focus {
+                    // Password must stay ASCII-only; refuse OS IME association.
+                    ime_active.set(false);
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                        ime_support::set_ime_allowed_latched(
+                            &st.window,
+                            false,
+                            &mut self.ime_allowed_latched,
+                        );
+                    }
+                    if ime_support::ime_diag_enabled() {
+                        log::info!("RUI_IME_DIAG Enabled ignored (password) fid={}", fid);
+                    }
+                    return;
+                }
                 ime_active.set(true);
                 if ime_support::ime_diag_enabled() {
                     log::info!("RUI_IME_DIAG Enabled fid={}", fid);
                 }
             }
             Ime::Disabled => {
+                ime_support::clear_ime_end_drain();
                 ime_active.set(false);
                 if let Some(rest) = text_edit_rest(&fid) {
                     Self::clear_ime_compose_state(rest);
                 }
                 if ime_support::ime_diag_enabled() {
                     log::info!("RUI_IME_DIAG Disabled fid={}", fid);
+                }
+            }
+            Ime::Preedit(_, _) | Ime::Commit(_) if password_focus => {
+                // Drop composition against password fields (IME should already be disallowed).
+                if let Some(rest) = text_edit_rest(&fid) {
+                    Self::clear_ime_compose_state(rest);
+                }
+                ime_active.set(false);
+                if ime_support::ime_diag_enabled() {
+                    log::info!("RUI_IME_DIAG compose dropped (password) fid={}", fid);
+                }
+            }
+            Ime::Preedit(_, _) | Ime::Commit(_) if ime_support::ime_end_drain_active() => {
+                // App already ended composition; ignore OS CPS_CANCEL / teardown echoes
+                // until Disabled clears the drain.
+                if ime_support::ime_diag_enabled() {
+                    log::info!("RUI_IME_DIAG drop compose echo during end-drain fid={}", fid);
                 }
             }
             Ime::Preedit(s, cursor) => {
@@ -140,6 +177,7 @@ impl super::App {
         crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None).set(None);
         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>).set(None);
         crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
+        ime_support::on_ime_composition_ended();
     }
 
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
@@ -221,19 +259,16 @@ impl super::App {
                 }
 
                 if text_edit_rest(&fid).is_none() {
-                    if clipboard_shortcut_modifiers(&self.modifiers) {
-                        if let Key::Character(ch) = &event.logical_key {
-                            if ch.as_str().eq_ignore_ascii_case("c") {
-                                if let Some(st) = (*self.state.borrow()).as_ref() {
-                                    if crate::components::label::try_copy_label_selection(
-                                        &st.root_element,
-                                    ) {
-                                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                            st.window.request_redraw();
-                                        }
-                                        return true;
-                                    }
+                    if clipboard_shortcut_modifiers(&self.modifiers)
+                        && edit_shortcut_letter(&event) == Some('c')
+                    {
+                        if let Some(st) = (*self.state.borrow()).as_ref() {
+                            if crate::components::label::try_copy_label_selection(&st.root_element)
+                            {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
                                 }
+                                return true;
                             }
                         }
                     }
@@ -271,74 +306,89 @@ impl super::App {
                         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
+                    let password_field = input_type_for(rest).is_password();
                     if clipboard_shortcut_modifiers(&self.modifiers) {
-                        if let Key::Character(ch) = &event.logical_key {
-                            let k = ch.as_str();
+                        if let Some(k) = edit_shortcut_letter(&event) {
                             let mut handled = false;
                             if !composing {
-                                if k.eq_ignore_ascii_case("c") {
-                                    let s = val_sig.get();
-                                    if let Some((a, b)) = text_sel_sig.get() {
-                                        let lo = a.min(b);
-                                        let hi = a.max(b);
-                                        if lo < hi && hi <= s.len() {
-                                            clipboard_set_text(&s[lo..hi]);
-                                        }
-                                    }
-                                    handled = true;
-                                } else if k.eq_ignore_ascii_case("v") {
-                                    if let Some(text) = clipboard_get_text() {
-                                        let text = if multiline {
-                                            text.replace('\r', "")
+                                match k {
+                                    'a' => {
+                                        // Select All
+                                        let s = val_sig.get();
+                                        if let Some(range) = select_all_range(&s) {
+                                            text_sel_sig.set(Some(range));
+                                            caret_sig.set(Some(range.1));
                                         } else {
-                                            sanitize_pasted_line(&text)
-                                        };
-                                        if !text.is_empty() {
-                                            let mut s = val_sig.get();
-                                            if let Some((a, b)) = text_sel_sig.get() {
-                                                let lo = a.min(b);
-                                                let hi = a.max(b);
-                                                if lo < hi && hi <= s.len() {
-                                                    s.replace_range(lo..hi, "");
-                                                }
-                                                let mut insert_at = lo.min(s.len());
-                                                insert_at = s.floor_char_boundary(insert_at);
-                                                let text = filter_typed_insert(rest, &s, &text);
-                                                if !text.is_empty() {
-                                                    s.insert_str(insert_at, &text);
-                                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
-                                                    text_sel_sig.set(None);
-                                                    caret_sig.set(Some(insert_at + text.len()));
-                                                }
+                                            text_sel_sig.set(None);
+                                            caret_sig.set(Some(0));
+                                        }
+                                        handled = true;
+                                    }
+                                    'c' => {
+                                        // Copy (blocked for password fields)
+                                        if !password_field {
+                                            let s = val_sig.get();
+                                            if let Some((lo, hi)) =
+                                                normalized_selection(&s, text_sel_sig.get())
+                                            {
+                                                clipboard_set_text(&s[lo..hi]);
+                                            }
+                                        }
+                                        handled = true;
+                                    }
+                                    'v' => {
+                                        // Paste
+                                        if let Some(text) = clipboard_get_text() {
+                                            let text = if multiline {
+                                                text.replace('\r', "")
                                             } else {
-                                                let mut insert_at =
-                                                    caret_sig.get().unwrap_or(s.len());
-                                                insert_at = insert_at.min(s.len());
-                                                insert_at = s.floor_char_boundary(insert_at);
+                                                sanitize_pasted_line(&text)
+                                            };
+                                            if !text.is_empty() {
+                                                let mut s = val_sig.get();
+                                                let insert_at = if let Some((lo, hi)) =
+                                                    normalized_selection(&s, text_sel_sig.get())
+                                                {
+                                                    s.replace_range(lo..hi, "");
+                                                    lo
+                                                } else {
+                                                    let mut at =
+                                                        caret_sig.get().unwrap_or(s.len());
+                                                    at = at.min(s.len());
+                                                    s.floor_char_boundary(at)
+                                                };
                                                 let text = filter_typed_insert(rest, &s, &text);
                                                 if !text.is_empty() {
                                                     s.insert_str(insert_at, &text);
-                                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                                    crate::utils::text_field::commit_value_sig(
+                                                        rest, val_sig, s,
+                                                    );
+                                                    text_sel_sig.set(None);
                                                     caret_sig.set(Some(insert_at + text.len()));
                                                 }
                                             }
                                         }
+                                        handled = true;
                                     }
-                                    handled = true;
-                                } else if k.eq_ignore_ascii_case("x") {
-                                    let mut s = val_sig.get();
-                                    if let Some((a, b)) = text_sel_sig.get() {
-                                        let lo = a.min(b);
-                                        let hi = a.max(b);
-                                        if lo < hi && hi <= s.len() {
-                                            clipboard_set_text(&s[lo..hi]);
+                                    'x' => {
+                                        // Cut (blocked for password fields)
+                                        let mut s = val_sig.get();
+                                        if let Some((lo, hi)) =
+                                            normalized_selection(&s, text_sel_sig.get())
+                                        {
+                                            if !password_field {
+                                                clipboard_set_text(&s[lo..hi]);
+                                            }
                                             s.replace_range(lo..hi, "");
-                                            crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                            crate::utils::text_field::commit_value_sig(
+                                                rest, val_sig, s,
+                                            );
                                             text_sel_sig.set(None);
                                             caret_sig.set(Some(lo));
                                         }
+                                        handled = true;
                                     }
-                                    handled = true;
+                                    _ => {}
                                 }
                             }
                             if handled {
@@ -353,80 +403,117 @@ impl super::App {
                         let s = val_sig.get();
                         let caret = caret_sig.get().unwrap_or(s.len()).min(s.len());
                         let caret = s.floor_char_boundary(caret);
+                        let shift = self.modifiers.shift_key();
                         let mut nav_handled = false;
                         match &event.logical_key {
                             Key::Named(NamedKey::ArrowLeft) => {
-                                if let Some((a, b)) = text_sel_sig.get() {
-                                    let lo = a.min(b);
-                                    let hi = a.max(b);
-                                    if lo < hi {
-                                        text_sel_sig.set(None);
-                                        caret_sig.set(Some(lo));
+                                let dest = if !shift {
+                                    if let Some((a, b)) = text_sel_sig.get() {
+                                        let lo = a.min(b);
+                                        let hi = a.max(b);
+                                        if lo < hi {
+                                            lo
+                                        } else {
+                                            caret_move_left(&s, caret)
+                                        }
                                     } else {
-                                        text_sel_sig.set(None);
-                                        caret_sig.set(Some(caret_move_left(&s, caret)));
+                                        caret_move_left(&s, caret)
                                     }
                                 } else {
+                                    caret_move_left(&s, caret)
+                                };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
                                     text_sel_sig.set(None);
-                                    caret_sig.set(Some(caret_move_left(&s, caret)));
                                 }
+                                caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::ArrowRight) => {
-                                if let Some((a, b)) = text_sel_sig.get() {
-                                    let lo = a.min(b);
-                                    let hi = a.max(b);
-                                    if lo < hi {
-                                        text_sel_sig.set(None);
-                                        caret_sig.set(Some(hi));
+                                let dest = if !shift {
+                                    if let Some((a, b)) = text_sel_sig.get() {
+                                        let lo = a.min(b);
+                                        let hi = a.max(b);
+                                        if lo < hi {
+                                            hi
+                                        } else {
+                                            caret_move_right(&s, caret)
+                                        }
                                     } else {
-                                        text_sel_sig.set(None);
-                                        caret_sig.set(Some(caret_move_right(&s, caret)));
+                                        caret_move_right(&s, caret)
                                     }
                                 } else {
+                                    caret_move_right(&s, caret)
+                                };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
                                     text_sel_sig.set(None);
-                                    caret_sig.set(Some(caret_move_right(&s, caret)));
                                 }
+                                caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::Home) => {
-                                text_sel_sig.set(None);
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     0
                                 } else {
                                     caret_line_home(&s, caret)
                                 };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
                                 caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::End) => {
-                                text_sel_sig.set(None);
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     s.len()
                                 } else {
                                     caret_line_end(&s, caret)
                                 };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
                                 caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::ArrowUp) => {
-                                text_sel_sig.set(None);
                                 let dest = if multiline {
                                     caret_move_vertical(&s, caret, -1)
                                 } else {
                                     // Single-line: Up jumps to start (common field behavior).
                                     0
                                 };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
                                 caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::ArrowDown) => {
-                                text_sel_sig.set(None);
                                 let dest = if multiline {
                                     caret_move_vertical(&s, caret, 1)
                                 } else {
                                     s.len()
                                 };
+                                if shift {
+                                    text_sel_sig
+                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                } else {
+                                    text_sel_sig.set(None);
+                                }
                                 caret_sig.set(Some(dest));
                                 nav_handled = true;
                             }
@@ -468,6 +555,18 @@ impl super::App {
                         }
                     }
                     if matches!(event.logical_key, Key::Named(NamedKey::Backspace)) {
+                        if ime_support::ime_end_drain_active() {
+                            if ime_support::ime_diag_enabled() {
+                                log::info!(
+                                    "RUI_IME_DIAG drop Backspace during end-drain rest={}",
+                                    rest
+                                );
+                            }
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                            return true;
+                        }
                         let pre = preedit_sig.get();
                         if !ime_active.get() || pre.is_empty() {
                             let mut s = val_sig.get();
@@ -498,6 +597,18 @@ impl super::App {
                             }
                         }
                     } else if let Some(t) = event.text.as_ref() {
+                        if ime_support::ime_end_drain_active() {
+                            if ime_support::ime_diag_enabled() {
+                                log::info!(
+                                    "RUI_IME_DIAG drop text during end-drain rest={}",
+                                    rest
+                                );
+                            }
+                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                st.window.request_redraw();
+                            }
+                            return true;
+                        }
                         let is_nl = t.as_str() == "\r" || t.as_str() == "\n";
                         let allow = !ime_active.get()
                             && !t.is_empty()

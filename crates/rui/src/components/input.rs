@@ -16,7 +16,7 @@
 //! | 值 | 行为 |
 //! |----|------|
 //! | `text`（默认） | 明文 |
-//! | `password` | 显示为 `•`，底层仍存原文；可选 `password_toggle` 睁眼/闭眼 |
+//! | `password` | 显示为 `•`，底层仍存原文；**禁用 IME**、仅 ASCII；可选 `password_toggle` |
 //! | `number` | 仅允许数字、可选 `-` / `.`；非法非空 → 自动 invalid |
 //! | `tel` | 过滤电话字符；非空格式失败 → 自动 invalid |
 //! | `email` / `url` | 宽松字符过滤；非空格式失败 → 自动 invalid |
@@ -24,6 +24,7 @@
 //!
 //! ## 可选尾饰
 //! - `clearable`：有内容时显示叉号，点击清空。
+//! - 编辑快捷键（Ctrl/Cmd）：全选 A、复制 C、粘贴 V、剪切 X；Shift+方向键扩展选区。
 //! - `password_toggle`：仅 `type=password`；切换掩码 / 明文。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
@@ -117,6 +118,12 @@ impl InputType {
         matches!(self, Self::Tel)
     }
 
+    /// Whether OS IME (CJK composition) is allowed while this field is focused.
+    /// Password fields force ASCII and must not open a candidate window.
+    pub fn allows_ime(self) -> bool {
+        !matches!(self, Self::Password)
+    }
+
     /// 空 placeholder 时的默认提示文案。
     pub fn default_placeholder(self) -> &'static str {
         match self {
@@ -206,6 +213,14 @@ pub fn filter_url_insert(_existing: &str, insert: &str) -> String {
     insert.chars().filter(|c| c.is_ascii_graphic()).collect()
 }
 
+/// 过滤 `type="password"`：仅非控制 ASCII（禁用 IME 后的兜底）。
+pub fn filter_password_insert(_existing: &str, insert: &str) -> String {
+    insert
+        .chars()
+        .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        .collect()
+}
+
 /// 按字段 `type` 过滤插入文本。
 pub fn filter_insert_for_type(ty: InputType, existing: &str, insert: &str) -> String {
     match ty {
@@ -213,7 +228,8 @@ pub fn filter_insert_for_type(ty: InputType, existing: &str, insert: &str) -> St
         InputType::Tel => filter_tel_insert(existing, insert),
         InputType::Email => filter_email_insert(existing, insert),
         InputType::Url => filter_url_insert(existing, insert),
-        InputType::Text | InputType::Password | InputType::Search => insert.to_string(),
+        InputType::Password => filter_password_insert(existing, insert),
+        InputType::Text | InputType::Search => insert.to_string(),
     }
 }
 
@@ -698,5 +714,24 @@ pub fn apply_bound_input_disabled(el: &mut Element, disabled: bool) -> LayoutSta
 impl crate::core::tree::IntoElementList for InputBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_disallows_ime_and_filters_to_ascii() {
+        assert!(!InputType::Password.allows_ime());
+        assert!(InputType::Text.allows_ime());
+        assert_eq!(
+            filter_password_insert("", "Ab1!你'好\n\u{7f}"),
+            "Ab1!'"
+        );
+        assert_eq!(
+            filter_insert_for_type(InputType::Password, "", "pāss字"),
+            "pss"
+        );
     }
 }

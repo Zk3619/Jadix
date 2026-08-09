@@ -8,6 +8,29 @@ use super::state::ScrollbarUpdateMode;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 
 impl super::App {
+    /// Complete deferred OS-blur IME release once `ime_os_blur_at` elapses.
+    fn flush_ime_os_blur_if_due(&mut self, window: &winit::window::Window) {
+        let Some(at) = self.ime_os_blur_at else {
+            return;
+        };
+        if self.os_window_focused {
+            self.ime_os_blur_at = None;
+            return;
+        }
+        if std::time::Instant::now() < at {
+            return;
+        }
+        self.ime_os_blur_at = None;
+        log::warn!("RUI_IME_DIAG os blur hard-release (stop system IME drive)");
+        super::ime_support::on_os_focus_lost(window);
+        super::ime_support::sync_ime_focus_owner(window, None);
+        super::ime_support::set_ime_allowed_latched(
+            window,
+            false,
+            &mut self.ime_allowed_latched,
+        );
+    }
+
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId) {
         let Some(sec) = self.secondaries.get_mut(&id) else {
             return;
@@ -69,23 +92,31 @@ impl super::App {
         )
     }
 
-    /// Logical caret X inside the focused field (padding + measured prefix), for IME cursor area.
-    fn estimate_ime_caret_x_in_field(
+    /// Returns `(caret_x_in_field, compose_origin_x_in_field, line_height_logical)`.
+    fn estimate_ime_caret_geom(
         &mut self,
         focus_id: &str,
         visual: [f32; 4],
         ui_scale: f32,
-    ) -> f32 {
+        pad_override: Option<f32>,
+    ) -> (f32, f32, f32) {
+        let pad = pad_override.unwrap_or_else(|| {
+            let rb = self.state.borrow();
+            let Some(st) = rb.as_ref() else {
+                return 8.0;
+            };
+            super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+                .map(|e| match e.style.padding.left {
+                    taffy::style::LengthPercentage::Length(v) => v,
+                    taffy::style::LengthPercentage::Percent(p) => visual[2] * p,
+                })
+                .unwrap_or(8.0)
+        });
+
         let mut rb = self.state.borrow_mut();
         let Some(st) = rb.as_mut() else {
-            return 8.0;
+            return (pad, pad, 20.0);
         };
-        let pad = super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
-            .map(|e| match e.style.padding.left {
-                taffy::style::LengthPercentage::Length(v) => v,
-                taffy::style::LengthPercentage::Percent(p) => visual[2] * p,
-            })
-            .unwrap_or(8.0);
 
         let rest = super::ime_support::text_edit_rest(focus_id).unwrap_or("");
         let vk = crate::components::input::input_value_signal_key(rest);
@@ -97,15 +128,22 @@ impl super::App {
         let anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>).peek();
         let caret = crate::core::reactivity::use_signal(&ck, || None::<usize>).peek();
         let display = super::tree_hit::input_display_text(&committed, &pre, anchor);
-        let caret_byte = if !pre.is_empty() {
+        let mut compose_byte = if !pre.is_empty() {
             let mut a = anchor.unwrap_or(committed.len()).min(committed.len());
             a = committed.floor_char_boundary(a);
-            a + pre.len()
+            a
         } else {
             caret.unwrap_or(display.len()).min(display.len())
         };
+        compose_byte = display.floor_char_boundary(compose_byte.min(display.len()));
+        let caret_byte = if !pre.is_empty() {
+            (compose_byte + pre.len()).min(display.len())
+        } else {
+            compose_byte
+        };
         let caret_byte = display.floor_char_boundary(caret_byte);
-        let prefix = &display[..caret_byte];
+        let caret_prefix = &display[..caret_byte];
+        let compose_prefix = &display[..compose_byte];
 
         fn first_text_style(el: &crate::core::tree::Element) -> Option<crate::style::TextStyle> {
             if el.text.is_some() {
@@ -127,14 +165,34 @@ impl super::App {
             })
             .unwrap_or_default();
 
-        super::ime_support::estimate_caret_x_in_field(
+        let line_h = crate::utils::text_field::text_edit_line_box_px(
+            text_style.size,
+            text_style.line_height_px,
+            text_style.line_height_scale,
+        )
+        .max(1.0);
+
+        let caret_x = super::ime_support::estimate_caret_x_in_field(
             Some(st.text_renderer.font_system_mut()),
-            prefix,
+            caret_prefix,
             &text_style,
             visual,
             ui_scale,
             pad,
-        )
+        );
+        let compose_x = if compose_byte == caret_byte {
+            caret_x
+        } else {
+            super::ime_support::estimate_caret_x_in_field(
+                Some(st.text_renderer.font_system_mut()),
+                compose_prefix,
+                &text_style,
+                visual,
+                ui_scale,
+                pad,
+            )
+        };
+        (caret_x, compose_x, line_h)
     }
 
     fn find_element_by_template_id<'a>(
@@ -1070,6 +1128,19 @@ impl super::App {
                 need_paint_sync_redraw = true;
             }
 
+            // After click handlers may move focus (Button / other Input), sync IME owner
+            // immediately so in-app blur folds preedit (stripping `'`) this event — not
+            // only on the next redraw.
+            if let Some(st) = (*self.state.borrow()).as_ref() {
+                let fid = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                    .peek();
+                if super::ime_support::is_text_edit_focus(&fid) {
+                    super::ime_support::sync_ime_focus_owner(&st.window, Some(&fid));
+                } else {
+                    super::ime_support::sync_ime_focus_owner(&st.window, None);
+                }
+            }
+
             if need_paint_sync_redraw {
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
@@ -1921,12 +1992,56 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                 let fid = focused.get();
+                let ui_scale = state.ui_scale();
+                let (win_w, win_h) = {
+                    let s = state.window.inner_size();
+                    let scale = ui_scale.max(0.001);
+                    (s.width as f32 / scale, s.height as f32 / scale)
+                };
+                // Prefer painted text leaf (render_x/y already scroll-adjusted). Focus-box
+                // − scroll_acc is fallback when the leaf was culled / not collected.
                 let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
-                    super::tree_hit::find_bounds_by_focus_id(&state.root_element, &fid, [0.0, 0.0])
-                        .map(|(b, sa)| (b, sa, fid.clone()))
+                    let painted = super::ime_support::painted_text_edit_visual_bounds(
+                        &state.text_nodes,
+                        &fid,
+                    );
+                    let focus_fallback = super::tree_hit::find_bounds_by_focus_id(
+                        &state.root_element,
+                        &fid,
+                        [0.0, 0.0],
+                    );
+                    match (painted, focus_fallback) {
+                        (Some(visual), fb) => {
+                            let scroll_acc = fb.map(|(_, sa)| sa).unwrap_or([0.0, 0.0]);
+                            Some((visual, scroll_acc, fid.clone(), "painted"))
+                        }
+                        (None, Some((b, sa))) => {
+                            let visual = [
+                                b[0] - sa[0],
+                                b[1] - sa[1],
+                                b[2],
+                                b[3],
+                            ];
+                            Some((visual, sa, fid.clone(), "focus_bounds"))
+                        }
+                        (None, None) => None,
+                    }
                 } else {
                     None
                 };
+                // Browser-like: scrolling the field out of the client does **not** blur.
+                // IME anchor Y is clamped to the viewport later (candidate sticks to top/bottom).
+                if let Some((visual, _, ref off_fid, _)) = ime_data.as_ref() {
+                    if super::ime_support::visual_fully_outside_window(*visual, win_w, win_h) {
+                        log::warn!(
+                            "RUI_IME_DIAG offscreen-clamp fid={off_fid} visual=({:.1},{:.1} {:.1}x{:.1}) win={win_w:.0}x{win_h:.0}",
+                            visual[0],
+                            visual[1],
+                            visual[2],
+                            visual[3]
+                        );
+                    }
+                }
                 // Blink wake must follow painted carets, not only IME geometry. If
                 // `find_bounds_by_focus_id` misses for a frame, clearing `caret_wake_at`
                 // freezes the caret in its current on/off phase forever.
@@ -1934,8 +2049,6 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .text_nodes
                     .iter()
                     .any(|n| n.style.input_caret.is_some());
-
-                let ui_scale = state.ui_scale();
 
                 drop(re_borrow); // CRITICAL: Free the borrow before updating signals!
 
@@ -2332,40 +2445,117 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     None => window.set_cursor(CursorIcon::Default),
                 }
 
-                if let Some((bounds, scroll_acc, fid_clone)) = ime_data {
-                    window.set_ime_allowed(true);
-                    // Visual field (logical) after ancestor scroll — refreshed every redraw so
-                    // ScrollArea motion / HiDPI `scale_factor` keep the OS IME window on the caret.
-                    let visual = [
-                        bounds[0] - scroll_acc[0],
-                        bounds[1] - scroll_acc[1],
-                        bounds[2],
-                        bounds[3],
-                    ];
-                    let caret_x_in_field =
-                        self.estimate_ime_caret_x_in_field(&fid_clone, visual, ui_scale);
-                    let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
-                        visual,
-                        caret_x_in_field,
-                        ui_scale,
-                    );
-                    window.set_ime_cursor_area(
-                        winit::dpi::PhysicalPosition::new(px, py),
-                        winit::dpi::PhysicalSize::new(pw, ph),
-                    );
-                    super::ime_support::record_ime_cursor(super::ime_support::ImeCursorSnapshot {
-                        focus_id: fid_clone,
-                        physical_x: px,
-                        physical_y: py,
-                        physical_w: pw,
-                        physical_h: ph,
-                        ui_scale,
-                        visual_x: visual[0],
-                        visual_y: visual[1],
-                        caret_x_in_field,
-                    });
+                // Soft-blur (`ime_os_blur_at`): do not cancel yet — TIP candidate click can
+                // briefly steal winit focus. Hard release runs after the deadline.
+                self.flush_ime_os_blur_if_due(&window);
+                if let Some((visual, scroll_acc, fid_clone, source)) = ime_data {
+                    if self.os_window_focused {
+                        let allow_ime = super::ime_support::text_edit_rest(&fid_clone)
+                            .map(|rest| {
+                                let key = crate::components::input::input_type_signal_key(rest);
+                                let raw = crate::core::reactivity::use_signal(&key, || {
+                                    crate::components::input::InputType::Text.as_str().to_string()
+                                })
+                                .peek();
+                                crate::components::input::InputType::parse(&raw).allows_ime()
+                            })
+                            .unwrap_or(true);
+                        // Keep focus-owner sync even for password (field-switch cancel);
+                        // only `set_ime_allowed` / cursor drive depend on `allows_ime`.
+                        super::ime_support::sync_ime_focus_owner(&window, Some(&fid_clone));
+                        super::ime_support::set_ime_allowed_latched(
+                            &window,
+                            allow_ime,
+                            &mut self.ime_allowed_latched,
+                        );
+                        if allow_ime {
+                            // Painted leaf is already inset; skip outer padding so caret_x is relative to
+                            // the text box. Focus-bounds fallback still needs field padding.
+                            let pad_zero = source == "painted";
+                            let (caret_x_in_field, compose_x_in_field, line_h) = self
+                                .estimate_ime_caret_geom(
+                                    &fid_clone,
+                                    visual,
+                                    ui_scale,
+                                    if pad_zero { Some(0.0) } else { None },
+                                );
+                            // IME caret box = text line, not the whole field chrome (avoids huge
+                            // vertical gap under the input / wrong cLineHeight for TIP).
+                            let caret_visual_y = super::ime_support::clamp_ime_anchor_y(
+                                visual[1] + (visual[3] - line_h).max(0.0) * 0.5,
+                                line_h,
+                                win_h,
+                            );
+                            let compose_visual_x = (visual[0] + compose_x_in_field)
+                                .clamp(0.0, (win_w - 1.0).max(0.0));
+                            let caret_w = 2.0_f32.max(1.0 / ui_scale.max(0.001));
+                            let composing = {
+                                let rest = super::ime_support::text_edit_rest(&fid_clone);
+                                rest.map(|r| {
+                                    let pk =
+                                        crate::components::input::input_preedit_signal_key(r);
+                                    let pre =
+                                        crate::core::reactivity::use_signal(&pk, String::new)
+                                            .peek();
+                                    let active = crate::core::reactivity::use_signal(
+                                        crate::components::IME_ACTIVE_SIGNAL,
+                                        || false,
+                                    )
+                                    .peek();
+                                    active && !pre.is_empty()
+                                })
+                                .unwrap_or(false)
+                            };
+                            // IME area / candidate anchor = composition origin (not the advancing
+                            // insert caret — that caused horizontal candidate creep while typing).
+                            let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
+                                [visual[0], caret_visual_y, visual[2], line_h],
+                                compose_x_in_field,
+                                ui_scale,
+                            );
+                            super::ime_support::apply_ime_cursor_area(
+                                &window,
+                                compose_visual_x,
+                                caret_visual_y,
+                                caret_w,
+                                line_h,
+                                ui_scale,
+                                scroll_acc,
+                                composing,
+                            );
+                            super::ime_support::record_ime_cursor(
+                                super::ime_support::ImeCursorSnapshot {
+                                    focus_id: fid_clone,
+                                    physical_x: px,
+                                    physical_y: py,
+                                    physical_w: pw,
+                                    physical_h: ph,
+                                    ui_scale,
+                                    visual_x: visual[0],
+                                    visual_y: caret_visual_y,
+                                    caret_x_in_field,
+                                    source,
+                                    scroll_acc_y: scroll_acc[1],
+                                },
+                            );
+                        }
+                    } else if self.ime_os_blur_at.is_some() {
+                        // Soft blur: Win IME path already refuses foreign-app HWND moves.
+                    } else {
+                        super::ime_support::sync_ime_focus_owner(&window, None);
+                        super::ime_support::set_ime_allowed_latched(
+                            &window,
+                            false,
+                            &mut self.ime_allowed_latched,
+                        );
+                    }
                 } else {
-                    window.set_ime_allowed(false);
+                    super::ime_support::sync_ime_focus_owner(&window, None);
+                    super::ime_support::set_ime_allowed_latched(
+                        &window,
+                        false,
+                        &mut self.ime_allowed_latched,
+                    );
                 }
 
                 // Caret blink: wake ~once per phase (~520ms), not every frame.
