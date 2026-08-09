@@ -90,7 +90,7 @@
 - [`use_scoped_signal`](../crates/rui/src/core/reactivity.rs)：键相对 owner path。
 - [`use_signal`](../crates/rui/src/core/reactivity.rs)：**保留全局键**（Input 焦点、滚动等需跨 rebuild 存活）。
 
-**仍开放**：`anchor_id` / `template_id` / `focus_id` 等 UI 层字符串仍扁平。
+**仍开放**：`anchor_id` / `template_id` / `focus_id` 等 UI 层字符串仍扁平。跨层身份契约与空串/a11y 事故原型见 [`element_identity.md`](element_identity.md)。
 
 ### 3.3 样式交互态无声明式出口 — ✅ 已解决（阶段二）
 

@@ -33,7 +33,7 @@
 - [ ] 稳定面候选的 **P0 阻断**（崩溃、无法开合、无法输入、布局塌缩）已修或降出稳定面  
 - [ ] 至少 **Button · Input · Dialog · Tabs · Checkbox|Switch** 有：headless 可构建布局测 **或** Gallery 手工清单勾选 **或** 已有库测  
 - [ ] 已知 diagnose 类问题（如 showcase 塌缩）有结论：已修 / 有测锁定 / 降级  
-- [ ] **`id` 身份卫生**：稳定候选已按规范 §4.2 分类（必填实例键 / 可选 / 展示型不要求）；审计见 C-WP-V.5  
+- [ ] **`id` 身份卫生**：稳定候选已按 [`element_identity.md`](element_identity.md) / 规范 §4.2 分类（必填实例键 / 可选 / 展示型不要求）；空串不写入 `focus_id`/`template_id`；审计见 C-WP-V.5  
 
 **硬退出（组件库专项 DoD）**：
 
@@ -50,15 +50,15 @@
 
 | 项 | 事实 |
 |----|------|
-| 组件模块 | `components/` **45** 个模块（含 `mod.rs` 共 46 文件）；私有 `dialog_shell` / `text_edit` 不计入产品面 |
+| 组件模块 | `components/` **45** 个公开模块；私有壳在 `components/internal/`（`dialog_shell` / `text_edit`）不计入产品面 |
 | 自动化覆盖 | `crate_tests/`：reactive / layout / components（Button·Input·Textarea）/ interaction；**多数组件仍无行为/像素验收** |
 | Golden | 仅 2 个 offscreen fixtures；**缺** Button/Input/Dialog/… 组件场景矩阵 |
 | 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖**；三平台未签署 |
 | 原语 | `primitives/`：box / interactive / overlay / text / path / portal；**无**独立 toggle 模块 |
-| 浮层 | `utils/popup.rs` 统一 placement；`dialog_shell` 共享 Dialog/AlertDialog 模态壳；开合状态仍多在各组件 |
+| 浮层 | `utils/popup.rs` 统一 placement；`components/internal/dialog_shell` 共享 Dialog/AlertDialog 模态壳；开合状态仍多在各组件 |
 | 主题 | `style/theme.rs` + `color_space.rs` 对齐 shadcn v4 OKLCH；light/dark（见 [`color.md`](color.md)） |
 | Gallery | 八分区**已落地**（与总计划 WP-3.1 同步 ☑）；示例侧常堆 `gal-*` **id**（示范习惯 ≠ API 必填） |
-| **身份债** | 多数 Builder 首位强制 `id`；全局 `use_signal("{id}__…")` 把实例键与 focus/锚点揉在一起 → 规范 §4.2 / C-WP-V.5 |
+| **身份债** | 多数 Builder 首位强制 `id`；空串/`template_id` 曾致 AccessKit 重复 NodeId；全局 `use_signal("{id}__…")` 揉焦点/锚点 → [`element_identity.md`](element_identity.md) / C-WP-V.5 / C-WP-2.6 / 总计划 WP-2.4 |
 | 总计划重叠 | W1 焦点/a11y；W2 golden；W3 Gallery/选器/浮层打磨；W4 发布与索引 |
 | CV 门禁 | **未通过**（C-WP-0.2 / V.* 仍 ☐）→ **禁止**开 C1 大重构 |
 
@@ -181,11 +181,11 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | 规范 §4.2；`components/*` Builder 签名；Gallery |
-| **任务** | ① 表列：各组件 `id` 是必填 / 可选 / 仅内部；实际用于信号键 / focus / 锚点 / 无；② 标出「展示型却强制 id」与「空 id 自动生成但不稳定」清单；③ Gallery 走查时记录「仅因示范而写的 id」——不把示范习惯写成 API 要求 |
-| **验收** | 审计表进 `docs/component_inventory.md` 或规范附录；CV 门禁增加：稳定候选的 id 策略已分类 |
+| **路径** | [`element_identity.md`](element_identity.md)；规范 §4.2；`components/*` Builder 签名；Gallery |
+| **任务** | ① 表列：各组件 `id` 是必填 / 可选 / 仅内部；实际用于信号键 / focus / template / 锚点 / 无；② 标出「展示型却强制 id」「空 id → `Some("")` 写入 focus/template」「空 id 自动生成但不稳定」清单；③ Gallery 走查时记录「仅因示范而写的 id」——不把示范习惯写成 API 要求；④ 对照身份契约 I-1～I-3 标 P0 |
+| **验收** | 审计表进 `docs/component_inventory.md` 或规范附录；CV 门禁增加：稳定候选的 id 策略已分类；P0 空串写入项有修或降级 |
 | **状态** | ☐ |
-| **对齐** | 规范 §4.2 |
+| **对齐** | [`element_identity.md`](element_identity.md) §8；规范 §4.2 |
 
 **CV 退出**：§0.1 门禁全勾（含身份审计分类）；方可进入 C1。C2 仅处理 `verified` / 无 P0 的候选。
 
@@ -200,10 +200,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`app/portal_overlay`、`dialog_shell`、Dialog / Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
-| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、`dialog_shell`；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
+| **路径** | `utils/popup.rs`、`app/portal_overlay`、`components/internal/dialog_shell`、Dialog / Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
+| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、`internal/dialog_shell`；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
 | **验收** | 审计表关闭或仅剩标注实验；Escape 顶层单测或 smoke 条目 |
-| **状态** | ☐（**前置：CV 通过**）placement/`dialog_shell` 已存在；契约审计与冒烟未关门 |
+| **状态** | ☐（**前置：CV 通过**）placement/`internal/dialog_shell` 已存在；契约审计与冒烟未关门 |
 | **对齐** | 总计划 WP-1.2、WP-3.4 |
 
 ### C-WP-1.2 Toggle / 布尔控件 headless 抽取
@@ -215,12 +215,12 @@ flowchart TB
 | **验收** | 三控件共享测例；规范 §2.1「禁止扩散」满足 |
 | **状态** | ☐ |
 
-### C-WP-1.3 Roving + FocusTrap 产品化
+### C-WP-1.3 Roving + focus_trap 产品化
 
 | | |
 |--|--|
-| **路径** | `utils/roving.rs`、`components/focus_trap.rs`、Tabs / Menubar / Command / Combobox |
-| **任务** | ① roving 单测进 `cargo test -p rui --lib`；② FocusTrap 与 Dialog/Sheet 接线文档化；③ focus_id 前缀表写入 `keyboard_nav.md` |
+| **路径** | `utils/roving.rs`、`utils/focus_trap.rs`、Tabs / Menubar / Command / Combobox |
+| **任务** | ① roving 单测进 `cargo test -p rui --lib`；② `sync_focus_trap` 与 Dialog/Sheet 接线文档化；③ focus_id 前缀表写入 `keyboard_nav.md` |
 | **验收** | 总计划 WP-1.2 验收合并勾选 |
 | **状态** | ☐ |
 | **对齐** | WP-1.2 |
@@ -229,10 +229,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `accesskit_bridge.rs`、Button、Input、Tabs、（Menu 或 Combobox 择一） |
-| **任务** | Role / 名称 / 值；读屏复现步骤文档 |
-| **验收** | 与总计划 WP-1.3 同一验收 |
-| **状态** | ☐ |
+| **路径** | `a11y/bridge.rs`、Button、Input、Tabs、（Menu 或 Combobox 择一）；[`element_identity.md`](element_identity.md) |
+| **任务** | Role / 名称 / 值；可聚焦控件非空唯一 `focus_id`（契约 I-3）；读屏复现步骤文档 |
+| **验收** | 与总计划 WP-1.3 同一验收；空串/复用 template 库测仍绿 |
+| **状态** | ☐（桥+主路径 Role 多随 WP-1.3；组件身份卫生仍挂 V.5/2.6） |
 
 **C1 退出**：浮层单一路径；布尔控件共享状态原语；roving/trap/a11y 主路径可演示。
 
@@ -293,11 +293,12 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | 规范 §4.2；C-WP-V.5 审计表；优先 Progress / Navbar / Chart / 纯展示 Label 路径 |
-| **任务** | ① 展示型：`id` 改为可选或移除首位必参；② 有状态：文档区分「实例键」与 `focus_id`；能受控则不强迫 id；③ 推动内部信号迁 `use_scoped_signal`（或等价 Owner 键）的试点（Button hover 键或 Toggle 择一）；④ Gallery 删掉无必要的 `gal-*` id |
-| **验收** | 至少 2 个原「无故必填 id」的稳定面组件改为可选；规范示例不再教「每个控件都写 id」；试点有测 |
+| **路径** | [`element_identity.md`](element_identity.md)；规范 §4.2；C-WP-V.5 审计表；优先 Progress / Navbar / Chart / 纯展示 Label 路径 |
+| **任务** | ① 展示型：`id` 改为可选或移除首位必参；② 有状态：文档区分「实例键」与 `focus_id`；能受控则不强迫 id；③ **空串**：一律自动非空键或不写 focus/template（契约 I-1 / I-6）；④ 推动内部信号迁 `use_scoped_signal`（或等价 Owner 键）的试点（Button hover 键或 Toggle 择一）；⑤ Gallery 删掉无必要的 `gal-*` id |
+| **验收** | 至少 2 个原「无故必填 id」的稳定面组件改为可选；稳定候选无 `Some("")` focus/template；规范示例不再教「每个控件都写 id」；试点有测 |
 | **状态** | ☐ |
 | **前置** | C-WP-V.5 |
+| **对齐** | 总计划 WP-2.4（scoped）；WP-1.3 桥防御测不得回退 |
 
 **C2 退出**：词汇表发布；token/受控无结构性例外；双书写面审计闭环；身份收敛至少完成审计表中的 P0 展示型项。
 
@@ -417,7 +418,7 @@ flowchart TB
 
 1. 争议先改 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) / ADR，再写代码。**ADR-9（双书写面）** 与 ADR-6 同级。  
 2. **验证优先于抽象**：没有复现笔记或测的「重构顺手修」默认拒绝合入稳定路径。  
-3. **身份卫生**：新 API 默认不把用户 `id` 设为必填；全局 `use_signal("{id}__…")` 须在 `//!` 写明多实例契约（规范 §4.2）。  
+3. **身份卫生**：新 API 默认不把用户 `id` 设为必填；空串不得写入 `focus_id`/`template_id`；全局 `use_signal("{id}__…")` 须在 `//!` 写明多实例契约（[`element_identity.md`](element_identity.md)、规范 §4.2）。  
 4. 新浮层控件不接受「先打补丁坐标、后接 popup」的长期状态。  
 5. 稳定面变更必须有测或 smoke 条目；新 props 默认双入口（标签 + Builder）。  
 6. 修不好的候选 **降级**，不阻塞 Beta。  
@@ -433,7 +434,8 @@ ENGINEERING_GRADE_FRAMEWORK.md
 ENGINEERING_IMPLEMENTATION_PLAN.md   ← 巩固期总 WP（★执行源）
 COMPONENT_LIBRARY.md                 ← 组件权威规范
 COMPONENT_LIBRARY_PLAN.md            ← 本文件（含 CV 门禁）
-headless.md / custom_components.md / keyboard_nav.md / color.md
+element_identity.md                  ← 跨层身份契约（与 C-WP-V.5 / 2.6、WP-2.4 同步）
+headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
 archive/                             ← 选型与早期随笔（已冻结）
 ```
 

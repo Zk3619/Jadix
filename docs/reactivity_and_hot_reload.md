@@ -73,6 +73,8 @@ Grid drag / Navigator / VirtualList / Portal 等拓扑变化场景继续用结�
 
 需要热重载或长期稳定 reconcile 的区块写显式 `reactive!("my_feature:block", || ...)`。
 
+`template_id` 是**槽位**身份，不是 AccessKit / 焦点全局主键；空串与四轴拆分见 [`element_identity.md`](element_identity.md)。
+
 ## 相关源码
 
 - [app/reactive.rs](../crates/rui/src/app/reactive.rs)

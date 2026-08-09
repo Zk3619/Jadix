@@ -5,7 +5,7 @@
 > **底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`（禁区见纲领 §7）。  
 > **日期**：2026-08-09（基线与进度相对 2026-08-07 刷新）  
 
-交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
+交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
 
 ---
 
@@ -30,7 +30,7 @@
 
 | 项 | 事实 |
 |----|------|
-| 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有 `dialog_shell` / `text_edit` |
+| 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有壳 `components/internal/{dialog_shell,text_edit}` |
 | 响应式 | ErrorBoundary / `switch_reactive` / `on_mount` / Store produce **已有**；`REGISTERED_*`→Owner 仍开放 |
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
 | Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
@@ -86,7 +86,7 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `style/focus_ring.rs`、`style/theme.rs`、`utils/roving.rs`、`components/focus_trap.rs`、Combobox / ContextMenu / Menubar / Tabs |
+| **路径** | `style/focus_ring.rs`、`style/theme.rs`、`utils/roving.rs`、`utils/focus_trap.rs`、Combobox / ContextMenu / Menubar / Tabs |
 | **任务** | ① 可聚焦控件默认 `focus-visible` 环（ring token）；② 应用级 Tab 序文档化；③ 列表/菜单 roving 单测；④ Escape 仅关顶层浮层契约测 |
 | **验收** | smoke #5–#7；roving 单测进 `cargo test -p rui --lib` |
 | **状态** | ☑ 代码+库测已合入；☑ Win 开发机 smoke #5–#7 签署（2026-08-09，Kingdom / Win 10.0.26200；Hard 外侧环 + Tab 重绘；`focus_ring` / `roving` / Esc 契约测绿）；☐ macOS / Linux 待 WP-1.4 |
@@ -96,11 +96,11 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `accesskit_bridge.rs`、Input / Button / Combobox（或 Menu） |
+| **路径** | `a11y/bridge.rs`、Input / Button / Combobox（或 Menu） |
 | **任务** | ① TextField / Button / ListBox 或 Menu Role 正确；② 焦点与 Action 同步；③ 文档：一条读屏复现步骤（Narrator / VoiceOver / Orca 任选） |
 | **验收** | smoke #9 至少一平台签署；`docs/desktop_smoke.md` 或新 `docs/a11y_smoke.md` 写清步骤 |
-| **状态** | ☑ 代码+库测+文档已合入（TextInput/Button/ComboBox/ListBox/Menu* Role；Focus/Click；placeholder/`aria-label` 名；[a11y_smoke.md](a11y_smoke.md) Narrator 步骤）；☐ Win Narrator smoke #9 待签署 |
-| **进展** | Gallery `gal-s2-input-a` 带 `aria_label="Gallery demo name"` 供 #9 |
+| **状态** | ☑ 桥迁 `a11y/` + 库测 + 文档（Role/Focus/Click；空/`template_id` path 消歧）；☐ Win Narrator smoke #9 待签署 |
+| **进展** | Gallery `gal-s2-input-a` + [a11y_smoke.md](a11y_smoke.md)；**边界**：本 WP = 桥防御与读屏主路径；组件空 id / 强制 id 收敛 → [element_identity.md](element_identity.md) + C-WP-V.5/2.6（非本 WP） |
 
 ### WP-1.4 三平台真窗口冒烟签署
 
@@ -152,9 +152,9 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `app/reactive.rs`（`REGISTERED_ANCHORS` / `REGISTERED_BINDINGS`）、`core/reactivity.rs` |
-| **任务** | ① 注册表条目随 owner dispose 移除（已有部分 `on_cleanup`，审计全覆盖）；② 辅助 API：scoped `template_id` / `focus_id`（owner path 前缀）；③ 长会话反复挂载/卸载无表膨胀测 |
-| **验收** | dispose 后 registry 不含键；文档更新 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) |
+| **路径** | `app/reactive.rs`（`REGISTERED_ANCHORS` / `REGISTERED_BINDINGS`）、`core/reactivity.rs`；契约 [element_identity.md](element_identity.md) |
+| **任务** | ① 注册表条目随 owner dispose 移除（已有部分 `on_cleanup`，审计全覆盖）；② 辅助 API：scoped `template_id` / `focus_id`（owner path 前缀）；③ 长会话反复挂载/卸载无表膨胀测；④ 与组件 C-WP-2.6 对齐：减少全局 `"{id}__…"` 与空串身份 |
+| **验收** | dispose 后 registry 不含键；文档更新 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) + [element_identity.md](element_identity.md) §7 |
 | **状态** | ☐ |
 
 ### WP-2.5 Store / Resource 契约加固
@@ -215,10 +215,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`dialog_shell` |
+| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`components/internal/dialog_shell` |
 | **任务** | 与 WP-1.2/1.3 对齐：焦点陷阱、类型即搜（Command）、菜单 Role；Dialog 走共享壳 |
 | **验收** | smoke #6–#7 + Command 打开关闭单测或手工清单项 |
-| **状态** | ☐ popup/Esc/`dialog_shell` 已有；产品化打磨未关门 |
+| **状态** | ☐ popup/Esc/`internal/dialog_shell` 已有；产品化打磨未关门 |
 
 ### WP-3.5 Router + 次窗协作
 
@@ -394,8 +394,9 @@ ENGINEERING_GRADE_FRAMEWORK.md     ← 为何 / 门槛 / 禁区（纲领）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：WP / 波次 / DoD（★执行源）
 COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + headless 骨架）
 COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
+element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
-PUBLISH.md / desktop_smoke.md / ime.md
+PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md
 headless.md / custom_components.md / color.md / keyboard_nav.md
 archive/                           ← 选型与早期随笔（已冻结）
 ```

@@ -10,7 +10,7 @@
 | 层级 | 路径 | 职责 | 禁止 |
 |------|------|------|------|
 | 布局 / 交互原语 | `crates/rui/src/primitives/` | `box`/`hstack`/`vstack`/`gstack`、`interactive`、`overlay`、`text`/`icon`、`path`、`Portal` | 不写配色、圆角、阴影等视觉常量 |
-| 行为工具 | `crates/rui/src/utils/` | **`popup`**（浮层几何 / underlay）、`roving`、`keyboard`、`text_field` 等 | 不绑定某一组件的外观变体 |
+| 行为工具 | `crates/rui/src/utils/` | **`popup`**（浮层几何 / underlay）、`roving`、`focus_trap`、`keyboard`、`text_field` 等 | 不绑定某一组件的外观变体 |
 | 设计令牌 | `crates/rui/src/tokens/` + `style/theme` + `style/color_space` | 语义色、间距、圆角等可主题化数值 | 不包含业务逻辑 |
 | 样式组件 | `crates/rui/src/components/` | 组合原语 + 令牌 + utils，形成 ShadCN 风格外观 | 不把复杂状态机永久只藏在样式层 |
 
@@ -21,7 +21,7 @@
 | `toggle` 布尔状态 | 仍在 `components/{toggle,checkbox,switch}` | C-WP-1.2 下沉到 `primitives/` 或 `utils/toggle_state` |
 | `popup` 开合契约 | 几何在 `utils/popup`；开合多内嵌各组件 | C-WP-1.1 固化唯一路径 |
 
-用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。私有壳（`text_edit/`、`dialog_shell/`）不是公开无头 API。
+用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。私有壳（`components/internal/{text_edit,dialog_shell}`）不是公开无头 API。
 
 ## 受控与非受控
 
@@ -47,11 +47,11 @@
 
 ## 无障碍（AccessKit）
 
-`crates/rui/src/accesskit_bridge.rs` 提供 `tree_update_from_elements(root, focused_fid)`，从带 `focus_id` 的控件生成扁平 `TreeUpdate`（窗口根 + 焦点部件）。**运行时**已在 `app::lifecycle` 中接入 `accesskit_winit::Adapter`（窗口首帧不可见创建适配器后再 `set_visible`），并于每帧 `render` 成功后 `update_if_active` 同步树；`TextInput` 角色映射依赖 `input:` 前缀的 `focus_id` 与输入值信号。
+`crates/rui/src/a11y/bridge.rs`（[`rui::a11y`](../crates/rui/src/a11y/mod.rs)）提供 `tree_update_from_elements(root, focused_fid)`，从带 `focus_id` 的控件生成层级 `TreeUpdate`（窗口根 + 焦点部件）。**运行时**已在 `app::lifecycle` 中接入 `accesskit_winit::Adapter`（窗口首帧不可见创建适配器后再 `set_visible`），并于每帧 `render` 成功后 `update_if_active` 同步树；`TextInput` 角色映射依赖 `input:` 前缀的 `focus_id` 与输入值信号。
 
 Tabs headless 条带的 `focus_id` 使用前缀 `tabstrip:`（常量 `components::tabs::TABSTRIP_FOCUS_PREFIX`），无障碍树中映射为 **TabList**。
 
-细粒度响应式与热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。键盘 / FocusTrap 见 [keyboard_nav.md](keyboard_nav.md)。
+细粒度响应式与热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。键盘 / `utils/focus_trap` 见 [keyboard_nav.md](keyboard_nav.md)。
 
 ## 无窗口布局测试
 

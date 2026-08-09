@@ -10,7 +10,7 @@ pub mod style;
 /// 兼容旧路径 `crate::render::*`。
 pub use renderer as render;
 
-pub mod accesskit_bridge;
+pub mod a11y;
 pub mod app;
 pub mod components;
 pub(crate) mod debug_stack;

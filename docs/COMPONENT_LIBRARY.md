@@ -2,10 +2,10 @@
 
 > **文档地位**：组件产品面的**单一权威规范**。选型、分层、API 契约、清单与质量门以本文为准。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；执行排期见 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)；与巩固期总计划 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 并行，不另开架构分叉。  
-> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils,dialog_shell,text_edit}`、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
+> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
 > **日期**：2026-08-09  
 
-交叉文档：[`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md)
+交叉文档：[`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
 
 ---
 
@@ -18,7 +18,7 @@
 |----|------|------|----------|
 | 产品面 | shadcn：`variant` / `size` / token 色 / 焦点环 | `components/` | **是**（prelude / Gallery / 文档索引） |
 | 书写面 | A: `ui!` 标签 · B: `*Builder` 链式 | 宏展开 ≡ Builder → `Element` | **双轨兼容**（见 §3） |
-| 行为面 | radix：开合、roving、trap、受控 Signal | `primitives/` + `utils/{popup,roving,keyboard}` | 高级 / 自定义组件 |
+| 行为面 | radix：开合、roving、trap、受控 Signal | `primitives/` + `utils/{popup,roving,focus_trap,keyboard}` | 高级 / 自定义组件 |
 | 语义面 | 设计令牌 + Theme light/dark | `style/theme.rs` + `tokens/` + `rui_style_tokens` | 换肤与 chrome 同源 |
 
 ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写面兼容）— **接受，不可再分叉**。
@@ -50,13 +50,13 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
             │  组合
      ┌──────┼──────────────────┐
      ▼      ▼                  ▼
- primitives/  tokens/     utils/popup·roving·keyboard·text_field
+ primitives/  tokens/     utils/popup·roving·focus_trap·keyboard·text_field
  (布局叶子)   (语义色)     (浮层几何 / 键盘 / 文本编辑共享)
      │
      ▼
  style/theme + color_space(OKLCH) + utility 变体 + focus_ring
 
- 私有（非产品面）：text_edit/ · dialog_shell/
+ 私有（非产品面）：components/internal/{text_edit,dialog_shell}
 ```
 
 ### 2.1 职责与禁区
@@ -64,10 +64,10 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal` | 写死 primary 色、圆角、阴影等视觉常量 |
-| 行为工具 | `utils/popup.rs`、`roving.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、键路由、受控文本写入 | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入 | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
-| 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；塞非产品私有实现 |
-| 私有壳 | `text_edit/`、`dialog_shell/`（`pub(crate)`） | Input/Textarea chrome；Dialog/AlertDialog 共享模态壳 | 当作公开 API 文档化或 prelude 导出 |
+| 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
+| 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dialog/AlertDialog 模态壳（`dialog_shell`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime |
 
 现状缺口（须按计划下沉，见实施计划 C-WP）：
 
@@ -147,7 +147,8 @@ Element::from(
 
 ### 4.2 身份与状态（`id` 勿过度使用）
 
-> **现状判断**：多数 Builder 把 `id: impl Into<String>` 当作**首位必参**，Gallery 也充满 `gal-*` 字符串。这把「实例键 / 焦点 / 信号命名空间 / 测试选择器」揉进同一个 prop，造成**过度使用 `id`**。下文为权威纠偏；实现分期收敛见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) **C-WP-V.5 / C-WP-2.6**。
+> **跨层权威契约**：不变量、AccessKit 派生、组件/宏/框架职责与事故原型见 **[`element_identity.md`](element_identity.md)**（本文仅组件 API 摘要）。  
+> **现状判断**：多数 Builder 把 `id: impl Into<String>` 当作**首位必参**，Gallery 也充满 `gal-*` 字符串。这把「实例键 / 焦点 / 信号命名空间 / 测试选择器」揉进同一个 prop，造成**过度使用 `id`**；空串写入 `template_id`/`focus_id` 曾导致读屏树重复 `NodeId` 崩溃。实现分期收敛见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) **C-WP-V.5 / C-WP-2.6** 与总计划 **WP-2.4**。
 
 #### 4.2.1 四条身份轴（禁止混为一谈）
 
@@ -155,11 +156,12 @@ Element::from(
 |----|------|----------|--------------|
 | **实例键 / 信号命名空间** | 非受控 `use_signal`、hover spring、`{id}__open` 等全局表键 | 今日多由组件 `id` 派生 | 仅多实例或跨子树持久时需要稳定键 |
 | **`focus_id`** | Tab / 点击焦点、AccessKit、浮层 `anchor` | `Element.focus_id`；常带前缀（`input:`、`tabstrip:`） | 需要可编程焦点或 a11y 名时 |
-| **`template_id`** | 热重载 / `reactive!` 子树身份 | 宏或 `reactive!(id, …)` | 热补丁或显式 anchor 时 |
+| **`template_id`** | 热重载 / `reactive!` **槽位** reconcile（≠ 全局 a11y 主键） | 宏或 `reactive!(id, …)` | 热补丁或显式 anchor 时 |
 | **测试 / 调试选择器** | 自动化点选、日志 | 可与上重合，**非**每个控件必填 | 测试需要时 |
 
 **禁止**：为「看起来像 HTML」而给每个静态 Label / 布局壳强行编造 `id`。  
-**禁止**：文档暗示「不用 id 就不合法」——`Separator` / `Card` 等无状态控件已证明可以没有用户 `id`。
+**禁止**：文档暗示「不用 id 就不合法」——`Separator` / `Card` 等无状态控件已证明可以没有用户 `id`。  
+**禁止**：`id == ""` 原样写入 `Some("")` 的 `focus_id` / `template_id`（见身份契约 I-1）。
 
 #### 4.2.2 何时**需要**稳定用户可见 `id`（或等价实例键）
 
@@ -221,7 +223,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 - 统一：`utils/popup` 的 `mark_floating` / placement / underlay；`app::portal_overlay` Esc 栈。  
 - Escape **只关顶层**；点击外部关闭与受控 `open` 信号单一写入点。  
-- 打开时焦点陷阱（`FocusTrap`）与关闭后焦点归还须可测或可冒烟。
+- 打开时焦点陷阱（`utils::sync_focus_trap` / `activate_focus_trap`）与关闭后焦点归还须可测或可冒烟。
 
 ### 4.5 无障碍最低集
 
@@ -233,7 +235,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Checkbox / Switch | 可 toggled |
 | 菜单 / Command / Combobox | 打开关闭 + 键盘移动（深化见巩固期 WP） |
 
-细节实现以 `accesskit_bridge.rs` 为准；新增前缀必须同时改 bridge 与本文或 `keyboard_nav.md`。
+细节实现以 `a11y/bridge.rs` 为准；新增前缀必须同时改 bridge 与本文或 `keyboard_nav.md`。
 
 ---
 
@@ -247,13 +249,13 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |------|----------------------------|----------|
 | **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label → 工程；其余 MVP→工程 |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Form → 工程；选器键盘深化对齐巩固期 W3 |
-| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command、FocusTrap；（共享壳 `dialog_shell`） | 统一 popup + Esc；Dialog/Tooltip 优先工程；Portal 在 `primitives/` |
+| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command；（共享壳 `internal/dialog_shell`） | 统一 popup + Esc；Dialog/Tooltip 优先工程；Portal 在 `primitives/`；Tab 陷阱 `utils/focus_trap` |
 | **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | Table 对齐 TanStack columns+data；VirtualList 依赖测宽；Chart/Path 深化 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Navbar=布局壳；NavigationMenu=链接导览（≠ Menubar）；页面栈 `app::navigator::navigation_host`；桌面 Router 在 `app::router` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | 滚动 focus 前缀与 IME 光标区协同 |
 | **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 与文本管线同源 |
 
-**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`text_field`→`utils/`；Segmented/Badge 若未单独成模块，可用 ToggleGroup / Label 组合或列入实验规划，**勿在清单假装已导出**。
+**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`；Segmented/Badge 若未单独成模块，可用 ToggleGroup / Label 组合或列入实验规划，**勿在清单假装已导出**。
 
 ### 5.2 稳定面 vs 实验面（发布口径草案）
 
@@ -283,7 +285,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 - [ ] 分层：新状态机是否应在 `utils`/`primitives` 而非仅组件内复制  
 - [ ] 受控 / 非受控单一写入点  
-- [ ] **身份**：未把 `id` 当作万金油；区分实例键 / `focus_id` / `template_id`（规范 §4.2）；展示型不强制用户起 id  
+- [ ] **身份**：未把 `id` 当作万金油；区分实例键 / `focus_id` / `template_id`（[`element_identity.md`](element_identity.md) + §4.2）；空串不写入 focus/template；展示型不强制用户起 id  
 - [ ] Theme token，无硬编码色  
 - [ ] **双书写面**：稳定面新 props 同时进 RSX 与 Builder（或文档标明例外）；互嵌仍编译  
 - [ ] Gallery 对应分区可见；**示例不堆砌无必要 id**  
@@ -318,7 +320,8 @@ ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 巩固期 Wave 1–4
 COMPONENT_LIBRARY.md               ← 本文件（组件权威规范）
 COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次（含 CV 门禁）
-headless.md / custom_components.md / keyboard_nav.md / color.md
+element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
+headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
 gap_analysis.md §6                 ← 历史 EUI 密度对照（非清单真源）
 ```
 

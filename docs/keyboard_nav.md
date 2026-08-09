@@ -1,10 +1,10 @@
 # 键盘导航契约（WP-1.2）
 
-与 [desktop_smoke.md](desktop_smoke.md) #5–#7、[`FocusTrap`](../crates/rui/src/components/focus_trap.rs)、[`roving`](../crates/rui/src/utils/roving.rs)、[`focus_ring`](../crates/rui/src/style/focus_ring.rs) 对齐。
+与 [desktop_smoke.md](desktop_smoke.md) #5–#7、[`focus_trap`](../crates/rui/src/utils/focus_trap.rs)、[`roving`](../crates/rui/src/utils/roving.rs)、[`focus_ring`](../crates/rui/src/style/focus_ring.rs) 对齐。
 
 ## Tab 序（应用级）
 
-1. **显式 FocusTrap**：若 [`FOCUS_TRAP_RING_KEY`](../crates/rui/src/components/focus_trap.rs) 非空，仅在登记 id 环内循环。
+1. **显式焦点陷阱**：若 [`FOCUS_TRAP_RING_KEY`](../crates/rui/src/utils/focus_trap.rs) 非空（由 [`sync_focus_trap`](../crates/rui/src/utils/focus_trap.rs) / `activate_focus_trap` 写入），仅在登记 id 环内循环。
 2. **否则若有顶层 Stacked 浮层**（Dialog / Menu / Popover 等，`portal_overlay::top_stacked_panel_z`）：Tab **优先**在该层面板（portal 层内匹配 panel z）的可聚焦节点间循环；焦点在层外时下一次 Tab 落到层内第一项。
 3. **否则**：全局 DFS 遍历带 `focusable` + `focus_id` 的节点（见 `input_controller` + `collect_focusable_ids`）。
 4. 聚焦时写 `__rui_button_focus_id`；键盘移焦时写 `__rui_focus_visible = true`。

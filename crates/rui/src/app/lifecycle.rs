@@ -199,7 +199,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 match ev.window_event {
                     AkWindowEvent::ActionRequested(req) => {
                         if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                            if crate::accesskit_bridge::dispatch_accesskit_action(
+                            if crate::a11y::dispatch_accesskit_action(
                                 &state.root_element,
                                 &req,
                             ) {

@@ -250,7 +250,7 @@ impl AppState {
         } else {
             Some(focused.as_str())
         };
-        crate::accesskit_bridge::tree_update_from_elements(&self.root_element, fid)
+        crate::a11y::tree_update_from_elements(&self.root_element, fid)
     }
 
     fn logical_size(&self) -> (f32, f32) {

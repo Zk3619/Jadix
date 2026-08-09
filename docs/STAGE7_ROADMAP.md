@@ -56,7 +56,7 @@ flowchart TB
 - 阶段清单 P0/P1/P2 已关；开放面转为巩固期：**真窗冒烟签署、组件 golden≥5、crates.io、文档站、稳定面 CV**。
 - Solid：`ErrorBoundary` / `switch_reactive` / `on_mount` **已落地**（旧「缺」作废）；部分 reconcile / Index；`mergeProps` 等可长期空缺。
 - 组件：约 **45** 公开模块（见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5）；相对 EUI 仍缺 VirtualMasonry、图表深度等。
-- MVP 已有、工程未闭环：IME 代码路径、焦点环、FocusTrap、Router/次窗、块级 md MVP、2 个 offscreen golden、Gallery 八分区。
+- MVP 已有、工程未闭环：IME 代码路径、焦点环、focus_trap、Router/次窗、块级 md MVP、2 个 offscreen golden、Gallery 八分区。
 
 原则（历史）：**先堵原生与文本坑，再铺产品组件，最后发布**。现执行节奏见巩固期计划。
 
@@ -70,8 +70,8 @@ flowchart TB
 |--------|------|----------|
 | IME 深度 | preedit 稳定、合成窗定位、`set_ime_cursor_area` 与滚动/缩放同步；中日韩回归用例 | `input_controller.rs`、`window_events.rs`、Input/Textarea |
 | 全局焦点环 | 主题 `ring` token 统一；可聚焦控件默认 `focus-visible` 环 | `style/theme.rs`、`style/focus_ring.rs` |
-| 键盘导航层 | 应用级 Tab 序；列表/菜单 **roving tabindex**；Escape 关闭浮层契约 | `focus_trap.rs`、Combobox/ContextMenu |
-| AccessKit 加深 | 更多 Role（text field、menu、listbox）；键盘 Action 与焦点同步 | `accesskit_bridge` |
+| 键盘导航层 | 应用级 Tab 序；列表/菜单 **roving tabindex**；Escape 关闭浮层契约 | `utils/focus_trap.rs`、Combobox/ContextMenu |
+| AccessKit 加深 | 更多 Role（text field、menu、listbox）；键盘 Action 与焦点同步 | `a11y/bridge` |
 | 真窗口冒烟 | 三平台「打开示例 → 输入中文 → Tab 移焦」清单 | [desktop_smoke.md](desktop_smoke.md) |
 
 **验收**：IME 合成不丢字、光标区不漂移；Tab 可走完主路径表单；读屏能读到 Input 名称与值变化。

@@ -1,6 +1,8 @@
 # AccessKit / 读屏冒烟（WP-1.3）
 
-与 [desktop_smoke.md](desktop_smoke.md) **#9**、[`accesskit_bridge`](../crates/rui/src/accesskit_bridge.rs) 对齐。至少在一个平台（推荐 Windows Narrator）签署。
+与 [desktop_smoke.md](desktop_smoke.md) **#9**、[`a11y::bridge`](../crates/rui/src/a11y/bridge.rs) 对齐。至少在一个平台（推荐 Windows Narrator）签署。
+
+**WP-1.3 边界**：本冒烟验收读屏主路径（角色/名称/值/Button 激活）。桥侧空串与 `template_id` path 消歧只保证**树不崩**；组件/宏仍写空身份属身份债，不在本 WP 关闭范围内——见 [`element_identity.md`](element_identity.md)。
 
 ## 主路径角色
 
@@ -13,7 +15,7 @@
 | Menubar | `MenuBar` / `Menu` / `MenuItem` | 文案 | Click、Focus |
 | ContextMenu 面板 | `Menu` / `MenuItem` | 文案 | Click |
 
-库测：`cargo test -p rui --lib accesskit_bridge`。
+库测：`cargo test -p rui --lib a11y::`。
 
 ## Windows Narrator 复现（smoke #9）
 
