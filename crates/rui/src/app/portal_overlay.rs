@@ -152,6 +152,19 @@ pub fn portal_sync(
     }
 }
 
+/// Top Stacked overlay panel z-index (`OverlayZ::panel`), if any.
+pub fn top_stacked_panel_z() -> Option<i32> {
+    OVERLAY_STACK.with(|cell| {
+        let mut stack = cell.borrow_mut();
+        prune_closed(&mut stack);
+        if stack.is_empty() {
+            None
+        } else {
+            Some(z_for_index(stack.len() - 1).panel)
+        }
+    })
+}
+
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
 ///
 /// `open.set` 必须在释放 `OVERLAY_STACK` 借用之后调用，否则 reactive rebuild →
@@ -237,6 +250,21 @@ mod tests {
     }
 
     #[test]
+    fn top_stacked_panel_z_tracks_depth() {
+        clear();
+        assert_eq!(top_stacked_panel_z(), None);
+        let a = Signal::new(true);
+        assert!(portal_sync("a", a, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert_eq!(top_stacked_panel_z(), Some(1001));
+        let b = Signal::new(true);
+        assert!(portal_sync("b", b, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert_eq!(top_stacked_panel_z(), Some(1011));
+        assert!(try_close_top());
+        assert_eq!(top_stacked_panel_z(), Some(1001));
+    }
+
+    /// WP-1.2 / smoke #7：Escape → [`try_close_top`] 只关最顶层，不穿透下层。
+    #[test]
     fn push_two_esc_closes_top_only() {
         clear();
         let a = Signal::new(true);
@@ -256,6 +284,31 @@ mod tests {
         assert!(!a.peek());
         assert_eq!(depth(), 0);
         assert!(!try_close_top());
+    }
+
+    #[test]
+    fn three_layers_esc_closes_top_only_each_time() {
+        clear();
+        let a = Signal::new(true);
+        let b = Signal::new(true);
+        let c = Signal::new(true);
+        assert!(portal_sync("a", a, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("b", b, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("c", c, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert_eq!(depth(), 3);
+
+        assert!(try_close_top());
+        assert!(!c.peek());
+        assert!(b.peek());
+        assert!(a.peek());
+
+        assert!(try_close_top());
+        assert!(!b.peek());
+        assert!(a.peek());
+
+        assert!(try_close_top());
+        assert!(!a.peek());
+        assert_eq!(depth(), 0);
     }
 
     #[test]

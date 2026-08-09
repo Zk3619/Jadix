@@ -37,10 +37,10 @@
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
 | 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
-| 冒烟 | `desktop_smoke.md` 清单存在；**三平台未签署** |
+| 冒烟 | `desktop_smoke.md`：Win #3–#4（WP-1.1）已签；**#1–#2/#5–#8 与 macOS/Linux 未签** |
 | 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：W1.1 代码路径与库测已合入、手工冒烟未签；W1.2/1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测已合入（手工 #5–#7 待 WP-1.4）；W1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -80,7 +80,7 @@ flowchart TB
 | **路径** | `app/input_controller.rs`、`app/ime_support.rs`、`app/window_events.rs`、`components/input.rs`、`components/textarea.rs` |
 | **任务** | ① preedit 稳定上屏不丢字；② `set_ime_cursor_area` 随 ScrollArea / 缩放更新；③ 中日韩至少一种 IME 回归测（可手工 + 日志断言接口） |
 | **验收** | `desktop_smoke` #3–#4 在开发机 Win 通过；滚动后候选窗不漂移。细则：[ime.md](ime.md) |
-| **状态** | ☑ 代码+库测已合入（`ime_support` / 诊断钩子）；☐ 手工 #3–#4 待签署 |
+| **状态** | ☑ 代码+库测已合入；☑ Win 开发机 smoke #3–#4 签署（2026-08-09，Kingdom / Win 10.0.26200；`ime_support` 6/6 绿） |
 
 ### WP-1.2 焦点环与 Tab / roving
 
@@ -89,7 +89,7 @@ flowchart TB
 | **路径** | `style/focus_ring.rs`、`style/theme.rs`、`utils/roving.rs`、`components/focus_trap.rs`、Combobox / ContextMenu / Menubar / Tabs |
 | **任务** | ① 可聚焦控件默认 `focus-visible` 环（ring token）；② 应用级 Tab 序文档化；③ 列表/菜单 roving 单测；④ Escape 仅关顶层浮层契约测 |
 | **验收** | smoke #5–#7；roving 单测进 `cargo test -p rui --lib` |
-| **状态** | ☐ 部分能力已在（focus_ring / roving 测 / FocusTrap / Combobox 方向键）；未按本 WP 验收关闭 |
+| **状态** | ☑ 代码+库测已合入（Input 始终环；其它可受控 `focus-visible`；Tabs/ContextMenu/Menubar roving；Esc 契约测）；☐ 手工 smoke #5–#7 待 WP-1.4 三平台签署 |
 | **进展** | 细则见 [keyboard_nav.md](keyboard_nav.md) |
 
 ### WP-1.3 AccessKit 主路径

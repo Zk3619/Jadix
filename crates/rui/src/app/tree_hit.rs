@@ -617,13 +617,30 @@ pub(super) fn find_element_by_focus_id<'a>(el: &'a Element, focus_id: &str) -> O
     None
 }
 
-/// Routes a key to the focused [`Element`] (by `focus_id`): `on_key_down` first, then Space/Enter
-/// activates `on_click` when `focusable` (no repeat).
-pub(super) fn dispatch_key_for_focused(el: &Element, focus_id: &str, event: &KeyEvent) -> bool {
-    let Some(node) = find_element_by_focus_id(el, focus_id) else {
-        return false;
-    };
-    if let Some(cb) = &node.on_key_down {
+/// Handlers cloned off the focused node so callers can drop `AppState` borrows before running them.
+///
+/// Running `on_key_down` / `on_click` while `AppState` is borrowed is unsafe: handlers often
+/// `signal.set`, which flushes `reactive_view` → [`crate::app::runtime::try_reconcile_subtree`]
+/// → `borrow_mut` and panics with `RefCell already borrowed`.
+pub(super) struct FocusedKeyHandlers {
+    pub on_key_down:
+        Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
+    pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
+    pub focusable: bool,
+}
+
+pub(super) fn focused_key_handlers(el: &Element, focus_id: &str) -> Option<FocusedKeyHandlers> {
+    let node = find_element_by_focus_id(el, focus_id)?;
+    Some(FocusedKeyHandlers {
+        on_key_down: node.on_key_down.clone(),
+        on_click: node.on_click.clone(),
+        focusable: node.focusable,
+    })
+}
+
+/// Routes a key through previously extracted [`FocusedKeyHandlers`].
+pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &KeyEvent) -> bool {
+    if let Some(cb) = &handlers.on_key_down {
         if cb.borrow_mut()(event.clone()) {
             return true;
         }
@@ -635,13 +652,49 @@ pub(super) fn dispatch_key_for_focused(el: &Element, focus_id: &str, event: &Key
         event.logical_key,
         Key::Named(NamedKey::Space) | Key::Named(NamedKey::Enter)
     );
-    if activate && node.focusable {
-        if let Some(cb) = &node.on_click {
+    if activate && handlers.focusable {
+        if let Some(cb) = &handlers.on_click {
             cb.borrow_mut()();
             return true;
         }
     }
     false
+}
+
+#[cfg(test)]
+mod focused_key_dispatch_tests {
+    use super::*;
+    use crate::core::reactivity::use_signal;
+    use crate::primitives::interactive::interactive;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// Regression for `RefCell already borrowed`: extract handlers under an outer borrow,
+    /// release it, then run — handlers may `signal.set` / nest `borrow_mut`.
+    #[test]
+    fn key_handlers_run_after_outer_borrow_released() {
+        let state = Rc::new(RefCell::new(0u32));
+        let state_cb = state.clone();
+        let open = use_signal("tree_hit_key_reentry_open", || false);
+        let root: Element = interactive(Element::new())
+            .focus_id("k")
+            .focusable(true)
+            .on_click(move || {
+                *state_cb.borrow_mut() += 1;
+                open.set(true);
+            })
+            .into();
+
+        // Outer immutable borrow (like input_controller before the fix).
+        let outer = state.borrow();
+        let handlers = focused_key_handlers(&root, "k").expect("handlers");
+        assert!(handlers.focusable);
+        let click = handlers.on_click.clone().expect("click");
+        drop(outer); // must release before running
+        click.borrow_mut()();
+        assert_eq!(*state.borrow(), 1);
+        assert!(open.peek());
+    }
 }
 
 #[cfg(test)]

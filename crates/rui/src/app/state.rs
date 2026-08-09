@@ -1110,6 +1110,12 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
+        crate::style::sync_focus_ring_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
         {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();

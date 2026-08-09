@@ -142,11 +142,15 @@ impl From<CheckboxBuilder> for Element {
         root.checkbox_sync = Some(sig);
 
         let sig_a = sig;
+        let focus_id = id.clone();
         let mut el: Element = interactive(root)
             .focus_id(id)
             .focusable(!disabled)
+            .focus_ring(!disabled)
             .on_click(move || {
                 if !disabled {
+                    // Mouse focus: move DOM focus without focus-visible ring.
+                    use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
                     sig_a.set(!sig_a.get());
                 }
             })

@@ -168,13 +168,16 @@ impl From<ToggleBuilder> for Element {
 
         let sig_click = sig;
         let id = builder.id.clone();
+        let focus_id = id.clone();
         let mut out: Element = interactive(row)
             .focus_id(id.clone())
             .focusable(!disabled)
+            .focus_ring(!disabled)
             .on_click(move || {
                 if disabled {
                     return;
                 }
+                use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
                 sig_click.set(!sig_click.get());
             })
             .into();

@@ -30,7 +30,8 @@ pub use element_style::{
     parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,
 };
 pub use focus_ring::{
-    apply_focus_ring_shadow, focus_ring_color, focus_ring_shadow_matches, FOCUS_RING_BLUR,
+    apply_focus_ring_shadow, control_focus_ring_active, focus_ring_color, focus_ring_shadow_matches,
+    sync_focus_ring_subtree, FOCUS_RING_BLUR,
 };
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,

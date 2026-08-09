@@ -82,3 +82,36 @@ pub fn collect_focusable_ids(el: &Element, ids: &mut Vec<String>) {
         collect_focusable_ids(child, ids);
     }
 }
+
+/// Collect focusable ids under the root portal layer whose panel `z_index` matches `panel_z`.
+///
+/// Used so Tab cycles inside the top stacked overlay (Dialog / Menu / Popover) first.
+pub fn collect_focusable_ids_in_portal_z(root: &Element, panel_z: i32, ids: &mut Vec<String>) {
+    let Some(layer) = find_portal_layer(root) else {
+        return;
+    };
+    for child in &layer.children {
+        if subtree_has_z(child, panel_z) {
+            collect_focusable_ids(child, ids);
+        }
+    }
+}
+
+fn find_portal_layer(el: &Element) -> Option<&Element> {
+    if el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID) {
+        return Some(el);
+    }
+    for c in &el.children {
+        if let Some(found) = find_portal_layer(c) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn subtree_has_z(el: &Element, z: i32) -> bool {
+    if el.style.z_index == z {
+        return true;
+    }
+    el.children.iter().any(|c| subtree_has_z(c, z))
+}

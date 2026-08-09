@@ -1,9 +1,10 @@
 //! # ToggleGroup
 //!
 //! 对齐 solid-ui / Kobalte **ToggleGroup**：一组两态按钮。
-//! - `multiple=false`（默认）：单选，值 `Signal<String>`（空串表示未选）
+//! - `multiple=false`（默认）：单选，值 `Signal<String>`（空串表示未选；[`required`](ToggleGroupBuilder::required) 时禁止空选）
 //! - `multiple=true`：多选，值用 `Signal<Vec<String>>`
 //! - `joined=true`：连体分段外观（[`crate::components::tabs_list`] 使用）
+//! - 单选支持 ←/→/↑/↓ / Home / End **只移焦点环**；Enter / Space / 点击才改选中
 //! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //!
 //! ## 用法
@@ -19,8 +20,11 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
+use crate::style::{control_focus_ring_active, focus_ring_color, FOCUS_RING_BLUR};
+use crate::utils::roving::{focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
+use winit::event::KeyEvent;
 
 pub struct ToggleGroupBuilder {
     id: String,
@@ -32,6 +36,8 @@ pub struct ToggleGroupBuilder {
     disabled: bool,
     variant: String,
     joined: bool,
+    /// Single-select only: refuse empty selection (TabsList).
+    required: bool,
 }
 
 /// RSX `<ToggleGroup>`：选项走 `options` 更稳妥；亦可用 builder。
@@ -73,6 +79,7 @@ pub fn toggle_group(id: impl Into<String>) -> ToggleGroupBuilder {
         disabled: false,
         variant: "outline".into(),
         joined: false,
+        required: false,
     }
 }
 
@@ -110,6 +117,42 @@ impl ToggleGroupBuilder {
         self.joined = v;
         self
     }
+    /// 单选必选一项（点击已选项不取消；空值回落到 default / 首项）。
+    pub fn required(mut self, v: bool) -> Self {
+        self.required = v;
+        self
+    }
+}
+
+/// Resulting value after clicking a single-select chip.
+pub(crate) fn single_select_after_click(current: &str, clicked: &str, required: bool) -> String {
+    if current == clicked {
+        if required {
+            current.to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        clicked.to_string()
+    }
+}
+
+/// Resolve a non-empty selection when `required` (invalid / empty → default → first).
+pub(crate) fn coerce_required_single(
+    current: &str,
+    values: &[String],
+    default_value: &str,
+) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    if values.iter().any(|v| v == current) {
+        return None;
+    }
+    if !default_value.is_empty() && values.iter().any(|v| v == default_value) {
+        return Some(default_value.to_string());
+    }
+    Some(values[0].clone())
 }
 
 fn toggle_chip_colors(
@@ -162,6 +205,26 @@ fn joined_radii(index: usize, count: usize, r: f32) -> [f32; 4] {
     }
 }
 
+/// Arrow / Home / End: move focus ring only (selection unchanged).
+/// Enter / Space: not handled here — falls through to `on_click` to activate selection.
+fn single_select_focus_roving_handler(
+    group_id: String,
+    values: Vec<String>,
+    index: usize,
+    disabled: bool,
+) -> impl FnMut(KeyEvent) -> bool {
+    let ids: Vec<String> = values
+        .iter()
+        .map(|v| format!("{group_id}:{v}"))
+        .collect();
+    move |ev: KeyEvent| {
+        if disabled {
+            return false;
+        }
+        focus_roving_key(&ev, &ids, index, FocusRovingAxis::Both)
+    }
+}
+
 fn item_el(
     group_id: &str,
     value: &str,
@@ -173,6 +236,7 @@ fn item_el(
     index: usize,
     count: usize,
     on_click: impl FnMut() + 'static,
+    on_key_down: Option<Box<dyn FnMut(KeyEvent) -> bool>>,
 ) -> Element {
     let (bg, border, fg) = toggle_chip_colors(pressed, disabled, outline, joined);
     let border_w = if outline && !joined { 1.0 } else { 0.0 };
@@ -200,11 +264,22 @@ fn item_el(
         },
     ));
     let focus_id = format!("{group_id}:{value}");
-    let mut out: Element = interactive(chip)
+    let fid_click = focus_id.clone();
+    let mut handler = on_click;
+    let mut builder = interactive(chip)
         .focus_id(focus_id)
         .focusable(!disabled)
-        .on_click(on_click)
-        .into();
+        .focus_ring(!disabled)
+        .on_click(move || {
+            if !disabled {
+                use_signal("__rui_button_focus_id", String::new).set(fid_click.clone());
+            }
+            handler();
+        });
+    if let Some(key_cb) = on_key_down {
+        builder = builder.on_key_down(key_cb);
+    }
+    let mut out: Element = builder.into();
     if disabled {
         out = out.cursor_not_allowed();
     } else {
@@ -218,6 +293,7 @@ impl From<ToggleGroupBuilder> for Element {
         let outline = builder.variant == "outline";
         let disabled = builder.disabled;
         let joined = builder.joined;
+        let required = builder.required && !builder.multiple;
         let group_id = builder.id.clone();
         let multiple = builder.multiple;
         let option_values: Vec<String> = builder
@@ -272,6 +348,7 @@ impl From<ToggleGroupBuilder> for Element {
                         }
                         sig_c.set(cur);
                     },
+                    None,
                 ));
             }
             let sync_sig = sig;
@@ -290,12 +367,20 @@ impl From<ToggleGroupBuilder> for Element {
             let default = builder.default_value.clone();
             let sig = builder
                 .value_single
-                .unwrap_or_else(|| use_signal(scope.as_str(), || default));
+                .unwrap_or_else(|| use_signal(scope.as_str(), || default.clone()));
+            if required {
+                if let Some(fixed) = coerce_required_single(&sig.peek(), &option_values, &default) {
+                    sig.set(fixed);
+                }
+            }
             let current = sig.peek();
             for (i, (val, label)) in builder.options.into_iter().enumerate() {
                 let pressed = current == val;
                 let sig_c = sig;
                 let v_c = val.clone();
+                let req = required;
+                let values_k = option_values.clone();
+                let gid = group_id.clone();
                 row = row.child(item_el(
                     &group_id,
                     &val,
@@ -310,16 +395,28 @@ impl From<ToggleGroupBuilder> for Element {
                         if disabled {
                             return;
                         }
-                        if sig_c.get() == v_c {
-                            sig_c.set(String::new());
-                        } else {
-                            sig_c.set(v_c.clone());
+                        let next = single_select_after_click(&sig_c.get(), &v_c, req);
+                        if sig_c.peek() != next {
+                            sig_c.set(next);
                         }
                     },
+                    Some(Box::new(single_select_focus_roving_handler(
+                        gid, values_k, i, disabled,
+                    ))),
                 ));
             }
             let sync_sig = sig;
+            let values_sync = option_values.clone();
+            let default_sync = default;
             row = row.reactive_sync(move |root, _layout_tree| {
+                if required {
+                    if let Some(fixed) =
+                        coerce_required_single(&sync_sig.peek(), &values_sync, &default_sync)
+                    {
+                        // Silent: paint sync may hold AppState; avoid effect flush / reconcile.
+                        sync_sig.set_silent(fixed);
+                    }
+                }
                 let current = sync_sig.peek();
                 sync_toggle_group_pressed(
                     root,
@@ -333,6 +430,9 @@ impl From<ToggleGroupBuilder> for Element {
         }
 
         row.template_id = Some(builder.id);
+        if required {
+            row.set_attr("rui_toggle_required", "1");
+        }
         row
     }
 }
@@ -370,16 +470,27 @@ fn sync_toggle_group_pressed(
                 option.style.radii = want_radii;
                 changed = true;
             }
-            let (want_shadow, want_blur) = if pressed {
+            // Prefer keyboard focus ring over pressed chip shadow (same token/blur as Input).
+            let show_ring = option.focus_id.as_deref().is_some_and(|fid| {
+                control_focus_ring_active(fid, option.focusable, disabled)
+            });
+            let (want_shadow, want_blur) = if show_ring {
+                (focus_ring_color(), FOCUS_RING_BLUR)
+            } else if pressed {
                 ([0.0, 0.0, 0.0, 0.08], 2.0)
             } else {
                 ([0.0, 0.0, 0.0, 0.0], 0.0)
             };
             if (option.style.shadow_blur - want_blur).abs() > 0.01
+                || (option.style.shadow_color[0] - want_shadow[0]).abs() > 0.001
+                || (option.style.shadow_color[1] - want_shadow[1]).abs() > 0.001
+                || (option.style.shadow_color[2] - want_shadow[2]).abs() > 0.001
                 || (option.style.shadow_color[3] - want_shadow[3]).abs() > 0.001
             {
                 option.style.shadow_color = want_shadow;
                 option.style.shadow_blur = want_blur;
+                option.style.shadow_offset = [0.0, 0.0];
+                option.style.shadow_spread = 0.0;
                 changed = true;
             }
         }
@@ -394,5 +505,37 @@ fn sync_toggle_group_pressed(
         crate::core::tree::LayoutStatus::StyleChanged
     } else {
         crate::core::tree::LayoutStatus::Clean
+    }
+}
+
+impl crate::core::tree::IntoElementList for ToggleGroupBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_click_keeps_selection() {
+        assert_eq!(single_select_after_click("list", "list", true), "list");
+        assert_eq!(single_select_after_click("list", "grid", true), "grid");
+        assert_eq!(single_select_after_click("list", "list", false), "");
+    }
+
+    #[test]
+    fn coerce_required_falls_back() {
+        let vals = vec!["list".into(), "grid".into()];
+        assert_eq!(coerce_required_single("list", &vals, "grid"), None);
+        assert_eq!(
+            coerce_required_single("", &vals, "grid"),
+            Some("grid".into())
+        );
+        assert_eq!(
+            coerce_required_single("nope", &vals, ""),
+            Some("list".into())
+        );
     }
 }

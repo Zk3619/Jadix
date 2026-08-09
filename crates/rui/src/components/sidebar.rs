@@ -4,10 +4,13 @@
 //!
 //! 默认 `flex-shrink: 0` 且 `min-width` 与宽度一致，避免主内容区固有宽把侧栏挤扁
 //! （典型 app-shell：rail 不缩，主区 `min-width: 0`）。
+//!
+//! 槽位内可聚焦控件（如 Gallery 导航 Button）自动获得 ↑↓ / Home / End **焦点环** roving。
 
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use crate::tokens;
+use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 
 pub struct SidebarBuilder {
     id: String,
@@ -79,6 +82,7 @@ impl From<SidebarBuilder> for Element {
         el.style.border_width = 1.0;
         el.style.border_color = tokens::border();
         el.template_id = Some(id);
+        attach_focus_roving(&mut el, FocusRovingAxis::Vertical);
         el
     }
 }

@@ -146,11 +146,14 @@ impl From<SwitchBuilder> for Element {
         track.switch_checked_sync = Some(sig);
 
         let sig_a = sig;
+        let focus_id = id.clone();
         let mut el: Element = interactive(track)
             .focus_id(id)
             .focusable(!disabled)
+            .focus_ring(!disabled)
             .on_click(move || {
                 if !disabled {
+                    use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
                     sig_a.set(!sig_a.get());
                 }
             })

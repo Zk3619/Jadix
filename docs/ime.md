@@ -93,8 +93,8 @@ assert!(!text.is_empty());
 ## 通过标准（WP-1.1 Done）
 
 - [x] 库测 `ime_support` 绿  
-- [ ] 手工：Win 上 smoke **#3** 通过  
-- [ ] 手工：Win 上 smoke **#4** 通过（滚动中候选窗跟随）  
+- [x] 手工：Win 上 smoke **#3** 通过（2026-08-09，Kingdom / Win 10.0.26200）  
+- [x] 手工：Win 上 smoke **#4** 通过（滚动中候选窗跟随）  
 - [ ] （可选）日文或韩文任测一组字路径  
 
 签署栏见 [desktop_smoke.md](desktop_smoke.md)。

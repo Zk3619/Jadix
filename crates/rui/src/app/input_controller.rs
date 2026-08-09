@@ -158,9 +158,19 @@ impl super::App {
                 } else {
                     Vec::new()
                 };
+                // Explicit FocusTrap wins; else Tab prefers top stacked overlay panel.
                 if ids.is_empty() {
                     if let Some(st) = (*self.state.borrow()).as_ref() {
-                        collect_focusable_ids(&st.root_element, &mut ids);
+                        if let Some(z) = crate::app::portal_overlay::top_stacked_panel_z() {
+                            crate::utils::input_hit::collect_focusable_ids_in_portal_z(
+                                &st.root_element,
+                                z,
+                                &mut ids,
+                            );
+                        }
+                        if ids.is_empty() {
+                            collect_focusable_ids(&st.root_element, &mut ids);
+                        }
                     }
                 }
                 if !ids.is_empty() {
@@ -232,9 +242,13 @@ impl super::App {
                             }
                         }
                     }
-                    if let Some(st) = (*self.state.borrow()).as_ref() {
-                        if super::tree_hit::dispatch_key_for_focused(&st.root_element, &fid, &event)
-                        {
+                    // Clone handlers under borrow, then drop before running them. Handlers may
+                    // `signal.set` → reactive reconcile → `AppState::borrow_mut`.
+                    let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
+                        super::tree_hit::focused_key_handlers(&st.root_element, &fid)
+                    });
+                    if let Some(handlers) = key_handlers {
+                        if super::tree_hit::run_focused_key_handlers(&handlers, &event) {
                             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
                             }

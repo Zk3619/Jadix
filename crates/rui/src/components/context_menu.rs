@@ -1,6 +1,7 @@
 //! # ContextMenu
 //!
 //! 右键菜单：触发器 `on_context_menu` 打开；underlay 点击关闭；Menu overlay。
+//! 打开时 ArrowUp/Down / Home / End 走 [`crate::utils::roving`] 高亮菜单项。
 
 use std::rc::Rc;
 
@@ -14,7 +15,10 @@ use crate::tokens;
 use crate::utils::popup::{
     mark_floating, panel_block_clicks, PopupPlacement,
 };
+use crate::utils::roving::{roving_edge, roving_move};
+use winit::keyboard::{Key, NamedKey};
 
+#[derive(Clone)]
 pub struct ContextMenuItem {
     pub label: String,
     pub on_click: Rc<dyn Fn()>,
@@ -60,15 +64,72 @@ impl ContextMenuBuilder {
         let open = self
             .open
             .unwrap_or_else(|| use_signal(open_key.as_str(), || false));
+        let active_key = format!("{}__ctx_active", self.id);
+        let active = use_signal(active_key.as_str(), || 0usize);
         let trigger_fid = format!("{}__ctx_trigger", self.id);
         let mut trigger = build();
         if trigger.focus_id.is_none() {
             trigger = trigger.focus_id(trigger_fid.as_str());
         }
+        // Custom (non-Button) triggers need an explicit focus-visible ring.
+        if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+            trigger.focusable = true;
+            trigger.focus_ring = true;
+        }
         let trigger_fid = trigger.focus_id.clone().unwrap_or(trigger_fid);
         let open_ctx = open;
+        let active_open = active;
+        let fid_focus = trigger_fid.clone();
         trigger = trigger.on_context_menu(move |_ev| {
+            active_open.set(0);
+            // Mouse open: focus trigger for arrow-key roving, but keep focus-visible false (no ring).
+            use_signal("__rui_button_focus_id", String::new).set(fid_focus.clone());
             open_ctx.set(true);
+        });
+        let open_keys = open;
+        let active_keys = active;
+        let items_for_keys = self.items.clone();
+        let n_items = items_for_keys.len();
+        trigger = trigger.on_key_down(move |ev| {
+            if !open_keys.peek() {
+                return false;
+            }
+            match &ev.logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    if let Some(next) = roving_move(n_items, active_keys.peek(), 1) {
+                        active_keys.set(next);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    if let Some(next) = roving_move(n_items, active_keys.peek(), -1) {
+                        active_keys.set(next);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::Home) => {
+                    if let Some(i) = roving_edge(n_items, false) {
+                        active_keys.set(i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::End) => {
+                    if let Some(i) = roving_edge(n_items, true) {
+                        active_keys.set(i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                    let ix = active_keys.peek();
+                    if let Some(it) = items_for_keys.get(ix) {
+                        (it.on_click)();
+                        open_keys.set(false);
+                        return true;
+                    }
+                    false
+                }
+                _ => false,
+            }
         });
 
         let id = self.id.clone();
@@ -79,6 +140,7 @@ impl ContextMenuBuilder {
 
         let menu = reactive_view(view_id, move || {
             let is_open = menu_open.get();
+            let active_ix = active.get();
             let Some(oz) = portal_sync(&id, menu_open, OverlayKind::Menu, OverlayMode::Stacked)
             else {
                 return Element::new();
@@ -90,13 +152,16 @@ impl ContextMenuBuilder {
             for (i, it) in items.iter().enumerate() {
                 let cb = it.on_click.clone();
                 let o = menu_open;
+                let a_row = active;
                 let label = it.label.clone();
                 let bid = format!("{id}__item{i}");
+                let highlighted = i == active_ix;
                 let row: Element = button(&bid)
-                    .variant("ghost")
+                    .variant(if highlighted { "secondary" } else { "ghost" })
                     .size("sm")
                     .w("100%")
                     .on_click(move || {
+                        a_row.set(i);
                         cb();
                         o.set(false);
                     })

@@ -36,8 +36,10 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
-use crate::utils::roving::roving_move;
+use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use winit::event::{ElementState, KeyEvent};
+use winit::keyboard::{Key, NamedKey};
 
 /// Content / 顶栏直达链接。
 #[derive(Clone)]
@@ -136,7 +138,13 @@ fn accent_muted() -> [f32; 4] {
     c
 }
 
-fn trigger_chip(focus_id: &str, label: &str, expanded: bool, on_click: impl FnMut() + 'static) -> Element {
+fn trigger_chip(
+    focus_id: &str,
+    label: &str,
+    expanded: bool,
+    on_click: impl FnMut() + 'static,
+    on_key_down: impl FnMut(KeyEvent) -> bool + 'static,
+) -> Element {
     let bg = if expanded {
         accent_muted()
     } else {
@@ -160,7 +168,9 @@ fn trigger_chip(focus_id: &str, label: &str, expanded: bool, on_click: impl FnMu
     interactive(chip)
         .focus_id(focus_id)
         .focusable(true)
+        .focus_ring(true)
         .on_click(on_click)
+        .on_key_down(on_key_down)
         .into()
 }
 
@@ -231,9 +241,32 @@ fn build_content_panel(
     expanded: Signal<Option<String>>,
     panel_z: i32,
 ) -> Element {
+    let link_ids: Vec<String> = links
+        .iter()
+        .map(|l| format!("{menu_id}:link:{}", l.id))
+        .collect();
     let mut list = vstack().gap("0.125rem").p("0.75rem").min_w("14rem");
-    for link in links {
-        list = list.child(content_link_el(menu_id, link, expanded));
+    for (i, link) in links.iter().enumerate() {
+        let mut el = content_link_el(menu_id, link, expanded);
+        let ids = link_ids.clone();
+        let trigger = trigger_id.to_string();
+        let exp = expanded;
+        el = el.on_key_down(move |ev| {
+            if ev.state != ElementState::Pressed || ev.repeat {
+                return false;
+            }
+            if matches!(ev.logical_key, Key::Named(NamedKey::Escape)) {
+                exp.set(None);
+                focus_by_id(trigger.clone());
+                return true;
+            }
+            focus_roving_key(&ev, &ids, i, FocusRovingAxis::Vertical)
+        });
+        // Ensure panel links show keyboard focus rings (ghost buttons already do).
+        if el.button_hover_paint.is_none() {
+            el.focus_ring = true;
+        }
+        list = list.child(el);
     }
     let mut panel: Element = list
         .bg(tokens::background())
@@ -266,7 +299,6 @@ impl From<NavigationMenuBuilder> for Element {
         let expanded = use_signal(format!("{id}__navmenu_expanded").as_str(), || {
             None::<String>
         });
-        let focus_idx = use_signal(format!("{id}__navmenu_focus").as_str(), || 0usize);
 
         // One open signal per trigger (created outside reactive_view — hook discipline).
         let mut trigger_meta: Vec<(String, String, Vec<NavigationMenuLink>, Signal<bool>)> =
@@ -279,22 +311,28 @@ impl From<NavigationMenuBuilder> for Element {
             }
         }
 
-        let item_count = items.len();
+        let top_focus_ids: Vec<String> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| match item {
+                NavigationMenuItem::Link(_) => format!("{id}:item:{i}"),
+                NavigationMenuItem::Trigger { id: tid, .. } => format!("{id}:{tid}:trigger"),
+            })
+            .collect();
+
         let view_id = format!("{id}__navmenu_view");
         let root_id = id.clone();
         let items_c = items;
 
         let mut root = reactive_view(view_id, move || {
             let open_key = expanded.get();
-            let _ = focus_idx.get();
             // Keep portal_sync open flags in sync with shared expanded key.
             for (tid, _, _, open_sig) in &trigger_meta {
                 open_sig.set(open_key.as_deref() == Some(tid.as_str()));
             }
 
             let exp = expanded;
-            let foc = focus_idx;
-            let n = item_count;
+            let top_ids = top_focus_ids.clone();
 
             let mut list_row: Element = hstack().gap("0.25rem").items_center().into();
             let mut panels: Vec<Element> = Vec::new();
@@ -304,7 +342,14 @@ impl From<NavigationMenuBuilder> for Element {
                     NavigationMenuItem::Link(link) => {
                         let run = link.on_select.clone();
                         let fid = format!("{root_id}:item:{i}");
-                        let chip = trigger_chip(&fid, &link.label, false, move || run());
+                        let ids = top_ids.clone();
+                        let chip = trigger_chip(
+                            &fid,
+                            &link.label,
+                            false,
+                            move || run(),
+                            move |ev| focus_roving_key(&ev, &ids, i, FocusRovingAxis::Horizontal),
+                        );
                         list_row = list_row.child(chip);
                     }
                     NavigationMenuItem::Trigger {
@@ -315,16 +360,50 @@ impl From<NavigationMenuBuilder> for Element {
                         let trigger_focus = format!("{root_id}:{tid}:trigger");
                         let overlay_key = format!("{root_id}:{tid}");
                         let is_open = open_key.as_deref() == Some(tid.as_str());
-                        let tid_c = tid.clone();
-                        let exp_t = exp;
-                        let chip =
-                            trigger_chip(&trigger_focus, label, is_open, move || {
-                                if exp_t.peek().as_deref() == Some(tid_c.as_str()) {
-                                    exp_t.set(None);
+                        let tid_click = tid.clone();
+                        let tid_keys = tid.clone();
+                        let exp_click = exp;
+                        let exp_keys = exp;
+                        let ids = top_ids.clone();
+                        let first_link = links
+                            .first()
+                            .map(|l| format!("{root_id}:link:{}", l.id));
+                        let chip = trigger_chip(
+                            &trigger_focus,
+                            label,
+                            is_open,
+                            move || {
+                                if exp_click.peek().as_deref() == Some(tid_click.as_str()) {
+                                    exp_click.set(None);
                                 } else {
-                                    exp_t.set(Some(tid_c.clone()));
+                                    exp_click.set(Some(tid_click.clone()));
                                 }
-                            });
+                            },
+                            move |ev| {
+                                if ev.state != ElementState::Pressed || ev.repeat {
+                                    return false;
+                                }
+                                if matches!(
+                                    ev.logical_key,
+                                    Key::Named(NamedKey::ArrowDown)
+                                ) {
+                                    if let Some(ref lid) = first_link {
+                                        if exp_keys.peek().as_deref() != Some(tid_keys.as_str()) {
+                                            exp_keys.set(Some(tid_keys.clone()));
+                                        }
+                                        focus_by_id(lid.clone());
+                                        return true;
+                                    }
+                                }
+                                if matches!(ev.logical_key, Key::Named(NamedKey::Escape))
+                                    && exp_keys.peek().is_some()
+                                {
+                                    exp_keys.set(None);
+                                    return true;
+                                }
+                                focus_roving_key(&ev, &ids, i, FocusRovingAxis::Horizontal)
+                            },
+                        );
 
                         let mut wrap: Element = r#box().relative(true).child(chip).into();
                         wrap.template_id = Some(format!("{root_id}:item:{i}"));
@@ -364,43 +443,7 @@ impl From<NavigationMenuBuilder> for Element {
                 }
             }
 
-            let list_focus = format!("navmenu:{root_id}");
-            let foc_k = foc;
-            let exp_k = exp;
-            let mut list: Element = interactive(list_row)
-                .focus_id(list_focus)
-                .focusable(true)
-                .on_key_down(move |ev| {
-                    use winit::event::ElementState;
-                    use winit::keyboard::{Key, NamedKey};
-                    if ev.state != ElementState::Pressed || ev.repeat {
-                        return false;
-                    }
-                    match &ev.logical_key {
-                        Key::Named(NamedKey::ArrowRight) => {
-                            if let Some(next) = roving_move(n, foc_k.get(), 1) {
-                                foc_k.set(next);
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            if let Some(next) = roving_move(n, foc_k.get(), -1) {
-                                foc_k.set(next);
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::Escape) => {
-                            if exp_k.peek().is_some() {
-                                exp_k.set(None);
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        _ => false,
-                    }
-                })
-                .into();
+            let mut list: Element = list_row;
             list.set_attr("rui_navigation_menu_list", "1");
 
             let mut shell: Element = vstack().gap("0").relative(true).child(list).into();

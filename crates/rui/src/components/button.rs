@@ -642,11 +642,13 @@ impl From<ButtonBuilder> for Element {
             hover_t_for_id(&builder.id, &builder.hover_easing)
         };
         let t = hover_t;
+        // Focus ring is snapped (not sprung): keyboard focus must paint the same frame as Tab.
         let focus_spring = use_ui_transition_spring(
             &btn_focus_spring_key(&builder.id),
             if is_focused { 1.0 } else { 0.0 },
         );
-        let focus_t = focus_spring.peek().clamp(0.0, 1.0);
+        focus_spring.snap(if is_focused { 1.0 } else { 0.0 });
+        let focus_t = if is_focused { 1.0 } else { 0.0 };
 
         // Apply size-based padding if not specified
         let mut container = builder.container;
@@ -905,12 +907,15 @@ fn sync_button_focus_ring_shadow(
     focus_id: &str,
     impact: &mut LayoutStatus,
 ) {
+    // Instant focus-visible ring. Spring blending lagged behind Tab when `tick_animations`
+    // ran before this sync: after idle, target flipped but no further redraw → missed move,
+    // then dual rings when springs finally caught up on the next key.
     let focus_spring = use_ui_transition_spring(
         &btn_focus_spring_key(focus_id),
         if is_focused { 1.0 } else { 0.0 },
     );
-    focus_spring.set(if is_focused { 1.0 } else { 0.0 });
-    let focus_t = focus_spring.peek().clamp(0.0, 1.0);
+    focus_spring.snap(if is_focused { 1.0 } else { 0.0 });
+    let focus_t = if is_focused { 1.0 } else { 0.0 };
     let rest_sh = button_shadow_style_for_sync(false, disabled, variant);
     let ring_sh = button_shadow_style_for_sync(true, disabled, variant);
     let (want_blur, want_color, want_off, want_spread) =

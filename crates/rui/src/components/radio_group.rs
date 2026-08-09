@@ -138,10 +138,16 @@ impl From<RadioGroupBuilder> for Element {
                 .into();
             let sel_c = sel;
             let v_clone = v.clone();
+            let fid = format!("{}:{}", builder.group_id, v_clone);
+            let fid_click = fid.clone();
             let opt: Element = interactive(pill)
-                .focus_id(format!("{}:{}", builder.group_id, v_clone))
+                .focus_id(fid)
                 .focusable(true)
-                .on_click(move || sel_c.set(v.clone()))
+                .focus_ring(true)
+                .on_click(move || {
+                    use_signal("__rui_button_focus_id", String::new).set(fid_click.clone());
+                    sel_c.set(v.clone());
+                })
                 .into();
             row = row.child(opt);
         }

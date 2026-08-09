@@ -75,6 +75,17 @@ impl Spring {
         let _ = state.signal.try_set_silent(state.current);
     }
 
+    /// Jump to `value` with zero velocity (no animation). Use for focus rings so a frame that
+    /// retargets after idle is not stuck waiting for a redraw that never comes (tick runs
+    /// before chrome sync; see button focus-ring sync).
+    pub fn snap(&self, value: f32) {
+        let mut state = self.0.borrow_mut();
+        state.target = value;
+        state.current = value;
+        state.velocity = 0.0;
+        let _ = state.signal.try_set_silent(value);
+    }
+
     pub fn get(&self) -> f32 {
         self.0.borrow().signal.get()
     }
@@ -331,5 +342,18 @@ mod tests {
         let _ = tick_animations(1.0 / 60.0);
         assert!(spring.0.borrow().signal.is_alive());
         let _ = spring.peek();
+    }
+
+    #[test]
+    fn snap_jumps_without_leaving_spring_running() {
+        let spring = Spring::new_ui_transition(0.0);
+        spring.set(1.0);
+        assert!((spring.peek() - 0.0).abs() < 0.001);
+        spring.snap(1.0);
+        assert!((spring.peek() - 1.0).abs() < 0.001);
+        assert!((spring.0.borrow().target - 1.0).abs() < 0.001);
+        assert!(spring.0.borrow().velocity.abs() < 0.001);
+        let tick = tick_animations(1.0 / 60.0);
+        assert!(!tick.any, "snapped spring must not keep requesting redraw");
     }
 }

@@ -56,6 +56,12 @@ impl InteractiveBuilder {
         self
     }
 
+    /// Opt-in keyboard focus-visible ring (same chrome as Input; not shown on mouse focus).
+    pub fn focus_ring(mut self, enabled: bool) -> Self {
+        self.el = self.el.focus_ring(enabled);
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.el = self.el.child(child);
         self

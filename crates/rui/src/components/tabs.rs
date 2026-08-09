@@ -2,7 +2,8 @@
 //!
 //! 对齐 solid-ui / Kobalte Tabs：
 //! - [`tabs_headless`] / [`Tabs`]：无头 TabList（选中 index + ←/→），**不绘制**可见标签 UI
-//! - [`tabs_list`] / [`TabsList`]：可见 TabsList 样式壳（`bg-muted` 连体条带），值用 `Signal<String>`
+//! - [`tabs_list`] / [`TabsList`]：可见 TabsList 样式壳（`bg-muted` 连体条带），值用 `Signal<String>`；
+//!   **始终选中一项**（`required`）；方向键只移动焦点环，Enter/Space/点击才改选中
 //!
 //! ## 用法
 //! ```ignore
@@ -28,6 +29,7 @@ use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;
+use crate::utils::roving::{roving_edge, roving_move};
 use rui_macros::component;
 
 /// AccessKit / 焦点约定前缀。
@@ -101,22 +103,37 @@ impl From<TabsHeadlessBuilder> for Element {
             let mut el: Element = interactive(Element::new())
                 .focus_id(focus_id)
                 .focusable(true)
+                .focus_ring(true)
                 .on_key_down(move |ev| {
                     use winit::event::ElementState;
                     use winit::keyboard::{Key, NamedKey};
                     if ev.state != ElementState::Pressed || ev.repeat {
                         return false;
                     }
-                    let mut i = sel_k.get();
+                    let i = sel_k.get();
                     match ev.logical_key {
                         Key::Named(NamedKey::ArrowRight) => {
-                            i = (i + 1).min(n.saturating_sub(1));
-                            sel_k.set(i);
+                            if let Some(next) = roving_move(n, i, 1) {
+                                sel_k.set(next);
+                            }
                             true
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
-                            i = i.saturating_sub(1);
-                            sel_k.set(i);
+                            if let Some(next) = roving_move(n, i, -1) {
+                                sel_k.set(next);
+                            }
+                            true
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            if let Some(next) = roving_edge(n, false) {
+                                sel_k.set(next);
+                            }
+                            true
+                        }
+                        Key::Named(NamedKey::End) => {
+                            if let Some(next) = roving_edge(n, true) {
+                                sel_k.set(next);
+                            }
                             true
                         }
                         _ => false,
@@ -190,8 +207,18 @@ impl From<TabsListBuilder> for Element {
             value,
             default_value,
         } = builder;
+        // Tabs always keep one selected option; chips support ←/→ roving (via ToggleGroup).
+        let default_value = if default_value.is_empty() {
+            options
+                .first()
+                .map(|(v, _)| v.clone())
+                .unwrap_or_default()
+        } else {
+            default_value
+        };
         let mut b = toggle_group(&id)
             .multiple(false)
+            .required(true)
             .default_value(default_value)
             .options(options)
             .variant("outline")

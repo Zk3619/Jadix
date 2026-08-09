@@ -298,6 +298,8 @@ pub struct Element {
     pub switch_checked_sync: Option<Signal<bool>>,
     /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.
     pub checkbox_sync: Option<Signal<bool>>,
+    /// Opt-in keyboard focus ring ([`crate::style::sync_focus_ring_subtree`]); not used by Button / Input.
+    pub focus_ring: bool,
     /// Generic component-owned signal synchronization; see [`ReactiveSync`].
     pub reactive_sync: Option<ReactiveSync>,
     /// GPU 贴图资源键（见 [`crate::queue_image_rgba8`]）；布局收集时生成纹理四边形实例。
@@ -519,6 +521,7 @@ impl Element {
             input_paint_sync: None,
             switch_checked_sync: None,
             checkbox_sync: None,
+            focus_ring: false,
             reactive_sync: None,
             image_texture: None,
             class_set: None,
@@ -697,6 +700,11 @@ impl Element {
     }
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+    /// Enable shared focus-visible ring (theme `ring`, blur 3). Keyboard Tab only; see [`crate::style::focus_ring`].
+    pub fn focus_ring(mut self, enabled: bool) -> Self {
+        self.focus_ring = enabled;
         self
     }
     pub fn scroll_offset(mut self, x: f32, y: f32) -> Self {
