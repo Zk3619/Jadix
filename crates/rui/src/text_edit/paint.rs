@@ -1,6 +1,5 @@
 ﻿//! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
-use super::ColorExt;
 use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
@@ -12,7 +11,10 @@ use crate::components::input::{
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::style::InputCaretDraw;
+use crate::style::{
+    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
+    focus_ring_destructive_color, focus_ring_shadow_matches_color, InputCaretDraw,
+};
 use crate::utils::text_field::{focus_id_for_text_edit, pull_controlled_into_store};
 /// 每帧将 Input/Textarea 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
 pub(crate) fn sync_text_edit_paint_subtree(
@@ -96,7 +98,7 @@ fn sync_one_text_edit_paint(
     let mut border_c = if invalid {
         parse_color("destructive")
     } else if is_focused {
-        parse_color("border-ring")
+        focus_ring_border_color()
     } else {
         parse_color("input")
     };
@@ -106,17 +108,10 @@ fn sync_one_text_edit_paint(
         bg[3] *= 0.5;
     }
 
-    let (want_shadow_color, want_shadow_blur) = if is_focused {
-        let sc = if invalid {
-            parse_color("destructive").with_alpha(0.4)
-        } else {
-            crate::style::focus_ring_color()
-        };
-        (sc, crate::style::FOCUS_RING_BLUR)
-    } else if !desc.disabled {
-        ([0.0, 0.0, 0.0, 0.06], 1.0)
+    let ring_color = if invalid {
+        focus_ring_destructive_color()
     } else {
-        ([0.0, 0.0, 0.0, 0.0], 0.0)
+        focus_ring_color()
     };
 
     let caret_in_real = if is_focused {
@@ -171,15 +166,32 @@ fn sync_one_text_edit_paint(
         el.style.bg_color = bg;
         container_style = true;
     }
-    if (el.style.shadow_blur - want_shadow_blur).abs() > 0.01
-        || (el.style.shadow_color[0] - want_shadow_color[0]).abs() > 0.001
-        || (el.style.shadow_color[1] - want_shadow_color[1]).abs() > 0.001
-        || (el.style.shadow_color[2] - want_shadow_color[2]).abs() > 0.001
-        || (el.style.shadow_color[3] - want_shadow_color[3]).abs() > 0.001
-    {
-        el.style.shadow_color = want_shadow_color;
-        el.style.shadow_blur = want_shadow_blur;
-        container_layout = true;
+    if is_focused {
+        if !focus_ring_shadow_matches_color(el, true, ring_color) {
+            apply_focus_ring_shadow_color(el, true, false, ring_color);
+            container_layout = true;
+        }
+    } else {
+        let (want_color, want_blur, want_spread) = if !desc.disabled {
+            ([0.0, 0.0, 0.0, 0.06], 1.0, 0.0)
+        } else {
+            ([0.0, 0.0, 0.0, 0.0], 0.0, 0.0)
+        };
+        let rest_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01
+            && (el.style.shadow_spread - want_spread).abs() <= 0.01
+            && el.style.shadow_offset == [0.0, 0.0]
+            && (el.style.shadow_color[0] - want_color[0]).abs() <= 0.001
+            && (el.style.shadow_color[1] - want_color[1]).abs() <= 0.001
+            && (el.style.shadow_color[2] - want_color[2]).abs() <= 0.001
+            && (el.style.shadow_color[3] - want_color[3]).abs() <= 0.001;
+        if !rest_ok {
+            el.style.shadow_color = want_color;
+            el.style.shadow_blur = want_blur;
+            el.style.shadow_offset = [0.0, 0.0];
+            el.style.shadow_spread = want_spread;
+            el.style.shadow_inset = false;
+            container_layout = true;
+        }
     }
 
     let mut text_layout = false;

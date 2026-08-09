@@ -37,10 +37,10 @@
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
 | 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
-| 冒烟 | `desktop_smoke.md`：Win #3–#4（WP-1.1）已签；**#1–#2/#5–#8 与 macOS/Linux 未签** |
+| 冒烟 | `desktop_smoke.md`：Win #3–#7（WP-1.1 / WP-1.2）已签；**#1–#2/#8–#9 与 macOS/Linux 未签** |
 | 开放 P0 | 真窗口冒烟签署、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测已合入（手工 #5–#7 待 WP-1.4）；W1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：W1.1 Win #3–#4 已签；W1.2 代码+库测+Win #5–#7 已签；W1.3/2.x 有局部能力但 WP 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -89,8 +89,8 @@ flowchart TB
 | **路径** | `style/focus_ring.rs`、`style/theme.rs`、`utils/roving.rs`、`components/focus_trap.rs`、Combobox / ContextMenu / Menubar / Tabs |
 | **任务** | ① 可聚焦控件默认 `focus-visible` 环（ring token）；② 应用级 Tab 序文档化；③ 列表/菜单 roving 单测；④ Escape 仅关顶层浮层契约测 |
 | **验收** | smoke #5–#7；roving 单测进 `cargo test -p rui --lib` |
-| **状态** | ☑ 代码+库测已合入（Input 始终环；其它可受控 `focus-visible`；Tabs/ContextMenu/Menubar roving；Esc 契约测）；☐ 手工 smoke #5–#7 待 WP-1.4 三平台签署 |
-| **进展** | 细则见 [keyboard_nav.md](keyboard_nav.md) |
+| **状态** | ☑ 代码+库测已合入；☑ Win 开发机 smoke #5–#7 签署（2026-08-09，Kingdom / Win 10.0.26200；Hard 外侧环 + Tab 重绘；`focus_ring` / `roving` / Esc 契约测绿）；☐ macOS / Linux 待 WP-1.4 |
+| **进展** | 细则见 [keyboard_nav.md](keyboard_nav.md)；可配置 `FocusRingStyle::{Hard,Soft}` |
 
 ### WP-1.3 AccessKit 主路径
 

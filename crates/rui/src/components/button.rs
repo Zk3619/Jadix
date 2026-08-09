@@ -27,7 +27,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow,
+    focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
+    focus_ring_style, lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow,
     use_ui_transition_cubic, use_ui_transition_spring,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -49,7 +50,7 @@ impl ColorExt for [f32; 4] {
     }
 }
 
-/// `shadow-xs` 与 `focus-visible:ring` / `ring-destructive/20` 的合成（单槽 `box-shadow`）。
+/// `shadow-xs` 与 focus ring（Hard/Soft via [`focus_ring_params`]）的单槽 `box-shadow`。
 fn button_shadow_style_for_sync(
     is_focused: bool,
     disabled: bool,
@@ -57,12 +58,13 @@ fn button_shadow_style_for_sync(
 ) -> (f32, [f32; 4], [f32; 2], f32) {
     let xs = matches!(variant, "default" | "secondary" | "outline" | "destructive");
     if is_focused && !disabled {
+        let (blur, spread) = focus_ring_params(focus_ring_style());
         let c = if variant == "destructive" {
-            parse_color("destructive").with_alpha(0.2)
+            focus_ring_destructive_color()
         } else {
-            parse_color("ring")
+            focus_ring_color()
         };
-        return (3.0, c, [0.0, 0.0], 0.0);
+        return (blur, c, [0.0, 0.0], spread);
     }
     if xs && !disabled {
         let s = parse_box_shadow(SHADOW_XS);
@@ -665,7 +667,13 @@ impl From<ButtonBuilder> for Element {
         }
         container = container.bg(bg);
         if let Some(mut b_color) = border {
-            if builder.disabled && builder.variant == ButtonVariant::Outline {
+            if is_focused && !builder.disabled {
+                b_color = if builder.variant == ButtonVariant::Destructive {
+                    focus_ring_destructive_color()
+                } else {
+                    focus_ring_border_color()
+                };
+            } else if builder.disabled && builder.variant == ButtonVariant::Outline {
                 b_color[3] *= 0.5;
             }
             container = container.border(b_color, 1.0);
@@ -798,6 +806,7 @@ fn paint_button_root_from_hover(
     desc: &ButtonHoverPaint,
     focus_id: &str,
     is_hovered: bool,
+    is_focused: bool,
     impact: &mut LayoutStatus,
 ) {
     let hover_t = hover_t_for_id(focus_id, &desc.hover_easing);
@@ -807,7 +816,13 @@ fn paint_button_root_from_hover(
         bg[3] *= 0.5;
     }
     let border = border.map(|mut c| {
-        if desc.disabled && desc.variant == "outline" {
+        if is_focused && !desc.disabled {
+            c = if desc.variant == "destructive" {
+                focus_ring_destructive_color()
+            } else {
+                focus_ring_border_color()
+            };
+        } else if desc.disabled && desc.variant == "outline" {
             c[3] *= 0.5;
         }
         c
@@ -930,7 +945,31 @@ fn sync_button_focus_ring_shadow(
         && (el.style.shadow_offset[1] - want_off[1]).abs() <= 0.01;
     let spread_ok = (el.style.shadow_spread - want_spread).abs() <= 0.01;
     let inset_ok = el.style.shadow_inset == want_inset;
-    if blur_ok && color_ok && off_ok && spread_ok && inset_ok {
+
+    // `focus-visible:border-ring` for variants that already have a border (e.g. outline).
+    let mut border_dirty = false;
+    if el.style.border_width > 0.5 {
+        let want_border = if is_focused && !disabled {
+            if variant == "destructive" {
+                focus_ring_destructive_color()
+            } else {
+                focus_ring_border_color()
+            }
+        } else {
+            let (_, _, border) = button_chrome_for_variant(variant, 0.0);
+            let mut c = border.unwrap_or(parse_color("border"));
+            if disabled && variant == "outline" {
+                c[3] *= 0.5;
+            }
+            c
+        };
+        if el.style.border_color != want_border {
+            el.style.border_color = want_border;
+            border_dirty = true;
+        }
+    }
+
+    if blur_ok && color_ok && off_ok && spread_ok && inset_ok && !border_dirty {
         return;
     }
     el.style.shadow_color = want_color;
@@ -996,10 +1035,18 @@ pub(crate) fn sync_button_hover_paint_subtree(
         if let Some(fid) = el.focus_id.clone() {
             let key = format!("{}_hover", fid);
             let is_hovered = use_signal(&key, || false).peek() && !desc.disabled;
-            paint_button_root_from_hover(el, layout_tree, &desc, &fid, is_hovered, impact);
             let focused = use_signal("__rui_button_focus_id", String::new);
             let focus_visible = use_signal("__rui_focus_visible", || false);
             let is_focused = !desc.disabled && focus_visible.peek() && focused.peek() == fid;
+            paint_button_root_from_hover(
+                el,
+                layout_tree,
+                &desc,
+                &fid,
+                is_hovered,
+                is_focused,
+                impact,
+            );
             sync_button_focus_ring_shadow(
                 el,
                 layout_tree,

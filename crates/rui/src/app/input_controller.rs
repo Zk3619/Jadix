@@ -149,7 +149,7 @@ impl super::App {
                     crate::components::FOCUS_TRAP_RING_KEY,
                     String::new,
                 );
-                let ring = trap_ring.get();
+                let ring = trap_ring.peek();
                 let mut ids: Vec<String> = if !ring.is_empty() {
                     ring.split(',')
                         .map(|s| s.trim().to_string())
@@ -178,7 +178,8 @@ impl super::App {
                         crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
                     let focus_visible =
                         crate::core::reactivity::use_signal("__rui_focus_visible", || false);
-                    let current = focused.get();
+                    // peek: event path must not subscribe focus into a reactive effect.
+                    let current = focused.peek();
                     let shift = self.modifiers.shift_key();
                     let idx = ids.iter().position(|id| id == &current);
                     let next_idx = if shift {
@@ -195,6 +196,12 @@ impl super::App {
                     let next_id = ids[next_idx].clone();
                     focus_visible.set(true);
                     focused.set(next_id);
+                    // Focus chrome is paint-synced (peek), not rebuild-driven. Without a redraw,
+                    // snapped focus rings never repaint after Tab (springs used to keep frames alive).
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                        st.window.request_redraw();
+                    }
+                    return true;
                 }
             } else if !matches!(event.logical_key, Key::Named(NamedKey::Tab)) {
                 let focused =

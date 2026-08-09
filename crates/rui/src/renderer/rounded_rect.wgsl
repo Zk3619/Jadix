@@ -150,10 +150,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_color = mix(in.border_color, in.color, alpha_border);
     }
 
-    // Compute shadow factor
+    // Compute shadow factor.
+    // CSS `box-shadow: 0 0 0 <spread> <color>` (Tailwind / shadcn `ring-*`) uses blur=0 +
+    // positive spread: a hard band outside the border box. Gate on color + blur/spread/offset,
+    // not blur alone — otherwise Hard focus rings never paint.
     var shadow_alpha = 0.0;
-    if (in.shadow_blur > 0.0) {
-        let blur = max(in.shadow_blur, 1e-4);
+    let shadow_active = in.shadow_color.a > 0.001
+        && (in.shadow_blur > 0.001
+            || abs(in.shadow_spread) > 0.001
+            || abs(in.shadow_offset.x) > 0.001
+            || abs(in.shadow_offset.y) > 0.001);
+    if (shadow_active) {
+        // Hard rings (blur≈0) still need ~1px AA; soft rings keep their blur radius.
+        let blur = max(in.shadow_blur, aa);
         let spread_signed = in.shadow_spread;
         if (in.shadow_inset > 0.5) {
             // Inset (CSS): shadow in the ring between the border box and an inner rounded rect
@@ -166,7 +175,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let from_inner = smoothstep(0.0, blur, d_inner);
             shadow_alpha = (from_outer * from_inner) * in.shadow_color.a;
         } else {
-            // Outset: only outside the rect (expanded shadow shape).
+            // Outset: fill the border-box expanded by spread; compositing with (1-alpha_bg)
+            // leaves the visible band outside the control (works with or without a CSS border).
             let d_shadow = sd_round_box(
                 in.p - in.shadow_offset,
                 b + vec2<f32>(spread_signed),

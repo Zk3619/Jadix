@@ -30,8 +30,10 @@ pub use element_style::{
     parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,
 };
 pub use focus_ring::{
-    apply_focus_ring_shadow, control_focus_ring_active, focus_ring_color, focus_ring_shadow_matches,
-    sync_focus_ring_subtree, FOCUS_RING_BLUR,
+    apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,
+    focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
+    focus_ring_shadow_matches, focus_ring_shadow_matches_color, sync_focus_ring_subtree,
+    FOCUS_RING_BLUR, FOCUS_RING_HARD_SPREAD, FOCUS_RING_SOFT_BLUR,
 };
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,
@@ -44,8 +46,8 @@ pub use text_style::{
     TextSpanKind, TextStyle, WhiteSpace,
 };
 pub use theme::{
-    get_theme, is_dark_theme, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,
-    DesignTokens, Theme, ThemeMode,
+    focus_ring_style, get_theme, is_dark_theme, set_focus_ring_style, set_theme, set_theme_mode,
+    theme_mode, toggle_theme_mode, with_theme, DesignTokens, FocusRingStyle, Theme, ThemeMode,
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, resolve_class_variants, sync_class_variants_subtree,

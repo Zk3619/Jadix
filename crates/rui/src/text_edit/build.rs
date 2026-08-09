@@ -1,6 +1,5 @@
 ﻿//! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize grip。
 
-use super::ColorExt;
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
@@ -160,7 +159,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let mut border_c = if invalid {
         parse_color("destructive")
     } else if is_focused {
-        parse_color("border-ring")
+        crate::style::focus_ring_border_color()
     } else {
         parse_color("input")
     };
@@ -203,14 +202,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         single_line_container.expect("single-line text edit requires single_line_container")
     };
     container = container.bg(bg).border(border_c, 1.0);
-    if is_focused {
-        let shadow_color = if invalid {
-            parse_color("destructive").with_alpha(0.4)
-        } else {
-            crate::style::focus_ring_color()
-        };
-        container = container.shadow(shadow_color, crate::style::FOCUS_RING_BLUR);
-    } else if !disabled {
+    if !is_focused && !disabled {
         container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
     }
 
@@ -349,6 +341,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let resizable = multiline && resizable && !disabled;
 
     let mut el: Element = container.into();
+    if is_focused {
+        let ring_color = if invalid {
+            crate::style::focus_ring_destructive_color()
+        } else {
+            crate::style::focus_ring_color()
+        };
+        crate::style::apply_focus_ring_shadow_color(&mut el, true, false, ring_color);
+    }
     el = el.child(text_region);
 
     if multiline {

@@ -1,6 +1,7 @@
 //! 设计令牌与主题系统（ShadCN v4 风格 OKLCH → display sRGB）。
 //!
 //! 支持运行时浅色 / 深色切换；[`get_theme`] 读取当前主题，[`set_theme_mode`] 切换。
+//! 焦点环几何由 [`FocusRingStyle`] 配置（Hard / Soft），与配色 token 分离。
 
 use std::cell::RefCell;
 
@@ -11,6 +12,16 @@ pub enum ThemeMode {
     #[default]
     Light,
     Dark,
+}
+
+/// Theme-level focus-ring geometry (ShadCN v4 Hard vs RUI Soft glow).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FocusRingStyle {
+    /// ShadCN v4：硬边 `spread=3`, `blur=0`.
+    #[default]
+    Hard,
+    /// 柔光：`blur=3`, `spread=0`.
+    Soft,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -29,7 +40,7 @@ pub struct DesignTokens {
     pub foreground: [f32; 4],
     pub border: [f32; 4],
     pub input: [f32; 4],
-    /// 焦点环色；含 alpha 以贴近 `ring-ring/50` 观感。
+    /// `ring-ring/50` 色（几何由 [`FocusRingStyle`] 决定）。
     pub ring: [f32; 4],
     pub radius: f32,
 }
@@ -38,6 +49,7 @@ pub struct DesignTokens {
 pub struct Theme {
     pub mode: ThemeMode,
     pub colors: DesignTokens,
+    pub focus_ring_style: FocusRingStyle,
 }
 
 impl Theme {
@@ -45,6 +57,7 @@ impl Theme {
         // 与 shadcn-ui `apps/v4/app/globals.css` 中 `:root` 对齐（浅色）。
         Self {
             mode: ThemeMode::Light,
+            focus_ring_style: FocusRingStyle::Hard,
             colors: DesignTokens {
                 background: oklch_to_display_srgba(1.0, 0.0, 0.0, 1.0),
                 foreground: oklch_to_display_srgba(0.145, 0.0, 0.0, 1.0),
@@ -60,6 +73,7 @@ impl Theme {
                 destructive_foreground: oklch_to_display_srgba(0.97, 0.01, 17.0, 1.0),
                 border: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 input: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
+                // ring-ring/50; Hard/Soft geometry is separate.
                 ring: oklch_to_display_srgba(0.708, 0.0, 0.0, 0.5),
                 radius: 0.625,
             },
@@ -70,6 +84,7 @@ impl Theme {
         // 与 shadcn-ui v4 `.dark` 对齐。
         Self {
             mode: ThemeMode::Dark,
+            focus_ring_style: FocusRingStyle::Hard,
             colors: DesignTokens {
                 background: oklch_to_display_srgba(0.145, 0.0, 0.0, 1.0),
                 foreground: oklch_to_display_srgba(0.985, 0.0, 0.0, 1.0),
@@ -124,15 +139,28 @@ pub fn is_dark_theme() -> bool {
     CURRENT_THEME.with(|t| t.borrow().is_dark())
 }
 
+pub fn focus_ring_style() -> FocusRingStyle {
+    CURRENT_THEME.with(|t| t.borrow().focus_ring_style)
+}
+
+/// Set focus-ring geometry without replacing color tokens.
+pub fn set_focus_ring_style(style: FocusRingStyle) {
+    CURRENT_THEME.with(|t| t.borrow_mut().focus_ring_style = style);
+}
+
 pub fn set_theme(theme: Theme) {
     CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
 }
 
+/// Switch light/dark tokens while preserving the current [`FocusRingStyle`].
 pub fn set_theme_mode(mode: ThemeMode) {
-    set_theme(match mode {
+    let style = focus_ring_style();
+    let mut next = match mode {
         ThemeMode::Light => Theme::light(),
         ThemeMode::Dark => Theme::dark(),
-    });
+    };
+    next.focus_ring_style = style;
+    set_theme(next);
 }
 
 pub fn toggle_theme_mode() -> ThemeMode {
@@ -142,4 +170,22 @@ pub fn toggle_theme_mode() -> ThemeMode {
     };
     set_theme_mode(next);
     next
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_theme_mode_preserves_focus_ring_style() {
+        let prev_mode = theme_mode();
+        let prev_style = focus_ring_style();
+        set_focus_ring_style(FocusRingStyle::Soft);
+        set_theme_mode(ThemeMode::Dark);
+        assert_eq!(focus_ring_style(), FocusRingStyle::Soft);
+        set_theme_mode(ThemeMode::Light);
+        assert_eq!(focus_ring_style(), FocusRingStyle::Soft);
+        set_focus_ring_style(prev_style);
+        set_theme_mode(prev_mode);
+    }
 }

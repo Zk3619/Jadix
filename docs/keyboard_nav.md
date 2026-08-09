@@ -30,10 +30,10 @@ Gallery / 应用应保证上述 id **页面内唯一**；Tab 顺序 = 树 DFS �
 
 | 规则 | 说明 |
 |------|------|
-| 样式 | 与 Input 一致：主题 token `ring` + blur `3`（[`FOCUS_RING_BLUR`](../crates/rui/src/style/focus_ring.rs)），offset/spread 0 |
+| 样式 | 与 Input 一致：主题 token `ring`（`ring-ring/50`）。默认 [`FocusRingStyle::Hard`](../crates/rui/src/style/theme.rs)（ShadCN v4：外侧 hard ring，spread `3`、blur `0`）；可 `set_focus_ring_style(Soft)` 切柔光。环画在控件盒外侧（与是否有边框无关，对齐 Tailwind `ring-*`）；有边框控件另同步 `border-ring`。无 ring-offset |
 | 文本控件 | Input / Textarea：**任意聚焦**即画环（含鼠标） |
 | 其它可受控控件 | Button、下拉触发器、菜单项、Checkbox / Switch / Toggle / Radio / TabsList 芯片、ContextMenu 触发器等：仅 **`focus-visible`（键盘 Tab）** 画环 |
-| 实现 | Button：spring 合成；其它 opt-in：`Element::focus_ring` + `sync_focus_ring_subtree` |
+| 实现 | 共享 [`focus_ring`](../crates/rui/src/style/focus_ring.rs)；Button snap 同步；其它 opt-in：`Element::focus_ring` + `sync_focus_ring_subtree` |
 
 ## Escape 关闭浮层
 
@@ -63,3 +63,9 @@ Helpers：[`roving_move`](../crates/rui/src/utils/roving.rs) / [`roving_edge`](.
 | 5 | Tab / Shift+Tab | 可受控控件出现焦点环；顺序合理 |
 | 6 | Combobox：方向键 + Enter | 选项可选中并关闭 |
 | 7 | Escape | 仅关闭最上层浮层 |
+
+签署栏见 [desktop_smoke.md](desktop_smoke.md)。
+
+- [x] 手工：Win 上 smoke **#5** 通过（2026-08-09，Kingdom / Win 10.0.26200）
+- [x] 手工：Win 上 smoke **#6** 通过（Combobox 方向键 + Enter）
+- [x] 手工：Win 上 smoke **#7** 通过（Escape 仅关顶层）
