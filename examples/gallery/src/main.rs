@@ -10,19 +10,19 @@
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
 use rui::app::open_secondary_window;
 use rui::component;
-use rui::components::scroll_area::{scroll_offset_y_signal_key, scroll_viewport_h_signal_key};
 use rui::components::*;
 use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
-use rui::core::reactivity::{use_signal, Signal};
+use rui::core::reactivity::{batch, use_signal, Signal};
 use rui::core::tree::Element;
 use rui::primitives::{hstack, r#box, vstack, Portal, PortalProps};
-use rui::style::{parse_color, parse_text_color};
+use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
 use std::collections::HashSet;
 
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
 const PRIMITIVES_SHOWCASE_REACTIVE: &str = "examples/gallery/PrimitivesShowcase:controls";
-const PRIMITIVES_VIRT_REACTIVE: &str = "examples/gallery/PrimitivesShowcase:virt_list";
+const TEXT_ALIGN_WP21_VIRT: &str = "gal-wp21-virt";
+const PRIMITIVES_VIRT: &str = "gal-virt-demo";
 const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
 const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
@@ -207,7 +207,12 @@ fn InputShowcase() -> rui::core::tree::Element {
                         id="gal-s2-mark-invalid"
                         variant="outline"
                         size="sm"
-                        on_click={move || mark_invalid.set(!mark_invalid.peek())}
+                        on_click={move || {
+                            // Solid `batch`: one flush for caption bind_text + Input invalid bind_attr.
+                            batch(|| {
+                                mark_invalid.set(!mark_invalid.peek());
+                            });
+                        }}
                     >
                         { if mark_invalid.get() { "Clear invalid" } else { "Mark invalid" } }
                     </Button>
@@ -616,6 +621,82 @@ fn ScrollShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
+/// GPU PartialLoad 默认关（见 docs/damage.md / 计划 B8）。计数用快照，勿每帧 ReactiveSync。
+#[component]
+fn DamageShowcase() -> rui::core::tree::Element {
+    let count = use_signal("gal_wp22_count", || 0_u32);
+    let show_extra = use_signal("gal_wp22_struct", || false);
+    let partial_snap = use_signal("gal_wp22_partial_snap", || 0_u64);
+    let full_snap = use_signal("gal_wp22_full_snap", || 0_u64);
+    let base_partial = use_signal("gal_wp22_base_partial", || 0_u64);
+    let base_full = use_signal("gal_wp22_base_full", || 0_u64);
+
+    let snap_stats = move || {
+        partial_snap.set(rui::partial_load_frame_count());
+        full_snap.set(rui::full_clear_frame_count());
+    };
+
+    ui! {
+        <MyCard title="WP-2.2) 细粒度 damage（策略可测）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对照 docs/damage.md。快照为逻辑 Clear/Load 策略累计（默认 GPU 仍 FullClear）。勿每帧悬停读数。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "勾选：① 重置→连点同宽+1→刷新：ΔPartialLoad↑、ΔFullClear≈0 ② 切换结构→刷新：ΔFullClear↑"
+                </Label>
+                <Label id="gal-wp22-stats" w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { format!(
+                        "快照: PartialLoad={} (+{})  FullClear={} (+{})",
+                        partial_snap.get(),
+                        partial_snap.get().saturating_sub(base_partial.get()),
+                        full_snap.get(),
+                        full_snap.get().saturating_sub(base_full.get())
+                    ) }
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Label id="gal-wp22-digit" text_size="1.5rem" font_weight="700" leading="none">
+                        { format!("{:02}", count.get() % 100) }
+                    </Label>
+                    <Button id="gal-wp22-inc" variant="default" on_click={move || {
+                        count.set(count.get().wrapping_add(1));
+                        // Present of this click runs after the handler; snap on next refresh.
+                    }}>
+                        "同宽 +1（00–99）"
+                    </Button>
+                    <Button id="gal-wp22-struct" variant="outline" on_click={move || {
+                        show_extra.set(!show_extra.get());
+                    }}>
+                        "切换结构（Show）"
+                    </Button>
+                    <Button id="gal-wp22-refresh" variant="outline" on_click={move || {
+                        snap_stats();
+                    }}>
+                        "刷新快照"
+                    </Button>
+                    <Button id="gal-wp22-reset" variant="secondary" on_click={move || {
+                        rui::reset_frame_policy_counters();
+                        partial_snap.set(0);
+                        full_snap.set(0);
+                        base_partial.set(0);
+                        base_full.set(0);
+                    }}>
+                        "重置计数"
+                    </Button>
+                </HStack>
+                <Show when={show_extra.get()}>
+                    <Rect id="gal-wp22-extra" bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <Label text_size="0.875rem" leading="normal">
+                            "结构变更样例：挂载/卸载此块应走全帧 Clear（ΔFullClear↑）。"
+                        </Label>
+                    </Rect>
+                </Show>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn LogicalShowcase() -> rui::core::tree::Element {
     ui! {
@@ -638,6 +719,95 @@ fn LogicalShowcase() -> rui::core::tree::Element {
                     <Rect bg="background" rounded="0.4rem" pt="0.75rem" pr="1rem" pb="0.25rem" pl="0.5rem"><Label>"pt/pr/pb/pl"</Label></Rect>
                     <Rect bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></Rect>
                 </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// WP-2.1 visual acceptance: narrow soft-wrap, Chip/Mention atomic, VirtualList font row height.
+fn gal_wp21_chip_mention() -> Element {
+    Element::new()
+        .text_spans(vec![
+            TextSpan::new("prefix "),
+            TextSpan::new("Chip Label")
+                .chip()
+                .padding_x(4.0)
+                .background([100, 116, 139, 56]),
+            TextSpan::new(" and "),
+            TextSpan::new("@alice").mention(),
+            TextSpan::new(" wrap after atomic spans"),
+        ])
+        .text_size(14.0)
+        .text_leading(1.5)
+        .text_color(parse_text_color("foreground"))
+        .w("10rem")
+        .min_w("0")
+}
+
+#[component]
+fn TextAlignShowcase() -> rui::core::tree::Element {
+    let row_h = rui::item_height_for_text(14.0, 1.5);
+    let chip_mention = gal_wp21_chip_mention();
+    // Always-on scrollbar: idle `auto` chrome hides and a mid-list offset looks "broken".
+    let virt: Element = virtual_list(TEXT_ALIGN_WP21_VIRT)
+        .item_count(120)
+        .item_height_from_font(14.0, 1.5)
+        .height(168.0)
+        .overscan(4)
+        .scrollbar_visibility("always")
+        .render_item(|i| {
+            label(&format!("gal-wp21-virt-{i}"))
+                .text(format!("virtual row {i:03}"))
+                .size(14.0)
+                .leading(1.5)
+                .into()
+        })
+        .into();
+
+    ui! {
+        <MyCard title="WP-2.1) 测宽 ≡ glyphon 分行">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Gallery 验收（对照 docs/text_align.md）：窄框多行软折不横溢；Chip/Mention 整段原子；VirtualList 行高 = item_height_for_text(14, 1.5)。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { format!("勾选：① ASCII 窄折 ② CJK 窄折 ③ Chip/Mention 不中段断开 ④ VirtualList 行高 {row_h}px、滚动只挂可见行") }
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
+                    <VStack gap="0.35rem" min_w="0">
+                        <Label font_weight="700" text_size="0.75rem">"ASCII soft-wrap（~5rem）"</Label>
+                        <Rect id="gal-wp21-ascii" bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label id="gal-wp21-ascii-label" w="100%" text_size="0.875rem" leading="normal">
+                                "hello world from rui text measure alignment"
+                            </Label>
+                        </Rect>
+                    </VStack>
+                    <VStack gap="0.35rem" min_w="0">
+                        <Label font_weight="700" text_size="0.75rem">"CJK soft-wrap（~6rem）"</Label>
+                        <Rect id="gal-wp21-cjk" bg="muted" rounded="0.375rem" p="0.5rem" w="6rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label id="gal-wp21-cjk-label" w="100%" text_size="1rem" leading="normal">
+                                "中文日文测试测宽分行对齐用例足够长"
+                            </Label>
+                        </Rect>
+                    </VStack>
+                    <VStack gap="0.35rem" min_w="0">
+                        <Label font_weight="700" text_size="0.75rem">"Chip + Mention（10rem）"</Label>
+                        <Rect id="gal-wp21-rich" bg="muted" rounded="0.375rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            { chip_mention }
+                        </Rect>
+                    </VStack>
+                </HStack>
+                <VStack gap="0.35rem" w="100%" min_w="0">
+                    <Label font_weight="700" text_size="0.875rem">
+                        { format!("VirtualList · item_height_from_font(14, 1.5) = {row_h}px") }
+                    </Label>
+                    <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "首屏应从 virtual row 000 起；滚动条常显。行高 21px，仅挂载可见区间，无重叠/空隙跳变。"
+                    </Label>
+                    <Rect bg="muted" rounded="0.375rem" p="0.25rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        { virt }
+                    </Rect>
+                </VStack>
             </VStack>
         </MyCard>
     }
@@ -1159,22 +1329,21 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                             </VStack>
                         </HStack>
                         <Label id="gal-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>
-                        <ScrollArea id="virt-demo" w="100%" h="11rem" overflow_y="auto" overflow_x="hidden" p="0.5rem" bg="muted" rounded="0.375rem">
-                            { rui::reactive!(PRIMITIVES_VIRT_REACTIVE, move || {
-                                let sy = use_signal(&scroll_offset_y_signal_key("virt-demo"), || 0.0_f32).get();
-                                let vh = use_signal(&scroll_viewport_h_signal_key("virt-demo"), || 160.0_f32).get();
-                                let (a, b) = rui::visible_item_range(sy, vh, 22.0, 200, 8);
-                                let mut col = vstack().w("100%").gap("2px");
-                                // 行文案勿夹每帧变化的 window 边界，否则滚动时整窗 text 全变、glyphon 每帧重跑。
-                                for i in a..b {
-                                    let row: Element = label(&format!("virt-row-{i}"))
-                                        .text(format!("virtual row {i:04}"))
-                                        .into();
-                                    col = col.child(row);
-                                }
-                                Element::from(col)
-                            }) }
-                        </ScrollArea>
+                        <Rect bg="muted" rounded="0.375rem" p="0.25rem" w="100%">
+                            { Element::from(
+                                virtual_list(PRIMITIVES_VIRT)
+                                    .item_count(200)
+                                    .item_height(22.0)
+                                    .height(176.0)
+                                    .overscan(8)
+                                    .scrollbar_visibility("always")
+                                    .render_item(|i| {
+                                        label(&format!("virt-row-{i}"))
+                                            .text(format!("virtual row {i:04}"))
+                                            .into()
+                                    }),
+                            ) }
+                        </Rect>
                     </VStack>
                 </Reactive>
             </MyCard>
@@ -1763,6 +1932,7 @@ fn gallery_section_body(section: &str) -> Element {
         "layout" => ui! {
             <VStack w="100%" gap="1rem" p="1.5rem">
                 <Label text_size="1.25rem" font_weight="700">"布局"</Label>
+                <DamageShowcase />
                 <ScrollShowcase />
                 <LogicalShowcase />
                 <UtilityClassShowcase />
@@ -1773,6 +1943,7 @@ fn gallery_section_body(section: &str) -> Element {
         "text" => ui! {
             <VStack w="100%" gap="1rem" p="1.5rem">
                 <Label text_size="1.25rem" font_weight="700">"文本"</Label>
+                <TextAlignShowcase />
                 <TextCompatibilityShowcase />
                 <EmojiRealtimeRegressionShowcase />
                 <TypographyShowcase />

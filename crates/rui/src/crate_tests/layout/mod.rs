@@ -5,4 +5,5 @@ mod portal_scroll_passthrough;
 mod scroll_clip_border;
 mod scroll_content_shrink;
 mod showcase_collapse;
+mod virtual_list_scroll;
 mod sidebar_shell_width;

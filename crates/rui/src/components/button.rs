@@ -908,9 +908,26 @@ fn paint_button_root_from_hover(
     }
     if layout_hit {
         *impact = impact.merge(LayoutStatus::LayoutChanged);
+        push_button_paint_damage(el);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
+        push_button_paint_damage(el);
     }
+}
+
+/// Local dirty rect for hover/focus chrome (WP-2.2 — avoid full-window Clear).
+fn push_button_paint_damage(el: &Element) {
+    let b = el.layout_bounds;
+    if b[2] <= 0.0 || b[3] <= 0.0 {
+        return;
+    }
+    let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
+    crate::app::damage::push_frame_paint_damage([
+        b[0] - pad,
+        b[1] - pad,
+        b[2] + pad * 2.0,
+        b[3] + pad * 2.0,
+    ]);
 }
 
 fn sync_button_focus_ring_shadow(
@@ -979,6 +996,7 @@ fn sync_button_focus_ring_shadow(
     el.style.shadow_inset = want_inset;
     layout_tree.update_taffy_node_style(el);
     *impact = impact.merge(LayoutStatus::StyleChanged);
+    push_button_paint_damage(el);
 }
 
 /// Solid-style in-place bind for `<Button variant={sig.get()}>`.

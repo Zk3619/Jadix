@@ -11,6 +11,10 @@ use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
 
 use crate::renderer::font_loader::{self, ensure_coverage_for_text};
 
+/// Logical-px epsilon when comparing [`PreparedLine::width`] to `avail` / glyphon run widths
+/// (WP-2.1). Line **counts** for soft-wrap at break opportunities must match exactly.
+pub const LINE_WIDTH_EPS: f32 = 1.0;
+
 /// Opaque prepared paragraph: segment widths cached for arbitrary available widths.
 #[derive(Clone, Debug)]
 pub struct PreparedText {
@@ -410,6 +414,51 @@ pub fn prepare_with_family(
         cache.insert(key, prepared.clone());
     });
     prepared
+}
+
+/// Soft-wrap line count from a glyphon [`Buffer`] at `avail_width` (logical px), using the
+/// same family / weight / shaping rules as [`measure_run_width`].
+///
+/// Used by WP-2.1 `text_align_*` tests to assert measure [`layout_lines`] ≡ paint soft-wrap.
+pub fn glyphon_soft_wrap_line_count(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    avail_width: f32,
+) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    with_layout_font_system(|font_system| {
+        let family = crate::renderer::text_hit::best_font_family(font_system);
+        let weight =
+            crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+        let shaping = if text.is_ascii() {
+            Shaping::Basic
+        } else {
+            Shaping::Advanced
+        };
+        ensure_coverage_for_text(font_system, text);
+        let avail = avail_width.max(1.0);
+        let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
+        // Tall window so soft-wrap produces multiple runs without vertical clipping.
+        buffer.set_size(
+            font_system,
+            Some(avail),
+            Some((line_height * 128.0).max(line_height + 2.0)),
+        );
+        buffer.set_text(
+            font_system,
+            text,
+            Attrs::new()
+                .family(family)
+                .weight(glyphon::fontdb::Weight(weight)),
+            shaping,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        buffer.layout_runs().count()
+    })
 }
 
 /// Soft-wrap prepared segments into concrete lines (segment ranges + concatenated text).

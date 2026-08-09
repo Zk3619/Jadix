@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
@@ -8,8 +9,8 @@ use winit::window::Window;
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
-    BackdropBlurPipeline, InstanceInput, RuiPipeline, RuiTextRenderer, TexturedInstanceInput,
-    TexturedQuadPipeline,
+    BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
+    TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -73,6 +74,8 @@ pub(super) struct AppState {
     pub(super) pipeline: RuiPipeline,
     textured_pipeline: TexturedQuadPipeline,
     backdrop_blur: BackdropBlurPipeline,
+    /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
+    present_retain: PresentRetainPipeline,
     image_textures: std::collections::HashMap<String, super::image_registry::GpuImageTexture>,
     textured_instance_buffer: wgpu::Buffer,
     textured_instance_capacity: usize,
@@ -164,6 +167,10 @@ pub(super) struct AppState {
     /// Fingerprint of the last submitted GPU frame (instances + text chrome + caret).
     /// Used to skip acquire/submit/present when a redraw was requested but nothing visual changed.
     last_gpu_frame_fp: u64,
+    /// Hash of all `scroll:` viewport offsets after prepass. Any change invalidates PartialLoad
+    /// (pixels move across the viewport; scissor from hover/bind_text would paint scroll only
+    /// inside the old dirty rect).
+    last_scroll_offset_fp: u64,
 }
 
 impl AppState {
@@ -474,6 +481,8 @@ impl AppState {
         let pipeline = RuiPipeline::new(&device, &config);
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
+        let mut present_retain = PresentRetainPipeline::new(&device, config.format);
+        let _ = present_retain.ensure_size(&device, config.width, config.height);
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
         let textured_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Textured instance buffer"),
@@ -520,6 +529,7 @@ impl AppState {
             pipeline,
             textured_pipeline,
             backdrop_blur,
+            present_retain,
             image_textures: std::collections::HashMap::new(),
             textured_instance_buffer,
             textured_instance_capacity: 256,
@@ -592,7 +602,28 @@ impl AppState {
             force_full_redraw: true,
             has_presented_frame: false,
             last_gpu_frame_fp: 0,
+            last_scroll_offset_fp: 0,
         }
+    }
+
+    /// Fingerprint scroll viewport offsets (logical). Used to force FullClear when content moves.
+    fn scroll_offset_fingerprint(root: &Element) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        fn walk(el: &Element, hasher: &mut DefaultHasher) {
+            if let Some(fid) = el.focus_id.as_deref() {
+                if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                    rest.hash(hasher);
+                    el.scroll_offset[0].to_bits().hash(hasher);
+                    el.scroll_offset[1].to_bits().hash(hasher);
+                }
+            }
+            for child in &el.children {
+                walk(child, hasher);
+            }
+        }
+        walk(root, &mut hasher);
+        hasher.finish()
     }
 
     pub(super) fn union_damage(&mut self, rect: [f32; 4]) {
@@ -615,10 +646,18 @@ impl AppState {
         self.damage_rect = None;
     }
 
-    fn damage_scissor_padding(instances: &[InstanceInput]) -> f32 {
-        instances.iter().fold(8.0_f32, |acc, inst| {
-            let pad = inst.shadow_blur + inst.shadow_spread.abs() + 8.0;
-            acc.max(pad)
+    /// Logical padding around paint damage for shadows / AA. Fixed cap — do not scan every
+    /// instance (that made scissor huge and expensive on page switches).
+    const DAMAGE_SCISSOR_PAD_LOGICAL: f32 = 16.0;
+
+    /// Opt-in GPU PartialLoad (`RUI_PARTIAL_DAMAGE=1`). Default off: Solid-style coherent
+    /// full present; retain+blit without draw culling regresses forms Mark invalid.
+    fn gpu_partial_damage_enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("RUI_PARTIAL_DAMAGE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
         })
     }
 
@@ -674,6 +713,15 @@ impl AppState {
         self.root_element = root_element;
         recompute_scroll_viewport_flags(&mut self.root_element);
         self.layout_status = status;
+        // Route / gallery page swaps must not PartialLoad over a stale retain buffer
+        // (progressive unordered patches + scissor from off-screen old bounds).
+        if matches!(
+            status,
+            crate::core::tree::LayoutStatus::StructureChanged
+                | crate::core::tree::LayoutStatus::LayoutChanged
+        ) {
+            self.mark_full_redraw();
+        }
     }
 
     pub(crate) fn reconcile_subtree(
@@ -705,6 +753,12 @@ impl AppState {
 
         recompute_scroll_viewport_flags(&mut self.root_element);
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        if matches!(
+            status,
+            LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+        ) {
+            self.mark_full_redraw();
+        }
         status
     }
 
@@ -844,11 +898,10 @@ impl AppState {
         self.template_paths.insert(template_id.to_string(), path);
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
         if matches!(status, crate::core::tree::LayoutStatus::StyleChanged) {
-            // Paint-only text/style (e.g. bind_text counter with unchanged intrinsic width):
-            // force a full redraw so partial scissor / atlas reuse cannot keep stale glyphs.
-            self.mark_full_redraw();
+            // Paint-only (e.g. bind_text `"10"`→`"11"`): dirty the glyph box, keep Load+scissor
+            // (WP-2.2). Do not `mark_full_redraw` — that forces a full Clear every counter tick.
             if bounds[2] > 0.0 && bounds[3] > 0.0 {
-                self.union_damage(bounds);
+                super::damage::accumulate_paint_damage(&mut self.damage_rect, bounds);
             }
         }
         status
@@ -1053,6 +1106,7 @@ impl AppState {
     /// `Outdated` without a size change.
     pub(super) fn recover_surface(&mut self) {
         self.surface.configure(&self.device, &self.config);
+        self.mark_full_redraw();
     }
 
     pub(super) fn render(
@@ -1144,18 +1198,27 @@ impl AppState {
         );
 
         use crate::core::tree::LayoutStatus;
-        if sync_impact != LayoutStatus::Clean {
-            let (lw, lh) = self.logical_size();
-            self.union_damage([0.0, 0.0, lw, lh]);
+        // Merge local chrome dirty rects (button hover, etc.) before deciding Clear vs Load.
+        if let Some(local) = super::damage::take_frame_paint_damage() {
+            self.union_damage(local);
         }
+        // WP-2.2: paint-only StyleChanged must NOT expand to the full window (that forced
+        // FullClear on every hover spring tick / bind_text). Structure / layout geometry
+        // changes move pixels → PartialLoad+scissor is unsafe (must FullClear).
+        match sync_impact {
+            LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+            LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged => {
+                self.mark_full_redraw();
+            }
+        }
+        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+
         if matches!(
             pre_chrome_layout_status,
             LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
         ) {
             self.mark_full_redraw();
         }
-
-        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
 
         let portal_moves =
             crate::layout::layout_tree::hoist_portal_subtrees(&mut self.root_element);
@@ -1170,13 +1233,17 @@ impl AppState {
         ) && self.last_resized_event.is_some();
         let mut scrollbar_update_resolved = scrollbar_update;
         if !skip_scroll_preupdate {
-            // Only `LayoutChanged` / `StructureChanged` from the *element tree* (reconcile/rebuild)
-            // promote to a full scrollbar prepass — not per-frame chrome sync.
-            scrollbar_update_resolved = match pre_chrome_layout_status {
-                crate::core::tree::LayoutStatus::StructureChanged
-                | crate::core::tree::LayoutStatus::LayoutChanged => ScrollbarUpdateMode::Full,
-                crate::core::tree::LayoutStatus::StyleChanged
-                | crate::core::tree::LayoutStatus::Clean => scrollbar_update,
+            // Promote on element-tree StructureChanged from either reconcile (`layout_status`) or
+            // same-frame `ReactiveSync` (e.g. VirtualList window remount). Do **not** promote on
+            // chrome-only LayoutChanged inside sync_impact (hover/shadow) — that was the old
+            // flicker path when chrome was merged into `layout_status`.
+            scrollbar_update_resolved = match (
+                pre_chrome_layout_status,
+                sync_impact,
+            ) {
+                (LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged, _)
+                | (_, LayoutStatus::StructureChanged) => ScrollbarUpdateMode::Full,
+                (LayoutStatus::StyleChanged | LayoutStatus::Clean, _) => scrollbar_update,
             };
             update_scrollbar_elements(
                 &mut self.root_element,
@@ -1185,6 +1252,14 @@ impl AppState {
                 scrollbar_update_resolved,
                 active_drag_rest,
             );
+            // Content scroll moves every pixel in the viewport. If we PartialLoad with a
+            // leftover hover/bind_text scissor, only that rect shows the new scroll offset
+            // (gallery: hover then wheel → corruption, then FullClear jump).
+            let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
+            if self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp {
+                self.mark_full_redraw();
+            }
+            self.last_scroll_offset_fp = scroll_fp;
         }
         #[cfg(debug_assertions)]
         let pre_done = Instant::now();
@@ -1216,6 +1291,9 @@ impl AppState {
 
         let (logical_w, logical_h) = self.logical_size();
         // StructureChanged (and cold start / portal hoist) still need a full Taffy rebuild.
+        // Include same-frame `ReactiveSync` StructureChanged (`sync_impact`): VirtualList replaces
+        // body children while scroll uses `set_silent`, so `layout_status` stays Clean and the
+        // fast path would collect with stale taffy child counts (element 23 vs taffy 17).
         // LayoutChanged: mark_dirty then compute from the **app root**. Do not use
         // `pick_subtree_compute_root` — Taffy treats the compute node as a layout root and
         // zeros its `location`, which collapses absolute positions for that whole branch
@@ -1224,7 +1302,7 @@ impl AppState {
         let use_full_taffy_rebuild = self.layout_tree.root_node.is_none()
             || portal_moves > 0
             || matches!(
-                pre_chrome_layout_status,
+                layout_for_build,
                 crate::core::tree::LayoutStatus::StructureChanged
             );
         let layout_subtree_root: Option<taffy::prelude::NodeId> = None;
@@ -1627,13 +1705,56 @@ impl AppState {
             });
 
         let (logical_w, logical_h) = self.logical_size();
-        let damage_covers_viewport = self.damage_rect.is_some_and(|d| {
-            super::damage::damage_covers_full([0.0, 0.0, logical_w, logical_h], d)
-        });
-        let use_partial_damage = self.has_presented_frame
-            && !self.force_full_redraw
-            && self.damage_rect.is_some()
-            && !damage_covers_viewport;
+        let viewport_logical = [0.0, 0.0, logical_w, logical_h];
+        // Logical Clear vs Load (damage tracking / Gallery). Solid-aligned: fine-grained
+        // *tree* updates (bind_*) then one coherent paint — not a half-updated framebuffer.
+        // GPU PartialLoad (retain Load+scissor+full blit) is opt-in via RUI_PARTIAL_DAMAGE=1:
+        // without draw-list culling it often costs more than a surface FullClear and can miss
+        // Input invalid chrome. Default off = pre-WP-2.2 present path.
+        let mut logical_policy = super::damage::frame_clear_policy(
+            self.has_presented_frame,
+            self.force_full_redraw,
+            self.damage_rect,
+            viewport_logical,
+        );
+        let mut scissor_physical = None;
+        if matches!(
+            logical_policy,
+            super::damage::FrameClearPolicy::PartialLoad
+        ) {
+            scissor_physical = self.damage_rect.and_then(|damage| {
+                super::damage::damage_to_scissor_physical(
+                    damage,
+                    Self::DAMAGE_SCISSOR_PAD_LOGICAL,
+                    ui_scale,
+                    self.config.width,
+                    self.config.height,
+                )
+            });
+            if scissor_physical.is_none() {
+                logical_policy = super::damage::FrameClearPolicy::FullClear;
+            }
+        }
+        let want_gpu_partial = Self::gpu_partial_damage_enabled()
+            && matches!(
+                logical_policy,
+                super::damage::FrameClearPolicy::PartialLoad
+            );
+        // Experimental path only (`RUI_PARTIAL_DAMAGE=1`): Load when retain is warm; otherwise
+        // one FullClear-into-retain to prime. Default builds never enter this branch.
+        let use_partial_damage = want_gpu_partial && self.present_retain.contents_valid();
+        let warm_retain = want_gpu_partial && !self.present_retain.contents_valid();
+        let draw_to_retain = use_partial_damage || warm_retain;
+        super::damage::note_frame_clear_policy(logical_policy);
+        if draw_to_retain {
+            let _ = self.present_retain.ensure_size(
+                &self.device,
+                self.config.width,
+                self.config.height,
+            );
+        } else {
+            self.present_retain.invalidate_contents();
+        }
         let clear_color = wgpu::Color {
             r: 0.95,
             g: 0.95,
@@ -1645,21 +1766,9 @@ impl AppState {
         } else {
             wgpu::LoadOp::Clear(clear_color)
         };
-        let scissor_physical = if use_partial_damage {
-            self.damage_rect.map(|damage| {
-                let pad = Self::damage_scissor_padding(&render_result.instances);
-                let scale = ui_scale;
-                let x = ((damage[0] - pad) * scale).floor().max(0.0) as u32;
-                let y = ((damage[1] - pad) * scale).floor().max(0.0) as u32;
-                let w = ((damage[2] + pad * 2.0) * scale).ceil() as u32;
-                let h = ((damage[3] + pad * 2.0) * scale).ceil() as u32;
-                let max_w = self.config.width.saturating_sub(x);
-                let max_h = self.config.height.saturating_sub(y);
-                (x, y, w.min(max_w).max(1), h.min(max_h).max(1))
-            })
-        } else {
-            None
-        };
+        if !use_partial_damage {
+            scissor_physical = None;
+        }
 
         let max_backdrop_blur_logical = overlay_split
             .bands
@@ -1823,8 +1932,14 @@ impl AppState {
                     max_backdrop_blur_logical * ui_scale,
                 );
                 // Same UV space as capture — not TexturedQuadPipeline (Y-flipped for images).
-                self.backdrop_blur
-                    .blit_to(&self.queue, &mut encoder, &view);
+                let blur_dst = if draw_to_retain {
+                    self.present_retain.color_view()
+                } else {
+                    Some(&view)
+                };
+                if let Some(dst) = blur_dst {
+                    self.backdrop_blur.blit_to(&self.queue, &mut encoder, dst);
+                }
             }
         }
 
@@ -1835,10 +1950,17 @@ impl AppState {
         };
 
         {
+            let color_view = if draw_to_retain {
+                self.present_retain
+                    .color_view()
+                    .ok_or(wgpu::SurfaceError::Lost)?
+            } else {
+                &view
+            };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: color_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: color_load,
@@ -2172,6 +2294,14 @@ impl AppState {
                     }
                 }
             }
+        }
+        if draw_to_retain {
+            self.present_retain
+                .blit_to_surface(&mut encoder, &view, clear_color);
+            self.present_retain.mark_contents_valid();
+        } else {
+            // Surface-direct FullClear: retain no longer matches the presented frame.
+            self.present_retain.invalidate_contents();
         }
         #[cfg(debug_assertions)]
         let encode_done = Instant::now();

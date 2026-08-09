@@ -40,4 +40,4 @@ pub use text_field::{
     TEXTAREA_FOCUS_PREFIX, TEXTAREA_RESIZE_FOCUS_PREFIX,
 };
 pub use text_node::{apply_label_defaults, build_icon_text_node, build_text_node, TextNodeConfig};
-pub use virtual_list::visible_item_range;
+pub use virtual_list::{item_height_for_text, visible_item_range};

@@ -13,7 +13,8 @@ use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, 
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, focus_ring_shadow_matches_color, InputCaretDraw,
+    focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
+    focus_ring_style, InputCaretDraw,
 };
 use crate::utils::text_field::{focus_id_for_text_edit, pull_controlled_into_store};
 /// 每帧将 Input/Textarea 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
@@ -168,8 +169,18 @@ fn sync_one_text_edit_paint(
     }
     if is_focused {
         if !focus_ring_shadow_matches_color(el, true, ring_color) {
+            let (blur, spread) = focus_ring_params(focus_ring_style());
+            let geom_same = (el.style.shadow_blur - blur).abs() <= 0.01
+                && (el.style.shadow_spread - spread).abs() <= 0.01
+                && el.style.shadow_offset == [0.0, 0.0]
+                && !el.style.shadow_inset;
             apply_focus_ring_shadow_color(el, true, false, ring_color);
-            container_layout = true;
+            // invalid ↔ valid only recolors the ring — paint-only (rapid Mark invalid).
+            if geom_same {
+                container_style = true;
+            } else {
+                container_layout = true;
+            }
         }
     } else {
         let (want_color, want_blur, want_spread) = if !desc.disabled {
@@ -177,20 +188,25 @@ fn sync_one_text_edit_paint(
         } else {
             ([0.0, 0.0, 0.0, 0.0], 0.0, 0.0)
         };
-        let rest_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01
+        let geom_ok = (el.style.shadow_blur - want_blur).abs() <= 0.01
             && (el.style.shadow_spread - want_spread).abs() <= 0.01
             && el.style.shadow_offset == [0.0, 0.0]
-            && (el.style.shadow_color[0] - want_color[0]).abs() <= 0.001
+            && !el.style.shadow_inset;
+        let color_ok = (el.style.shadow_color[0] - want_color[0]).abs() <= 0.001
             && (el.style.shadow_color[1] - want_color[1]).abs() <= 0.001
             && (el.style.shadow_color[2] - want_color[2]).abs() <= 0.001
             && (el.style.shadow_color[3] - want_color[3]).abs() <= 0.001;
-        if !rest_ok {
+        if !geom_ok || !color_ok {
             el.style.shadow_color = want_color;
             el.style.shadow_blur = want_blur;
             el.style.shadow_offset = [0.0, 0.0];
             el.style.shadow_spread = want_spread;
             el.style.shadow_inset = false;
-            container_layout = true;
+            if geom_ok {
+                container_style = true;
+            } else {
+                container_layout = true;
+            }
         }
     }
 
@@ -524,6 +540,17 @@ fn sync_one_text_edit_paint(
         *impact = impact.merge(LayoutStatus::LayoutChanged);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
+        // Local dirty for invalid/focus border paint (WP-2.2 PartialLoad).
+        let b = el.layout_bounds;
+        if b[2] > 0.0 && b[3] > 0.0 {
+            let pad = el.style.shadow_blur + el.style.shadow_spread.abs() + 8.0;
+            crate::app::damage::push_frame_paint_damage([
+                b[0] - pad,
+                b[1] - pad,
+                b[2] + pad * 2.0,
+                b[3] + pad * 2.0,
+            ]);
+        }
     }
 }
 

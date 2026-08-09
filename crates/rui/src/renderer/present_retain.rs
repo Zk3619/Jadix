@@ -1,0 +1,256 @@
+//! Retained color buffer for partial `LoadOp::Load` + scissor.
+//!
+//! Swapchain images (FLIP_DISCARD / GLES) do not preserve prior frame contents, so
+//! Load+scissor directly on the surface leaves undefined/black pixels outside the
+//! damage rect. UI is drawn into this texture; each present blits the full buffer
+//! to the surface.
+
+use wgpu::util::DeviceExt;
+
+use super::pipeline::VertexInput;
+
+struct RetainRt {
+    /// Kept alive so `view` / bind group remain valid.
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+}
+
+/// Offscreen present target + fullscreen blit to the swapchain.
+pub struct PresentRetainPipeline {
+    pipeline: wgpu::RenderPipeline,
+    tex_bgl: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+    retain: Option<RetainRt>,
+    format: wgpu::TextureFormat,
+    /// True when `retain` holds a complete frame (safe to `LoadOp::Load`).
+    /// Cleared after surface-direct FullClear so the next PartialLoad warms the buffer.
+    contents_valid: bool,
+}
+
+impl PresentRetainPipeline {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Present Retain Blit Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("present_retain.wgsl").into()),
+        });
+
+        let tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Present Retain Tex BGL"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Present Retain PL"),
+            bind_group_layouts: &[&tex_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Present Retain Blit Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[VertexInput::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Present Retain Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Same UV orientation as backdrop blur capture (not TexturedQuad Y-flip).
+        let verts: &[VertexInput] = &[
+            VertexInput {
+                position: [-1.0, -1.0],
+                uv: [0.0, 1.0],
+            },
+            VertexInput {
+                position: [1.0, -1.0],
+                uv: [1.0, 1.0],
+            },
+            VertexInput {
+                position: [1.0, 1.0],
+                uv: [1.0, 0.0],
+            },
+            VertexInput {
+                position: [-1.0, 1.0],
+                uv: [0.0, 0.0],
+            },
+        ];
+        let indices: &[u16] = &[0, 1, 2, 0, 2, 3];
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Present Retain VB"),
+            contents: bytemuck::cast_slice(verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Present Retain IB"),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        Self {
+            pipeline,
+            tex_bgl,
+            sampler,
+            vertex_buffer,
+            index_buffer,
+            num_indices: indices.len() as u32,
+            retain: None,
+            format,
+            contents_valid: false,
+        }
+    }
+
+    #[inline]
+    pub fn contents_valid(&self) -> bool {
+        self.contents_valid && self.retain.is_some()
+    }
+
+    /// After a surface-direct FullClear the retain buffer is stale.
+    pub fn invalidate_contents(&mut self) {
+        self.contents_valid = false;
+    }
+
+    pub fn mark_contents_valid(&mut self) {
+        self.contents_valid = self.retain.is_some();
+    }
+
+    /// Ensure the retain buffer matches `width`×`height`. Returns `true` when the texture
+    /// was (re)created and prior contents are invalid — caller must FullClear this frame.
+    pub fn ensure_size(&mut self, device: &wgpu::Device, width: u32, height: u32) -> bool {
+        let width = width.max(1);
+        let height = height.max(1);
+        if let Some(rt) = &self.retain {
+            if rt.width == width && rt.height == height {
+                return false;
+            }
+        }
+        self.contents_valid = false;
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Present Retain Color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Present Retain BG"),
+            layout: &self.tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        self.retain = Some(RetainRt {
+            _texture: texture,
+            view,
+            bind_group,
+            width,
+            height,
+        });
+        true
+    }
+
+    pub fn color_view(&self) -> Option<&wgpu::TextureView> {
+        self.retain.as_ref().map(|r| &r.view)
+    }
+
+    /// Blit the full retain buffer onto the swapchain view (always Clear → full image).
+    pub fn blit_to_surface(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+        clear: wgpu::Color,
+    ) {
+        let Some(rt) = self.retain.as_ref() else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Present Retain → Surface"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: surface_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &rt.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.num_indices, 0, 0..1);
+    }
+}

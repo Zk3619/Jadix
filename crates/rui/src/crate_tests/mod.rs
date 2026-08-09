@@ -7,3 +7,4 @@ mod components;
 mod interaction;
 mod layout;
 mod reactive;
+mod text;

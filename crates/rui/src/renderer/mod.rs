@@ -10,6 +10,7 @@ mod extended_pictographic;
 pub mod font_loader;
 pub mod offscreen;
 pub mod pipeline;
+pub mod present_retain;
 pub mod prepare_text;
 pub mod text;
 pub mod text_hit;
@@ -19,6 +20,7 @@ pub mod twemoji_name;
 
 pub use backdrop_blur::BackdropBlurPipeline;
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
+pub use present_retain::PresentRetainPipeline;
 pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
 pub use prepare_text::prepare_text_frame;
 pub use text::RuiTextRenderer;

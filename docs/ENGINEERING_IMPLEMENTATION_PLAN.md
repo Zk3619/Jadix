@@ -40,7 +40,7 @@
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）：W1.1 #3/#4、W1.2 #5–#7、W1.3 #9、W1.4 Win 列 #1–#8 已签；AccessKit 可演示。macOS / Linux 冒烟仍 ☐。W2.x 未验收；W3.1 完成；W3.5 部分落地（Router/次窗有、Gallery 外壳演示缺）；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）。macOS / Linux 冒烟仍 ☐。W2.3+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -127,17 +127,18 @@ flowchart TB
 | **路径** | `text/measure.rs`、`text/wrap_variable.rs`、`renderer/prepare_text.rs`、`layout/layout_tree.rs` |
 | **任务** | ① 固定用例：ASCII / CJK / soft-wrap / chip·mention 断行；② 断言 `layout_lines*` 行数·行宽与 prepare 消费一致（容差文档化）；③ 无字体环境启发式不 panic |
 | **验收** | 库测 `text_align_*`（命名自定）CI 绿；VirtualList 固定字号行高可断言 |
-| **状态** | ☐ `text/measure` + wrap_variable + 部分 textarea/glyphon 诊断测已有；命名对齐矩阵未关门 |
-| **进展** | [glyphon_audit.md](glyphon_audit.md) 确认中期坚持 glyphon |
+| **状态** | ☑ **开发机 Win 已签署**（2026-08-10，Kingdom / Win 10.0.26200；Gallery）：库测 `text_align_*` + Gallery「文本 / WP-2.1」视觉验收；`item_height_for_text` / VirtualList 行高；细则 [text_align.md](text_align.md) |
+| **进展** | [glyphon_audit.md](glyphon_audit.md) 确认中期坚持 glyphon；paint 全链路仍再 shape（共享 soft-wrap 窗口，非逐行 buffer）；VirtualList 已改为 keyed 增量复用（见组件） |
 
-### WP-2.2 细粒度 damage 默认路径
+### WP-2.2 细粒度 damage 默认路径（策略可测）
 
 | | |
 |--|--|
-| **路径** | `app/damage.rs`、`app/state.rs`、render 提交路径 |
-| **任务** | ① 结构未变：`rects_union` → scissor / Load；② 结构变更才全帧 Clear；③ 计数器 `bind_text` 同宽场景不触发全屏 Clear（可测或 tracing 断言） |
-| **验收** | 单测或 debug 计数；文档一句说明默认策略 |
-| **状态** | ☐ scissor/damage MVP 已有；「默认路径可证明」未验收 |
+| **路径** | `app/damage.rs`、`app/state.rs`；细则 [damage.md](damage.md) |
+| **任务** | ① 逻辑策略：`rects_union` + `frame_clear_policy`（局部 paint → PartialLoad；结构/布局/滚动 → FullClear）；② 同宽 `bind_text` 不 `mark_full_redraw`；③ 可测计数 + Gallery 验收卡；④ GPU present **默认 FullClear**（Solid 式完整像素）；GPU PartialLoad/retain **不**纳入本 WP |
+| **验收** | 库测 `damage::` CI 绿；Gallery 逻辑 `ΔPartialLoad` / `ΔFullClear` 可演示；文档写清默认策略与 GPU 非范围 |
+| **状态** | ☑ **策略可测已签署**（2026-08-10，Kingdom / Win 10.0.26200）：计数 API + Gallery **布局 / WP-2.2**；默认 GPU FullClear；GPU PartialLoad → §7 **B8** |
+| **进展** | 曾试 retain+blit PartialLoad：无 draw 裁剪时更慢且易半帧；已关默认路径并写入 [damage.md](damage.md) |
 
 ### WP-2.3 子树布局上溢升父
 
@@ -176,7 +177,7 @@ flowchart TB
 | **状态** | ☐ 现仅 2 fixtures（clear + stage8_pattern）；组件场景未录 |
 | **注意** | 软件渲染确定性：固定尺寸、禁动画、固定字体策略（见 [font_strategy.md](font_strategy.md)） |
 
-**Wave 2 退出**：对齐测 + ≥5 golden CI；damage 策略可陈述；Owner 注册表无泄漏测。
+**Wave 2 退出**：对齐测 + ≥5 golden CI；damage **策略可测已签**（WP-2.2）；Owner 注册表无泄漏测。GPU PartialLoad 不阻塞本 Wave（B8）。
 
 ---
 
@@ -336,6 +337,7 @@ flowchart TB
 | B5 | VirtualMasonry 产品化 | 见 WP-3.7 |
 | B6 | 完整 3D/矩阵变换 | 当前 rotate/scale MVP 足够 |
 | B7 | 真窗口 CI（云桌面 / self-hosted） | 冒烟签署可先顶上 |
+| B8 | **GPU PartialLoad / retain**（默认开启） | **前置**：实例/文本按脏区裁剪 draw-list，或 profiling 证 FullClear 填色为瓶颈。约束与验收见 [damage.md](damage.md)「如何把 GPU PartialLoad 做好 / 何时做」。不阻塞 W2/Beta；建议 WP-2.6 golden 稳后或独立性能 WP。代码预留：`present_retain.*`、`RUI_PARTIAL_DAMAGE=1` |
 
 ---
 
@@ -347,6 +349,7 @@ flowchart TB
 - [ ] 文档站：Getting Started + 更新契约 + 组件索引（WP-4.4）
 - [ ] 三平台真窗口冒烟 #1–#8 签署（WP-1.4；**Win 已签**，macOS/Linux 待补）
 - [x] AccessKit 主路径可演示并有文档（WP-1.3；Win Narrator #9 已签）
+- [x] damage 策略可测（WP-2.2；GPU PartialLoad = B8，不阻塞 Beta）
 - [ ] 测宽绘制对齐测 + ≥5 组件 golden CI（WP-2.1、WP-2.6、WP-4.5）
 - [ ] gap / 纲领开放 **P0 = 0**（冒烟、crates、文档站）
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1、WP-4.7）
@@ -359,7 +362,7 @@ flowchart TB
 |----|------|
 | 1 | WP-1.1～1.3；并行起草 WP-4.1 CHANGELOG / 承诺面 |
 | 2 | WP-1.4 Win 已签 → 启动 WP-2.1、WP-2.4；macOS/Linux 冒烟可并行补签 |
-| 3–4 | WP-2.2、2.3、2.5、2.6（golden 五场景） |
+| 3–4 | WP-2.2 ☑ → WP-2.3、2.5、2.6（golden 五场景）；GPU PartialLoad 见 B8 |
 | 5–6 | WP-3.1～3.5；托盘 WP-3.6 视进度 |
 | 7 | WP-4.2～4.6；冻结 API |
 | 8 | WP-4.3 publish + WP-4.7 升 Beta；同步 gap / 纲领 |
@@ -396,7 +399,7 @@ COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + head
 COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
-PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md
+PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md / text_align.md / damage.md
 headless.md / custom_components.md / color.md / keyboard_nav.md
 archive/                           ← 选型与早期随笔（已冻结）
 ```

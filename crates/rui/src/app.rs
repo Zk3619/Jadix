@@ -41,7 +41,7 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
     }
 }
 
-mod damage;
+pub mod damage;
 mod hot_reload;
 mod image_registry;
 pub(crate) mod ime_support;
