@@ -103,18 +103,20 @@ pub fn custom_emoji_left_top(
     Some((left, top))
 }
 
-/// 水平对齐占位 glyph 的 `x`，垂直在行盒内居中放置 `emoji_height` 的方块。
+/// 水平对齐占位 glyph 的中心，垂直在行盒内居中放置 `emoji_width`×`emoji_height` 的方块。
 ///
 /// 不依赖 Mask tofu 的 `placement`（避免底切），也不要求 swash 光栅。
+/// `emoji_width` 可略大于占位 advance（例如 1.15em），以贴近系统 emoji 视觉大小。
 pub fn custom_emoji_left_centered_top(
     buffer: &glyphon::Buffer,
     layout_text: &str,
     global_byte: usize,
+    emoji_width: f32,
     emoji_height: f32,
 ) -> Option<(f32, f32)> {
     let (line_i, local) = global_byte_to_line_local(layout_text, global_byte)?;
     let (run, g) = find_glyph_for_line_byte(buffer, line_i, local)?;
-    let left = g.x;
+    let left = g.x + (g.w - emoji_width) * 0.5;
     let pad = (run.line_height - emoji_height).max(0.0) * 0.5;
     let top = run.line_top + pad;
     Some((left, top))

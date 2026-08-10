@@ -3,6 +3,7 @@ mod button_caption;
 mod input_adornments;
 mod input_caret;
 mod input_shape_suffix;
+mod label_emoji_clip;
 mod textarea_gallery_diag;
 mod textarea_multiline;
 

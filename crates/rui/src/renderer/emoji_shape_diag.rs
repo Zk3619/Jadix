@@ -265,6 +265,15 @@ mod tests {
             ("simple", "😀"),
         ] {
             let raster = crate::renderer::prepare_text::load_font_fallback_raster(seq, 32, 400);
+            if name == "flag_cn" {
+                // Segoe flags are Mask RI letters — must not invent a gray tofu raster.
+                assert!(
+                    raster.is_none(),
+                    "flag_cn: Mask-only RI fallback must be None (Twemoji supplies color flags)"
+                );
+                println!("flag_cn: fallback correctly rejected");
+                continue;
+            }
             assert!(
                 raster.is_some(),
                 "{name}: isolated font fallback must produce a raster (got None)"
@@ -323,6 +332,69 @@ mod tests {
     }
 
     #[test]
+    fn twemoji_loads_colorful_flag_when_assets_present() {
+        let dir_candidates = [
+            std::path::PathBuf::from("assets/twemoji/72x72"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/twemoji/72x72"),
+        ];
+        if dir_candidates.iter().all(|p| !p.is_dir()) {
+            println!("skip: Twemoji dir missing");
+            return;
+        }
+        let r = crate::renderer::prepare_text::load_twemoji_raster("🇨🇳", 32)
+            .expect("🇨🇳 Twemoji PNG must decode when assets are present");
+        assert!(r.width > 0 && r.height > 0);
+        let mut chroma = 0.0_f32;
+        let mut n = 0.0_f32;
+        for px in r.rgba.chunks(4) {
+            if px[3] < 32 {
+                continue;
+            }
+            let max = px[0].max(px[1]).max(px[2]) as f32;
+            let min = px[0].min(px[1]).min(px[2]) as f32;
+            chroma += max - min;
+            n += 1.0;
+        }
+        let c = if n == 0.0 { 0.0 } else { chroma / n };
+        println!("🇨🇳 twemoji {}x{} chroma={c:.1}", r.width, r.height);
+        assert!(c >= 24.0, "Twemoji flag must be colorful, chroma={c}");
+    }
+
+    #[test]
+    fn flag_emoji_must_not_paint_regional_indicator_tofu() {
+        // Windows Segoe often only exposes Mask RI letters for 🇨🇳 via swash.
+        // Painting those as custom glyphs looks like faint gray "CN"/"US" (gallery 6b).
+        for seq in ["🇨🇳", "🇺🇸"] {
+            let paint = crate::renderer::prepare_text::emoji_paint_pixel_size(14.0);
+            let over = paint.saturating_mul(2).clamp(paint, 128);
+            let raw = crate::renderer::prepare_text::load_font_fallback_raster(seq, over, 400);
+            assert!(
+                raw.is_none(),
+                "{seq}: Mask-only RI fallback must be rejected (got {}x{})",
+                raw.as_ref().map(|r| r.width).unwrap_or(0),
+                raw.as_ref().map(|r| r.height).unwrap_or(0)
+            );
+            let stem = crate::renderer::twemoji_name::twemoji_stem(seq);
+            let candidates = [
+                std::path::PathBuf::from("assets/twemoji/72x72"),
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/twemoji/72x72"),
+            ];
+            if let Some(dir) = candidates.into_iter().find(|p| p.is_dir()) {
+                let path = dir.join(format!("{stem}.png"));
+                assert!(
+                    path.is_file(),
+                    "Twemoji dir exists but flag PNG missing: {path:?}"
+                );
+                println!("{seq}: font fallback rejected; Twemoji PNG ok ({path:?})");
+            } else {
+                println!(
+                    "{seq}: font fallback rejected; sync assets/twemoji/72x72 for gallery flags"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn font_fallback_composites_family_not_first_glyph_only() {
         let family = crate::renderer::prepare_text::load_font_fallback_raster("👨‍👩‍👧‍👦", 32, 400)
             .expect("family fallback raster");
@@ -339,6 +411,50 @@ mod tests {
     }
 
     #[test]
+    fn face_emoji_raster_has_ink_near_bottom_edge() {
+        // If we clip even a few px off a full-bleed circular face, it looks "shaved flat".
+        let r = crate::renderer::prepare_text::load_font_fallback_raster("😀", 32, 400)
+            .expect("grinning face fallback");
+        let w = r.width as usize;
+        let h = r.height as usize;
+        let bottom_rows = 3usize.min(h);
+        let mut ink_bottom = 0usize;
+        for row in (h - bottom_rows)..h {
+            for col in 0..w {
+                if r.rgba[(row * w + col) * 4 + 3] > 32 {
+                    ink_bottom += 1;
+                }
+            }
+        }
+        println!("😀 {}x{} ink_in_bottom_{bottom_rows}_rows={ink_bottom}", w, h);
+        assert!(
+            ink_bottom > 0,
+            "face emoji ink reaches the bottom of the raster — TextBounds must not shave those rows"
+        );
+    }
+
+    #[test]
+    fn custom_emoji_bottom_must_fit_leaf_clip_with_leading_normal() {
+        // Production: leaf height ≈ line_height (leading-normal). Custom quad is em-square,
+        // centered in the line. Any clip shorter than line_height will flatten faces.
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let emoji_h = size;
+        let top = (lh - emoji_h) * 0.5;
+        let bottom = top + emoji_h;
+        // Simulated tight clip mistaken for "font-size tall" leaf (leading-none residual).
+        let tight_clip_h = size;
+        let overshoot_if_tight = bottom - tight_clip_h;
+        println!("lh={lh} emoji=[{top},{bottom}] tight_clip={tight_clip_h} overshoot={overshoot_if_tight}");
+        assert!(
+            overshoot_if_tight > 1.0,
+            "documents the failure mode when leaf clip ≈ font-size"
+        );
+        // Correct clip must be at least line_height.
+        assert!(bottom <= lh + 0.01);
+    }
+
+    #[test]
     fn custom_emoji_quad_vs_line_box_clip_signal() {
         // Centered placement must keep the em-square inside the line box.
         let mut fs = font_loader::create_font_system();
@@ -348,7 +464,9 @@ mod tests {
         let lh = size * 1.5;
         let text = "Hello 😀 world";
         let layout = crate::renderer::emoji_layout::plan_emoji_layout_text(text);
-        let emoji_start = layout.find(crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT).unwrap();
+        let emoji_start = layout
+            .find(crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT)
+            .unwrap();
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(&mut fs, Some(400.0), Some(lh + 2.0));
@@ -361,7 +479,7 @@ mod tests {
         buffer.shape_until_scroll(&mut fs, false);
 
         let (left, top) = crate::renderer::emoji_layout::custom_emoji_left_centered_top(
-            &buffer, &layout, emoji_start, size,
+            &buffer, &layout, emoji_start, size, size,
         )
         .expect("emoji slot position");
         let bottom = top + size;
@@ -403,7 +521,6 @@ mod tests {
         buffer.shape_until_scroll(&mut fs, false);
 
         let mut byte = 0usize;
-        let mut raw_byte = 0usize;
         for g in line.graphemes(true) {
             let is_emoji = emoji_detect::grapheme_is_emoji(g);
             let start = byte;
@@ -412,8 +529,6 @@ mod tests {
             } else {
                 byte += g.len();
             }
-            raw_byte += g.len();
-            let _ = raw_byte;
             if !is_emoji {
                 continue;
             }
@@ -434,5 +549,129 @@ mod tests {
             );
         }
         let _ = EMOJI_GPU_COMPAT_SECTION1_SAMPLES;
+    }
+
+    #[test]
+    fn face_emoji_colr_raster_does_not_shave_bottom() {
+        // Regression for swash ColorOutline ceil(min.y) crop on Segoe COLR faces.
+        // Intact circle: last ink row is a short chord; a shaved face leaves a wide flat edge.
+        let r = crate::renderer::prepare_text::load_font_fallback_raster("😀", 64, 400)
+            .expect("grinning face");
+        let w = r.width as usize;
+        let h = r.height as usize;
+        let row_ink = |row: usize| {
+            (0..w)
+                .filter(|&x| r.rgba[(row * w + x) * 4 + 3] > 32)
+                .count()
+        };
+        let mut last = 0usize;
+        let mut max_row = 0usize;
+        for row in 0..h {
+            let n = row_ink(row);
+            max_row = max_row.max(n);
+            if n > 0 {
+                last = row;
+            }
+        }
+        let chord = row_ink(last);
+        println!("😀 COLR {w}x{h} max_row={max_row} last={last} chord={chord}");
+        assert!(max_row > 0);
+        assert!(
+            (chord as f32) < (max_row as f32) * 0.55,
+            "bottom must taper, not shave flat; chord={chord} max={max_row}"
+        );
+    }
+
+    #[test]
+    fn measure_fitted14_yellow_fill() {
+        fn yellow_fill(rgba: &[u8], w: usize, h: usize) -> (usize, usize, f32, f32) {
+            let mut minx = w;
+            let mut miny = h;
+            let mut maxx = 0usize;
+            let mut maxy = 0usize;
+            for y in 0..h {
+                for x in 0..w {
+                    let i = (y * w + x) * 4;
+                    let (r, g, b, a) = (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]);
+                    if a > 40 && r > 180 && g > 140 && b < 100 {
+                        minx = minx.min(x);
+                        miny = miny.min(y);
+                        maxx = maxx.max(x);
+                        maxy = maxy.max(y);
+                    }
+                }
+            }
+            let bw = maxx + 1 - minx;
+            let bh = (maxy + 1 - miny).max(1);
+            (
+                bw,
+                bh,
+                bw as f32 / bh as f32,
+                (bw.max(bh) as f32) / (w as f32),
+            )
+        }
+        for seq in ["😀", "😂", "🤣"] {
+            let paint = crate::renderer::prepare_text::emoji_paint_pixel_size(14.0);
+            let over = paint.saturating_mul(2).clamp(paint, 128);
+            let raw =
+                crate::renderer::prepare_text::load_font_fallback_raster(seq, over, 400).unwrap();
+            let fitted =
+                crate::renderer::prepare_text::fit_emoji_to_pixel_square(&raw, paint);
+            let (bw, bh, ar, fill) =
+                yellow_fill(&fitted.rgba, fitted.width as usize, fitted.height as usize);
+            println!(
+                "{seq} paint={paint} yellow={bw}x{bh} aspect={ar:.3} max_dim/em={fill:.3}"
+            );
+            assert!(
+                fill >= 0.82,
+                "{seq}: yellow face must fill most of the paint square, fill={fill}"
+            );
+            // Tilted glyphs (🤣) have non-square yellow AABB even when optically round.
+            assert!(
+                (ar - 1.0).abs() < 0.22,
+                "{seq}: yellow face must stay roughly round, aspect={ar}"
+            );
+        }
+    }
+
+    #[test]
+    fn rofl_emoji_bottom_not_shaved_after_letterbox_and_line_clip() {
+        // Gallery: leading-normal Label, custom emoji = full em-square centered in line.
+        // 🤣 is tilted — ink often touches the texture bottom; any TextBounds overshoot
+        // shaves the tears into a flat chord (user: "第三个底部被削平").
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let pixel = crate::renderer::prepare_text::emoji_paint_pixel_size(size);
+        let over = pixel.saturating_mul(2).clamp(pixel, 128);
+        let raw = crate::renderer::prepare_text::load_font_fallback_raster("🤣", over, 400)
+            .expect("rofl");
+        let fitted = crate::renderer::prepare_text::fit_emoji_to_pixel_square(&raw, pixel);
+        let dst = fitted.width as usize;
+        let last_row_ink = (0..dst)
+            .filter(|&x| fitted.rgba[((dst - 1) * dst + x) * 4 + 3] > 32)
+            .count();
+        let first_row_ink = (0..dst)
+            .filter(|&x| fitted.rgba[x * 4 + 3] > 32)
+            .count();
+        let top = (lh - pixel as f32).max(0.0) * 0.5;
+        let bottom = top + pixel as f32;
+        let overshoot = (bottom - lh).max(0.0);
+        println!(
+            "🤣 raw={}x{} fitted={}x{} last_row_ink={last_row_ink} first_row_ink={first_row_ink} \
+             quad=[{top:.2},{bottom:.2}] lh={lh} overshoot={overshoot}",
+            raw.width, raw.height, fitted.width, fitted.height
+        );
+        assert_eq!(
+            last_row_ink, 0,
+            "fitted 🤣 must not put ink on the last row (got {last_row_ink})"
+        );
+        assert_eq!(
+            first_row_ink, 0,
+            "fitted 🤣 must keep top pad (got {first_row_ink})"
+        );
+        assert!(
+            overshoot < 0.5,
+            "centered em-square must fit leading-normal line box"
+        );
     }
 }

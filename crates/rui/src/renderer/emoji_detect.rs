@@ -6,12 +6,13 @@ use super::extended_pictographic::is_extended_pictographic as char_is_extended_p
 
 #[inline]
 fn char_is_emoji_codepoint(cp: u32) -> bool {
+    // Prefer Extended_Pictographic for Misc Symbols / Dingbats. The old blanket
+    // `0x2600..=0x27BF` stole text stars/shapes (★ ☆) into the emoji pipeline.
     matches!(
         cp,
-        0x1F300..=0x1FAFF
-            | 0x2600..=0x27BF
-            | 0xFE00..=0xFE0F
-            | 0x1F1E6..=0x1F1FF
+        0x1F300..=0x1FAFF // emoji blocks
+            | 0xFE00..=0xFE0F // variation selectors (☀️ etc.)
+            | 0x1F1E6..=0x1F1FF // regional indicators
     )
 }
 
@@ -28,6 +29,22 @@ fn grapheme_is_keycap_sequence(g: &str) -> bool {
         }
     }
     has_base && has_combining_keycap
+}
+
+/// 区域指示符国旗 grapheme（如 `🇨🇳`）：恰好两个 Regional Indicator。
+pub fn grapheme_is_regional_flag(g: &str) -> bool {
+    let mut n = 0usize;
+    for c in g.chars() {
+        let cp = c as u32;
+        if (0x1F1E6..=0x1F1FF).contains(&cp) {
+            n += 1;
+        } else if cp == 0xFE0F {
+            continue;
+        } else {
+            return false;
+        }
+    }
+    n == 2
 }
 
 /// 单个 Unicode grapheme是否按 emoji 处理（与 Twemoji 切分一致）。
@@ -56,6 +73,27 @@ mod tests {
     fn flags_count_as_emoji() {
         assert!(text_contains_emoji("🇨🇳"));
         assert!(grapheme_is_emoji("🇺🇸"));
+        assert!(grapheme_is_regional_flag("🇨🇳"));
+        assert!(grapheme_is_regional_flag("🇺🇸"));
+        assert!(!grapheme_is_regional_flag("😀"));
+        assert!(!grapheme_is_regional_flag("🏳️‍🌈"));
+    }
+
+    #[test]
+    fn box_shape_symbols_are_text_not_emoji() {
+        // Gallery "Box/shape symbols" must stay text glyphs — emoji pipeline + Twemoji miss
+        // turns them into tiny/missing custom quads.
+        for g in ["■", "□", "▲", "△", "●", "○", "◆", "◇", "★", "☆", "※", "◎", "◉"] {
+            assert!(
+                !grapheme_is_emoji(g),
+                "{g} (U+{:04X}) must not be classified as emoji",
+                g.chars().next().unwrap() as u32
+            );
+        }
+        // Still treat true emoji / emoji-presentation symbols as emoji.
+        assert!(grapheme_is_emoji("☀")); // often emoji-style
+        assert!(grapheme_is_emoji("✅"));
+        assert!(grapheme_is_emoji("😀"));
     }
 
     #[test]

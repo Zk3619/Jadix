@@ -382,15 +382,24 @@ fn first_present<'a>(db: &Database, names: &[&'a str]) -> Option<&'a str> {
 
 /// Pick default sans/serif family names after fonts are loaded.
 pub fn apply_default_families(db: &mut Database) {
+    // Prefer the platform UI sans first. Putting CJK UI fonts (YaHei) first made
+    // Latin/geometry (■ ● ★) pick CJK-designed glyphs that look tiny next to
+    // Latin text; CJK codepoints still resolve via lazy YaHei fallback.
     let sans = first_present(
         db,
         &[
+            // Windows / cross-platform UI defaults
+            "Segoe UI",
+            "San Francisco",
+            "Helvetica Neue",
+            "Arial",
+            // CJK UI faces (fallback when Latin UI sans is absent)
+            "Microsoft YaHei UI",
+            "Microsoft YaHei",
             "Noto Sans CJK SC",
             "Noto Sans CJK JP",
             "Noto Sans CJK KR",
             "Noto Sans CJK TC",
-            "Microsoft YaHei UI",
-            "Microsoft YaHei",
             "Malgun Gothic",
             "PingFang SC",
             "Hiragino Sans GB",
@@ -398,8 +407,6 @@ pub fn apply_default_families(db: &mut Database) {
             "Source Han Sans SC",
             "WenQuanYi Micro Hei",
             "Leelawadee UI",
-            "Segoe UI",
-            "Arial",
         ],
     );
     if let Some(name) = sans {
@@ -484,22 +491,27 @@ pub fn detect_script_needs(text: &str) -> ScriptNeeds {
         if matches!(cp, 0x0900..=0x097F | 0xA8E0..=0xA8FF) {
             needs.devanagari = true;
         }
-        // Math / misc symbols often missing from UI sans (∑ ∏ √ ∞ ♪ § …).
+        // Math / misc symbols often missing from UI sans (∑ ∏ √ ∞ ♪ § ★ ※ …).
         if matches!(
             cp,
             0x00A7..=0x00B1
                 | 0x0370..=0x03FF
+                | 0x2000..=0x206F
                 | 0x2070..=0x209F
                 | 0x2190..=0x21FF
                 | 0x2200..=0x22FF
                 | 0x2300..=0x23FF
-                | 0x25A0..=0x25FF
-                | 0x2660..=0x266F
+                | 0x2500..=0x25FF
+                | 0x2600..=0x26FF
+                | 0x2700..=0x27BF
                 | 0x27C0..=0x27EF
                 | 0x2980..=0x29FF
                 | 0x2A00..=0x2AFF
         ) {
-            needs.symbols = true;
+            // Color-emoji / EP codepoints are owned by the emoji pipeline.
+            if !emoji_detect::grapheme_is_emoji(c.encode_utf8(&mut [0u8; 4])) {
+                needs.symbols = true;
+            }
         }
     }
     needs

@@ -687,25 +687,32 @@ fn twemoji_dir() -> PathBuf {
         }
     }
     // Absolute candidates — never rely solely on process cwd.
-    let mut candidates = vec![
-        PathBuf::from("assets/twemoji/72x72"),
-        PathBuf::from("crates/rui/assets/twemoji/72x72"),
-    ];
-    // crates/rui → ../../assets/twemoji/72x72
+    let mut candidates = Vec::new();
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // crates/rui → workspace/assets/twemoji/72x72 (baked at compile time).
     candidates.push(manifest.join("../../assets/twemoji/72x72"));
     candidates.push(manifest.join("assets/twemoji/72x72"));
+    if let Some(workspace) = manifest.parent().and_then(|p| p.parent()) {
+        candidates.push(workspace.join("assets/twemoji/72x72"));
+    }
+    candidates.push(PathBuf::from("assets/twemoji/72x72"));
+    candidates.push(PathBuf::from("crates/rui/assets/twemoji/72x72"));
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("assets/twemoji/72x72"));
-        candidates.push(cwd.join("crates/rui/assets/twemoji/72x72"));
+        let mut walk = cwd;
+        for _ in 0..6 {
+            candidates.push(walk.join("assets/twemoji/72x72"));
+            candidates.push(walk.join("crates/rui/assets/twemoji/72x72"));
+            if !walk.pop() {
+                break;
+            }
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             candidates.push(parent.join("assets/twemoji/72x72"));
             candidates.push(parent.join("twemoji/72x72"));
-            // Walk up a few levels from target/release toward the workspace.
             let mut walk = parent.to_path_buf();
-            for _ in 0..5 {
+            for _ in 0..6 {
                 candidates.push(walk.join("assets/twemoji/72x72"));
                 if !walk.pop() {
                     break;
@@ -771,7 +778,24 @@ fn decode_png_rgba(bytes: &[u8]) -> Option<super::text::EmojiRaster> {
                 rgba[di + 3] = 255;
             }
         }
-        png::ColorType::Indexed => return None,
+        png::ColorType::Indexed => {
+            // Twemoji flags are often palette PNGs; rejecting Indexed made 🇨🇳 vanish.
+            let palette = reader.info().palette.as_ref()?;
+            let trns = reader.info().trns.as_ref().map(|t| t.as_ref());
+            for (i, &idx) in data.iter().enumerate().take(w * h) {
+                let di = i * 4;
+                let pi = idx as usize * 3;
+                if pi + 2 >= palette.len() {
+                    continue;
+                }
+                rgba[di] = palette[pi];
+                rgba[di + 1] = palette[pi + 1];
+                rgba[di + 2] = palette[pi + 2];
+                rgba[di + 3] = trns
+                    .and_then(|t| t.get(idx as usize).copied())
+                    .unwrap_or(255);
+            }
+        }
     }
     Some(super::text::EmojiRaster::new(
         info.width as u16,
@@ -780,27 +804,132 @@ fn decode_png_rgba(bytes: &[u8]) -> Option<super::text::EmojiRaster> {
     ))
 }
 
+fn trim_rgba_to_ink(src: &super::text::EmojiRaster) -> super::text::EmojiRaster {
+    let w = src.width as usize;
+    let h = src.height as usize;
+    if w == 0 || h == 0 {
+        return src.clone();
+    }
+    let mut minx = w;
+    let mut miny = h;
+    let mut maxx = 0usize;
+    let mut maxy = 0usize;
+    let mut any = false;
+    for y in 0..h {
+        for x in 0..w {
+            if src.rgba[(y * w + x) * 4 + 3] > 16 {
+                any = true;
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    if !any {
+        return src.clone();
+    }
+    let nw = (maxx + 1 - minx).max(1);
+    let nh = (maxy + 1 - miny).max(1);
+    if nw == w && nh == h {
+        return src.clone();
+    }
+    let mut out = vec![0u8; nw * nh * 4];
+    for y in 0..nh {
+        let src_row = ((miny + y) * w + minx) * 4;
+        let dst_row = y * nw * 4;
+        out[dst_row..dst_row + nw * 4].copy_from_slice(&src.rgba[src_row..src_row + nw * 4]);
+    }
+    super::text::EmojiRaster::new(nw as u16, nh as u16, out)
+}
+
+fn sample_rgba_bilinear(src: &super::text::EmojiRaster, x: f32, y: f32) -> [u8; 4] {
+    let sw = src.width.max(1) as usize;
+    let sh = src.height.max(1) as usize;
+    let x = x.clamp(0.0, (sw - 1) as f32);
+    let y = y.clamp(0.0, (sh - 1) as f32);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(sw - 1);
+    let y1 = (y0 + 1).min(sh - 1);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+    let pix = |px: usize, py: usize| {
+        let i = (py * sw + px) * 4;
+        [
+            src.rgba[i] as f32,
+            src.rgba[i + 1] as f32,
+            src.rgba[i + 2] as f32,
+            src.rgba[i + 3] as f32,
+        ]
+    };
+    let p00 = pix(x0, y0);
+    let p10 = pix(x1, y0);
+    let p01 = pix(x0, y1);
+    let p11 = pix(x1, y1);
+    let mut out = [0u8; 4];
+    for c in 0..4 {
+        let top = p00[c] * (1.0 - fx) + p10[c] * fx;
+        let bot = p01[c] * (1.0 - fx) + p11[c] * fx;
+        out[c] = (top * (1.0 - fy) + bot * fy).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
 fn resize_rgba_nn(src: &super::text::EmojiRaster, dst_size: u16) -> super::text::EmojiRaster {
     let dst = dst_size.max(1) as usize;
     let sw = src.width.max(1) as usize;
     let sh = src.height.max(1) as usize;
-    if sw == dst && sh == dst {
+    // Letterbox into a square — never stretch. Stretching a taller COLR ink-box into
+    // an em-square was crushing faces into vertical ovals.
+    //
+    // Keep a 1px transparent inset so ink never sits on the texture edge. Tilted
+    // glyphs (🤣) and circular faces otherwise put tears/chords on the last row;
+    // glyphon TextBounds snap then shaves them flat.
+    let inset = if dst >= 4 { 1 } else { 0 };
+    let inner = dst.saturating_sub(2 * inset).max(1);
+    if sw == inner && sh == inner && inset == 0 {
         return src.clone();
     }
     let mut out = vec![0u8; dst * dst * 4];
-    for y in 0..dst {
-        let sy = y * sh / dst;
-        for x in 0..dst {
-            let sx = x * sw / dst;
-            let si = (sy * sw + sx) * 4;
-            let di = (y * dst + x) * 4;
-            out[di..di + 4].copy_from_slice(&src.rgba[si..si + 4]);
+    let scale = (inner as f32 / sw as f32).min(inner as f32 / sh as f32);
+    let dw = (sw as f32 * scale).round().max(1.0) as usize;
+    let dh = (sh as f32 * scale).round().max(1.0) as usize;
+    let dw = dw.min(inner);
+    let dh = dh.min(inner);
+    let ox = (dst - dw) / 2;
+    let oy = (dst - dh) / 2;
+    for y in 0..dh {
+        let sy = (y as f32 + 0.5) * sh as f32 / dh as f32 - 0.5;
+        for x in 0..dw {
+            let sx = (x as f32 + 0.5) * sw as f32 / dw as f32 - 0.5;
+            let px = sample_rgba_bilinear(src, sx, sy);
+            let di = ((oy + y) * dst + (ox + x)) * 4;
+            out[di..di + 4].copy_from_slice(&px);
         }
     }
     super::text::EmojiRaster::new(dst as u16, dst as u16, out)
 }
 
-fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::EmojiRaster> {
+/// Fit a fallback/Twemoji raster into the em-square used by custom glyphs.
+pub(crate) fn fit_emoji_to_pixel_square(
+    src: &super::text::EmojiRaster,
+    pixel_size: u16,
+) -> super::text::EmojiRaster {
+    // Trim COLR/canvas pad first so the face fills the em-square (was ~0.64em yellow).
+    let trimmed = trim_rgba_to_ink(src);
+    resize_rgba_nn(&trimmed, pixel_size)
+}
+
+/// Paint size for custom emoji quads — slightly above font-size so color emoji
+/// matches typical system UI (Segoe in Notepad/Chrome reads larger than the text em).
+pub(crate) fn emoji_paint_pixel_size(scaled_text_size: f32) -> u16 {
+    (scaled_text_size * 1.15)
+        .ceil()
+        .clamp(1.0, 512.0) as u16
+}
+
+pub(crate) fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::EmojiRaster> {
     let base = twemoji_dir();
     let path = base.join(twemoji_filename(sequence));
     if !Path::new(&path).exists() {
@@ -808,7 +937,7 @@ fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::E
     }
     let bytes = std::fs::read(path).ok()?;
     let raw = decode_png_rgba(&bytes)?;
-    Some(resize_rgba_nn(&raw, pixel_size.max(1)))
+    Some(fit_emoji_to_pixel_square(&raw, pixel_size.max(1)))
 }
 
 /// Isolated FontSystem for color-emoji fallback rasters.
@@ -885,6 +1014,130 @@ fn blit_premultiplied_or_mask(
     }
 }
 
+fn blit_mask_rgba(
+    dst: &mut [u8],
+    dst_w: u32,
+    dst_h: u32,
+    mask: &[u8],
+    mask_w: u32,
+    mask_h: u32,
+    dx: i32,
+    dy: i32,
+    color: [u8; 4],
+) {
+    if mask_w == 0 || mask_h == 0 || dst_w == 0 || dst_h == 0 {
+        return;
+    }
+    let color_a = color[3] as u32;
+    for row in 0..mask_h as i32 {
+        let y = dy + row;
+        if y < 0 || y >= dst_h as i32 {
+            continue;
+        }
+        let src_row = &mask[(row as u32 * mask_w) as usize..];
+        for col in 0..mask_w as i32 {
+            let x = dx + col;
+            if x < 0 || x >= dst_w as i32 {
+                continue;
+            }
+            let a = (src_row[col as usize] as u32 * color_a) >> 8;
+            if a == 0 {
+                continue;
+            }
+            let di = ((y as u32 * dst_w + x as u32) * 4) as usize;
+            if a >= 255 {
+                dst[di] = color[0];
+                dst[di + 1] = color[1];
+                dst[di + 2] = color[2];
+                dst[di + 3] = 255;
+            } else {
+                let inv = 255 - a;
+                for i in 0..3 {
+                    let d = dst[di + i] as u32;
+                    dst[di + i] = ((inv * d + a * color[i] as u32) >> 8) as u8;
+                }
+                let d = dst[di + 3] as u32;
+                dst[di + 3] = ((inv * d + a * 255) >> 8) as u8;
+            }
+        }
+    }
+}
+
+/// COLR/CPAL raster matching swash `ColorOutline`, except `base_y` uses `floor`
+/// instead of `ceil` so circular Segoe faces keep their bottom curve.
+fn rasterize_colr_glyph_unclipped(
+    font: swash::FontRef<'_>,
+    glyph_id: u16,
+    size: f32,
+) -> Option<(i32, i32, u32, u32, Vec<u8>)> {
+    use swash::scale::ScaleContext;
+    use swash::zeno::{Mask, Origin, Scratch};
+
+    let mut context = ScaleContext::new();
+    let mut scaler = context.builder(font).size(size).hint(true).build();
+    if !scaler.has_color_outlines() {
+        return None;
+    }
+    let outline = scaler.scale_color_outline(glyph_id)?;
+    if outline.is_empty() {
+        return None;
+    }
+    let bounds = outline.bounds();
+    // Mirror swash::scale::Render ColorOutline placement, with:
+    //   base_y = floor(min.y)  (swash uses ceil → crops face bottoms)
+    //   +1px pad so layer AA / tilted tears are not clipped by the canvas edge
+    const PAD: i32 = 1;
+    let base_x = bounds.min.x.floor() as i32 - PAD;
+    let base_y = bounds.min.y.floor() as i32 - PAD;
+    let max_x = bounds.max.x.ceil() as i32 + PAD;
+    let max_y = bounds.max.y.ceil() as i32 + PAD;
+    let base_w = (max_x - base_x).max(1) as u32;
+    let base_h = (max_y - base_y).max(1) as u32;
+    if base_w > 512 || base_h > 512 {
+        return None;
+    }
+
+    let mut rgba = vec![0u8; (base_w * base_h * 4) as usize];
+    let palette = font.color_palettes().next();
+    let foreground = [128u8, 128, 128, 255];
+    let mut scratch = Vec::new();
+    let mut rcx = Scratch::new();
+
+    for i in 0..outline.len() {
+        let Some(layer) = outline.get(i) else {
+            return None;
+        };
+        scratch.clear();
+        let placement = Mask::with_scratch(layer.path(), &mut rcx)
+            .origin(Origin::BottomLeft)
+            .inspect(|fmt, w, h| {
+                scratch.resize(fmt.buffer_size(w, h), 0);
+            })
+            .render_into(&mut scratch[..], None);
+        let color = layer
+            .color_index()
+            .and_then(|idx| palette.map(|p| p.get(idx)))
+            .unwrap_or(foreground);
+        let dx = placement.left.wrapping_sub(base_x);
+        let dy = (base_h as i32 + base_y).wrapping_sub(placement.top);
+        blit_mask_rgba(
+            &mut rgba,
+            base_w,
+            base_h,
+            &scratch,
+            placement.width,
+            placement.height,
+            dx,
+            dy,
+            color,
+        );
+    }
+
+    let placement_left = base_x;
+    let placement_top = base_h as i32 + base_y;
+    Some((placement_left, placement_top, base_w, base_h, rgba))
+}
+
 /// Rasterize an emoji sequence with the isolated color-emoji face.
 ///
 /// Composites **all** usable glyphs (not just the first Color). Segoe often
@@ -921,6 +1174,24 @@ pub(crate) fn load_font_fallback_raster(
     for run in buffer.layout_runs() {
         for g in run.glyphs.iter() {
             let physical = g.physical((0.0, 0.0), 1.0);
+            // Prefer our COLR path (avoids swash ColorOutline bottom crop).
+            let font_arc = font_system.get_font(g.font_id);
+            let colr = font_arc.as_ref().and_then(|f| {
+                rasterize_colr_glyph_unclipped(f.as_swash(), g.glyph_id, size)
+            });
+            if let Some((left, top, w, h, data)) = colr {
+                if w > 0 && h > 0 {
+                    blits.push(FallbackGlyphBlit {
+                        x0: physical.x + left,
+                        y0: physical.y - top,
+                        w,
+                        h,
+                        color: true,
+                        data,
+                    });
+                    continue;
+                }
+            }
             let Some(image) = swash_cache.get_image_uncached(font_system, physical.cache_key)
             else {
                 continue;
@@ -951,10 +1222,13 @@ pub(crate) fn load_font_fallback_raster(
         return None;
     }
     // Prefer Color layers when any exist (drop ZWJ outline crumbs). Else keep Masks
-    // (Windows flags often only expose Mask through swash).
+    // for non-flag sequences (rare). Regional-indicator flags on Windows are Mask-only
+    // RI letter outlines via swash — painting them looks like faint gray "CN"/"US".
     let has_color = blits.iter().any(|b| b.color);
     if has_color {
         blits.retain(|b| b.color);
+    } else if emoji_detect::grapheme_is_regional_flag(sequence) {
+        return None;
     } else {
         blits.retain(|b| b.w > 1 && b.h > 1);
     }
@@ -1025,8 +1299,10 @@ fn load_emoji_raster_chain(
     }
 
     // 3) System color-emoji on an *isolated* FontSystem — never open seguimj on the UI FS.
-    load_font_fallback_raster(sequence, pixel_size, font_weight)
-        .map(|r| resize_rgba_nn(&r, pixel_size.max(1)))
+    // Supersample COLR then bilinear-fit so small UI sizes stay round (not NN blocky).
+    let oversample = pixel_size.saturating_mul(2).clamp(pixel_size, 128);
+    load_font_fallback_raster(sequence, oversample, font_weight)
+        .map(|r| fit_emoji_to_pixel_square(&r, pixel_size.max(1)))
 }
 
 fn load_emoji_raster_cached(
@@ -1562,7 +1838,7 @@ pub fn prepare_text_frame(
         let emoji_cache_key = if emoji_custom_glyph_enabled() && has_emoji {
             Some(super::text::EmojiCacheKey {
                 sequence: shape_text.to_string(),
-                pixel_size: scaled_size.ceil().clamp(1.0, u16::MAX as f32) as u16,
+                pixel_size: emoji_paint_pixel_size(scaled_size),
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
             })
@@ -1585,12 +1861,13 @@ pub fn prepare_text_frame(
                     let TextSegment::Emoji { text, start } = seg else {
                         continue;
                     };
-                    let pixel_size = scaled_size.ceil().clamp(1.0, 512.0) as u16;
+                    let pixel_size = emoji_paint_pixel_size(scaled_size);
                     let slot = pixel_size as f32;
                     let (mut left, top) = match emoji_layout::custom_emoji_left_centered_top(
                         &text_renderer.shaped_cache[i].buffer,
                         &layout_text,
                         start,
+                        slot,
                         slot,
                     ) {
                         Some((l, t)) => (l, t + emoji_baseline_layout_tweak(scaled_size)),
@@ -2395,5 +2672,55 @@ mod input_shaping_stability_tests {
         assert!(!is_input_inline_text(Some("__rui_input:pw:clear")));
         assert!(!is_input_inline_text(Some("label")));
         assert!(!is_input_inline_text(None));
+    }
+
+    #[test]
+    fn resize_rgba_nn_letterboxes_tall_source() {
+        // Tall 8x16 opaque block → 16x16 must stay ~8px wide (not stretched to 16).
+        let mut rgba = vec![0u8; 8 * 16 * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[255, 200, 0, 255]);
+        }
+        let src = crate::renderer::text::EmojiRaster::new(8, 16, rgba);
+        let out = super::resize_rgba_nn(&src, 16);
+        assert_eq!((out.width, out.height), (16, 16));
+        let mut minx = 16usize;
+        let mut maxx = 0usize;
+        let mut last_row = 0usize;
+        for y in 0..16 {
+            for x in 0..16 {
+                if out.rgba[(y * 16 + x) * 4 + 3] > 0 {
+                    minx = minx.min(x);
+                    maxx = maxx.max(x);
+                    if y == 15 {
+                        last_row += 1;
+                    }
+                }
+            }
+        }
+        let ink_w = maxx + 1 - minx;
+        assert!(
+            ink_w <= 9,
+            "letterbox must preserve aspect (got ink_w={ink_w}; stretch would be ~16)"
+        );
+        assert_eq!(last_row, 0, "safe inset must keep last row transparent");
+    }
+
+    #[test]
+    fn resize_rgba_nn_pads_full_bleed_source() {
+        let mut rgba = vec![0u8; 14 * 14 * 4];
+        for px in rgba.chunks_exact_mut(4) {
+            px.copy_from_slice(&[255, 220, 0, 255]);
+        }
+        let src = crate::renderer::text::EmojiRaster::new(14, 14, rgba);
+        let out = super::resize_rgba_nn(&src, 14);
+        let last = (0..14)
+            .filter(|&x| out.rgba[(13 * 14 + x) * 4 + 3] > 0)
+            .count();
+        let first = (0..14)
+            .filter(|&x| out.rgba[x * 4 + 3] > 0)
+            .count();
+        assert_eq!(last, 0, "full-bleed source must gain bottom pad");
+        assert_eq!(first, 0, "full-bleed source must gain top pad");
     }
 }
