@@ -72,6 +72,10 @@ pub fn portal_hit_passthrough(el: &Element) -> bool {
 /// - Stable frames (no fresh `rui_portal=1`): **do not** tear down the portal layer — only
 ///   prune keys that are no longer wanted. Rewriting the layer every frame while skipping
 ///   Taffy rebuild desyncs `element.children` vs `taffy.children` (OOB panic in collect).
+/// - Nested portals that appear **inside** an already-hoisted overlay (e.g. Select menu
+///   opened inside a Dialog stage on the portal layer) are lifted in a second pass so they
+///   become viewport-fixed siblings — otherwise `absolute` + viewport `left`/`top` double-
+///   offsets the menu relative to the local containing block.
 /// - Returns a non-zero “structure dirty” count when the portal tree changed (caller must
 ///   full-rebuild Taffy).
 pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
@@ -81,87 +85,92 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     collect_portal_slot_keys(root, &mut wanted);
 
     let pending = count_rui_portal_nodes(root);
+    let mut structure_dirty = dirty;
     if pending == 0 {
         // Retention path: leave live hoisted nodes in place; drop closed keys only.
-        return dirty + prune_unwanted_hoisted(root, &wanted);
-    }
+        structure_dirty += prune_unwanted_hoisted(root, &wanted);
+    } else {
+        let mut prev = take_all_hoisted(root);
 
-    let mut prev = take_all_hoisted(root);
+        let mut lifted = Vec::new();
+        hoist_portal_rec_with_slots(root, &mut lifted);
+        debug_assert_eq!(lifted.len(), pending);
 
-    let mut lifted = Vec::new();
-    hoist_portal_rec_with_slots(root, &mut lifted);
-    debug_assert_eq!(lifted.len(), pending);
+        let mut fresh_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut root_bucket = Vec::new();
+        let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
 
-    let mut fresh_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut root_bucket = Vec::new();
-    let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
-
-    for mut node in lifted {
-        let mount = node
-            .attrs
-            .get(ATTR_PORTAL_MOUNT)
-            .cloned()
-            .unwrap_or_default();
-        let key = portal_key_of(&node);
-        wanted.insert(key.clone());
-        fresh_keys.insert(key.clone());
-        prev.remove(&key);
-        prepare_hoisted_node(&mut node, &key);
-        place_hoisted(
-            root,
-            node,
-            mount.trim(),
-            &mut root_bucket,
-            &mut host_buckets,
-        );
-    }
-
-    for (key, node) in prev {
-        if !wanted.contains(&key) || fresh_keys.contains(&key) {
-            continue;
-        }
-        let mount = node
-            .attrs
-            .get(ATTR_HOISTED_MOUNT)
-            .cloned()
-            .unwrap_or_default();
-        place_hoisted(
-            root,
-            node,
-            mount.trim(),
-            &mut root_bucket,
-            &mut host_buckets,
-        );
-    }
-
-    let layer_idx = root
-        .children
-        .iter()
-        .position(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
-        .expect("portal layer");
-    {
-        let layer = &mut root.children[layer_idx];
-        layer.style.position = taffy::style::Position::Absolute;
-        layer.style.position_fixed = true;
-        layer.style.overflow.x = taffy::style::Overflow::Visible;
-        layer.style.overflow.y = taffy::style::Overflow::Visible;
-        if layer.pointer_events_mode() == crate::core::tree::PointerEvents::Auto {
-            layer.set_attr(
-                crate::core::tree::ATTR_POINTER_EVENTS,
-                crate::core::tree::PointerEvents::BoxNone.as_str(),
+        for mut node in lifted {
+            let mount = node
+                .attrs
+                .get(ATTR_PORTAL_MOUNT)
+                .cloned()
+                .unwrap_or_default();
+            let key = portal_key_of(&node);
+            wanted.insert(key.clone());
+            fresh_keys.insert(key.clone());
+            prev.remove(&key);
+            prepare_hoisted_node(&mut node, &key);
+            place_hoisted(
+                root,
+                node,
+                mount.trim(),
+                &mut root_bucket,
+                &mut host_buckets,
             );
         }
-        layer.children.clear();
-        layer.children.append(&mut root_bucket);
+
+        for (key, node) in prev {
+            if !wanted.contains(&key) || fresh_keys.contains(&key) {
+                continue;
+            }
+            let mount = node
+                .attrs
+                .get(ATTR_HOISTED_MOUNT)
+                .cloned()
+                .unwrap_or_default();
+            place_hoisted(
+                root,
+                node,
+                mount.trim(),
+                &mut root_bucket,
+                &mut host_buckets,
+            );
+        }
+
+        let layer_idx = root
+            .children
+            .iter()
+            .position(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        {
+            let layer = &mut root.children[layer_idx];
+            layer.style.position = taffy::style::Position::Absolute;
+            layer.style.position_fixed = true;
+            layer.style.overflow.x = taffy::style::Overflow::Visible;
+            layer.style.overflow.y = taffy::style::Overflow::Visible;
+            if layer.pointer_events_mode() == crate::core::tree::PointerEvents::Auto {
+                layer.set_attr(
+                    crate::core::tree::ATTR_POINTER_EVENTS,
+                    crate::core::tree::PointerEvents::BoxNone.as_str(),
+                );
+            }
+            layer.children.clear();
+            layer.children.append(&mut root_bucket);
+        }
+
+        for (path, mut kids) in host_buckets {
+            let host = element_mut_by_path(root, &path);
+            host.children.append(&mut kids);
+        }
+
+        // Layer membership was rewritten — always force a Taffy rebuild this frame.
+        structure_dirty = pending.max(1).max(dirty);
     }
 
-    for (path, mut kids) in host_buckets {
-        let host = element_mut_by_path(root, &path);
-        host.children.append(&mut kids);
-    }
-
-    // Layer membership was rewritten — always force a Taffy rebuild this frame.
-    pending.max(1).max(dirty)
+    // Dialog already on the layer + Select opens inside it: main-tree pending is 0, but a
+    // fresh `rui_portal` still sits under the hoisted stage — promote it now.
+    structure_dirty + hoist_nested_portals_from_hoisted(root, &mut wanted)
 }
 
 fn count_rui_portal_nodes(node: &Element) -> usize {
@@ -324,9 +333,8 @@ fn make_portal_slot(key: &str) -> Element {
 }
 
 fn collect_portal_slot_keys(node: &Element, out: &mut std::collections::HashSet<String>) {
-    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
-        return;
-    }
+    // Walk the portal layer too: nested menus leave slots *inside* already-hoisted
+    // Dialog/Popover stages; skipping the layer would prune those menus next frame.
     if let Some(k) = node.attrs.get(ATTR_PORTAL_SLOT) {
         let t = k.trim();
         if !t.is_empty() {
@@ -335,6 +343,87 @@ fn collect_portal_slot_keys(node: &Element, out: &mut std::collections::HashSet<
     }
     for c in &node.children {
         collect_portal_slot_keys(c, out);
+    }
+}
+
+/// Promote `rui_portal=1` nodes that were inserted under already-hoisted overlays.
+///
+/// [`hoist_portal_rec_with_slots`] skips [`PORTAL_LAYER_ID`], and
+/// [`count_rui_portal_nodes`] does too — so a Select opened inside a live Dialog never
+/// enters the main lift path. Extract here and append as siblings on the same mount.
+fn hoist_nested_portals_from_hoisted(
+    root: &mut Element,
+    wanted: &mut std::collections::HashSet<String>,
+) -> usize {
+    let mut lifted = Vec::new();
+    if let Some(layer) = root
+        .children
+        .iter_mut()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+    {
+        for child in &mut layer.children {
+            hoist_portal_rec_with_slots(child, &mut lifted);
+        }
+    }
+    extract_nested_portals_from_host_hoisted(root, &mut lifted);
+    if lifted.is_empty() {
+        return 0;
+    }
+
+    let n = lifted.len();
+    let mut root_bucket = Vec::new();
+    let mut host_buckets: Vec<(Vec<usize>, Vec<Element>)> = Vec::new();
+    for mut node in lifted {
+        let mount = node
+            .attrs
+            .get(ATTR_PORTAL_MOUNT)
+            .cloned()
+            .unwrap_or_default();
+        let key = portal_key_of(&node);
+        wanted.insert(key.clone());
+        prepare_hoisted_node(&mut node, &key);
+        place_hoisted(
+            root,
+            node,
+            mount.trim(),
+            &mut root_bucket,
+            &mut host_buckets,
+        );
+    }
+
+    if !root_bucket.is_empty() {
+        let layer = root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        layer.children.append(&mut root_bucket);
+    }
+    for (path, mut kids) in host_buckets {
+        let host = element_mut_by_path(root, &path);
+        host.children.append(&mut kids);
+    }
+    n
+}
+
+fn extract_nested_portals_from_host_hoisted(node: &mut Element, lifted: &mut Vec<Element>) {
+    if node.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+        return;
+    }
+    let mut i = 0;
+    while i < node.children.len() {
+        if node.children[i]
+            .attrs
+            .get(ATTR_HOISTED_PORTAL)
+            .map(|s| s.as_str())
+            == Some("1")
+        {
+            hoist_portal_rec_with_slots(&mut node.children[i], lifted);
+            i += 1;
+        } else {
+            extract_nested_portals_from_host_hoisted(&mut node.children[i], lifted);
+            i += 1;
+        }
     }
 }
 

@@ -71,6 +71,10 @@ pub struct HitPathEntry {
     pub on_double_click: Option<PointerHandler>,
     /// Element was marked `rui_hoisted_portal` (Solid body overlay surface).
     pub hoisted_portal: bool,
+    /// `rui_portal_key` when present (stable portal identity after hoist).
+    pub portal_key: Option<String>,
+    /// `rui_floating` id when present (Select / Popover / Menu panel).
+    pub floating_id: Option<String>,
 }
 
 /// Collect the hit path from root to the deepest hit node (inclusive).
@@ -138,6 +142,16 @@ fn hit_path_rec(
 
     // Record this node before descending (root → leaf order).
     let entry_index = out.len();
+    let portal_key = el
+        .attrs
+        .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let floating_id = el
+        .attrs
+        .get(crate::utils::popup::ATTR_FLOATING)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     out.push(HitPathEntry {
         focus_id: el.focus_id.clone(),
         on_pointer_down: el.on_pointer_down.clone(),
@@ -150,6 +164,8 @@ fn hit_path_rec(
             .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
             .map(|s| s.as_str())
             == Some("1"),
+        portal_key,
+        floating_id,
     });
 
     let mut child_hit = false;

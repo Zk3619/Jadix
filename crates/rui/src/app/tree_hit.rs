@@ -24,7 +24,7 @@ fn claims_own_bounds(el: &Element) -> bool {
     pointer_events_targets_self(el) && !portal_hit_passthrough(el)
 }
 
-fn hit_test_child_indices(el: &Element) -> Vec<usize> {
+pub(super) fn hit_test_child_indices(el: &Element) -> Vec<usize> {
     // Topmost child wins.
     // Order rule:
     // - higher z_index is always on top
@@ -39,7 +39,7 @@ fn hit_test_child_indices(el: &Element) -> Vec<usize> {
 }
 
 #[inline]
-fn children_share_same_z_index(el: &Element) -> bool {
+pub(super) fn children_share_same_z_index(el: &Element) -> bool {
     let Some(first) = el.children.first() else {
         return true;
     };
@@ -61,60 +61,115 @@ pub(super) fn input_display_text(
     format!("{}{}{}", &committed[..a], preedit, &committed[a..])
 }
 
+/// Pointer hit on a stacking layer.
+///
+/// - [`LayerHit::Miss`]: pointer missed — callers may try siblings.
+/// - [`LayerHit::Hit`]: pointer hit this layer. `None` payload means an occluder
+///   (e.g. modal underlay) with no focus/cursor/`on_hover` of its own; ancestors may
+///   still bubble a payload, but lower siblings must not be searched.
+#[derive(Clone, Debug)]
+enum LayerHit<T> {
+    Miss,
+    Hit(Option<T>),
+}
+
+impl<T> LayerHit<T> {
+    fn bubble(self, parent: Option<T>) -> Self {
+        match self {
+            Self::Miss => Self::Miss,
+            Self::Hit(v) => Self::Hit(v.or(parent)),
+        }
+    }
+
+    fn into_option(self) -> Option<T> {
+        match self {
+            Self::Miss => None,
+            Self::Hit(v) => v,
+        }
+    }
+}
+
+#[inline]
+pub(super) fn escape_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    if el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+        || el.style.position_fixed
+    {
+        [0.0_f32, 0.0_f32]
+    } else {
+        scroll_acc
+    }
+}
+
 pub(super) fn pick_cursor(
     el: &Element,
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
 ) -> Option<CursorKind> {
+    pick_cursor_hit(el, x, y, scroll_acc).into_option()
+}
+
+fn pick_cursor_hit(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> LayerHit<CursorKind> {
     if pointer_events_blocked(el) {
-        return None;
+        return LayerHit::Miss;
     }
+    let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
-    // `layout_bounds` is stable unscrolled absolute space.
-    // To match screen coordinates (x, y), we must subtract parent scroll accumulation.
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
+    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    // Overflow Clipping (Check if point is within container visual bounds)
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && !inside
     {
-        return None;
+        return LayerHit::Miss;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(c) = pick_cursor(child, x, y, next_acc) {
-                return Some(c);
+            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     } else {
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(c) = pick_cursor(child, x, y, next_acc) {
-                return Some(c);
+            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     }
 
-    if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+    if inside {
         if !claims_own_bounds(el) {
-            return None;
+            return LayerHit::Miss;
         }
-        el.cursor
+        // Claiming bounds occludes lower siblings even without a cursor kind.
+        LayerHit::Hit(el.cursor)
     } else {
-        None
+        LayerHit::Miss
     }
 }
 
@@ -178,51 +233,71 @@ pub(super) fn find_focus_id_at(
     y: f32,
     scroll_acc: [f32; 2],
 ) -> Option<String> {
+    find_focus_id_at_hit(el, x, y, scroll_acc).into_option()
+}
+
+fn find_focus_id_at_hit(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> LayerHit<String> {
     if pointer_events_blocked(el) {
-        return None;
+        return LayerHit::Miss;
     }
+    let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
+    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && !inside
     {
-        return None;
+        return LayerHit::Miss;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(id) = find_focus_id_at(child, x, y, next_acc) {
-                return Some(id);
+            match find_focus_id_at_hit(child, x, y, next_acc).bubble(el.focus_id.clone()) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     } else {
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(id) = find_focus_id_at(child, x, y, next_acc) {
-                return Some(id);
+            match find_focus_id_at_hit(child, x, y, next_acc).bubble(el.focus_id.clone()) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     }
 
-    if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+    if inside {
         if !claims_own_bounds(el) {
-            return None;
+            return LayerHit::Miss;
         }
-        return el.focus_id.clone();
+        // Claiming bounds occludes lower siblings (modal underlay vs gallery scrollbars).
+        LayerHit::Hit(el.focus_id.clone())
+    } else {
+        LayerHit::Miss
     }
-    None
 }
 
 /// 命中最上层含 `input:` 继承焦点的文本叶（用于拖选时按 `rest` 查找布局与样式）。
@@ -499,7 +574,10 @@ pub(super) fn update_hovers(
         let mut all = scratch.borrow_mut();
         all.clear();
         collect_hover_handlers(el, &mut all);
-        let target = pick_hover_target(el, x, y, scroll_offset);
+        let target = match pick_hover_target(el, x, y, scroll_offset) {
+            HoverHit::Hit(cb) => cb,
+            HoverHit::Miss => None,
+        };
         for cb in all.iter() {
             let is_target = target.as_ref().is_some_and(|t| std::rc::Rc::ptr_eq(t, cb));
             cbs.push((cb.clone(), is_target));
@@ -519,60 +597,97 @@ fn collect_hover_handlers(
     }
 }
 
+/// Result of hover hit-testing (distinct from “no handler”).
+///
+/// - [`HoverHit::Miss`]: pointer missed this subtree — try siblings.
+/// - [`HoverHit::Hit`]: pointer hit this subtree. `None` means absorb (block siblings
+///   below, e.g. modal underlay) but ancestors may still supply `on_hover`.
+enum HoverHit {
+    Miss,
+    Hit(Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>),
+}
+
 fn pick_hover_target(
     el: &Element,
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
-) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
+) -> HoverHit {
     if pointer_events_blocked(el) {
-        return None;
+        return HoverHit::Miss;
     }
+
+    // Match `pointer_events::hit_path`: body portal / fixed escape ancestor scroll.
+    let scroll_acc = if el.template_id.as_deref()
+        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+        || el.style.position_fixed
+    {
+        [0.0_f32, 0.0_f32]
+    } else {
+        scroll_acc
+    };
+
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    // Respect overflow clipping as a hard boundary.
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+
+    // Respect overflow clipping as a hard boundary (portal layer is a stacking shell).
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
         && !inside
     {
-        return None;
+        return HoverHit::Miss;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
-    // Topmost child wins.
+    // Topmost child wins; bubble `on_hover` so Button > label still highlights.
+    let bubble = |child_hit: HoverHit| -> HoverHit {
+        match child_hit {
+            HoverHit::Miss => HoverHit::Miss,
+            HoverHit::Hit(cb) => HoverHit::Hit(cb.or_else(|| el.on_hover.clone())),
+        }
+    };
+
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(cb) = pick_hover_target(child, x, y, next_acc) {
-                return Some(cb);
+            match bubble(pick_hover_target(child, x, y, next_acc)) {
+                HoverHit::Miss => {}
+                hit => return hit,
             }
         }
     } else {
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(cb) = pick_hover_target(child, x, y, next_acc) {
-                return Some(cb);
+            match bubble(pick_hover_target(child, x, y, next_acc)) {
+                HoverHit::Miss => {}
+                hit => return hit,
             }
         }
     }
 
     if inside {
         if !claims_own_bounds(el) {
-            return None;
+            return HoverHit::Miss;
         }
-        el.on_hover.clone()
+        // Claiming bounds absorbs sibling search even without `on_hover` (modal underlay).
+        HoverHit::Hit(el.on_hover.clone())
     } else {
-        None
+        HoverHit::Miss
     }
 }
 
@@ -684,6 +799,134 @@ pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &Ke
         }
     }
     false
+}
+
+#[cfg(test)]
+mod hover_occlusion_tests {
+    use super::*;
+    use crate::primitives::interactive::interactive;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn claiming_underlay_blocks_hover_on_content_below() {
+        let below_hits = Rc::new(Cell::new(0u32));
+        let below_hits_cb = below_hits.clone();
+        let mut below: Element = interactive(Element::new().w(100.0).h(100.0))
+            .on_hover(move |h| {
+                if h {
+                    below_hits_cb.set(below_hits_cb.get() + 1);
+                }
+            })
+            .into();
+        below.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        // Full-screen underlay claims bounds via on_click but has no on_hover.
+        let mut underlay = Element::new().w(100.0).h(100.0).on_click(|| {});
+        underlay.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        underlay.style.z_index = 1000;
+
+        let mut root = Element::new().child(below).child(underlay);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let mut to_run = Vec::new();
+        update_hovers(&root, 50.0, 50.0, [0.0, 0.0], &mut to_run);
+        for (cb, is_hover) in to_run {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(
+            below_hits.get(),
+            0,
+            "content under a claiming underlay must not receive hover"
+        );
+    }
+
+    #[test]
+    fn claiming_underlay_blocks_scrollbar_focus_and_cursor() {
+        use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
+        use crate::core::tree::CursorKind;
+
+        let mut track = Element::new()
+            .w(12.0)
+            .h(100.0)
+            .cursor_kind(CursorKind::Pointer);
+        track.focus_id = Some(format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}gallery:y"));
+        track.layout_bounds = [88.0, 0.0, 12.0, 100.0];
+
+        // Underlay is an earlier sibling with higher z — DOM-order-only hit would miss it.
+        let mut underlay = Element::new().w(100.0).h(100.0).on_click(|| {});
+        underlay.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        underlay.style.z_index = 1000;
+
+        let mut root = Element::new().child(underlay).child(track);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        assert!(
+            find_focus_id_at(&root, 94.0, 50.0, [0.0, 0.0]).is_none(),
+            "scrollbar track under modal underlay must not win focus hit-test"
+        );
+        assert!(
+            pick_cursor(&root, 94.0, 50.0, [0.0, 0.0]).is_none(),
+            "scrollbar Pointer cursor must not leak through claiming underlay"
+        );
+    }
+
+    #[test]
+    fn claiming_underlay_blocks_scroll_chain_underneath() {
+        use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
+
+        let mut area = Element::new().w(100.0).h(100.0);
+        area.focus_id = Some(format!("{SCROLL_AREA_FOCUS_PREFIX}gallery"));
+        area.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let mut underlay = Element::new().w(100.0).h(100.0).on_click(|| {});
+        underlay.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        underlay.style.z_index = 1000;
+
+        let mut root = Element::new().child(underlay).child(area);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let mut chain = Vec::new();
+        let hit = crate::app::scroll_support::collect_scroll_chain_at(
+            &root,
+            50.0,
+            50.0,
+            [0.0, 0.0],
+            &mut chain,
+        );
+        assert!(hit, "underlay must absorb the pointer");
+        assert!(
+            chain.is_empty(),
+            "gallery scroll area under underlay must not enter hover/wheel chain"
+        );
+    }
+
+    #[test]
+    fn button_hover_bubbles_from_child_label() {
+        let hovered = Rc::new(Cell::new(false));
+        let hovered_cb = hovered.clone();
+        let mut label = Element::new().w(80.0).h(20.0);
+        label.layout_bounds = [10.0, 10.0, 80.0, 20.0];
+
+        let mut btn: Element = interactive(Element::new().w(100.0).h(40.0).child(label))
+            .on_hover(move |h| hovered_cb.set(h))
+            .into();
+        btn.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+
+        let mut root = Element::new().child(btn);
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+
+        let mut to_run = Vec::new();
+        // Pointer over the inner label (not the button padding).
+        update_hovers(&root, 40.0, 20.0, [0.0, 0.0], &mut to_run);
+        for (cb, is_hover) in to_run {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert!(
+            hovered.get(),
+            "Button on_hover must fire when pointer is over a non-hover child"
+        );
+    }
 }
 
 #[cfg(test)]

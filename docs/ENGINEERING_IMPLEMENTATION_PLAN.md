@@ -40,7 +40,7 @@
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）。macOS / Linux 冒烟仍 ☐。W2.3+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）；**WP-2.3 ☑ Win 视觉已签署**。macOS / Linux 冒烟仍 ☐。W2.4+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
 
 ---
 
@@ -147,8 +147,8 @@ flowchart TB
 | **路径** | `layout/layout_tree.rs`（`pick_subtree_compute_root`、`resolve_layout_compute_root`、`mark_dirty`）；细则 [layout_subtree.md](layout_subtree.md) |
 | **任务** | 尺寸上溢时升父/根的规则固化 + 单测（嵌套 flex 改子宽） |
 | **验收** | `layout_mark_dirty` / `subtree_promote::` 覆盖升父；无错误裁剪；Gallery **布局 / WP-2.3** |
-| **状态** | ☑ 代码+库测+Gallery 验收区已合入（`resolve_layout_compute_root` + `subtree_promote::` 3 测；侧栏「布局 / WP-2.3」）；live 仍 app-root compute（Taffy location 安全）；☐ Win 视觉签署（加宽 chip → footer 下移） |
-| **进展** | 内容尺寸祖先上溢升父；定高宽容器可停在浅层候选；细则见 [layout_subtree.md](layout_subtree.md) |
+| **状态** | ☑ **开发机 Win 已签署**（2026-08-10，Kingdom / Win 10.0.26200；Gallery）：加宽 chip → wrap 行增高、footer 下移；复位恢复。库测 `subtree_promote::` + live app-root compute（Taffy location 安全）；细则 [layout_subtree.md](layout_subtree.md) |
+| **进展** | 内容尺寸祖先上溢升父；定高宽容器可停在浅层候选；Gallery 动态 `w={signal.get()}` 经 `ui!` → `bind_prop`/`apply_bound_size`（`LayoutChanged`）就地更新 |
 
 ### WP-2.4 Anchors / Bindings 挂 Owner + scoped ID
 
@@ -363,7 +363,7 @@ flowchart TB
 |----|------|
 | 1 | WP-1.1～1.3；并行起草 WP-4.1 CHANGELOG / 承诺面 |
 | 2 | WP-1.4 Win 已签 → 启动 WP-2.1、WP-2.4；macOS/Linux 冒烟可并行补签 |
-| 3–4 | WP-2.2 ☑ → WP-2.3、2.5、2.6（golden 五场景）；GPU PartialLoad 见 B8 |
+| 3–4 | WP-2.2 / 2.3 ☑ → WP-2.4、2.5、2.6（golden 五场景）；GPU PartialLoad 见 B8 |
 | 5–6 | WP-3.1～3.5；托盘 WP-3.6 视进度 |
 | 7 | WP-4.2～4.6；冻结 API |
 | 8 | WP-4.3 publish + WP-4.7 升 Beta；同步 gap / 纲领 |

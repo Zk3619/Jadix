@@ -450,6 +450,8 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
         disabled: false,
         on_click: None,
         container: hstack()
+            // ShadCN Button base: `inline-flex shrink-0 items-center justify-center gap-2`
+            // （`whitespace-nowrap` 落在文案叶子上，见 From）。
             .rounded(size.corner_radius())
             .gap(size.gap())
             .justify_center()
@@ -562,6 +564,18 @@ impl ButtonBuilder {
     // Pass-through some layout methods
     pub fn w(mut self, w: impl IntoDimension) -> Self {
         self.container = self.container.w(w);
+        self
+    }
+    /// Stretch to parent width while keeping ShadCN `shrink-0`.
+    ///
+    /// Sets `width: 100%` + `min-width: 0` + `max-width: 100%` so flex `min-width: auto`
+    /// does not inflate past the parent (Dialog / form rows).
+    pub fn w_full(mut self) -> Self {
+        self.container = self
+            .container
+            .w("100%")
+            .min_w(0.0)
+            .max_w("100%");
         self
     }
     pub fn h(mut self, h: impl IntoDimension) -> Self {

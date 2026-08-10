@@ -136,7 +136,12 @@ pub use scroll_viewport::{
 pub use scrollbar::{
     scrollbar, scrollbarbuilder, Scrollbar, ScrollbarBuilder, ScrollbarOrientation, ScrollbarProps,
 };
-pub use select::{select, Select, SelectBuilder, SelectProps};
+pub use select::{
+    select, select_content, select_scope, use_select, Select, SelectBuilder, SelectContentOpts,
+    SelectCtx, SelectGroup, SelectGroupData, SelectGroupProps, SelectItem, SelectItemAlign,
+    SelectItemData, SelectItemProps, SelectLabel, SelectLabelProps, SelectProps, SelectSeparator,
+    SelectSeparatorProps, SelectTrigger, SelectTriggerProps, SelectValue, SelectValueProps,
+};
 pub use separator::{separator, Separator, SeparatorBuilder, SeparatorProps};
 pub use sheet::{sheet, SheetBuilder, SheetSide};
 pub use sidebar::{sidebar, SidebarBuilder};

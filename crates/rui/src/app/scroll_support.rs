@@ -157,8 +157,34 @@ pub(super) fn collect_scroll_areas_at(
     }
 }
 
+/// Visit children topmost-first (z_index, then DOM order), matching [`super::tree_hit`].
+fn for_each_hit_child<'a>(
+    el: &'a Element,
+    mut f: impl FnMut(&'a Element) -> bool,
+) -> bool {
+    if super::tree_hit::children_share_same_z_index(el) {
+        for child in el.children.iter().rev() {
+            if f(child) {
+                return true;
+            }
+        }
+    } else {
+        let order = super::tree_hit::hit_test_child_indices(el);
+        for i in order.into_iter().rev() {
+            if f(&el.children[i]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Collect only the topmost hit branch (deepest child path) under pointer.
 /// Output order matches `collect_scroll_areas_at`: deepest scroll area first, then ancestors.
+///
+/// Occluders (modal underlay) that claim bounds stop sibling search even when they are
+/// not themselves scroll areas — otherwise gallery scrollbars under a dialog keep receiving
+/// hover / wheel.
 pub(super) fn collect_scroll_chain_at(
     el: &Element,
     x: f32,
@@ -169,32 +195,37 @@ pub(super) fn collect_scroll_chain_at(
     if !crate::core::tree::pointer_events_targets_children(el) {
         return false;
     }
+    let scroll_acc = super::tree_hit::escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
         && !inside
     {
         return false;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
     let mut child_hit = false;
-    for child in el.children.iter().rev() {
-        if collect_scroll_chain_at(child, x, y, next_acc, out) {
-            child_hit = true;
-            break;
-        }
+    if for_each_hit_child(el, |child| {
+        collect_scroll_chain_at(child, x, y, next_acc, out)
+    }) {
+        child_hit = true;
     }
 
     if let Some(id) = el.focus_id.as_deref() {
@@ -232,32 +263,37 @@ pub(crate) fn collect_scroll_rest_chain_at(
     if !crate::core::tree::pointer_events_targets_children(el) {
         return false;
     }
+    let scroll_acc = super::tree_hit::escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0];
     let vy = b[1] - scroll_acc[1];
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
         && !inside
     {
         return false;
     }
 
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
     }
 
     let mut child_hit = false;
-    for child in el.children.iter().rev() {
-        if collect_scroll_rest_chain_at(child, x, y, next_acc, out) {
-            child_hit = true;
-            break;
-        }
+    if for_each_hit_child(el, |child| {
+        collect_scroll_rest_chain_at(child, x, y, next_acc, out)
+    }) {
+        child_hit = true;
     }
 
     if let Some(id) = el.focus_id.as_deref() {

@@ -139,12 +139,22 @@ fn mounted_anchor_hook(id: &str) -> Option<Rc<UnmountHook>> {
 /// Empty subtree root used only to reserve a stable [`Element::template_id`] in the declarative tree.
 /// Must use the **same** string as [`reactive_anchor`].
 pub fn reactive_placeholder(anchor_id: impl Into<String>) -> Element {
+    reactive_placeholder_sized(anchor_id, "100%", "100%")
+}
+
+/// Like [`reactive_placeholder`], but with explicit size (e.g. `0`×`0` for portal anchors
+/// inside ScrollArea so a `100%` shell cannot inflate scroll content metrics).
+pub fn reactive_placeholder_sized(
+    anchor_id: impl Into<String>,
+    width: impl crate::core::tree::IntoDimension,
+    height: impl crate::core::tree::IntoDimension,
+) -> Element {
     let id = anchor_id.into();
     let mut placeholder = Element::new()
         .template_id(id.clone())
         .template_hash(REACTIVE_PLACEHOLDER_HASH)
-        .w("100%")
-        .h("100%");
+        .w(width)
+        .h(height);
 
     if let Some(hook) = mounted_anchor_hook(&id) {
         placeholder = placeholder.on_unmount_hook(Rc::clone(&hook));
@@ -634,6 +644,32 @@ where
     F: FnMut() -> StylePatch + 'static,
 {
     bind_prop(el, bind_key, compute, |el, patch| patch.apply(el))
+}
+
+/// Patch one size axis from a fine-grained binding (`ui!` dynamic `w` / `h` / `min_w` / …).
+///
+/// Returns [`LayoutStatus::LayoutChanged`] when the dimension actually changes so
+/// `update_element_by_template_id` queues Taffy `mark_dirty` + root compute.
+pub fn apply_bound_size(
+    el: &mut Element,
+    axis: &str,
+    next: taffy::style::Dimension,
+) -> LayoutStatus {
+    let slot = match axis {
+        "w" | "width" | "inline_size" | "inlineSize" => &mut el.style.size.width,
+        "h" | "height" | "block_size" | "blockSize" => &mut el.style.size.height,
+        "min_w" | "minWidth" | "min_width" => &mut el.style.min_size.width,
+        "min_h" | "minHeight" | "min_height" => &mut el.style.min_size.height,
+        "max_w" | "maxWidth" | "max_width" => &mut el.style.max_size.width,
+        "max_h" | "maxHeight" | "max_height" => &mut el.style.max_size.height,
+        _ => return LayoutStatus::Clean,
+    };
+    if *slot == next {
+        LayoutStatus::Clean
+    } else {
+        *slot = next;
+        LayoutStatus::LayoutChanged
+    }
 }
 
 /// Conditional rendering helper for fine-grained blocks.

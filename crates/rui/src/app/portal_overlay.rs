@@ -60,8 +60,33 @@ fn z_for_index(i: usize) -> OverlayZ {
     }
 }
 
-fn prune_closed(stack: &mut Vec<OverlayLayer>) {
-    stack.retain(|l| l.open.peek());
+/// Drop layers whose `open` is already false. If a Modal is pruned this way, also
+/// remove exclusive surfaces (Menu/Popover/Tooltip) and return their signals so the
+/// caller can `try_set(false)` after releasing the stack borrow.
+fn prune_closed(stack: &mut Vec<OverlayLayer>) -> Vec<Signal<bool>> {
+    let mut to_close = Vec::new();
+    let mut closed_modal = false;
+    stack.retain(|l| {
+        if l.open.peek() {
+            true
+        } else {
+            if matches!(l.kind, OverlayKind::Modal) {
+                closed_modal = true;
+            }
+            false
+        }
+    });
+    if closed_modal {
+        stack.retain(|l| {
+            if is_exclusive_surface(l.kind) {
+                to_close.push(l.open);
+                false
+            } else {
+                true
+            }
+        });
+    }
+    to_close
 }
 
 /// Dropdown / popover style surfaces: only one should be open at a time.
@@ -114,14 +139,13 @@ pub fn portal_sync(
             // [`try_close_top`]: `open.set` may rebuild and re-enter [`portal_sync`].
             let (z, to_close) = OVERLAY_STACK.with(|cell| {
                 let mut stack = cell.borrow_mut();
-                prune_closed(&mut stack);
+                let mut to_close = prune_closed(&mut stack);
                 if open.peek() {
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
                         stack[pos].open = open;
                         stack[pos].kind = kind;
-                        (Some(z_for_index(pos)), Vec::new())
+                        (Some(z_for_index(pos)), to_close)
                     } else {
-                        let mut to_close = Vec::new();
                         stack.retain(|l| {
                             if l.id == id {
                                 return true;
@@ -140,8 +164,21 @@ pub fn portal_sync(
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
                 } else {
+                    // Closing: drop this id. Closing a Modal (by kind arg — the layer may
+                    // already have been prune_closed after `open.set(false)`) must also
+                    // dismiss nested exclusive surfaces so Select open state cannot stick.
                     stack.retain(|l| l.id != id);
-                    (None, Vec::new())
+                    if matches!(kind, OverlayKind::Modal) {
+                        stack.retain(|l| {
+                            if is_exclusive_surface(l.kind) {
+                                to_close.push(l.open);
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                    }
+                    (None, to_close)
                 }
             });
             for other in to_close {
@@ -154,15 +191,20 @@ pub fn portal_sync(
 
 /// Top Stacked overlay panel z-index (`OverlayZ::panel`), if any.
 pub fn top_stacked_panel_z() -> Option<i32> {
-    OVERLAY_STACK.with(|cell| {
+    let (z, to_close) = OVERLAY_STACK.with(|cell| {
         let mut stack = cell.borrow_mut();
-        prune_closed(&mut stack);
-        if stack.is_empty() {
+        let to_close = prune_closed(&mut stack);
+        let z = if stack.is_empty() {
             None
         } else {
             Some(z_for_index(stack.len() - 1).panel)
-        }
-    })
+        };
+        (z, to_close)
+    });
+    for other in to_close {
+        other.try_set(false);
+    }
+    z
 }
 
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
@@ -170,20 +212,28 @@ pub fn top_stacked_panel_z() -> Option<i32> {
 /// `open.set` 必须在释放 `OVERLAY_STACK` 借用之后调用，否则 reactive rebuild →
 /// [`portal_sync`] 会 `RefCell already borrowed`。
 pub fn try_close_top() -> bool {
-    let to_close = OVERLAY_STACK.with(|cell| {
+    let (to_close_top, pruned) = OVERLAY_STACK.with(|cell| {
         let mut stack = cell.borrow_mut();
-        prune_closed(&mut stack);
-        stack.pop().map(|top| top.open)
+        let pruned = prune_closed(&mut stack);
+        let top = stack.pop().map(|top| top.open);
+        (top, pruned)
     });
-    let Some(open) = to_close else {
-        return false;
+    let mut closed = false;
+    for other in pruned {
+        if other.peek() {
+            other.try_set(false);
+            closed = true;
+        }
+    }
+    let Some(open) = to_close_top else {
+        return closed;
     };
     if open.peek() {
         // Prefer try_set: stack may briefly hold a disposed handle across teardown.
         open.try_set(false);
         true
     } else {
-        false
+        closed
     }
 }
 
@@ -198,20 +248,23 @@ pub fn try_dismiss_outside_press() -> bool {
     if !crate::utils::popup::underlay_close_is_armed() {
         return false;
     }
-    let to_close = OVERLAY_STACK.with(|cell| {
+    let (to_close, pruned) = OVERLAY_STACK.with(|cell| {
         let mut stack = cell.borrow_mut();
-        prune_closed(&mut stack);
+        let pruned = prune_closed(&mut stack);
         let Some(top) = stack.last() else {
-            return None;
+            return (None, pruned);
         };
         match top.kind {
             OverlayKind::Popover | OverlayKind::Menu | OverlayKind::Tooltip => {}
-            OverlayKind::Modal => return None,
+            OverlayKind::Modal => return (None, pruned),
         }
         let open = top.open;
         stack.pop();
-        Some(open)
+        (Some(open), pruned)
     });
+    for other in pruned {
+        other.try_set(false);
+    }
     let Some(open) = to_close else {
         return false;
     };
@@ -227,6 +280,42 @@ pub fn try_dismiss_outside_press() -> bool {
 /// True when the hit path intersects a hoisted portal surface (`rui_hoisted_portal`).
 pub fn hit_path_on_hoisted_portal(path: &[super::pointer_events::HitPathEntry]) -> bool {
     path.iter().any(|e| e.hoisted_portal)
+}
+
+/// Id of the top Stacked Menu / Popover / Tooltip (exclusive dismissable surface), if any.
+pub fn top_stacked_exclusive_id() -> Option<String> {
+    OVERLAY_STACK.with(|cell| {
+        let stack = cell.borrow();
+        stack.iter().rev().find_map(|l| {
+            if !l.open.peek() {
+                return None;
+            }
+            match l.kind {
+                OverlayKind::Menu | OverlayKind::Popover | OverlayKind::Tooltip => {
+                    Some(l.id.clone())
+                }
+                OverlayKind::Modal => None,
+            }
+        })
+    })
+}
+
+/// True when the press is on the **top** exclusive overlay panel (Select / Popover / …).
+///
+/// Unlike [`hit_path_on_hoisted_portal`], this ignores other hoisted surfaces (e.g. Dialog
+/// stage) so clicking Dialog chrome outside the menu still dismisses the menu.
+pub fn hit_path_on_top_exclusive_surface(
+    path: &[super::pointer_events::HitPathEntry],
+) -> bool {
+    let Some(id) = top_stacked_exclusive_id() else {
+        return false;
+    };
+    let panel_key = format!("panel:{id}");
+    path.iter().any(|e| {
+        e.floating_id.as_deref() == Some(id.as_str())
+            || e.portal_key.as_deref() == Some(id.as_str())
+            || e.portal_key.as_deref() == Some(panel_key.as_str())
+    })
 }
 
 /// Drop portal stack entries (call on app shutdown so Signal handles do not linger).
@@ -247,6 +336,23 @@ mod tests {
 
     fn depth() -> usize {
         OVERLAY_STACK.with(|c| c.borrow().len())
+    }
+
+    #[test]
+    fn closing_modal_dismisses_nested_exclusive_surface() {
+        clear();
+        let modal = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync("dlg", modal, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(depth(), 2);
+
+        // Dialog close: portal_sync with open=false must clear nested Select too.
+        modal.set(false);
+        assert!(portal_sync("dlg", modal, OverlayKind::Modal, OverlayMode::Stacked).is_none());
+        assert!(!menu.peek(), "nested menu open signal must be cleared with modal");
+        assert_eq!(depth(), 0);
+        clear();
     }
 
     #[test]
@@ -366,6 +472,43 @@ mod tests {
         crate::utils::popup::arm_underlay_close();
         assert!(try_dismiss_outside_press());
         assert!(!open.peek());
+    }
+
+    #[test]
+    fn hit_path_on_top_exclusive_ignores_other_hoisted_portals() {
+        clear();
+        let menu = Signal::new(true);
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(top_stacked_exclusive_id().as_deref(), Some("sel"));
+
+        let on_dialog = [crate::app::pointer_events::HitPathEntry {
+            focus_id: None,
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_click: None,
+            on_context_menu: None,
+            on_double_click: None,
+            hoisted_portal: true,
+            portal_key: Some("panel:dlg".into()),
+            floating_id: None,
+        }];
+        assert!(
+            !hit_path_on_top_exclusive_surface(&on_dialog),
+            "Dialog portal must not count as Select menu surface"
+        );
+
+        let on_menu = [crate::app::pointer_events::HitPathEntry {
+            focus_id: None,
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_click: None,
+            on_context_menu: None,
+            on_double_click: None,
+            hoisted_portal: true,
+            portal_key: Some("panel:sel".into()),
+            floating_id: Some("sel".into()),
+        }];
+        assert!(hit_path_on_top_exclusive_surface(&on_menu));
     }
 
     #[test]

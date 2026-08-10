@@ -318,3 +318,41 @@ fn bind_style_applies_bg_and_class_patch() {
     dispose_effect(root);
     reset_registered_anchors();
 }
+
+#[test]
+fn apply_bound_size_marks_layout_changed_on_width() {
+    use crate::app::reactive::apply_bound_size;
+    use crate::core::tree::IntoDimension;
+    let mut el = Element::new().w("3.5rem");
+    let narrow = IntoDimension::into_dimension("3.5rem");
+    let wide = IntoDimension::into_dimension("11rem");
+    assert_eq!(
+        apply_bound_size(&mut el, "w", narrow),
+        LayoutStatus::Clean
+    );
+    assert_eq!(
+        apply_bound_size(&mut el, "w", wide),
+        LayoutStatus::LayoutChanged
+    );
+    assert_eq!(el.style.size.width, wide);
+}
+
+#[test]
+fn bind_prop_applies_initial_width() {
+    use crate::app::reactive::{apply_bound_size, bind_prop};
+    use crate::core::tree::IntoDimension;
+    reset_registered_anchors();
+    let wide = use_signal("__rui_test_bind_size_w", || false);
+    wide.set_silent(false);
+    let el = bind_prop(
+        Element::new().template_id("bind:size:w"),
+        "bind:size:w",
+        move || IntoDimension::into_dimension(if wide.get() { "11rem" } else { "3.5rem" }),
+        |el, dim| apply_bound_size(el, "w", dim),
+    );
+    assert_eq!(
+        el.style.size.width,
+        IntoDimension::into_dimension("3.5rem")
+    );
+    reset_registered_anchors();
+}

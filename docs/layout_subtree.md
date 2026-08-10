@@ -38,3 +38,5 @@ cargo run -p gallery
 
 1. 点「加宽 chip」：中间 wrap 行增高，下方 footer **下移**（非被裁切叠住）。
 2. 点「复位」：恢复单行高度与 footer 位置。
+
+**签署**：☑ 开发机 Win（2026-08-10，Kingdom / Win 10.0.26200）已按上表确认。

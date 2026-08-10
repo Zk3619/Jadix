@@ -50,8 +50,9 @@ impl IntoDimension for &str {
             if let Ok(val) = rest.parse::<f32>() {
                 return Dimension::Percent(val / 100.0);
             }
-        } else if let Some(rest) = s.strip_suffix("vw").or_else(|| s.strip_suffix("vh")) {
-            // Taffy's Dimension has no viewport unit, fallback to percent semantics.
+        } else if let Some(rest) = strip_viewport_unit(s) {
+            // Taffy Dimension has no viewport units; map to percent of the containing
+            // block (portal body mount ≈ viewport for Dialog / floating shells).
             if let Ok(val) = rest.parse::<f32>() {
                 return Dimension::Percent(val / 100.0);
             }
@@ -60,6 +61,21 @@ impl IntoDimension for &str {
         }
         Dimension::Auto
     }
+}
+
+/// `vw` / `vh` / `dvw` / `dvh` / `svw` / `svh` / `lvw` / `lvh` → numeric prefix.
+fn strip_viewport_unit(s: &str) -> Option<&str> {
+    const SUFFIXES: &[&str] = &["dvw", "dvh", "svw", "svh", "lvw", "lvh", "vw", "vh"];
+    for suffix in SUFFIXES {
+        if let Some(rest) = s.strip_suffix(suffix) {
+            // Reject bare unit or junk like "85dvhpx".
+            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+            {
+                return Some(rest);
+            }
+        }
+    }
+    None
 }
 
 impl IntoDimension for String {
@@ -71,6 +87,27 @@ impl IntoDimension for String {
 impl IntoDimension for &String {
     fn into_dimension(self) -> Dimension {
         self.as_str().into_dimension()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_dvh_dvw_as_percent() {
+        match "85dvh".into_dimension() {
+            Dimension::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
+            other => panic!("expected percent, got {other:?}"),
+        }
+        match "85dvw".into_dimension() {
+            Dimension::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
+            other => panic!("expected percent, got {other:?}"),
+        }
+        match "50vh".into_dimension() {
+            Dimension::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
+            other => panic!("expected percent, got {other:?}"),
+        }
     }
 }
 

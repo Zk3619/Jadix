@@ -282,8 +282,10 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
     }
 
     // Cap without overflow → children paint past the panel chrome.
+    // Use Hidden (not Scroll): product panels put ScrollArea inside; Scroll on the
+    // floating root steals wheel and leaves the inner viewport thinking it has no overflow.
     if el.style.overflow.y == taffy::style::Overflow::Visible {
-        el.style.overflow.y = taffy::style::Overflow::Scroll;
+        el.style.overflow.y = taffy::style::Overflow::Hidden;
         changed = true;
     }
     changed
@@ -601,7 +603,7 @@ mod tests {
             min_w: 0.0,
         };
         assert!(write_floating_place(&mut el, place));
-        assert_eq!(el.style.overflow.y, taffy::style::Overflow::Scroll);
+        assert_eq!(el.style.overflow.y, taffy::style::Overflow::Hidden);
         match el.style.max_size.height {
             taffy::style::Dimension::Length(h) => assert!((h - 120.0).abs() < 0.1),
             other => panic!("expected max height length, got {other:?}"),

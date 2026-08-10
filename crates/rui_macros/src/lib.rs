@@ -655,11 +655,18 @@ fn expand_node(
         }
         RsxNode::Element(el) => {
             let name_str = el.name.to_string();
+            let select_is_compound = name_str == "Select"
+                && !el
+                    .attributes
+                    .iter()
+                    .any(|(k, _)| k == "options");
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
+                || select_is_compound
+                || name_str == "SelectContent"
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Fragment"
@@ -713,6 +720,82 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if select_is_compound {
+                    // ShadCN compound Select: provide context before Trigger/Content.
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let value_expr = get_attr("value");
+                    let placeholder_expr = get_attr("placeholder");
+                    let class_expr = get_attr("class");
+                    let content_class_expr = get_attr("content_class")
+                        .or_else(|| get_attr("contentClass"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Select#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let placeholder_ts = if let Some(ph) = placeholder_expr {
+                        quote! { (#ph).to_string() }
+                    } else {
+                        quote! { "Select…".to_string() }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { (#c).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let content_class_ts = if let Some(c) = content_class_expr {
+                        quote! { (#c).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    return quote! {
+                        rui::components::select_scope(
+                            #id_ts,
+                            #open_ts,
+                            #value_ts,
+                            #placeholder_ts,
+                            #class_ts,
+                            #content_class_ts,
+                            || #child_el,
+                        )
                     };
                 }
 
@@ -773,6 +856,74 @@ fn expand_node(
                                 overlay_opacity: #overlay_opacity,
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "SelectContent" {
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let match_trigger = get_attr("match_trigger")
+                        .or_else(|| get_attr("matchTrigger"))
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let menu_width = get_attr("menu_width")
+                        .or_else(|| get_attr("menuWidth"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let menu_height = get_attr("menu_height")
+                        .or_else(|| get_attr("menuHeight"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let min_height = get_attr("min_height")
+                        .or_else(|| get_attr("minHeight"))
+                        .or_else(|| get_attr("min_h"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let max_height = get_attr("max_height")
+                        .or_else(|| get_attr("maxHeight"))
+                        .or_else(|| get_attr("max_h"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let placement = get_attr("placement")
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rendered inside SelectContent's reactive_view.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::select_content(
+                            rui::components::SelectContentOpts {
+                                class: #class,
+                                match_trigger: #match_trigger,
+                                menu_width: #menu_width,
+                                menu_height: #menu_height,
+                                min_height: #min_height,
+                                max_height: #max_height,
+                                placement: #placement,
                             },
                             move || #child_el,
                         )
@@ -1450,6 +1601,44 @@ fn expand_node(
                                 });
                                 continue;
                             }
+                            // Dynamic size axes → LayoutChanged bind (WP-2.3 chip widen, etc.).
+                            if matches!(
+                                attr_name,
+                                "w" | "width"
+                                    | "inline_size"
+                                    | "inlineSize"
+                                    | "h"
+                                    | "height"
+                                    | "block_size"
+                                    | "blockSize"
+                                    | "min_w"
+                                    | "minWidth"
+                                    | "min_width"
+                                    | "min_h"
+                                    | "minHeight"
+                                    | "min_height"
+                                    | "max_w"
+                                    | "maxWidth"
+                                    | "max_width"
+                                    | "max_h"
+                                    | "maxHeight"
+                                    | "max_height"
+                            ) {
+                                let axis = attr_name;
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_size_{}#{}", file!(), line!(), #axis, #idx),
+                                        move || {
+                                            rui::core::tree::IntoDimension::into_dimension(#value)
+                                        },
+                                        |el, dim| {
+                                            rui::app::reactive::apply_bound_size(el, #axis, dim)
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
                         }
                         if attr_name == "class"
                             || attr_name == "className"
@@ -1869,25 +2058,125 @@ fn expand_node(
                     continue;
                 }
                 match attr_str.as_str() {
-                    "w" | "width" => element = apply_min_max_size_expr(element, value, "w"),
+                    "w" | "width" | "inline_size" | "inlineSize" => {
+                        if !in_reactive_boundary
+                            && expr_reads_get(value)
+                            && parse_min_max_call(value).is_none()
+                        {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "w";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_w#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = apply_min_max_size_expr(element, value, "w");
+                        }
+                    }
                     "max_w" | "maxWidth" | "max_width" => {
-                        element = quote! { #element.max_w(#value) }
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "max_w";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_max_w#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.max_w(#value) };
+                        }
                     }
                     "min_w" | "minWidth" | "min_width" => {
-                        element = quote! { #element.min_w(#value) }
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "min_w";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_min_w#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.min_w(#value) };
+                        }
                     }
-                    "inline_size" | "inlineSize" => {
-                        element = apply_min_max_size_expr(element, value, "w")
+                    "h" | "height" | "block_size" | "blockSize" => {
+                        if !in_reactive_boundary
+                            && expr_reads_get(value)
+                            && parse_min_max_call(value).is_none()
+                        {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "h";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_h#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = apply_min_max_size_expr(element, value, "h");
+                        }
                     }
-                    "h" | "height" => element = apply_min_max_size_expr(element, value, "h"),
                     "max_h" | "maxHeight" | "max_height" => {
-                        element = quote! { #element.max_h(#value) }
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "max_h";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_max_h#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.max_h(#value) };
+                        }
                     }
                     "min_h" | "minHeight" | "min_height" => {
-                        element = quote! { #element.min_h(#value) }
-                    }
-                    "block_size" | "blockSize" => {
-                        element = apply_min_max_size_expr(element, value, "h")
+                        if !in_reactive_boundary && expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let axis = "min_h";
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_size_min_h#{}", file!(), line!(), #idx),
+                                    move || {
+                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                    },
+                                    |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.min_h(#value) };
+                        }
                     }
                     "bg" => {
                         if !in_reactive_boundary && expr_reads_get(value) {

@@ -247,22 +247,18 @@
 
 ## 6. 组件清单
 
-历史计数「26 / 3 / 21」已过时。**现行清单**见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5（约 45 模块）。关键产品空洞（定位引擎、Tooltip、ContextMenu、Combobox、VirtualList、Table、TreeView、Form、Textarea、Toast、Resizable、FilePicker、AlertDialog、Sheet、Menubar、Command、Chart、Date/Color、Carousel、Gallery）均有 MVP；Router wired、托盘 stub。
+历史计数「26 / 3 / 21」已过时。**现行清单与分桶**见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5 + [component_inventory.md](component_inventory.md)（约 43 产品模块；`verified` / `stable-candidate` / `experimental` / `broken`）。关键产品空洞均有 MVP；Router wired、托盘 stub。
 
-**以 EUI 作完整度标尺**（不作架构参照，见 §1）。仍明显落后的产品面：
+**EUI 只作密度标尺**（不作架构 / API 参照，见 §1）。完整对照表在 inventory §3；此处仅保留仍落后的密度项：
 
-| EUI 已有 | RUI 现状 | 说明 |
-|----------|----------|------|
-| `barchart` / `linechart` / `piechart` | Bar/Line MVP | 矩形条 + path attrs stub（[`chart.rs`](../crates/rui/src/components/chart.rs) / [`path.rs`](../crates/rui/src/primitives/path.rs)） |
-| `markdown`（内置 md4c） | inline MVP | [`parse_markdown_inline`](../crates/rui/src/text/markdown_inline.rs)；块级 md 仍缺 |
-| `datepicker` / `timepicker` | 交互 MVP | 月网格 / 时分面板写 Signal |
-| `colorpicker` | 交互 MVP | 色板 + `#RRGGBB` |
-| `carousel` / `card_slider` | Carousel MVP | prev/next 索引 |
-| `stepper` / `segmented` / `progress` | MVP | 已落地 |
-| `virtualmasonry` | 缺失 | 依赖可信行高（见 §4.4） |
-| `navbar` / `sidebar` | MVP | 布局壳 |
+| EUI 已有 | RUI 现状 | 密度结论 |
+|----------|----------|----------|
+| `piechart` | 无（仅 bar/line MVP） | 缺 |
+| 块级 `markdown` | 仅 inline MVP | 缺 |
+| `virtualmasonry` | 缺失 | 缺（P2；卡可信行高） |
+| `segmented` | 无独立模块；用 ToggleGroup | 等价可接受 |
 
-其中 `virtualmasonry` 仍卡可信行高；块级 `markdown` 可在 inline MVP 之上继续加深。
+其余 EUI 控件头（button/input/tabs/dialog/toast/datepicker/…）RUI 已有对位；差距在**信任度（CV 分桶）**而非再扩表面积。
 
 ---
 

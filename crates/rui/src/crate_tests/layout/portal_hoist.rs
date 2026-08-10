@@ -2,7 +2,8 @@
 
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, PORTAL_LAYER_ID,
+    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
+    PORTAL_LAYER_ID,
 };
 use crate::layout::layout_tree::LayoutTree;
 
@@ -341,5 +342,104 @@ fn hoist_nested_portals_count_matches_lifted() {
     let mut root = Element::new().child(outer);
     // Must not panic on lifted.len() == pending (both 2).
     assert_eq!(hoist_portal_subtrees(&mut root), 2);
+    assert_eq!(count_in_layer(&root), 2);
+}
+
+/// Dialog stage already on the portal layer + Select menu opens inside it (retention path).
+/// The menu must become a **sibling** on the layer (viewport-fixed), not stay absolute under
+/// the stage — otherwise floating left/top are applied in the wrong containing block.
+#[test]
+fn hoist_select_portal_inside_already_hoisted_dialog() {
+    let panel = Element::new().w(320.0).h(200.0).template_id("dlg-panel");
+    let mut stage = Element::new()
+        .w("100%")
+        .h("100%")
+        .template_id("dlg-stage")
+        .child(panel);
+    stage.set_attr("rui_portal", "1");
+    stage.set_attr(ATTR_PORTAL_KEY, "panel:dlg");
+
+    let mut root = Element::new().w(800.0).h(600.0).children([
+        Element::new().child(stage),
+    ]);
+
+    assert!(hoist_portal_subtrees(&mut root) >= 1);
+    assert_eq!(count_in_layer(&root), 1);
+
+    // Simulate Select opening: fresh rui_portal inserted under the live hoisted panel.
+    {
+        let layer = root
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        let stage = layer
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-stage"))
+            .expect("hoisted stage");
+        let panel = stage
+            .children
+            .iter_mut()
+            .find(|c| c.template_id.as_deref() == Some("dlg-panel"))
+            .expect("panel");
+        let mut menu = Element::new().w(160.0).h(120.0).template_id("select-menu");
+        menu.set_attr("rui_portal", "1");
+        menu.set_attr(ATTR_PORTAL_KEY, "panel:select-menu");
+        panel.children.push(menu);
+    }
+
+    assert!(
+        hoist_portal_subtrees(&mut root) >= 1,
+        "nested select portal must dirty structure"
+    );
+    assert_eq!(
+        count_in_layer(&root),
+        2,
+        "select menu must be a portal-layer sibling of the dialog stage"
+    );
+
+    let layer = portal_layer(&root).expect("portal layer");
+    let menu = layer
+        .children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some("select-menu"))
+        .expect("select menu on layer");
+    assert_eq!(
+        menu.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()),
+        Some("1")
+    );
+    assert!(
+        menu.attrs.get("rui_portal").is_none(),
+        "rui_portal attr cleared after hoist"
+    );
+    assert!(
+        menu.style.position_fixed,
+        "body-mounted nested portal must be viewport-fixed"
+    );
+
+    let stage = layer
+        .children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some("dlg-stage"))
+        .expect("stage");
+    let panel = &stage.children[0];
+    assert!(
+        panel
+            .children
+            .iter()
+            .all(|c| c.template_id.as_deref() != Some("select-menu")),
+        "menu must not remain under the dialog panel"
+    );
+    assert!(
+        panel
+            .children
+            .iter()
+            .any(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_some()),
+        "panel keeps a portal slot for the lifted select"
+    );
+
+    // Retention: slot inside the hoisted stage keeps the menu alive.
+    assert_eq!(hoist_portal_subtrees(&mut root), 0);
     assert_eq!(count_in_layer(&root), 2);
 }

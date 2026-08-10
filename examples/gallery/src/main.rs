@@ -1051,6 +1051,7 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
     let tab_idx = use_signal("gallery_tabs_idx", || 0usize);
     let pop_open = use_signal("gallery_popover_open", || false);
     let select_val = use_signal("gallery_select_plan", || "basic".to_string());
+    let fruit_val = use_signal("gallery_select_fruit", || String::new());
 
     ui! {
         <MyCard title="10) Select · Popover · Tab strip (AccessKit)">
@@ -1063,13 +1064,31 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                         select("gallery:select_plan")
                             .value_signal(select_val)
                             .default_value("basic")
-                            .options(vec![
-                                ("basic".to_string(), "Basic".to_string()),
-                                ("pro".to_string(), "Pro".to_string()),
-                                ("team".to_string(), "Team".to_string()),
-                            ]),
+                            .trigger_width("100%")
+                            .item(SelectItemData::new("basic", "Basic"))
+                            .item(SelectItemData::new("pro", "Pro"))
+                            .item(SelectItemData::new("team", "Team")),
                     ) }
                     <Label text_size="0.875rem">{ format!("Selected plan: {}", select_val.get()) }</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "ShadCN 复合写法（SelectTrigger / Content / Item）："
+                    </Label>
+                    <Select id="gallery:select_fruit" value={fruit_val} placeholder="Select a fruit" class="w-full">
+                        <SelectTrigger class="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent max_h="12rem" class="bg-popover">
+                            <SelectGroup>
+                                <SelectLabel>"Fruits"</SelectLabel>
+                                <SelectItem value="apple">"Apple"</SelectItem>
+                                <SelectItem value="banana">"Banana"</SelectItem>
+                                <SelectItem value="blueberry">"Blueberry"</SelectItem>
+                            </SelectGroup>
+                            <SelectSeparator />
+                            <SelectItem value="pineapple">"Pineapple"</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Label text_size="0.875rem">{ format!("Selected fruit: {}", fruit_val.get()) }</Label>
                     <Button
                         variant="outline"
                         size="sm"
@@ -1529,20 +1548,32 @@ fn OverlayFeedbackShowcase() -> Element {
                             <Label text_size="0.875rem" font_weight="600">
                                 "嵌套浮层（Select）"
                             </Label>
-                            { Element::from(
-                                select("gal-dialog-nested-select")
-                                    .value_signal(nested_select)
-                                    .default_value("opt-a")
-                                    .trigger_width("100%")
-                                    .options(vec![
-                                        ("opt-a".into(), "Option A".into()),
-                                        ("opt-b".into(), "Option B".into()),
-                                        ("opt-c".into(), "Option C".into()),
-                                    ]),
-                            ) }
-                            <Label text_size="0.75rem" color="muted-foreground">
-                                { format!("Selected: {}", nested_select.get()) }
-                            </Label>
+                            <Select
+                                id="gal-dialog-nested-select"
+                                value={nested_select}
+                                placeholder="Pick an option"
+                                class="w-full"
+                            >
+                                <SelectTrigger class="w-full">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent max_h="12rem">
+                                    <SelectItem value="opt-a">"Option A"</SelectItem>
+                                    <SelectItem value="opt-b">"Option B"</SelectItem>
+                                    <SelectSeparator />
+                                    <SelectGroup>
+                                        <SelectLabel>"More"</SelectLabel>
+                                        <SelectItem value="opt-c">"Option C"</SelectItem>
+                                        <SelectItem value="opt-d">"Option D — long label"</SelectItem>
+                                        <SelectItem value="opt-e">"Option E"</SelectItem>
+                                    </SelectGroup>
+                                </SelectContent>
+                            </Select>
+                            <Reactive id="gal-dialog-sel-status">
+                                <Label text_size="0.75rem" color="muted-foreground">
+                                    { format!("Selected: {}", nested_select.get()) }
+                                </Label>
+                            </Reactive>
                             <Label text_size="0.875rem">"行 1 — 演示长内容"</Label>
                             <Label text_size="0.875rem">"行 2"</Label>
                             <Label text_size="0.875rem">"行 3"</Label>

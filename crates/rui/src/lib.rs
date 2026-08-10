@@ -14,6 +14,8 @@ pub mod a11y;
 pub mod app;
 pub mod components;
 pub(crate) mod debug_stack;
+/// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。
+pub mod prelude;
 pub mod primitives;
 /// Text measure (`prepare`/`layout`) + render bridge (`RuiTextRenderer`).
 pub mod text;

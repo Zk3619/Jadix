@@ -29,7 +29,7 @@
 
 **CV 门禁（进入 C1 前必须满足）**：
 
-- [ ] 稳定面草案已标：`verified` / `broken` / `experimental`（见 C-WP-0.2）  
+- [x] 稳定面草案已标：`verified` / `broken` / `experimental`（见 C-WP-0.2 / [`component_inventory.md`](component_inventory.md)）  
 - [ ] 稳定面候选的 **P0 阻断**（崩溃、无法开合、无法输入、布局塌缩）已修或降出稳定面  
 - [ ] 至少 **Button · Input · Dialog · Tabs · Checkbox|Switch** 有：headless 可构建布局测 **或** Gallery 手工清单勾选 **或** 已有库测  
 - [ ] 已知 diagnose 类问题（如 showcase 塌缩）有结论：已修 / 有测锁定 / 降级  
@@ -118,19 +118,19 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | 规范 §5；可选 `docs/component_inventory.md` 或 site 索引 stub |
+| **路径** | 规范 §5；[`component_inventory.md`](component_inventory.md) |
 | **任务** | ① 按 Gallery 分区列出全部公开 API；② 每项标 **`experimental` / `stable-candidate` / `verified` / `broken`**；③ 每项附 **id 策略**（必填实例键 / 可选 / 展示型不要求 / 仅内部自动）；④ 稳定候选默认 ≤ 规范 §5.2 草案；⑤ 与 gap §6 EUI 对照只保留密度标尺 |
 | **验收** | 表与 `components/mod.rs` pub use 一致；**broken 不得进 C1**；id 策略列可对接 C-WP-V.5 |
-| **状态** | ☐ 规范 §5.1 已按模块刷新；verified/broken 分桶表仍缺 |
+| **状态** | ☑ 2026-08-10：inventory 分桶 + id 策略 + EUI 密度标尺；规范 §5 已互链；broken=无 |
 
 ### C-WP-0.3 Prelude / 导出与双书写面策略
 
 | | |
 |--|--|
-| **路径** | `crates/rui/src/lib.rs` 或 `prelude`；规范 §3 |
+| **路径** | `crates/rui/src/prelude.rs`（`rui::prelude`）；规范 §3 |
 | **任务** | ① 默认 prelude re-export 样式组件标签入口 **与** 对应 Builder/`fn`；② 低层 popup 可不进 prelude；③ **ADR-9** 禁止废除无标签写法 |
 | **验收** | 标签与纯 Builder 均可编译；规范 §3 有互嵌示例 |
-| **状态** | ☐ 双书写面已在模块 `//!` 与规范落地；**尚无**独立 `rui::prelude` 模块 |
+| **状态** | ☑ 2026-08-10：`rui::prelude` 落地；`tests/prelude_dual_surface.rs` 覆盖双面+互嵌；规范 §3.0 策略结论 |
 
 **C0 退出**：互链完成；分桶表可评审；prelude + 双书写面策略有结论。
 

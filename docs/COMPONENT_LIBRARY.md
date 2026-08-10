@@ -3,9 +3,9 @@
 > **文档地位**：组件产品面的**单一权威规范**。选型、分层、API 契约、清单与质量门以本文为准。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；执行排期见 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)；与巩固期总计划 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 并行，不另开架构分叉。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
-> **日期**：2026-08-09  
+> **日期**：2026-08-10（§5 分桶表落地）  
 
-交叉文档：[`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
+交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
 
 ---
 
@@ -89,12 +89,27 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 
 ## 3. 双书写面（一等公民 · 必须兼容）
 
-RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止把「只用 `ui!` 标签」或「废弃 Builder」写成唯一正确路径。
+RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止把「只用 `ui!` 标签」或「废弃 Builder」写成唯一正确路径（**ADR-9**）。
 
 | 书写面 | 形态 | 典型入口 | 适用 |
 |--------|------|----------|------|
-| **A · RSX / 标签** | `ui! { <Button variant="outline">…</Button> }` | `rui_macros::ui!`、`#[component]` | 声明式树、热重载模板、文档站默认示例 |
-| **B · Builder / 纯 Rust** | `button("ok").variant("outline").on_click(…).into()` 或 `Element::from(…)` | `components::*` / `primitives::*` 的 `fn` + `*Builder` | 无类 HTML 标签、动态拼装、库测、复杂闭包 |
+| **A · RSX / 标签** | `ui! { <Button variant="outline">…</Button> }` | `rui_macros::ui!`、`#[component]`；经 [`prelude`](../crates/rui/src/prelude.rs) | 声明式树、热重载模板、文档站默认示例 |
+| **B · Builder / 纯 Rust** | `button("ok").variant("outline").on_click(…).into()` 或 `Element::from(…)` | 同模块 `fn` + `*Builder`；经 **同一** `prelude` | 无类 HTML 标签、动态拼装、库测、复杂闭包 |
+
+### 3.0 默认入口：`rui::prelude`
+
+```rust
+use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Signal + ui!/component
+```
+
+| 进 prelude | 不进 prelude |
+|------------|--------------|
+| 样式组件 PascalCase **与** 对应 `snake_case` / `*Builder` | [`utils::popup`](../crates/rui/src/utils/popup.rs) 低层几何 / placement |
+| `hstack` / `vstack` / `Portal` / `text` / `icon` | `popover_panel`（低层面板；按需 `components::popover`） |
+| `ThemeMode` / `set_theme_mode` | `overlay` / `path`、`BaseComponentBuilder`、`apply_bound_*` |
+| `ui!` / `component` / `reactive!` 等宏 | `planned` 未落地组件；`internal/*` |
+
+策略结论：**默认 DX = prelude 双书写面**；高级浮层能力显式路径导入，避免把 Radix 式无头工具误当成产品默认 API。
 
 ### 3.1 兼容契约（硬性）
 
@@ -103,7 +118,7 @@ RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止�
    - `ui!` 子树可嵌入 `{ Element::from(button(…).variant(…)) }` 或任意已构建的 `Element`；
    - Builder / `vstack`·`hstack` 的 `.child(…)` 可接收 `ui! { … }` 的结果或 `#[component]` 产物。  
 3. **API 面等价**：稳定面组件凡在 RSX 暴露的 props（`variant` / `size` / `disabled` / 受控 signal / `on_click` 等），Builder 须有对应链式方法（或文档标明「仅 RSX 糖」的极少数例外，且例外不得承载唯一行为路径）。  
-4. **仅 Builder 的控件**（如部分 `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder）。  
+4. **仅 Builder 的控件**（如部分 `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder），并进入 prelude。  
 5. **热重载**：`template_id` 主要服务含 `ui!` 的模板；纯 Builder 树仍是一等运行时能力，不因无热补丁而降级为「非推荐」。  
 6. **文档与示例**：Getting Started / 组件索引应**至少各给一种写法的完整片段**；标杆组件（Button、Input）两种都展示。
 
@@ -114,10 +129,13 @@ RUI **同时**提供两种写 UI 的方式，且必须**互相兼容**。禁止�
 | 新能力只进 `ui!` 属性、Builder 长期缺失 | 破坏无标签书写能力 |
 | 文档暗示「现代写法 = 只能写标签」 | 与项目「掌握代码 / 纯 Rust 拼装」目标冲突 |
 | RSX 与 Builder 走不同状态机或不同 token | 双源真理，无法互嵌保证观感一致 |
+| prelude 只导出标签、废除 Builder re-export | 违反 ADR-9 |
 
-代码锚点示例（同一按钮）：
+代码锚点（同一按钮 · 双面）：
 
 ```rust
+use rui::prelude::*;
+
 // A · 标签（无持久状态时可省略 id）
 ui! { <Button variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
 
@@ -125,11 +143,30 @@ ui! { <Button variant="outline" on_click={move || { /* … */ }}>"保存"</Butto
 ui! { <Button id="save" variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
 
 // B · Builder（无类 HTML 标签）；空 id 可走自动生成，持久状态勿依赖自动 id
-Element::from(
-    button("save") // 或 button("") 仅临时
-        .variant("outline")
-        .on_click(move |_| { /* … */ })
-)
+let _: Element = button("save")
+    .variant("outline")
+    .on_click(move |_| { /* … */ })
+    .into();
+```
+
+互嵌（验收用例，见 `crates/rui/tests/prelude_dual_surface.rs`）：
+
+```rust
+use rui::prelude::*;
+
+// 标签树 ← 嵌入 Builder
+let _ = ui! {
+    <VStack gap="0.5rem">
+        { Element::from(button("x").variant("ghost").text("内嵌 Builder")) }
+        <Button variant="outline">"标签子节点"</Button>
+    </VStack>
+};
+
+// Builder 树 ← 嵌入 ui!
+let _: Element = vstack()
+    .gap("0.5rem")
+    .child(ui! { <Label id="cap">"内嵌标签"</Label> })
+    .into();
 ```
 
 实现细节以各组件 `//!` 与 `From<*Builder> for Element` 为准；宏展开不得绕过公开 Builder 另造私有平行 API（宏生成调用公开函数除外）。
@@ -240,23 +277,35 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 ---
 
-## 5. 组件清单（代码事实 · 2026-08-09）
+## 5. 组件清单（代码事实 · 2026-08-10）
 
-来源：`components/mod.rs` + Gallery 分区。状态口径：**MVP** = 可演示；**工程** = 满足 §1；**实验** = SemVer 实验面。分桶验证（verified/broken）见计划 C-WP-0.2（仍 ☐）。
+来源：`components/mod.rs` `pub use` + Gallery 分区。  
+**分桶权威表**（`experimental` / `stable-candidate` / `verified` / `planned` / `broken` + **id 策略**）：[`component_inventory.md`](component_inventory.md)（C-WP-0.2 ☑）。  
+粗口径：**MVP** = Gallery 可演示；**工程** = 满足 §1；未过 CV 的 §5.2 项多为 `stable-candidate`；ShadCN 未落地对位为 `planned`（§5.1 附表 / inventory §1.9）。
+
+参考分工：ShadCN → 产品命名与分区；Solid → 受控 Signal / 细粒度 sync（非组件表）；EUI → **仅密度标尺**（见 inventory §3），不搬架构。
 
 ### 5.1 按 Gallery 分区
 
-| 分区 | 组件（`components/` 模块） | 基线目标 |
-|------|----------------------------|----------|
-| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label → 工程；其余 MVP→工程 |
-| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Form → 工程；选器键盘深化对齐巩固期 W3 |
-| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command；（共享壳 `internal/dialog_shell`） | 统一 popup + Esc；Dialog/Tooltip 优先工程；Portal 在 `primitives/`；Tab 陷阱 `utils/focus_trap` |
-| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | Table 对齐 TanStack columns+data；VirtualList 依赖测宽；Chart/Path 深化 |
-| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Navbar=布局壳；NavigationMenu=链接导览（≠ Menubar）；页面栈 `app::navigator::navigation_host`；桌面 Router 在 `app::router` |
-| **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | 滚动 focus 前缀与 IME 光标区协同 |
-| **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 与文本管线同源 |
+| 分区 | 组件（`components/` 模块） | 分桶摘要（详见 inventory） |
+|------|----------------------------|----------------------------|
+| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button=`verified`；Label/Separator/Card=`stable-candidate`；其余=`experimental`（越出 §5.2） |
+| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Select/Combobox=`verified`（窄主路径）；其余稳定面项=`stable-candidate`；Date/Time/Color/File=`experimental` |
+| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command；（共享壳 `internal/dialog_shell`） | Dialog=`verified`（Esc 栈）；AlertDialog/Toast/Tooltip=`stable-candidate`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
+| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | 全部 `experimental`（§5.2 外或深度未承诺） |
+| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`stable-candidate`；其余=`experimental` |
+| **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea=`verified`（含 Input 滚动）；Scrollbar=`stable-candidate`；Viewport/Resizable=`experimental` |
+| **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 选区随 Label；inline=`experimental`；块级 md **缺失**（密度项） |
 
-**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`；Segmented/Badge 若未单独成模块，可用 ToggleGroup / Label 组合或列入实验规划，**勿在清单假装已导出**。
+**ShadCN `planned`（尚未 `pub use`，详见 inventory §1.9）**：
+
+| 优先级 | 规划组件 | 建议分区 |
+|--------|----------|----------|
+| P1 | Badge、Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination | 基础 / 浮层 / 导航 / 数据 |
+| P2 | HoverCard、Calendar、Empty、Kbd、ButtonGroup、InputOTP、InputGroup | 浮层 / 表单 / 基础 |
+| 等价不单列 | Drawer→Sheet、Sonner→Toast、NativeSelect→Select、Field→Form 等 | — |
+
+**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`。`planned` 未落地前**禁止**写入 prelude 或假装已导出。
 
 ### 5.2 稳定面 vs 实验面（发布口径草案）
 
@@ -265,9 +314,9 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、AlertDialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Form（校验 Context）、Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化 |
-| Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨 |
+| Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
-最终表以巩固期 **WP-4.1** CHANGELOG 为准；本文草案供组件 PR 归类。
+**CV 分桶快照（2026-08-10）**：`verified` = Button、Input、Select、Combobox、Dialog（Esc）、ScrollArea；其余 §5.2 行为控件 = `stable-candidate`；**broken = 无**；**planned** = ShadCN 未落地对位（不进稳定面）。升格/降级只改 [`component_inventory.md`](component_inventory.md) 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 
 ### 5.3 明确不做（组件库范围）
 
@@ -319,11 +368,13 @@ cargo check -p gallery
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 巩固期 Wave 1–4
-COMPONENT_LIBRARY.md               ← 本文件（组件权威规范）
+COMPONENT_LIBRARY.md               ← 本文件（组件权威规范；§3 prelude + 双书写面）
 COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次（含 CV 门禁）
+component_inventory.md             ← §5 分桶附录（verified/broken + id 策略 + EUI 密度）
+crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
-gap_analysis.md §6                 ← 历史 EUI 密度对照（非清单真源）
+gap_analysis.md §6                 ← 历史 EUI 密度摘要（真源转 inventory §3）
 ```
 
 争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。

@@ -68,17 +68,25 @@ impl From<OverlayBuilder> for Element {
             color[3] = a;
         }
 
+        // Always attach a click handler so hoist does not default the portal root to
+        // `pointer-events: box-none` (which would let hover/clicks reach content below).
         let mut el: Element = if let Some(open) = close_on_click {
             interactive(r#box().into())
                 .on_click(move || {
                     if !underlay_close_is_armed() {
                         return;
                     }
+                    // Nested Select / Popover / Menu sits above this modal on the overlay
+                    // stack — dismiss that first; only close the dialog when nothing else
+                    // is stacked on top.
+                    if crate::app::portal_overlay::try_dismiss_outside_press() {
+                        return;
+                    }
                     open.set(false);
                 })
                 .into()
         } else {
-            r#box().into()
+            crate::utils::popup::swallow_clicks(r#box().into())
         };
 
         el = el
@@ -101,6 +109,29 @@ mod tests {
     use super::*;
     use crate::core::reactivity::{create_root, Signal};
     use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+
+    #[test]
+    fn overlay_prefers_nested_menu_dismiss_before_closing_modal() {
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+        };
+        use crate::utils::popup::arm_underlay_close;
+
+        clear_overlay_stack();
+        let dialog = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync("dlg", dialog, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        arm_underlay_close();
+
+        let underlay: Element = overlay(1000).close_on_click(dialog).into();
+        if let Some(cb) = &underlay.on_click {
+            cb.borrow_mut()();
+        }
+        assert!(!menu.peek(), "underlay click must dismiss nested menu first");
+        assert!(dialog.peek(), "dialog must stay open while menu was on top");
+        clear_overlay_stack();
+    }
 
     #[test]
     fn overlay_sets_underlay_portal_key_and_blur() {

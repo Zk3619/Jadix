@@ -110,9 +110,9 @@ pub(crate) fn apply_dialog_shell_surface(mut panel: Element) -> Element {
         .border_color(tokens::border())
         .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
         .p("1.5rem")
-        .max_w("32rem")
+        .max_w("85dvw")
         .w("100%")
-        .max_h("85%")
+        .max_h("85dvh")
         .overflow_y("hidden")
         .overflow_x("hidden");
     panel
@@ -141,6 +141,7 @@ pub(crate) fn dialog_sections(sections: DialogSections) -> Element {
         .overflow_y("auto")
         .scrollbar_visibility("auto")
         .w("100%")
+        .h("auto")
         .min_h("0")
         .flex_grow(1.0)
         .flex_shrink(1.0)

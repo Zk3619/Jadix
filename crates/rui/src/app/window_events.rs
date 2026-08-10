@@ -568,15 +568,15 @@ impl super::App {
         let mut to_run = Vec::new();
         super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
 
-        if let Some(cursor) = cursor_pick {
-            window.set_cursor(match cursor {
-                crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
-                crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
-                crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
-                _ => winit::window::CursorIcon::Default,
-            });
-        }
+        // Always apply: occluders (modal underlay) return None and must reset to Default,
+        // otherwise gallery scrollbar Pointer cursors stick through the mask.
+        window.set_cursor(match cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
+            crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
+            crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
+            crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
+            crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
+            crate::core::tree::CursorKind::Default => winit::window::CursorIcon::Default,
+        });
 
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
@@ -1052,6 +1052,16 @@ impl super::App {
                             .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
                             .map(|s| s.as_str())
                             == Some("1"),
+                        portal_key: el
+                            .attrs
+                            .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                        floating_id: el
+                            .attrs
+                            .get(crate::utils::popup::ATTR_FLOATING)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
                     }]
                 } else {
                     super::pointer_events::hit_path(&state.root_element, x, y)
@@ -1963,7 +1973,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .map(|(rest, b, max, content)| (rest.clone(), (*b, *max, *content)))
                     .collect();
 
-                let hover_cursor_pick = state.last_hover_cursor;
+                // Prefer hit-test over paint-order `last_hover_cursor`: layout DFS can leave a
+                // sticky Pointer from gallery scrollbars when a claiming underlay has no cursor.
+                let hover_cursor_pick =
+                    super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
                 super::tree_hit::update_hovers(
                     &state.root_element,
@@ -1973,21 +1986,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     &mut hover_to_run,
                 );
 
-                if let Some(cursor) = hover_cursor_pick {
-                    window.set_cursor(match cursor {
-                        crate::core::tree::CursorKind::Pointer => {
-                            winit::window::CursorIcon::Pointer
-                        }
-                        crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                        crate::core::tree::CursorKind::NotAllowed => {
-                            winit::window::CursorIcon::NotAllowed
-                        }
-                        crate::core::tree::CursorKind::NwseResize => {
-                            winit::window::CursorIcon::NwseResize
-                        }
-                        _ => winit::window::CursorIcon::Default,
-                    });
-                }
+                window.set_cursor(match hover_cursor_pick
+                    .unwrap_or(crate::core::tree::CursorKind::Default)
+                {
+                    crate::core::tree::CursorKind::Pointer => {
+                        winit::window::CursorIcon::Pointer
+                    }
+                    crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
+                    crate::core::tree::CursorKind::NotAllowed => {
+                        winit::window::CursorIcon::NotAllowed
+                    }
+                    crate::core::tree::CursorKind::NwseResize => {
+                        winit::window::CursorIcon::NwseResize
+                    }
+                    crate::core::tree::CursorKind::Default => {
+                        winit::window::CursorIcon::Default
+                    }
+                });
 
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
@@ -2640,7 +2655,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 let y = self.cursor_pos.y as f32 / scale;
                                 let path =
                                     super::pointer_events::hit_path(&state.root_element, x, y);
-                                !super::portal_overlay::hit_path_on_hoisted_portal(&path)
+                                !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
                                     && !crate::utils::popup::path_hits_floating_trigger(
                                         &state.root_element,
                                         &path,

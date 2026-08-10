@@ -320,11 +320,15 @@ pub fn DialogBody(children: Option<Element>) -> Element {
     let ctx = require_dialog("DialogBody");
     let child = children.unwrap_or_else(Element::new);
     let scroll_id = format!("{}__body", ctx.id);
+    // Prefer flex sizing over the ScrollArea default `h: 100%` — percentage height
+    // against an unresolved portal stage can leave body metrics at "no overflow"
+    // until a later dirty (e.g. opening a nested Select).
     scroll_area(scroll_id.as_str())
         .overflow_x("hidden")
         .overflow_y("auto")
         .scrollbar_visibility("auto")
         .w("100%")
+        .h("auto")
         .min_h("0")
         .flex_grow(1.0)
         .flex_shrink(1.0)

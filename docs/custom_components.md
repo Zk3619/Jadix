@@ -44,20 +44,17 @@ pub fn MyButton(label: String, primary: bool) -> Element {
 ### Same idea with Builders only
 
 ```rust
-use rui::components::button;
-use rui::core::tree::Element;
-use rui::primitives::r#box::vstack;
+use rui::prelude::*;
 
-// Pure Rust: no class-HTML tags required.
+// Pure Rust: no class-HTML tags required（与 ui! 同等一等公民）。
 fn counter_row(count_label: Element, on_inc: impl Fn() + 'static) -> Element {
-    Element::from(
-        vstack()
-            .gap("0.5rem")
-            .child(count_label)
-            .child(Element::from(
-                button("inc").variant("default").on_click(move |_| on_inc()),
-            )),
-    )
+    vstack()
+        .gap("0.5rem")
+        .child(count_label)
+        .child(Element::from(
+            button("inc").variant("default").on_click(move |_| on_inc()),
+        ))
+        .into()
 }
 ```
 
