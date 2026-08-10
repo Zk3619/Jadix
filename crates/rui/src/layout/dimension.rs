@@ -21,6 +21,17 @@ fn parse_css_length_px(s: &str, em_base_px: f32) -> Option<f32> {
     parse_css_number(trimmed).map(|v| v * CSS_ROOT_FONT_SIZE_PX)
 }
 
+/// Convert builder / RSX size tokens into a Taffy [`Dimension`].
+///
+/// # Percentage (`"50%"`, `"100%"`)
+/// Resolves against the **containing block's content box** (CSS): the parent's
+/// content width/height after subtracting that parent's padding and border.
+/// It does **not** include the parent's margin.
+///
+/// # Viewport units (`vw` / `vh` / `dvw` / …)
+/// Mapped to [`Dimension::Percent`] of the current layout root (window / portal
+/// body). Prefer true viewport when the root ≈ the window; nested portals may
+/// differ from CSS `vh` of the browser viewport.
 pub trait IntoDimension {
     fn into_dimension(self) -> Dimension;
 }
