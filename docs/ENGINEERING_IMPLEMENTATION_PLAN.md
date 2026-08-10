@@ -144,10 +144,11 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `layout/layout_tree.rs`（`pick_subtree_compute_root`、`mark_dirty`） |
+| **路径** | `layout/layout_tree.rs`（`pick_subtree_compute_root`、`resolve_layout_compute_root`、`mark_dirty`）；细则 [layout_subtree.md](layout_subtree.md) |
 | **任务** | 尺寸上溢时升父/根的规则固化 + 单测（嵌套 flex 改子宽） |
-| **验收** | `layout_mark_dirty` / 新测覆盖升父；无错误裁剪 |
-| **状态** | ☐ `mark_dirty` + crate_tests 已有；上溢升父规则未固化验收 |
+| **验收** | `layout_mark_dirty` / `subtree_promote::` 覆盖升父；无错误裁剪；Gallery **布局 / WP-2.3** |
+| **状态** | ☑ 代码+库测+Gallery 验收区已合入（`resolve_layout_compute_root` + `subtree_promote::` 3 测；侧栏「布局 / WP-2.3」）；live 仍 app-root compute（Taffy location 安全）；☐ Win 视觉签署（加宽 chip → footer 下移） |
+| **进展** | 内容尺寸祖先上溢升父；定高宽容器可停在浅层候选；细则见 [layout_subtree.md](layout_subtree.md) |
 
 ### WP-2.4 Anchors / Bindings 挂 Owner + scoped ID
 
@@ -399,7 +400,7 @@ COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + head
 COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
-PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md / text_align.md / damage.md
+PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md / text_align.md / damage.md / layout_subtree.md
 headless.md / custom_components.md / color.md / keyboard_nav.md
 archive/                           ← 选型与早期随笔（已冻结）
 ```

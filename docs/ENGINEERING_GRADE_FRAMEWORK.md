@@ -70,7 +70,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 持久保留树 | `layout_tree::build_and_layout` 复用 `NodeId`；`reconcile_elements` | 禁止每帧清树重建 |
 | 细粒度直达 | `bind_text` / `bind_prop` / `bind_class` / `template_paths` | 计数器类更新不应整树 diff |
 | Layout ≠ Paint | `LayoutStatus`；同宽文本 → `StyleChanged` | 滚动与换色廉价 |
-| 子树布局 MVP | `mark_dirty` + `pick_subtree_compute_root` | 继续加深上溢升父，而非换引擎 |
+| 子树布局 | `mark_dirty` + `resolve_layout_compute_root`（上溢升父）；live 从 app root compute | 见 [layout_subtree.md](layout_subtree.md)；非换引擎 |
 
 **明确不做的替代路线**（已否决，见 gap §1）：
 

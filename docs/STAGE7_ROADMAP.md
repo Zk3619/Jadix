@@ -88,7 +88,7 @@ flowchart TB
 | 逐行变宽绕排 | Pretext 式行可用宽可变 MVP | `text/measure.rs` |
 | glyphon ↔ layout_lines | soft-wrap / chip 与绘制分行一致 | `prepare_text.rs` |
 | 字体策略 | UI 字体打包与字重回退 | `font_loader.rs` |
-| 子树布局加深 | 尺寸上溢时升父/根 | `layout_tree.rs` |
+| 子树布局加深 | 尺寸上溢时升父/根（☑ WP-2.3） | `layout_tree.rs` · [layout_subtree.md](layout_subtree.md) |
 | 细粒度 damage | 结构未变时按元素 rect union | `damage.rs` |
 | 组件级 golden | 场景进 CI | `offscreen.rs` |
 | Scrollbar overlay | 不占布局宽的 overlay 条 | `scrollbar.rs` |
