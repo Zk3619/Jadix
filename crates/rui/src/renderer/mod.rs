@@ -5,6 +5,8 @@ pub mod cpu_text;
 pub mod emoji_detect;
 pub mod emoji_layout;
 pub mod emoji_matrix;
+#[cfg(test)]
+mod emoji_shape_diag;
 pub mod emoji_svg;
 mod extended_pictographic;
 pub mod font_loader;

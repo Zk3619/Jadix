@@ -263,11 +263,12 @@ fn measure_run_width(
     }
     ensure_coverage_for_text(font_system, text);
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
         buffer.set_size(font_system, Some(16_384.0), Some(line_height + 2.0));
         buffer.set_text(
             font_system,
-            text,
+            layout.as_ref(),
             Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(weight)),
@@ -441,6 +442,7 @@ pub fn glyphon_soft_wrap_line_count(
         };
         ensure_coverage_for_text(font_system, text);
         let avail = avail_width.max(1.0);
+        let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
         // Tall window so soft-wrap produces multiple runs without vertical clipping.
         buffer.set_size(
@@ -450,7 +452,7 @@ pub fn glyphon_soft_wrap_line_count(
         );
         buffer.set_text(
             font_system,
-            text,
+            layout.as_ref(),
             Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(weight)),

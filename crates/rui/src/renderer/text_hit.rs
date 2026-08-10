@@ -74,12 +74,13 @@ pub fn measure_prefix_width(
     if let Some(hit) = MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
         return hit;
     }
+    let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
     let mut buffer =
         glyphon::Buffer::new(font_system, glyphon::Metrics::new(scaled_size, line_height));
     buffer.set_size(font_system, Some(max_width), Some(line_height + 2.0));
     buffer.set_text(
         font_system,
-        text,
+        layout.as_ref(),
         glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight)),

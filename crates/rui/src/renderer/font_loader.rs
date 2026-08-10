@@ -812,7 +812,10 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
     );
 }
 
-/// Open system color-emoji only after Twemoji/SVG raster miss (or explicit env).
+/// Open system color-emoji **only** on an isolated FontSystem used by Twemoji-miss
+/// raster fallback (`prepare_text::emoji_fallback_engines`). Never call this on the
+/// UI/layout FontSystem: glyphon ignores text alpha for CBDT Color glyphs, so once
+/// Segoe UI Emoji is in the main DB those fragments paint through “hidden” spans.
 pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
     let mut state = lazy_state();
     let missing_in_db = !emoji_coverage_present(font_system.db());

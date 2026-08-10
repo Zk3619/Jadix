@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -33,6 +33,37 @@ use super::InstanceInput;
 enum TextSegment {
     Plain,
     Emoji { text: String, start: usize },
+}
+
+/// EM SPACE — ~1em advance in UI sans, matches the custom emoji quad slot.
+const EMOJI_LAYOUT_SLOT: char = emoji_layout::EMOJI_LAYOUT_SLOT;
+
+/// Replace each emoji grapheme with a single-width slot so layout advance matches the
+/// custom glyph square. Keeps ZWJ/RI clusters from reserving 2–3× em of invisible Mask width.
+fn plan_emoji_layout(text: &str) -> (String, Vec<TextSegment>) {
+    let mut layout = String::with_capacity(text.len());
+    let mut segments = Vec::new();
+    let mut plain = false;
+    for grapheme in text.graphemes(true) {
+        if emoji_detect::grapheme_is_emoji(grapheme) {
+            if plain {
+                segments.push(TextSegment::Plain);
+                plain = false;
+            }
+            segments.push(TextSegment::Emoji {
+                text: grapheme.to_string(),
+                start: layout.len(),
+            });
+            layout.push(EMOJI_LAYOUT_SLOT);
+        } else {
+            layout.push_str(grapheme);
+            plain = true;
+        }
+    }
+    if plain {
+        segments.push(TextSegment::Plain);
+    }
+    (layout, segments)
 }
 
 #[derive(Clone)]
@@ -472,32 +503,6 @@ fn text_bounds_from_clip(
     }
 }
 
-fn split_text_with_emoji(text: &str) -> Vec<TextSegment> {
-    let mut out = Vec::new();
-    let mut plain = String::new();
-    let mut current = 0usize;
-    for grapheme in text.graphemes(true) {
-        let start = current;
-        current += grapheme.len();
-        if emoji_detect::grapheme_is_emoji(grapheme) {
-            if !plain.is_empty() {
-                plain.clear();
-                out.push(TextSegment::Plain);
-            }
-            out.push(TextSegment::Emoji {
-                text: grapheme.to_string(),
-                start,
-            });
-        } else {
-            plain.push_str(grapheme);
-        }
-    }
-    if !plain.is_empty() {
-        out.push(TextSegment::Plain);
-    }
-    out
-}
-
 fn emoji_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -508,16 +513,7 @@ fn emoji_debug_enabled() -> bool {
 }
 
 fn emoji_custom_glyph_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        // Default ON: color Twemoji PNGs. Set RUI_EMOJI_CUSTOM_GLYPH=0 to use font glyphs
-        // (often monochrome outline boxes with Segoe UI).
-        std::env::var("RUI_EMOJI_CUSTOM_GLYPH")
-            .map(|v| {
-                !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
-            })
-            .unwrap_or(true)
-    })
+    emoji_layout::custom_glyph_layout_enabled()
 }
 
 fn emoji_svg_enabled() -> bool {
@@ -593,8 +589,13 @@ fn resolve_text_align(
     }
 }
 
-/// Shape text; when Twemoji custom glyphs are on, paint emoji codepoints transparent so
-/// Segoe UI's monochrome outline glyphs do not show under/over the color PNGs.
+/// Shape text for the UI FontSystem.
+///
+/// When custom emoji glyphs are enabled, each emoji grapheme is replaced with a
+/// single EM SPACE so advances match the ~1em color quad. Painting real emoji
+/// codepoints (even with alpha=0) is wrong for two reasons:
+/// 1) ZWJ/RI clusters expand to multiple Mask advances → holes beside a 1em quad
+/// 2) glyphon ignores alpha on CBDT Color glyphs if a color-emoji face is present
 fn set_shaped_buffer_text(
     buffer: &mut glyphon::Buffer,
     font_system: &mut glyphon::FontSystem,
@@ -607,29 +608,8 @@ fn set_shaped_buffer_text(
         buffer.set_text(font_system, text, attrs, shaping);
         return;
     }
-    let invisible = attrs.color(glyphon::Color::rgba(0, 0, 0, 0));
-    let mut spans: Vec<(&str, glyphon::Attrs)> = Vec::new();
-    let mut plain_start = 0usize;
-    let mut byte = 0usize;
-    for grapheme in text.graphemes(true) {
-        let start = byte;
-        byte += grapheme.len();
-        if emoji_detect::grapheme_is_emoji(grapheme) {
-            if plain_start < start {
-                spans.push((&text[plain_start..start], attrs));
-            }
-            spans.push((&text[start..byte], invisible));
-            plain_start = byte;
-        }
-    }
-    if plain_start < text.len() {
-        spans.push((&text[plain_start..], attrs));
-    }
-    if spans.is_empty() {
-        buffer.set_text(font_system, text, attrs, shaping);
-    } else {
-        buffer.set_rich_text(font_system, spans, attrs, shaping);
-    }
+    let (layout, _) = plan_emoji_layout(text);
+    buffer.set_text(font_system, &layout, attrs, shaping);
 }
 
 /// 与占位字形对齐后的额外垂直微调（仅当设置了 `RUI_EMOJI_BASELINE_FACTOR` 时非零）。
@@ -831,67 +811,193 @@ fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::E
     Some(resize_rgba_nn(&raw, pixel_size.max(1)))
 }
 
-fn load_font_fallback_raster(
-    text_renderer: &mut RuiTextRenderer,
+/// Isolated FontSystem for color-emoji fallback rasters.
+///
+/// Must **not** load Segoe UI Emoji / Noto Color Emoji into the UI `FontSystem`:
+/// glyphon's fragment shader ignores text color for `SwashContent::Color`, so
+/// `Attrs.color(alpha=0)` cannot hide CBDT glyphs. Once those faces are in the
+/// main DB, cosmic-text falls back into them and ZWJ / RI clusters leak as
+/// fragmented color ink under Twemoji custom glyphs (gallery: family/flags).
+fn emoji_fallback_engines() -> MutexGuard<'static, (glyphon::FontSystem, glyphon::SwashCache)> {
+    static CELL: OnceLock<Mutex<(glyphon::FontSystem, glyphon::SwashCache)>> = OnceLock::new();
+    CELL.get_or_init(|| {
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_emoji_font_fallback(&mut fs);
+        Mutex::new((fs, glyphon::SwashCache::new()))
+    })
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
+}
+
+struct FallbackGlyphBlit {
+    x0: i32,
+    y0: i32,
+    w: u32,
+    h: u32,
+    color: bool,
+    data: Vec<u8>,
+}
+
+fn blit_premultiplied_or_mask(
+    dst: &mut [u8],
+    dst_w: i32,
+    dst_h: i32,
+    blit: &FallbackGlyphBlit,
+) {
+    for row in 0..blit.h as i32 {
+        for col in 0..blit.w as i32 {
+            let x = blit.x0 + col;
+            let y = blit.y0 + row;
+            if x < 0 || y < 0 || x >= dst_w || y >= dst_h {
+                continue;
+            }
+            let di = ((y * dst_w + x) * 4) as usize;
+            let (sr, sg, sb, sa) = if blit.color {
+                let si = ((row * blit.w as i32 + col) * 4) as usize;
+                (
+                    blit.data[si],
+                    blit.data[si + 1],
+                    blit.data[si + 2],
+                    blit.data[si + 3],
+                )
+            } else {
+                let a = blit.data[(row * blit.w as i32 + col) as usize];
+                (255, 255, 255, a)
+            };
+            if sa == 0 {
+                continue;
+            }
+            // Source-over (non-premultiplied).
+            let da = dst[di + 3] as u32;
+            let out_a = sa as u32 + ((255 - sa as u32) * da) / 255;
+            if out_a == 0 {
+                continue;
+            }
+            let inv = 255 - sa as u32;
+            dst[di] = (((sr as u32 * sa as u32) + (dst[di] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[di + 1] =
+                (((sg as u32 * sa as u32) + (dst[di + 1] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[di + 2] =
+                (((sb as u32 * sa as u32) + (dst[di + 2] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[di + 3] = out_a as u8;
+        }
+    }
+}
+
+/// Rasterize an emoji sequence with the isolated color-emoji face.
+///
+/// Composites **all** usable glyphs (not just the first Color). Segoe often
+/// emits multiple CBDT glyphs for ZWJ families; flags may only yield Mask.
+pub(crate) fn load_font_fallback_raster(
     sequence: &str,
     pixel_size: u16,
-    _family: glyphon::Family,
     font_weight: u16,
 ) -> Option<super::text::EmojiRaster> {
-    // Prefer a real color-emoji face; UI sans yields monochrome outline "emoji".
+    let mut engines = emoji_fallback_engines();
+    let (font_system, swash_cache) = &mut *engines;
     let emoji_family = crate::utils::font::resolve_family(
-        unsafe { &*text_renderer.font_system }.db(),
+        font_system.db(),
         "Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, emoji, sans-serif",
     );
     let size = pixel_size.max(1) as f32;
-    let mut buffer = glyphon::Buffer::new(
-        unsafe { &mut *text_renderer.font_system },
-        glyphon::Metrics::new(size, size * 1.2),
-    );
-    buffer.set_size(
-        unsafe { &mut *text_renderer.font_system },
-        Some(size * 2.0),
-        Some(size * 2.0),
-    );
+    // Wide enough for ZWJ strips (family) and RI pairs.
+    let canvas_w = (size * 6.0).max(size * 2.0);
+    let canvas_h = (size * 2.0).max(size);
+    let mut buffer =
+        glyphon::Buffer::new(font_system, glyphon::Metrics::new(size, size * 1.2));
+    buffer.set_size(font_system, Some(canvas_w), Some(canvas_h));
     buffer.set_text(
-        unsafe { &mut *text_renderer.font_system },
+        font_system,
         sequence,
         glyphon::Attrs::new()
             .family(emoji_family)
             .weight(glyphon::fontdb::Weight(font_weight)),
         glyphon::Shaping::Advanced,
     );
-    buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+    buffer.shape_until_scroll(font_system, false);
+
+    let mut blits: Vec<FallbackGlyphBlit> = Vec::new();
     for run in buffer.layout_runs() {
-        for g in run.glyphs {
+        for g in run.glyphs.iter() {
             let physical = g.physical((0.0, 0.0), 1.0);
-            let image = text_renderer
-                .swash_cache
-                .get_image_uncached(unsafe { &mut *text_renderer.font_system }, physical.cache_key)?;
-            let w = image.placement.width as usize;
-            let h = image.placement.height as usize;
+            let Some(image) = swash_cache.get_image_uncached(font_system, physical.cache_key)
+            else {
+                continue;
+            };
+            let w = image.placement.width;
+            let h = image.placement.height;
             if w == 0 || h == 0 {
                 continue;
             }
-            // Only accept true color bitmaps — Mask/SubpixelMask is the "outline box" look.
-            let glyphon::SwashContent::Color = image.content else {
+            let color = matches!(image.content, glyphon::SwashContent::Color);
+            let is_mask = matches!(image.content, glyphon::SwashContent::Mask);
+            if !color && !is_mask {
                 continue;
-            };
-            return Some(super::text::EmojiRaster::new(
-                image.placement.width as u16,
-                image.placement.height as u16,
-                image.data,
-            ));
+            }
+            let x0 = physical.x + image.placement.left;
+            let y0 = physical.y - image.placement.top;
+            blits.push(FallbackGlyphBlit {
+                x0,
+                y0,
+                w,
+                h,
+                color,
+                data: image.data,
+            });
         }
     }
-    None
+    if blits.is_empty() {
+        return None;
+    }
+    // Prefer Color layers when any exist (drop ZWJ outline crumbs). Else keep Masks
+    // (Windows flags often only expose Mask through swash).
+    let has_color = blits.iter().any(|b| b.color);
+    if has_color {
+        blits.retain(|b| b.color);
+    } else {
+        blits.retain(|b| b.w > 1 && b.h > 1);
+    }
+    if blits.is_empty() {
+        return None;
+    }
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    for b in &blits {
+        min_x = min_x.min(b.x0);
+        min_y = min_y.min(b.y0);
+        max_x = max_x.max(b.x0 + b.w as i32);
+        max_y = max_y.max(b.y0 + b.h as i32);
+    }
+    let out_w = (max_x - min_x).clamp(1, 512);
+    let out_h = (max_y - min_y).clamp(1, 512);
+    let mut rgba = vec![0u8; (out_w * out_h * 4) as usize];
+    for b in &blits {
+        let shifted = FallbackGlyphBlit {
+            x0: b.x0 - min_x,
+            y0: b.y0 - min_y,
+            w: b.w,
+            h: b.h,
+            color: b.color,
+            data: b.data.clone(),
+        };
+        blit_premultiplied_or_mask(&mut rgba, out_w, out_h, &shifted);
+    }
+    Some(super::text::EmojiRaster::new(
+        out_w as u16,
+        out_h as u16,
+        rgba,
+    ))
 }
 
 fn load_emoji_raster_chain(
     text_renderer: &mut RuiTextRenderer,
     sequence: &str,
     pixel_size: u16,
-    family: glyphon::Family,
+    _family: glyphon::Family,
     font_weight: u16,
 ) -> Option<super::text::EmojiRaster> {
     // 1) Twemoji PNG (preferred — always color), scaled to text size.
@@ -918,9 +1024,8 @@ fn load_emoji_raster_chain(
         text_renderer.emoji_cache.stats.svg_fallback_to_png += 1;
     }
 
-    // 3) System color-emoji font (CBDT/sbix) — only after Twemoji miss.
-    font_loader::ensure_emoji_font_fallback(unsafe { &mut *text_renderer.font_system });
-    load_font_fallback_raster(text_renderer, sequence, pixel_size, family, font_weight)
+    // 3) System color-emoji on an *isolated* FontSystem — never open seguimj on the UI FS.
+    load_font_fallback_raster(sequence, pixel_size, font_weight)
         .map(|r| resize_rgba_nn(&r, pixel_size.max(1)))
 }
 
@@ -1129,7 +1234,7 @@ pub fn prepare_text_frame(
 
         let family = if has_emoji {
             // Twemoji custom glyphs paint color emoji; keep layout on UI sans.
-            // System emoji font opens only on Twemoji miss (ensure_emoji_font_fallback).
+            // Never open system color-emoji on this FontSystem (see emoji_fallback_engines).
             best_font_family(unsafe { &*text_renderer.font_system })
         } else if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
@@ -1471,29 +1576,26 @@ pub fn prepare_text_frame(
             } else {
                 _emoji_misses += 1;
                 let mut next_custom_id = text_renderer.emoji_cache.next_custom_id;
-                let segments = split_text_with_emoji(shape_text.as_ref());
+                let (layout_text, segments) = plan_emoji_layout(shape_text.as_ref());
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
-                // When font advances collapse (missing emoji face), Twemoji quads would
-                // all land on the same x — advance a layout cursor as a backstop.
+                // Backstop if a slot advance collapses; with EM SPACE this is rarely needed.
                 let mut emoji_left_cursor = 0.0_f32;
                 for seg in segments {
                     let TextSegment::Emoji { text, start } = seg else {
                         continue;
                     };
-                    let (mut left, top) = match emoji_layout::custom_emoji_left_top(
+                    let pixel_size = scaled_size.ceil().clamp(1.0, 512.0) as u16;
+                    let slot = pixel_size as f32;
+                    let (mut left, top) = match emoji_layout::custom_emoji_left_centered_top(
                         &text_renderer.shaped_cache[i].buffer,
-                        shape_text.as_ref(),
+                        &layout_text,
                         start,
-                        x,
-                        y,
-                        1.0,
-                        unsafe { &mut *text_renderer.font_system },
-                        &mut text_renderer.swash_cache,
+                        slot,
                     ) {
                         Some((l, t)) => (l, t + emoji_baseline_layout_tweak(scaled_size)),
                         None => {
-                            let prefix = shape_text.get(..start).unwrap_or("");
+                            let prefix = layout_text.get(..start).unwrap_or("");
                             let left = measure_prefix_width(
                                 unsafe { &mut *text_renderer.font_system },
                                 prefix,
@@ -1509,11 +1611,10 @@ pub fn prepare_text_frame(
                                     start
                                 );
                             }
-                            (left, emoji_baseline_offset_fallback(scaled_size))
+                            let top = emoji_baseline_offset_fallback(scaled_size);
+                            (left, top)
                         }
                     };
-                    let pixel_size = scaled_size.ceil().clamp(1.0, 512.0) as u16;
-                    let slot = pixel_size as f32;
                     if left + 0.5 < emoji_left_cursor {
                         left = emoji_left_cursor;
                     }
