@@ -1,4 +1,10 @@
-//! 元素盒模型与 Taffy 映射；部分绘制属性由 GPU 路径消费，不进入 Taffy。
+//! 元素盒模型与 Taffy 映射。
+//!
+//! ## 百分比尺寸（对齐 CSS）
+//! - `width/height: N%` 相对**包含块的 content box**（父级内容区），不含父级 padding / border / margin。
+//! - 本库默认 [`BoxSizing::BorderBox`]（同 Tailwind / 常见 CSS reset）：元素自身的
+//!   `width: 100%` 含其 padding + border；子项可用宽 = 父 border-box − padding − border。
+//! - `outline` / 阴影仍仅绘制，不进布局。
 
 use taffy::prelude::*;
 
@@ -257,11 +263,13 @@ pub struct Style {
     /// Grid 子项：列占位。
     pub grid_column: Line<GridPlacement>,
 
-    // Visual properties (not passed to Taffy)
+    // Visual properties
     pub bg_color: [f32; 4],
+    /// Layout + paint：非 `None` 且 `border_width > 0` 时写入 Taffy `border`（BorderBox 内容区会扣掉它）。
     pub border_style: LineStyle,
     pub border_color: [f32; 4],
     pub border_width: f32,
+    /// 仅绘制，不进 Taffy。
     pub outline_style: LineStyle,
     pub outline_color: [f32; 4],
     pub outline_width: f32,
@@ -398,7 +406,21 @@ impl Style {
     }
 
     pub fn to_taffy_style(&self) -> taffy::style::Style {
+        // Uniform border → Taffy length on all sides when the stroke participates in layout.
+        let border_lp = if self.border_style != LineStyle::None && self.border_width > 0.0 {
+            LengthPercentage::Length(self.border_width)
+        } else {
+            LengthPercentage::Length(0.0)
+        };
+        let border = Rect {
+            left: border_lp,
+            right: border_lp,
+            top: border_lp,
+            bottom: border_lp,
+        };
         taffy::style::Style {
+            // Tailwind / ShadCN：size 含 padding+border；子项 % 仍相对本节点 content box。
+            box_sizing: BoxSizing::BorderBox,
             display: self.display,
             flex_direction: self.flex_direction,
             flex_wrap: self.flex_wrap,
@@ -415,6 +437,7 @@ impl Style {
             flex_shrink: self.flex_shrink,
             flex_basis: self.flex_basis,
             padding: self.padding,
+            border,
             margin: self.margin,
             gap: self.gap,
             overflow: self.overflow,

@@ -175,6 +175,7 @@ pub struct TextStyle {
     pub overline: bool,
     pub line_through: bool,
     pub decoration_style: TextDecorationStyle,
+    /// `None` = CSS `currentColor`（绘制时用本节点 `color`）；`Some` = 显式装饰色。
     pub decoration_color: Option<[u8; 4]>,
     pub decoration_thickness: f32,
     pub underline_offset: f32,

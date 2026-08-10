@@ -24,7 +24,7 @@ pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_c
 pub use color_space::{
     encode_linear_srgb_component, encode_linear_srgb_to_display_srgb, lerp_display_srgb_linear,
     lerp_premultiplied_display_srgba, linearize_display_srgb, linearize_display_srgb_component,
-    mix_display_srgb_in_oklab, oklch_to_display_srgba,
+    mix_display_srgb_in_oklab, oklch_to_display_srgba, display_srgba_to_linear_srgba,
 };
 pub use element_style::{
     parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,

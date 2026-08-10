@@ -7,6 +7,21 @@ pub fn primary() -> [f32; 4] {
 }
 
 #[inline]
+pub fn secondary() -> [f32; 4] {
+    parse_color("secondary")
+}
+
+#[inline]
+pub fn accent() -> [f32; 4] {
+    parse_color("accent")
+}
+
+#[inline]
+pub fn destructive() -> [f32; 4] {
+    parse_color("destructive")
+}
+
+#[inline]
 pub fn border() -> [f32; 4] {
     parse_color("border")
 }
@@ -14,6 +29,26 @@ pub fn border() -> [f32; 4] {
 #[inline]
 pub fn background() -> [f32; 4] {
     parse_color("background")
+}
+
+#[inline]
+pub fn card() -> [f32; 4] {
+    parse_color("card")
+}
+
+#[inline]
+pub fn popover() -> [f32; 4] {
+    parse_color("popover")
+}
+
+#[inline]
+pub fn surface() -> [f32; 4] {
+    parse_color("surface")
+}
+
+#[inline]
+pub fn sidebar() -> [f32; 4] {
+    parse_color("sidebar")
 }
 
 #[inline]
@@ -27,6 +62,18 @@ pub fn muted() -> [f32; 4] {
 }
 
 #[inline]
+pub fn chart(n: u8) -> [f32; 4] {
+    parse_color(match n {
+        1 => "chart-1",
+        2 => "chart-2",
+        3 => "chart-3",
+        4 => "chart-4",
+        5 => "chart-5",
+        _ => "chart-1",
+    })
+}
+
+#[inline]
 pub fn foreground_text() -> [u8; 4] {
     parse_text_color("foreground")
 }
@@ -34,4 +81,14 @@ pub fn foreground_text() -> [u8; 4] {
 #[inline]
 pub fn primary_foreground_text() -> [u8; 4] {
     parse_text_color("primary-foreground")
+}
+
+#[inline]
+pub fn secondary_foreground_text() -> [u8; 4] {
+    parse_text_color("secondary-foreground")
+}
+
+#[inline]
+pub fn destructive_foreground_text() -> [u8; 4] {
+    parse_text_color("destructive-foreground")
 }

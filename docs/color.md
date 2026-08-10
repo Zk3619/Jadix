@@ -9,6 +9,7 @@
 - **用途**：主题、设计稿、与 **CSS Color 4 / Tailwind v4 / shadcn/ui v4**（`oklch(...)`）对齐；在感知上均匀的插值与变亮变暗。
 - **实现**：默认 `DesignTokens` 由 **OKLCH** 数值经 `palette` 转为 **display sRGB**（`[f32; 4]`，0–1），再供 `parse_color` / 渲染使用。
 - **说明**：GPU 与现有管线仍以 **display sRGB + alpha** 为主，避免一次性改动整栈。
+- **sRGB 交换链**：swapchain / offscreen 目标多为 `*Srgb`。wgpu 要求片元输出 **线性光**，写入时再编码。矩形着色器（`rounded_rect.wgsl`）在写出前对 display 色做 `linearize`；否则会出现二次编码（如 `#333`→`#7B`、`#F5F5F5`→`#FBFBFB`）。主题令牌与 `oklch_to_display_srgba` / `color_mix_over_background` 在 CPU 侧与 Web 一致，勿用改 token 掩盖此问题。
 
 ## 2. 线性 sRGB 作为合成与插值空间
 
@@ -30,7 +31,8 @@
 
 ## A. 令牌层（已实现）
 
-- 默认主题对齐 **shadcn/ui v4** 文档站 `apps/v4/app/globals.css` 中 `:root` 的 OKLCH 语义色（含 `--radius: 0.625rem`）。
+- 默认主题对齐 **shadcn/ui v4** 文档站 `apps/v4/app/globals.css` 中 `:root` / `.dark` 的 **全部** `@theme inline` 语义色（含 `card`、`popover`、`chart-1..5`、`sidebar-*`、`surface`、`code*`、`selection*`；`--radius: 0.625rem`）。
+- `chart-*` 引用 Tailwind v4 默认 `--color-blue-300..800`（见 `Reference/TailwindCSS/packages/tailwindcss/theme.css`）。
 - 转换：`oklch_to_display_srgba`（`palette::Oklch` → `Srgb`）。
 
 ## B. 线性混合（已实现）
@@ -60,6 +62,7 @@
 
 - 浏览器里 `transition-all` 多为 **ease + 固定时长** 的插值。
 - RUI 在 **Button** 上用 **`use_ui_transition_spring` + `lerp_display_srgb_linear`**：目标值 0/1 表示「未悬停 / 悬停」，每帧由 `style::animation::tick_animations` 推进弹簧，颜色在 **线性 sRGB** 下插值，观感接近短 **`transition`**；曲线为 **欠阻尼弹簧**，与 CSS 默认 `ease` 不完全相同，但避免生硬跳变。
+- 变体 utility 对齐文档站 Aria Button 采样：`primary/80`、`secondary` + `foreground 5%` mix、destructive `/10`→`/20` + 不透明 `destructive` 字色。
 
 ---
 

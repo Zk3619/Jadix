@@ -158,7 +158,8 @@ pub fn spacing_token_to_px(token: &str) -> Option<f32> {
         "16" => Some(64.0),
         "20" => Some(80.0),
         "24" => Some(96.0),
-        "full" => Some(9999.0),
+        // `full` is NOT a spacing length — size utilities (`w-full` → 100%) are handled in
+        // [`size_keyword_value`]. Do not map it to a sentinel px (that broke web `w-full`).
         _ => {
             if let Some(n) = token.strip_suffix("px") {
                 return n.parse().ok();
@@ -198,8 +199,39 @@ fn spacing_value(token: &str, prefix: &str) -> Option<String> {
         }
         return Some(v.to_string());
     }
+    // Size box keywords (Tailwind / CSS): only for w/h/min/max size prefixes.
+    if matches!(
+        prefix,
+        "w-" | "h-" | "min-w-" | "max-w-" | "min-h-" | "max-h-"
+    ) {
+        if let Some(v) = size_keyword_value(prefix, rest) {
+            return Some(v);
+        }
+    }
     let px = spacing_token_to_px(rest)?;
     Some(format!("{px}px"))
+}
+
+/// Tailwind size keywords → CSS dimension strings consumed by [`IntoDimension`].
+///
+/// | token | CSS |
+/// |-------|-----|
+/// | `full` | `100%` |
+/// | `auto` | `auto` |
+/// | `screen` | `100vw` / `100vh` |
+///
+/// (`fit` / `min` / `max` content keywords omitted until layout supports them.)
+fn size_keyword_value(prefix: &str, rest: &str) -> Option<String> {
+    match rest {
+        "full" => Some("100%".into()),
+        "auto" => Some("auto".into()),
+        "screen" => match prefix {
+            "w-" | "min-w-" | "max-w-" => Some("100vw".into()),
+            "h-" | "min-h-" | "max-h-" => Some("100vh".into()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn negate_px_string(v: &str) -> String {
@@ -577,6 +609,44 @@ mod tests {
             Some(KnownUtility::WhitespaceNowrap)
         ));
         assert!(!is_known_utility("not-a-real-class"));
+    }
+
+    #[test]
+    fn size_full_auto_screen_match_web() {
+        assert!(matches!(
+            classify_utility("w-full"),
+            Some(KnownUtility::Width(ref v)) if v == "100%"
+        ));
+        assert!(matches!(
+            classify_utility("h-full"),
+            Some(KnownUtility::Height(ref v)) if v == "100%"
+        ));
+        assert!(matches!(
+            classify_utility("min-w-full"),
+            Some(KnownUtility::MinWidth(ref v)) if v == "100%"
+        ));
+        assert!(matches!(
+            classify_utility("max-w-full"),
+            Some(KnownUtility::MaxWidth(ref v)) if v == "100%"
+        ));
+        assert!(matches!(
+            classify_utility("w-auto"),
+            Some(KnownUtility::Width(ref v)) if v == "auto"
+        ));
+        assert!(matches!(
+            classify_utility("w-screen"),
+            Some(KnownUtility::Width(ref v)) if v == "100vw"
+        ));
+        assert!(matches!(
+            classify_utility("h-screen"),
+            Some(KnownUtility::Height(ref v)) if v == "100vh"
+        ));
+        // `full` must not resolve as a spacing px for gap/padding.
+        assert_eq!(spacing_token_to_px("full"), None);
+        assert!(matches!(
+            classify_utility("w-64"),
+            Some(KnownUtility::Width(ref v)) if v == "256px"
+        ));
     }
 
     #[test]

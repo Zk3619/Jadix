@@ -100,6 +100,16 @@ pub fn mix_display_srgb_in_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     [r, g, b_chan, ao]
 }
 
+/// Display sRGB RGBA → 线性光 RGBA（alpha 不变）。
+///
+/// 写入 wgpu `*Srgb` 渲染目标前，片元输出须为线性值；若把 display 编码色直接写出，
+/// 硬件会再 encode 一次（`#333`→`#7B`、`#F5`→`#FB`）。矩形管线在 WGSL 末尾做等价转换。
+#[inline]
+pub fn display_srgba_to_linear_srgba(c: [f32; 4]) -> [f32; 4] {
+    let rgb = linearize_display_srgb([c[0], c[1], c[2]]);
+    [rgb[0], rgb[1], rgb[2], c[3]]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +120,48 @@ mod tests {
         let p = oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0);
         assert!((p[0] - p[1]).abs() < 1e-4 && (p[1] - p[2]).abs() < 1e-4);
         assert!(p[0] > 0.08 && p[0] < 0.11, "r={}", p[0]);
+    }
+
+    fn hex3(c: [f32; 4]) -> String {
+        format!(
+            "{:02X}{:02X}{:02X}",
+            (c[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c[2].clamp(0.0, 1.0) * 255.0).round() as u8
+        )
+    }
+
+    #[test]
+    fn oklch_secondary_matches_web_f5() {
+        // globals.css `--secondary: oklch(0.97 0 0)` → canvas `#F5F5F5`（非 `#FBFBFB`）
+        let s = oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0);
+        assert_eq!(hex3(s), "F5F5F5");
+    }
+
+    #[test]
+    fn mistaken_srgb_double_encode_matches_reported_screen_hex() {
+        // 若把 display `#33` 当线性值写入 *Srgb 目标，硬件再 encode → ~`#7C`（用户采样 `#7B`）。
+        let display_33 = 0x33 as f32 / 255.0;
+        let wrongly_stored = encode_linear_srgb_component(display_33);
+        let byte = (wrongly_stored * 255.0).round() as u8;
+        assert!((123..=124).contains(&byte), "got {byte:#x}");
+        // 正确路径：先线性化再交由 *Srgb 目标 encode，应回到 `#33`。
+        let linear = linearize_display_srgb_component(display_33);
+        let roundtrip = encode_linear_srgb_component(linear);
+        assert_eq!((roundtrip * 255.0).round() as u8, 0x33);
+    }
+
+    #[test]
+    fn display_to_linear_helper_roundtrips_via_encode() {
+        let display = [0.2, 0.2, 0.2, 1.0]; // #333
+        let linear = display_srgba_to_linear_srgba(display);
+        let back = [
+            encode_linear_srgb_component(linear[0]),
+            encode_linear_srgb_component(linear[1]),
+            encode_linear_srgb_component(linear[2]),
+            linear[3],
+        ];
+        assert_eq!(hex3(back), "333333");
     }
 
     #[test]

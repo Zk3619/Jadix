@@ -120,6 +120,23 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_sel;
 }
 
+/// IEC 61966-2-1: display sRGB channel → linear light (matches CPU `linearize_display_srgb`).
+fn linearize_srgb_channel(u: f32) -> f32 {
+    let c = clamp(u, 0.0, 1.0);
+    if (c <= 0.04045) {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
+fn linearize_srgb_rgb(rgb: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        linearize_srgb_channel(rgb.x),
+        linearize_srgb_channel(rgb.y),
+        linearize_srgb_channel(rgb.z),
+    );
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // CSS overflow clip: keep full rounded-rect geometry (borders stay on true edges)
@@ -195,5 +212,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         out_rgb = (in.shadow_color.rgb * s_a + final_color.rgb * fill_alpha * (1.0 - s_a)) / out_a;
     }
 
-    return vec4<f32>(out_rgb, out_a);
+    // Instance colors are **display (gamma-encoded) sRGB** from the style/theme layer.
+    // Swapchain / offscreen targets use `*Srgb` formats: the GPU expects **linear** fragment
+    // output and encodes on write. Without this step, display values are encoded twice
+    // (e.g. `#333` → `#7B`, `#F5F5F5` → `#FBFBFB`).
+    return vec4<f32>(linearize_srgb_rgb(out_rgb), out_a);
 }
