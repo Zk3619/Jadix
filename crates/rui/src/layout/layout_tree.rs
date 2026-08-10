@@ -837,6 +837,11 @@ impl TextMeasureCacheKey {
 }
 
 #[inline]
+fn dimension_is_content_sized(d: Dimension) -> bool {
+    matches!(d, Dimension::Auto)
+}
+
+#[inline]
 fn pack_avail_space(d: taffy::style::AvailableSpace) -> u64 {
     match d {
         taffy::style::AvailableSpace::Definite(v) => {
@@ -990,6 +995,8 @@ impl LayoutTree {
     /// If every dirty node shares the same parent, return that parent for subtree `compute_layout`.
     /// Divergent parents (or empty / root-level dirty) → `None` (caller uses app root).
     ///
+    /// Does **not** apply size-overflow promotion — see [`Self::resolve_layout_compute_root`].
+    ///
     /// **Not used on the live LayoutChanged path:** computing from a non-root node zeros that
     /// node's `location` (Taffy treats it as the layout root), collapsing absolute positions.
     /// Prefer app-root `compute_layout` after [`Self::mark_dirty_nodes_in_tree`].
@@ -1026,6 +1033,58 @@ impl LayoutTree {
             return None;
         }
         Some(parent)
+    }
+
+    /// True when `node`'s style size on either axis is content-dependent (`Auto`), so a
+    /// descendant size change can grow/shrink this node (WP-2.3「上溢」).
+    pub fn node_size_depends_on_descendants(&self, node: NodeId) -> bool {
+        let Ok(style) = self.taffy.style(node) else {
+            return true;
+        };
+        dimension_is_content_sized(style.size.width)
+            || dimension_is_content_sized(style.size.height)
+    }
+
+    /// Walk from `candidate` toward the app root while ancestors are content-sized.
+    ///
+    /// Returns the highest ancestor that still has a usable prior layout size and is **not**
+    /// the app root; `None` means promote all the way to the app root (safe default).
+    pub fn promote_compute_root_for_size_overflow(&self, candidate: NodeId) -> Option<NodeId> {
+        let app_root = self.root_node?;
+        if candidate == app_root {
+            return None;
+        }
+        let mut cur = candidate;
+        // While the candidate itself is content-sized, a child size change can change its
+        // outer size — outer siblings need a higher compute root.
+        while self.node_size_depends_on_descendants(cur) {
+            let parent = self.taffy.parent(cur)?;
+            if parent == app_root {
+                return None;
+            }
+            cur = parent;
+        }
+        let Ok(layout) = self.taffy.layout(cur) else {
+            return None;
+        };
+        if layout.size.width <= 0.0 || layout.size.height <= 0.0 {
+            return None;
+        }
+        Some(cur)
+    }
+
+    /// Pick a common parent for `dirty`, then promote past content-sized ancestors
+    /// ([`Self::promote_compute_root_for_size_overflow`]).
+    ///
+    /// Live [`crate::app::state`] LayoutChanged still passes `subtree_root: None` (app root)
+    /// because Taffy zeros non-root `location`. This API documents / tests the overflow rule
+    /// and is the gate for any future safe subtree compute.
+    pub fn resolve_layout_compute_root(
+        &self,
+        dirty: &std::collections::HashSet<NodeId>,
+    ) -> Option<NodeId> {
+        let picked = self.pick_subtree_compute_root(dirty)?;
+        self.promote_compute_root_for_size_overflow(picked)
     }
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {

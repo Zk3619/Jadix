@@ -621,6 +621,54 @@ fn ScrollShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// WP-2.3 Gallery 验收：嵌套 flex 加宽子项 → wrap 行增高，footer 下移（非错误裁剪）。
+/// 对照 docs/layout_subtree.md；live 路径为 mark_dirty + app-root compute。
+#[component]
+fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
+    let wide = use_signal("gal_wp23_wide", || false);
+
+    ui! {
+        <MyCard title="WP-2.3) 子树布局上溢升父">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对照 docs/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
+                </Label>
+                <HStack gap="0.5rem" wrap="wrap">
+                    <Button id="gal-wp23-widen" variant="default" on_click={move || wide.set(true)}>
+                        "加宽 chip"
+                    </Button>
+                    <Button id="gal-wp23-reset" variant="outline" on_click={move || wide.set(false)}>
+                        "复位"
+                    </Button>
+                </HStack>
+                <Rect id="gal-wp23-frame" w="14rem" bg="muted" rounded="0.5rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <VStack w="100%" gap="0.35rem">
+                        <Label id="gal-wp23-header" text_size="0.75rem" font_weight="600">"header"</Label>
+                        <HStack id="gal-wp23-mid" w="100%" gap="0.25rem" wrap="wrap">
+                            <Rect
+                                id="gal-wp23-leaf"
+                                h="1.5rem"
+                                rounded="0.25rem"
+                                bg="primary"
+                                p="0.15rem"
+                                w={ if wide.get() { "11rem" } else { "3.5rem" } }
+                            >
+                                <Label text_size="0.7rem" text_color="primary-foreground">"chip"</Label>
+                            </Rect>
+                            <Rect id="gal-wp23-sib" w="3.5rem" h="1.5rem" rounded="0.25rem" bg="secondary" p="0.15rem">
+                                <Label text_size="0.7rem">"sib"</Label>
+                            </Rect>
+                        </HStack>
+                        <Rect id="gal-wp23-footer" w="100%" bg="accent" rounded="0.25rem" p="0.35rem">
+                            <Label text_size="0.75rem" font_weight="600">"footer（应随 mid 下移）"</Label>
+                        </Rect>
+                    </VStack>
+                </Rect>
+            </VStack>
+        </MyCard>
+    }
+}
+
 /// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
 /// GPU PartialLoad 默认关（见 docs/damage.md / 计划 B8）。计数用快照，勿每帧 ReactiveSync。
 #[component]
@@ -1932,6 +1980,7 @@ fn gallery_section_body(section: &str) -> Element {
         "layout" => ui! {
             <VStack w="100%" gap="1rem" p="1.5rem">
                 <Label text_size="1.25rem" font_weight="700">"布局"</Label>
+                <LayoutSubtreeShowcase />
                 <DamageShowcase />
                 <ScrollShowcase />
                 <LogicalShowcase />
