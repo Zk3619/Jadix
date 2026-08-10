@@ -50,7 +50,7 @@
 | Button | `button` / `Button` / `ButtonBuilder` | **verified** | 可选；空 → **仅内部自动** `btn-N` | smoke#5/#9；`button_*` lib |
 | Label | `label` / `Label` / `LabelBuilder`；`text` re-export | **stable-candidate** | **展示型不要求**（RSX 仍常传/`宏生成`；空串勿写 focus） | 选区键见 `label_selection_signal_key` |
 | Separator | `separator` / `Separator` | **stable-candidate** | **展示型不要求** | 无用户 id API |
-| Card | `Card` | **stable-candidate** | **展示型不要求** | 无用户 id API |
+| Card | `Card` / `CardHeader` / `CardTitle` / `CardDescription` / `CardAction` / `CardContent` / `CardFooter` | **stable-candidate** | **展示型不要求** | 复合分区对齐 solid-ui / shadcn；无用户 id API |
 | Toggle | `toggle` / `Toggle` | **experimental** | 必填实例键（非受控） | 不在 §5.2；Gallery 表单区演示 |
 | ToggleGroup | `toggle_group` / `ToggleGroup` | **experimental** | 必填实例键 | reactive sync lib；≈ EUI `segmented` |
 | Progress | `progress` / `Progress` | **experimental** | 可选 / 展示偏多 | 不在 §5.2 |

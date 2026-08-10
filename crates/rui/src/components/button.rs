@@ -28,17 +28,18 @@ use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
-    focus_ring_style, lerp_display_srgb_linear, lerp_premultiplied_display_srgba, parse_box_shadow,
-    use_ui_transition_cubic, use_ui_transition_spring,
+    focus_ring_style, is_dark_theme, lerp_display_srgb_linear, lerp_premultiplied_display_srgba,
+    mix_display_srgb_in_oklab, use_ui_transition_cubic, use_ui_transition_spring,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Tailwind v4 `shadow-xs`（shadcn 文档站 Button demo：`0 1px 2px 0 rgb(0 0 0 / 0.05)`）。
+/// Tailwind v4 `shadow-xs`（保留常量供文档/对照；当前 Button 变体不再默认挂 shadow）。
+#[allow(dead_code)]
 const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
-/// 引擎坐标下正值会把下划线抬高；这里取负值让 link 下划线向下偏移。
-const LINK_UNDERLINE_OFFSET_PX: f32 = -4.0;
+/// Tailwind `underline-offset-4` 观感折中：正值向上抬向字形；略小于 3 以免贴字。
+const LINK_UNDERLINE_OFFSET_PX: f32 = 2.0;
 
 trait ColorExt {
     fn with_alpha(self, alpha: f32) -> [f32; 4];
@@ -50,13 +51,13 @@ impl ColorExt for [f32; 4] {
     }
 }
 
-/// `shadow-xs` 与 focus ring（Hard/Soft via [`focus_ring_params`]）的单槽 `box-shadow`。
+/// Focus ring（Hard/Soft via [`focus_ring_params`]）的单槽 `box-shadow`。
+/// 当前 shadcn Base/Aria Button 文档站变体不再挂 `shadow-xs`。
 fn button_shadow_style_for_sync(
     is_focused: bool,
     disabled: bool,
     variant: &str,
 ) -> (f32, [f32; 4], [f32; 2], f32) {
-    let xs = matches!(variant, "default" | "secondary" | "outline" | "destructive");
     if is_focused && !disabled {
         let (blur, spread) = focus_ring_params(focus_ring_style());
         let c = if variant == "destructive" {
@@ -66,10 +67,7 @@ fn button_shadow_style_for_sync(
         };
         return (blur, c, [0.0, 0.0], spread);
     }
-    if xs && !disabled {
-        let s = parse_box_shadow(SHADOW_XS);
-        return (s.blur, s.color, s.offset, s.spread);
-    }
+    let _ = disabled;
     (0.0, [0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 0.0)
 }
 
@@ -133,40 +131,86 @@ fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
     ]
 }
 
-/// `hover_t`：0=静止，1=悬停；由弹簧驱动，对标浏览器 `transition` 的平滑插值（颜色在线性 sRGB 下 lerp）。
+/// Tailwind / CSS `color-mix(..., fg alpha%, transparent)` 叠在 `background` 上的不透明等价色。
+///
+/// 使用 **直通道 sRGB alpha 合成**（与文档站 canvas 采样一致：`primary/80`→`#333`、
+/// `destructive/10`→`#fde6e7`）。勿用 Oklab 混合替代——会把结果抬亮。
+fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
+    let bg = parse_color("background");
+    let a = alpha.clamp(0.0, 1.0);
+    [
+        fg[0] * a + bg[0] * (1.0 - a),
+        fg[1] * a + bg[1] * (1.0 - a),
+        fg[2] * a + bg[2] * (1.0 - a),
+        1.0,
+    ]
+}
+
+/// `color-mix(in oklch, base, other pct%)` — pct 为 other 占比（0–100）。
+fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32; 4] {
+    let t = (other_pct / 100.0).clamp(0.0, 1.0);
+    let mut out = mix_display_srgb_in_oklab(base, other, t);
+    out[3] = 1.0;
+    out
+}
+
+/// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
+/// - default: `bg-primary` → hover `primary/80`
+/// - secondary: `bg-secondary` → hover `color-mix(secondary, foreground 5%)`
+/// - destructive: `destructive/10` → hover `destructive/20`；字色为不透明 `destructive`
+/// - outline / ghost / link：见各分支
 pub(crate) fn button_chrome_for_variant(
     variant: &str,
     hover_t: f32,
 ) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
     let t = hover_t.clamp(0.0, 1.0);
+    let dark = is_dark_theme();
     match variant {
         "default" => {
             let rest = parse_color("primary");
-            let hover = parse_color("primary").with_alpha(0.9);
+            let hover = color_mix_over_background(parse_color("primary"), 0.8);
             let bg = lerp_display_srgb_linear(rest, hover, t);
             (bg, parse_text_color("primary-foreground"), None)
         }
         "secondary" => {
             let rest = parse_color("secondary");
-            let hover = parse_color("secondary").with_alpha(0.8);
+            let hover = color_mix_oklch_pct(
+                parse_color("secondary"),
+                parse_color("foreground"),
+                5.0,
+            );
             let bg = lerp_display_srgb_linear(rest, hover, t);
             (bg, parse_text_color("secondary-foreground"), None)
         }
         "outline" => {
-            let rest_bg = parse_color("background");
-            let hover_bg = parse_color("accent");
+            let (rest_bg, hover_bg, border) = if dark {
+                (
+                    color_mix_over_background(parse_color("input"), 0.3),
+                    color_mix_over_background(parse_color("input"), 0.5),
+                    parse_color("input"),
+                )
+            } else {
+                (
+                    parse_color("background"),
+                    parse_color("accent"),
+                    parse_color("border"),
+                )
+            };
             let bg = lerp_display_srgb_linear(rest_bg, hover_bg, t);
             let tc = lerp_text_rgba(
                 parse_text_color("foreground"),
                 parse_text_color("accent-foreground"),
                 t,
             );
-            // Tailwind `border` 类，与 shadcn 文档站 outline 按钮一致（浅色主题常与 `input` 同色）。
-            (bg, tc, Some(parse_color("border")))
+            (bg, tc, Some(border))
         }
         "ghost" => {
             let rest_bg = [0.0, 0.0, 0.0, 0.0];
-            let hover_bg = parse_color("accent");
+            let hover_bg = if dark {
+                parse_color("accent").with_alpha(0.5)
+            } else {
+                parse_color("accent")
+            };
             let bg = lerp_premultiplied_display_srgba(rest_bg, hover_bg, t);
             let tc = lerp_text_rgba(
                 parse_text_color("foreground"),
@@ -176,15 +220,17 @@ pub(crate) fn button_chrome_for_variant(
             (bg, tc, None)
         }
         "destructive" => {
-            let rest = parse_color("destructive");
-            let hover = parse_color("destructive").with_alpha(0.9);
+            let destructive = parse_color("destructive");
+            let (rest_a, hover_a) = if dark { (0.2, 0.3) } else { (0.1, 0.2) };
+            let rest = color_mix_over_background(destructive, rest_a);
+            let hover = color_mix_over_background(destructive, hover_a);
             let bg = lerp_display_srgb_linear(rest, hover, t);
-            (bg, parse_text_color("white"), None)
+            (bg, parse_text_color("destructive"), None)
         }
         "link" => ([0.0; 4], parse_text_color("primary"), None),
         _ => {
             let rest = parse_color("primary");
-            let hover = parse_color("primary").with_alpha(0.9);
+            let hover = color_mix_over_background(parse_color("primary"), 0.8);
             let bg = lerp_display_srgb_linear(rest, hover, t);
             (bg, parse_text_color("primary-foreground"), None)
         }
@@ -754,6 +800,7 @@ impl From<ButtonBuilder> for Element {
                 )
                 .text_center()
                 .flex_shrink(0.0);
+                // 下划线色：`decoration_color = None` → draw 时 currentColor（见 cascade 注释）。
                 // ShadCN: `whitespace-nowrap` on label text only. Lucide icon glyphs are square
                 // measure leaves — nowrap inflate soft-wrap width and breaks centering in icon buttons.
                 if !is_lucide_glyph {
@@ -862,8 +909,10 @@ fn paint_button_root_from_hover(
         } else {
             child.text_style.underline_offset
         };
+        // link：保持 `None`（currentColor），勿钉死 Some(rgb)。
         if child.text_style.underline != underline
             || child.text_style.color != c
+            || (desc.variant == "link" && child.text_style.decoration_color.is_some())
             || (child.text_style.underline_offset - want_uo).abs() > 0.01
         {
             text_children_ok = false;
@@ -904,14 +953,29 @@ fn paint_button_root_from_hover(
             color[3] = ((color[3] as f32) * 0.5).round() as u8;
         }
         let prev_uo = child.text_style.underline_offset;
+        let prev_dc = child.text_style.decoration_color;
         child.text_style.color = color;
         child.text_style.underline = underline;
+        // Protect against cascade wipe on LayoutChanged (same as `Element::underline`).
+        child
+            .attrs
+            .insert("text_decoration_line".to_string(), "1".to_string());
+        child
+            .attrs
+            .insert("text_color".to_string(), "1".to_string());
         if desc.variant == "link" {
             child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
+            // currentColor：勿写 Some(rgb)/attr，让 cascade 与 prepare_text 跟字色走。
+            child.text_style.decoration_color = None;
+            child.attrs.remove("text_decoration_color");
+            child
+                .attrs
+                .insert("text_underline_offset".to_string(), "1".to_string());
         }
         if prev_u != underline {
             layout_hit = true;
         } else if child.text_style.color != old_tc
+            || prev_dc != child.text_style.decoration_color
             || (prev_uo - child.text_style.underline_offset).abs() > 0.01
         {
             style_hit = true;
@@ -1098,5 +1162,58 @@ pub(crate) fn sync_button_hover_paint_subtree(
 impl crate::core::tree::IntoElementList for ButtonBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::{button_chrome_for_variant, color_mix_over_background};
+    use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
+
+    fn hex(c: [f32; 4]) -> String {
+        format!(
+            "#{:02X}{:02X}{:02X}",
+            (c[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c[2].clamp(0.0, 1.0) * 255.0).round() as u8
+        )
+    }
+
+    fn luminance(c: [f32; 4]) -> f32 {
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    }
+
+    #[test]
+    fn primary_matches_docs_black_and_hover_80() {
+        set_theme_mode(ThemeMode::Light);
+        let (rest, _, _) = button_chrome_for_variant("default", 0.0);
+        let (hover, _, _) = button_chrome_for_variant("default", 1.0);
+        assert_eq!(hex(rest), "#000000");
+        assert_eq!(hex(hover), "#333333");
+    }
+
+    #[test]
+    fn secondary_hover_darkens_via_foreground_mix() {
+        set_theme_mode(ThemeMode::Light);
+        let (rest, _, _) = button_chrome_for_variant("secondary", 0.0);
+        let (hover, fg, _) = button_chrome_for_variant("secondary", 1.0);
+        assert_eq!(fg, parse_text_color("secondary-foreground"));
+        assert_eq!(hex(rest), "#F5F5F5");
+        assert_eq!(hex(hover), "#E5E5E5");
+        assert!(luminance(hover) < luminance(rest));
+    }
+
+    #[test]
+    fn destructive_soft_tint_with_opaque_destructive_text() {
+        set_theme_mode(ThemeMode::Light);
+        let destructive = parse_color("destructive");
+        let (rest, fg, _) = button_chrome_for_variant("destructive", 0.0);
+        let (hover, hover_fg, _) = button_chrome_for_variant("destructive", 1.0);
+        assert_eq!(fg, parse_text_color("destructive"));
+        assert_eq!(hover_fg, parse_text_color("destructive"));
+        assert_eq!(fg[3], 255);
+        assert_eq!(hex(rest), hex(color_mix_over_background(destructive, 0.1)));
+        assert_eq!(hex(hover), hex(color_mix_over_background(destructive, 0.2)));
+        assert!(luminance(hover) < luminance(rest));
     }
 }

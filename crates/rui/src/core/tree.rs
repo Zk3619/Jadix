@@ -786,6 +786,10 @@ impl Element {
     }
     pub fn underline(mut self, underline: bool) -> Self {
         self.text_style.underline = underline;
+        // Mark explicit so `cascade_inheritable_text_style` does not wipe hover toggles
+        // (e.g. Button `link` → `hover:underline`).
+        self.attrs
+            .insert("text_decoration_line".to_string(), "1".to_string());
         self
     }
     pub fn text_decoration(mut self, decoration: impl Into<String>) -> Self {

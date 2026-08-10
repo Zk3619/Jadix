@@ -660,6 +660,11 @@ fn expand_node(
                     .attributes
                     .iter()
                     .any(|(k, _)| k == "options");
+            let combobox_is_compound = name_str == "Combobox"
+                && !el
+                    .attributes
+                    .iter()
+                    .any(|(k, _)| k == "options");
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -667,6 +672,8 @@ fn expand_node(
                 || name_str == "DialogContent"
                 || select_is_compound
                 || name_str == "SelectContent"
+                || combobox_is_compound
+                || name_str == "ComboboxContent"
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Fragment"
@@ -917,6 +924,157 @@ fn expand_node(
                     return quote! {
                         rui::components::select_content(
                             rui::components::SelectContentOpts {
+                                class: #class,
+                                match_trigger: #match_trigger,
+                                menu_width: #menu_width,
+                                menu_height: #menu_height,
+                                min_height: #min_height,
+                                max_height: #max_height,
+                                placement: #placement,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if combobox_is_compound {
+                    // ShadCN compound Combobox: provide context before Input/Content.
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let value_expr = get_attr("value");
+                    let placeholder_expr = get_attr("placeholder");
+                    let clearable_expr = get_attr("clearable");
+                    let class_expr = get_attr("class");
+                    let content_class_expr = get_attr("content_class")
+                        .or_else(|| get_attr("contentClass"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Combobox#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let placeholder_ts = if let Some(ph) = placeholder_expr {
+                        quote! { (#ph).to_string() }
+                    } else {
+                        quote! { "Search…".to_string() }
+                    };
+                    let clearable_ts = if let Some(c) = clearable_expr {
+                        quote! { rui::core::tree::parse_bool_like(#c) }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { (#c).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let content_class_ts = if let Some(c) = content_class_expr {
+                        quote! { (#c).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    return quote! {
+                        rui::components::combobox_scope(
+                            #id_ts,
+                            #open_ts,
+                            #value_ts,
+                            #placeholder_ts,
+                            #clearable_ts,
+                            #class_ts,
+                            #content_class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "ComboboxContent" {
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let match_trigger = get_attr("match_trigger")
+                        .or_else(|| get_attr("matchTrigger"))
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let menu_width = get_attr("menu_width")
+                        .or_else(|| get_attr("menuWidth"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let menu_height = get_attr("menu_height")
+                        .or_else(|| get_attr("menuHeight"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let min_height = get_attr("min_height")
+                        .or_else(|| get_attr("minHeight"))
+                        .or_else(|| get_attr("min_h"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let max_height = get_attr("max_height")
+                        .or_else(|| get_attr("maxHeight"))
+                        .or_else(|| get_attr("max_h"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let placement = get_attr("placement")
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rendered inside ComboboxContent's reactive_anchor.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::combobox_content(
+                            rui::components::ComboboxContentOpts {
                                 class: #class,
                                 match_trigger: #match_trigger,
                                 menu_width: #menu_width,

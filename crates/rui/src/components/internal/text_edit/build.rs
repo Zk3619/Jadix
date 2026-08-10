@@ -1,4 +1,4 @@
-﻿//! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize grip。
+﻿//! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
@@ -379,25 +379,39 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
 
     if resizable {
         let resize_fid = crate::utils::text_field::textarea_resize_focus_id(&field_id);
-        let grip_label = build_text_node(
-            "◢",
-            TextNodeConfig {
-                size_px: 10.0,
-                weight: 400,
-                color: parse_text_color("muted-foreground"),
-                ..Default::default()
-            },
-        );
+        // ShadCN / solid-ui / 浏览器原生风格：一长一短两条 45° 斜线（／）。
+        // 轴距角点为 `d` 时线长 = d√2，中心距右/下各 d/2；端点落在底边与右边。
+        // chrome 圆角 0.375rem≈6px：d 必须 > 圆角，否则端点落在圆角外侧被裁成角尖短划。
+        // `rotate` 只作用于本节点绘制实例，故每条线各自旋转。
+        let mut stroke = parse_color("muted-foreground");
+        stroke[3] *= 0.65;
+        const GRIP: f32 = 14.0;
+        const D_LONG: f32 = 11.0;
+        const D_SHORT: f32 = 7.0;
+        let grip_line = |d: f32| -> Element {
+            let len = d * std::f32::consts::SQRT_2;
+            Element::from(
+                r#box()
+                    .absolute(true)
+                    .left(GRIP - d * 0.5 - len * 0.5)
+                    .top(GRIP - d * 0.5 - 0.5)
+                    .w(len)
+                    .h(1.0)
+                    .bg(stroke)
+                    .rounded(0.5)
+                    .pointer_events("none"),
+            )
+            .rotate(-45.0)
+        };
         let mut grip: Element = r#box()
             .absolute(true)
             .right(0.0)
             .bottom(0.0)
-            .w(14.0)
-            .h(14.0)
+            .w(GRIP)
+            .h(GRIP)
             .z_index(2)
-            .items_center()
-            .justify_center()
-            .child(grip_label)
+            .child(grip_line(D_LONG))
+            .child(grip_line(D_SHORT))
             .into();
         grip = grip
             .focus_id(resize_fid)

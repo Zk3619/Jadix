@@ -1,42 +1,211 @@
 //! # Card
 //!
-//! 带边框、圆角与语义背景色的垂直卡片容器。间距取自 [`crate::tokens::spacing`]
-//!（默认 `p=SPACE_4`、`gap=SPACE_2`、圆角 8px）。
+//! 对齐 solid-ui / shadcn **复合 Card**：
 //!
-//! ## 用来做什么
-//! 把一组相关内容（标题、说明、控件）包成一块视觉单元，无独立 Header/Title 槽。
+//! ```text
+//! Card
+//! ├── CardHeader
+//! │   ├── CardTitle
+//! │   ├── CardDescription
+//! │   └── CardAction          // 可选；Header 右侧动作区（shadcn v4）
+//! ├── CardContent
+//! └── CardFooter
+//! ```
+//!
+//! 根容器：`bg-card`、边框、圆角、轻阴影，以及 `py` + 区间 `gap`（shadcn v4）。
+//! 分区只加水平 `px`；纯子节点也能吃到根上的垂直内边距。
+//!
+//! `ui!` 中 `<Card>` / `<CardHeader>` 等由通用 PascalCase → `*Props` 展开（与
+//! [`DialogHeader`](crate::components::DialogHeader) 相同，无需专用 scope）。
 //!
 //! ## 用法
 //! ```ignore
-//! <Card>
-//!   <Label text_size="0.875rem">"标题"</Label>
-//!   <Label>"正文说明…"</Label>
-//! </Card>
+//! ui! {
+//!     <Card>
+//!         <CardHeader>
+//!             <CardTitle>"Notifications"</CardTitle>
+//!             <CardDescription>"You have 3 unread messages."</CardDescription>
+//!             <CardAction>
+//!                 <Button variant="link" size="sm">"Sign Up"</Button>
+//!             </CardAction>
+//!         </CardHeader>
+//!         <CardContent>
+//!             <Label>"Card body…"</Label>
+//!         </CardContent>
+//!         <CardFooter>
+//!             <Button w="100%">"Mark all as read"</Button>
+//!         </CardFooter>
+//!     </Card>
+//! }
 //! ```
-//!
-//! ## 注意
-//! 需要标题时在 `children` 内自行放 [`crate::components::Label`]；更复杂卡片可在应用层自建组合。
 
 use crate::core::tree::{parse_color, Element};
-use crate::primitives::vstack;
+use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::text::text;
+use crate::style::parse_text_color;
 use crate::tokens;
 use rui_macros::component;
 
-/// 卡片容器。见模块文档。
+const ATTR_CARD_SLOT: &str = "rui_card_slot";
+const SLOT_ACTION: &str = "action";
+
+/// `ui!` 多子节点会先打成匿名 VStack；分区再拆开接到自己的布局上。
+fn take_packed_children(mut el: Element) -> Vec<Element> {
+    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
+    if bare && el.children.len() > 1 {
+        std::mem::take(&mut el.children)
+    } else {
+        vec![el]
+    }
+}
+
+fn is_card_action(el: &Element) -> bool {
+    el.attrs
+        .get(ATTR_CARD_SLOT)
+        .map(|s| s.as_str() == SLOT_ACTION)
+        .unwrap_or(false)
+}
+
+/// 卡片根容器（边框 / 圆角 / `bg-card` / 轻阴影）。见模块文档。
+///
+/// 默认 `w/max_w: 100%` + `min_w: 0`，避免 flex 子项因内容固有宽撑破父级。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Card(children: Option<Element>) -> Element {
-    let child = children.unwrap_or_else(Element::new);
+    let kids = children.map(take_packed_children).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
-            .p(tokens::SPACE_4)
-            .gap(tokens::SPACE_2)
-            .bg(parse_color("background"))
+            .max_w("100%")
+            .min_w(0.0)
+            .gap(tokens::SPACE_6)
+            .py(tokens::SPACE_6)
+            .bg(parse_color("card"))
             .border_style("solid")
             .border_color(parse_color("border"))
-            .border_width(0.125)
-            .rounded(8.0)
-            .child(child),
+            .border_width(1.0)
+            .rounded(tokens::RADIUS_LG)
+            .shadow([0.0, 0.0, 0.0, 0.08], 4.0)
+            .children(kids),
+    )
+}
+
+/// 顶栏：标题 / 说明；若含 [`CardAction`] 则右侧并排放置。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardHeader(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    let (actions, rest): (Vec<_>, Vec<_>) = kids.into_iter().partition(|c| is_card_action(c));
+
+    if actions.is_empty() {
+        return Element::from(
+            vstack()
+                .w("100%")
+                .max_w("100%")
+                .min_w(0.0)
+                .gap("0.375rem")
+                .px(tokens::SPACE_6)
+                .children(rest),
+        );
+    }
+
+    // 与 Action 并排时不要 `w(100%)`：百分比宽 + 旁侧按钮会把 Header 撑破父级。
+    let title_block: Element = vstack()
+        .gap("0.375rem")
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .min_w(0.0)
+        .children(rest)
+        .into();
+
+    Element::from(
+        hstack()
+            .w("100%")
+            .max_w("100%")
+            .min_w(0.0)
+            .items("start")
+            .justify("between")
+            .gap(tokens::SPACE_4)
+            .px(tokens::SPACE_6)
+            .child(title_block)
+            .children(actions),
+    )
+}
+
+/// 标题（`text-lg` / semibold / card-foreground）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardTitle(children: Option<Element>) -> Element {
+    let fg = parse_text_color("card-foreground");
+    match children {
+        Some(c) => c
+            .text_size(18.0)
+            .font_weight(600.0)
+            .text_color(fg)
+            .min_w(0.0),
+        None => Element::from(text("").size(18.0).weight(600.0).color(fg)).min_w(0.0),
+    }
+}
+
+/// 说明文案（`text-sm` / muted-foreground）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardDescription(children: Option<Element>) -> Element {
+    let muted = parse_text_color("muted-foreground");
+    match children {
+        Some(c) => c
+            .text_size(14.0)
+            .font_weight(400.0)
+            .text_color(muted)
+            .min_w(0.0),
+        None => Element::from(text("").size(14.0).weight(400.0).color(muted)).min_w(0.0),
+    }
+}
+
+/// Header 右侧动作区（对齐 shadcn `CardAction`）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardAction(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    let mut el: Element = hstack()
+        .items_center()
+        .gap(tokens::SPACE_2)
+        .flex_shrink(0.0)
+        .children(kids)
+        .into();
+    el.set_attr(ATTR_CARD_SLOT, SLOT_ACTION);
+    el
+}
+
+/// 主内容区（水平 `px`；垂直间距由根 [`Card`] 的 `gap` / `py` 承担）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardContent(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    Element::from(
+        vstack()
+            .w("100%")
+            .max_w("100%")
+            .min_w(0.0)
+            .gap(tokens::SPACE_4)
+            .px(tokens::SPACE_6)
+            .children(kids),
+    )
+}
+
+/// 底栏（横向；默认左对齐，可用 `class` / `justify` 覆盖）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CardFooter(children: Option<Element>) -> Element {
+    let kids = children.map(take_packed_children).unwrap_or_default();
+    Element::from(
+        hstack()
+            .w("100%")
+            .max_w("100%")
+            .min_w(0.0)
+            .items_center()
+            .gap(tokens::SPACE_2)
+            .px(tokens::SPACE_6)
+            .children(kids),
     )
 }

@@ -2,6 +2,10 @@
 //!
 //! 1px 分割线：默认水平满宽；`.vertical(true)` 时垂直满高。颜色取 [`crate::tokens::border`]。
 //!
+//! 对齐 solid-ui / ShadCN：`shrink-0 bg-border` + 水平 `h-px w-full` / 垂直 `w-px h-full`。
+//! 菜单内分割线（Select / Combobox / DropdownMenu）的 `-mx-1 my-1` 由各组件自行叠加，
+//! 不要在本模块扩展菜单专用变体。
+//!
 //! ## 用法
 //! ```ignore
 //! <Separator />
@@ -64,12 +68,13 @@ impl crate::core::tree::IntoElementList for SeparatorBuilder {
 
 impl From<SeparatorBuilder> for Element {
     fn from(builder: SeparatorBuilder) -> Self {
+        // solid-ui / ShadCN: shrink-0 bg-border; horizontal h-px w-full; vertical w-px h-full
         let mut el: Element = if builder.vertical {
             r#box().w("1px").h("100%").min_h("1rem").into()
         } else {
             r#box().h("1px").w("100%").min_w("1rem").into()
         };
-        el = el.bg(tokens::border());
+        el = el.bg(tokens::border()).flex_shrink(0.0);
         el
     }
 }

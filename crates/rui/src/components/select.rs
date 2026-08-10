@@ -538,16 +538,20 @@ pub fn SelectItem(
     row.accesskit_role("option")
 }
 
-/// ShadCN Aria `SelectSeparator`（`cn-select-separator`：`-mx-1`，上下留白）。
+/// ShadCN / solid-ui 菜单分割线：`-mx-1 my-1 h-px bg-border`。
+///
+/// Content 为 `p-1` 时 `-mx-1` 抵消内边距，线贴面板左右缘且两侧等距。
+/// `w(auto)` 配合交叉轴 stretch，避免默认 `w-full` + `mx` 左右溢出不对称。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SelectSeparator(children: Option<Element>) -> Element {
     let _ = children;
     let _ = require_select("SelectSeparator");
-    let mut el: Element = separator().into();
-    // 下方略多一点，避免紧贴随后的 SelectLabel。
-    el = el.mx("-0.25rem").mt("0.25rem").mb("0.125rem");
-    el
+    Element::from(separator())
+        .w("auto")
+        .mx("-0.25rem")
+        .my("0.25rem")
+        .pointer_events_none()
 }
 
 /// 项内容对齐。
@@ -920,7 +924,10 @@ fn build_entries_element(
                 }
             }
             SelectEntry::Separator => {
-                col = col.child(Element::from(separator()));
+                col = col.child(SelectSeparator(SelectSeparatorProps {
+                    children: None,
+                    base: None,
+                }));
             }
         }
     }

@@ -80,13 +80,24 @@ pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,
     ButtonProps,
 };
-pub use card::{Card, CardProps};
+pub use card::{
+    Card, CardAction, CardActionProps, CardContent, CardContentProps, CardDescription,
+    CardDescriptionProps, CardFooter, CardFooterProps, CardHeader, CardHeaderProps, CardProps,
+    CardTitle, CardTitleProps,
+};
 pub use carousel::{carousel, CarouselBuilder};
 pub use chart::{bar_chart, line_chart, BarChartBuilder, LineChartBuilder};
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use color_picker::{color_picker, ColorPicker, ColorPickerBuilder, ColorPickerProps};
 pub use command::{command, CommandAction, CommandBuilder};
-pub use combobox::{combobox, ComboboxBuilder};
+pub use combobox::{
+    combobox, combobox_content, combobox_scope, use_combobox, Combobox, ComboboxBuilder,
+    ComboboxContentOpts, ComboboxCtx, ComboboxEmpty, ComboboxEmptyProps, ComboboxGroup,
+    ComboboxGroupData, ComboboxGroupProps, ComboboxInput, ComboboxInputProps, ComboboxItem,
+    ComboboxItemData, ComboboxItemProps, ComboboxLabel, ComboboxLabelProps, ComboboxList,
+    ComboboxListProps, ComboboxProps, ComboboxSeparator, ComboboxSeparatorProps,
+    ComboboxVisibleItem,
+};
 pub use context_menu::{context_menu, ContextMenuBuilder, ContextMenuItem};
 pub use table::{table, TableBuilder, TableColumn, TableSortDir, TableSortState};
 pub use date_picker::{

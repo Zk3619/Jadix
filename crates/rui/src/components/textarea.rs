@@ -3,7 +3,8 @@
 //! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
 //! 共享 chrome 构建/绘制在 [`crate::components::internal::text_edit`]。
 //! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
-//! 内容溢出时在内部滚动视口滚动；默认右下角可拖拽改高。
+//! 内容溢出时在内部滚动视口滚动；默认右下角可拖拽改高（斜线手柄）。
+//! [`TextareaBuilder::resizable`] 为 `false` 时禁止改高并隐藏手柄。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -65,7 +66,7 @@ impl TextareaBuilder {
         self
     }
 
-    /// 右下角拖拽三角改高；默认开启。
+    /// 右下角拖拽斜线手柄改高；默认开启。`false` 时禁止改高并隐藏手柄。
     pub fn resizable(mut self, yes: bool) -> Self {
         self.resizable = yes;
         self

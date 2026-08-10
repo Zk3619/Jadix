@@ -1157,9 +1157,23 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
                 </VStack>
 
                 <VStack gap="0.5rem">
-                    <Label font_weight="700">"C) uno=..."</Label>
+                    <Label font_weight="700">"C) Card 复合（ShadCN / solid-ui）"</Label>
                     <Card>
-                        <Label text_size="0.875rem">"components::Card（tokens 间距 + 圆角）"</Label>
+                        <CardHeader>
+                            <CardTitle>"Notifications"</CardTitle>
+                            <CardDescription>"You have 3 unread messages."</CardDescription>
+                            <CardAction>
+                                <Button variant="link" size="sm">"Sign Up"</Button>
+                            </CardAction>
+                        </CardHeader>
+                        <CardContent>
+                            <Label text_size="0.875rem" w="100%" min_w="0">
+                                "Header / Title / Description / Action / Content / Footer"
+                            </Label>
+                        </CardContent>
+                        <CardFooter>
+                            <Button w="100%" size="sm">"Mark all as read"</Button>
+                        </CardFooter>
                     </Card>
                     <Rect uno="p-3 rounded-md bg-secondary">
                         <VStack uno="gap-2">
@@ -1465,19 +1479,30 @@ fn TextareaComboboxShowcase() -> Element {
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "多行输入、可过滤 Combobox、TabsList 与 ToggleGroup。"
                 </Label>
-                <Textarea id="gal-textarea" placeholder="多行备注…" rows={4} value={notes} />
+                <Textarea id="gal-textarea" placeholder="多行备注…（可拖右下角改高）" rows={4} value={notes} />
+                <Textarea id="gal-textarea-fixed" placeholder="固定高度（resizable=false）" rows={3} resizable={false} />
                 <Label text_size="0.875rem" leading="normal">{ format!("Textarea: {}", notes.get()) }</Label>
-                { Element::from(
-                    combobox("gal-combo")
-                        .value_signal(combo)
-                        .placeholder("搜索城市…")
-                        .options([
-                            ("sh", "Shanghai"),
-                            ("bj", "Beijing"),
-                            ("sz", "Shenzhen"),
-                            ("gz", "Guangzhou"),
-                        ]),
-                ) }
+                                <Combobox id="gal-combo" value={combo} placeholder="搜索城市…" clearable={true} class="w-full">
+                    <ComboboxInput />
+                    <ComboboxContent max_h="16rem">
+                        <ComboboxList>
+                            <ComboboxGroup>
+                                <ComboboxLabel>"East China"</ComboboxLabel>
+                                <ComboboxItem value="sh">"Shanghai"</ComboboxItem>
+                                <ComboboxItem value="hz">"Hangzhou"</ComboboxItem>
+                            </ComboboxGroup>
+                            <ComboboxSeparator />
+                            <ComboboxGroup>
+                                <ComboboxLabel>"South China"</ComboboxLabel>
+                                <ComboboxItem value="sz">"Shenzhen"</ComboboxItem>
+                                <ComboboxItem value="gz">"Guangzhou"</ComboboxItem>
+                            </ComboboxGroup>
+                            <ComboboxSeparator />
+                            <ComboboxItem value="bj">"Beijing"</ComboboxItem>
+                        </ComboboxList>
+                        <ComboboxEmpty>"No results."</ComboboxEmpty>
+                    </ComboboxContent>
+                </Combobox>
                 <Label text_size="0.875rem">{ format!("Combobox: {}", combo.get()) }</Label>
                 { Element::from(
                     tabs_list("gal-tabs")
