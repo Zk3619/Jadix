@@ -498,7 +498,7 @@ mod tests {
         );
     }
 
-    /// With EM SPACE slots, ZWJ clusters must not reserve >>1em.
+    /// With fixed-width slots, ZWJ clusters must not reserve >>1em.
     #[test]
     fn gallery_emoji_row_slot_plan_collapses_zwj_advance() {
         let line = "Emoji: 😀 😁 😂 🤣 😅 🥲 🧠 🧪 🚀 🌍 🔥 ✅ ❌ 💡 🧩 👨‍👩‍👧‍👦 🧑‍💻 🏳️‍🌈";
@@ -506,6 +506,10 @@ mod tests {
         let mut fs = font_loader::create_font_system();
         font_loader::apply_default_families(fs.db_mut());
         font_loader::ensure_coverage_for_text(&mut fs, line);
+        font_loader::ensure_coverage_for_text(
+            &mut fs,
+            crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+        );
         let ui = best_font_family(&fs);
         let size = 14.0_f32;
         let lh = size * 1.5;
@@ -544,7 +548,7 @@ mod tests {
             let name = twemoji_name::twemoji_stem(g);
             println!("slot emoji={name} advance={advance:.1} ratio={ratio:.2}");
             assert!(
-                ratio < 1.35,
+                ratio > 0.85 && ratio < 1.35,
                 "{name}: expected ~1em slot advance after plan, got ratio={ratio}"
             );
         }
@@ -673,5 +677,99 @@ mod tests {
             overshoot < 0.5,
             "centered em-square must fit leading-normal line box"
         );
+    }
+
+    /// Gallery "Emoji / Symbols / Math" row must soft-wrap to the left margin — not stair-step.
+    #[test]
+    fn gallery_emoji_row_soft_wrap_resets_left() {
+        use unicode_segmentation::UnicodeSegmentation;
+
+        let line = "Emoji: 😀 😁 😂 🤣 😅 🥲 🧠 🧪 🚀 🌍 🔥 ✅ ❌ 💡 🧩 👨‍👩‍👧‍👦 🧑‍💻 🏳️‍🌈";
+        let layout = crate::renderer::emoji_layout::plan_emoji_layout_text(line);
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, line);
+        font_loader::ensure_coverage_for_text(
+            &mut fs,
+            crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+        );
+        let ui = best_font_family(&fs);
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let avail = 220.0_f32;
+
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(&mut fs, Some(avail), Some(lh * 8.0));
+        buffer.set_text(
+            &mut fs,
+            &layout,
+            glyphon::Attrs::new().family(ui),
+            glyphon::Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+
+        let runs = buffer.layout_runs().count();
+        assert!(
+            runs >= 2,
+            "narrow gallery emoji row should soft-wrap, got {runs} runs"
+        );
+
+        let slot = size;
+        let mut cursor = 0.0_f32;
+        let mut line_top = None;
+        let mut positions = Vec::new();
+        let mut byte = 0usize;
+        for g in line.graphemes(true) {
+            let is_emoji = emoji_detect::grapheme_is_emoji(g);
+            let start = byte;
+            if is_emoji {
+                byte += crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.len_utf8();
+            } else {
+                byte += g.len();
+                continue;
+            }
+            let (left, top) = crate::renderer::emoji_layout::custom_emoji_left_centered_top(
+                &buffer, &layout, start, slot, slot,
+            )
+            .unwrap_or_else(|| panic!("emoji slot miss g={g:?} start={start}"));
+            let left = crate::renderer::emoji_layout::advance_emoji_left_cursor(
+                left,
+                top,
+                slot,
+                &mut cursor,
+                &mut line_top,
+            );
+            positions.push((left, top));
+        }
+
+        assert!(positions.len() >= 4, "expected several emoji quads");
+        let mut by_line: Vec<(f32, Vec<f32>)> = Vec::new();
+        for (left, top) in &positions {
+            if let Some((_, xs)) = by_line.iter_mut().find(|(t, _)| (*t - top).abs() <= 0.5) {
+                xs.push(*left);
+            } else {
+                by_line.push((*top, vec![*left]));
+            }
+        }
+        assert!(
+            by_line.len() >= 2,
+            "expected soft-wrap onto another visual line, got {} line(s)",
+            by_line.len()
+        );
+        for (top, xs) in &by_line {
+            let max_right = xs.iter().cloned().fold(0.0_f32, f32::max) + slot;
+            assert!(
+                max_right <= avail + 1.0,
+                "emoji quads must stay inside avail={avail}, right={max_right:.1} top={top:.1}"
+            );
+        }
+        for (top, xs) in by_line.iter().skip(1) {
+            let first = xs[0];
+            assert!(
+                first < slot * 1.5,
+                "first emoji on wrapped line must return to left margin, left={first:.1} \
+                 top={top:.1} (stair-step regression)"
+            );
+        }
     }
 }

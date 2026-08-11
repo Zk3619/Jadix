@@ -232,4 +232,4 @@
 
 - 实现：`EmojiGlyphCache.raster_entries`，键为 **emoji 序列字符串** + **`pixel_size`（逻辑字号取整后的像素高度）**。
 - 作用：同一 grapheme、同一字号在**不同文本节点**或**同节点内多次出现**时，复用已解码/已栅格化的 RGBA，避免重复读盘与 SVG 光栅。
-- 与节点级 `EmojiCacheKey` 的关系：节点键仍缓存整段布局下的 `CustomGlyph` 与对应贴图；光栅缓存是更细粒度的跨节点去重层。
+- 与节点级 `EmojiCacheKey` 的关系：节点键仍缓存整段布局下的 `CustomGlyph` 与对应贴图（含量化后的 `wrap_width_q`，容器收窄软换行时失效并重排）；光栅缓存是更细粒度的跨节点去重层。

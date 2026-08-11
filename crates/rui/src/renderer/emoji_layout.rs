@@ -5,8 +5,15 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::emoji_detect;
 
-/// EM SPACE — ~1em advance in UI sans, matches the custom emoji quad slot.
-pub const EMOJI_LAYOUT_SLOT: char = '\u{2003}';
+/// Ideograph `一` (U+4E00) — ~1em advance via CJK fallback, **not** Unicode whitespace.
+///
+/// Must not be a `Zs` space (old EM SPACE U+2003): cosmic-text strips leading whitespace after
+/// soft-wrap, which dropped the first emoji on each wrapped line and caused stair-step quads.
+/// Fullwidth ASCII (U+FF03) is too narrow in Segoe UI (~0.65em); CJK keeps the em-square slot.
+///
+/// Paint path must color this slot with alpha=0 (`set_shaped_buffer_text`) — otherwise the
+/// ideograph stroke shows as a black line through every Twemoji quad.
+pub const EMOJI_LAYOUT_SLOT: char = '\u{4E00}';
 
 /// Replace each emoji grapheme with [`EMOJI_LAYOUT_SLOT`] so layout advance ≈ custom quad.
 pub fn plan_emoji_layout_text(text: &str) -> String {
@@ -21,7 +28,7 @@ pub fn plan_emoji_layout_text(text: &str) -> String {
     layout
 }
 
-/// Whether paint replaces emoji with EM SPACE slots + color quads (default on).
+/// Whether paint replaces emoji with fixed-width slots + color quads (default on).
 pub fn custom_glyph_layout_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -122,6 +129,27 @@ pub fn custom_emoji_left_centered_top(
     Some((left, top))
 }
 
+/// Same-line backstop when a slot advance collapses; soft-wrap must reset the cursor
+/// so the next emoji returns to the left margin (no stair-step overflow).
+pub fn advance_emoji_left_cursor(
+    left: f32,
+    top: f32,
+    slot: f32,
+    cursor: &mut f32,
+    line_top: &mut Option<f32>,
+) -> f32 {
+    if line_top.map(|t| (top - t).abs() > 0.5).unwrap_or(false) {
+        *cursor = 0.0;
+    }
+    *line_top = Some(top);
+    let mut left = left;
+    if left + 0.5 < *cursor {
+        left = *cursor;
+    }
+    *cursor = left + slot * 0.95;
+    left
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +170,103 @@ mod tests {
         assert_eq!(layout.chars().count(), 3);
         assert!(layout.contains(EMOJI_LAYOUT_SLOT));
         assert!(!layout.contains('\u{200d}'));
+    }
+
+    #[test]
+    fn left_cursor_resets_on_soft_wrap_line() {
+        let slot = 16.0_f32;
+        let mut cursor = 0.0_f32;
+        let mut line_top = None;
+        let l0 = advance_emoji_left_cursor(100.0, 0.0, slot, &mut cursor, &mut line_top);
+        assert!((l0 - 100.0).abs() < f32::EPSILON);
+        // Same line: collapsed left is pushed forward.
+        let l1 = advance_emoji_left_cursor(10.0, 0.0, slot, &mut cursor, &mut line_top);
+        assert!(l1 + 0.1 >= 100.0, "same-line backstop should keep monotonic left, got {l1}");
+        // Soft-wrap to next visual line: must return to the measured left (margin), not stair-step.
+        let l2 = advance_emoji_left_cursor(4.0, 24.0, slot, &mut cursor, &mut line_top);
+        assert!(
+            (l2 - 4.0).abs() < 0.01,
+            "wrapped emoji must keep line-start left, got {l2} (stair-step regression)"
+        );
+    }
+
+    #[test]
+    fn slot_advance_near_one_em_with_coverage() {
+        use crate::renderer::font_loader;
+        use crate::renderer::text_hit::best_font_family;
+
+        let slot = EMOJI_LAYOUT_SLOT.to_string();
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, &slot);
+        let ui = best_font_family(&fs);
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(&mut fs, Some(64.0), Some(lh + 2.0));
+        buffer.set_text(
+            &mut fs,
+            &slot,
+            glyphon::Attrs::new().family(ui),
+            glyphon::Shaping::Advanced,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let w = buffer
+            .layout_runs()
+            .map(|r| r.line_w)
+            .fold(0.0_f32, f32::max);
+        let ratio = w / size;
+        println!(
+            "slot U+{:04X} whitespace={} advance={w:.2} ratio={ratio:.2}",
+            EMOJI_LAYOUT_SLOT as u32,
+            EMOJI_LAYOUT_SLOT.is_whitespace()
+        );
+        assert!(
+            ratio > 0.85 && ratio < 1.35,
+            "emoji layout slot must be ~1em after coverage, got ratio={ratio}"
+        );
+    }
+
+    #[test]
+    fn emoji_layout_slot_is_not_whitespace() {
+        assert!(
+            !EMOJI_LAYOUT_SLOT.is_whitespace(),
+            "slot must survive soft-wrap leading-whitespace strip (was EM SPACE)"
+        );
+    }
+
+    #[test]
+    fn invisible_slot_attrs_still_emit_layout_glyphs() {
+        use crate::renderer::font_loader;
+        use crate::renderer::text_hit::best_font_family;
+
+        let text = "Hi 😀 there";
+        let layout = plan_emoji_layout_text(text);
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, &layout);
+        let ui = best_font_family(&fs);
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let visible = glyphon::Attrs::new()
+            .family(ui)
+            .color(glyphon::Color::rgba(0, 0, 0, 255));
+        let invisible = visible.color(glyphon::Color::rgba(0, 0, 0, 0));
+        let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
+        let slot_end = slot_start + EMOJI_LAYOUT_SLOT.len_utf8();
+        let owned = [
+            (layout[..slot_start].to_string(), visible),
+            (layout[slot_start..slot_end].to_string(), invisible),
+            (layout[slot_end..].to_string(), visible),
+        ];
+        let rich: Vec<(&str, glyphon::Attrs)> =
+            owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(&mut fs, Some(400.0), Some(lh * 2.0));
+        buffer.set_rich_text(&mut fs, rich, visible, glyphon::Shaping::Advanced);
+        buffer.shape_until_scroll(&mut fs, false);
+        let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, size, size)
+            .expect("alpha=0 slot must still produce a layout glyph for Twemoji alignment");
+        assert!(left.is_finite() && left >= 0.0, "left={left}");
     }
 }

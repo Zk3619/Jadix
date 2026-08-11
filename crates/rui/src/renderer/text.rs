@@ -22,6 +22,9 @@ pub(crate) struct EmojiCacheKey {
     pub pixel_size: u16,
     pub scale_bits: u32,
     pub color_mode: u8,
+    /// Quantized wrap width (`scaled_w / 8`, same as `node_shape_hash`).
+    /// CustomGlyph `left`/`top` follow soft-wrap, so a width-only reshape must miss.
+    pub wrap_width_q: u16,
 }
 
 #[derive(Default)]
@@ -30,6 +33,9 @@ pub(crate) struct EmojiGlyphCache {
     entry_lru: VecDeque<EmojiCacheKey>,
     pub raster_entries: HashMap<EmojiRasterCacheKey, EmojiRaster>,
     raster_lru: VecDeque<EmojiRasterCacheKey>,
+    /// Stable id → raster. Glyphon panics if `rasterize` returns `None` after `Some`
+    /// for the same request; node LRU must not drop these.
+    id_rasters: HashMap<u16, EmojiRaster>,
     pub next_custom_id: u16,
     pub stats: EmojiCacheStats,
 }
@@ -88,6 +94,9 @@ impl EmojiGlyphCache {
     }
 
     pub(crate) fn insert_emoji_node(&mut self, key: EmojiCacheKey, entry: EmojiGlyphEntry) {
+        for (id, raster) in &entry.rasters {
+            self.id_rasters.insert(*id, raster.clone());
+        }
         let max = emoji_node_cache_max();
         if self.entries.contains_key(&key) {
             self.entries.insert(key.clone(), entry);
@@ -108,18 +117,48 @@ impl EmojiGlyphCache {
         self.entries.insert(key, entry);
     }
 
+    /// Reuse custom-glyph ids/rasters from any wrap-width sibling of `key` (same text/size).
+    pub(crate) fn find_wrap_sibling(&self, key: &EmojiCacheKey) -> Option<&EmojiGlyphEntry> {
+        self.entries.iter().find_map(|(k, entry)| {
+            (k.sequence == key.sequence
+                && k.pixel_size == key.pixel_size
+                && k.scale_bits == key.scale_bits
+                && k.color_mode == key.color_mode
+                && k.wrap_width_q != key.wrap_width_q)
+            .then_some(entry)
+        })
+    }
+
     pub fn rasterize(&self, input: RasterizeCustomGlyphRequest) -> Option<RasterizedCustomGlyph> {
+        let try_raster = |r: &EmojiRaster| -> Option<RasterizedCustomGlyph> {
+            if r.width == input.width && r.height == input.height {
+                Some(RasterizedCustomGlyph {
+                    data: (*r.rgba).to_vec(),
+                    content_type: ContentType::Color,
+                })
+            } else {
+                None
+            }
+        };
+        if let Some(r) = self.id_rasters.get(&input.id) {
+            if let Some(out) = try_raster(r) {
+                return Some(out);
+            }
+        }
         for entry in self.entries.values() {
             if let Some(r) = entry.rasters.get(&input.id) {
-                if r.width == input.width && r.height == input.height {
-                    return Some(RasterizedCustomGlyph {
-                        data: (*r.rgba).to_vec(),
-                        content_type: ContentType::Color,
-                    });
+                if let Some(out) = try_raster(r) {
+                    return Some(out);
                 }
             }
         }
-        None
+        // Glyphon asserts Some→None never happens for the same request. If an id was
+        // handed out but the bitmap is gone/mismatched, return a transparent placeholder.
+        let n = (input.width as usize).saturating_mul(input.height as usize).saturating_mul(4);
+        Some(RasterizedCustomGlyph {
+            data: vec![0; n],
+            content_type: ContentType::Color,
+        })
     }
 }
 
@@ -325,5 +364,87 @@ impl RuiTextRenderer {
         {
             log::error!("glyphon TextRenderer::render failed: {err:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glyphon::RasterizeCustomGlyphRequest;
+
+    fn sample_raster(w: u16, h: u16) -> EmojiRaster {
+        EmojiRaster::new(w, h, vec![10; (w as usize) * (h as usize) * 4])
+    }
+
+    #[test]
+    fn rasterize_survives_node_lru_eviction() {
+        std::env::set_var("RUI_EMOJI_NODE_CACHE_MAX", "1");
+        let mut cache = EmojiGlyphCache::default();
+        let key_a = EmojiCacheKey {
+            sequence: "a".into(),
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 10,
+        };
+        let mut rasters = HashMap::new();
+        rasters.insert(7, sample_raster(16, 16));
+        cache.insert_emoji_node(
+            key_a,
+            EmojiGlyphEntry {
+                glyphs: vec![],
+                rasters,
+            },
+        );
+        // Evict A by inserting B (max=1).
+        let key_b = EmojiCacheKey {
+            sequence: "b".into(),
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 10,
+        };
+        cache.insert_emoji_node(
+            key_b,
+            EmojiGlyphEntry {
+                glyphs: vec![],
+                rasters: HashMap::new(),
+            },
+        );
+        assert!(!cache.entries.contains_key(&EmojiCacheKey {
+            sequence: "a".into(),
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 10,
+        }));
+        let out = cache.rasterize(RasterizeCustomGlyphRequest {
+            id: 7,
+            width: 16,
+            height: 16,
+            x_bin: glyphon::SubpixelBin::Zero,
+            y_bin: glyphon::SubpixelBin::Zero,
+            scale: 1.0,
+        });
+        assert!(
+            out.is_some(),
+            "glyphon requires Some after Some — id_rasters must outlive node LRU"
+        );
+        assert_eq!(out.unwrap().data.len(), 16 * 16 * 4);
+    }
+
+    #[test]
+    fn rasterize_never_returns_none() {
+        let cache = EmojiGlyphCache::default();
+        let out = cache.rasterize(RasterizeCustomGlyphRequest {
+            id: 99,
+            width: 8,
+            height: 8,
+            x_bin: glyphon::SubpixelBin::Zero,
+            y_bin: glyphon::SubpixelBin::Zero,
+            scale: 1.0,
+        });
+        assert!(out.is_some());
+        assert_eq!(out.unwrap().data.len(), 8 * 8 * 4);
     }
 }

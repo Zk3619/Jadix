@@ -262,6 +262,14 @@ fn measure_run_width(
         return heuristic;
     }
     ensure_coverage_for_text(font_system, text);
+    if crate::renderer::emoji_detect::text_contains_emoji(text)
+        && crate::renderer::emoji_layout::custom_glyph_layout_enabled()
+    {
+        ensure_coverage_for_text(
+            font_system,
+            crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+        );
+    }
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
@@ -441,6 +449,14 @@ pub fn glyphon_soft_wrap_line_count(
             Shaping::Advanced
         };
         ensure_coverage_for_text(font_system, text);
+        if crate::renderer::emoji_detect::text_contains_emoji(text)
+            && crate::renderer::emoji_layout::custom_glyph_layout_enabled()
+        {
+            ensure_coverage_for_text(
+                font_system,
+                crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+            );
+        }
         let avail = avail_width.max(1.0);
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));

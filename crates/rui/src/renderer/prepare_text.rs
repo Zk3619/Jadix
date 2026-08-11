@@ -35,7 +35,7 @@ enum TextSegment {
     Emoji { text: String, start: usize },
 }
 
-/// EM SPACE — ~1em advance in UI sans, matches the custom emoji quad slot.
+/// CJK `一` slot — ~1em advance; must not be whitespace (see [`emoji_layout::EMOJI_LAYOUT_SLOT`]).
 const EMOJI_LAYOUT_SLOT: char = emoji_layout::EMOJI_LAYOUT_SLOT;
 
 /// Replace each emoji grapheme with a single-width slot so layout advance matches the
@@ -592,10 +592,13 @@ fn resolve_text_align(
 /// Shape text for the UI FontSystem.
 ///
 /// When custom emoji glyphs are enabled, each emoji grapheme is replaced with a
-/// single EM SPACE so advances match the ~1em color quad. Painting real emoji
-/// codepoints (even with alpha=0) is wrong for two reasons:
+/// fixed-width non-whitespace slot so advances match the ~1em color quad. Painting
+/// real emoji codepoints (even with alpha=0) is wrong for two reasons:
 /// 1) ZWJ/RI clusters expand to multiple Mask advances → holes beside a 1em quad
 /// 2) glyphon ignores alpha on CBDT Color glyphs if a color-emoji face is present
+///
+/// Slot must not be Unicode whitespace: cosmic-text strips leading spaces after soft-wrap,
+/// which dropped the first emoji on each wrapped line (gallery stair-step overflow).
 fn set_shaped_buffer_text(
     buffer: &mut glyphon::Buffer,
     font_system: &mut glyphon::FontSystem,
@@ -608,8 +611,34 @@ fn set_shaped_buffer_text(
         buffer.set_text(font_system, text, attrs, shaping);
         return;
     }
-    let (layout, _) = plan_emoji_layout(text);
-    buffer.set_text(font_system, &layout, attrs, shaping);
+    let (layout, segments) = plan_emoji_layout(text);
+    // Slot char (CJK `一`) must keep ~1em advance but paint invisible — otherwise the
+    // ideograph stroke shows as a black line through every Twemoji quad.
+    let invisible = attrs.color(glyphon::Color::rgba(0, 0, 0, 0));
+    let slot_len = EMOJI_LAYOUT_SLOT.len_utf8();
+    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::new();
+    let mut cursor = 0usize;
+    for seg in &segments {
+        let TextSegment::Emoji { start, .. } = seg else {
+            continue;
+        };
+        if cursor < *start {
+            owned.push((layout[cursor..*start].to_string(), attrs));
+        }
+        let end = (*start + slot_len).min(layout.len());
+        owned.push((layout[*start..end].to_string(), invisible));
+        cursor = end;
+    }
+    if cursor < layout.len() {
+        owned.push((layout[cursor..].to_string(), attrs));
+    }
+    if owned.is_empty() {
+        buffer.set_text(font_system, &layout, attrs, shaping);
+        return;
+    }
+    let rich: Vec<(&str, glyphon::Attrs)> =
+        owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+    buffer.set_rich_text(font_system, rich, attrs, shaping);
 }
 
 /// 与占位字形对齐后的额外垂直微调（仅当设置了 `RUI_EMOJI_BASELINE_FACTOR` 时非零）。
@@ -1507,6 +1536,14 @@ pub fn prepare_text_frame(
             unsafe { &mut *text_renderer.font_system },
             shape_text_for_coverage.as_ref(),
         );
+        // Slot char (CJK `一`) must be covered too — emoji-only strings otherwise leave a
+        // narrow .notdef advance and crush adjacent Twemoji quads.
+        if has_emoji && emoji_custom_glyph_enabled() {
+            font_loader::ensure_coverage_for_text(
+                unsafe { &mut *text_renderer.font_system },
+                emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+            );
+        }
 
         let family = if has_emoji {
             // Twemoji custom glyphs paint color emoji; keep layout on UI sans.
@@ -1841,6 +1878,10 @@ pub fn prepare_text_frame(
                 pixel_size: emoji_paint_pixel_size(scaled_size),
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
+                // Match `node_shape_hash` width quantization so soft-wrap rebuilds quads.
+                wrap_width_q: ((scaled_w / 8.0)
+                    .round()
+                    .clamp(0.0, (u16::MAX as f32) / 8.0) as u16),
             })
         } else {
             None
@@ -1851,19 +1892,31 @@ pub fn prepare_text_frame(
                 text_renderer.emoji_cache.stats.hits += 1;
             } else {
                 _emoji_misses += 1;
+                let sibling_ids: Vec<(u16, super::text::EmojiRaster)> = text_renderer
+                    .emoji_cache
+                    .find_wrap_sibling(&key)
+                    .map(|e| {
+                        e.glyphs
+                            .iter()
+                            .filter_map(|g| e.rasters.get(&g.id).map(|r| (g.id, r.clone())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut sibling_iter = sibling_ids.into_iter();
                 let mut next_custom_id = text_renderer.emoji_cache.next_custom_id;
                 let (layout_text, segments) = plan_emoji_layout(shape_text.as_ref());
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
-                // Backstop if a slot advance collapses; with EM SPACE this is rarely needed.
+                // Same-line backstop if a slot advance collapses; reset on soft-wrap.
                 let mut emoji_left_cursor = 0.0_f32;
+                let mut emoji_line_top: Option<f32> = None;
                 for seg in segments {
                     let TextSegment::Emoji { text, start } = seg else {
                         continue;
                     };
                     let pixel_size = emoji_paint_pixel_size(scaled_size);
                     let slot = pixel_size as f32;
-                    let (mut left, top) = match emoji_layout::custom_emoji_left_centered_top(
+                    let (left, top) = match emoji_layout::custom_emoji_left_centered_top(
                         &text_renderer.shaped_cache[i].buffer,
                         &layout_text,
                         start,
@@ -1892,19 +1945,27 @@ pub fn prepare_text_frame(
                             (left, top)
                         }
                     };
-                    if left + 0.5 < emoji_left_cursor {
-                        left = emoji_left_cursor;
-                    }
-                    emoji_left_cursor = left + slot * 0.95;
-                    let glyph_id = next_custom_id;
-                    next_custom_id = next_custom_id.wrapping_add(1).max(1);
-                    let raster = load_emoji_raster_cached(
-                        text_renderer,
-                        &text,
-                        pixel_size,
-                        family,
-                        font_weight,
+                    let left = emoji_layout::advance_emoji_left_cursor(
+                        left,
+                        top,
+                        slot,
+                        &mut emoji_left_cursor,
+                        &mut emoji_line_top,
                     );
+                    let (glyph_id, raster) = if let Some((id, raster)) = sibling_iter.next() {
+                        (id, Some(raster))
+                    } else {
+                        let glyph_id = next_custom_id;
+                        next_custom_id = next_custom_id.wrapping_add(1).max(1);
+                        let raster = load_emoji_raster_cached(
+                            text_renderer,
+                            &text,
+                            pixel_size,
+                            family,
+                            font_weight,
+                        );
+                        (glyph_id, raster)
+                    };
                     if let Some(raster) = raster {
                         // Match logical quad to font size (raster already resized).
                         let width = pixel_size as f32;
