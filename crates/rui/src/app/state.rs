@@ -1187,6 +1187,11 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        crate::components::radio_group::sync_radio_checked_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
         // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
         crate::style::sync_focus_ring_subtree(
             &mut self.root_element,

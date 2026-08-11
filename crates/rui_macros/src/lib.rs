@@ -10,6 +10,8 @@ use syn::{Expr, Ident, Token, braced};
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// 同 Input：省略 `id` 的 `<Checkbox>` 避免非受控信号键 `{id}__checkbox` 撞车。
 static CHECKBOX_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
+/// 同 Checkbox：省略 `id` 的 `<Switch>` 避免非受控信号键 `{id}__switch` 撞车。
+static SWITCH_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn expr_as_u16(value: &Expr) -> Option<u16> {
     match value {
@@ -673,6 +675,11 @@ fn expand_node(
                     .attributes
                     .iter()
                     .any(|(k, _)| k == "options");
+            let radio_group_is_compound = name_str == "RadioGroup"
+                && !el
+                    .attributes
+                    .iter()
+                    .any(|(k, _)| k == "options");
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -682,6 +689,7 @@ fn expand_node(
                 || name_str == "SelectContent"
                 || combobox_is_compound
                 || name_str == "ComboboxContent"
+                || radio_group_is_compound
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Fragment"
@@ -809,6 +817,73 @@ fn expand_node(
                             #placeholder_ts,
                             #class_ts,
                             #content_class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if radio_group_is_compound {
+                    // solid-ui / ShadCN compound RadioGroup：先 provide context 再构建 Item。
+                    let id_expr = get_attr("id");
+                    let value_expr = get_attr("value")
+                        .or_else(|| get_attr("selected"));
+                    let default_expr = get_attr("default_value")
+                        .or_else(|| get_attr("defaultValue"));
+                    let disabled_expr = get_attr("disabled");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:RadioGroup#{}", file!(), line!(), #idx) }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { (#d).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    return quote! {
+                        rui::components::radio_group_scope(
+                            #id_ts,
+                            #value_ts,
+                            #default_ts,
+                            #disabled_ts,
                             || #child_el,
                         )
                     };
@@ -1939,8 +2014,8 @@ fn expand_node(
                             base_calls.push(quote! { b = b.#method_ident(#final_value); });
                         }
                     } else {
-                        // Checkbox `checked` 是 `Option<Signal<bool>>`，不能走全局 boolish。
-                        if name_str == "Checkbox"
+                        // Checkbox / Switch `checked` 是 `Option<Signal<bool>>`，不能走全局 boolish。
+                        if (name_str == "Checkbox" || name_str == "Switch")
                             && matches!(attr_name, "checked" | "checked_signal" | "checkedSignal")
                         {
                             prop_names.push(syn::Ident::new("checked", attr.span()));
@@ -1958,6 +2033,9 @@ fn expand_node(
                                 // ShadCN / HTML 别名
                                 "defaultChecked" => {
                                     syn::Ident::new("default_checked", attr.span())
+                                }
+                                "defaultValue" => {
+                                    syn::Ident::new("default_value", attr.span())
                                 }
                                 "onCheckedChange" => syn::Ident::new("on_click", attr.span()),
                                 "ariaInvalid" | "aria_invalid" => {
@@ -2024,6 +2102,14 @@ fn expand_node(
                     prop_names.push(syn::Ident::new("id", name_ident.span()));
                     prop_values.push(quote! {
                         format!("__rui_checkbox_auto_{}", #seq)
+                    });
+                }
+
+                if name_str == "Switch" && !prop_names.iter().any(|p| *p == "id") {
+                    let seq = SWITCH_RSX_ANON_SEQ.fetch_add(1, Ordering::Relaxed);
+                    prop_names.push(syn::Ident::new("id", name_ident.span()));
+                    prop_values.push(quote! {
+                        format!("__rui_switch_auto_{}", #seq)
                     });
                 }
 

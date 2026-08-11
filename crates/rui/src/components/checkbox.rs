@@ -183,6 +183,7 @@ fn is_caption_text_leaf(el: &Element) -> bool {
             .is_some_and(|s| !s.is_empty())
         && el.checkbox_sync.is_none()
         && el.switch_checked_sync.is_none()
+        && el.radio_selected_sync.is_none()
         && el.on_click.is_none()
         && el.focus_id.as_deref().map_or(true, |s| s.is_empty())
         && el.attrs.get("accesskit_role").map(|s| s.as_str()) != Some("label")

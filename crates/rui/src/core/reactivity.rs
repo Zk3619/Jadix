@@ -1592,6 +1592,7 @@ where
 pub use crate::style::{
     tick_animations, use_scrollbar_visibility_spring, use_spring, use_ui_transition_cubic,
     use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState, Spring, SpringState,
+    any_ui_animation_active,
 };
 
 #[cfg(test)]

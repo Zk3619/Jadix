@@ -192,6 +192,21 @@ pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
     lifecycle::run(app_builder);
 }
 
+/// Enable mouse primary-button drag-to-scroll (content pan) on scroll viewports.
+///
+/// Default is **`false`**: desktop expects wheel / scrollbar; content pan is for touch.
+/// Touch primary-finger pan is always enabled regardless of this flag.
+///
+/// Call before or after [`run`]; takes effect on the next pointer-down.
+pub fn set_mouse_content_pan_enabled(enabled: bool) {
+    MOUSE_CONTENT_PAN.with(|c| c.set(enabled));
+}
+
+/// Whether mouse drag pans scroll content (see [`set_mouse_content_pan_enabled`]).
+pub fn mouse_content_pan_enabled() -> bool {
+    MOUSE_CONTENT_PAN.with(|c| c.get())
+}
+
 /// Set pointer capture to the element with this `focus_id` (DOM `setPointerCapture` analogue).
 pub fn set_pointer_capture(focus_id: impl Into<String>) {
     POINTER_CAPTURE.with(|c| *c.borrow_mut() = Some(focus_id.into()));
@@ -207,6 +222,8 @@ pub fn pointer_capture_id() -> Option<String> {
 }
 
 thread_local! {
+    /// Mouse left-drag content pan; off by default (desktop). Touch still pans.
+    static MOUSE_CONTENT_PAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static POINTER_CAPTURE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static FILE_DROP_HANDLER: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(Vec<std::path::PathBuf>)>>>> =
         const { std::cell::RefCell::new(None) };

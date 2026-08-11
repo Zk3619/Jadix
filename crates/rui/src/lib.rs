@@ -130,6 +130,7 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
 pub use app::damage::{
     full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
 };
+pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled};
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
     visible_item_range, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,

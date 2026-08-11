@@ -472,6 +472,10 @@ impl super::App {
                 None
             };
 
+        // Slider 拖拽在 drop(state_borrow) 之后再 set Signal，避免 bind_text →
+        // try_update_element_by_template_id 与本处 borrow_mut 重入。
+        let slider_drag_x = x;
+
         let drag_sel_update: Option<(String, usize, usize)> = if self.left_button_down
             && self.scrollbar_drag.is_none()
         {
@@ -592,6 +596,11 @@ impl super::App {
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
 
+        let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
+        if slider_dragging {
+            window.request_redraw();
+        }
+
         // Apply hover state after releasing the state borrow.
         // 1) Clear previous axis-hover if changed
         let mut hover_state_changed = false;
@@ -690,6 +699,7 @@ impl super::App {
             && self.input_drag_rest.is_none()
             && self.label_drag_key.is_none()
             && self.drag_reorder.is_none()
+            && !crate::components::slider::is_slider_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -1017,7 +1027,11 @@ impl super::App {
             }
 
             // Arm a potential content pan (deepest scroll viewport under the pointer).
-            if self.scrollbar_drag.is_none()
+            // Touch always; mouse only when `set_mouse_content_pan_enabled(true)`.
+            let allow_content_pan =
+                self.primary_touch_id.is_some() || super::mouse_content_pan_enabled();
+            if allow_content_pan
+                && self.scrollbar_drag.is_none()
                 && self.drag_reorder.is_none()
                 && self.textarea_resize_drag.is_none()
                 && input_drag.is_none()
@@ -1118,6 +1132,10 @@ impl super::App {
                 &mut pev,
                 super::pointer_events::PointerKind::Down,
             );
+            // Slider / other controls that stop_propagation must not also pan the scroll parent.
+            if pev.is_consumed() {
+                self.content_scroll_drag = None;
+            }
             if detail >= 2 && !pev.is_consumed() {
                 let mut pev2 =
                     super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
@@ -1195,6 +1213,7 @@ impl super::App {
             self.left_button_down = false;
             self.scrollbar_drag = None;
             self.textarea_resize_drag = None;
+            crate::components::slider::clear_slider_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -1580,12 +1599,14 @@ impl super::App {
         self.last_frame_time = now;
         // Avoid α→0 on duplicate redraws / timer quirks; cap so a long pause does not “teleport”.
         let scroll_dt = dt.clamp(1.0 / 240.0, 0.08);
+        // UI spring/cubic 与滚动共用夹紧口径（`tick_animations` 内部亦会再夹一次）。
+        let anim_dt = scroll_dt;
 
         let window = state.window.clone();
         drop(state_borrow);
 
-        let anim_tick = crate::style::tick_animations(dt);
-        let nav_animating = crate::app::navigator::tick_active(dt);
+        let anim_tick = crate::style::tick_animations(anim_dt);
+        let nav_animating = crate::app::navigator::tick_active(anim_dt);
         if anim_tick.any || nav_animating {
             window.request_redraw();
         }
@@ -2467,7 +2488,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Keep the redraw pump alive only while content is still animating.
                 // For the scrollbar `visible_until` hold window, sleep until the deadline via
                 // `about_to_wait` + WaitUntil (one wake starts fade-out) instead of ~1.5s of frames.
-                if smooth_scroll_animating || scrollbar_fade_animating {
+                // Switch 等 chrome 在本帧 render/sync 里才 `set` tween（晚于上方 tick），
+                // 必须在此用 `any_ui_animation_active` 补泵，否则停在第 0 帧。
+                if smooth_scroll_animating
+                    || scrollbar_fade_animating
+                    || crate::style::any_ui_animation_active()
+                {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
                     let earliest = self

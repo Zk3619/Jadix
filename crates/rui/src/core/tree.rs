@@ -294,10 +294,12 @@ pub struct Element {
     pub button_hover_paint: Option<ButtonHoverPaint>,
     /// 若存在，则每帧由 [`crate::components::internal::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
     pub input_paint_sync: Option<TextEditPaintSync>,
-    /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and updates track bg + thumb alignment.
+    /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and animates track bg + thumb translate.
     pub switch_checked_sync: Option<Signal<bool>>,
     /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.
     pub checkbox_sync: Option<Signal<bool>>,
+    /// Radio item control: group [`Signal<String>`] + attrs `rui_radio_value`；见 `sync_radio_checked_subtree`。
+    pub radio_selected_sync: Option<Signal<String>>,
     /// Opt-in keyboard focus ring ([`crate::style::sync_focus_ring_subtree`]); not used by Button / Input.
     pub focus_ring: bool,
     /// Generic component-owned signal synchronization; see [`ReactiveSync`].
@@ -521,6 +523,7 @@ impl Element {
             input_paint_sync: None,
             switch_checked_sync: None,
             checkbox_sync: None,
+            radio_selected_sync: None,
             focus_ring: false,
             reactive_sync: None,
             image_texture: None,

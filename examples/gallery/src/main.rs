@@ -972,7 +972,7 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
         <MyCard title="8) Switch · Checkbox · Separator">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Checkbox: embed text / Label inside, or sibling Label with Solid id / for. Tab / Space on the box."
+                    "Checkbox / Switch: embed text / Label inside, or sibling Label with Solid id / for. Tab / Space on the control."
                 </Label>
 
                 <Separator />
@@ -1042,9 +1042,45 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
 
                 <Separator />
 
+                <Label font_weight="700" text_size="0.875rem">"Switch (solid-ui layout)"</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Embed text / Label inside, or sibling Label with Solid id / for. Thumb slides with a short transition."
+                </Label>
+
+                <Switch>"Airplane Mode (embedded text)"</Switch>
+
+                <Switch>
+                    <Label text_size="0.875rem" font_weight="500">
+                        "Airplane Mode (embedded Label)"
+                    </Label>
+                </Switch>
+
+                <HStack gap="0.5rem" items="center">
+                    <Switch id="gallery_airplane" />
+                    <Label for="gallery_airplane" text_size="0.875rem" font_weight="500">
+                        "Airplane Mode"
+                    </Label>
+                </HStack>
+
+                <HStack gap="0.5rem" items="center">
+                    <Switch id="gallery_wifi" defaultChecked=true />
+                    <Label for="gallery_wifi" text_size="0.875rem" font_weight="500">
+                        "Wi-Fi (default on)"
+                    </Label>
+                </HStack>
+
+                <HStack gap="0.5rem" items="center">
+                    <Switch id="gallery_switch_disabled" disabled=true />
+                    <Label for="gallery_switch_disabled" text_size="0.875rem" color="muted-foreground">
+                        "Do not disturb"
+                    </Label>
+                </HStack>
+
+                <Separator />
+
                 <Label font_weight="700" text_size="0.875rem">"Switch · controlled Checkbox"</Label>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
-                    { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
+                    <Switch id="hw_demo_switch" checked={sw} />
                     <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
                     <Button variant="outline" size="sm" on_click={move || sw.set(!sw.get())}>
                         "Flip switch"
@@ -1078,27 +1114,62 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
 #[component]
 fn RadioSliderShowcase() -> rui::core::tree::Element {
     let tier = use_signal("gallery_radio_tier", || "free".to_string());
+    let notify = use_signal("gallery_radio_notify", || "all".to_string());
+    let tier_opts = use_signal("gallery_radio_tier_opts", || "pro".to_string());
     let level = use_signal("gallery_slider_level", || 0.4_f32);
 
     ui! {
         <MyCard title="9) Radio group · Slider">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Radio / Slider 自带组件级响应式边界；下方标签用自动 bind_text 展示受控值。"
+                    "RadioGroup: solid-ui circular items. Embed text / ItemLabel, or options builder. Tab / Space on the control."
                 </Label>
+
+                <Label font_weight="700" text_size="0.875rem">"RadioGroup (compound RSX)"</Label>
+                <RadioGroup id="gallery_radio_tier" value={tier} default_value="free">
+                    <RadioGroupItem value="free">"Free"</RadioGroupItem>
+                    <RadioGroupItem value="pro">
+                        <RadioGroupItemLabel>"Pro"</RadioGroupItemLabel>
+                    </RadioGroupItem>
+                    <RadioGroupItem value="team">"Team"</RadioGroupItem>
+                </RadioGroup>
+                <Label text_size="0.875rem">{ format!("Tier: {}", tier.get()) }</Label>
+
+                <Separator />
+
+                <Label font_weight="700" text_size="0.875rem">"Notifications (default + disabled)"</Label>
+                <RadioGroup id="gallery_radio_notify" value={notify} default_value="all">
+                    <RadioGroupItem value="all">"All new messages"</RadioGroupItem>
+                    <RadioGroupItem value="mentions">"Direct messages and mentions"</RadioGroupItem>
+                    <RadioGroupItem value="none" disabled=true>"Nothing"</RadioGroupItem>
+                </RadioGroup>
+                <Label text_size="0.875rem">{ format!("notify: {}", notify.get()) }</Label>
+
+                <Separator />
+
+                <Label font_weight="700" text_size="0.875rem">"Builder · options"</Label>
                 { Element::from(
-                    radio_group("gallery:radio_tier")
-                        .selected_signal(tier)
-                        .default_value("free")
+                    radio_group("gallery:radio_options")
+                        .value_signal(tier_opts)
+                        .default_value("pro")
                         .options(vec![
                             ("free".to_string(), "Free".to_string()),
                             ("pro".to_string(), "Pro".to_string()),
                             ("team".to_string(), "Team".to_string()),
                         ]),
                 ) }
-                <Label text_size="0.875rem">{ format!("Tier: {}", tier.get()) }</Label>
-                { Element::from(slider("gallery:slider").value_signal(level)) }
-                <Label text_size="0.875rem">{ format!("Level: {:.2}", level.get()) }</Label>
+                <Label text_size="0.875rem">{ format!("tier_opts: {}", tier_opts.get()) }</Label>
+
+                <Separator />
+
+                <Label font_weight="700" text_size="0.875rem">"Slider (solid-ui)"</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Click or drag the track; arrow keys step. Track / fill / thumb match solid-ui."
+                </Label>
+                <Slider id="gallery:slider" value={level} default_value={0.4} />
+                <Label text_size="0.875rem">{ format!("Level: {:.0}%", level.get() * 100.0) }</Label>
+                <Slider id="gallery:slider_disabled" defaultValue={0.6} disabled=true />
+                <Label text_size="0.75rem" color="muted-foreground">"Disabled"</Label>
             </VStack>
         </MyCard>
     }

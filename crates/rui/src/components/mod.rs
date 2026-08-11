@@ -137,7 +137,11 @@ pub use navigation_menu::{
 };
 pub use popover::{popover_panel, PopoverBuilder};
 pub use progress::{progress, Progress, ProgressBuilder, ProgressProps};
-pub use radio_group::{radio_group, RadioGroup, RadioGroupBuilder, RadioGroupProps};
+pub use radio_group::{
+    radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder,
+    RadioGroupCtx, RadioGroupItem, RadioGroupItemLabel, RadioGroupItemLabelProps,
+    RadioGroupItemProps, RadioGroupProps,
+};
 pub use resizable::{resizable, ResizableBuilder};
 pub use scroll_area::{scroll_area, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps};
 pub use scroll_viewport::{

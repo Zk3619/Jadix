@@ -188,7 +188,9 @@ impl CubicTween {
 
     pub fn set(&self, target: f32) {
         let mut s = self.0.borrow_mut();
-        if (s.target - target).abs() < 1e-5 && !s.active {
+        // 目标未变时不要重置 `elapsed`：chrome sync 每帧会再 `set` 同一目标，
+        // 若此处重启，有效时长会远长于 `duration`（asymptotic crawl）。
+        if (s.target - target).abs() < 1e-5 {
             return;
         }
         s.from_value = s.value;
@@ -221,6 +223,11 @@ pub struct AnimationTick {
 }
 
 pub fn tick_animations(dt: f32) -> AnimationTick {
+    // 与滚动同口径：首屏连帧 / Wait 后首帧的 raw `dt` 常为 ≈0 或数秒。
+    // 不夹紧时：≈0 → 动画看似失效；过大 → 一帧瞬跳到目标。
+    const DT_MIN: f32 = 1.0 / 240.0;
+    const DT_MAX: f32 = 0.08;
+    let dt = dt.clamp(DT_MIN, DT_MAX);
     const SPRING_SETTLE_POS_EPS: f32 = 0.01;
     const SPRING_SETTLE_VEL_EPS: f32 = 0.01;
     let mut spring_any_running = false;
@@ -325,6 +332,31 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
     }
 }
 
+/// 是否仍有未 settle 的 spring / cubic（不推进时间）。
+/// chrome sync（Switch 等）常在本帧 `tick_animations` **之后**才 `set` 目标；
+/// render 结束后用此查询补 `request_redraw`，避免动画停在第 0 帧。
+pub fn any_ui_animation_active() -> bool {
+    const SPRING_SETTLE_POS_EPS: f32 = 0.01;
+    const SPRING_SETTLE_VEL_EPS: f32 = 0.01;
+    let spring_busy = ANIMATIONS.with(|anim| {
+        anim.borrow().iter().any(|w| {
+            w.upgrade().is_some_and(|s| {
+                let s = s.borrow();
+                (s.current - s.target).abs() >= SPRING_SETTLE_POS_EPS
+                    || s.velocity.abs() >= SPRING_SETTLE_VEL_EPS
+            })
+        })
+    });
+    if spring_busy {
+        return true;
+    }
+    CUBIC_TWEENS.with(|anim| {
+        anim.borrow()
+            .iter()
+            .any(|w| w.upgrade().is_some_and(|s| s.borrow().active))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +387,72 @@ mod tests {
         assert!(spring.0.borrow().velocity.abs() < 0.001);
         let tick = tick_animations(1.0 / 60.0);
         assert!(!tick.any, "snapped spring must not keep requesting redraw");
+    }
+
+    #[test]
+    fn cubic_set_same_target_does_not_restart_elapsed() {
+        let tw = CubicTween::new_ui_transition(0.0);
+        tw.set(1.0);
+        let _ = tick_animations(0.05);
+        let elapsed_mid = tw.0.borrow().elapsed;
+        assert!(elapsed_mid > 0.04, "expected ~50ms progress, got {elapsed_mid}");
+        // Chrome sync 风格：每帧再 set 同一目标
+        tw.set(1.0);
+        tw.set(1.0);
+        assert!(
+            (tw.0.borrow().elapsed - elapsed_mid).abs() < 1e-6,
+            "same-target set must not reset elapsed"
+        );
+        // 再走完剩余 ≈100ms，应在 150ms 窗口内 settle
+        for _ in 0..8 {
+            let _ = tick_animations(0.02);
+        }
+        assert!(!tw.0.borrow().active);
+        assert!((tw.peek() - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn tick_clamps_near_zero_dt_so_first_frames_still_advance() {
+        let tw = CubicTween::new_ui_transition(0.0);
+        tw.set(1.0);
+        // 首屏连帧 / 重复 RedrawRequested 常见 raw dt≈0
+        let _ = tick_animations(0.0);
+        let elapsed = tw.0.borrow().elapsed;
+        assert!(
+            elapsed >= 1.0 / 240.0 - 1e-6,
+            "near-zero dt must still advance (got {elapsed})"
+        );
+        assert!(tw.0.borrow().active);
+        assert!(any_ui_animation_active());
+    }
+
+    #[test]
+    fn tick_clamps_huge_dt_so_idle_wake_does_not_teleport() {
+        let tw = CubicTween::new_ui_transition(0.0);
+        tw.set(1.0);
+        // Wait 数秒后首帧：未夹紧会一次走完 150ms
+        let _ = tick_animations(2.0);
+        assert!(
+            tw.0.borrow().active,
+            "huge dt must not finish a 150ms tween in one tick"
+        );
+        let v = tw.peek();
+        assert!(
+            v > 0.01 && v < 0.99,
+            "expected mid-tween after clamped step, got {v}"
+        );
+    }
+
+    #[test]
+    fn spring_huge_dt_does_not_settle_in_one_tick() {
+        let spring = Spring::new_ui_transition(0.0);
+        spring.set(1.0);
+        let _ = tick_animations(2.0);
+        let cur = spring.peek();
+        assert!(
+            (cur - 1.0).abs() > 0.05,
+            "hover spring must not teleport on huge dt (got {cur})"
+        );
+        assert!(any_ui_animation_active());
     }
 }

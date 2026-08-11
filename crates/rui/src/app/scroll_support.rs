@@ -17,7 +17,9 @@ pub(super) struct ScrollbarDragState {
     pub(super) grab_offset: f32,
 }
 
-/// Primary-pointer content pan over a scroll viewport (touch / mouse drag → fling).
+/// Primary-pointer content pan over a scroll viewport (touch; optional mouse → fling).
+///
+/// Mouse arming is gated by [`crate::app::mouse_content_pan_enabled`] (default off).
 #[derive(Clone, Debug)]
 pub(super) struct ContentScrollDrag {
     pub(super) rest: String,

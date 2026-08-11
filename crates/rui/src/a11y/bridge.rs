@@ -77,6 +77,9 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "button" => Some(Role::Button),
         "checkbox" => Some(Role::CheckBox),
         "switch" => Some(Role::Switch),
+        "radio" | "radiobutton" | "radio_button" => Some(Role::RadioButton),
+        "radiogroup" | "radio_group" => Some(Role::RadioGroup),
+        "slider" => Some(Role::Slider),
         "textinput" | "text_input" | "textfield" => Some(Role::TextInput),
         "label" => Some(Role::Label),
         "group" => Some(Role::Group),
@@ -111,6 +114,7 @@ fn should_be_accesskit_node(el: &Element) -> bool {
         || has_a11y_name_desc_live_attr(el)
         || el.switch_checked_sync.is_some()
         || el.checkbox_sync.is_some()
+        || el.radio_selected_sync.is_some()
 }
 
 fn parse_live(raw: &str) -> Option<Live> {
@@ -139,6 +143,8 @@ fn infer_role(el: &Element, fid: Option<&str>) -> Role {
         Role::Switch
     } else if el.checkbox_sync.is_some() {
         Role::CheckBox
+    } else if el.radio_selected_sync.is_some() {
+        Role::RadioButton
     } else if fid.is_some_and(|f| {
         f.starts_with(INPUT_FOCUS_PREFIX) || f.starts_with(TEXTAREA_FOCUS_PREFIX)
     }) {
@@ -258,7 +264,8 @@ fn is_plain_text_name_leaf(el: &Element) -> bool {
     {
         return false;
     }
-    if el.switch_checked_sync.is_some() || el.checkbox_sync.is_some() {
+    if el.switch_checked_sync.is_some() || el.checkbox_sync.is_some() || el.radio_selected_sync.is_some()
+    {
         return false;
     }
     el.children.iter().all(is_plain_text_name_leaf_or_empty)
@@ -274,6 +281,7 @@ fn is_plain_text_name_leaf_or_empty(el: &Element) -> bool {
         && !has_a11y_name_desc_live_attr(el)
         && el.switch_checked_sync.is_none()
         && el.checkbox_sync.is_none()
+        && el.radio_selected_sync.is_none()
         && el.children.iter().all(is_plain_text_name_leaf_or_empty)
 }
 
@@ -304,11 +312,16 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
     // 已有 labelledby 时，名称交给关联 Label（避免勾选 glyph 当可读名）。
     let has_labelled_by = el.attrs.contains_key("accesskit_labelled_by")
         || el.attrs.contains_key("aria-labelledby");
-    if has_labelled_by && matches!(role, Role::CheckBox | Role::Switch | Role::TextInput) {
+    if has_labelled_by
+        && matches!(
+            role,
+            Role::CheckBox | Role::Switch | Role::RadioButton | Role::TextInput
+        )
+    {
         return None;
     }
 
-    if matches!(role, Role::CheckBox | Role::Switch) {
+    if matches!(role, Role::CheckBox | Role::Switch | Role::RadioButton) {
         let cleaned = collect_visible_text_excluding_lucide_root(el);
         if !cleaned.is_empty() {
             return Some(cleaned);
@@ -346,6 +359,7 @@ fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bo
     if !is_root
         && (el.checkbox_sync.is_some()
             || el.switch_checked_sync.is_some()
+            || el.radio_selected_sync.is_some()
             || el.on_click.is_some())
     {
         return;
@@ -469,6 +483,17 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
         });
     } else if let Some(s) = el.checkbox_sync {
         node.set_toggled(if s.get() {
+            Toggled::True
+        } else {
+            Toggled::False
+        });
+    } else if let Some(s) = el.radio_selected_sync {
+        let item = el
+            .attrs
+            .get("rui_radio_value")
+            .map(|v| v.as_str())
+            .unwrap_or("");
+        node.set_toggled(if s.get() == item {
             Toggled::True
         } else {
             Toggled::False
