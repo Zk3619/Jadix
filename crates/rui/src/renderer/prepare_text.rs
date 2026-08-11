@@ -359,8 +359,9 @@ fn node_shape_hash(
     text.hash(&mut h);
     ((scaled_size * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     ((line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
-    ((scaled_w / 8.0).round().clamp(0.0, (u16::MAX as f32) / 8.0) as u16).hash(&mut h);
-    ((scaled_h / 8.0).round().clamp(0.0, (u16::MAX as f32) / 8.0) as u16).hash(&mut h);
+    // 1px wrap/height buckets so width changes miss cache (no per-frame reshape on hit).
+    ((scaled_w).round().clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
+    ((scaled_h).round().clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     weight.hash(&mut h);
     family_hash(family).hash(&mut h);
     align_to_u8(align).hash(&mut h);
@@ -1632,27 +1633,45 @@ pub fn prepare_text_frame(
                 info.width.max(1.0)
             };
             let metrics = crate::text::layout(prepared, layout_w);
-            let soft_w = (layout_w * ui_scale).max(1.0);
-            // Input/Textarea: buffer height follows *content* only. Never `.max(scaled_h)` —
-            // a stretched leaf (viewport-tall) would make soft_h track textarea resize.
+            let soft_w_target = (layout_w * ui_scale).max(1.0);
+            let logical_lh = line_height / ui_scale.max(0.001);
+            // Bidi/emoji ink can exceed the leaf when shaped at full width (gallery: 240→253).
+            // Reuse the layout-warmed FIT_CACHE wrap width — cache hit is cheap; shaped_cache hit
+            // still skips reshape on scroll. Do NOT run extra corrective tighten here.
+            let (soft_w, fit_content_h) = if !nowrap && !info.text.is_ascii() {
+                let fit = crate::text::glyphon_fit_soft_wrap(
+                    info.text.as_str(),
+                    st.size,
+                    font_weight,
+                    logical_lh,
+                    layout_w,
+                );
+                (
+                    (fit.wrap_width * ui_scale).max(1.0),
+                    fit.line_count.max(1) as f32 * line_height,
+                )
+            } else {
+                (
+                    soft_w_target,
+                    metrics.line_count.max(1) as f32 * line_height,
+                )
+            };
             let hard_lines = info.text.split('\n').count().max(1) as f32;
             let ink_fudge = if is_input_text {
                 crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
             } else {
                 2.0
             };
-            let content_h = (metrics.height * ui_scale)
+            let content_h = fit_content_h
+                .max(metrics.height * ui_scale)
                 .max(hard_lines * line_height)
                 .max(line_height);
-            // Input/Textarea: never couple soft_h to leaf/chrome (`scaled_h`). Gallery
-            // symptom: drag-taller reveals lines 1→2→3 while empty grows — a short
-            // height_opt drops layout_runs, chrome bg reads as a "white cover".
             let soft_h = if is_input_text {
                 content_h + ink_fudge
             } else {
+                // Prefer the laid-out leaf height (fit-aware) over segment arithmetic.
                 content_h.max(scaled_h) + ink_fudge
             };
-            let _ = metrics.line_count;
             let _ = metrics.max_line_width;
             (soft_w, soft_h)
         } else {
@@ -1756,8 +1775,9 @@ pub fn prepare_text_frame(
                 }
             }
             let measured_text_w = if cache_hit {
+                // Fast path: do not reshape on hit. Scroll frames reuse the buffer.
+                // Width is part of `node_shape_hash` (1px); a real width change misses cache.
                 if is_input_text {
-                    // Pin unbounded / content-tall window + clear scroll on hit.
                     entry.buffer.set_size(
                         unsafe { &mut *text_renderer.font_system },
                         Some(buffer_soft_w),
@@ -1857,6 +1877,8 @@ pub fn prepare_text_frame(
                     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
                 }
                 buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                // Keep wrap == leaf width. Shrinking wrap to chase ink reflows UAX#9 across
+                // soft-break boundaries (gallery bidi: Arabic/Hebrew/digits swap lines).
                 if is_input_text {
                     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
                 }
@@ -1878,10 +1900,8 @@ pub fn prepare_text_frame(
                 pixel_size: emoji_paint_pixel_size(scaled_size),
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
-                // Match `node_shape_hash` width quantization so soft-wrap rebuilds quads.
-                wrap_width_q: ((scaled_w / 8.0)
-                    .round()
-                    .clamp(0.0, (u16::MAX as f32) / 8.0) as u16),
+                // Actual buffer wrap width (may be < leaf for bidi ink fit).
+                wrap_width_q: (buffer_soft_w.round().clamp(0.0, u16::MAX as f32) as u16),
             })
         } else {
             None

@@ -869,8 +869,8 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Use this section to verify multilingual shaping, emoji fallback, combining marks, punctuation width, and bidirectional text."
                 </Label>
-                <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%">
-                    <VStack gap="0.5rem" w="100%">
+                <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%" min_w="0">
+                    <VStack gap="0.5rem" w="100%" min_w="0">
                         <Label w="100%" font_weight="700">"English / Latin"</Label>
                         <Label w="100%" leading="normal">
                             "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. 0123456789"
@@ -921,7 +921,7 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                             "Zero-width joiner: 👩‍🚀 👨‍🔬 👩‍💻 | Combining marks: A\u{0301} e\u{0301} o\u{0302} n\u{0303}"
                         </Label>
                         <Label w="100%" leading="normal">
-                            "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789"
+                            "Bidirectional sample: English 123 - \u{2068}العربية\u{2060}٤٥٦\u{2069}\u{200B}- \u{2068}עברית\u{2060}789\u{2069}"
                         </Label>
                         <Label w="100%" leading="normal" id="gal-rtl-emoji-mixed">
                             "RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例"

@@ -107,6 +107,7 @@ enum LayoutFsSlot {
 /// Drop cached segment widths after fonts are (lazily) added so measure/render stay aligned.
 pub fn invalidate_prepare_cache() {
     PREPARE_CACHE.with(|c| c.borrow_mut().clear());
+    FIT_CACHE.with(|c| c.borrow_mut().clear());
 }
 
 /// Point layout measure at the renderer's [`FontSystem`] so fontdb / coverage stay single-sourced.
@@ -428,6 +429,9 @@ pub fn prepare_with_family(
 /// Soft-wrap line count from a glyphon [`Buffer`] at `avail_width` (logical px), using the
 /// same family / weight / shaping rules as [`measure_run_width`].
 ///
+/// Uses [`glyphon_fit_soft_wrap`]: cosmic-text may emit runs wider than the buffer for
+/// bidi / mixed-script lines; we tighten wrap width until ink fits `avail_width`.
+///
 /// Used by WP-2.1 `text_align_*` tests to assert measure [`layout_lines`] ≡ paint soft-wrap.
 pub fn glyphon_soft_wrap_line_count(
     text: &str,
@@ -436,10 +440,84 @@ pub fn glyphon_soft_wrap_line_count(
     line_height: f32,
     avail_width: f32,
 ) -> usize {
-    if text.is_empty() {
-        return 0;
+    glyphon_fit_soft_wrap(text, size, weight, line_height, avail_width).line_count
+}
+
+/// Result of shaping with a wrap width tightened until glyph ink fits `target_width`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlyphonFitSoftWrap {
+    /// Buffer wrap width actually used (≤ target when bidi overflow required shrink).
+    pub wrap_width: f32,
+    pub line_count: usize,
+    pub max_ink: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct FitKey {
+    text_hash: u64,
+    size_q: u16,
+    line_height_q: u16,
+    weight: u16,
+    target_q: u16,
+}
+
+thread_local! {
+    static FIT_CACHE: RefCell<HashMap<FitKey, GlyphonFitSoftWrap>> =
+        RefCell::new(HashMap::new());
+}
+
+fn buffer_max_ink(buffer: &Buffer) -> (usize, f32) {
+    let mut n = 0usize;
+    let mut m = 0.0_f32;
+    for run in buffer.layout_runs() {
+        n += 1;
+        let gr = run
+            .glyphs
+            .iter()
+            .map(|g| g.x + g.w)
+            .fold(0.0_f32, f32::max);
+        m = m.max(gr).max(run.line_w);
     }
-    with_layout_font_system(|font_system| {
+    (n, m)
+}
+
+fn fit_cache_key(text: &str, size: f32, weight: u16, line_height: f32, target: f32) -> FitKey {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    FitKey {
+        text_hash: h.finish(),
+        size_q: (size * 10.0).clamp(0.0, u16::MAX as f32) as u16,
+        line_height_q: (line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16,
+        weight,
+        // 1px buckets — scroll/resize stability without thrashing every subpixel.
+        target_q: target.round().clamp(0.0, u16::MAX as f32) as u16,
+    }
+}
+
+/// Shape `text` so every layout run's ink stays within `target_width`.
+///
+/// Cosmic-text soft-wrap can leave bidi / emoji-mixed runs wider than the buffer (gallery:
+/// avail=240 → line_w≈253). Results are cached — measure + prepare must not reshape 12×/frame.
+pub fn glyphon_fit_soft_wrap(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    target_width: f32,
+) -> GlyphonFitSoftWrap {
+    if text.is_empty() {
+        return GlyphonFitSoftWrap {
+            wrap_width: target_width.max(1.0),
+            line_count: 0,
+            max_ink: 0.0,
+        };
+    }
+    let target = target_width.max(1.0);
+    let key = fit_cache_key(text, size, weight, line_height, target);
+    if let Some(hit) = FIT_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let fitted = with_layout_font_system(|font_system| {
         let family = crate::renderer::text_hit::best_font_family(font_system);
         let weight =
             crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
@@ -457,15 +535,8 @@ pub fn glyphon_soft_wrap_line_count(
                 crate::renderer::emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
             );
         }
-        let avail = avail_width.max(1.0);
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
-        // Tall window so soft-wrap produces multiple runs without vertical clipping.
-        buffer.set_size(
-            font_system,
-            Some(avail),
-            Some((line_height * 128.0).max(line_height + 2.0)),
-        );
         buffer.set_text(
             font_system,
             layout.as_ref(),
@@ -474,9 +545,45 @@ pub fn glyphon_soft_wrap_line_count(
                 .weight(glyphon::fontdb::Weight(weight)),
             shaping,
         );
+        let tall = (line_height * 128.0).max(line_height + 2.0);
+        // Mild first-pass shrink only — aggressive multi-step shrink scrambled bidi breaks.
+        buffer.set_size(font_system, Some(target), Some(tall));
         buffer.shape_until_scroll(font_system, false);
-        buffer.layout_runs().count()
-    })
+        let (mut line_count, mut max_ink) = buffer_max_ink(&buffer);
+        let mut wrap_w = target;
+        if max_ink > target + 0.5 && target > 8.0 {
+            let over = (max_ink - target).max(1.0).min((target * 0.15).max(1.0));
+            wrap_w = (target - over).max(target * 0.85).max(1.0);
+            buffer.set_size(font_system, Some(wrap_w), Some(tall));
+            buffer.shape_until_scroll(font_system, false);
+            let (n, ink) = buffer_max_ink(&buffer);
+            line_count = n;
+            max_ink = ink;
+            // Second correction only if still badly overflowing.
+            if max_ink > target + 1.0 {
+                let over2 = (max_ink - target).max(1.0).min((target * 0.2).max(1.0));
+                wrap_w = (wrap_w - over2).max(target * 0.75).max(1.0);
+                buffer.set_size(font_system, Some(wrap_w), Some(tall));
+                buffer.shape_until_scroll(font_system, false);
+                let (n2, ink2) = buffer_max_ink(&buffer);
+                line_count = n2;
+                max_ink = ink2;
+            }
+        }
+        GlyphonFitSoftWrap {
+            wrap_width: wrap_w,
+            line_count,
+            max_ink,
+        }
+    });
+    FIT_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() > 2048 {
+            cache.clear();
+        }
+        cache.insert(key, fitted);
+    });
+    fitted
 }
 
 /// Soft-wrap prepared segments into concrete lines (segment ranges + concatenated text).
@@ -671,7 +778,17 @@ pub fn measure_leaf(
         width.max(1.0)
     };
     let metrics = layout(&prepared, layout_w);
-    let height = metrics.height.max(line_height);
+    // Segment arithmetic under-counts soft-wrap lines for bidi/emoji (glyphon may need a
+    // tighter wrap width → more runs). Prefer fitted glyphon height so the leaf is tall
+    // enough and paint does not vertically clip mid-run glyphs.
+    let height = if !nowrap && !text.is_ascii() && layout_w > prepared.max_segment_width + 1.0
+    {
+        let fit = glyphon_fit_soft_wrap(text, size, weight, line_height, layout_w);
+        let h = line_height * (fit.line_count.max(1) as f32);
+        h.max(metrics.height).max(line_height)
+    } else {
+        metrics.height.max(line_height)
+    };
     (width, height)
 }
 
@@ -721,6 +838,27 @@ mod tests {
     }
 
     #[test]
+    fn measure_leaf_min_content_probe_returns_max_segment() {
+        // `AvailableSpace::MinContent` is forwarded as avail_width=Some(0) from layout_tree;
+        // that must yield max_segment_width, not the full intrinsic line.
+        let text = "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let intrinsic = intrinsic_width(&prepared);
+        let (w, _) = measure_leaf(text, size, 500, lh, None, Some(0.0), 0.0, false);
+        assert!(
+            (w - prepared.max_segment_width).abs() < 1.0,
+            "MinContent probe width {w} should be max_seg {}, intrinsic={intrinsic}",
+            prepared.max_segment_width
+        );
+        assert!(
+            w + 1.0 < intrinsic,
+            "min-content {w} must be narrower than intrinsic {intrinsic}"
+        );
+    }
+
+    #[test]
     fn prepare_layout_wraps_latin() {
         let p = prepare("hello world from rui text measure", 14.0, 400, 14.0 * 1.5);
         let wide = layout(&p, 10_000.0);
@@ -732,6 +870,49 @@ mod tests {
             narrow.line_count,
             narrow.max_line_width
         );
+    }
+
+    #[test]
+    fn gallery_bidi_and_rtl_emoji_soft_wrap_under_narrow_avail() {
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let samples = [
+            "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789",
+            "RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例",
+        ];
+        for text in samples {
+            let p = prepare(text, size, 500, lh);
+            let intrinsic = intrinsic_width(&p);
+            let avail = (intrinsic * 0.45).max(p.max_segment_width + 1.0).min(intrinsic - 1.0);
+            let m = layout(&p, avail);
+            let (w, h) = measure_leaf(text, size, 500, lh, Some(avail), None, 0.0, false);
+            let glyphon_n = glyphon_soft_wrap_line_count(text, size, 500, lh, avail);
+            println!(
+                "text={:?}\nintrinsic={intrinsic:.1} max_seg={:.1} avail={avail:.1}\n\
+                 layout lines={} max_line={:.1} measure=({w:.1},{h:.1}) glyphon_runs={glyphon_n}",
+                &text[..text.chars().take(24).collect::<String>().len().min(text.len())],
+                p.max_segment_width,
+                m.line_count,
+                m.max_line_width,
+            );
+            assert!(
+                m.line_count >= 2,
+                "measure layout should soft-wrap under avail={avail}, got {} lines",
+                m.line_count
+            );
+            assert!(
+                w <= avail + 1.0,
+                "leaf width {w} must not exceed avail {avail}"
+            );
+            assert!(
+                h + 0.5 >= lh * 2.0,
+                "wrapped height should be >= 2 lines, h={h} lh={lh}"
+            );
+            assert!(
+                glyphon_n >= 2,
+                "glyphon should soft-wrap too, runs={glyphon_n}"
+            );
+        }
     }
 
     #[test]

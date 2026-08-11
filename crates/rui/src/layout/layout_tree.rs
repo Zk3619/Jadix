@@ -984,12 +984,16 @@ fn measured_text_leaf_size(
 
     // `whitespace-nowrap` (ShadCN Button): ignore definite shrink — min/max content are the
     // full line, matching CSS inline-flex + nowrap (browser grows the button instead of wrapping).
+    // Distinguish MinContent vs MaxContent: both used to fall through to `intrinsic_w`,
+    // so soft-wrap labels reported min-content == full line and flex parents could not
+    // squeeze them (gallery bidi/RTL overflow past the card).
     let avail_width = if m.nowrap {
         None
     } else {
         match available_space.width {
             taffy::style::AvailableSpace::Definite(w) => Some(w.max(1.0)),
-            _ => None,
+            taffy::style::AvailableSpace::MinContent => Some(0.0),
+            taffy::style::AvailableSpace::MaxContent => None,
         }
     };
 
@@ -1044,7 +1048,25 @@ fn measured_text_leaf_size(
             width.max(1.0)
         };
         let metrics = crate::text::layout(&prepared, layout_w);
-        (width, metrics.height.max(single_line_height))
+        // Match `measure_leaf`: only fit when the box is wider than an unbreakable segment
+        // (avoids MinContent/`layout_w≈0` thrash; fit is cached for scroll).
+        let height = if !m.nowrap
+            && !blob.as_ref().is_ascii()
+            && layout_w > prepared.max_segment_width + 1.0
+        {
+            let fit = crate::text::glyphon_fit_soft_wrap(
+                blob.as_ref(),
+                size,
+                m.weight,
+                single_line_height,
+                layout_w,
+            );
+            let h = single_line_height * (fit.line_count.max(1) as f32);
+            h.max(metrics.height).max(single_line_height)
+        } else {
+            metrics.height.max(single_line_height)
+        };
+        (width, height)
     } else {
         crate::text::measure_leaf(
             blob.as_ref(),
@@ -2050,6 +2072,10 @@ impl LayoutTree {
                 y: render_y,
                 width: lay_w,
                 height: lay_h,
+                // Ancestor overflow only. Do NOT scissor to the leaf box here: when measure
+                // under-counts soft-wrap lines (common with bidi/emoji), leaf-clip hides the
+                // spilled glyphs instead of letting height/reflow catch up — gallery showed
+                // mid-word Arabic cuts and missing 👍 as "overflow:hidden".
                 clip_bounds: clip,
                 style: text_style.clone(),
                 prepared,
