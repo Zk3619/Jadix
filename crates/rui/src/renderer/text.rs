@@ -11,7 +11,11 @@ use glyphon::{
 use wgpu::{Device, Queue, RenderPass, SurfaceConfiguration};
 
 pub(crate) struct ShapedTextEntry {
+    /// Full cache key (content + style + bounds). Exact hit skips reshape.
     pub key_hash: u64,
+    /// Content/style identity without leaf width/height (iced `Difference::Shape` key).
+    /// Same `shape_hash` + different bounds → cheap `set_size` reflow only.
+    pub shape_hash: u64,
     pub buffer: glyphon::Buffer,
     pub measured_text_w: f32,
 }

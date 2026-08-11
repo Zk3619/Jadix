@@ -296,6 +296,9 @@ impl SecondaryWindowState {
         if prep.needs_warmup {
             self.window.request_redraw();
         }
+        if crate::text::take_fit_needs_relayout() {
+            self.window.request_redraw();
+        }
         Ok(())
     }
 }

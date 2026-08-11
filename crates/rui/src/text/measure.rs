@@ -3,7 +3,7 @@
 //! Layout-time Taffy leaf measure and (later) render share the same segment widths so we no longer
 //! estimate with `char_intrinsic_width_em` while glyphon shapes for paint.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -464,6 +464,31 @@ struct FitKey {
 thread_local! {
     static FIT_CACHE: RefCell<HashMap<FitKey, GlyphonFitSoftWrap>> =
         RefCell::new(HashMap::new());
+    /// Resize / scroll fast path: skip expensive glyphon fit shaping in layout + prepare.
+    static LAYOUT_TEXT_FAST: Cell<bool> = const { Cell::new(false) };
+    /// Paint computed a new FIT_CACHE entry that may need a taller leaf next frame.
+    static FIT_NEEDS_RELAYOUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enable fast layout/paint text path (window resize drag, scroll). Cleared each frame from render.
+pub fn set_layout_text_fast_mode(fast: bool) {
+    LAYOUT_TEXT_FAST.with(|c| c.set(fast));
+}
+
+#[inline]
+pub fn layout_text_fast_mode() -> bool {
+    LAYOUT_TEXT_FAST.with(|c| c.get())
+}
+
+/// Quantize wrap target during interactive resize so FIT_CACHE / shaped_cache reuse nearby widths.
+#[inline]
+pub fn layout_wrap_target(width: f32, fast: bool) -> f32 {
+    let w = width.max(1.0);
+    if fast && w > 8.0 {
+        ((w / 8.0).round() * 8.0).max(1.0)
+    } else {
+        w
+    }
 }
 
 fn buffer_max_ink(buffer: &Buffer) -> (usize, f32) {
@@ -492,6 +517,68 @@ fn fit_cache_key(text: &str, size: f32, weight: u16, line_height: f32, target: f
         // 1px buckets — scroll/resize stability without thrashing every subpixel.
         target_q: target.round().clamp(0.0, u16::MAX as f32) as u16,
     }
+}
+
+/// FIT_CACHE lookup only — no glyphon shaping (resize fast path).
+pub fn try_glyphon_fit_soft_wrap(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    target_width: f32,
+) -> Option<GlyphonFitSoftWrap> {
+    if text.is_empty() {
+        return Some(GlyphonFitSoftWrap {
+            wrap_width: target_width.max(1.0),
+            line_count: 0,
+            max_ink: 0.0,
+        });
+    }
+    let target = target_width.max(1.0);
+    let key = fit_cache_key(text, size, weight, line_height, target);
+    FIT_CACHE.with(|c| c.borrow().get(&key).copied())
+}
+
+pub fn bidi_soft_wrap_height(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    layout_w: f32,
+    max_segment_width: f32,
+    metrics: &TextLayoutMetrics,
+    nowrap: bool,
+) -> f32 {
+    // P1 (pretext-style): layout height is segment arithmetic first. Never *compute*
+    // glyphon_fit here — that runs only when paint sees ink spill and fills FIT_CACHE.
+    let base = metrics.height.max(line_height);
+    if nowrap || text.is_ascii() {
+        return base;
+    }
+    // MinContent / single-segment probe (`layout_w≈0` → max_seg): no soft-wrap fit.
+    if layout_w <= 8.0 || layout_w <= max_segment_width + 1.0 {
+        return base;
+    }
+    let target = layout_wrap_target(layout_w, layout_text_fast_mode());
+    if let Some(fit) = try_glyphon_fit_soft_wrap(text, size, weight, line_height, target) {
+        return (line_height * fit.line_count.max(1) as f32).max(base);
+    }
+    if (target - layout_w).abs() > 0.5 {
+        if let Some(fit) = try_glyphon_fit_soft_wrap(text, size, weight, line_height, layout_w) {
+            return (line_height * fit.line_count.max(1) as f32).max(base);
+        }
+    }
+    base
+}
+
+/// Called when paint runs `glyphon_fit` after ink spill so the next frame can remeasure height.
+pub fn note_fit_needs_relayout() {
+    FIT_NEEDS_RELAYOUT.with(|c| c.set(true));
+}
+
+/// Drain the paint→layout height sync flag (one-shot per frame).
+pub fn take_fit_needs_relayout() -> bool {
+    FIT_NEEDS_RELAYOUT.with(|c| c.replace(false))
 }
 
 /// Shape `text` so every layout run's ink stays within `target_width`.
@@ -778,17 +865,16 @@ pub fn measure_leaf(
         width.max(1.0)
     };
     let metrics = layout(&prepared, layout_w);
-    // Segment arithmetic under-counts soft-wrap lines for bidi/emoji (glyphon may need a
-    // tighter wrap width → more runs). Prefer fitted glyphon height so the leaf is tall
-    // enough and paint does not vertically clip mid-run glyphs.
-    let height = if !nowrap && !text.is_ascii() && layout_w > prepared.max_segment_width + 1.0
-    {
-        let fit = glyphon_fit_soft_wrap(text, size, weight, line_height, layout_w);
-        let h = line_height * (fit.line_count.max(1) as f32);
-        h.max(metrics.height).max(line_height)
-    } else {
-        metrics.height.max(line_height)
-    };
+    let height = bidi_soft_wrap_height(
+        text,
+        size,
+        weight,
+        line_height,
+        layout_w,
+        prepared.max_segment_width,
+        &metrics,
+        nowrap,
+    );
     (width, height)
 }
 
@@ -904,15 +990,117 @@ mod tests {
                 w <= avail + 1.0,
                 "leaf width {w} must not exceed avail {avail}"
             );
+            // P1: measure height is segment arithmetic until FIT_CACHE is warm (paint spill).
             assert!(
-                h + 0.5 >= lh * 2.0,
-                "wrapped height should be >= 2 lines, h={h} lh={lh}"
+                (h - m.height.max(lh)).abs() < 0.5,
+                "cold FIT_CACHE: measure height should match layout() arithmetic, h={h} metrics={}",
+                m.height
             );
             assert!(
                 glyphon_n >= 2,
                 "glyphon should soft-wrap too, runs={glyphon_n}"
             );
         }
+    }
+
+    #[test]
+    fn fast_mode_skips_glyphon_fit_compute() {
+        invalidate_prepare_cache();
+        let text = "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789";
+        let size = 14.0;
+        let lh = size * 1.5;
+        set_layout_text_fast_mode(true);
+        let miss = try_glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
+        assert!(miss.is_none(), "empty cache must not trigger fit shaping");
+        let fit = glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
+        let hit = try_glyphon_fit_soft_wrap(
+            text,
+            size,
+            500,
+            lh,
+            layout_wrap_target(243.0, true),
+        );
+        assert!(hit.is_some(), "quantized resize target should reuse fit cache");
+        assert!(
+            fit.wrap_width <= 240.0 + 1.0 || fit.max_ink <= 240.0 * 1.08 + 2.0,
+            "fit must tighten wrap for bidi"
+        );
+        set_layout_text_fast_mode(false);
+        shutdown_layout_text();
+    }
+
+    #[test]
+    fn p1_layout_height_uses_arithmetic_until_fit_cache_hit() {
+        invalidate_prepare_cache();
+        let _ = take_fit_needs_relayout();
+        let text = "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let avail = 240.0f32;
+        let metrics = layout(&prepared, avail);
+        let h_miss = bidi_soft_wrap_height(
+            text,
+            size,
+            500,
+            lh,
+            avail,
+            prepared.max_segment_width,
+            &metrics,
+            false,
+        );
+        assert!(
+            (h_miss - metrics.height.max(lh)).abs() < 0.01,
+            "P1: layout must not compute fit on miss; got h={h_miss} metrics={}",
+            metrics.height
+        );
+        assert!(
+            try_glyphon_fit_soft_wrap(text, size, 500, lh, avail).is_none(),
+            "layout path must leave FIT_CACHE cold"
+        );
+        let fit = glyphon_fit_soft_wrap(text, size, 500, lh, avail);
+        let h_hit = bidi_soft_wrap_height(
+            text,
+            size,
+            500,
+            lh,
+            avail,
+            prepared.max_segment_width,
+            &metrics,
+            false,
+        );
+        let expect = (lh * fit.line_count.max(1) as f32).max(metrics.height).max(lh);
+        assert!(
+            (h_hit - expect).abs() < 0.01,
+            "after paint fit, layout height must use FIT_CACHE line_count"
+        );
+        shutdown_layout_text();
+    }
+
+    #[test]
+    fn p1_min_content_width_skips_fit_path() {
+        invalidate_prepare_cache();
+        let text = "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let metrics = layout(&prepared, prepared.max_segment_width.max(1.0));
+        let h = bidi_soft_wrap_height(
+            text,
+            size,
+            500,
+            lh,
+            prepared.max_segment_width,
+            prepared.max_segment_width,
+            &metrics,
+            false,
+        );
+        assert!(
+            (h - metrics.height.max(lh)).abs() < 0.01,
+            "MinContent / max_seg width must stay on arithmetic height"
+        );
+        assert!(try_glyphon_fit_soft_wrap(text, size, 500, lh, prepared.max_segment_width).is_none());
+        shutdown_layout_text();
     }
 
     #[test]

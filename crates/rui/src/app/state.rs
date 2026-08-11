@@ -1119,6 +1119,11 @@ impl AppState {
         // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
         scrollbar_skip_flex_layout: bool,
     ) -> Result<(), wgpu::SurfaceError> {
+        // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
+        // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
+        let layout_fast = self.last_resized_event.is_some();
+        crate::text::set_layout_text_fast_mode(layout_fast);
+        let text_fast = text_force_fast_mode || layout_fast;
         let _text_backend = self.text_backend;
         #[cfg(debug_assertions)]
         let render_begin = Instant::now();
@@ -1519,7 +1524,7 @@ impl AppState {
                 &self.config,
                 &self.text_nodes[..overlay_text_start],
                 ui_scale,
-                text_force_fast_mode,
+                text_fast,
                 &shadow_cached_keys,
                 &self.shadow_rect_cache,
             );
@@ -1549,6 +1554,11 @@ impl AppState {
                 );
             }
             if prep_out.needs_warmup {
+                self.window.request_redraw();
+            }
+            // P1: paint spill→fit may need a taller leaf; remeasure next frame from FIT_CACHE.
+            if crate::text::take_fit_needs_relayout() {
+                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
                 self.window.request_redraw();
             }
             (
@@ -1584,7 +1594,7 @@ impl AppState {
                     &self.config,
                     &self.text_nodes[text_lo..text_hi],
                     ui_scale,
-                    text_force_fast_mode,
+                    text_fast,
                     &shadow_cached_keys,
                     &self.shadow_rect_cache,
                 )
@@ -1596,7 +1606,7 @@ impl AppState {
                     &self.config,
                     &self.text_nodes[text_lo..text_hi],
                     ui_scale,
-                    text_force_fast_mode,
+                    text_fast,
                     &shadow_cached_keys,
                     &self.shadow_rect_cache,
                 )
@@ -1619,6 +1629,10 @@ impl AppState {
             overlay_band_underlines.push(overlay_prep.underline_instances);
         }
         if overlay_needs_warmup {
+            self.window.request_redraw();
+        }
+        if crate::text::take_fit_needs_relayout() {
+            self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             self.window.request_redraw();
         }
         #[cfg(debug_assertions)]

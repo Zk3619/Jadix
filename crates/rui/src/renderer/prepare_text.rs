@@ -339,29 +339,34 @@ fn family_hash(family: glyphon::Family) -> u64 {
     h.finish()
 }
 
-fn node_shape_hash(
+fn quantize_shape_dim(v: f32, force_fast: bool) -> u16 {
+    let q = if force_fast && v > 0.0 {
+        // egui-style: coarsen during interactive resize to cut churn; paint still set_size
+        // to the real leaf width on Bounds path.
+        (v / 2.0).round() * 2.0
+    } else {
+        v.round()
+    };
+    q.clamp(0.0, u16::MAX as f32) as u16
+}
+
+/// Content + style identity (no leaf bounds). Matching this with different width = Bounds miss.
+fn node_shape_identity_hash(
     text: &str,
     scaled_size: f32,
     line_height: f32,
-    scaled_w: f32,
-    scaled_h: f32,
     weight: u16,
     family: glyphon::Family,
     align: glyphon::cosmic_text::Align,
     shaping: glyphon::Shaping,
     letter_spacing: f32,
     direction: TextDirection,
-    // Baked into glyphon Attrs on shape — must invalidate when opacity/color flips
-    // (e.g. Input adornments hidden with opacity 0 then shown).
     color: [u8; 4],
 ) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
     ((scaled_size * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     ((line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
-    // 1px wrap/height buckets so width changes miss cache (no per-frame reshape on hit).
-    ((scaled_w).round().clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
-    ((scaled_h).round().clamp(0.0, u16::MAX as f32) as u16).hash(&mut h);
     weight.hash(&mut h);
     family_hash(family).hash(&mut h);
     align_to_u8(align).hash(&mut h);
@@ -381,14 +386,101 @@ fn node_shape_hash(
     h.finish()
 }
 
+fn node_shape_hash(
+    text: &str,
+    scaled_size: f32,
+    line_height: f32,
+    scaled_w: f32,
+    scaled_h: f32,
+    weight: u16,
+    family: glyphon::Family,
+    align: glyphon::cosmic_text::Align,
+    shaping: glyphon::Shaping,
+    letter_spacing: f32,
+    direction: TextDirection,
+    // Baked into glyphon Attrs on shape — must invalidate when opacity/color flips
+    // (e.g. Input adornments hidden with opacity 0 then shown).
+    color: [u8; 4],
+    force_fast_mode: bool,
+) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    node_shape_identity_hash(
+        text,
+        scaled_size,
+        line_height,
+        weight,
+        family,
+        align,
+        shaping,
+        letter_spacing,
+        direction,
+        color,
+    )
+    .hash(&mut h);
+    // Bounds: 1px at rest; 2px during resize/scroll fast path (fewer Exact misses →
+    // more cheap Bounds `set_size` paths). Never reuse a buffer without set_size.
+    quantize_shape_dim(scaled_w, force_fast_mode).hash(&mut h);
+    quantize_shape_dim(scaled_h, force_fast_mode).hash(&mut h);
+    h.finish()
+}
+
 fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text::ShapedTextEntry {
     let mut buffer = glyphon::Buffer::new(font_system, glyphon::Metrics::new(1.0, 1.0));
     buffer.set_size(font_system, Some(1.0), Some(1.0));
     super::text::ShapedTextEntry {
         key_hash: 0,
+        shape_hash: 0,
         buffer,
         measured_text_w: 0.0,
     }
+}
+
+/// P1: after shaping at leaf/cache wrap, if cosmic ink spills the leaf, run one
+/// `glyphon_fit` (fills FIT_CACHE) and `set_size` to the fitted wrap.
+fn correct_bidi_ink_spill(
+    buffer: &mut glyphon::Buffer,
+    font_system: &mut glyphon::FontSystem,
+    text: &str,
+    size: f32,
+    weight: u16,
+    logical_lh: f32,
+    fit_lookup_w: f32,
+    soft_w_target: f32,
+    ui_scale: f32,
+    line_height: f32,
+    scaled_h: f32,
+    height_opt: Option<f32>,
+    wrap_w: f32,
+    nowrap: bool,
+) -> f32 {
+    if nowrap || text.is_ascii() || soft_w_target <= 8.0 {
+        return wrap_w;
+    }
+    let mut max_ink = 0.0_f32;
+    let mut runs = 0usize;
+    for run in buffer.layout_runs() {
+        runs += 1;
+        let gr = run
+            .glyphs
+            .iter()
+            .map(|g| g.x + g.w)
+            .fold(0.0_f32, f32::max);
+        max_ink = max_ink.max(gr).max(run.line_w);
+    }
+    if max_ink <= soft_w_target + 1.0 {
+        return wrap_w;
+    }
+    let fit = crate::text::glyphon_fit_soft_wrap(text, size, weight, logical_lh, fit_lookup_w);
+    let fit_w = (fit.wrap_width * ui_scale).max(1.0);
+    if (fit_w - wrap_w).abs() > 0.5 {
+        buffer.set_size(font_system, Some(fit_w), height_opt);
+        buffer.shape_until_scroll(font_system, false);
+    }
+    let need_h = fit.line_count.max(1) as f32 * line_height;
+    if need_h > scaled_h + 1.0 || fit.line_count > runs {
+        crate::text::note_fit_needs_relayout();
+    }
+    fit_w
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1626,68 +1718,40 @@ pub fn prepare_text_frame(
         // the layout-only FontSystem is still deferred (separate FontSystems).
         // `whitespace-nowrap`: shape against intrinsic (or wider box), never soft-wrap mid-label.
         let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
-        let (buffer_soft_w, buffer_soft_h) = if let Some(ref prepared) = info.prepared {
-            let layout_w = if nowrap {
+        let layout_w = if let Some(ref prepared) = info.prepared {
+            if nowrap {
                 crate::text::intrinsic_width(prepared).max(info.width).max(1.0)
             } else {
                 info.width.max(1.0)
-            };
-            let metrics = crate::text::layout(prepared, layout_w);
-            let soft_w_target = (layout_w * ui_scale).max(1.0);
-            let logical_lh = line_height / ui_scale.max(0.001);
-            // Bidi/emoji ink can exceed the leaf when shaped at full width (gallery: 240→253).
-            // Reuse the layout-warmed FIT_CACHE wrap width — cache hit is cheap; shaped_cache hit
-            // still skips reshape on scroll. Do NOT run extra corrective tighten here.
-            let (soft_w, fit_content_h) = if !nowrap && !info.text.is_ascii() {
-                let fit = crate::text::glyphon_fit_soft_wrap(
-                    info.text.as_str(),
-                    st.size,
-                    font_weight,
-                    logical_lh,
-                    layout_w,
-                );
-                (
-                    (fit.wrap_width * ui_scale).max(1.0),
-                    fit.line_count.max(1) as f32 * line_height,
-                )
-            } else {
-                (
-                    soft_w_target,
-                    metrics.line_count.max(1) as f32 * line_height,
-                )
-            };
-            let hard_lines = info.text.split('\n').count().max(1) as f32;
-            let ink_fudge = if is_input_text {
-                crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
-            } else {
-                2.0
-            };
-            let content_h = fit_content_h
-                .max(metrics.height * ui_scale)
-                .max(hard_lines * line_height)
-                .max(line_height);
-            let soft_h = if is_input_text {
-                content_h + ink_fudge
-            } else {
-                // Prefer the laid-out leaf height (fit-aware) over segment arithmetic.
-                content_h.max(scaled_h) + ink_fudge
-            };
-            let _ = metrics.max_line_width;
-            (soft_w, soft_h)
+            }
         } else {
-            let hard_lines = info.text.split('\n').count().max(1) as f32;
-            let ink_fudge = if is_input_text {
-                crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
-            } else {
-                2.0
-            };
-            let content_h = hard_lines * line_height.max(1.0);
-            let soft_h = if is_input_text {
-                content_h.max(line_height) + ink_fudge
-            } else {
-                scaled_h.max(content_h).max(line_height) + ink_fudge
-            };
-            (scaled_w.max(0.0), soft_h)
+            info.width.max(1.0)
+        };
+        let soft_w_target = (layout_w * ui_scale).max(1.0);
+        let metrics = info.prepared.as_ref().map(|p| crate::text::layout(p, layout_w));
+        let hard_lines = info.text.split('\n').count().max(1) as f32;
+        let ink_fudge = if is_input_text {
+            crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
+        } else {
+            2.0
+        };
+        // Height from segment arithmetic / leaf first. glyphon_fit only on Shape miss (below).
+        let metrics_h = metrics
+            .as_ref()
+            .map(|m| {
+                (m.line_count.max(1) as f32 * line_height)
+                    .max(m.height * ui_scale)
+                    .max(hard_lines * line_height)
+                    .max(line_height)
+            })
+            .unwrap_or_else(|| {
+                (hard_lines * line_height.max(1.0))
+                    .max(line_height)
+            });
+        let buffer_soft_h = if is_input_text {
+            metrics_h + ink_fudge
+        } else {
+            metrics_h.max(scaled_h) + ink_fudge
         };
         // Unbounded height_opt for Input/Textarea: `Some(content soft_h)` still races with
         // shaped_cache index reuse / stale short windows. `None` keeps every hard line.
@@ -1725,6 +1789,18 @@ pub fn prepare_text_frame(
         } else {
             Cow::Owned(format!("{mark}{spaced}"))
         };
+        let shape_hash = node_shape_identity_hash(
+            shape_text.as_ref(),
+            scaled_size,
+            line_height,
+            font_weight,
+            family,
+            align,
+            shaping,
+            st.letter_spacing,
+            st.direction,
+            st.color,
+        );
         let key_hash = node_shape_hash(
             shape_text.as_ref(),
             scaled_size,
@@ -1738,6 +1814,7 @@ pub fn prepare_text_frame(
             st.letter_spacing,
             st.direction,
             st.color,
+            force_fast_mode,
         );
 
         if preshape_only {
@@ -1757,52 +1834,160 @@ pub fn prepare_text_frame(
                 .shaped_cache
                 .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
         }
-        let (measured_text_w, cache_hit) = {
-            let entry = &mut text_renderer.shaped_cache[i];
-            let mut cache_hit = entry.key_hash == key_hash;
-            // Input/Textarea: cosmic only shapes lines inside `height_opt`. A cache hit
-            // that keeps a 1-line-tall buffer after `\n` was added drops later runs and
-            // the caret (gallery: first line ok, rest blank). Force reshape when the
-            // buffer window is shorter than content or yields fewer runs than hard lines.
-            if cache_hit && is_input_text {
-                let hard = info.text.split('\n').count().max(1);
-                let runs = entry.buffer.layout_runs().count();
-                // Input path pins height_opt=None. Any leftover finite window (even if
-                // tall enough for soft_h) can still drop runs after edits — force miss.
-                let finite_height = entry.buffer.size().1.is_some();
-                if runs < hard || finite_height {
-                    cache_hit = false;
-                }
-            }
-            let measured_text_w = if cache_hit {
-                // Fast path: do not reshape on hit. Scroll frames reuse the buffer.
-                // Width is part of `node_shape_hash` (1px); a real width change misses cache.
-                if is_input_text {
-                    entry.buffer.set_size(
-                        unsafe { &mut *text_renderer.font_system },
-                        Some(buffer_soft_w),
-                        buffer_height_opt,
-                    );
-                    entry
-                        .buffer
-                        .set_scroll(glyphon::cosmic_text::Scroll::default());
-                    entry
-                        .buffer
-                        .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
-                    entry.measured_text_w = entry
-                        .buffer
-                        .layout_runs()
-                        .map(|run| run.line_w)
-                        .fold(0.0_f32, f32::max);
-                }
-                entry.measured_text_w
+
+        // P1: wrap from FIT_CACHE when present; otherwise shape at leaf and correct on
+        // ink spill (glyphon_fit writes the cache). Layout never computes fit.
+        let logical_lh = line_height / ui_scale.max(0.001);
+        let fit_lookup_w = {
+            let fit_target = crate::text::layout_wrap_target(layout_w, force_fast_mode);
+            if force_fast_mode {
+                fit_target
             } else {
+                layout_w
+            }
+        };
+        let resolve_cached_wrap = || -> (f32, bool) {
+            if nowrap || info.text.is_ascii() || info.prepared.is_none() {
+                return (soft_w_target, false);
+            }
+            if let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(
+                info.text.as_str(),
+                st.size,
+                font_weight,
+                logical_lh,
+                fit_lookup_w,
+            ) {
+                return ((fit.wrap_width * ui_scale).max(1.0), true);
+            }
+            (soft_w_target, false)
+        };
+
+        enum ShapePath {
+            Exact { measured: f32, wrap_w: f32 },
+            Bounds { measured: f32, wrap_w: f32 },
+            Miss,
+        }
+
+        let path = {
+            let entry = &mut text_renderer.shaped_cache[i];
+            let exact_hit = entry.key_hash == key_hash && entry.shape_hash == shape_hash;
+            let bounds_only = !exact_hit
+                && entry.shape_hash == shape_hash
+                && entry.shape_hash != 0
+                && !is_input_text;
+
+            if exact_hit {
+                let mut ok = true;
+                if is_input_text {
+                    let hard = info.text.split('\n').count().max(1);
+                    let runs = entry.buffer.layout_runs().count();
+                    let finite_height = entry.buffer.size().1.is_some();
+                    if runs < hard || finite_height {
+                        ok = false;
+                    }
+                }
+                if ok {
+                    if is_input_text {
+                        let (mut wrap_w, _) = resolve_cached_wrap();
+                        entry.buffer.set_size(
+                            unsafe { &mut *text_renderer.font_system },
+                            Some(wrap_w),
+                            buffer_height_opt,
+                        );
+                        entry
+                            .buffer
+                            .set_scroll(glyphon::cosmic_text::Scroll::default());
+                        entry
+                            .buffer
+                            .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                        wrap_w = correct_bidi_ink_spill(
+                            &mut entry.buffer,
+                            unsafe { &mut *text_renderer.font_system },
+                            info.text.as_str(),
+                            st.size,
+                            font_weight,
+                            logical_lh,
+                            fit_lookup_w,
+                            soft_w_target,
+                            ui_scale,
+                            line_height,
+                            scaled_h,
+                            buffer_height_opt,
+                            wrap_w,
+                            nowrap,
+                        );
+                        entry.measured_text_w = entry
+                            .buffer
+                            .layout_runs()
+                            .map(|run| run.line_w)
+                            .fold(0.0_f32, f32::max);
+                        ShapePath::Exact {
+                            measured: entry.measured_text_w,
+                            wrap_w,
+                        }
+                    } else {
+                        ShapePath::Exact {
+                            measured: entry.measured_text_w,
+                            wrap_w: entry.buffer.size().0.unwrap_or(soft_w_target),
+                        }
+                    }
+                } else {
+                    ShapePath::Miss
+                }
+            } else if bounds_only {
+                // iced Difference::Bounds: same Buffer, set_size only (no set_text).
+                // Wrap = FIT_CACHE hit, else leaf; spill → one glyphon_fit (P1).
+                let (mut wrap_w, _) = resolve_cached_wrap();
+                entry.buffer.set_size(
+                    unsafe { &mut *text_renderer.font_system },
+                    Some(wrap_w),
+                    buffer_height_opt,
+                );
+                entry
+                    .buffer
+                    .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                wrap_w = correct_bidi_ink_spill(
+                    &mut entry.buffer,
+                    unsafe { &mut *text_renderer.font_system },
+                    info.text.as_str(),
+                    st.size,
+                    font_weight,
+                    logical_lh,
+                    fit_lookup_w,
+                    soft_w_target,
+                    ui_scale,
+                    line_height,
+                    scaled_h,
+                    buffer_height_opt,
+                    wrap_w,
+                    nowrap,
+                );
+                let measured = entry
+                    .buffer
+                    .layout_runs()
+                    .map(|run| run.line_w)
+                    .fold(0.0_f32, f32::max);
+                entry.key_hash = key_hash;
+                entry.shape_hash = shape_hash;
+                entry.measured_text_w = measured;
+                ShapePath::Bounds { measured, wrap_w }
+            } else {
+                ShapePath::Miss
+            }
+        };
+
+        let (measured_text_w, cache_hit, buffer_soft_w) = match path {
+            ShapePath::Exact { measured, wrap_w } | ShapePath::Bounds { measured, wrap_w } => {
+                (measured, true, wrap_w)
+            }
+            ShapePath::Miss => {
                 _shape_misses += 1;
+                let (mut buffer_soft_w, _) = resolve_cached_wrap();
+                let entry = &mut text_renderer.shaped_cache[i];
                 let mut buffer = glyphon::Buffer::new(
                     unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
-                // Input/Textarea: `None` height shapes every hard line (external clip).
                 buffer.set_size(
                     unsafe { &mut *text_renderer.font_system },
                     Some(buffer_soft_w),
@@ -1818,10 +2003,14 @@ pub fn prepare_text_frame(
                         st.color[3],
                     ));
                 if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
-                    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
+                    let mut owned: Vec<(String, glyphon::Attrs)> =
+                        Vec::with_capacity(spans.len());
                     for (si, span) in spans.iter().enumerate() {
-                        let mut body =
-                            apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size);
+                        let mut body = apply_letter_spacing_approx(
+                            &span.text,
+                            st.letter_spacing,
+                            scaled_size,
+                        );
                         if si == 0 {
                             let m = direction_mark(st.direction);
                             if !m.is_empty() {
@@ -1848,7 +2037,6 @@ pub fn prepare_text_frame(
                         if span.monospace {
                             a = a.family(glyphon::Family::Monospace);
                         }
-                        // Chip/Mention/code backgrounds: metadata = span_index + 1.
                         if span.background.is_some()
                             || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
                         {
@@ -1858,7 +2046,12 @@ pub fn prepare_text_frame(
                     }
                     let rich: Vec<(&str, glyphon::Attrs)> =
                         owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
-                    buffer.set_rich_text(unsafe { &mut *text_renderer.font_system }, rich, attrs, shaping);
+                    buffer.set_rich_text(
+                        unsafe { &mut *text_renderer.font_system },
+                        rich,
+                        attrs,
+                        shaping,
+                    );
                 } else {
                     set_shaped_buffer_text(
                         &mut buffer,
@@ -1873,27 +2066,39 @@ pub fn prepare_text_frame(
                     line.set_align(Some(align));
                 }
                 if is_input_text {
-                    // Never inherit a leftover buffer scroll from a prior cache entry shape.
                     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
                 }
                 buffer.shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
-                // Keep wrap == leaf width. Shrinking wrap to chase ink reflows UAX#9 across
-                // soft-break boundaries (gallery bidi: Arabic/Hebrew/digits swap lines).
                 if is_input_text {
                     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
                 }
+                buffer_soft_w = correct_bidi_ink_spill(
+                    &mut buffer,
+                    unsafe { &mut *text_renderer.font_system },
+                    info.text.as_str(),
+                    st.size,
+                    font_weight,
+                    logical_lh,
+                    fit_lookup_w,
+                    soft_w_target,
+                    ui_scale,
+                    line_height,
+                    scaled_h,
+                    buffer_height_opt,
+                    buffer_soft_w,
+                    nowrap,
+                );
                 let measured = buffer
                     .layout_runs()
                     .map(|run| run.line_w)
                     .fold(0.0_f32, f32::max);
                 entry.key_hash = key_hash;
+                entry.shape_hash = shape_hash;
                 entry.buffer = buffer;
                 entry.measured_text_w = measured;
-                measured
-            };
-            (measured_text_w, cache_hit)
+                (measured, false, buffer_soft_w)
+            }
         };
-
         let emoji_cache_key = if emoji_custom_glyph_enabled() && has_emoji {
             Some(super::text::EmojiCacheKey {
                 sequence: shape_text.to_string(),
@@ -2664,7 +2869,7 @@ pub fn prepare_text_frame(
 
 #[cfg(test)]
 mod shape_cache_key_tests {
-    use super::node_shape_hash;
+    use super::{node_shape_hash, node_shape_identity_hash};
     use crate::style::TextDirection;
 
     #[test]
@@ -2685,6 +2890,7 @@ mod shape_cache_key_tests {
             0.0,
             TextDirection::Auto,
             [100, 100, 100, 0],
+            false,
         );
         let shown = node_shape_hash(
             "x",
@@ -2699,11 +2905,71 @@ mod shape_cache_key_tests {
             0.0,
             TextDirection::Auto,
             [100, 100, 100, 200],
+            false,
         );
         assert_ne!(
             hidden, shown,
             "opacity/color alpha must invalidate shaped cache (Input adornments)"
         );
+    }
+
+    #[test]
+    fn bounds_miss_keeps_shape_identity_when_only_width_changes() {
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let text = "Bidirectional sample: English 123 - العربية";
+        let color = [30u8, 30, 30, 255];
+        let shape_a = node_shape_identity_hash(
+            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+        );
+        let shape_b = node_shape_identity_hash(
+            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+        );
+        assert_eq!(shape_a, shape_b, "identity must ignore leaf bounds");
+
+        let key_narrow = node_shape_hash(
+            text, 14.0, 21.0, 160.0, 42.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, false,
+        );
+        let key_wide = node_shape_hash(
+            text, 14.0, 21.0, 260.0, 42.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, false,
+        );
+        assert_ne!(key_narrow, key_wide, "bounds change must miss Exact key");
+        // Same shape_hash + different key_hash ⇒ Bounds path (iced Difference::Bounds).
+        assert_eq!(
+            node_shape_identity_hash(
+                text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+            ),
+            shape_a
+        );
+    }
+
+    #[test]
+    fn fast_mode_quantizes_bounds_to_cut_exact_churn() {
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let color = [0u8, 0, 0, 255];
+        let a = node_shape_hash(
+            "hi", 14.0, 21.0, 201.0, 40.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, true,
+        );
+        let b = node_shape_hash(
+            "hi", 14.0, 21.0, 202.0, 40.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, true,
+        );
+        assert_eq!(a, b, "2px quantize during fast should collapse nearby widths");
+        let c = node_shape_hash(
+            "hi", 14.0, 21.0, 201.0, 40.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, false,
+        );
+        let d = node_shape_hash(
+            "hi", 14.0, 21.0, 202.0, 40.0, 400, family, align, shaping, 0.0,
+            TextDirection::Auto, color, false,
+        );
+        assert_ne!(c, d, "rest path keeps 1px Exact sensitivity");
     }
 }
 

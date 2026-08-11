@@ -1048,24 +1048,16 @@ fn measured_text_leaf_size(
             width.max(1.0)
         };
         let metrics = crate::text::layout(&prepared, layout_w);
-        // Match `measure_leaf`: only fit when the box is wider than an unbreakable segment
-        // (avoids MinContent/`layout_w≈0` thrash; fit is cached for scroll).
-        let height = if !m.nowrap
-            && !blob.as_ref().is_ascii()
-            && layout_w > prepared.max_segment_width + 1.0
-        {
-            let fit = crate::text::glyphon_fit_soft_wrap(
-                blob.as_ref(),
-                size,
-                m.weight,
-                single_line_height,
-                layout_w,
-            );
-            let h = single_line_height * (fit.line_count.max(1) as f32);
-            h.max(metrics.height).max(single_line_height)
-        } else {
-            metrics.height.max(single_line_height)
-        };
+        let height = crate::text::bidi_soft_wrap_height(
+            blob.as_ref(),
+            size,
+            m.weight,
+            single_line_height,
+            layout_w,
+            prepared.max_segment_width,
+            &metrics,
+            m.nowrap,
+        );
         (width, height)
     } else {
         crate::text::measure_leaf(
