@@ -972,24 +972,77 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
         <MyCard title="8) Switch · Checkbox · Separator">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Tab to focus, Space/Enter toggles (same as buttons). Horizontal Separator uses full width; vertical divider uses programmatic separator().vertical(true)."
+                    "Checkbox: embed text / Label inside, or sibling Label with Solid id / for. Tab / Space on the box."
                 </Label>
 
                 <Separator />
 
-                <Label font_weight="700" text_size="0.875rem">"Uncontrolled (internal state)"</Label>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Label text_size="0.875rem">"Notifications"</Label>
-                    <Switch />
-                    <Label text_size="0.875rem">"Terms"</Label>
-                    <Checkbox />
-                    <Label text_size="0.875rem" color="muted-foreground">"Disabled"</Label>
-                    <Checkbox disabled=true />
+                <Label font_weight="700" text_size="0.875rem">"Checkbox (solid-ui layout)"</Label>
+
+                <Checkbox>"Accept terms (embedded text)"</Checkbox>
+
+                <Checkbox>
+                    <Label text_size="0.875rem" font_weight="500">
+                        "Accept terms (embedded Label)"
+                    </Label>
+                </Checkbox>
+
+                <HStack gap="0.5rem" items="center">
+                    <Checkbox id="gallery_terms" />
+                    <Label for="gallery_terms" text_size="0.875rem" font_weight="500">
+                        "Accept terms and conditions"
+                    </Label>
+                </HStack>
+
+                <HStack gap="0.5rem" items="start">
+                    <Checkbox id="gallery_terms_desc" defaultChecked=true />
+                    <VStack gap="0.25rem" min_w="0">
+                        <Label for="gallery_terms_desc" text_size="0.875rem" font_weight="500">
+                            "Accept terms and conditions"
+                        </Label>
+                        <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                            "By clicking this checkbox, you agree to the terms."
+                        </Label>
+                    </VStack>
+                </HStack>
+
+                <HStack gap="0.5rem" items="center">
+                    <Checkbox id="gallery_terms_disabled" disabled=true />
+                    <Label for="gallery_terms_disabled" text_size="0.875rem" color="muted-foreground">
+                        "Enable notifications"
+                    </Label>
+                </HStack>
+
+                <HStack gap="0.5rem" items="center">
+                    <Checkbox id="gallery_terms_invalid" invalid=true />
+                    <Label for="gallery_terms_invalid" text_size="0.875rem" color="destructive">
+                        "Accept terms and conditions"
+                    </Label>
+                </HStack>
+
+                <HStack
+                    gap="0.5rem"
+                    items="start"
+                    p="1rem"
+                    w="100%"
+                    rounded="0.5rem"
+                    border_width={1.0}
+                    border_color="border"
+                >
+                    <Checkbox id="gallery_terms_card" />
+                    <VStack gap="0.25rem" min_w="0">
+                        <Label for="gallery_terms_card" text_size="0.875rem" font_weight="500">
+                            "Enable notifications"
+                        </Label>
+                        <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                            "You can enable or disable notifications at any time."
+                        </Label>
+                    </VStack>
                 </HStack>
 
                 <Separator />
 
-                <Label font_weight="700" text_size="0.875rem">"Controlled (shared Signal + Flip)"</Label>
+                <Label font_weight="700" text_size="0.875rem">"Switch · controlled Checkbox"</Label>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
                     { Element::from(switch("hw_demo_switch").checked_signal(sw)) }
                     <Label text_size="0.875rem">{ format!("switch = {}", sw.get()) }</Label>
@@ -997,9 +1050,14 @@ fn ToggleControlsShowcase() -> rui::core::tree::Element {
                         "Flip switch"
                     </Button>
                 </HStack>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    { Element::from(checkbox("hw_demo_checkbox").checked_signal(cb)) }
-                    <Label text_size="0.875rem">{ format!("checkbox = {}", cb.get()) }</Label>
+                <HStack gap="0.5rem" items="center">
+                    <Checkbox id="hw_demo_checkbox" checked={cb} />
+                    <Label for="hw_demo_checkbox" text_size="0.875rem">
+                        { format!("checkbox = {}", cb.get()) }
+                    </Label>
+                    <Button variant="outline" size="sm" on_click={move || cb.set(!cb.get())}>
+                        "Flip checkbox"
+                    </Button>
                 </HStack>
 
                 <Separator />

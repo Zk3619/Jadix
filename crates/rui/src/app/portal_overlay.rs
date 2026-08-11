@@ -483,6 +483,7 @@ mod tests {
 
         let on_dialog = [crate::app::pointer_events::HitPathEntry {
             focus_id: None,
+            label_for: None,
             on_pointer_down: None,
             on_pointer_up: None,
             on_click: None,
@@ -499,6 +500,7 @@ mod tests {
 
         let on_menu = [crate::app::pointer_events::HitPathEntry {
             focus_id: None,
+            label_for: None,
             on_pointer_down: None,
             on_pointer_up: None,
             on_click: None,

@@ -8,6 +8,8 @@ use syn::{Expr, Ident, Token, braced};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
+/// 同 Input：省略 `id` 的 `<Checkbox>` 避免非受控信号键 `{id}__checkbox` 撞车。
+static CHECKBOX_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn expr_as_u16(value: &Expr) -> Option<u16> {
     match value {
@@ -176,6 +178,12 @@ impl Parse for RsxNode {
                     syn::Error::new(e.span(), format!("Failed at keyword attr ref: {}", e))
                 })?;
                 syn::Ident::new("ref", proc_macro2::Span::call_site())
+            } else if input.peek(Token![for]) {
+                // Solid `for={id}` → Label prop `r#for`。
+                input.parse::<Token![for]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at keyword attr for: {}", e))
+                })?;
+                proc_macro2::Ident::new_raw("for", proc_macro2::Span::call_site())
             } else {
                 input
                     .parse()
@@ -1931,6 +1939,15 @@ fn expand_node(
                             base_calls.push(quote! { b = b.#method_ident(#final_value); });
                         }
                     } else {
+                        // Checkbox `checked` 是 `Option<Signal<bool>>`，不能走全局 boolish。
+                        if name_str == "Checkbox"
+                            && matches!(attr_name, "checked" | "checked_signal" | "checkedSignal")
+                        {
+                            prop_names.push(syn::Ident::new("checked", attr.span()));
+                            prop_values.push(quote! { Some(#value) });
+                            continue;
+                        }
+
                         let final_attr = if name_str == "Input" && attr_str == "type" {
                             // HTML `type` → 组件 prop `input_type`（避免 Rust 关键字）。
                             syn::Ident::new("input_type", attr.span())
@@ -1938,9 +1955,20 @@ fn expand_node(
                             match attr_str.as_str() {
                                 "onClick" => syn::Ident::new("on_click", attr.span()),
                                 "onChange" => syn::Ident::new("on_change", attr.span()),
+                                // ShadCN / HTML 别名
+                                "defaultChecked" => {
+                                    syn::Ident::new("default_checked", attr.span())
+                                }
+                                "onCheckedChange" => syn::Ident::new("on_click", attr.span()),
+                                "ariaInvalid" | "aria_invalid" => {
+                                    syn::Ident::new("invalid", attr.span())
+                                }
+                                // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
+                                "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),
                             }
                         };
+                        let final_attr_name = final_attr.to_string();
                         let final_value = if attr_str == "id" {
                             // RSX string attrs are `&str`; component `id` is `String`.
                             quote! { (#value).into() }
@@ -1948,10 +1976,19 @@ fn expand_node(
                             quote! { #value }
                         } else if matches!(
                             attr_name,
-                            "on_click" | "onClick" | "on_change" | "onChange"
+                            "on_click"
+                                | "onClick"
+                                | "on_change"
+                                | "onChange"
+                                | "onCheckedChange"
                         ) {
                             quote! { Some(rui::core::tree::Handler::from(rui::core::tree::ZeroArgFn(#value))) }
-                        } else if is_boolish_attr(attr_name) {
+                        } else if is_boolish_attr(attr_name)
+                            || matches!(
+                                final_attr_name.as_str(),
+                                "default_checked" | "invalid" | "disabled"
+                            )
+                        {
                             if let Some(b) = expr_as_bool_compat(value) {
                                 quote! { Some(#b) }
                             } else if !in_reactive_boundary && expr_reads_get(value) {
@@ -1979,6 +2016,14 @@ fn expand_node(
                     prop_names.push(syn::Ident::new("id", name_ident.span()));
                     prop_values.push(quote! {
                         format!("__rui_input_auto_{}", #seq)
+                    });
+                }
+
+                if name_str == "Checkbox" && !prop_names.iter().any(|p| *p == "id") {
+                    let seq = CHECKBOX_RSX_ANON_SEQ.fetch_add(1, Ordering::Relaxed);
+                    prop_names.push(syn::Ident::new("id", name_ident.span()));
+                    prop_values.push(quote! {
+                        format!("__rui_checkbox_auto_{}", #seq)
                     });
                 }
 

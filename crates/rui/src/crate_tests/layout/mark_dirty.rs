@@ -70,3 +70,31 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
         "root compute_layout should clear dirty"
     );
 }
+
+#[test]
+fn mark_all_text_leaves_dirty_touches_text_nodes() {
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().flex_col().child(
+        Element::new()
+            .text("hello wrap me please")
+            .text_size(14.0)
+            .w(80.0)
+            .template_id("txt"),
+    );
+    tree.build_and_layout(&mut root, 200.0, 200.0, [0.0, 0.0]);
+    let text_node = root.children[0]
+        .layout_node
+        .expect("text leaf must have taffy node");
+    assert!(!tree.is_node_dirty(text_node));
+
+    let calls_before = tree.mark_dirty_calls;
+    tree.mark_all_text_leaves_dirty(&root);
+    assert!(
+        tree.mark_dirty_calls > calls_before,
+        "must mark_dirty text leaves for settle/fit remasure"
+    );
+    assert!(
+        tree.is_node_dirty(text_node),
+        "text leaf must be dirty after mark_all_text_leaves_dirty"
+    );
+}

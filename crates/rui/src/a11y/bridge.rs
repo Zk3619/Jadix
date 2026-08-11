@@ -7,12 +7,14 @@ use accesskit::{
 };
 use std::hash::{Hash, Hasher};
 
-use crate::utils::text_field::{
-    input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
-};
+use crate::components::label::ATTR_LABEL_FOR;
 use crate::components::tabs::TABSTRIP_FOCUS_PREFIX;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
+use crate::utils::text_field::{
+    input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
+};
+use std::collections::HashMap;
 
 const ROOT_ID: NodeId = NodeId(1);
 /// Stable key for the Document node under Window (Narrator / browse content).
@@ -285,10 +287,39 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
     {
         return Some(text.to_string());
     }
-    let collected = collect_visible_text(el);
-    if !collected.is_empty() {
-        return Some(collected);
+
+    // Label：用自身文案；勿把内嵌 Checkbox 勾选字形拼进读屏名。
+    if role == Role::Label {
+        if let Some(t) = el
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(t.to_string());
+        }
+        return collect_label_caption(el);
     }
+
+    // 已有 labelledby 时，名称交给关联 Label（避免勾选 glyph 当可读名）。
+    let has_labelled_by = el.attrs.contains_key("accesskit_labelled_by")
+        || el.attrs.contains_key("aria-labelledby");
+    if has_labelled_by && matches!(role, Role::CheckBox | Role::Switch | Role::TextInput) {
+        return None;
+    }
+
+    if matches!(role, Role::CheckBox | Role::Switch) {
+        let cleaned = collect_visible_text_excluding_lucide_root(el);
+        if !cleaned.is_empty() {
+            return Some(cleaned);
+        }
+    } else {
+        let collected = collect_visible_text(el);
+        if !collected.is_empty() {
+            return Some(collected);
+        }
+    }
+
     if role == Role::TextInput || role == Role::ComboBox {
         return el
             .attrs
@@ -300,26 +331,82 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
     None
 }
 
-fn apply_labelled_by(el: &Element, node: &mut Node) {
-    let Some(refs) = el
+fn collect_label_caption(el: &Element) -> Option<String> {
+    let mut parts = Vec::new();
+    collect_label_caption_into(el, &mut parts, true);
+    let s = parts.join(" ");
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bool) {
+    if !is_root
+        && (el.checkbox_sync.is_some()
+            || el.switch_checked_sync.is_some()
+            || el.on_click.is_some())
+    {
+        return;
+    }
+    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if el.text_style.font_family.as_deref() != Some("lucide") {
+            parts.push(t.to_string());
+        }
+    }
+    for child in &el.children {
+        collect_label_caption_into(child, parts, false);
+    }
+}
+
+fn collect_visible_text_skip_lucide(el: &Element, parts: &mut Vec<String>) {
+    if el.text_style.font_family.as_deref() == Some("lucide") {
+        // 勾选 / 图标字形不当 accessible name；仍可下钻非 lucide 子节点。
+        for child in &el.children {
+            collect_visible_text_skip_lucide(child, parts);
+        }
+        return;
+    }
+    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        parts.push(t.to_string());
+    }
+    for child in &el.children {
+        collect_visible_text_skip_lucide(child, parts);
+    }
+}
+
+fn collect_visible_text_excluding_lucide_root(el: &Element) -> String {
+    let mut parts = Vec::new();
+    collect_visible_text_skip_lucide(el, &mut parts);
+    parts.join(" ")
+}
+
+fn apply_labelled_by(el: &Element, node: &mut Node, for_map: &HashMap<String, String>) {
+    let from_attr = el
         .attrs
         .get("accesskit_labelled_by")
         .or_else(|| el.attrs.get("aria-labelledby"))
-        .map(|s| s.as_str())
-    else {
-        return;
+        .map(|s| s.as_str());
+    let ids: Vec<NodeId> = if let Some(refs) = from_attr {
+        refs.split_whitespace()
+            .filter(|s| !s.is_empty())
+            .map(node_id_for_key)
+            .collect()
+    } else if let Some(fid) = el.focus_id.as_deref().filter(|s| !s.is_empty()) {
+        for_map
+            .get(fid)
+            .map(|lbl_key| vec![node_id_for_key(lbl_key)])
+            .unwrap_or_default()
+    } else {
+        Vec::new()
     };
-    let ids: Vec<NodeId> = refs
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .map(node_id_for_key)
-        .collect();
     if !ids.is_empty() {
         node.set_labelled_by(ids);
     }
 }
 
-fn build_node(el: &Element, key: &str) -> Node {
+fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
     let fid = el.focus_id.as_deref();
     let role = infer_role(el, fid);
     let mut node = Node::new(role);
@@ -329,15 +416,29 @@ fn build_node(el: &Element, key: &str) -> Node {
     }
 
     // AccessKit: Role::Label Name comes from `value` (`label_comes_from_value`); controls use `label`.
-    if let Some(text) = resolve_accessible_text(el, role) {
-        if role == Role::Label {
+    let named_by_label = el.attrs.contains_key("accesskit_labelled_by")
+        || el.attrs.contains_key("aria-labelledby")
+        || fid.is_some_and(|f| for_map.contains_key(f));
+    let explicit_name = el
+        .attrs
+        .get("accesskit_name")
+        .or_else(|| el.attrs.get("aria-label"))
+        .map(|s| s.as_str())
+        .filter(|t| !t.is_empty());
+
+    if role == Role::Label {
+        if let Some(text) = resolve_accessible_text(el, role) {
             node.set_value(text);
-        } else {
+        }
+    } else if let Some(text) = explicit_name {
+        node.set_label(text.to_string());
+    } else if !named_by_label {
+        if let Some(text) = resolve_accessible_text(el, role) {
             node.set_label(text);
         }
     }
 
-    apply_labelled_by(el, &mut node);
+    apply_labelled_by(el, &mut node, for_map);
 
     if let Some(desc) = el
         .attrs
@@ -383,7 +484,6 @@ fn build_node(el: &Element, key: &str) -> Node {
         }
     }
 
-    let _ = key;
     node
 }
 
@@ -416,6 +516,7 @@ fn walk_subtree(
     parent_child_ids: &mut Vec<NodeId>,
     used: &mut std::collections::HashSet<u64>,
     under_name_from_contents: bool,
+    for_map: &HashMap<String, String>,
 ) {
     // Fold plain caption text into the ancestor control name (avoid "按钮" + nested Label).
     if under_name_from_contents && is_plain_text_name_leaf(el) {
@@ -430,13 +531,21 @@ fn walk_subtree(
         } else {
             format!("{path}/{i}")
         };
-        walk_subtree(child, &child_path, nodes, &mut child_ids, used, absorb);
+        walk_subtree(
+            child,
+            &child_path,
+            nodes,
+            &mut child_ids,
+            used,
+            absorb,
+            for_map,
+        );
     }
 
     if should_be_accesskit_node(el) {
         let preferred = stable_node_key(el, path);
-        let (key, id) = alloc_unique_node_id(&preferred, path, used);
-        let mut node = build_node(el, &key);
+        let (_key, id) = alloc_unique_node_id(&preferred, path, used);
+        let mut node = build_node(el, for_map);
         node.set_children(child_ids);
         nodes.push((id, node));
         parent_child_ids.push(id);
@@ -445,11 +554,37 @@ fn walk_subtree(
     }
 }
 
+/// Collect `Label[for=target] → accesskit_id` so sibling controls get `labelled_by` without attrs.
+fn collect_label_for_map(el: &Element, map: &mut HashMap<String, String>) {
+    if let Some(for_id) = el
+        .attrs
+        .get(ATTR_LABEL_FOR)
+        .map(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let lbl_key = el
+            .attrs
+            .get("accesskit_id")
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("lbl:for:{for_id}"));
+        map.entry(for_id.to_string()).or_insert(lbl_key);
+    }
+    for child in &el.children {
+        collect_label_for_map(child, map);
+    }
+}
+
 /// Hierarchical tree: Window → Document → element a11y nodes.
 ///
 /// A Document child is required for Narrator/browse-style reading of static Labels;
 /// Tab alone only visits focusable controls (by design).
 pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> TreeUpdate {
+    let mut for_map = HashMap::new();
+    collect_label_for_map(root, &mut for_map);
+
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut content_children: Vec<NodeId> = Vec::new();
     let mut used = std::collections::HashSet::new();
@@ -465,14 +600,15 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
             &mut content_children,
             &mut used,
             false,
+            &for_map,
         );
     }
 
     // Root element itself may be an a11y node (unusual but supported).
     if should_be_accesskit_node(root) {
         let preferred = stable_node_key(root, "root");
-        let (key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
-        let mut node = build_node(root, &key);
+        let (_key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
+        let mut node = build_node(root, &for_map);
         node.set_children(content_children);
         nodes.push((id, node));
         content_children = vec![id];
@@ -984,5 +1120,42 @@ mod tests {
         assert_eq!(label.role(), Role::Label);
         assert_eq!(label.value(), Some("Email"));
         assert_eq!(field.labelled_by(), &[lid]);
+    }
+
+    #[test]
+    fn label_for_maps_to_labelled_by_without_control_attr() {
+        let mut lbl = Element::new().text("Accept terms").accesskit_role("label");
+        lbl.attrs
+            .insert("for".to_string(), "terms-cb".to_string());
+        lbl.attrs.insert(
+            "accesskit_id".to_string(),
+            "lbl:for:terms-cb".to_string(),
+        );
+        let mut cb = Element::new().focus_id("terms-cb").focusable(true);
+        cb.checkbox_sync = Some(crate::core::reactivity::use_signal(
+            "a11y_label_for_cb",
+            || false,
+        ));
+        let root = Element::new().child(lbl).child(cb);
+        let update = tree_update_from_elements(&root, None);
+
+        let lid = node_id_for_key("lbl:for:terms-cb");
+        let cid = node_id_for_key("terms-cb");
+        let label = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == lid)
+            .map(|(_, n)| n)
+            .expect("label");
+        let box_node = update
+            .nodes
+            .iter()
+            .find(|(i, _)| *i == cid)
+            .map(|(_, n)| n)
+            .expect("checkbox");
+        assert_eq!(label.value(), Some("Accept terms"));
+        assert_eq!(box_node.role(), Role::CheckBox);
+        assert_eq!(box_node.labelled_by(), &[lid]);
+        assert!(box_node.label().is_none());
     }
 }

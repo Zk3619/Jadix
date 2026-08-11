@@ -10,12 +10,18 @@
 //! ```ignore
 //! <Label text_size="0.875rem" font_weight="600">"标题"</Label>
 //! <Label id="hint" text_color="#888">"说明文字"</Label>
-//! // Element::from(label("t").text("Hello").size(14.0))
+//! // 关联控件（Solid `for`）：点击标签转发到 `focus_id` 匹配的控件
+//! <Checkbox id="terms" />
+//! <Label for="terms">"Accept terms"</Label>
+//! // 组合文案请写在 Checkbox 内：`<Checkbox>"Accept"</Checkbox>` 或内嵌 `<Label>`
+//! // Element::from(label("t").text("Hello").size(14.0).r#for("terms"))
 //! ```
 //!
 //! ## 注意
 //! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
 //! 约 14px / weight 500 / leading-none / `min_w=0`。`template_id` 取自 `id`。
+//! `for` 写入 `attrs["for"]`；指针命中时由 hit path 转发到目标 `on_click`。
+//! 关联时写入稳定 `accesskit_id`（`lbl:for:…`），桥侧给目标补 `labelled_by`。
 
 use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage, LayoutStatus};
 use crate::primitives::text::TextBuilder;
@@ -148,8 +154,41 @@ fn try_copy_label_selection_subtree(el: &Element) -> bool {
     false
 }
 
+/// `attrs` 键：Label → 控件关联（Solid / HTML 原生属性名 `for`）。
+pub const ATTR_LABEL_FOR: &str = "for";
+
+/// Label 关联控件时的稳定 AccessKit / `aria-labelledby` 目标键。
+pub fn label_accesskit_id_for(for_target: &str) -> String {
+    format!("lbl:for:{for_target}")
+}
+
+/// Solid `for`：写入 attrs，并补齐 `accesskit_id` 供读屏 `labelled_by`。
+fn apply_label_for(el: &mut Element, for_id: &str) {
+    let for_id = for_id.trim();
+    if for_id.is_empty() {
+        return;
+    }
+    el.attrs
+        .insert(ATTR_LABEL_FOR.to_string(), for_id.to_string());
+    if el
+        .attrs
+        .get("accesskit_id")
+        .map(|s| s.as_str())
+        .is_none_or(|s| s.is_empty())
+    {
+        el.attrs.insert(
+            "accesskit_id".to_string(),
+            label_accesskit_id_for(for_id),
+        );
+    }
+    if el.cursor.is_none() {
+        el.cursor = Some(crate::core::tree::CursorKind::Pointer);
+    }
+}
+
 pub struct LabelBuilder {
     pub(crate) id: String,
+    pub(crate) for_target: String,
     pub(crate) inner: TextBuilder,
 }
 
@@ -163,9 +202,11 @@ pub fn Label(
     color: Option<[u8; 4]>,
     weight: Option<f32>,
     center: bool,
+    /// 关联控件的 `focus_id` / Checkbox `id`（Solid `for`）。
+    r#for: String,
     children: Option<Element>,
 ) -> Element {
-    let mut builder = label(&id).text(text);
+    let mut builder = label(&id).text(text).r#for(r#for);
     if let Some(s) = size {
         builder = builder.size(s);
     }
@@ -187,6 +228,7 @@ pub fn Label(
 pub fn label(id: &str) -> LabelBuilder {
     LabelBuilder {
         id: id.to_string(),
+        for_target: String::new(),
         inner: TextBuilder {
             el: apply_label_defaults(Element::new()),
         },
@@ -401,6 +443,12 @@ impl LabelBuilder {
         }
         self
     }
+
+    /// Solid `for`：关联控件 `focus_id`。
+    pub fn r#for(mut self, target_id: impl Into<String>) -> Self {
+        self.for_target = target_id.into();
+        self
+    }
 }
 
 impl From<LabelBuilder> for Element {
@@ -414,6 +462,8 @@ impl From<LabelBuilder> for Element {
         if !el.attrs.contains_key("accesskit_role") {
             el = el.accesskit_role("label");
         }
+        let for_id = builder.for_target.trim().to_string();
+        apply_label_for(&mut el, &for_id);
         el
     }
 }
@@ -538,5 +588,15 @@ mod tests {
         drop(mounted.borrow_mut().take());
         dispose_effect(root);
         reset_registered_anchors();
+    }
+
+    #[test]
+    fn label_for_sets_accesskit_id() {
+        let el: Element = label("").text("Email").r#for("input:email").into();
+        assert_eq!(el.attrs.get(ATTR_LABEL_FOR).map(|s| s.as_str()), Some("input:email"));
+        assert_eq!(
+            el.attrs.get("accesskit_id").map(|s| s.as_str()),
+            Some("lbl:for:input:email")
+        );
     }
 }

@@ -1286,6 +1286,23 @@ impl LayoutTree {
         walk(self, root, dirty);
     }
 
+    /// Mark every text leaf dirty so `compute_layout` re-runs measure (FIT_CACHE / settle).
+    ///
+    /// Needed when available space is unchanged but soft-wrap height must grow after
+    /// `glyphon_fit` (paint spill → `note_fit_needs_relayout`, or post-resize settle).
+    /// Without this, Taffy keeps the previous one-line cache and labels stay clipped / stacked.
+    pub fn mark_all_text_leaves_dirty(&mut self, root: &Element) {
+        fn walk(tree: &mut LayoutTree, el: &Element) {
+            if el.text.is_some() && el.children.is_empty() && el.layout_node.is_some() {
+                tree.mark_element_layout_dirty(el);
+            }
+            for child in &el.children {
+                walk(tree, child);
+            }
+        }
+        walk(self, root);
+    }
+
     pub fn build_and_layout(
         &mut self,
         root: &mut Element,

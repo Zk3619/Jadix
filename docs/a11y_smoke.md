@@ -36,8 +36,19 @@
 
 ```rust
 ui! {
+    // 显式 labelledby
     <Label accesskit_id="email-lbl">"邮箱"</Label>
     <Input id="email" aria_labelledby="email-lbl" placeholder="you@example.com" />
+
+    // Solid `for`：Label 自动写 `accesskit_id=lbl:for:…`，桥侧给目标控件补 `labelled_by`
+    <Checkbox id="terms" />
+    <Label for="terms">"Accept terms"</Label>
+
+    // Checkbox 内嵌文案 / Label（自动 `for` + `aria-labelledby`）
+    <Checkbox>"Accept terms"</Checkbox>
+    <Checkbox>
+        <Label>"Accept terms"</Label>
+    </Checkbox>
 }
 ```
 

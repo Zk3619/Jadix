@@ -2012,21 +2012,19 @@ pub fn prepare_text_frame(
                 }
             } else if bounds_only {
                 // iced Difference::Bounds: same Buffer, set_size only (no set_text).
-                // P2 (xilem-compatible): reuse only when ink fits the new leaf **and**
-                // current line count fits the leaf height (avoid stacked glyphs).
+                // Skip set_size only when wrap already matches the desired width. "ink fits
+                // wider leaf" alone is wrong on grow: old narrow wrap leaves empty space on
+                // the right (gallery Checkbox blurb after widening the window).
                 let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
                 let measured = entry.measured_text_w;
                 let runs = entry.buffer.layout_runs().count().max(1);
                 let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
-                // Emoji/bidi ink can exceed `line_w`; do not reuse a leaf-width buffer on settle.
-                let leaf_wrap_on_settle = !force_fast_mode
-                    && !nowrap
-                    && !info.text.is_ascii()
-                    && (cur_wrap - soft_w_target).abs() < 1.0;
+                let want_wrap = resolve_paint_wrap();
+                let wrap_matches_leaf = (cur_wrap - want_wrap).abs() <= 1.0;
                 if measured > 0.0
                     && measured <= soft_w_target + 0.5
                     && height_ok
-                    && !leaf_wrap_on_settle
+                    && wrap_matches_leaf
                 {
                     entry.key_hash = key_hash;
                     entry.shape_hash = shape_hash;
@@ -2035,7 +2033,7 @@ pub fn prepare_text_frame(
                         wrap_w: cur_wrap,
                     }
                 } else {
-                    let mut wrap_w = resolve_paint_wrap();
+                    let mut wrap_w = want_wrap;
                     entry.buffer.set_size(
                         unsafe { &mut *text_renderer.font_system },
                         Some(wrap_w),

@@ -233,7 +233,8 @@ RUI 当前相关路径（摘要；**P0 已落地**）：
 
 ### P2 — xilem 式兼容复用 + egui 代际 GC（已实施）
 
-- Bounds：若 `measured_text_w ≤ new_leaf_w` **且** `runs*lh ≤ leaf_h` → 跳过 `set_size`。  
+- Bounds：仅当 **当前 buffer wrap ≈ 目标 wrap**（ASCII→leaf；bidi→fit）且 ink/行高仍适配时跳过 `set_size`。  
+  仅 `measured ≤ new_leaf` 不够——叶变宽时旧窄 wrap 会造成右侧留白、不及时重排。  
 - `FIT_CACHE`：`fit_cache_frame_tick` 代际 trim（软上限 1024，保留近几帧触及项）。  
 - `shaped_cache`：仍按节点下标对齐，`truncate` 丢弃多余槽（无需独立代际表）。
 

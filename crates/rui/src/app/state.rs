@@ -114,6 +114,9 @@ pub(super) struct AppState {
     /// Latest `WindowEvent::Resized` size. `inner_size()` can briefly lag during maximize; merging
     /// avoids a one-frame swapchain smaller than the DWM client area (black letterboxing at edges).
     last_resized_event: Option<PhysicalSize<u32>>,
+    /// After live resize ends, the matching frame still ran `layout_fast`; the next frame must
+    /// remasure text leaves with glyphon_fit and reshape (not reuse the text prepare cache).
+    needs_text_settle: bool,
     #[cfg(debug_assertions)]
     scroll_prepass_log_last: Instant,
     #[cfg(debug_assertions)]
@@ -226,6 +229,8 @@ impl AppState {
 
     pub(super) fn note_winit_resized(&mut self, physical_size: PhysicalSize<u32>) {
         self.last_resized_event = Some(physical_size);
+        // New resize aborts a pending settle; drag frames stay on the fast path.
+        self.needs_text_settle = false;
     }
 
     /// Pick the swapchain / layout size for this frame.
@@ -554,6 +559,7 @@ impl AppState {
             last_hover_cursor,
             text_backend,
             last_resized_event: None,
+            needs_text_settle: false,
             #[cfg(debug_assertions)]
             scroll_prepass_log_last: Instant::now(),
             #[cfg(debug_assertions)]
@@ -1121,6 +1127,15 @@ impl AppState {
     ) -> Result<(), wgpu::SurfaceError> {
         // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
         // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
+        // Settle is deferred one frame after `inner_size` matches the last Resized event so the
+        // final drag frame stays fluid; that next frame must run with fast=false + LayoutChanged.
+        let settling = self.needs_text_settle && self.last_resized_event.is_none();
+        if settling {
+            self.needs_text_settle = false;
+            self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+            // Geometry may match the last fast frame; force prepare so Exact/Bounds apply fit wrap.
+            self.last_text_nodes_cache.clear();
+        }
         let layout_fast = self.last_resized_event.is_some();
         crate::text::set_layout_text_fast_mode(layout_fast);
         let text_fast = text_force_fast_mode || layout_fast;
@@ -1139,9 +1154,8 @@ impl AppState {
                 .is_some_and(|e| inner.width == e.width && inner.height == e.height)
             {
                 self.last_resized_event = None;
-                // This frame still ran with layout_fast; schedule one settle pass so
-                // bidi/CJK leaf heights can glyphon_fit without hitching the drag.
-                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                // This frame still ran with layout_fast; next frame settles (fit + remasure).
+                self.needs_text_settle = true;
                 self.window.request_redraw();
             }
         }
@@ -1323,8 +1337,15 @@ impl AppState {
         {
             let dirty: std::collections::HashSet<_> =
                 self.pending_layout_dirty.drain(..).collect();
-            self.layout_tree
-                .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
+            if dirty.is_empty() {
+                // Resize settle / paint→fit relayout: available space often unchanged, so Taffy
+                // will not remasure unless text leaves are marked dirty.
+                self.layout_tree
+                    .mark_all_text_leaves_dirty(&self.root_element);
+            } else {
+                self.layout_tree
+                    .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
+            }
         } else if use_full_taffy_rebuild {
             self.pending_layout_dirty.clear();
         }
@@ -1459,6 +1480,10 @@ impl AppState {
             );
         }
         self.layout_status = crate::core::tree::LayoutStatus::Clean;
+        // Persist settle intent across the Clean reset above (next frame remasures + reshapes).
+        if self.needs_text_settle {
+            self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+        }
 
         // Keep the shader `globals.resolution` aligned with the surface every frame (avoids one-frame
         // mismatch if `configure` / layout / uniform updates reorder across events).
@@ -1710,7 +1735,9 @@ impl AppState {
                 && !self.force_full_redraw
                 && frame_fp == self.last_gpu_frame_fp
             {
-                self.layout_status = crate::core::tree::LayoutStatus::Clean;
+                if !self.needs_text_settle {
+                    self.layout_status = crate::core::tree::LayoutStatus::Clean;
+                }
                 return Ok(());
             }
             self.last_gpu_frame_fp = frame_fp;

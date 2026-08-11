@@ -1053,6 +1053,11 @@ impl super::App {
                 {
                     vec![super::pointer_events::HitPathEntry {
                         focus_id: el.focus_id.clone(),
+                        label_for: el
+                            .attrs
+                            .get(crate::components::label::ATTR_LABEL_FOR)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
                         on_pointer_down: el.on_pointer_down.clone(),
                         on_pointer_up: el.on_pointer_up.clone(),
                         on_click: el.on_click.clone(),
@@ -1080,18 +1085,24 @@ impl super::App {
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
-            let cb_to_run = path
-                .iter()
-                .rev()
-                .find_map(|e| e.on_click.clone())
-                .or_else(|| {
-                    super::pointer_events::resolve_click_with_capture(
-                        &state.root_element,
-                        x,
-                        y,
-                        capture.as_deref(),
+            let cb_resolved = {
+                let (from_path, focus_via_label) =
+                    super::pointer_events::resolve_click_from_path(&state.root_element, &path);
+                if from_path.is_some() {
+                    (from_path, focus_via_label)
+                } else {
+                    (
+                        super::pointer_events::resolve_click_with_capture(
+                            &state.root_element,
+                            x,
+                            y,
+                            capture.as_deref(),
+                        ),
+                        None,
                     )
-                });
+                }
+            };
+            let (cb_to_run, label_for_focus) = cb_resolved;
             drop(state_borrow);
             let focus_visible =
                 crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -1115,9 +1126,21 @@ impl super::App {
                     &mut pev2,
                     super::pointer_events::PointerKind::DoubleClick,
                 );
-            } else if !pev.is_consumed() {
-                if let Some(cb) = cb_to_run {
-                    (*cb.borrow_mut())();
+            }
+            // Legacy / Label `for` activation.
+            // - detail==1: always run resolved click (control on path, or Label→control).
+            // - detail>=2: DoubleClick already fired `on_click` on path nodes; Label 本身无
+            //   on_click，for 转发若仍走 else 会丢点击——连点 Label 时表现为无法快速切换。
+            if !pev.is_consumed() {
+                let via_label = label_for_focus.is_some();
+                if via_label || detail < 2 {
+                    if let Some(fid) = label_for_focus {
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .set(fid);
+                    }
+                    if let Some(cb) = cb_to_run {
+                        (*cb.borrow_mut())();
+                    }
                 }
             }
 

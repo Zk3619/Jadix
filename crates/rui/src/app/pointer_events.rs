@@ -64,6 +64,8 @@ pub type PointerHandler = Rc<RefCell<dyn FnMut(&PointerEvent)>>;
 #[derive(Clone)]
 pub struct HitPathEntry {
     pub focus_id: Option<String>,
+    /// Label `attrs["for"]`（Solid `for`）→ 转发点击到匹配 `focus_id` 的控件。
+    pub label_for: Option<String>,
     pub on_pointer_down: Option<PointerHandler>,
     pub on_pointer_up: Option<PointerHandler>,
     pub on_click: Option<Rc<RefCell<dyn FnMut()>>>,
@@ -154,6 +156,11 @@ fn hit_path_rec(
         .filter(|s| !s.is_empty());
     out.push(HitPathEntry {
         focus_id: el.focus_id.clone(),
+        label_for: el
+            .attrs
+            .get(crate::components::label::ATTR_LABEL_FOR)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         on_pointer_down: el.on_pointer_down.clone(),
         on_pointer_up: el.on_pointer_up.clone(),
         on_click: el.on_click.clone(),
@@ -199,13 +206,35 @@ fn hit_path_rec(
     }
 }
 
-/// Find element by `focus_id` (for pointer capture retargeting).
+/// Find element by `focus_id`, falling back to `template_id`.
+///
+/// **Must prefer `focus_id`**：组合 Checkbox 外层与控制面可能共用同一 `template_id`，
+/// 若先匹配 `template_id` 会命中无 `on_click` 的外层行，导致 Label `for` 点击无法切换。
 pub fn find_by_focus_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+    if let Some(found) = find_by_focus_id_exact(el, id) {
+        return Some(found);
+    }
+    find_by_template_id_exact(el, id)
+}
+
+fn find_by_focus_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
     if el.focus_id.as_deref() == Some(id) {
         return Some(el);
     }
     for c in &el.children {
-        if let Some(found) = find_by_focus_id(c, id) {
+        if let Some(found) = find_by_focus_id_exact(c, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+    if el.template_id.as_deref() == Some(id) {
+        return Some(el);
+    }
+    for c in &el.children {
+        if let Some(found) = find_by_template_id_exact(c, id) {
             return Some(found);
         }
     }
@@ -313,6 +342,31 @@ pub fn resolve_click_with_capture(
     tree_hit::find_click(root, x, y, [0.0, 0.0])
 }
 
+/// 从 hit path 解析最终 `on_click`：优先 Label `for` → 目标控件，否则最深节点自身 handler。
+///
+/// 返回 `(callback, focus_id_to_set)`；`focus_id_to_set` 在经由 Label `for` 激活时指向目标控件。
+pub fn resolve_click_from_path(
+    root: &Element,
+    path: &[HitPathEntry],
+) -> (Option<Rc<RefCell<dyn FnMut()>>>, Option<String>) {
+    // 先整 path 扫 Label `for`（叶→根），避免被无 handler 的文本叶抢先返回。
+    for entry in path.iter().rev() {
+        if let Some(for_id) = entry.label_for.as_deref() {
+            if let Some(target) = find_by_focus_id(root, for_id) {
+                if target.on_click.is_some() {
+                    return (target.on_click.clone(), Some(for_id.to_string()));
+                }
+            }
+        }
+    }
+    for entry in path.iter().rev() {
+        if let Some(cb) = entry.on_click.clone() {
+            return (Some(cb), None);
+        }
+    }
+    (None, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +418,53 @@ mod tests {
         // Root capture still runs before leaf target; bubble must not re-fire root's down
         // (we only fire on_pointer_down once per phase walk). Capture already ran root.
         assert!(ev.is_consumed());
+    }
+
+    #[test]
+    fn label_for_resolves_compound_checkbox_control_not_row() {
+        use std::cell::Cell;
+
+        let toggled = Rc::new(Cell::new(0u32));
+        let t = toggled.clone();
+
+        // Mirrors `<Checkbox>"caption"</Checkbox>`: outer row shares template_id with control focus_id.
+        let mut control = Element::new();
+        control.focus_id = Some("terms".into());
+        control.template_id = Some("terms".into());
+        control = control.on_click(move || {
+            t.set(t.get() + 1);
+        });
+
+        let mut caption = Element::new().text("Accept");
+        caption
+            .attrs
+            .insert("for".to_string(), "terms".to_string());
+
+        let mut row = Element::new().child(control).child(caption);
+        row.template_id = Some("terms".into());
+
+        let found = find_by_focus_id(&row, "terms").expect("control");
+        assert!(
+            found.on_click.is_some(),
+            "must resolve focused control, not template_id-only row"
+        );
+        assert_eq!(found.focus_id.as_deref(), Some("terms"));
+
+        let path = [HitPathEntry {
+            focus_id: None,
+            label_for: Some("terms".into()),
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_click: None,
+            on_context_menu: None,
+            on_double_click: None,
+            hoisted_portal: false,
+            portal_key: None,
+            floating_id: None,
+        }];
+        let (cb, fid) = resolve_click_from_path(&row, &path);
+        assert_eq!(fid.as_deref(), Some("terms"));
+        (*cb.expect("forwarded click").borrow_mut())();
+        assert_eq!(toggled.get(), 1);
     }
 }

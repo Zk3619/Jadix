@@ -161,3 +161,50 @@ fn gallery_rtl_emoji_paint_wrap_stays_inside_leaf() {
     );
     shutdown_layout_text();
 }
+
+#[test]
+fn ascii_blurb_reflows_when_leaf_grows_past_stale_wrap() {
+    // Regression: Bounds reused old narrow wrap when measured still fit the wider leaf,
+    // leaving empty space on the right (gallery Checkbox description after widen).
+    invalidate_prepare_cache();
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    let family = best_font_family(&fs);
+    let text = "Checkbox: embed text / Label inside, or sibling Label with Solid id / for. Tab / Space on the box.";
+    let size = 12.0f32;
+    let lh = size * 1.5;
+    let narrow = 160.0f32;
+    let wide = 320.0f32;
+
+    let mut buffer = Buffer::new(&mut fs, Metrics::new(size, lh));
+    buffer.set_text(
+        &mut fs,
+        text,
+        Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(500)),
+        Shaping::Advanced,
+    );
+    buffer.set_size(&mut fs, Some(narrow), Some(lh * 16.0));
+    buffer.shape_until_scroll(&mut fs, false);
+    let runs_narrow = buffer.layout_runs().count();
+    assert!(
+        runs_narrow >= 3,
+        "fixture must wrap tightly at {narrow}px, got {runs_narrow} runs"
+    );
+
+    // Grow leaf: must set_size to wide (not keep narrow wrap just because ink fits).
+    buffer.set_size(&mut fs, Some(wide), Some(lh * 16.0));
+    buffer.shape_until_scroll(&mut fs, false);
+    let runs_wide = buffer.layout_runs().count();
+    assert!(
+        runs_wide < runs_narrow,
+        "widening wrap must reflow to fewer lines ({runs_narrow} → {runs_wide})"
+    );
+    let ink = max_ink(&buffer);
+    assert!(
+        ink > narrow + 8.0,
+        "reflowed lines should use space past the old wrap; ink={ink} narrow={narrow}"
+    );
+    shutdown_layout_text();
+}
