@@ -1,9 +1,9 @@
 # 工程级差距分析（Gap Analysis）
 
-> **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。  
+> **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) / [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；**Solid 细粒度权威现状**见 [REACTIVITY.md](REACTIVITY.md)。  
 > 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`docs/`  
 > 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法  
-> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）
+> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md
 
 三个问题：**距离工程级 UI 框架还差什么**、**类 SolidJS 能力还缺什么**、**还需要哪些组件**。
 
@@ -210,7 +210,8 @@
 
 ## 5. SolidJS 能力对齐
 
-> **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。
+> **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。  
+> **2026-08-12**：下表为**历史镜像**；权威清单、Leptos/Floem 对照与开放缺口以 [REACTIVITY.md](REACTIVITY.md) §4–§6 为准；执行 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)。
 
 | Solid API | RUI 对应 | 状态 | 备注 |
 |-----------|----------|------|------|

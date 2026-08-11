@@ -5,7 +5,7 @@
 > **事实来源**：`core/tree.rs`（`Element` 字段）、`a11y/bridge.rs`、`app/hot_reload.rs`、`app/reactive.rs`、`rui_macros`、`components/*` Builder。  
 > **日期**：2026-08-09  
 
-交叉：[`a11y_smoke.md`](a11y_smoke.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`custom_components.md`](custom_components.md)
+交叉：[`a11y_smoke.md`](a11y_smoke.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`custom_components.md`](custom_components.md)
 
 ---
 
@@ -255,13 +255,14 @@ cargo check -p gallery
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md          ← 总纲领（P1 DX：scoped id）
 ENGINEERING_IMPLEMENTATION_PLAN.md      ← WP-1.3 / WP-2.4
+REACTIVITY.md / REACTIVITY_PLAN.md      ← 细粒度口径；R-WP-1 承接 WP-2.4 审计
 COMPONENT_LIBRARY.md §4.2               ← 组件 API 摘要 → 指向本文
 COMPONENT_LIBRARY_PLAN.md               ← C-WP-V.5 / C-WP-2.6 / C-WP-1.4
 element_identity.md                     ← 本文件（跨层身份权威）
 a11y_smoke.md / keyboard_nav.md / reactivity_and_hot_reload.md
 ```
 
-争议：先改本文不变量与职责表，再改代码；禁止在组件 PR 内静默重新定义「id = template_id = focus_id」。
+争议：先改本文不变量与职责表，再改代码；禁止在组件 PR 内静默重新定义「id = template_id = focus_id」。Owner 注册表执行细节见 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
 
 ---
 

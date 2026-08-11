@@ -5,7 +5,7 @@
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
 > **日期**：2026-08-10（§5 分桶表落地）  
 
-交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
+交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
 
 ---
 
@@ -174,6 +174,8 @@ let _: Element = vstack()
 ---
 
 ## 4. API 契约（所有公开组件）
+
+受控 / 非受控与细粒度更新口径交叉 [`REACTIVITY.md`](REACTIVITY.md) §7；身份四轴见 [`element_identity.md`](element_identity.md)。
 
 ### 4.1 命名与暴露
 
@@ -368,16 +370,18 @@ cargo check -p gallery
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 巩固期 Wave 1–4
+REACTIVITY.md                      ← Solid 细粒度权威（受控 Signal / 三档更新口径）
+REACTIVITY_PLAN.md                 ← R-WP（与 WP-2.4/2.5、C-WP-V.5/2.6 对齐）
 COMPONENT_LIBRARY.md               ← 本文件（组件权威规范；§3 prelude + 双书写面）
 COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次（含 CV 门禁）
 component_inventory.md             ← §5 分桶附录（verified/broken + id 策略 + EUI 密度）
 crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
-headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
+headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md / reactivity_and_hot_reload.md
 gap_analysis.md §6                 ← 历史 EUI 密度摘要（真源转 inventory §3）
 ```
 
-争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。
+争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。受控 Signal / 细粒度更新争议以 [`REACTIVITY.md`](REACTIVITY.md) 为准。
 
 ---
 

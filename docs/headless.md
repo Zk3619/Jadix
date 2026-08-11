@@ -51,7 +51,7 @@
 
 Tabs headless 条带的 `focus_id` 使用前缀 `tabstrip:`（常量 `components::tabs::TABSTRIP_FOCUS_PREFIX`），无障碍树中映射为 **TabList**。
 
-细粒度响应式与热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。键盘 / `utils/focus_trap` 见 [keyboard_nav.md](keyboard_nav.md)。
+细粒度响应式与热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)；权威口径见 [REACTIVITY.md](REACTIVITY.md)。键盘 / `utils/focus_trap` 见 [keyboard_nav.md](keyboard_nav.md)。
 
 ## 无窗口布局测试
 

@@ -1,14 +1,14 @@
 # RUI × 六参考项目对照
 
-> **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) §2–§3。  
-> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；RUI 以 `crates/` 与工程文档为准。  
-> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）
+> **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) / [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) §2–§3；**细粒度反应性权威**见 [REACTIVITY.md](REACTIVITY.md)（含 Leptos / Floem 对照）。  
+> **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `reference/leptos-main` · `reference/floem-main`；RUI 以 `crates/` 与工程文档为准。  
+> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*
 
 ---
 
 ## 0. 总判断
 
-RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六者仍是正确定位。差距在**原生可信度、文本/golden 质量门、组件深度与发布工程**——不是换哲学。
+RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六者仍是正确定位。差距在**原生可信度、文本/golden 质量门、组件深度与发布工程**——不是换哲学。细粒度工程卫生（`REGISTERED_*`→Owner、双路径）见 [REACTIVITY.md](REACTIVITY.md) / [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)，不拉低「模型轴」评分。
 
 六参考各管一层：
 

@@ -1,7 +1,7 @@
 # RUI 基础组件库实施计划
 
 > **文档地位**：把 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 落成**可执行工作包（C-WP）**。  
-> **与总计划关系**：不替代 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)；组件专项与巩固期 **W1–W4 交错**。重叠项（焦点环、a11y、golden、Gallery）以总计划验收为准，本计划补**分层下沉、API 归一、清单工程化**。  
+> **与总计划关系**：不替代 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)；组件专项与巩固期 **W1–W4 交错**。重叠项（焦点环、a11y、golden、Gallery）以总计划验收为准，本计划补**分层下沉、API 归一、清单工程化**。受控 Signal / Owner 注册表与 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) **R-WP-1**、总计划 **WP-2.4** 对齐，不在此重复实现反应性内核。  
 > **前提**：阶段一～十二组件 MVP 已落地；选型已定为 **shadcn 产品面 + headless 骨架**，书写为 **`ui!` ↔ Builder 双轨兼容**（ADR-6 / ADR-9，不可再分叉）。  
 > **执行原则**：**先验证稳定面、再行为下沉与 API 归一**。大量组件仍属「Gallery 可演示、库测/冒烟未盖住」——**禁止**在未过 CV 门禁前大面积做 C1/C2 重构。  
 > **日期**：2026-08-09（基线与勾选相对 2026-08-07 刷新）  
@@ -432,10 +432,11 @@ flowchart TB
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md
 ENGINEERING_IMPLEMENTATION_PLAN.md   ← 巩固期总 WP（★执行源）
+REACTIVITY.md / REACTIVITY_PLAN.md   ← 细粒度口径 + R-WP（WP-2.4/2.5 · C-WP-V.5/2.6）
 COMPONENT_LIBRARY.md                 ← 组件权威规范
 COMPONENT_LIBRARY_PLAN.md            ← 本文件（含 CV 门禁）
 element_identity.md                  ← 跨层身份契约（与 C-WP-V.5 / 2.6、WP-2.4 同步）
-headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
+headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md / reactivity_and_hot_reload.md
 archive/                             ← 选型与早期随笔（已冻结）
 ```
 

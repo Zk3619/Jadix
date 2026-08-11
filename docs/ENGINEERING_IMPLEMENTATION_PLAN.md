@@ -5,7 +5,7 @@
 > **底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`（禁区见纲领 §7）。  
 > **日期**：2026-08-09（基线与进度相对 2026-08-07 刷新）  
 
-交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
+交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [REACTIVITY.md](REACTIVITY.md) · [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)（R-WP，与 WP-2.4/2.5 互补）· [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
 
 ---
 
@@ -31,7 +31,7 @@
 | 项 | 事实 |
 |----|------|
 | 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有壳 `components/internal/{dialog_shell,text_edit}` |
-| 响应式 | ErrorBoundary / `switch_reactive` / `on_mount` / Store produce **已有**；`REGISTERED_*`→Owner 仍开放 |
+| 响应式 | ErrorBoundary / `switch_reactive` / `on_mount` / Store produce **已有**；`REGISTERED_*`→Owner 仍开放（权威：[REACTIVITY.md](REACTIVITY.md)；加深：[REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)） |
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
 | Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
@@ -158,6 +158,7 @@ flowchart TB
 | **任务** | ① 注册表条目随 owner dispose 移除（已有部分 `on_cleanup`，审计全覆盖）；② 辅助 API：scoped `template_id` / `focus_id`（owner path 前缀）；③ 长会话反复挂载/卸载无表膨胀测；④ 与组件 C-WP-2.6 对齐：减少全局 `"{id}__…"` 与空串身份 |
 | **验收** | dispose 后 registry 不含键；文档更新 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) + [element_identity.md](element_identity.md) §7 |
 | **状态** | ☐ |
+| **互补** | 审计清单与测矩阵见 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) **R-WP-1**（不另开勾选源） |
 
 ### WP-2.5 Store / Resource 契约加固
 
@@ -167,6 +168,7 @@ flowchart TB
 | **任务** | ① `produce` 语义与文档示例；② Resource Err → ErrorBoundary 端到端测；③ 标明实验 API（若尚不承诺） |
 | **验收** | 库测覆盖 produce + EB；SemVer 面草稿记入 CHANGELOG 草案 |
 | **状态** | ☐ API 已存在；契约测 + CHANGELOG 草案未完成 |
+| **互补** | 异步策略表 / 加深见 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) **R-WP-4**；Store proxy 加深为 **R-WP-3**（P2，本 WP 退出后） |
 
 ### WP-2.6 组件 golden 骨架（5 场景）
 
@@ -396,16 +398,18 @@ cargo check -p gallery
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md     ← 为何 / 门槛 / 禁区（纲领）
 ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：WP / 波次 / DoD（★执行源）
+REACTIVITY.md                      ← Solid 细粒度权威规范
+REACTIVITY_PLAN.md                 ← R-WP（与 WP-2.4/2.5 互补；硬化不扩面）
 COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + headless 骨架）
 COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
 PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md / text_align.md / damage.md / layout_subtree.md
-headless.md / custom_components.md / color.md / keyboard_nav.md
+headless.md / custom_components.md / color.md / keyboard_nav.md / reactivity_and_hot_reload.md
 archive/                           ← 选型与早期随笔（已冻结）
 ```
 
-组件产品面的选型与分层**不在此重开辩论**；**双书写面（`ui!` ↔ Builder）兼容**见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md) / 纲领 ADR-9。重叠验收（焦点 / a11y / Gallery / golden / 文档索引）与 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 双清单勾选即可。
+组件产品面的选型与分层**不在此重开辩论**；**双书写面（`ui!` ↔ Builder）兼容**见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md) / 纲领 ADR-9。反应性口径见 [REACTIVITY.md](REACTIVITY.md)。重叠验收（焦点 / a11y / Gallery / golden / 文档索引）与 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 双清单勾选即可；Owner 注册表与 Store 契约与 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) 双清单对齐。
 
 ---
 

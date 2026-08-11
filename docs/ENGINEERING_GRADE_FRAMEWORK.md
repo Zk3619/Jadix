@@ -149,6 +149,8 @@ crates/
 
 衡量的是**细粒度响应式编程模型**覆盖度，不是 solid-main 仓库对齐度。DOM/SSR 相关 API **不在范围内**。
 
+**权威展开**：现状、Leptos/`reactive_graph` × Floem/`floem_reactive` 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)（R-WP，与 WP-2.4/2.5 互补）。巩固期**禁止**以「追平 Leptos API 面」替代工程门槛。
+
 | 状态 | 代表 API |
 |------|----------|
 | 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`** |
@@ -174,7 +176,7 @@ crates/
 | P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
 | P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
-| P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md) |
+| P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md)；执行 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1 + WP-2.4 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
 
@@ -182,7 +184,7 @@ crates/
 
 ## 5. 三档更新契约（开发者必须遵守）
 
-权威细则：[`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)。纲领级摘要：
+权威口径：[`REACTIVITY.md`](REACTIVITY.md) §3；用法细则：[`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)。纲领级摘要：
 
 | 档位 | API | 允许做什么 | 禁止 |
 |------|-----|------------|------|
@@ -231,6 +233,8 @@ crates/
 ```text
 ENGINEERING_GRADE_FRAMEWORK.md      ← 本纲领（为何 + 门槛 + 禁区）
 ENGINEERING_IMPLEMENTATION_PLAN.md  ← 巩固期完整实现计划（WP / 波次 / DoD）★执行源
+REACTIVITY.md                       ← Solid 细粒度响应式权威规范（对照 Leptos/Floem）
+REACTIVITY_PLAN.md                  ← 反应性 R-WP（硬化；与 WP-2.4/2.5 互补）
 COMPONENT_LIBRARY.md                ← 组件库权威规范（shadcn 面 + headless 骨架）
 COMPONENT_LIBRARY_PLAN.md           ← 组件专项 C-WP（与巩固期交错）
 element_identity.md                 ← 跨层身份契约（与组件 C-WP-V.5/2.6、WP-2.4 同步）
@@ -239,11 +243,11 @@ element_identity.md                 ← 跨层身份契约（与组件 C-WP-V.5/
 │            keyboard_nav · ime · desktop_smoke · a11y_smoke · color · font_strategy · font
 │            multi_window · tray · glyphon_audit · size_and_memory
 │            PUBLISH · emoji_gpu_compat_matrix · site/README
-├─ 历史审计（非执行源）：gap_analysis · STAGE7_ROADMAP · PROJECT
+├─ 历史审计（非执行源）：gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
 └─ archive/                         ← 选型过程 / 早期随笔（已冻结，仅供追溯）
 ```
 
-争议处理：架构与禁区以本纲领 + ADR 为准；组件选型以 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 为准；**身份轴**以 [`element_identity.md`](element_identity.md) 为准；排期勾选以两份 `*_PLAN.md` 为准。
+争议处理：架构与禁区以本纲领 + ADR 为准；**反应性口径**以 [`REACTIVITY.md`](REACTIVITY.md) 为准；组件选型以 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 为准；**身份轴**以 [`element_identity.md`](element_identity.md) 为准；排期勾选以总计划 + 组件计划 + [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) 为准。
 
 ---
 
