@@ -1139,6 +1139,10 @@ impl AppState {
                 .is_some_and(|e| inner.width == e.width && inner.height == e.height)
             {
                 self.last_resized_event = None;
+                // This frame still ran with layout_fast; schedule one settle pass so
+                // bidi/CJK leaf heights can glyphon_fit without hitching the drag.
+                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                self.window.request_redraw();
             }
         }
 
@@ -1528,6 +1532,16 @@ impl AppState {
                 &shadow_cached_keys,
                 &self.shadow_rect_cache,
             );
+            // Mid-resize cull race: atlas left intact; do not promote an empty prepare into
+            // text_cache_valid or the blank frame sticks until geometry drifts.
+            if prep_out.culled_skip_prepare {
+                self.window.request_redraw();
+                (
+                    self.last_underline_instances.clone(),
+                    self.last_caret_instances.clone(),
+                    self.last_shadow_tex_draws.clone(),
+                )
+            } else {
             for bm in &prep_out.shadow_new_bitmaps {
                 let gpu = super::image_registry::upload_rgba8(
                     &self.device,
@@ -1566,6 +1580,7 @@ impl AppState {
                 prep_out.caret_instances,
                 prep_out.shadow_tex_draws,
             )
+            }
         };
 
         // Prepare overlay glyphs per portal paint band (separate atlas/renderer each) so the

@@ -119,6 +119,9 @@ pub struct PrepareTextOutput {
     pub shadow_new_bitmaps: Vec<ShadowNewBitmap>,
     pub shadow_tex_draws: Vec<ShadowTexDraw>,
     pub needs_warmup: bool,
+    /// Nodes existed but every TextArea was culled (common mid-resize). Atlas was **not**
+    /// wiped with an empty `prepare` — caller must not treat this as a successful prepare cache.
+    pub culled_skip_prepare: bool,
 }
 
 fn shadow_cache_key(
@@ -435,8 +438,9 @@ fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text:
     }
 }
 
-/// P1: after shaping at leaf/cache wrap, if cosmic ink spills the leaf, run one
-/// `glyphon_fit` (fills FIT_CACHE) and `set_size` to the fitted wrap.
+/// After shaping: if cosmic ink spills the leaf horizontally **or** soft-wrap line count
+/// exceeds the leaf height, run one `glyphon_fit` (fills FIT_CACHE) and request relayout.
+/// During resize/scroll fast mode, skip the expensive fit (settle frame corrects).
 fn correct_bidi_ink_spill(
     buffer: &mut glyphon::Buffer,
     font_system: &mut glyphon::FontSystem,
@@ -452,6 +456,7 @@ fn correct_bidi_ink_spill(
     height_opt: Option<f32>,
     wrap_w: f32,
     nowrap: bool,
+    force_fast: bool,
 ) -> f32 {
     if nowrap || text.is_ascii() || soft_w_target <= 8.0 {
         return wrap_w;
@@ -467,20 +472,30 @@ fn correct_bidi_ink_spill(
             .fold(0.0_f32, f32::max);
         max_ink = max_ink.max(gr).max(run.line_w);
     }
-    if max_ink <= soft_w_target + 1.0 {
+    let horizontal_spill = max_ink > soft_w_target + 1.0;
+    let vertical_spill = (runs as f32 * line_height) > scaled_h + 1.0;
+    if !horizontal_spill && !vertical_spill {
+        return wrap_w;
+    }
+    if force_fast {
+        // Keep resize fluid; resting frame (!fast) will fit + relayout.
         return wrap_w;
     }
     let fit = crate::text::glyphon_fit_soft_wrap(text, size, weight, logical_lh, fit_lookup_w);
     let fit_w = (fit.wrap_width * ui_scale).max(1.0);
-    if (fit_w - wrap_w).abs() > 0.5 {
+    if horizontal_spill && (fit_w - wrap_w).abs() > 0.5 {
         buffer.set_size(font_system, Some(fit_w), height_opt);
         buffer.shape_until_scroll(font_system, false);
     }
     let need_h = fit.line_count.max(1) as f32 * line_height;
-    if need_h > scaled_h + 1.0 || fit.line_count > runs {
+    if need_h > scaled_h + 1.0 || vertical_spill || fit.line_count > runs {
         crate::text::note_fit_needs_relayout();
     }
-    fit_w
+    if horizontal_spill {
+        fit_w
+    } else {
+        wrap_w
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1490,8 +1505,11 @@ pub fn prepare_text_frame(
             shadow_new_bitmaps: Vec::new(),
             shadow_tex_draws: Vec::new(),
             needs_warmup: false,
+            culled_skip_prepare: false,
         };
     }
+
+    crate::text::fit_cache_frame_tick();
 
     let mut shadow_new_bitmaps: Vec<ShadowNewBitmap> = Vec::new();
     let mut shadow_tex_draws: Vec<ShadowTexDraw> = Vec::new();
@@ -1835,8 +1853,8 @@ pub fn prepare_text_frame(
                 .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
         }
 
-        // P1: wrap from FIT_CACHE when present; otherwise shape at leaf and correct on
-        // ink spill (glyphon_fit writes the cache). Layout never computes fit.
+        // Wrap: FIT_CACHE hit always. Fast miss → leaf (smooth resize). Settle miss →
+        // one glyphon_fit (bidi/emoji ink must not paint past the leaf).
         let logical_lh = line_height / ui_scale.max(0.001);
         let fit_lookup_w = {
             let fit_target = crate::text::layout_wrap_target(layout_w, force_fast_mode);
@@ -1846,9 +1864,9 @@ pub fn prepare_text_frame(
                 layout_w
             }
         };
-        let resolve_cached_wrap = || -> (f32, bool) {
+        let resolve_paint_wrap = || -> f32 {
             if nowrap || info.text.is_ascii() || info.prepared.is_none() {
-                return (soft_w_target, false);
+                return soft_w_target;
             }
             if let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(
                 info.text.as_str(),
@@ -1857,9 +1875,19 @@ pub fn prepare_text_frame(
                 logical_lh,
                 fit_lookup_w,
             ) {
-                return ((fit.wrap_width * ui_scale).max(1.0), true);
+                return (fit.wrap_width * ui_scale).max(1.0);
             }
-            (soft_w_target, false)
+            if force_fast_mode {
+                return soft_w_target;
+            }
+            let fit = crate::text::glyphon_fit_soft_wrap(
+                info.text.as_str(),
+                st.size,
+                font_weight,
+                logical_lh,
+                fit_lookup_w,
+            );
+            (fit.wrap_width * ui_scale).max(1.0)
         };
 
         enum ShapePath {
@@ -1888,7 +1916,7 @@ pub fn prepare_text_frame(
                 }
                 if ok {
                     if is_input_text {
-                        let (mut wrap_w, _) = resolve_cached_wrap();
+                        let mut wrap_w = resolve_paint_wrap();
                         entry.buffer.set_size(
                             unsafe { &mut *text_renderer.font_system },
                             Some(wrap_w),
@@ -1915,6 +1943,7 @@ pub fn prepare_text_frame(
                             buffer_height_opt,
                             wrap_w,
                             nowrap,
+                            force_fast_mode,
                         );
                         entry.measured_text_w = entry
                             .buffer
@@ -1926,9 +1955,56 @@ pub fn prepare_text_frame(
                             wrap_w,
                         }
                     } else {
-                        ShapePath::Exact {
-                            measured: entry.measured_text_w,
-                            wrap_w: entry.buffer.size().0.unwrap_or(soft_w_target),
+                        // Exact hit (labels): fast may have shaped at full leaf; settle must
+                        // apply fit wrap so bidi/emoji ink does not clip at the card edge.
+                        let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
+                        if force_fast_mode {
+                            ShapePath::Exact {
+                                measured: entry.measured_text_w,
+                                wrap_w: cur_wrap,
+                            }
+                        } else {
+                            let mut wrap_w = resolve_paint_wrap();
+                            let runs = entry.buffer.layout_runs().count();
+                            let need_reshape = (wrap_w - cur_wrap).abs() > 0.5
+                                || (runs as f32 * line_height) > scaled_h + 1.0;
+                            if need_reshape {
+                                entry.buffer.set_size(
+                                    unsafe { &mut *text_renderer.font_system },
+                                    Some(wrap_w),
+                                    buffer_height_opt,
+                                );
+                                entry.buffer.shape_until_scroll(
+                                    unsafe { &mut *text_renderer.font_system },
+                                    false,
+                                );
+                            }
+                            wrap_w = correct_bidi_ink_spill(
+                                &mut entry.buffer,
+                                unsafe { &mut *text_renderer.font_system },
+                                info.text.as_str(),
+                                st.size,
+                                font_weight,
+                                logical_lh,
+                                fit_lookup_w,
+                                soft_w_target,
+                                ui_scale,
+                                line_height,
+                                scaled_h,
+                                buffer_height_opt,
+                                wrap_w,
+                                nowrap,
+                                force_fast_mode,
+                            );
+                            entry.measured_text_w = entry
+                                .buffer
+                                .layout_runs()
+                                .map(|run| run.line_w)
+                                .fold(0.0_f32, f32::max);
+                            ShapePath::Exact {
+                                measured: entry.measured_text_w,
+                                wrap_w,
+                            }
                         }
                     }
                 } else {
@@ -1936,41 +2012,65 @@ pub fn prepare_text_frame(
                 }
             } else if bounds_only {
                 // iced Difference::Bounds: same Buffer, set_size only (no set_text).
-                // Wrap = FIT_CACHE hit, else leaf; spill → one glyphon_fit (P1).
-                let (mut wrap_w, _) = resolve_cached_wrap();
-                entry.buffer.set_size(
-                    unsafe { &mut *text_renderer.font_system },
-                    Some(wrap_w),
-                    buffer_height_opt,
-                );
-                entry
-                    .buffer
-                    .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
-                wrap_w = correct_bidi_ink_spill(
-                    &mut entry.buffer,
-                    unsafe { &mut *text_renderer.font_system },
-                    info.text.as_str(),
-                    st.size,
-                    font_weight,
-                    logical_lh,
-                    fit_lookup_w,
-                    soft_w_target,
-                    ui_scale,
-                    line_height,
-                    scaled_h,
-                    buffer_height_opt,
-                    wrap_w,
-                    nowrap,
-                );
-                let measured = entry
-                    .buffer
-                    .layout_runs()
-                    .map(|run| run.line_w)
-                    .fold(0.0_f32, f32::max);
-                entry.key_hash = key_hash;
-                entry.shape_hash = shape_hash;
-                entry.measured_text_w = measured;
-                ShapePath::Bounds { measured, wrap_w }
+                // P2 (xilem-compatible): reuse only when ink fits the new leaf **and**
+                // current line count fits the leaf height (avoid stacked glyphs).
+                let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
+                let measured = entry.measured_text_w;
+                let runs = entry.buffer.layout_runs().count().max(1);
+                let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
+                // Emoji/bidi ink can exceed `line_w`; do not reuse a leaf-width buffer on settle.
+                let leaf_wrap_on_settle = !force_fast_mode
+                    && !nowrap
+                    && !info.text.is_ascii()
+                    && (cur_wrap - soft_w_target).abs() < 1.0;
+                if measured > 0.0
+                    && measured <= soft_w_target + 0.5
+                    && height_ok
+                    && !leaf_wrap_on_settle
+                {
+                    entry.key_hash = key_hash;
+                    entry.shape_hash = shape_hash;
+                    ShapePath::Bounds {
+                        measured,
+                        wrap_w: cur_wrap,
+                    }
+                } else {
+                    let mut wrap_w = resolve_paint_wrap();
+                    entry.buffer.set_size(
+                        unsafe { &mut *text_renderer.font_system },
+                        Some(wrap_w),
+                        buffer_height_opt,
+                    );
+                    entry
+                        .buffer
+                        .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                    wrap_w = correct_bidi_ink_spill(
+                        &mut entry.buffer,
+                        unsafe { &mut *text_renderer.font_system },
+                        info.text.as_str(),
+                        st.size,
+                        font_weight,
+                        logical_lh,
+                        fit_lookup_w,
+                        soft_w_target,
+                        ui_scale,
+                        line_height,
+                        scaled_h,
+                        buffer_height_opt,
+                        wrap_w,
+                        nowrap,
+                        force_fast_mode,
+                    );
+                    let measured = entry
+                        .buffer
+                        .layout_runs()
+                        .map(|run| run.line_w)
+                        .fold(0.0_f32, f32::max);
+                    entry.key_hash = key_hash;
+                    entry.shape_hash = shape_hash;
+                    entry.measured_text_w = measured;
+                    ShapePath::Bounds { measured, wrap_w }
+                }
             } else {
                 ShapePath::Miss
             }
@@ -1982,7 +2082,7 @@ pub fn prepare_text_frame(
             }
             ShapePath::Miss => {
                 _shape_misses += 1;
-                let (mut buffer_soft_w, _) = resolve_cached_wrap();
+                let mut buffer_soft_w = resolve_paint_wrap();
                 let entry = &mut text_renderer.shaped_cache[i];
                 let mut buffer = glyphon::Buffer::new(
                     unsafe { &mut *text_renderer.font_system },
@@ -2087,6 +2187,7 @@ pub fn prepare_text_frame(
                     buffer_height_opt,
                     buffer_soft_w,
                     nowrap,
+                    force_fast_mode,
                 );
                 let measured = buffer
                     .layout_runs()
@@ -2777,7 +2878,9 @@ pub fn prepare_text_frame(
     }
 
     let _t2 = std::time::Instant::now();
-
+    // Keep viewport in sync on resize even when every node is culled — but never
+    // `prepare([])` while nodes exist (wipes atlas → blank text until geometry drifts
+    // enough to bust text_cache_valid).
     text_renderer.viewport.update(
         queue,
         glyphon::Resolution {
@@ -2785,6 +2888,18 @@ pub fn prepare_text_frame(
             height: config.height,
         },
     );
+
+    let text_area_count = text_areas.len();
+    if text_area_count == 0 {
+        return PrepareTextOutput {
+            underline_instances,
+            caret_instances,
+            shadow_new_bitmaps,
+            shadow_tex_draws,
+            needs_warmup: true,
+            culled_skip_prepare: true,
+        };
+    }
 
     let _warmup_count = preshape_warmup.len();
     if !preshape_warmup.is_empty() {
@@ -2823,7 +2938,6 @@ pub fn prepare_text_frame(
         }
     }
 
-    let text_area_count = text_areas.len();
     let fs = text_renderer.font_system;
     if let Err(err) = text_renderer.text_renderer.prepare_with_custom(
         device,
@@ -2864,6 +2978,7 @@ pub fn prepare_text_frame(
         shadow_new_bitmaps,
         shadow_tex_draws,
         needs_warmup: !text_renderer.pending_warmup.is_empty(),
+        culled_skip_prepare: false,
     }
 }
 

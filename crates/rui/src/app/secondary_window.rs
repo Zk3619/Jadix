@@ -293,7 +293,7 @@ impl SecondaryWindowState {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        if prep.needs_warmup {
+        if prep.culled_skip_prepare || prep.needs_warmup {
             self.window.request_redraw();
         }
         if crate::text::take_fit_needs_relayout() {

@@ -224,16 +224,18 @@ RUI 当前相关路径（摘要；**P0 已落地**）：
 
 预期：resize 从「N × (fit×2~3 + 全量 reshape)」降为「N × FIT 查找 + 一次 set_size」。
 
-### P1 — pretext 式高度：算术为主，fit 为辅（已实施）
+### P1 — pretext 式高度：算术为主，fit 为辅（已实施，含正确性修正）
 
-- 布局高度：`layout()` 段宽算术；**仅**在 FIT_CACHE 命中时用 `fit.line_count` 抬高，**布局路径永不 compute fit**。  
-- `glyphon_fit`：paint（Bounds/Miss）在 `max_ink > leaf + ε` 时计算一次并写入 FIT_CACHE；必要时 `note_fit_needs_relayout` 让下一帧重测高度。  
-- MinContent / `layout_w≤max_seg`（含 `≈0` 探针）：只用算术，不走 fit。
+- 布局高度：ASCII / MinContent → 段宽算术；可换行非 ASCII → FIT_CACHE 命中用 `fit.line_count`。  
+- **resize fast**：布局 miss **不** compute fit（只算术）；paint spill 也不 fit。  
+- **松手 settle**：布局 miss 一次 fit；paint 水平/垂直 spill → fit + 必要时 relayout。  
+- MinContent / `layout_w≤max_seg`：只用算术。
 
-### P2 — xilem 式兼容复用 + egui 代际 GC
+### P2 — xilem 式兼容复用 + egui 代际 GC（已实施）
 
-- 若 `old_measured_w ≤ new_leaf_w` 且行数未变 → 复用 shaped buffer（可不 set_size）。  
-- shaped_cache / FIT_CACHE 用 generation trim，避免无限增长。
+- Bounds：若 `measured_text_w ≤ new_leaf_w` **且** `runs*lh ≤ leaf_h` → 跳过 `set_size`。  
+- `FIT_CACHE`：`fit_cache_frame_tick` 代际 trim（软上限 1024，保留近几帧触及项）。  
+- `shaped_cache`：仍按节点下标对齐，`truncate` 丢弃多余槽（无需独立代际表）。
 
 ### P3 — gpui 式解耦（中长期）
 
@@ -258,7 +260,7 @@ RUI 当前相关路径（摘要；**P0 已落地**）：
 | Bidi | 元数据，断行不用 | 有限 | cosmic UAX#9 | unicode_bidi + shape | parley | 依赖 HB | cosmic；样例用 FSI |
 | Emoji | canvas 校正 | emoji 字体优先 | 系统回退 | emoji 字体标记 | parley | 彩色字体 | Twemoji 占位 + custom glyph |
 | 软换行 | 自研算术 | 自研 | cosmic Buffer | **自研 WrapBoundary** | parley | 朴素行累加 | cosmic + fit 收紧 |
-| Resize 策略 | **纯 layout 算术** | Galley 哈希重算/命中 | **Bounds→set_size** | wrap 边界重算 | **max_advance 复用** | 尺寸 LRU | **Bounds→set_size(fit.wrap)** |
+| Resize 策略 | **纯 layout 算术** | Galley 哈希重算/命中 | **Bounds→set_size** | wrap 边界重算 | **max_advance 复用** | 尺寸 LRU | **Bounds + xilem 兼容跳过；spill→fit** |
 | 缓存 | 段宽 / emoji 校正 | Galley 代际 | Buffer + alias | 两帧 + hash | 多槽 Layout | TextSize LRU | PREPARE + FIT + shaped（shape_hash / key_hash） |
 
 ---
