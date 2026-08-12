@@ -58,6 +58,10 @@ fn gallery_like_textarea_keeps_newlines_and_multi_line_leaf() {
     let leaf = find_tid(&root, &tid).expect("textarea text leaf");
     let leaf_h = leaf.layout_bounds[3];
     let chrome_h = root.children[0].layout_bounds[3];
+    let region_tid = format!("__rui_textarea:{id}:region");
+    let region_h = find_tid(&root, &region_tid)
+        .expect("text region")
+        .layout_bounds[3];
     let info = result
         .text_nodes
         .iter()
@@ -85,10 +89,10 @@ fn gallery_like_textarea_keeps_newlines_and_multi_line_leaf() {
         clip_h + 0.5 >= leaf_h,
         "default chrome clip must fit leaf (clip={clip_h} leaf={leaf_h})"
     );
-    // Absolute text_region must track chrome (not shrink to first line).
+    // Absolute text_region clip must track the scrollport (inside chrome border).
     assert!(
-        (clip_h - chrome_h).abs() < 1.0,
-        "text_region clip must fill chrome (clip={clip_h} chrome={chrome_h})"
+        (clip_h - region_h).abs() < 1.0,
+        "text_region clip must fill scrollport (clip={clip_h} region={region_h} chrome={chrome_h})"
     );
 }
 

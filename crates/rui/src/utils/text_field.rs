@@ -48,6 +48,100 @@ pub fn textarea_default_height(rows: u32, line_height_px: f32, pad_y_px: f32) ->
     rows.max(1) as f32 * line_height_px.max(1.0) + pad_y_px * 2.0
 }
 
+#[inline]
+fn length_percentage_px(v: &taffy::style::LengthPercentage) -> f32 {
+    match *v {
+        taffy::style::LengthPercentage::Length(px) if px.is_finite() => px,
+        _ => 0.0,
+    }
+}
+
+/// Scrollport vertical padding from style, falling back to layout gap text leaf ↔ region box.
+pub fn textarea_scrollport_padding_y(
+    region: &crate::core::tree::Element,
+    region_abs_y: f32,
+    viewport_h: f32,
+) -> (f32, f32) {
+    let mut pad_top = length_percentage_px(&region.style.padding.top);
+    let mut pad_bottom = length_percentage_px(&region.style.padding.bottom);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let child_top = child.layout_bounds[1];
+        let child_bottom = child.layout_bounds[1] + child.layout_bounds[3];
+        let region_bottom = region_abs_y + viewport_h;
+        if pad_top < 0.5 {
+            pad_top = (child_top - region_abs_y).max(0.0);
+        }
+        if pad_bottom < 0.5 {
+            pad_bottom = (region_bottom - child_bottom).max(0.0);
+        }
+        break;
+    }
+    (pad_top, pad_bottom)
+}
+
+/// Textarea internal scrollport content height (text block + top/bottom padding).
+///
+/// Do not derive from `max_bottom - origin`: collect seeds `max_bottom` to the viewport
+/// bottom before walking children, so an empty/shorter leaf still yields `viewport + pad_bottom`.
+pub fn textarea_scroll_content_h(
+    region: &crate::core::tree::Element,
+    region_abs_y: f32,
+    viewport_h: f32,
+) -> f32 {
+    let (pad_top, pad_bottom) = textarea_scrollport_padding_y(region, region_abs_y, viewport_h);
+    let mut content = viewport_h;
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let style_h = match child.style.size.height {
+            taffy::style::Dimension::Length(h) if h.is_finite() => h,
+            _ => 0.0,
+        };
+        let layout_h = child.layout_bounds[3];
+        // Layout is authoritative; stale style must not inflate scroll when leaf is shorter.
+        let mut child_h = if layout_h > 0.5 {
+            layout_h
+        } else {
+            style_h
+        };
+        if let Some(text) = &child.text {
+            let w = child.layout_bounds[2].max(1.0);
+            let lh = child
+                .text_style
+                .line_height_px
+                .unwrap_or(child.text_style.size * 1.5)
+                .max(1.0);
+            let measured = text_edit_content_height_px(
+                text,
+                child.text_style.size,
+                child.text_style.weight,
+                lh,
+                w,
+            );
+            child_h = child_h.max(measured);
+        }
+        if child_h > 0.0 {
+            content = content.max(pad_top + child_h + pad_bottom);
+        }
+        break;
+    }
+    content
+}
+
 /// 解析 Input/Textarea 行盒高度（逻辑 px）。
 ///
 /// 未显式指定时用 **leading-normal（1.5）**，与 Gallery 中正常的 Label 对照一致，
@@ -123,11 +217,21 @@ pub fn caret_line_and_local(text: &str, byte_ix: usize) -> (usize, usize) {
     (line_i, ix.saturating_sub(line_start))
 }
 
+/// Scroll insets for [`ensure_caret_visible_scroll_y`] inside a padded textarea scrollport.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TextareaCaretScrollInsets {
+    pub pad_top: f32,
+    pub pad_bottom: f32,
+    /// Bottom ink on the last hard line (see [`text_edit_ink_pad_px`]).
+    pub ink_bottom: f32,
+}
+
 /// 若 caret 行盒不在视口内，返回应写入的新 `scroll_y`；已可见则 `None`。
 ///
 /// - `viewport_h` 过小（未就绪）时：若仍有明显 `scroll_y`，强制清零（避免信号未就绪时
 ///   陈旧 sy 把多行裁成顶上一薄条，看起来像「字形被压扁」）。
 /// - `max_scroll_y`（通常 `max(0, content_h - viewport_h)`）用于钳制，避免把内容顶出裁切区。
+/// - `insets`：textarea 内部 `py` 与末行 ink；单行 Input 用 [`Default::default()`]。
 pub fn ensure_caret_visible_scroll_y(
     text: &str,
     caret_byte: usize,
@@ -135,6 +239,7 @@ pub fn ensure_caret_visible_scroll_y(
     viewport_h: f32,
     scroll_y: f32,
     max_scroll_y: f32,
+    insets: TextareaCaretScrollInsets,
 ) -> Option<f32> {
     let lh = line_height.max(1.0);
     let max_sy = max_scroll_y.max(0.0);
@@ -147,11 +252,15 @@ pub fn ensure_caret_visible_scroll_y(
         return if scroll_y > 0.5 { Some(0.0) } else { None };
     }
     let (line_i, _) = caret_line_and_local(text, caret_byte);
-    let caret_top = line_i as f32 * lh;
-    let caret_bot = caret_top + lh;
+    let line_count = text.split('\n').count().max(1);
+    let on_last_line = line_i + 1 >= line_count;
+    let ink = if on_last_line { insets.ink_bottom.max(0.0) } else { 0.0 };
+    // Coordinates in scroll-content space (includes scrollport padding).
+    let caret_top = insets.pad_top + line_i as f32 * lh;
+    let caret_bot = insets.pad_top + (line_i + 1) as f32 * lh + ink;
     let mut new_sy = scroll_y.clamp(0.0, max_sy);
     if caret_top < new_sy {
-        new_sy = caret_top;
+        new_sy = (caret_top - insets.pad_top).max(0.0);
     }
     if caret_bot > new_sy + viewport_h {
         new_sy = (caret_bot - viewport_h).max(0.0);
@@ -324,11 +433,34 @@ mod tests {
         // line 4 at y=80..100, viewport 50 tall scrolled to 0 → need sy=50
         let text = "a\nb\nc\nd\ne";
         let caret = text.len();
-        let new_sy = ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 0.0, 50.0);
+        let new_sy = ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 0.0, 50.0, Default::default());
         assert_eq!(new_sy, Some(50.0));
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 50.0, 50.0),
+            ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 50.0, 50.0, Default::default()),
             None
+        );
+    }
+
+    #[test]
+    fn ensure_caret_visible_textarea_insets_include_pad_and_last_line_ink() {
+        let text = "a\nb\nc\nd\ne";
+        let caret = text.len();
+        let lh = 20.0;
+        let vh = 50.0;
+        let insets = TextareaCaretScrollInsets {
+            pad_top: 8.0,
+            pad_bottom: 8.0,
+            ink_bottom: 4.0,
+        };
+        // Last line bottom in content space: 8 + 5*20 + 4 = 112 → sy = 62
+        assert_eq!(
+            ensure_caret_visible_scroll_y(text, caret, lh, vh, 0.0, 80.0, insets),
+            Some(62.0)
+        );
+        // Without insets (input path): sy = 50
+        assert_eq!(
+            ensure_caret_visible_scroll_y(text, caret, lh, vh, 0.0, 80.0, Default::default()),
+            Some(50.0)
         );
     }
 
@@ -337,11 +469,11 @@ mod tests {
         let text = "a\nb";
         // Unready viewport still clears a stale scroll offset (gallery squash).
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 0.0, 40.0, 0.0),
+            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 0.0, 40.0, 0.0, Default::default()),
             Some(0.0)
         );
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 5.0, 0.0, 0.0),
+            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 5.0, 0.0, 0.0, Default::default()),
             None
         );
     }
@@ -350,7 +482,7 @@ mod tests {
     fn ensure_caret_visible_clears_stale_sy_when_content_fits() {
         let text = "a\nb";
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 100.0, 40.0, 0.0),
+            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 100.0, 40.0, 0.0, Default::default()),
             Some(0.0)
         );
     }

@@ -371,7 +371,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .overlay(true)
             .z_index(1000)
             .top(4.0)
-            .bottom(14.0) // leave room for resize grip
+            .bottom(2.0) // minimal inset; resize grip overlays the corner (z below track)
             .right(2.0)
             .into();
         el = el.child(vbar);

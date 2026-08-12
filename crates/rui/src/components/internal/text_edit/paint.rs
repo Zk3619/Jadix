@@ -453,16 +453,45 @@ fn sync_one_text_edit_paint(
                 (el.layout_bounds[3] - line_height * 0.25).max(0.0)
             };
             let ch_eff = content_h_text.max(text_h_layout);
-            let _ = ch; // post-render metrics own the signal; paint must not shrink-poison it
+            let _ = ch; // post-render metrics own content_h; do not raise the signal here —
+            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }
-            if ch_eff > 1.0 && (ch_eff - ch).abs() > 0.5 && ch_eff >= ch {
-                // Only raise content_h here; never shrink below post-render metrics mid-frame.
-                use_signal(&ch_key, || 0.0_f32).set_silent(ch_eff);
+            let mut scroll_content_h = ch_eff;
+            let mut caret_insets = crate::utils::text_field::TextareaCaretScrollInsets::default();
+            for child in el.children.iter() {
+                if child.focus_id.as_deref() == Some(vp_fid.as_str()) {
+                    let region_h = if vp_h_layout > 1.0 {
+                        vp_h_layout
+                    } else {
+                        vh_eff
+                    };
+                    let (pad_top, pad_bottom) =
+                        crate::utils::text_field::textarea_scrollport_padding_y(
+                            child,
+                            child.layout_bounds[1],
+                            region_h,
+                        );
+                    scroll_content_h = pad_top + ch_eff + pad_bottom;
+                    caret_insets = crate::utils::text_field::TextareaCaretScrollInsets {
+                        pad_top,
+                        pad_bottom,
+                        ink_bottom: crate::utils::text_field::text_edit_ink_pad_px(
+                            desc.text_size_px,
+                        ),
+                    };
+                    break;
+                }
             }
-            let max_sy = (ch_eff - vh_eff).max(0.0);
-            let content_fits = vh_eff > 1.0 && content_h_text <= vh_eff + 0.5;
+            // Post-render publish wins when larger; never shrink below live text measure.
+            // After Enter, `ch` is still one frame stale — replacing scroll_content_h made
+            // max_sy too small until the user typed and collect refreshed the signal.
+            if ch > vh_eff + 0.5 {
+                scroll_content_h = scroll_content_h.max(ch);
+            }
+            let max_sy = (scroll_content_h - vh_eff).max(0.0);
+            let content_fits = vh_eff > 1.0 && scroll_content_h <= vh_eff + 0.5;
             // Only pull scroll to the caret when the caret *moves* (typing / arrows).
             // Running this every focused frame clamps sy to caret_top — wheel/scrollbar
             // cannot travel past the caret (gallery: "只能滚动极小值").
@@ -484,6 +513,7 @@ fn sync_one_text_edit_paint(
                     vh_eff,
                     sy,
                     max_sy,
+                    caret_insets,
                 )
             } else if max_sy < 0.5 && sy > 0.5 {
                 Some(0.0)

@@ -269,6 +269,10 @@ fn textarea_parent_flex_shrink_does_not_crush_leaf_height() {
     let result = tree.build_and_layout(&mut root, 400.0, lh * 1.6, [-1.0, -1.0]);
     let leaf_h = find_tid(&root, &tid).expect("text leaf").layout_bounds[3];
     let chrome_h = root.children[0].layout_bounds[3];
+    let region_tid = format!("__rui_textarea:{id}:region");
+    let region_h = find_tid(&root, &region_tid)
+        .expect("text region")
+        .layout_bounds[3];
     let info = result
         .text_nodes
         .iter()
@@ -288,8 +292,8 @@ fn textarea_parent_flex_shrink_does_not_crush_leaf_height() {
         "flex_shrink(0) chrome should keep height under parent pressure (chrome={chrome_h})"
     );
     assert!(
-        (clip_h - chrome_h).abs() < 1.0,
-        "absolute text_region clip must fill chrome (clip={clip_h} chrome={chrome_h})"
+        (clip_h - region_h).abs() < 1.0,
+        "absolute text_region clip must fill scrollport (clip={clip_h} region={region_h} chrome={chrome_h})"
     );
     assert!(
         clip_h + 0.5 >= leaf_h,
@@ -739,6 +743,140 @@ fn textarea_paint_sync_scrolls_caret_into_view_when_past_fold() {
 }
 
 #[test]
+fn textarea_newline_at_bottom_scrolls_last_line_fully_visible() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-ml-newline-bottom";
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+    let ink = text_edit_ink_pad_px(size);
+    let line = "我";
+    let text = format!("{line}\n{line}\n{line}\n{line}\n{line}");
+    let line_count = text.split('\n').count();
+
+    use_signal(&input_value_signal_key(id), String::new).set(text.clone());
+    use_signal("__rui_button_focus_id", String::new).set(format!("textarea:{id}"));
+    use_signal(
+        &crate::components::input::input_caret_signal_key(id),
+        || None::<usize>,
+    )
+    .set(Some(text.len()));
+
+    let el: Element = textarea(id).rows(4).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(400.0).h(400.0).child(el);
+    let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+
+    let region_tid = format!("__rui_textarea:{id}:region");
+    let region = find_tid(&root, &region_tid).expect("region");
+    let region_h = region.layout_bounds[3];
+    let (pad_top, _pad_bottom) = crate::utils::text_field::textarea_scrollport_padding_y(
+        region,
+        region.layout_bounds[1],
+        region_h,
+    );
+    let caret_bot = pad_top + line_count as f32 * lh + ink;
+
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+    let sy = use_signal(
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+        || 0.0_f32,
+    )
+    .peek();
+    let visible_bottom = sy + region_h;
+    assert!(
+        visible_bottom >= caret_bot - 0.5,
+        "newline auto-scroll must show full last line (sy={sy} region_h={region_h} \
+         visible_bottom={visible_bottom} caret_bot={caret_bot} pad_top={pad_top} ink={ink})"
+    );
+
+    let tid = input_text_template_id(id);
+    let info = tree
+        .build_and_layout_fast(&mut root, 400.0, 400.0, [-1.0, -1.0], true, false)
+        .text_nodes
+        .iter()
+        .find(|n| n.template_id.as_deref() == Some(tid.as_str()))
+        .expect("text after scroll")
+        .clone();
+    let clip_h = info.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
+    let last_line_screen_bottom = info.y + (line_count as f32 * lh + ink) - sy;
+    let clip_bottom = info.y + clip_h;
+    assert!(
+        last_line_screen_bottom <= clip_bottom + 0.5,
+        "last line ink must sit inside clip (screen_bottom={last_line_screen_bottom} \
+         clip_bottom={clip_bottom} sy={sy})"
+    );
+}
+
+#[test]
+fn textarea_trailing_newline_scrolls_before_content_h_signal_refreshes() {
+    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_offset_y_signal_key,
+    };
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-ml-stale-ch-newline";
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+    let ink = text_edit_ink_pad_px(size);
+    let line = "我";
+    let four_lines = format!("{line}\n{line}\n{line}\n{line}");
+
+    use_signal(&input_value_signal_key(id), String::new).set(four_lines.clone());
+    use_signal("__rui_button_focus_id", String::new).set(format!("textarea:{id}"));
+
+    let el: Element = textarea(id).rows(4).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(400.0).h(400.0).child(el);
+    let result = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+    let (_id, bounds, _max, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(r, ..)| r == &rest)
+        .expect("textarea metrics");
+
+    // Enter at end: fifth empty line; `ch` signal still holds pre-Enter collect height.
+    let five_lines = format!("{four_lines}\n");
+    use_signal(&input_value_signal_key(id), String::new).set(five_lines.clone());
+    use_signal(
+        &crate::components::input::input_caret_signal_key(id),
+        || None::<usize>,
+    )
+    .set(Some(five_lines.len()));
+    use_signal(&scroll_content_h_signal_key(&rest), || 0.0_f32).set_silent(content[1]);
+
+    let region_tid = format!("__rui_textarea:{id}:region");
+    let region = find_tid(&root, &region_tid).expect("region");
+    let region_h = region.layout_bounds[3].max(bounds[3]);
+    let (pad_top, _pad_bottom) = crate::utils::text_field::textarea_scrollport_padding_y(
+        region,
+        region.layout_bounds[1],
+        region_h,
+    );
+    let line_count = five_lines.split('\n').count();
+    let caret_bot = pad_top + line_count as f32 * lh + ink;
+
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+    let sy = use_signal(&scroll_offset_y_signal_key(&rest), || 0.0_f32).peek();
+    assert!(
+        sy + region_h >= caret_bot - 0.5,
+        "Enter-only must scroll empty last line even with stale ch (sy={sy} region_h={region_h} \
+         caret_bot={caret_bot} stale_ch={})",
+        content[1]
+    );
+}
+
+#[test]
 fn textarea_nested_in_scroll_area_keeps_own_overflow_metrics() {
     use crate::app::scroll_support::collect_scroll_rest_chain_at;
     use crate::components::scroll_area::scroll_area;
@@ -1119,5 +1257,184 @@ fn textarea_overflow_content_enables_y_scroll_metrics() {
         max_scroll[1] > 1.0,
         "max_scroll_y must be > 0 when lines overflow chrome, got {}",
         max_scroll[1]
+    );
+}
+
+/// Gallery symptom: thumb stuck mid-track while sy already clamped — paint raised `ch` before
+/// layout collect, but post-render clamped `sy` to a smaller `raw_max_y`.
+#[test]
+fn textarea_five_lines_max_scroll_matches_signal_extent() {
+    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
+    };
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-five-bottom";
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+    let text = "啊\n啊\n啊\n啊\n啊";
+    use_signal(&input_value_signal_key(id), String::new).set(text.into());
+    use_signal("__rui_button_focus_id", String::new).set(format!("textarea:{id}"));
+
+    let el: Element = textarea(id).rows(4).resizable(true).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(900.0).h(800.0).child(el);
+    let result = tree.build_and_layout(&mut root, 900.0, 800.0, [-1.0, -1.0]);
+
+    let (_id, bounds, max_scroll, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(r, ..)| r == &rest)
+        .expect("textarea metrics");
+    let max_from_extent = (content[1] - bounds[3]).max(0.0);
+    assert!(
+        (max_scroll[1] - max_from_extent).abs() < 1.0,
+        "max_scroll_y must match content−viewport (max={} extent={} content={} vp={})",
+        max_scroll[1],
+        max_from_extent,
+        content[1],
+        bounds[3]
+    );
+    assert!(
+        max_scroll[1] > lh * 0.4,
+        "5 lines in ~4-row chrome must allow meaningful scroll (max={max_scroll:?})"
+    );
+
+    // Simulate post-render metric publish (unit tests skip window_events).
+    let ch_key = scroll_content_h_signal_key(&rest);
+    let vh_key = scroll_viewport_h_signal_key(&rest);
+    let sy_key = scroll_offset_y_signal_key(&rest);
+    use_signal(&ch_key, || 0.0_f32).set_silent(content[1]);
+    use_signal(&vh_key, || 0.0_f32).set_silent(bounds[3]);
+
+    // Paint sync must not inflate content_h above collect metrics (thumb/sy desync).
+    let ch_before = use_signal(&ch_key, || 0.0_f32).peek();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+    let ch_after = use_signal(&ch_key, || 0.0_f32).peek();
+    assert!(
+        (ch_after - ch_before).abs() < 0.5,
+        "paint sync must not raise content_h signal (before={ch_before} after={ch_after} layout={})",
+        content[1]
+    );
+
+    use_signal(&sy_key, || 0.0_f32).set(max_scroll[1]);
+    let _ = tree.build_and_layout_fast(&mut root, 900.0, 800.0, [-1.0, -1.0], false, false);
+    let sy = use_signal(&sy_key, || 0.0_f32).peek();
+    let vh = use_signal(&vh_key, || 0.0_f32).peek();
+    let ch = use_signal(&ch_key, || 0.0_f32).peek();
+    let thumb_t = if (ch - vh) > 1e-3 {
+        (sy / (ch - vh)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    assert!(
+        thumb_t > 0.85,
+        "at max scroll thumb must sit near track bottom (t={thumb_t} sy={sy} ch={ch} vh={vh} max={})",
+        max_scroll[1]
+    );
+}
+
+#[test]
+fn textarea_scroll_extent_includes_bottom_padding() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-bottom-pad";
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let region_tid = format!("__rui_textarea:{id}:region");
+    let tid = input_text_template_id(id);
+    let text = "a\na\naaa\na\n啊";
+    use_signal(&input_value_signal_key(id), String::new).set(text.into());
+
+    let el: Element = textarea(id).rows(4).resizable(true).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(900.0).h(800.0).child(el);
+    let result = tree.build_and_layout(&mut root, 900.0, 800.0, [-1.0, -1.0]);
+
+    let region = find_tid(&root, &region_tid).expect("region");
+    let leaf = find_tid(&root, &tid).expect("leaf");
+    let pad_bottom = match region.style.padding.bottom {
+        taffy::style::LengthPercentage::Length(v) => v,
+        _ => {
+            let region_bottom = region.layout_bounds[1] + region.layout_bounds[3];
+            let leaf_bottom = leaf.layout_bounds[1] + leaf.layout_bounds[3];
+            (region_bottom - leaf_bottom).max(0.0)
+        }
+    };
+    assert!(
+        pad_bottom > 4.0,
+        "textarea region must have bottom padding (got {pad_bottom})"
+    );
+
+    let leaf_extent = leaf.layout_bounds[1] + leaf.layout_bounds[3] - region.layout_bounds[1];
+    let expected_content = leaf_extent + pad_bottom;
+    let (_id, bounds, max_scroll, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(r, ..)| r == &rest)
+        .expect("metrics");
+    assert!(
+        (content[1] - expected_content).abs() < 1.5,
+        "content_h must include bottom padding (content={} expected={} leaf_extent={pad_bottom})",
+        content[1],
+        expected_content
+    );
+    assert!(
+        (max_scroll[1] - (content[1] - bounds[3]).max(0.0)).abs() < 1.0,
+        "max_scroll must match content−viewport"
+    );
+}
+
+#[test]
+fn textarea_paint_sync_does_not_clamp_scroll_below_padding_inclusive_max() {
+    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
+    };
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-paint-max-pad";
+    let rest = crate::utils::text_field::textarea_scroll_rest(id);
+    let text = "a\na\naaa\na\n啊";
+    use_signal(&input_value_signal_key(id), String::new).set(text.into());
+    use_signal("__rui_button_focus_id", String::new).set(format!("textarea:{id}"));
+
+    let el: Element = textarea(id).rows(4).resizable(true).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(900.0).h(800.0).child(el);
+    let result = tree.build_and_layout(&mut root, 900.0, 800.0, [-1.0, -1.0]);
+    let (_id, bounds, max_scroll, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(r, ..)| r == &rest)
+        .expect("metrics");
+
+    let ch_key = scroll_content_h_signal_key(&rest);
+    let vh_key = scroll_viewport_h_signal_key(&rest);
+    let sy_key = scroll_offset_y_signal_key(&rest);
+    use_signal(&ch_key, || 0.0_f32).set_silent(content[1]);
+    use_signal(&vh_key, || 0.0_f32).set_silent(bounds[3]);
+    use_signal(&sy_key, || 0.0_f32).set(max_scroll[1]);
+
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+    let sy_after = use_signal(&sy_key, || 0.0_f32).peek();
+    assert!(
+        (sy_after - max_scroll[1]).abs() < 1.0,
+        "paint sync must not clamp sy below padding-inclusive max \
+         (sy={sy_after} max={} content={} vp={})",
+        max_scroll[1],
+        content[1],
+        bounds[3]
     );
 }

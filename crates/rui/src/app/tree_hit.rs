@@ -24,6 +24,19 @@ fn claims_own_bounds(el: &Element) -> bool {
     pointer_events_targets_self(el) && !portal_hit_passthrough(el)
 }
 
+/// Preserve `input:` / `textarea:` focus through inner scroll viewports (`scroll:`).
+#[inline]
+fn inherit_text_edit_focus_id<'a>(el: &'a Element, inherited: Option<&'a str>) -> Option<&'a str> {
+    if let Some(id) = el.focus_id.as_deref() {
+        if id.starts_with(crate::components::INPUT_FOCUS_PREFIX)
+            || id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX)
+        {
+            return Some(id);
+        }
+    }
+    inherited
+}
+
 pub(super) fn hit_test_child_indices(el: &Element) -> Vec<usize> {
     // Topmost child wins.
     // Order rule:
@@ -316,7 +329,7 @@ pub(super) fn find_input_text_leaf_for_rest(
 
 fn find_input_text_leaf_for_rest_acc(
     el: &Element,
-    inherited_fid: Option<&str>,
+    text_edit_fid: Option<&str>,
     rest: &str,
     scroll_acc: [f32; 2],
 ) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
@@ -327,10 +340,12 @@ fn find_input_text_leaf_for_rest_acc(
     if el.style.overflow.y != taffy::style::Overflow::Visible {
         next_acc[1] += el.scroll_offset[1];
     }
-    let fid = el.focus_id.as_deref().or(inherited_fid);
+    let child_text_edit_fid = inherit_text_edit_focus_id(el, text_edit_fid);
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_input_text_leaf_for_rest_acc(child, fid, rest, next_acc) {
+            if let Some(r) =
+                find_input_text_leaf_for_rest_acc(child, child_text_edit_fid, rest, next_acc)
+            {
                 return Some(r);
             }
         }
@@ -338,13 +353,15 @@ fn find_input_text_leaf_for_rest_acc(
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_input_text_leaf_for_rest_acc(child, fid, rest, next_acc) {
+            if let Some(r) =
+                find_input_text_leaf_for_rest_acc(child, child_text_edit_fid, rest, next_acc)
+            {
                 return Some(r);
             }
         }
     }
     if let Some(text) = &el.text {
-        if let Some(id) = fid {
+        if let Some(id) = child_text_edit_fid {
             if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
                 || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
             {
@@ -367,7 +384,7 @@ fn find_input_text_leaf_for_rest_acc(
 /// 返回 `(rest, bounds, display, style, scroll, focus_id)`。
 pub(super) fn find_input_text_at(
     el: &Element,
-    inherited_fid: Option<&str>,
+    text_edit_fid: Option<&str>,
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
@@ -401,10 +418,10 @@ pub(super) fn find_input_text_at(
         next_acc[1] += el.scroll_offset[1];
     }
 
-    let fid = el.focus_id.as_deref().or(inherited_fid);
+    let child_text_edit_fid = inherit_text_edit_focus_id(el, text_edit_fid);
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_input_text_at(child, fid, x, y, next_acc) {
+            if let Some(r) = find_input_text_at(child, child_text_edit_fid, x, y, next_acc) {
                 return Some(r);
             }
         }
@@ -412,7 +429,7 @@ pub(super) fn find_input_text_at(
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_input_text_at(child, fid, x, y, next_acc) {
+            if let Some(r) = find_input_text_at(child, child_text_edit_fid, x, y, next_acc) {
                 return Some(r);
             }
         }
@@ -422,13 +439,12 @@ pub(super) fn find_input_text_at(
         if el.text_style.font_family.as_deref() == Some("lucide") {
             return None;
         }
-        if let Some(id) = fid {
+        if let Some(id) = child_text_edit_fid {
             let rest = id
                 .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
                 .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
             if let Some(rest) = rest {
                 if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
-                    // Note: Here we still return el.scroll_offset for specific input metrics.
                     // Fourth tuple slot carries the full focus_id so callers keep `textarea:` vs `input:`.
                     return Some((
                         rest.to_string(),
@@ -1025,6 +1041,62 @@ mod ime_scroll_bounds_tests {
             "must prefer scrolled match, sa={sa:?}"
         );
         assert!(((bounds[1] - sa[1]) - 180.0).abs() < 0.5);
+    }
+}
+
+#[cfg(test)]
+mod textarea_text_hit_tests {
+    use super::*;
+    use crate::components::TEXTAREA_FOCUS_PREFIX;
+    use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+    use crate::utils::text_field::text_edit_line_box_px;
+    use taffy::style::Overflow;
+
+    fn textarea_like_tree() -> (Element, f32) {
+        let lh = text_edit_line_box_px(14.0, None, None);
+        let field_id = "ta-hit";
+        let rest = "ta-hit-scroll";
+
+        let mut text = Element::new().w(300.0);
+        text.layout_bounds = [34.0, 58.0, 300.0, lh * 3.0];
+        text.text = Some("啊\n啊\n啊".into());
+        text.focus_id = None;
+
+        let mut viewport = Element::new().w(368.0).h(98.0);
+        viewport.layout_bounds = [0.0, 0.0, 368.0, 98.0];
+        viewport.style.overflow.y = Overflow::Hidden;
+        viewport.focus_id = Some(focus_id_for_scroll_viewport(rest));
+        viewport = viewport.child(text);
+
+        let mut chrome = Element::new().w(400.0).h(100.0);
+        chrome.layout_bounds = [0.0, 0.0, 400.0, 100.0];
+        chrome.focus_id = Some(format!("{TEXTAREA_FOCUS_PREFIX}{field_id}"));
+        chrome = chrome.child(viewport);
+
+        (chrome, lh)
+    }
+
+    #[test]
+    fn find_input_text_at_hits_multiline_leaf_through_scroll_viewport() {
+        let (root, lh) = textarea_like_tree();
+        let line2_y = 58.0 + lh * 1.5;
+        let hit = find_input_text_at(&root, None, 120.0, line2_y, [0.0, 0.0])
+            .expect("line 2 must hit textarea text leaf through scroll viewport");
+        assert_eq!(hit.0, "ta-hit");
+        assert_eq!(hit.5, format!("{TEXTAREA_FOCUS_PREFIX}ta-hit"));
+        assert!(
+            hit.2.contains('\n'),
+            "display must include hard newlines"
+        );
+    }
+
+    #[test]
+    fn find_input_text_leaf_for_rest_finds_multiline_leaf_through_scroll_viewport() {
+        let (root, _) = textarea_like_tree();
+        let (bounds, text, _, _) =
+            find_input_text_leaf_for_rest(&root, None, "ta-hit").expect("leaf for drag-select");
+        assert_eq!(text.matches('\n').count(), 2);
+        assert!(bounds[3] > 50.0, "bounds must span multi-line leaf");
     }
 }
 

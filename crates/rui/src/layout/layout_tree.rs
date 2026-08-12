@@ -2336,26 +2336,11 @@ impl LayoutTree {
                 // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
                 // still holds the real field-sizing-content height.
                 if rest.ends_with("__ta_scroll") {
-                    let pad_y = match (
-                        &element.style.padding.top,
-                        &element.style.padding.bottom,
-                    ) {
-                        (
-                            taffy::style::LengthPercentage::Length(t),
-                            taffy::style::LengthPercentage::Length(b),
-                        ) => *t + *b,
-                        _ => 0.0,
-                    };
-                    let mut floor = layout.size.height;
-                    for child in &element.children {
-                        if let taffy::style::Dimension::Length(h) = child.style.size.height {
-                            floor = floor.max(h + pad_y);
-                        }
-                        if let taffy::style::Dimension::Length(h) = child.style.min_size.height {
-                            floor = floor.max(h + pad_y);
-                        }
-                    }
-                    content_h = content_h.max(floor);
+                    content_h = crate::utils::text_field::textarea_scroll_content_h(
+                        element,
+                        abs_y,
+                        layout.size.height,
+                    );
                 }
                 scroll_metrics.push((
                     rest.to_string(),
