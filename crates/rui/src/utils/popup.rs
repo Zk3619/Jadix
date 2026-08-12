@@ -39,8 +39,12 @@ pub enum PopupPlacement {
     #[default]
     BottomStart,
     BottomEnd,
+    /// Prefer below; align panel center with trigger center (edge-clamped).
+    BottomCenter,
     TopStart,
     TopEnd,
+    /// Prefer above; align panel center with trigger center (edge-clamped).
+    TopCenter,
 }
 
 impl PopupPlacement {
@@ -48,16 +52,20 @@ impl PopupPlacement {
         match self {
             Self::BottomStart => "bottom-start",
             Self::BottomEnd => "bottom-end",
+            Self::BottomCenter => "bottom",
             Self::TopStart => "top-start",
             Self::TopEnd => "top-end",
+            Self::TopCenter => "top",
         }
     }
 
     pub fn from_attr(s: &str) -> Self {
         match s {
             "bottom-end" => Self::BottomEnd,
+            "bottom" | "bottom-center" => Self::BottomCenter,
             "top-start" => Self::TopStart,
             "top-end" => Self::TopEnd,
+            "top" | "top-center" => Self::TopCenter,
             _ => Self::BottomStart,
         }
     }
@@ -79,6 +87,8 @@ pub const ATTR_FLOATING_H: &str = "rui_floating_h";
 pub const ATTR_FLOATING_MIN_H: &str = "rui_floating_min_h";
 /// Optional min-width: absolute (`8rem`) or relative to trigger (`trigger`, `trigger+1.75rem`).
 pub const ATTR_FLOATING_MIN_W: &str = "rui_floating_min_w";
+/// Optional per-panel gap in px between trigger and floating panel (default [`FLOATING_TRIGGER_GAP`]).
+pub const ATTR_FLOATING_GAP: &str = "rui_floating_gap";
 
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
@@ -97,10 +107,24 @@ pub fn mark_floating(
     el.set_attr(ATTR_FLOATING_PLACEMENT, placement.as_attr());
 }
 
-/// 根据触发器矩形与视口，计算浮层左上角与可用高度（优先 BottomStart，空间不足则翻转）。
+/// Like [`mark_floating`], with an explicit trigger–panel gap in px (e.g. tooltip `sideOffset`/`gutter` ≈ 4).
+pub fn mark_floating_with_gap(
+    el: &mut Element,
+    id: &str,
+    trigger_focus_id: &str,
+    placement: PopupPlacement,
+    gap_px: f32,
+) {
+    mark_floating(el, id, trigger_focus_id, placement);
+    el.set_attr(ATTR_FLOATING_GAP, format!("{}", gap_px.max(0.0)));
+}
+
+/// 根据触发器矩形与视口，计算浮层左上角与可用高度（优先下方/上方，空间不足则翻转）。
 ///
 /// Always keeps [`FLOATING_VIEWPORT_MARGIN`] from the viewport edges and `gap` from the
 /// trigger so the panel never sits flush against either.
+/// Center placements keep the panel mid-x aligned with the trigger mid-x when possible,
+/// otherwise clamp to the viewport edge while staying as close as possible.
 pub fn compute_anchored_placement(
     trigger: [f32; 4],
     viewport: [f32; 2],
@@ -116,11 +140,15 @@ pub fn compute_anchored_placement(
     let w = if menu_w > 0.0 { menu_w } else { tw };
     let prefer_bottom = matches!(
         preferred,
-        PopupPlacement::BottomStart | PopupPlacement::BottomEnd
+        PopupPlacement::BottomStart | PopupPlacement::BottomEnd | PopupPlacement::BottomCenter
     );
     let prefer_end = matches!(
         preferred,
         PopupPlacement::BottomEnd | PopupPlacement::TopEnd
+    );
+    let prefer_center = matches!(
+        preferred,
+        PopupPlacement::BottomCenter | PopupPlacement::TopCenter
     );
 
     let space_below = (vh - margin - (ty + th) - gap).max(0.0);
@@ -143,7 +171,13 @@ pub fn compute_anchored_placement(
         (ty - gap - menu_h_estimate.min(max_h)).max(margin)
     };
 
-    let mut x = if prefer_end { tx + tw - w } else { tx };
+    let mut x = if prefer_center {
+        tx + (tw - w) * 0.5
+    } else if prefer_end {
+        tx + tw - w
+    } else {
+        tx
+    };
     let x_max = (vw - margin - w).max(margin);
     if x + w > vw - margin {
         x = x_max;
@@ -406,7 +440,9 @@ fn apply_floating_menus(
                 let w = tb[2].max(0.0);
                 (w, false, attr_min_w.unwrap_or(w).max(w))
             } else {
-                let floor = attr_min_w.unwrap_or(tb[2]).max(tb[2]).max(0.0);
+                // Content-sized (`width: auto`). Default min-width = trigger (Select menus);
+                // explicit `rui_floating_min_w` wins (e.g. `0` → true w-fit for Tooltip).
+                let floor = attr_min_w.unwrap_or(tb[2]).max(0.0);
                 (floor, true, floor)
             };
             let preferred = PopupPlacement::from_attr(
@@ -416,19 +452,33 @@ fn apply_floating_menus(
                     .map(|s| s.as_str())
                     .unwrap_or("bottom-start"),
             );
-            let estimate_h = el.layout_bounds[3].max(32.0);
+            let estimate_h = if el.layout_bounds[3] > 0.5 {
+                el.layout_bounds[3]
+            } else {
+                32.0
+            };
             let estimate_w = if width_auto {
-                el.layout_bounds[2].max(menu_w).max(32.0)
+                if el.layout_bounds[2] > 0.5 {
+                    el.layout_bounds[2].max(menu_w)
+                } else {
+                    menu_w.max(32.0)
+                }
             } else {
                 menu_w.max(min_w).max(32.0)
             };
+            let gap = el
+                .attrs
+                .get(ATTR_FLOATING_GAP)
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(FLOATING_TRIGGER_GAP)
+                .max(0.0);
             let (x, y, available_max_h, _) = compute_anchored_placement(
                 *tb,
                 viewport,
                 estimate_w,
                 estimate_h,
                 preferred,
-                FLOATING_TRIGGER_GAP,
+                gap,
             );
             let max_h = el
                 .attrs
@@ -718,6 +768,105 @@ mod tests {
             taffy::style::Dimension::Length(w) => assert!((w - 80.0).abs() < 0.5),
             other => panic!("min-width should be trigger width, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sync_floating_w_fit_min_w_zero() {
+        let mut trigger = Element::new().focus_id("t-fit");
+        trigger.layout_bounds = [20.0, 40.0, 160.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating_with_gap(
+            &mut panel,
+            "tip-fit",
+            "t-fit",
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        panel.layout_bounds = [0.0, 0.0, 72.0, 24.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let tip = &root.children[1];
+        assert!(
+            matches!(tip.style.size.width, taffy::style::Dimension::Auto),
+            "tooltip must be w-fit (width: auto)"
+        );
+        match tip.style.min_size.width {
+            taffy::style::Dimension::Auto => {}
+            taffy::style::Dimension::Length(w) if w < 0.5 => {}
+            other => panic!("w-fit must not floor min-width to trigger, got {other:?}"),
+        }
+        // Prefer below with gap 4; center on trigger mid-x (20+80=100 → x=100-36=64).
+        match inset_length(tip.style.inset.top) {
+            Some(y) => assert!((y - (40.0 + 28.0 + 4.0)).abs() < 0.5, "y={y}"),
+            None => panic!("expected top inset"),
+        }
+        match inset_length(tip.style.inset.left) {
+            Some(x) => assert!((x - 64.0).abs() < 0.5, "x={x}"),
+            None => panic!("expected left inset"),
+        }
+    }
+
+    #[test]
+    fn compute_flips_above_when_below_is_tight() {
+        // Trigger near bottom; small panel must flip above.
+        let trigger = [100.0, 560.0, 80.0, 28.0];
+        let (_x, y, _max_h, flipped) = compute_anchored_placement(
+            trigger,
+            [800.0, 600.0],
+            72.0,
+            24.0,
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        assert!(flipped, "must flip above when below has no room");
+        // ty - gap - h = 560 - 4 - 24 = 532
+        assert!((y - 532.0).abs() < 0.5, "y={y}");
+    }
+
+    #[test]
+    fn compute_center_aligns_mid_x() {
+        // trigger mid = 100+40 = 140; panel w=72 → x = 140 - 36 = 104
+        let (x, y, _, flipped) = compute_anchored_placement(
+            [100.0, 40.0, 80.0, 28.0],
+            [800.0, 600.0],
+            72.0,
+            24.0,
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        assert!(!flipped);
+        assert!((x - 104.0).abs() < 0.5, "x={x}");
+        assert!((y - (40.0 + 28.0 + 4.0)).abs() < 0.5, "y={y}");
+    }
+
+    #[test]
+    fn compute_center_clamps_to_viewport_edge() {
+        // Near left edge: ideal center would go past margin → clamp to margin.
+        let (x, _, _, _) = compute_anchored_placement(
+            [10.0, 40.0, 40.0, 28.0],
+            [800.0, 600.0],
+            120.0,
+            24.0,
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        assert!((x - FLOATING_VIEWPORT_MARGIN).abs() < 0.5, "x={x}");
+
+        // Near right edge: clamp so panel right stays at vw - margin.
+        let (x2, _, _, _) = compute_anchored_placement(
+            [760.0, 40.0, 30.0, 28.0],
+            [800.0, 600.0],
+            100.0,
+            24.0,
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        let expect = 800.0 - FLOATING_VIEWPORT_MARGIN - 100.0;
+        assert!((x2 - expect).abs() < 0.5, "x2={x2}");
     }
 
     #[test]

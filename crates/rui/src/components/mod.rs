@@ -8,7 +8,7 @@
 //!
 //! 布局原语（`Box` / `HStack` / `VStack` / `GStack` / [`crate::primitives::Portal`]）在
 //! [`crate::primitives`]；本模块在其上拼装**产品组件**（Button、Input、Dialog…）。
-//! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`；Dialog/AlertDialog → `dialog_shell`），
+//! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`）；Dialog 模态壳在本目录 [`dialog`] 内，
 //! 不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留
 //! [`ScrollArea`] / [`Scrollbar`] / RSX [`ScrollViewport`] 等产品层封装。
@@ -20,7 +20,7 @@
 //! - 有状态控件若用全局 `use_signal("{id}__…")`，多实例必须稳定唯一键（空 id 撞键会串状态）。
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
-//! - Tabs headless 条带自带 [`crate::app::reactive::reactive_view`]；面板仍可用 `<Show>` 或 `#[component(reactive)]`。
+//! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
 //! - 颜色 / 日期选择器：[`color_picker`] / [`date_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
 //!   页面栈宿主在 [`crate::app::navigator::navigation_host`]（非本层、非 NavigationMenu）。
@@ -58,7 +58,6 @@ pub mod scrollbar;
 pub mod select;
 pub mod separator;
 pub mod sheet;
-pub mod alert_dialog;
 pub mod carousel;
 pub mod chart;
 pub mod sidebar;
@@ -74,7 +73,6 @@ pub mod tooltip;
 pub mod tree_view;
 pub mod virtual_list;
 
-pub use alert_dialog::{alert_dialog, AlertDialogBuilder};
 pub use base::BaseComponentBuilder;
 pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,
@@ -164,13 +162,23 @@ pub use slider::{slider, Slider, SliderBuilder, SliderProps};
 pub use stepper::{stepper, StepperBuilder};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
 pub use tabs::{
-    tabs_headless, tabs_headless_root, tabs_list, Tabs, TabsHeadlessBuilder, TabsList,
-    TabsListBuilder, TabsListProps, TabsProps, TABSTRIP_FOCUS_PREFIX,
+    tabs_content, tabs_headless, tabs_headless_root, tabs_list, tabs_scope, use_tabs, Tabs,
+    TabsContent, TabsContentProps, TabsCtx, TabsHeadlessBuilder, TabsList, TabsListBuilder,
+    TabsListProps, TabsOrientation, TabsProps, TabsTrigger, TabsTriggerProps, TABSTRIP_FOCUS_PREFIX,
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
-pub use toast::{toast, toast_dismiss, toast_host, toast_push, toast_queue, ToastItem};
+pub use toast::{
+    toast, toast_dismiss, toast_host, toast_pending, toast_push, toast_queue, toast_set_layout,
+    toast_set_limit, toast_set_overflow, toast_set_position, toaster, Toast, ToastBuilder,
+    ToastClose, ToastCloseProps, ToastDescription, ToastDescriptionProps, ToastItem, ToastLayout,
+    ToastOverflow, ToastPosition, ToastProps, ToastTitle, ToastTitleProps, ToastTone, Toaster,
+    ToasterBuilder, ToasterProps,
+};
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};
-pub use tooltip::{tooltip, TooltipBuilder};
+pub use tooltip::{
+    tooltip, tooltip_content, tooltip_scope, tooltip_side_to_placement, use_tooltip, TooltipBuilder,
+    TooltipContentOpts, TooltipCtx, TooltipTrigger, TooltipTriggerProps,
+};
 pub use tree_view::{tree_view, TreeNode, TreeViewBuilder};
 pub use virtual_list::{virtual_list, VirtualListBuilder};

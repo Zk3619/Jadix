@@ -1356,6 +1356,14 @@ impl Element {
         self
     }
 
+    /// CSS `box-sizing: content-box`：测宽为内容宽，padding 加在外侧。
+    /// 文案叶若要自带水平 padding 并 `text-align:center`，必须用这个（默认 BorderBox
+    /// 会把测宽当成边框宽，padding 吃掉内容区）。
+    pub fn content_box(mut self) -> Self {
+        self.style.box_sizing = taffy::style::BoxSizing::ContentBox;
+        self
+    }
+
     pub fn display_grid(mut self) -> Self {
         self.style.display = Display::Grid;
         self

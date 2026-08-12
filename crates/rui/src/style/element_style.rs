@@ -1,5 +1,7 @@
 //! 元素盒模型与 Taffy 映射。
 //!
+//! 契约与缺口总览见 [`docs/box_model.md`](../../../../docs/box_model.md)；执行 [`AUTHORITY.md`](../../../../docs/AUTHORITY.md) WP-2.9。
+//!
 //! ## 百分比尺寸（对齐 CSS）
 //! - `width/height: N%` 相对**包含块的 content box**（父级内容区），不含父级 padding / border / margin。
 //! - 本库默认 [`BoxSizing::BorderBox`]（同 Tailwind / 常见 CSS reset）：元素自身的
@@ -235,6 +237,9 @@ pub struct Style {
     pub align_content: Option<AlignContent>,
     /// Grid 容器：单元格内子项的默认行向对齐。
     pub justify_items: Option<AlignItems>,
+    /// 盒模型：默认 BorderBox（Tailwind）；文案叶若自带 padding 需 ContentBox，
+    /// 否则测宽被当成边框宽、padding 吃掉内容区。
+    pub box_sizing: BoxSizing,
     pub size: Size<Dimension>,
     pub min_size: Size<Dimension>,
     pub max_size: Size<Dimension>,
@@ -312,6 +317,7 @@ impl Default for Style {
             justify_self: None,
             align_content: None,
             justify_items: None,
+            box_sizing: BoxSizing::BorderBox,
             size: Size::auto(),
             min_size: Size {
                 width: Dimension::Auto,
@@ -419,8 +425,8 @@ impl Style {
             bottom: border_lp,
         };
         taffy::style::Style {
-            // Tailwind / ShadCN：size 含 padding+border；子项 % 仍相对本节点 content box。
-            box_sizing: BoxSizing::BorderBox,
+            // 默认 BorderBox（Tailwind）。个别文案叶可改 ContentBox 以便自带 padding。
+            box_sizing: self.box_sizing,
             display: self.display,
             flex_direction: self.flex_direction,
             flex_wrap: self.flex_wrap,

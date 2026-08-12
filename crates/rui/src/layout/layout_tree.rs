@@ -1975,6 +1975,59 @@ impl LayoutTree {
             }
         }
 
+        // Tabs line variant: paint-only underline / side bar (no absolute child node).
+        if let Some(ind) = element
+            .attrs
+            .get("rui_tabs_line_indicator")
+            .map(|s| s.as_str())
+        {
+            let line_w = 2.0_f32;
+            let color = crate::style::parse_color("foreground");
+            let (pos, size) = match ind {
+                "h" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
+                    [
+                        render_rect[0],
+                        render_rect[1] + render_rect[3] - line_w,
+                    ],
+                    [render_rect[2], line_w],
+                ),
+                "v" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
+                    [
+                        render_rect[0] + render_rect[2] - line_w,
+                        render_rect[1],
+                    ],
+                    [line_w, render_rect[3]],
+                ),
+                _ => ([0.0, 0.0], [0.0, 0.0]),
+            };
+            if size[0] > 0.0 && size[1] > 0.0 {
+                let bar_rect = [pos[0], pos[1], size[0], size[1]];
+                let bar_visible = intersect_rect(parent_clip, bar_rect);
+                if bar_visible[2] > 0.0 && bar_visible[3] > 0.0 {
+                    instances.push(
+                        InstanceInput {
+                            rect_pos: pos,
+                            rect_size: size,
+                            color: mul_color_alpha(color, opacity),
+                            border_color: [0.0, 0.0, 0.0, 0.0],
+                            radii: [0.0, 0.0, 0.0, 0.0],
+                            border_width: 0.0,
+                            shadow_color: [0.0, 0.0, 0.0, 0.0],
+                            shadow_offset: [0.0, 0.0],
+                            shadow_blur: 0.0,
+                            shadow_spread: 0.0,
+                            shadow_inset: 0.0,
+                            rotate_deg,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            _pad: 0.0,
+                        }
+                        .with_clip(parent_clip),
+                    );
+                }
+            }
+        }
+
         // Collect outline as an overlay (drawn outside; does not affect layout).
         let outline_w = if element.style.outline_style == crate::style::LineStyle::None {
             0.0
@@ -2187,7 +2240,7 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     child,
                     child_nodes[i],
-                    [abs_x, abs_y],
+                    [abs_x + element.style.translate[0], abs_y + element.style.translate[1]],
                     next_scroll_acc,
                     clip,
                     pass_to_children,
@@ -2251,7 +2304,7 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     &mut element.children[i],
                     child_nodes[i],
-                    [abs_x, abs_y],
+                    [abs_x + element.style.translate[0], abs_y + element.style.translate[1]],
                     next_scroll_acc,
                     clip,
                     pass_to_children,

@@ -680,16 +680,22 @@ fn expand_node(
                     .attributes
                     .iter()
                     .any(|(k, _)| k == "options");
+            let tabs_is_compound = name_str == "Tabs"
+                && !el.attributes.iter().any(|(k, _)| k == "count");
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
+                || name_str == "Tooltip"
+                || name_str == "TooltipContent"
                 || select_is_compound
                 || name_str == "SelectContent"
                 || combobox_is_compound
                 || name_str == "ComboboxContent"
                 || radio_group_is_compound
+                || tabs_is_compound
+                || name_str == "TabsContent"
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Fragment"
@@ -743,6 +749,49 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "Tooltip" {
+                    // Provide context *before* Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Tooltip#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::tooltip_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -889,6 +938,114 @@ fn expand_node(
                     };
                 }
 
+                if tabs_is_compound {
+                    // solid-ui / ShadCN compound Tabs：先 provide context 再构建 List/Trigger/Content。
+                    let id_expr = get_attr("id");
+                    let value_expr = get_attr("value");
+                    let default_expr = get_attr("default_value")
+                        .or_else(|| get_attr("defaultValue"));
+                    let orientation_expr = get_attr("orientation");
+                    let disabled_expr = get_attr("disabled");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Tabs#{}", file!(), line!(), #idx) }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { (#d).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
+                    let orientation_ts = if let Some(o) = orientation_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    return quote! {
+                        rui::components::tabs_scope(
+                            #id_ts,
+                            #value_ts,
+                            #default_ts,
+                            #orientation_ts,
+                            #disabled_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "TabsContent" {
+                    let Some(value_expr) = get_attr("value") else {
+                        return quote! { compile_error!("<TabsContent> requires `value={...}`"); };
+                    };
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            true,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::tabs_content((#value_expr).to_string(), move || #child_el)
+                    };
+                }
+
                 if name_str == "DialogContent" {
                     let show_close = get_attr("show_close")
                         .or_else(|| get_attr("showClose"))
@@ -946,6 +1103,48 @@ fn expand_node(
                                 overlay_opacity: #overlay_opacity,
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "TooltipContent" {
+                    let side = get_attr("side")
+                        .or_else(|| get_attr("placement"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom".to_string() });
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rebuilt inside tooltip_content's reactive_view.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::tooltip_content(
+                            rui::components::TooltipContentOpts {
+                                side: #side,
+                                class: #class,
                             },
                             move || #child_el,
                         )

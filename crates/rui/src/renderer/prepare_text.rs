@@ -2366,7 +2366,19 @@ pub fn prepare_text_frame(
             unsafe { &*text_renderer.font_system },
         );
 
-        let dy = 0.0;
+        let hard_lines_n = info.text.split('\n').count().max(1);
+        // Padded ContentBox chips (Tabs): leaf border is taller than one line. Cosmic lays out
+        // from the top of the buffer — without a dy, labels sit in the top padding (and look
+        // top-biased). Center a single nowrap line in the border box.
+        let dy = if !is_input_text
+            && nowrap
+            && hard_lines_n == 1
+            && scaled_h > line_height + 1.0
+        {
+            (scaled_h - line_height) * 0.5
+        } else {
+            0.0
+        };
         let sdx = st.shadow_offset[0] * ui_scale;
         let sdy = st.shadow_offset[1] * ui_scale;
         let sblur = st.shadow_blur * ui_scale;
@@ -2671,7 +2683,7 @@ pub fn prepare_text_frame(
         text_areas.push(glyphon::TextArea {
             buffer: &entry.buffer,
             left: tb.x,
-            top: tb.y,
+            top: tb.y + tb.dy,
             scale: 1.0,
             bounds,
             default_color: glyphon::Color::rgba(tb.color[0], tb.color[1], tb.color[2], tb.color[3]),
