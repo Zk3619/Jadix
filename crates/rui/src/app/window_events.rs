@@ -597,7 +597,8 @@ impl super::App {
         self.note_long_press_move(phys_x, phys_y);
 
         let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
-        if slider_dragging {
+        let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
+        if slider_dragging || toast_dragging {
             window.request_redraw();
         }
 
@@ -1099,24 +1100,6 @@ impl super::App {
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
-            let cb_resolved = {
-                let (from_path, focus_via_label) =
-                    super::pointer_events::resolve_click_from_path(&state.root_element, &path);
-                if from_path.is_some() {
-                    (from_path, focus_via_label)
-                } else {
-                    (
-                        super::pointer_events::resolve_click_with_capture(
-                            &state.root_element,
-                            x,
-                            y,
-                            capture.as_deref(),
-                        ),
-                        None,
-                    )
-                }
-            };
-            let (cb_to_run, label_for_focus) = cb_resolved;
             drop(state_borrow);
             let focus_visible =
                 crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -1136,31 +1119,7 @@ impl super::App {
             if pev.is_consumed() {
                 self.content_scroll_drag = None;
             }
-            if detail >= 2 && !pev.is_consumed() {
-                let mut pev2 =
-                    super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
-                super::pointer_events::dispatch_pointer(
-                    &path,
-                    &mut pev2,
-                    super::pointer_events::PointerKind::DoubleClick,
-                );
-            }
-            // Legacy / Label `for` activation.
-            // - detail==1: always run resolved click (control on path, or Label→control).
-            // - detail>=2: DoubleClick already fired `on_click` on path nodes; Label 本身无
-            //   on_click，for 转发若仍走 else 会丢点击——连点 Label 时表现为无法快速切换。
-            if !pev.is_consumed() {
-                let via_label = label_for_focus.is_some();
-                if via_label || detail < 2 {
-                    if let Some(fid) = label_for_focus {
-                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
-                            .set(fid);
-                    }
-                    if let Some(cb) = cb_to_run {
-                        (*cb.borrow_mut())();
-                    }
-                }
-            }
+            // `on_click` / Label `for` 在 pointer up（抬起）时触发，对标 DOM click。
 
             if let Some((rest, caret_ix, focus_id)) = input_drag {
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
@@ -1214,6 +1173,7 @@ impl super::App {
             self.scrollbar_drag = None;
             self.textarea_resize_drag = None;
             crate::components::slider::clear_slider_drag_if_any();
+            crate::components::toast::clear_toast_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -2730,25 +2690,127 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         super::runtime::request_redraw();
                     }
                     crate::utils::popup::arm_underlay_close();
-                    if let Some(state) = (*self.state.borrow()).as_ref() {
-                        if state.window.id() != id {
-                            return;
+                    let scale = {
+                        let state_borrow = self.state.borrow();
+                        match state_borrow.as_ref() {
+                            Some(state) if state.window.id() == id => {
+                                state.window.scale_factor() as f32
+                            }
+                            _ => return,
                         }
-                        let scale = state.window.scale_factor() as f32;
-                        let x = self.cursor_pos.x as f32 / scale;
-                        let y = self.cursor_pos.y as f32 / scale;
-                        let path = super::pointer_events::hit_path(&state.root_element, x, y);
-                        let mut pev = super::pointer_events::PointerEvent::new(
+                    };
+                    let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                    let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                    let capture = super::pointer_capture_id();
+                    let (path, cb_to_run, label_for_focus) = {
+                        let state_borrow = self.state.borrow();
+                        let state = match state_borrow.as_ref() {
+                            Some(s) if s.window.id() == id => s,
+                            _ => return,
+                        };
+                        let path = if let Some(ref cap_id) = capture {
+                            if let Some(el) =
+                                super::pointer_events::find_by_focus_id(&state.root_element, cap_id)
+                            {
+                                vec![super::pointer_events::HitPathEntry {
+                                    focus_id: el.focus_id.clone(),
+                                    label_for: el
+                                        .attrs
+                                        .get(crate::components::label::ATTR_LABEL_FOR)
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty()),
+                                    on_pointer_down: el.on_pointer_down.clone(),
+                                    on_pointer_up: el.on_pointer_up.clone(),
+                                    on_click: el.on_click.clone(),
+                                    on_context_menu: el.on_context_menu.clone(),
+                                    on_double_click: el.on_double_click.clone(),
+                                    hoisted_portal: el
+                                        .attrs
+                                        .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+                                        .map(|s| s.as_str())
+                                        == Some("1"),
+                                    portal_key: el
+                                        .attrs
+                                        .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty()),
+                                    floating_id: el
+                                        .attrs
+                                        .get(crate::utils::popup::ATTR_FLOATING)
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty()),
+                                }]
+                            } else {
+                                super::pointer_events::hit_path(&state.root_element, x, y)
+                            }
+                        } else {
+                            super::pointer_events::hit_path(&state.root_element, x, y)
+                        };
+                        let cb_resolved = {
+                            let (from_path, focus_via_label) =
+                                super::pointer_events::resolve_click_from_path(
+                                    &state.root_element,
+                                    &path,
+                                );
+                            if from_path.is_some() {
+                                (from_path, focus_via_label)
+                            } else {
+                                (
+                                    super::pointer_events::resolve_click_with_capture(
+                                        &state.root_element,
+                                        x,
+                                        y,
+                                        capture.as_deref(),
+                                    ),
+                                    None,
+                                )
+                            }
+                        };
+                        (path, cb_resolved.0, cb_resolved.1)
+                    };
+                    let detail = self.click_count.max(1);
+                    let mut pev = super::pointer_events::PointerEvent::new(
+                        x,
+                        y,
+                        MouseButton::Left,
+                        detail,
+                    );
+                    super::pointer_events::dispatch_pointer(
+                        &path,
+                        &mut pev,
+                        super::pointer_events::PointerKind::Up,
+                    );
+                    if detail >= 2 && !pev.is_consumed() {
+                        let mut pev2 = super::pointer_events::PointerEvent::new(
                             x,
                             y,
                             MouseButton::Left,
-                            self.click_count.max(1),
+                            detail,
                         );
                         super::pointer_events::dispatch_pointer(
                             &path,
-                            &mut pev,
-                            super::pointer_events::PointerKind::Up,
+                            &mut pev2,
+                            super::pointer_events::PointerKind::DoubleClick,
                         );
+                    }
+                    // Legacy `on_click` / Label `for`：在 pointer up 触发（对标 DOM click）。
+                    if !pev.is_consumed() {
+                        let via_label = label_for_focus.is_some();
+                        if via_label || detail < 2 {
+                            if let Some(fid) = label_for_focus {
+                                crate::core::reactivity::use_signal(
+                                    "__rui_button_focus_id",
+                                    String::new,
+                                )
+                                    .set(fid);
+                            }
+                            if let Some(cb) = cb_to_run {
+                                (*cb.borrow_mut())();
+                            }
+                        }
+                    }
+                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                        st.window.request_redraw();
                     }
                 }
             }

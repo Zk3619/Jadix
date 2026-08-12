@@ -53,6 +53,7 @@ impl AppRuntime {
         let state = opt.as_mut()?;
         Some(state.update_element_by_template_id(template_id, patch))
     }
+
 }
 
 pub fn set_app_runtime(rt: AppRuntime) {
@@ -96,3 +97,4 @@ where
             .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
     })
 }
+

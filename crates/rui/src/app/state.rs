@@ -1192,6 +1192,11 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        crate::components::tabs::sync_tabs_trigger_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
         // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
         crate::style::sync_focus_ring_subtree(
             &mut self.root_element,
@@ -2474,6 +2479,7 @@ pub(super) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
 fn normalize_anchor_template_id(id: &str) -> String {
     id.replace('\\', "/").to_ascii_lowercase()
 }
+
 
 /// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.
 fn find_reactive_subtree_by_anchor_id_mut<'a>(

@@ -83,7 +83,9 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "textinput" | "text_input" | "textfield" => Some(Role::TextInput),
         "label" => Some(Role::Label),
         "group" => Some(Role::Group),
+        "tab" => Some(Role::Tab),
         "tablist" => Some(Role::TabList),
+        "tabpanel" | "tab_panel" => Some(Role::TabPanel),
         "link" => Some(Role::Link),
         "list" => Some(Role::List),
         "listitem" | "list_item" => Some(Role::ListItem),
@@ -243,6 +245,7 @@ fn uses_name_from_contents(el: &Element) -> bool {
                 | Role::Link
                 | Role::CheckBox
                 | Role::Switch
+                | Role::Tab
         )
     )
 }

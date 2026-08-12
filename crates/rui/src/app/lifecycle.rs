@@ -285,6 +285,22 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Toast 自动退场 / 退场动画结束：到期唤醒并推进队列。
+        if crate::components::toast::tick_toast_lifecycle() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+        if let Some(wake) = crate::components::toast::toast_next_wake_at() {
+            if wake <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
         if let Some(deadline) = next_wake {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {

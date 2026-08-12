@@ -244,8 +244,9 @@ fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Elemen
 /// Dispatch pointer event along `path` (capture → target → bubble).
 ///
 /// - `on_pointer_down` / `on_pointer_up` / `on_context_menu` / `on_double_click` participate fully.
-/// - Legacy `on_click` fires once at the deepest node that has it (target/bubble leaf behavior),
-///   unless a capture/target handler already called [`PointerEvent::stop_propagation`].
+/// - Legacy `on_click` fires once at the deepest node that has it on pointer **up**
+///   (DOM-like click), unless a capture/target handler already called
+///   [`PointerEvent::stop_propagation`] on that gesture.
 pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: PointerKind) {
     if path.is_empty() {
         return;

@@ -1603,10 +1603,10 @@ fn TextareaComboboxShowcase() -> Element {
     let align = use_signal("gal_toggle_align", || "left".to_string());
 
     ui! {
-        <MyCard title="Textarea · Combobox · TabsList · ToggleGroup">
+        <MyCard title="Textarea · Combobox · Tabs · ToggleGroup">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "多行输入、可过滤 Combobox、TabsList 与 ToggleGroup。"
+                    "多行输入、可过滤 Combobox、复合 Tabs（List / Trigger / Content）与 ToggleGroup。"
                 </Label>
                 <Textarea id="gal-textarea" placeholder="多行备注…（可拖右下角改高）" rows={4} value={notes} />
                 <Textarea id="gal-textarea-fixed" placeholder="固定高度（resizable=false）" rows={3} resizable={false} />
@@ -1633,17 +1633,35 @@ fn TextareaComboboxShowcase() -> Element {
                     </ComboboxContent>
                 </Combobox>
                 <Label text_size="0.875rem">{ format!("Combobox: {}", combo.get()) }</Label>
-                { Element::from(
-                    tabs_list("gal-tabs")
-                        .value_signal(tab_view)
-                        .default_value("list")
-                        .options(vec![
-                            ("list".into(), "List".into()),
-                            ("grid".into(), "Grid".into()),
-                            ("map".into(), "Map".into()),
-                        ]),
-                ) }
-                <Label text_size="0.875rem">{ format!("TabsList: {}", tab_view.get()) }</Label>
+                <Tabs id="gal-tabs" value={tab_view} default_value="list">
+                    <TabsList>
+                        <TabsTrigger value="list">"List"</TabsTrigger>
+                        <TabsTrigger value="grid">"Grid"</TabsTrigger>
+                        <TabsTrigger value="map">"Map"</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="list">
+                        <Label text_size="0.875rem" leading="normal">"List panel — click a tab or use ←/→ then Enter."</Label>
+                    </TabsContent>
+                    <TabsContent value="grid">
+                        <Label text_size="0.875rem" leading="normal">"Grid panel"</Label>
+                    </TabsContent>
+                    <TabsContent value="map">
+                        <Label text_size="0.875rem" leading="normal">"Map panel"</Label>
+                    </TabsContent>
+                </Tabs>
+                <Label text_size="0.875rem">{ format!("Tabs: {}", tab_view.get()) }</Label>
+                <Tabs id="gal-tabs-line" default_value="one">
+                    <TabsList variant="line">
+                        <TabsTrigger value="one">"One"</TabsTrigger>
+                        <TabsTrigger value="two">"Two"</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="one">
+                        <Label text_size="0.75rem" color="muted-foreground">"line variant"</Label>
+                    </TabsContent>
+                    <TabsContent value="two">
+                        <Label text_size="0.75rem" color="muted-foreground">"second line tab"</Label>
+                    </TabsContent>
+                </Tabs>
                 { Element::from(
                     toggle_group("gal-align")
                         .value_signal(align)
@@ -1665,11 +1683,9 @@ fn OverlayFeedbackShowcase() -> Element {
     let cmd_open = use_signal("gal_cmd_open", || false);
     let dialog_open = use_signal("gal_dialog_open", || false);
     let dialog_select = use_signal("gal_dialog_select", || "opt-a".to_string());
-    let alert_open = use_signal("gal_alert_open", || false);
     let sheet_open = use_signal("gal_sheet_open", || false);
     let progress_val = use_signal("gal_progress", || 0.45f32);
     let open_cmd = cmd_open;
-    let open_alert = alert_open;
     let open_sheet = sheet_open;
     let bump = progress_val;
 
@@ -1759,15 +1775,6 @@ fn OverlayFeedbackShowcase() -> Element {
             </Dialog>
         }
     };
-    let alert_el: Element = alert_dialog("gal-alert", "确认操作")
-        .open_signal(alert_open)
-        .description("此操作仅作 Gallery 演示，不会修改数据。")
-        .confirm_label("确认")
-        .cancel_label("取消")
-        .on_confirm(|| {
-            toast_push("Confirmed", 2000);
-        })
-        .into();
     let sheet_el: Element = sheet("gal-sheet")
         .open_signal(sheet_open)
         .w("18rem")
@@ -1782,9 +1789,18 @@ fn OverlayFeedbackShowcase() -> Element {
             }
         })
         .into();
-    let tip: Element = tooltip("gal-tip", "Hover tip").trigger(|_open| {
-        ui! { <Button id="gal-tip-trigger" variant="outline" size="sm">{ "Hover for tooltip" }</Button> }
-    });
+    let tip: Element = ui! {
+        <Tooltip id="gal-tip">
+            <TooltipTrigger>
+                <Button id="gal-tip-trigger" variant="outline" size="sm">
+                    "Hover for tooltip"
+                </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+                "Hover tip"
+            </TooltipContent>
+        </Tooltip>
+    };
     let ctx: Element = context_menu("gal-ctx")
         .item("Copy", || {
             toast_push("Copy", 1500);
@@ -1802,26 +1818,129 @@ fn OverlayFeedbackShowcase() -> Element {
     let progress_el: Element = progress("gal-progress").value_signal(progress_val).into();
 
     ui! {
-        <MyCard title="Command · Dialog · Alert · Sheet · Toast · Tooltip · Progress">
+        <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：命令面板、模态、确认框、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
+                    "浮层与反馈：命令面板、模态 Dialog（含 Cancel/Confirm）、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button id="gal-cmd-open" variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
                         "Command"
                     </Button>
                     { dialog_el }
-                    <Button id="gal-alert-open" variant="outline" size="sm" on_click={move || open_alert.set(true)}>
-                        "Alert"
-                    </Button>
                     <Button id="gal-sheet-open" variant="outline" size="sm" on_click={move || open_sheet.set(true)}>
                         "Sheet"
                     </Button>
                     <Button id="gal-toast-push" variant="default" size="sm" on_click={move || {
-                        toast_push("Toast from Gallery", 3000);
+                        toast_set_layout("stack");
+                        toast("Toast from Gallery")
+                            .description("Hover the stack to expand.")
+                            .duration(5000)
+                            .show();
                     }}>
                         "Toast"
+                    </Button>
+                    <Button id="gal-toast-stack3" variant="secondary" size="sm" on_click={move || {
+                        toast_set_layout("stack");
+                        toast_set_overflow("displace");
+                        toast_set_limit(3);
+                        let _ = toast("First").description("Stack peek #1").duration(6000).show();
+                        let _ = toast("Second").description("Stack peek #2").duration(6000).show();
+                        let _ = toast("Third").description("Front of stack — hover to expand").duration(6000).show();
+                    }}>
+                        "Stack ×3"
+                    </Button>
+                    <Button id="gal-toast-list3" variant="outline" size="sm" on_click={move || {
+                        toast_set_layout("list");
+                        toast_set_overflow("displace");
+                        toast_set_limit(3);
+                        let _ = toast("List A").description("Non-stacked list layout").duration(6000).show();
+                        let _ = toast("List B").variant("success").duration(6000).show();
+                        let _ = toast("List C").variant("warning").duration(6000).show();
+                    }}>
+                        "List ×3"
+                    </Button>
+                    <Button id="gal-toast-displace" variant="outline" size="sm" on_click={move || {
+                        toast_set_layout("stack");
+                        toast_set_overflow("displace");
+                        toast_set_limit(2);
+                        let _ = toast("Keep").description("limit=2 displace").duration(8000).show();
+                        let _ = toast("Stay").duration(8000).show();
+                        let _ = toast("New").description("Oldest held, returns later").duration(8000).show();
+                    }}>
+                        "Displace"
+                    </Button>
+                    <Button id="gal-toast-wait" variant="outline" size="sm" on_click={move || {
+                        toast_set_layout("stack");
+                        toast_set_overflow("wait");
+                        toast_set_limit(2);
+                        let _ = toast("Visible 1").description("limit=2 wait").duration(5000).show();
+                        let _ = toast("Visible 2").duration(5000).show();
+                        let _ = toast("Waiting A").description("Enters after a slot frees").duration(5000).show();
+                        let _ = toast("Waiting B").duration(5000).show();
+                    }}>
+                        "Wait"
+                    </Button>
+                    <Button id="gal-toast-success" variant="secondary" size="sm" on_click={move || {
+                        toast("Saved")
+                            .description("Changes applied.")
+                            .variant("success")
+                            .duration(2500)
+                            .show();
+                    }}>
+                        "Success"
+                    </Button>
+                    <Button id="gal-toast-warn" variant="outline" size="sm" on_click={move || {
+                        toast("Check network")
+                            .variant("warning")
+                            .duration(2500)
+                            .show();
+                    }}>
+                        "Warning"
+                    </Button>
+                    <Button id="gal-toast-err" variant="destructive" size="sm" on_click={move || {
+                        toast("Something failed")
+                            .variant("destructive")
+                            .duration(3000)
+                            .show();
+                    }}>
+                        "Error"
+                    </Button>
+                    <Button id="gal-toast-pos-tl" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("top-left");
+                        toast("Top left").description("Swipe up to dismiss").duration(5000).show();
+                    }}>
+                        "↖"
+                    </Button>
+                    <Button id="gal-toast-pos-tc" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("top-center");
+                        toast("Top center").duration(5000).show();
+                    }}>
+                        "↑"
+                    </Button>
+                    <Button id="gal-toast-pos-tr" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("top-right");
+                        toast("Top right").duration(5000).show();
+                    }}>
+                        "↗"
+                    </Button>
+                    <Button id="gal-toast-pos-bl" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("bottom-left");
+                        toast("Bottom left").description("Swipe down to dismiss").duration(5000).show();
+                    }}>
+                        "↙"
+                    </Button>
+                    <Button id="gal-toast-pos-bc" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("bottom-center");
+                        toast("Bottom center").duration(5000).show();
+                    }}>
+                        "↓"
+                    </Button>
+                    <Button id="gal-toast-pos-br" variant="ghost" size="sm" on_click={move || {
+                        toast_set_position("bottom-right");
+                        toast("Bottom right").duration(5000).show();
+                    }}>
+                        "↘"
                     </Button>
                     <Button
                         id="gal-secondary-open"
@@ -1864,7 +1983,6 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>{ "Bump +10%" }</Button>
                 </VStack>
                 { cmd_el }
-                { alert_el }
                 { sheet_el }
             </VStack>
         </MyCard>
@@ -2001,16 +2119,16 @@ fn NavbarNavigationMenuShowcase() -> Element {
             "comp",
             "Components",
             vec![
-                NavigationMenuLink::new("alert", "Alert Dialog", {
+                NavigationMenuLink::new("dialog", "Dialog", {
                     let picked = picked;
-                    move || picked.set("Alert Dialog".into())
+                    move || picked.set("Dialog".into())
                 })
-                .description("Modal confirmation surface"),
+                .description("Modal surface with header / body / footer"),
                 NavigationMenuLink::new("tabs", "Tabs", {
                     let picked = picked;
                     move || picked.set("Tabs".into())
                 })
-                .description("Headless strip + TabsList shell"),
+                .description("Compound Tabs + headless strip"),
             ],
         )
         .link("about", "About", {
@@ -2130,87 +2248,103 @@ fn nav_item(section: Signal<String>, id: &'static str, label: &'static str) -> E
 fn gallery_section_body(section: &str) -> Element {
     match section {
         "forms" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"表单"</Label>
-                <InputShowcase />
-                <PickerPlaceholdersShowcase />
-                <TextareaComboboxShowcase />
-                <ToggleControlsShowcase />
-                <RadioSliderShowcase />
-                <SelectPopoverTabShowcase />
-            </VStack>
+            <ScrollArea id="scroll-forms" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"表单"</Label>
+                    <InputShowcase />
+                    <PickerPlaceholdersShowcase />
+                    <TextareaComboboxShowcase />
+                    <ToggleControlsShowcase />
+                    <RadioSliderShowcase />
+                    <SelectPopoverTabShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "overlays" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"浮层 / 反馈"</Label>
-                <OverlayFeedbackShowcase />
-                <PrimitivesShowcase />
-            </VStack>
+            <ScrollArea id="scroll-overlays" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"浮层 / 反馈"</Label>
+                    <OverlayFeedbackShowcase />
+                    <PrimitivesShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "data" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"数据"</Label>
-                <DataChartShowcase />
-            </VStack>
+            <ScrollArea id="scroll-data" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"数据"</Label>
+                    <DataChartShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "navigation" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"导航"</Label>
-                <NavbarNavigationMenuShowcase />
-                <MenubarStepperShowcase />
-                <NavigatorShowcase />
-                <SelectPopoverTabShowcase />
-            </VStack>
+            <ScrollArea id="scroll-navigation" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"导航"</Label>
+                    <NavbarNavigationMenuShowcase />
+                    <MenubarStepperShowcase />
+                    <NavigatorShowcase />
+                    <SelectPopoverTabShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "layout" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"布局"</Label>
-                <LayoutSubtreeShowcase />
-                <DamageShowcase />
-                <ScrollShowcase />
-                <LogicalShowcase />
-                <UtilityClassShowcase />
-                <GridAndDragShowcase />
-                <ShadowShowcase />
-            </VStack>
+            <ScrollArea id="scroll-layout" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"布局"</Label>
+                    <LayoutSubtreeShowcase />
+                    <DamageShowcase />
+                    <ScrollShowcase />
+                    <LogicalShowcase />
+                    <UtilityClassShowcase />
+                    <GridAndDragShowcase />
+                    <ShadowShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "text" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"文本"</Label>
-                <TextAlignShowcase />
-                <TextCompatibilityShowcase />
-                <EmojiRealtimeRegressionShowcase />
-                <TypographyShowcase />
-            </VStack>
+            <ScrollArea id="scroll-text" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"文本"</Label>
+                    <TextAlignShowcase />
+                    <TextCompatibilityShowcase />
+                    <EmojiRealtimeRegressionShowcase />
+                    <TypographyShowcase />
+                </VStack>
+            </ScrollArea>
         },
         "about" => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
-                <Label text_size="1.25rem" font_weight="700">"关于"</Label>
-                <Rect bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
-                    <VStack gap="0.5rem">
-                        <Label font_weight="700">"Technical Stack"</Label>
-                        <Label>"Layout: Taffy (Flexbox / Grid)"</Label>
-                        <Label>"Text: Glyphon (Cosmic-text)"</Label>
-                        <Label>"Rendering: WGPU"</Label>
-                        <Label>"Reactivity: Signal fine-grained updates"</Label>
-                        <Label>"A11y: AccessKit bridge"</Label>
-                    </VStack>
-                </Rect>
-                <Label text_size="0.875rem" color="muted-foreground">
-                    "侧栏分区对应 ENGINEERING_IMPLEMENTATION_PLAN WP-3.1 Gallery 覆盖矩阵。"
-                </Label>
-            </VStack>
+            <ScrollArea id="scroll-about" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
+                    <Label text_size="1.25rem" font_weight="700">"关于"</Label>
+                    <Rect bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
+                        <VStack gap="0.5rem">
+                            <Label font_weight="700">"Technical Stack"</Label>
+                            <Label>"Layout: Taffy (Flexbox / Grid)"</Label>
+                            <Label>"Text: Glyphon (Cosmic-text)"</Label>
+                            <Label>"Rendering: WGPU"</Label>
+                            <Label>"Reactivity: Signal fine-grained updates"</Label>
+                            <Label>"A11y: AccessKit bridge"</Label>
+                        </VStack>
+                    </Rect>
+                    <Label text_size="0.875rem" color="muted-foreground">
+                        "侧栏分区对应 ENGINEERING_IMPLEMENTATION_PLAN WP-3.1 Gallery 覆盖矩阵。"
+                    </Label>
+                </VStack>
+            </ScrollArea>
         },
         _ => ui! {
-            <VStack w="100%" gap="1rem" p="1.5rem">
-                <Label text_size="1.25rem" font_weight="700">"基础"</Label>
-                <Label text_size="0.875rem" color="muted-foreground">
-                    "Button 变体 / 尺寸 / hover 缓动 · 排版装饰"
-                </Label>
-                <ButtonShowcase />
-                <ButtonHoverEasingShowcase />
-                <TypographyShowcase />
-            </VStack>
+            <ScrollArea id="scroll-basics" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"基础"</Label>
+                    <Label text_size="0.875rem" color="muted-foreground">
+                        "Button 变体 / 尺寸 / hover 缓动 · 排版装饰"
+                    </Label>
+                    <ButtonShowcase />
+                    <ButtonHoverEasingShowcase />
+                    <TypographyShowcase />
+                </VStack>
+            </ScrollArea>
         },
     }
 }
@@ -2275,10 +2409,10 @@ fn build_gallery_app() -> Element {
     ui! {
         <HStack w="100%" h="100%" bg="background" gap="0" relative=true>
             { side }
-            <ScrollArea id="root-scroll" h="100%" min_w="0" overflow_y="auto" overflow_x="auto" grow="1" scroll_behavior="smooth">
+            <VStack h="100%" min_w="0" grow="1">
                 { body }
-            </ScrollArea>
-            { Element::from(toast_host()) }
+            </VStack>
+            <Toaster variant="stack" overflow="displace" limit={3} position="top-right" />
         </HStack>
     }
 }
@@ -2560,8 +2694,8 @@ mod mount_tests {
                     let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
                     let mut layout = rui::core::tree::LayoutTree::new();
                     let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
-                    let scroll = find_id(&app, "root-scroll").expect("root-scroll");
-                    widths.push((section, scroll.layout_bounds[2]));
+                    let pane = find_id(&app, &format!("scroll-{section}")).expect("scroll pane");
+                    widths.push((section, pane.layout_bounds[2]));
                 }
                 let overlay_widths: Vec<f32> = widths
                     .iter()
@@ -2601,7 +2735,7 @@ mod mount_tests {
                     el.children.iter().find_map(|c| find_id(c, id))
                 }
                 let side = find_id(&app, "gal-sidebar").expect("sidebar");
-                let scroll = find_id(&app, "root-scroll").expect("root-scroll");
+                let scroll = find_id(&app, "scroll-basics").expect("scroll-basics");
                 let side_w = side.layout_bounds[2];
                 let scroll_w = scroll.layout_bounds[2];
                 assert!(
