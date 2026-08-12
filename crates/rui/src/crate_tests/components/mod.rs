@@ -1,5 +1,6 @@
 mod button_bind_text;
 mod button_caption;
+mod cv_stable_layout;
 mod input_adornments;
 mod input_caret;
 mod input_shape_suffix;

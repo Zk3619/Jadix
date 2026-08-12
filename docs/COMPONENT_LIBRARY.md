@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
-> **日期**：2026-08-10（§5 分桶）；执行移交 2026-08-12  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
 
@@ -279,11 +279,11 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 ---
 
-## 5. 组件清单（代码事实 · 2026-08-10）
+## 5. 组件清单（代码事实 · 2026-08-12）
 
 来源：`components/mod.rs` `pub use` + Gallery 分区。  
 **分桶权威表**（`experimental` / `stable-candidate` / `verified` / `planned` / `broken` + **id 策略**）：[`component_inventory.md`](component_inventory.md)（C-WP-0.2 ☑）。  
-粗口径：**MVP** = Gallery 可演示；**工程** = 满足 §1；未过 CV 的 §5.2 项多为 `stable-candidate`；ShadCN 未落地对位为 `planned`（§5.1 附表 / inventory §1.9）。
+粗口径：**MVP** = Gallery 可演示；**工程** = 满足 §1；WP-CV.1 后 §5.2.1 行为控件均为 `verified`；样式承诺面见 §5.2.2（不进 CV）；ShadCN 未落地对位为 `planned`（§5.1 附表 / inventory §1.9）。
 
 参考分工：ShadCN → 产品命名与分区；Solid → 受控 Signal / 细粒度 sync（非组件表）；EUI → **仅密度标尺**（见 inventory §3），不搬架构。
 
@@ -291,12 +291,12 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 分区 | 组件（`components/` 模块） | 分桶摘要（详见 inventory） |
 |------|----------------------------|----------------------------|
-| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button=`verified`；Label/Separator/Card=`stable-candidate`；其余=`experimental`（越出 §5.2） |
-| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Select/Combobox=`verified`（窄主路径）；其余稳定面项=`stable-candidate`；Date/Time/Color/File=`experimental` |
-| **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog=`verified`（Esc 栈；壳在 `dialog.rs`）；Toast/Tooltip=`stable-candidate`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
-| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | 全部 `experimental`（§5.2 外或深度未承诺） |
-| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`stable-candidate`；其余=`experimental` |
-| **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea=`verified`（含 Input 滚动）；Scrollbar=`stable-candidate`；Viewport/Resizable=`experimental` |
+| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；其余=`experimental`（越出 §5.2.1） |
+| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1）；Date/Time/Color/File=`experimental` |
+| **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
+| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
+| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`verified`；其余=`experimental` |
+| **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
 | **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 选区随 Label；inline=`experimental`；块级 md **缺失**（密度项） |
 
 **ShadCN `planned`（尚未 `pub use`，详见 inventory §1.9）**：
@@ -309,16 +309,26 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 **不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`。`planned` 未落地前**禁止**写入 prelude 或假装已导出。
 
-### 5.2 稳定面 vs 实验面（发布口径草案）
+### 5.2 发布承诺面（SemVer 口径草案）
 
-| 稳定面（0.1 起承诺 semver） | 实验面（可破坏，须标 `experimental` 或文档警告） |
-|-----------------------------|--------------------------------------------------|
+#### 5.2.1 组件稳定面（CV 范围 · inventory §2）
+
+| 稳定面控件（0.1 起承诺 semver） | 实验面（可破坏，须标 `experimental` 或文档警告） |
+|--------------------------------|--------------------------------------------------|
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
-| Form（校验 Context）、Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化 |
-| Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
+| Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
+| | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
-**CV 分桶快照（2026-08-10）**：`verified` = Button、Input、Select、Combobox、Dialog（Esc）、ScrollArea；其余 §5.2 行为控件 = `stable-candidate`；**broken = 无**；**planned** = ShadCN 未落地对位（不进稳定面）。升格/降级只改 [`component_inventory.md`](component_inventory.md) 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
+**CV 分桶快照（2026-08-12，WP-CV.1）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
+
+#### 5.2.2 样式承诺面（非控件 · 不进 CV · inventory §1.8）
+
+| 承诺面（0.1 起承诺 semver） | 延后 / 实验 |
+|----------------------------|-------------|
+| Theme / `set_theme_mode`、utility `class` 主集（`rui_style_tokens`） | 完整 CSSOM、分边 border、真视口单位等见 [`box_model.md`](box_model.md) Backlog |
+
+验收归属工程域：WP-2.9、[`color.md`](color.md)、换肤冒烟；**禁止**用 Gallery 控件走查或 verified/stable-candidate 分桶标记。
 
 ### 5.3 明确不做（组件库范围）
 

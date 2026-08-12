@@ -67,7 +67,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 | 这次 `set` 触发什么？Store/Resource 语义 | `REACTIVITY.md` | 以「追平 Leptos API」替代门槛 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
-| 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2） | 只改 Gallery 文案 |
+| 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
 ### 1.3 旧计划处置
 
@@ -92,7 +92,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
 | 文本/像素 | 测宽对齐 ☑；damage 策略 ☑；golden **仅 2** 场景 | ≥5 组件 golden |
 | 反应性 | API 主路径齐；`REGISTERED_*`→Owner **未收口** | 长会话无泄漏；更新路径可预测 |
-| 组件 | Gallery 八分区 ☑；CV **未过**；多数稳定面仍 `stable-candidate` | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
+| 组件 | Gallery 八分区 ☑；**WP-CV.1 ☑**（§5.2.1 行为控件走查完成）；CV.2–.4 未过 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
 
 ---
@@ -130,7 +130,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 域 | 规范管 | 计划（本文）管 | 不管 |
 |----|--------|----------------|------|
 | **工程** | 六门槛、栈、发布叙事、质量门命令 | W1 冒烟、W2 文本/damage/golden、W3 外壳、W4 crates.io | 单个组件 variant 名 |
-| **组件** | 分层、双书写、受控 API、清单、质量门模板 | CV 走查、行为下沉、token 归一、Gallery 覆盖 | 重写 Signal 内核 |
+| **组件** | 分层、双书写、受控 API、清单、质量门模板 | CV 走查（仅 `components/` 控件）、行为下沉、Gallery 覆盖 | 重写 Signal 内核；Theme/utility SemVer |
 | **响应式** | API 清单、缺口 G1–G9、与组件的受控边界 | Owner 注册表、双路径、Store/EB 契约 | 浮层 placement、chrome 色值 |
 | **身份**（横切） | 四轴不变量 I-1… | 审计 + 空串收敛 + scoped API（并入 WP-2.4 / CV） | 当「第四套计划」 |
 
@@ -199,29 +199,32 @@ flowchart TB
 
 ### 5.3 Wave CV — 稳定面验证（原组件门禁）
 
-**目标**：把「Gallery 能演示」变成「敢承诺」的最小集合。  
+**目标**：把「Gallery 能演示」变成「敢承诺」的最小**控件**集合。  
+**CV 范围**：仅 `components/` 产品控件（Gallery 分区 + inventory §1.1–1.7）。**不含** Theme / utility（样式承诺面，见 inventory §1.8）、Form helpers（Context，已降 `experimental`）。  
 **硬规则：未过 CV 不得开 WP-3.4 / 3.7 / 3.8 行为与 API 大重构。**  
 broken 修不好 → 降出稳定面，禁止假装 `verified`。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
 | **WP-CV.0** | 分桶清单 + prelude 双书写 | C-WP-0.2 / 0.3 | ☑ inventory + `rui::prelude` |
-| **WP-CV.1** | 稳定候选 Gallery / 手工走查 | C-WP-V.1 | ☐ |
-| **WP-CV.2** | 最小自动化网（Button/Input/Dialog/Tabs/Checkbox\|Switch 布局或行为） | C-WP-V.2 | ☐ 已有零散测，**未按矩阵关门** |
+| **WP-CV.1** | 稳定候选 Gallery / 手工走查 | C-WP-V.1 | ☑ 2026-08-12；§5.2.1 行为控件走查完成；Form 降出稳定面 |
+| **WP-CV.2** | 最小自动化网（Button/Input/Dialog/Tabs/Checkbox\|Switch 布局或行为） | C-WP-V.2 | ☑ 2026-08-12；`crate_tests/components/cv_stable_layout.rs` 矩阵 8 测 |
 | **WP-CV.3** | P0 修障或降级 | C-WP-V.3 | ☐ |
 | **WP-CV.4** | `id` 过度使用审计（分类表） | C-WP-V.5 | ☐ |
 | **WP-CV.5** | 核心 golden 骨架（可选，与 WP-2.6 合并） | C-WP-V.4 | ☐ 不阻塞 CV 退出，阻塞「宣称视觉稳定」 |
 
 **CV 退出（进入组件下沉前）**
 
-- [ ] 稳定面草案已标 `verified` / `broken` / `experimental`（清单有；走查 ☐）  
-- [ ] 稳定候选无未分类 P0  
-- [ ] Button · Input · Dialog · Tabs · Checkbox|Switch 有 layout/行为测 **或** 冒烟勾选  
-- [ ] 稳定候选 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`  
+- [x] §5.2.1 **行为控件**已标 `verified`（Gallery 走查 ☑ 2026-08-12）；Form → `experimental`（非控件）  
+- [ ] 行为控件无未分类 P0  
+- [x] Button · Input · Dialog · Tabs · Checkbox|Switch 有 layout/行为测 **或** 冒烟勾选（CV.2 ☑ 2026-08-12）  
+- [ ] 行为控件 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`  
 
-分桶真源：[`component_inventory.md`](component_inventory.md)。  
-**当前 `verified`（窄主路径）**：Button、Input、Select、Combobox、Dialog（Esc）、ScrollArea。  
-Checkbox 近期已对齐 solid-ui / Label `for` / labelledby——仍为 `stable-candidate`，须经 CV.1/2 升格。
+分桶真源：[`component_inventory.md`](component_inventory.md) §2（控件）。  
+**当前 `verified`（控件）**：Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar。  
+**Form**：降出 §5.2.1（Context helpers → `experimental`）；加深见 WP-3.9。  
+**CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。
+**样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](color.md)。
 
 ### 5.4 Wave 2 — 文本、像素与内核硬化
 
