@@ -330,7 +330,7 @@ pub fn radio_group_scope(
     disabled: bool,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "radio");
     let default_value = default_value.into();
     let value =
         value.unwrap_or_else(|| use_signal(format!("{id}__radio").as_str(), || default_value));
@@ -508,7 +508,7 @@ impl RadioGroupBuilder {
 
 impl From<RadioGroupBuilder> for Element {
     fn from(builder: RadioGroupBuilder) -> Self {
-        let id = builder.group_id;
+        let id = crate::utils::resolve_instance_id(builder.group_id, "radio");
         let default_value = builder.default_value;
         let disabled = builder.disabled;
         let options = builder.options;

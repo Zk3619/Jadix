@@ -4,6 +4,7 @@ pub mod file_dialog;
 pub mod focus_trap;
 pub mod font;
 pub mod input_hit;
+pub mod instance_id;
 pub mod keyboard;
 pub mod lucide;
 pub mod popup;
@@ -20,6 +21,7 @@ pub use focus_trap::{
     activate_focus_trap, deactivate_focus_trap, focus_trap_ring_ids, sync_focus_trap,
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
+pub use instance_id::resolve_instance_id;
 pub use lucide::{apply_bound_icon_name, lucide_glyph};
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,

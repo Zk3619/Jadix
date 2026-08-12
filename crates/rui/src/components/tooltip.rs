@@ -80,7 +80,7 @@ pub fn tooltip_scope(
     open: Option<Signal<bool>>,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "tooltip");
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__tooltip_open").as_str(), || false));
     let trigger_fid =
         use_signal(format!("{id}__tooltip_trigger_fid").as_str(), || format!("{id}__tooltip_trigger"));

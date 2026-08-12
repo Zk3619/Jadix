@@ -8,7 +8,7 @@
 > - [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) → **仅密度标尺**（§3）；禁作 API/架构参照  
 > **日期**：2026-08-12（样式承诺面拆出 §1.8；§5.2 → §5.2.1/§5.2.2）  
 
-交叉：[`AUTHORITY.md`](AUTHORITY.md) WP-CV.0 · WP-CV.1 · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
+交叉：[`AUTHORITY.md`](AUTHORITY.md) WP-CV.0 · WP-CV.1 · WP-CV.3 · WP-CV.4 · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
 
 ---
 
@@ -24,6 +24,8 @@
 
 **硬规则（仅 `components/` 控件）**：`stable-candidate` ⊆ 规范 §5.2.1 组件稳定面；已导出且越出 §5.2.1 → `experimental`；未导出对位 → `planned`（§1.9）。  
 **WP-CV.1（2026-08-12）**：§5.2.1 行为控件已 Gallery 手工走查并升 `verified`；**Form** 降出组件稳定面（Context helpers）。Theme / utility **不进 CV**，见 §1.8。  
+**WP-CV.3（2026-08-12）**：§2 稳定面文档已手工复核修错；**无未分类 P0**，`broken` = 无（不降级）。  
+**WP-CV.4（2026-08-12）**：稳定面 id 分类见 §2.1；空串 I-1 已修。展示型去必填 / Gallery 减噪 → WP-2.8。  
 **禁止**：把 `planned` 写进 prelude / Gallery 假装可 import；把 Theme/utility 当控件走 CV 改桶。
 
 ### id 策略列（对接 C-WP-V.5）
@@ -185,24 +187,67 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 组件 | 桶（本表） | CV 下一步 |
 |------|------------|-----------|
-| Button | verified | 保持；CV.2 layout ☑；golden → WP-CV.5 / WP-2.6 |
-| Input | verified | 保持；CV.2 layout ☑；IME 非 Win 仍开放 |
-| Select | verified | 保持；CV.2 外扩 layout 可选 |
-| Combobox | verified | 同上 |
-| Dialog | verified | 保持；CV.2 layout ☑ |
-| ScrollArea / Scrollbar | verified | 保持 |
-| Label / Separator / Card | verified | 保持 |
-| Textarea / Checkbox / Switch / RadioGroup / Slider | verified | Checkbox/Switch CV.2 ☑；Textarea/Radio/Slider layout 可扩 |
-| Tabs / Toast / Tooltip | verified | Tabs CV.2 layout ☑ |
+| Button | verified | 保持；CV.2/CV.4 ☑；golden → WP-CV.5 / WP-2.6 |
+| Input | verified | 保持；CV.2/CV.4 ☑；IME 非 Win 仍开放 |
+| Select | verified | 保持；CV.4 空串 auto ☑；CV.2 外扩 layout 可选 |
+| Combobox | verified | 同上（scope 统一 resolve） |
+| Dialog | verified | 保持；CV.2/CV.4 ☑ |
+| ScrollArea / Scrollbar | verified | 保持；CV.4 ScrollArea 空串 auto ☑ |
+| Label / Separator / Card | verified | 保持；Label 空 id 不写 tid（CV.4） |
+| Textarea / Checkbox / Switch / RadioGroup / Slider | verified | CV.2 Checkbox/Switch ☑；Radio CV.4 auto ☑ |
+| Tabs / Toast / Tooltip | verified | Tabs CV.2+CV.4 ☑；Tooltip CV.4 auto ☑ |
 
 **Form**：已降出组件稳定面 → `experimental`（Context helpers；`form_provider` / `form_field` / `form_validate`）。加深见 WP-3.9，不挡 CV.1。
 
 **样式承诺面**（Theme / utility）：见 §1.8；**不在本表**，不走 CV 改桶。
 
-**broken**：暂无已确认 P0 组件。若后续发现阻断项 → 标 `broken` 或降出稳定面，**不得**假装 verified、**不得**进 C1。
+**broken**：无（WP-CV.3 签署时确认）。若后续发现阻断项 → 标 `broken` 或降出稳定面，**不得**假装 verified、**不得**进 C1。
 
 **显式不在组件稳定候选**（即使 Gallery 有演示）：**Form** / Toggle / ToggleGroup / Progress / Image / Sheet / Popover / Dropdown / ContextMenu / Command / 一切 Date·Time·Color / Table / VirtualList / TreeView / Chart / Carousel / Stepper / Menubar / Navbar / NavigationMenu / Sidebar / ScrollViewport / Resizable / 块级 markdown / FileDialog / **Theme / utility**。  
 **全部 `planned`（§1.9）亦不在稳定候选**——落地后先 `experimental`，再经 CV 决定是否升 §5.2.1。
+
+---
+
+## 2.1 WP-CV.4 · `id` 过度使用审计（稳定面）
+
+> **日期**：2026-08-12 · 对照 [`element_identity.md`](element_identity.md) I-1 / I-3 · 真源 `crates/rui/src/components/` + `utils/instance_id.rs`。  
+> **范围**：§2 `verified` 控件。experimental 仅作备注，不挡 CV.4。  
+> **空串口径**：`resolve_instance_id` → `__rui_{kind}_rt_N`（会话递增，跨 rebuild 不保证）；展示型 Label 空 id → **不写** `template_id`。
+
+| 组件 | API | 空 id | 写入 focus / template | 信号键 | 锚点 | I-1 / 笔记 |
+|------|-----|-------|----------------------|--------|------|------------|
+| Button | 首位可空 | **auto** `btn-N` | focus=裸 id；template=id | 无（全局焦点键） | — | 已合规 |
+| Label | 首位可空 | 展示：**不写** tid；selectable → auto | selectable → focus | 选区 `__rui_label_selection_{id}` | `for` 指他控 | I-1 ☑（CV.4 修） |
+| Separator / Card | **无用户 id** | n/a | 无 | 无 | — | 展示型目标态 |
+| Input | 首位可空 | **auto** `__rui_input_rt_N` | `input:{id}`；tid 派生 | value/caret/… | — | 已合规 |
+| Textarea | 首位可空 | **auto** `__rui_textarea_rt_N` | `textarea:{id}` | 同 Input + h 信号 | 内 scroll | 已合规 |
+| Checkbox / Switch / Slider | 首位可空 | **auto** `__rui_*_rt_N` | 裸 id | `{id}__checkbox` 等 | — | 已合规 |
+| RadioGroup | 首位 `group_id` | **auto** `__rui_radio_rt_N` | 项 `{g}:{v}` | `{id}__radio` | — | I-1 ☑（CV.4 修） |
+| Select | 必填位（可空） | **auto** `__rui_select_rt_N` | `{id}:trigger` | `__select_*` | floating → trigger | I-1/I-3 ☑（CV.4 修） |
+| Combobox | 必填位（可空） | **auto** `__rui_combo_rt_N`（scope 统一） | `input:{id}` | `__combo_*` | floating → `input:{id}` | 锚点与 Input 同 id（CV.4 修） |
+| Dialog | 必填位（可空） | **auto** `__rui_dialog_rt_N` | Trigger 派生 | `{id}__open` | portal | I-1 ☑（CV.4 修） |
+| Tooltip | 必填位（可空） | **auto** `__rui_tooltip_rt_N` | `__tooltip_trigger` | `__tooltip_open` | floating | I-1 ☑（CV.4 修） |
+| Toast | Host 无 id；项 `u64` | n/a | `toast-card-{u64}` | 全局队列 | — | 已合规 |
+| Tabs | 复合必填（可空） | **auto** `__rui_tabs_rt_N` | `{id}:{value}` / `tabstrip:` | `{id}__tabs` | content show | I-1 ☑（CV.4 修） |
+| ScrollArea | 首位可空 | **auto** `__rui_scroll_rt_N` | `scroll:{id}` | viewport 信号 | Scrollbar target | I-1 ☑（CV.4 修） |
+| Scrollbar | `id` 未用于身份；要 `target` | n/a | `scrollbar-*-{target}` | visibility by target | 跟 SA | 无空 focus 写入 |
+
+### Gallery 示范 id（勿写成 API 要求）
+
+- Button 大量**省略 id**（`btn-N`）；焦点/测引用才写 `gal-*`（WP-2.8 Gallery 减噪已起步）。  
+- Input：冒烟 `gal-s2-input-a`、密码测 `gal-s2-input-pw`；其余同行 Input 省略（auto）。  
+- Textarea/Combobox/Tabs：`gal-textarea`、`gal-combo`、`gal-tabs*`（多实例）。  
+- Checkbox/Switch/Radio/Slider：保留 `gallery_*` 多实例键。  
+- Dialog/Tooltip：保留实例键；Trigger 按钮可省略。  
+- 分区壳 ScrollArea：`scroll-{section}`；inset 演示 `sa-*`。  
+- 文档探针 Label：`gal-s6-label-cjk` / `gal-s11-virt-title` / bidi·emoji 回归 id。
+
+### CV.4 结论
+
+- **稳定面 id 策略已分类**（本表 + §1 各行「id 策略」列）。  
+- **I-1 空串 `Some("")`**：稳定面已修（`resolve_instance_id` / Label 不写 tid）；桥侧防御测保留。  
+- **遗留 → WP-2.8**：展示型去必填心智（Label/Chart/Navbar 等 API 首位）；显式同 id 多实例仍属调用方契约（I-3）；Gallery 减噪。  
+- **experimental**：多数无空串 auto，空 id 风险同修前 Select；不挡 CV.4，升格前须对齐本表。
 
 ---
 

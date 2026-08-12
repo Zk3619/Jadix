@@ -26,6 +26,7 @@ fn find_text<'a>(el: &'a Element, tid: &str) -> Option<&'a str> {
 fn clearable_shows_clear_when_nonempty_and_clears_value() {
     let id = "diag-input-clear";
     use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
 
     let mut el: Element = input(id).clearable(true).into();
     let clear_tid = format!("__rui_input:{id}:clear");
@@ -34,10 +35,19 @@ fn clearable_shows_clear_when_nonempty_and_clears_value() {
         .iter()
         .find(|c| c.template_id.as_deref() == Some(clear_tid.as_str()))
         .expect("clear adornment present");
+    assert!(
+        (clear.style.opacity - 1.0).abs() < 0.001,
+        "unfocused nonempty must show clear"
+    );
     clear.on_click.as_ref().unwrap().borrow_mut()();
     assert_eq!(
         use_signal(&input_value_signal_key(id), String::new).peek(),
         ""
+    );
+    assert_eq!(
+        use_signal("__rui_button_focus_id", String::new).peek(),
+        focus_id_for_input(id),
+        "clear click must focus the field"
     );
 
     let mut tree = LayoutTree::new();
@@ -143,7 +153,7 @@ fn adorn_opacity(el: &Element, tid: &str) -> Option<f32> {
 }
 
 #[test]
-fn focused_nonempty_makes_clear_and_eye_opaque() {
+fn nonempty_makes_clear_visible_even_when_unfocused() {
     let id = "diag-adorn-opacity";
     use_signal(&input_value_signal_key(id), String::new).set("secret".into());
     use_signal("__rui_button_focus_id", String::new).set(String::new());
@@ -155,8 +165,16 @@ fn focused_nonempty_makes_clear_and_eye_opaque() {
         .into();
     let clear_tid = format!("__rui_input:{id}:clear");
     let reveal_tid = format!("__rui_input:{id}:reveal");
-    assert_eq!(adorn_opacity(&el, &clear_tid), Some(0.0));
-    assert_eq!(adorn_opacity(&el, &reveal_tid), Some(0.0));
+    assert_eq!(
+        adorn_opacity(&el, &clear_tid),
+        Some(1.0),
+        "nonempty clear must be clickable while unfocused"
+    );
+    assert_eq!(
+        adorn_opacity(&el, &reveal_tid),
+        Some(0.0),
+        "eye stays focused-only"
+    );
 
     use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
     let mut tree = LayoutTree::new();
@@ -165,7 +183,7 @@ fn focused_nonempty_makes_clear_and_eye_opaque() {
     assert_eq!(
         adorn_opacity(&el, &clear_tid),
         Some(1.0),
-        "focused+nonempty clear must be opaque"
+        "focused+nonempty clear must stay opaque"
     );
     assert_eq!(
         adorn_opacity(&el, &reveal_tid),

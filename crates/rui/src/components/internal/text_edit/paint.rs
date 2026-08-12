@@ -365,7 +365,7 @@ fn sync_one_text_edit_paint(
         let clear_tid = input_clear_template_id(&desc.base_id);
         if let Some(btn) = find_descendant_by_template_id_mut(el, &clear_tid) {
             let show =
-                is_focused && (!committed.is_empty() || !preedit.is_empty()) && !desc.disabled;
+                (!committed.is_empty() || !preedit.is_empty()) && !desc.disabled;
             if set_adornment_visible(btn, show) {
                 adorn_style = true;
             }

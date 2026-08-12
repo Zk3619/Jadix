@@ -322,7 +322,8 @@ impl ScrollAreaBuilder {
 }
 
 impl From<ScrollAreaBuilder> for Element {
-    fn from(builder: ScrollAreaBuilder) -> Element {
+    fn from(mut builder: ScrollAreaBuilder) -> Element {
+        builder.id = crate::utils::resolve_instance_id(std::mem::take(&mut builder.id), "scroll");
         let inset_key = scroll_scrollbar_inset_signal_key(&builder.id);
         let inset_x_key = scroll_scrollbar_inset_x_signal_key(&builder.id);
         let inset_y_key = scroll_scrollbar_inset_y_signal_key(&builder.id);
@@ -526,6 +527,7 @@ impl From<ScrollAreaBuilder> for Element {
                     outer = outer.child(h);
                 }
             }
+            outer.template_id = Some(builder.id.clone());
             outer
         } else {
             outer = outer.child(viewport);

@@ -444,7 +444,7 @@ pub fn tabs_scope(
     disabled: bool,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "tabs");
     let default_value = default_value.into();
     let orientation = TabsOrientation::parse(&orientation.into());
     let value =
@@ -720,6 +720,7 @@ impl From<TabsHeadlessBuilder> for Element {
             default_selected,
             children,
         } = builder;
+        let id = crate::utils::resolve_instance_id(id, "tabs");
         let scope = format!("{id}__tabs");
         let sel = selected.unwrap_or_else(|| {
             use_signal(scope.as_str(), || {

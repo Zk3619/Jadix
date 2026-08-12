@@ -91,6 +91,7 @@ fn MyCard(title: String, children: Option<rui::core::tree::Element>) -> rui::cor
 }
 
 /// Solid getter-props 试点：`#[component(reactive)]` + Signal 字段；文案/图标走自动 bind，不整卡重建。
+/// `id` 为宏要求的实例键（本组件体未再写入 focus/template）。
 #[component(reactive)]
 fn ReactiveStatusBadge(
     id: String,
@@ -158,8 +159,8 @@ fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
                     "默认 hover_easing=\"spring\"；设为 \"cubic\" 时对标 CSS transition + cubic-bezier(0.4, 0, 0.2, 1)"
                 </Label>
                 <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
-                    <Button id="gal-hover-spring" variant="ghost" hover_easing="spring">"Ghost · spring"</Button>
-                    <Button id="gal-hover-cubic" variant="ghost" hover_easing="cubic">"Ghost · cubic"</Button>
+                    <Button variant="ghost" hover_easing="spring">"Ghost · spring"</Button>
+                    <Button variant="ghost" hover_easing="cubic">"Ghost · cubic"</Button>
                 </HStack>
             </VStack>
         </MyCard>
@@ -186,19 +187,18 @@ fn InputShowcase() -> rui::core::tree::Element {
                         clearable="true"
                         flex_grow="1"
                     />
-                    <Input id="gal-s2-input-b" placeholder="Invalid" invalid=true clearable="true" flex_grow="1" />
+                    <Input placeholder="Invalid" invalid=true clearable="true" flex_grow="1" />
                     <Input id="gal-s2-input-pw" type="password" password_toggle="true" clearable="true" flex_grow="1" />
-                    <Input id="gal-s2-input-num" type="number" clearable=true flex_grow="1" />
+                    <Input type="number" clearable=true flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <Input id="gal-s2-email" type="email" clearable=true flex_grow="1" />
-                    <Input id="gal-s2-tel" type="tel" clearable=true flex_grow="1" />
-                    <Input id="gal-s2-url" type="url" clearable=true flex_grow="1" />
-                    <Input id="gal-s2-search" type="search" clearable="true" flex_grow="1" />
+                    <Input type="email" clearable=true flex_grow="1" />
+                    <Input type="tel" clearable=true flex_grow="1" />
+                    <Input type="url" clearable=true flex_grow="1" />
+                    <Input type="search" clearable="true" flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="center" wrap="wrap" w="100%">
                     <Input
-                        id="gal-s2-input-bound-invalid"
                         placeholder="invalid={signal}"
                         invalid={mark_invalid.get()}
                         flex_grow="1"
@@ -250,7 +250,6 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                     <Button
-                        id="gal-file"
                         variant="outline"
                         size="sm"
                         flex_grow="1"
@@ -261,7 +260,6 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                         "Choose image…"
                     </Button>
                     <Button
-                        id="gal-dir"
                         variant="outline"
                         size="sm"
                         flex_grow="1"
@@ -634,19 +632,18 @@ fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
                     "对照 docs/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap">
-                    <Button id="gal-wp23-widen" variant="default" on_click={move || wide.set(true)}>
+                    <Button variant="default" on_click={move || wide.set(true)}>
                         "加宽 chip"
                     </Button>
-                    <Button id="gal-wp23-reset" variant="outline" on_click={move || wide.set(false)}>
+                    <Button variant="outline" on_click={move || wide.set(false)}>
                         "复位"
                     </Button>
                 </HStack>
-                <Rect id="gal-wp23-frame" w="14rem" bg="muted" rounded="0.5rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                <Rect w="14rem" bg="muted" rounded="0.5rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                     <VStack w="100%" gap="0.35rem">
-                        <Label id="gal-wp23-header" text_size="0.75rem" font_weight="600">"header"</Label>
-                        <HStack id="gal-wp23-mid" w="100%" gap="0.25rem" wrap="wrap">
+                        <Label text_size="0.75rem" font_weight="600">"header"</Label>
+                        <HStack w="100%" gap="0.25rem" wrap="wrap">
                             <Rect
-                                id="gal-wp23-leaf"
                                 h="1.5rem"
                                 rounded="0.25rem"
                                 bg="primary"
@@ -655,11 +652,11 @@ fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
                             >
                                 <Label text_size="0.7rem" text_color="primary-foreground">"chip"</Label>
                             </Rect>
-                            <Rect id="gal-wp23-sib" w="3.5rem" h="1.5rem" rounded="0.25rem" bg="secondary" p="0.15rem">
+                            <Rect w="3.5rem" h="1.5rem" rounded="0.25rem" bg="secondary" p="0.15rem">
                                 <Label text_size="0.7rem">"sib"</Label>
                             </Rect>
                         </HStack>
-                        <Rect id="gal-wp23-footer" w="100%" bg="accent" rounded="0.25rem" p="0.35rem">
+                        <Rect w="100%" bg="accent" rounded="0.25rem" p="0.35rem">
                             <Label text_size="0.75rem" font_weight="600">"footer（应随 mid 下移）"</Label>
                         </Rect>
                     </VStack>
@@ -694,7 +691,7 @@ fn DamageShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "勾选：① 重置→连点同宽+1→刷新：ΔPartialLoad↑、ΔFullClear≈0 ② 切换结构→刷新：ΔFullClear↑"
                 </Label>
-                <Label id="gal-wp22-stats" w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     { format!(
                         "快照: PartialLoad={} (+{})  FullClear={} (+{})",
                         partial_snap.get(),
@@ -704,26 +701,26 @@ fn DamageShowcase() -> rui::core::tree::Element {
                     ) }
                 </Label>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Label id="gal-wp22-digit" text_size="1.5rem" font_weight="700" leading="none">
+                    <Label text_size="1.5rem" font_weight="700" leading="none">
                         { format!("{:02}", count.get() % 100) }
                     </Label>
-                    <Button id="gal-wp22-inc" variant="default" on_click={move || {
+                    <Button variant="default" on_click={move || {
                         count.set(count.get().wrapping_add(1));
                         // Present of this click runs after the handler; snap on next refresh.
                     }}>
                         "同宽 +1（00–99）"
                     </Button>
-                    <Button id="gal-wp22-struct" variant="outline" on_click={move || {
+                    <Button variant="outline" on_click={move || {
                         show_extra.set(!show_extra.get());
                     }}>
                         "切换结构（Show）"
                     </Button>
-                    <Button id="gal-wp22-refresh" variant="outline" on_click={move || {
+                    <Button variant="outline" on_click={move || {
                         snap_stats();
                     }}>
                         "刷新快照"
                     </Button>
-                    <Button id="gal-wp22-reset" variant="secondary" on_click={move || {
+                    <Button variant="secondary" on_click={move || {
                         rui::reset_frame_policy_counters();
                         partial_snap.set(0);
                         full_snap.set(0);
@@ -734,7 +731,7 @@ fn DamageShowcase() -> rui::core::tree::Element {
                     </Button>
                 </HStack>
                 <Show when={show_extra.get()}>
-                    <Rect id="gal-wp22-extra" bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         <Label text_size="0.875rem" leading="normal">
                             "结构变更样例：挂载/卸载此块应走全帧 Clear（ΔFullClear↑）。"
                         </Label>
@@ -824,23 +821,23 @@ fn TextAlignShowcase() -> rui::core::tree::Element {
                 <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"ASCII soft-wrap（~5rem）"</Label>
-                        <Rect id="gal-wp21-ascii" bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                            <Label id="gal-wp21-ascii-label" w="100%" text_size="0.875rem" leading="normal">
+                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label w="100%" text_size="0.875rem" leading="normal">
                                 "hello world from rui text measure alignment"
                             </Label>
                         </Rect>
                     </VStack>
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"CJK soft-wrap（~6rem）"</Label>
-                        <Rect id="gal-wp21-cjk" bg="muted" rounded="0.375rem" p="0.5rem" w="6rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                            <Label id="gal-wp21-cjk-label" w="100%" text_size="1rem" leading="normal">
+                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" w="6rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label w="100%" text_size="1rem" leading="normal">
                                 "中文日文测试测宽分行对齐用例足够长"
                             </Label>
                         </Rect>
                     </VStack>
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"Chip + Mention（10rem）"</Label>
-                        <Rect id="gal-wp21-rich" bg="muted" rounded="0.375rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             { chip_mention }
                         </Rect>
                     </VStack>
@@ -1433,7 +1430,6 @@ fn NavigatorShowcase() -> Element {
                 </Label>
                 <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
                     <Button
-                        id="gal-nav-home"
                         size="sm"
                         variant="outline"
                         on_click={move || {
@@ -1443,7 +1439,6 @@ fn NavigatorShowcase() -> Element {
                         "Home"
                     </Button>
                     <Button
-                        id="gal-nav-detail"
                         size="sm"
                         variant="outline"
                         on_click={move || {
@@ -1456,7 +1451,6 @@ fn NavigatorShowcase() -> Element {
                         "Push Detail"
                     </Button>
                     <Button
-                        id="gal-nav-sheet"
                         size="sm"
                         variant="secondary"
                         on_click={move || {
@@ -1472,7 +1466,6 @@ fn NavigatorShowcase() -> Element {
                         "Open Sheet"
                     </Button>
                     <Button
-                        id="gal-nav-back"
                         size="sm"
                         variant="ghost"
                         on_click={move || {
@@ -1507,18 +1500,18 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                         <HStack gap="0.75rem" items="start" wrap="wrap">
                             <VStack gap="0.25rem">
                                 <Label font_weight="700" text_size="0.75rem">"Texture quad"</Label>
-                                <Image id="demo-checker-img" texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
+                                <Image texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
                             </VStack>
                             <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
                                 <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
                                 <HStack gap="0.5rem" wrap="wrap">
-                                    <Button id="prim-overlay-toggle" variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
+                                    <Button variant="outline" on_click={move || overlay_open.set(!overlay_open.get())}>
                                         { if overlay_open.get() { "关闭根 Portal" } else { "打开根 Portal" } }
                                     </Button>
-                                    <Button id="prim-local-portal-toggle" variant="outline" on_click={move || local_open.set(!local_open.get())}>
+                                    <Button variant="outline" on_click={move || local_open.set(!local_open.get())}>
                                         { if local_open.get() { "关闭局部 Portal" } else { "打开局部 Portal" } }
                                     </Button>
-                                    <Button id="prim-trap-toggle" variant="secondary" on_click={move || {
+                                    <Button variant="secondary" on_click={move || {
                                         let next = !trap_on.get();
                                         trap_on.set(next);
                                         rui::sync_focus_trap("prim-trap", next, "trap-a,trap-b");
@@ -1566,7 +1559,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                 <Label text_size="0.875rem" color="muted-foreground">
                                     "未指定 mount：提升到根叠层（对齐 Solid document.body）。"
                                 </Label>
-                                <Button id="prim-overlay-close" variant="default" on_click={move || overlay_open.set(false)}>
+                                <Button variant="default" on_click={move || overlay_open.set(false)}>
                                     "关闭"
                                 </Button>
                             </VStack>
@@ -1583,7 +1576,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                 <Label text_size="0.75rem" color="muted-foreground">
                                     "mount=\"prim-portal-host\"：挂在子容器叠层内。"
                                 </Label>
-                                <Button id="prim-local-portal-close" size="sm" variant="default" on_click={move || local_open.set(false)}>
+                                <Button size="sm" variant="default" on_click={move || local_open.set(false)}>
                                     "关闭"
                                 </Button>
                             </VStack>
@@ -1704,7 +1697,7 @@ fn OverlayFeedbackShowcase() -> Element {
         ui! {
             <Dialog id="gal-dialog" open={open}>
                 <DialogTrigger>
-                    <Button id="gal-dialog-open" variant="outline" size="sm">Dialog</Button>
+                    <Button variant="outline" size="sm">Dialog</Button>
                 </DialogTrigger>
                 <DialogContent overlay_blur={8.0}>
                     <DialogHeader>
@@ -1790,7 +1783,7 @@ fn OverlayFeedbackShowcase() -> Element {
     let tip: Element = ui! {
         <Tooltip id="gal-tip">
             <TooltipTrigger>
-                <Button id="gal-tip-trigger" variant="outline" size="sm">
+                <Button variant="outline" size="sm">
                     "Hover for tooltip"
                 </Button>
             </TooltipTrigger>
@@ -1808,7 +1801,7 @@ fn OverlayFeedbackShowcase() -> Element {
         })
         .trigger(|| {
             ui! {
-                <Rect id="gal-ctx-trigger" p="0.75rem" bg="muted" class="rounded-md" w="100%">
+                <Rect p="0.75rem" bg="muted" class="rounded-md" w="100%">
                     <Label text_size="0.875rem">{ "右键此区域打开 ContextMenu" }</Label>
                 </Rect>
             }
@@ -1822,14 +1815,14 @@ fn OverlayFeedbackShowcase() -> Element {
                     "浮层与反馈：命令面板、模态 Dialog（含 Cancel/Confirm）、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
-                    <Button id="gal-cmd-open" variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
+                    <Button variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
                         "Command"
                     </Button>
                     { dialog_el }
-                    <Button id="gal-sheet-open" variant="outline" size="sm" on_click={move || open_sheet.set(true)}>
+                    <Button variant="outline" size="sm" on_click={move || open_sheet.set(true)}>
                         "Sheet"
                     </Button>
-                    <Button id="gal-toast-push" variant="default" size="sm" on_click={move || {
+                    <Button variant="default" size="sm" on_click={move || {
                         toast_set_layout("stack");
                         toast("Toast from Gallery")
                             .description("Hover the stack to expand.")
@@ -1838,7 +1831,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Toast"
                     </Button>
-                    <Button id="gal-toast-stack3" variant="secondary" size="sm" on_click={move || {
+                    <Button variant="secondary" size="sm" on_click={move || {
                         toast_set_layout("stack");
                         toast_set_overflow("displace");
                         toast_set_limit(3);
@@ -1848,7 +1841,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Stack ×3"
                     </Button>
-                    <Button id="gal-toast-list3" variant="outline" size="sm" on_click={move || {
+                    <Button variant="outline" size="sm" on_click={move || {
                         toast_set_layout("list");
                         toast_set_overflow("displace");
                         toast_set_limit(3);
@@ -1858,7 +1851,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "List ×3"
                     </Button>
-                    <Button id="gal-toast-displace" variant="outline" size="sm" on_click={move || {
+                    <Button variant="outline" size="sm" on_click={move || {
                         toast_set_layout("stack");
                         toast_set_overflow("displace");
                         toast_set_limit(2);
@@ -1868,7 +1861,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Displace"
                     </Button>
-                    <Button id="gal-toast-wait" variant="outline" size="sm" on_click={move || {
+                    <Button variant="outline" size="sm" on_click={move || {
                         toast_set_layout("stack");
                         toast_set_overflow("wait");
                         toast_set_limit(2);
@@ -1879,7 +1872,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Wait"
                     </Button>
-                    <Button id="gal-toast-success" variant="secondary" size="sm" on_click={move || {
+                    <Button variant="secondary" size="sm" on_click={move || {
                         toast("Saved")
                             .description("Changes applied.")
                             .variant("success")
@@ -1888,7 +1881,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Success"
                     </Button>
-                    <Button id="gal-toast-warn" variant="outline" size="sm" on_click={move || {
+                    <Button variant="outline" size="sm" on_click={move || {
                         toast("Check network")
                             .variant("warning")
                             .duration(2500)
@@ -1896,7 +1889,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Warning"
                     </Button>
-                    <Button id="gal-toast-err" variant="destructive" size="sm" on_click={move || {
+                    <Button variant="destructive" size="sm" on_click={move || {
                         toast("Something failed")
                             .variant("destructive")
                             .duration(3000)
@@ -1904,44 +1897,43 @@ fn OverlayFeedbackShowcase() -> Element {
                     }}>
                         "Error"
                     </Button>
-                    <Button id="gal-toast-pos-tl" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("top-left");
                         toast("Top left").description("Swipe up to dismiss").duration(5000).show();
                     }}>
                         "↖"
                     </Button>
-                    <Button id="gal-toast-pos-tc" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("top-center");
                         toast("Top center").duration(5000).show();
                     }}>
                         "↑"
                     </Button>
-                    <Button id="gal-toast-pos-tr" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("top-right");
                         toast("Top right").duration(5000).show();
                     }}>
                         "↗"
                     </Button>
-                    <Button id="gal-toast-pos-bl" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("bottom-left");
                         toast("Bottom left").description("Swipe down to dismiss").duration(5000).show();
                     }}>
                         "↙"
                     </Button>
-                    <Button id="gal-toast-pos-bc" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("bottom-center");
                         toast("Bottom center").duration(5000).show();
                     }}>
                         "↓"
                     </Button>
-                    <Button id="gal-toast-pos-br" variant="ghost" size="sm" on_click={move || {
+                    <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("bottom-right");
                         toast("Bottom right").duration(5000).show();
                     }}>
                         "↘"
                     </Button>
                     <Button
-                        id="gal-secondary-open"
                         variant="secondary"
                         size="sm"
                         on_click={move || {
@@ -1975,7 +1967,7 @@ fn OverlayFeedbackShowcase() -> Element {
                 <VStack gap="0.35rem" w="100%">
                     <Label font_weight="600" text_size="0.875rem">{ "Progress" }</Label>
                     { progress_el }
-                    <Button id="gal-progress-bump" variant="outline" size="sm" on_click={move || {
+                    <Button variant="outline" size="sm" on_click={move || {
                         let v = bump.peek();
                         bump.set(if v >= 1.0 { 0.0 } else { (v + 0.1).min(1.0) });
                     }}>{ "Bump +10%" }</Button>

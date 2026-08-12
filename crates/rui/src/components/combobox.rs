@@ -174,7 +174,7 @@ pub fn combobox_scope(
     content_class: impl Into<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "combo");
     let placeholder = placeholder.into();
     let trigger_class = trigger_class.into();
     let content_class = content_class.into();
@@ -356,6 +356,9 @@ pub fn ComboboxInput(
                     clear_val.set(String::new());
                     commit_value(&clear_id, String::new());
                     clear_open.set(false);
+                    use_signal("__rui_button_focus_id", String::new)
+                        .set(crate::utils::text_field::input_focus_id(&clear_id));
+                    use_signal("__rui_focus_visible", || false).set(true);
                 },
             );
             if !show_clear {
@@ -366,6 +369,7 @@ pub fn ComboboxInput(
 
         let o_chev = open;
         let a_chev = active;
+        let chev_id = id.clone();
         let chevron = input_adornment_button(
             format!("{id}__combo_chevron"),
             lucide_named("chevron-down"),
@@ -377,6 +381,9 @@ pub fn ComboboxInput(
                     disarm_underlay_close();
                 }
                 o_chev.set(next);
+                use_signal("__rui_button_focus_id", String::new)
+                    .set(crate::utils::text_field::input_focus_id(&chev_id));
+                use_signal("__rui_focus_visible", || false).set(true);
             },
         );
         trigger = trigger.gap("0.25rem").child(chevron);

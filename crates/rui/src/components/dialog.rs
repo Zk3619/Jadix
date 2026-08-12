@@ -105,7 +105,7 @@ pub fn dialog_scope(
     open: Option<Signal<bool>>,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "dialog");
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__open").as_str(), || false));
     provide_context(
         dialog_context(),

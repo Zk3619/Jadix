@@ -31,6 +31,51 @@ impl super::App {
         );
     }
 
+    /// Whether a pointer hit should keep the current Input/Textarea focus.
+    fn pointer_keeps_text_edit_focus(
+        root: &crate::core::tree::Element,
+        focused: &str,
+        path: &[super::pointer_events::HitPathEntry],
+        input_drag_fid: Option<&str>,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        if input_drag_fid == Some(focused) {
+            return true;
+        }
+        let Some(rest) = super::ime_support::text_edit_rest(focused) else {
+            return false;
+        };
+        let resize_fid = crate::utils::text_field::textarea_resize_focus_id(rest);
+        let scroll_rest = crate::utils::text_field::textarea_scroll_rest(rest);
+        let scroll_fid =
+            crate::core::scroll_viewport::focus_id_for_scroll_viewport(&scroll_rest);
+        for entry in path {
+            let Some(fid) = entry.focus_id.as_deref() else {
+                continue;
+            };
+            if fid == focused || fid == resize_fid || fid == scroll_fid {
+                return true;
+            }
+            if let Some((srest, _, _)) = super::scroll_support::parse_scrollbar_focus_id(fid) {
+                if srest == scroll_rest {
+                    return true;
+                }
+            }
+        }
+        // Fallback: click inside the focused field's layout box (padding / empty chrome).
+        if let Some((bounds, scroll_acc)) =
+            super::tree_hit::find_bounds_by_focus_id(root, focused, [0.0, 0.0])
+        {
+            let vx = bounds[0] - scroll_acc[0];
+            let vy = bounds[1] - scroll_acc[1];
+            if x >= vx && x <= vx + bounds[2] && y >= vy && y <= vy + bounds[3] {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId) {
         let Some(sec) = self.secondaries.get_mut(&id) else {
             return;
@@ -1121,6 +1166,7 @@ impl super::App {
             }
             // `on_click` / Label `for` 在 pointer up（抬起）时触发，对标 DOM click。
 
+            let input_drag_fid = input_drag.as_ref().map(|(_, _, fid)| fid.clone());
             if let Some((rest, caret_ix, focus_id)) = input_drag {
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
                 // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
@@ -1147,6 +1193,58 @@ impl super::App {
                 self.content_scroll_drag = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
+            }
+
+            // Browser-like: pointer down outside the focused text field clears its focus.
+            // Keep focus when hitting the field chrome, caret, adornments, resize, or inner scroll.
+            {
+                let focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                        .peek();
+                if super::ime_support::is_text_edit_focus(&focused) {
+                    let keep = if let Some(st) = (*self.state.borrow()).as_ref() {
+                        Self::pointer_keeps_text_edit_focus(
+                            &st.root_element,
+                            &focused,
+                            &path,
+                            input_drag_fid.as_deref(),
+                            x,
+                            y,
+                        )
+                    } else {
+                        true
+                    };
+                    if !keep {
+                        crate::core::reactivity::use_signal(
+                            "__rui_button_focus_id",
+                            String::new,
+                        )
+                        .set(String::new());
+                        need_paint_sync_redraw = true;
+                    }
+                }
+            }
+
+            // Radix-like: dismiss Menu/Popover/Tooltip on pointer *down* outside the panel
+            // and its trigger — same gesture as text-field blur (Combobox must not require
+            // a second click to close after the first click only cleared focus).
+            //
+            // Never call `open.set` while AppState is borrowed.
+            {
+                let should_outside_dismiss = if let Some(st) = (*self.state.borrow()).as_ref() {
+                    !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
+                        && !crate::utils::popup::path_hits_floating_trigger(
+                            &st.root_element,
+                            &path,
+                        )
+                } else {
+                    false
+                };
+                if should_outside_dismiss
+                    && super::portal_overlay::try_dismiss_outside_press()
+                {
+                    need_paint_sync_redraw = true;
+                }
             }
 
             // After click handlers may move focus (Button / other Input), sync IME owner
@@ -2661,35 +2759,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
                 self.handle_mouse_input(id, element_state);
                 if element_state == ElementState::Released {
-                    // Click handlers run first (open → disarm). Outside dismiss only if still
-                    // armed from a prior release; then arm for the next gesture.
+                    // Order matters (matches comment historically intended here):
+                    // 1) `on_click` first — opening a Menu/Combobox disarms underlay close
+                    // 2) outside dismiss only if still armed (same release must not dismiss
+                    //    what it just opened)
+                    // 3) arm for the *next* gesture
+                    //
+                    // Previously arm ran *before* on_click, so open left the stack disarmed
+                    // and the first outside click only cleared text focus (Combobox).
                     //
                     // Never call `open.set` / reconcile while AppState is borrowed — that
                     // panics at `runtime::try_reconcile_subtree` (`RefCell already borrowed`).
-                    let should_outside_dismiss = {
-                        let state_borrow = self.state.borrow();
-                        match state_borrow.as_ref() {
-                            Some(state) if state.window.id() == id => {
-                                let scale = state.window.scale_factor() as f32;
-                                let x = self.cursor_pos.x as f32 / scale;
-                                let y = self.cursor_pos.y as f32 / scale;
-                                let path =
-                                    super::pointer_events::hit_path(&state.root_element, x, y);
-                                !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
-                                    && !crate::utils::popup::path_hits_floating_trigger(
-                                        &state.root_element,
-                                        &path,
-                                    )
-                            }
-                            _ => false,
-                        }
-                    };
-                    if should_outside_dismiss
-                        && super::portal_overlay::try_dismiss_outside_press()
-                    {
-                        super::runtime::request_redraw();
-                    }
-                    crate::utils::popup::arm_underlay_close();
                     let scale = {
                         let state_borrow = self.state.borrow();
                         match state_borrow.as_ref() {
@@ -2809,6 +2889,28 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             }
                         }
                     }
+                    // Re-hit after click handlers: open may have mounted a floating panel.
+                    let should_outside_dismiss = {
+                        let state_borrow = self.state.borrow();
+                        match state_borrow.as_ref() {
+                            Some(state) if state.window.id() == id => {
+                                let path =
+                                    super::pointer_events::hit_path(&state.root_element, x, y);
+                                !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
+                                    && !crate::utils::popup::path_hits_floating_trigger(
+                                        &state.root_element,
+                                        &path,
+                                    )
+                            }
+                            _ => false,
+                        }
+                    };
+                    if should_outside_dismiss
+                        && super::portal_overlay::try_dismiss_outside_press()
+                    {
+                        super::runtime::request_redraw();
+                    }
+                    crate::utils::popup::arm_underlay_close();
                     if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }

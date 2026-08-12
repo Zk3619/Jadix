@@ -474,6 +474,40 @@ mod tests {
         assert!(!open.peek());
     }
 
+    /// Regression: `arm` must run *after* the open `on_click` (which disarms). Arming first
+    /// then opening leaves the stack disarmed so the next outside press only blurs Combobox.
+    #[test]
+    fn arm_before_open_click_leaves_first_outside_dismiss_noop() {
+        clear();
+        let open = Signal::new(false);
+        crate::utils::popup::arm_underlay_close();
+        // Open click: disarm + push (portal_sync also disarms).
+        crate::utils::popup::disarm_underlay_close();
+        open.set(true);
+        assert!(portal_sync("cb", open, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert!(
+            !try_dismiss_outside_press(),
+            "still disarmed after open — first outside dismiss must no-op"
+        );
+        assert!(open.peek());
+        // Next release arms; second outside press closes.
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert!(!open.peek());
+    }
+
+    #[test]
+    fn arm_after_open_click_allows_immediate_outside_dismiss() {
+        clear();
+        let open = Signal::new(false);
+        crate::utils::popup::disarm_underlay_close();
+        open.set(true);
+        assert!(portal_sync("cb", open, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert!(!open.peek());
+    }
+
     #[test]
     fn hit_path_on_top_exclusive_ignores_other_hoisted_portals() {
         clear();

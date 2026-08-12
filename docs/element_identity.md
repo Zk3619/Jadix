@@ -175,17 +175,18 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 
 ## 7. 现状与目标态
 
-### 7.1 现状（2026-08-09）
+### 7.1 现状（2026-08-12 · WP-CV.4）
 
 | 项 | 状态 |
 |----|------|
 | 规范摘要 | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4.2 已纠偏「过度 id」 |
-| Button / Input 空 id | 自动 `btn-N` / `__rui_input_rt_N`（会话内） |
-| 大量 Builder | 首位仍强制 `id: impl Into<String>`；Gallery 堆 `gal-*` |
-| RSX 省略 id | 部分路径仍可能落到空串再写入 Element（事故源） |
-| AccessKit 桥 | `a11y/bridge.rs`：空串忽略、`rui:tpl:…@{path}`、`alloc_unique_node_id` + 库测（**WP-1.3 止血**） |
-| 组件空串写入 | **未根治**（仍可能 `template_id = Some("")`）→ C-WP-V.5 / C-WP-2.6 |
-| Owner 作用域 id | 未完成（总计划 WP-2.4） |
+| 稳定面空 id | 审计表 [`component_inventory.md`](component_inventory.md) §2.1；统一 [`resolve_instance_id`](../crates/rui/src/utils/instance_id.rs)；Label 空 id **不写** `template_id` |
+| Button / Input / Textarea / Checkbox / Switch / Slider | 既有 `btn-N` / `__rui_*_rt_N` |
+| Select / Combobox / Dialog / Tooltip / Tabs / Radio / ScrollArea | CV.4 补 auto（同 `resolve_instance_id`） |
+| 大量 Builder | 首位仍接 `id: impl Into<String>`（可空）；**去必填心智** → WP-2.8 |
+| Gallery | 仍有 `gal-*` 示范；勿写成 API 要求 |
+| AccessKit 桥 | `a11y/bridge.rs` 空串忽略 + path 消歧 + 库测（WP-1.3） |
+| Owner 作用域 id | 未完成（WP-2.4） |
 
 ### 7.2 目标态
 

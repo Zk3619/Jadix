@@ -320,7 +320,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
 | | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
-**CV 分桶快照（2026-08-12，WP-CV.1）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
+**CV 分桶快照（2026-08-12，WP-CV.1 / CV.3）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**（CV.3 签署）；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 
 #### 5.2.2 样式承诺面（非控件 · 不进 CV · inventory §1.8）
 

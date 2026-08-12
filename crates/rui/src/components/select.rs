@@ -119,7 +119,7 @@ pub fn select_scope(
     content_class: impl Into<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
-    let id = id.into();
+    let id = crate::utils::resolve_instance_id(id, "select");
     let placeholder = placeholder.into();
     let trigger_class = trigger_class.into();
     let content_class = content_class.into();
@@ -803,6 +803,7 @@ impl From<SelectBuilder> for Element {
             trigger_class,
             content_class,
         } = builder;
+        let id = crate::utils::resolve_instance_id(id, "select");
 
         let open = use_signal(format!("{id}__select_open").as_str(), || false);
         // Empty default → placeholder; only honor explicit `default_value`.

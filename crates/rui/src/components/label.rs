@@ -19,7 +19,7 @@
 //!
 //! ## 注意
 //! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
-//! 约 14px / weight 500 / leading-none / `min_w=0`。`template_id` 取自 `id`。
+//! 约 14px / weight 500 / leading-none / `min_w=0`。非空 `id` 才写入 `template_id`（I-1：禁 `Some("")`）。
 //! `for` 写入 `attrs["for"]`；指针命中时由 hit path 转发到目标 `on_click`。
 //! 关联时写入稳定 `accesskit_id`（`lbl:for:…`），桥侧给目标补 `labelled_by`。
 
@@ -438,7 +438,9 @@ impl LabelBuilder {
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.inner.el = self.inner.el.selectable(selectable);
         if selectable {
-            enable_label_selection(&mut self.inner.el, &self.id);
+            let sel_id = crate::utils::resolve_instance_id(self.id.clone(), "label");
+            self.id = sel_id.clone();
+            enable_label_selection(&mut self.inner.el, &sel_id);
             self.inner.el = self.inner.el.cursor_text();
         }
         self
@@ -455,7 +457,8 @@ impl From<LabelBuilder> for Element {
     fn from(builder: LabelBuilder) -> Element {
         let mut el: Element = builder.inner.into();
         // Prefer Solid-style bind identity adopted from a text child over the label's auto id.
-        if el.template_id.is_none() {
+        // Display labels: omit template_id when user id is empty (I-1 — never Some("")).
+        if el.template_id.is_none() && !builder.id.trim().is_empty() {
             el.template_id = Some(builder.id);
         }
         // Static text enters AccessKit as Label (not Tab-focusable); see `a11y::bridge` + a11y_smoke.
@@ -473,7 +476,7 @@ impl From<LabelBuilder> for Element {
 /// Sets `text_style.selectable`, assigns `focus_id`, and marks the element for future
 /// paint sync (`input_caret` selection path when a caret draw sync is installed).
 pub fn enable_label_selection(el: &mut Element, focus_id: impl Into<String>) {
-    let id = focus_id.into();
+    let id = crate::utils::resolve_instance_id(focus_id, "label");
     el.focus_id = Some(id.clone());
     el.text_style.selectable = true;
     el.cursor = Some(crate::core::tree::CursorKind::Text);
@@ -598,5 +601,12 @@ mod tests {
             el.attrs.get("accesskit_id").map(|s| s.as_str()),
             Some("lbl:for:input:email")
         );
+    }
+
+    #[test]
+    fn label_empty_id_does_not_write_empty_template_id() {
+        let el: Element = label("").text("x").into();
+        assert_ne!(el.template_id.as_deref(), Some(""));
+        assert!(el.template_id.is_none(), "display Label empty id → no template_id");
     }
 }

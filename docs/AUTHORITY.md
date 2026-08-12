@@ -92,7 +92,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
 | 文本/像素 | 测宽对齐 ☑；damage 策略 ☑；golden **仅 2** 场景 | ≥5 组件 golden |
 | 反应性 | API 主路径齐；`REGISTERED_*`→Owner **未收口** | 长会话无泄漏；更新路径可预测 |
-| 组件 | Gallery 八分区 ☑；**WP-CV.1 ☑**（§5.2.1 行为控件走查完成）；CV.2–.4 未过 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
+| 组件 | Gallery 八分区 ☑；**WP-CV.1–.4 ☑**（走查 / 矩阵 / P0 / id 审计）；**CV.5** 可选 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
 
 ---
@@ -209,21 +209,23 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | **WP-CV.0** | 分桶清单 + prelude 双书写 | C-WP-0.2 / 0.3 | ☑ inventory + `rui::prelude` |
 | **WP-CV.1** | 稳定候选 Gallery / 手工走查 | C-WP-V.1 | ☑ 2026-08-12；§5.2.1 行为控件走查完成；Form 降出稳定面 |
 | **WP-CV.2** | 最小自动化网（Button/Input/Dialog/Tabs/Checkbox\|Switch 布局或行为） | C-WP-V.2 | ☑ 2026-08-12；`crate_tests/components/cv_stable_layout.rs` 矩阵 8 测 |
-| **WP-CV.3** | P0 修障或降级 | C-WP-V.3 | ☐ |
-| **WP-CV.4** | `id` 过度使用审计（分类表） | C-WP-V.5 | ☐ |
+| **WP-CV.3** | P0 修障或降级 | C-WP-V.3 | ☑ 2026-08-12；inventory 稳定面文档手工复核修错；`broken` = 无；无未分类 P0 |
+| **WP-CV.4** | `id` 过度使用审计（分类表） | C-WP-V.5 | ☑ 2026-08-12；inventory §2.1；稳定面空串 I-1 已修（`resolve_instance_id`） |
 | **WP-CV.5** | 核心 golden 骨架（可选，与 WP-2.6 合并） | C-WP-V.4 | ☐ 不阻塞 CV 退出，阻塞「宣称视觉稳定」 |
 
 **CV 退出（进入组件下沉前）**
 
 - [x] §5.2.1 **行为控件**已标 `verified`（Gallery 走查 ☑ 2026-08-12）；Form → `experimental`（非控件）  
-- [ ] 行为控件无未分类 P0  
+- [x] 行为控件无未分类 P0（CV.3 ☑ 2026-08-12；inventory §2 `broken` = 无）  
 - [x] Button · Input · Dialog · Tabs · Checkbox|Switch 有 layout/行为测 **或** 冒烟勾选（CV.2 ☑ 2026-08-12）  
-- [ ] 行为控件 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`  
+- [x] 行为控件 id 策略已按身份契约分类；空串不写入 `focus_id`/`template_id`（CV.4 ☑ 2026-08-12）  
 
 分桶真源：[`component_inventory.md`](component_inventory.md) §2（控件）。  
 **当前 `verified`（控件）**：Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar。  
 **Form**：降出 §5.2.1（Context helpers → `experimental`）；加深见 WP-3.9。  
-**CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。
+**CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。  
+**CV.3**（2026-08-12）：稳定面 inventory 文档手工验证修错后签署；无未分类 P0，不降级。  
+**CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → WP-2.8。  
 **样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](color.md)。
 
 ### 5.4 Wave 2 — 文本、像素与内核硬化

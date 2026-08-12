@@ -453,8 +453,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 use_signal("__rui_focus_visible", || false).set(true);
             },
         );
-        let show_clear = is_focused && (!committed.is_empty() || !preedit.is_empty());
-        let _ = set_adornment_visible(&mut clear_btn, show_clear && !disabled);
+        let show_clear = (!committed.is_empty() || !preedit.is_empty()) && !disabled;
+        let _ = set_adornment_visible(&mut clear_btn, show_clear);
         el = el.child(clear_btn);
     }
 
