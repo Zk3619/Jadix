@@ -1,6 +1,6 @@
 # 已知缺口 / 产品愿望（非正式 tracker）
 
-> **非权威**。巩固期 Backlog 以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) §7 与 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) §8 为准；缺陷请开 issue。本文仅作随手备忘。
+> **非权威**。巩固期 Backlog 以 [AUTHORITY.md](AUTHORITY.md) §7 为准；缺陷请开 issue。本文仅作随手备忘。
 
 ## Components
 

@@ -2,21 +2,22 @@
 
 Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4.4）。
 
-> **权威入口**：先读四件套，再进从属手册。历史选型文在 [`../archive/`](../archive/README.md)。
+> **权威入口**：[AUTHORITY.md](../AUTHORITY.md)。领域规范与手册见下。历史选型文在 [`../archive/`](../archive/README.md)。
 
 ## Getting Started · 快速开始
 
 | EN | 中文 | Link |
 |----|------|------|
-| Engineering-grade charter | 工程级权威纲领 | [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) |
-| Implementation plan | 巩固期实现计划（★执行源） | [ENGINEERING_IMPLEMENTATION_PLAN.md](../ENGINEERING_IMPLEMENTATION_PLAN.md) |
-| Component library | 组件库权威规范 | [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) |
-| Component plan | 组件专项计划（含 CV） | [COMPONENT_LIBRARY_PLAN.md](../COMPONENT_LIBRARY_PLAN.md) |
+| Authority + unified plan | 唯一入口与执行计划 | [AUTHORITY.md](../AUTHORITY.md) |
+| Engineering-grade charter | 工程级门槛与 ADR | [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) |
+| Component library | 组件库领域规范 | [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) |
+| Reactivity | 细粒度响应式规范 | [REACTIVITY.md](../REACTIVITY.md) |
 | Vision | 愿景与分层初衷 | [PROJECT.md](../PROJECT.md) |
 | Custom components | 自定义组件 | [custom_components.md](../custom_components.md) |
 | Reactivity & hot reload | 响应式与热重载 | [reactivity_and_hot_reload.md](../reactivity_and_hot_reload.md) |
 | Headless patterns | Headless 模式 | [headless.md](../headless.md) |
 | Color tokens | 颜色与混色 | [color.md](../color.md) |
+| Box model | 类 CSS 盒模型 | [box_model.md](../box_model.md) |
 
 ## Desktop shell · 桌面外壳
 

@@ -1,6 +1,6 @@
 # 工程级差距分析（Gap Analysis）
 
-> **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) / [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；**Solid 细粒度权威现状**见 [REACTIVITY.md](REACTIVITY.md)。  
+> **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [AUTHORITY.md](AUTHORITY.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；**Solid 细粒度现状**见 [REACTIVITY.md](REACTIVITY.md)。  
 > 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`docs/`  
 > 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法  
 > 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md
@@ -73,7 +73,7 @@
 **阶段三（事件与渲染）已落地**：[`pointer_events`](../crates/rui/src/app/pointer_events.rs) 冒泡/捕获/capture；脏区 [`damage`](../crates/rui/src/app/damage.rs)+scissor；AccessKit 层级与 Action；静态文本选区；[`renderer/offscreen`](../crates/rui/src/renderer/offscreen.rs) golden 骨架。  
 **阶段四（组件与生态）已落地 MVP**：[`sync_floating_placement`](../crates/rui/src/utils/popup.rs)；Tooltip / ContextMenu / Combobox；VirtualList / DataTable / TreeView；Form / Textarea；ToastHost / Resizable / FilePicker(`rfd`)。
 
-接下来卡住「发布级」的**不是再换一条哲学路线，而是原生层与工程层的打磨**（§1 已说明为什么不换底座）。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)；**巩固期执行**见 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
+接下来卡住「发布级」的**不是再换一条哲学路线，而是原生层与工程层的打磨**（§1 已说明为什么不换底座）。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)；**巩固期执行**见 [AUTHORITY.md](AUTHORITY.md)。
 
 ---
 
@@ -211,7 +211,7 @@
 ## 5. SolidJS 能力对齐
 
 > **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。  
-> **2026-08-12**：下表为**历史镜像**；权威清单、Leptos/Floem 对照与开放缺口以 [REACTIVITY.md](REACTIVITY.md) §4–§6 为准；执行 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)。
+> **2026-08-12**：下表为**历史镜像**；权威清单、Leptos/Floem 对照与开放缺口以 [REACTIVITY.md](REACTIVITY.md) §4–§6 为准；执行 [AUTHORITY.md](AUTHORITY.md)。
 
 | Solid API | RUI 对应 | 状态 | 备注 |
 |-----------|----------|------|------|
@@ -352,10 +352,10 @@
 
 ## 相关文档
 
-- [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) — **迈向工程级权威纲领**（门槛、禁区、巩固期轨道）
-- [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) — **巩固期执行源**（Wave 1–4 / 工作包 / DoD）
-- [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) — **组件库权威规范**（shadcn 产品面 + headless 骨架）
-- [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) — **组件库专项实施计划**（C-WP / 与巩固期交错）
+- [AUTHORITY.md](AUTHORITY.md) — **巩固期唯一入口与执行源**
+- [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) — 工程门槛、禁区、ADR
+- [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) — 组件领域规范（shadcn 产品面 + headless 骨架）
+- [REACTIVITY.md](REACTIVITY.md) — 细粒度响应式领域规范
 - [PROJECT.md](PROJECT.md) — 愿景、分层架构与阶段计划
 - [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) — 阶段七～十二历史排期（执行已移交巩固期计划）
 - [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md) — 三档更新与热重载模板契约

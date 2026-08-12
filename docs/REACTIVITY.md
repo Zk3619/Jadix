@@ -1,7 +1,7 @@
 # RUI Solid 细粒度响应式（权威规范）
 
-> **文档地位**：细粒度响应式编程模型与实现口径的**单一权威规范**。衡量「组件挂载一次 + Signal 局部更新」的覆盖度与工程卫生，**不是** solid-main / Leptos 整仓对齐度。  
-> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区（ADR-1）；巩固期勾选以 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-2.4 / WP-2.5** 为准；加深项执行源为 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)（**R-WP-***，不另开架构分叉）。  
+> **文档地位**：细粒度响应式编程模型与实现口径的**领域规范**。衡量「组件挂载一次 + Signal 局部更新」的覆盖度与工程卫生，**不是** solid-main / Leptos 整仓对齐度。  
+> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区（ADR-1）；**执行勾选**以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为准。冻结细则 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/core/{reactivity,store,resource}.rs`、`crates/rui/src/app/{reactive,resource,error_boundary}.rs`、`rui_macros`；对照 [`reference/leptos-main`](../reference/leptos-main)（`reactive_graph` / `tachys`）、[`reference/floem-main`](../reference/floem-main)（`floem_reactive`）、[`reference/SolidJS`](../reference/SolidJS)。  
 > **日期**：2026-08-12  
 
@@ -159,7 +159,7 @@
 
 ## 6. 已知缺口（权威开放面）
 
-> 执行勾选见 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) 与总计划 WP-2.4 / 2.5。此处只列**事实**。
+> 执行勾选见 [`AUTHORITY.md`](AUTHORITY.md)。此处只列**事实**。冻结细则 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。
 
 | ID | 缺口 | 优先级 | 映射 |
 |----|------|--------|------|
@@ -186,24 +186,24 @@
 | 开合 / roving | 可用 Signal 存状态 | 行为下沉 `utils/`（popup / focus_trap）；不把状态机只藏样式层 |
 | 结构岛 | Dialog / Menu 内容用 `reactive!` / Show | 产品 API 与 variant；勿在稳定面依赖未稳定的 Store proxy |
 
-组件规范见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4；实施见 C-WP-V.5 / 2.6（与 WP-2.4 对齐）。
+组件规范见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4；实施见 [`AUTHORITY.md`](AUTHORITY.md) WP-CV.4 / WP-2.8（与 WP-2.4 对齐）。
 
 ---
 
 ## 8. 文档拓扑
 
 ```text
+AUTHORITY.md                         ← ★执行源（WP-2.4 / 2.5 / 2.7 / WP-R.*）
 ENGINEERING_GRADE_FRAMEWORK.md       ← 总纲领（ADR-1；§4.2 / §5 摘要）
-ENGINEERING_IMPLEMENTATION_PLAN.md   ← WP-2.4 / WP-2.5 勾选（巩固期门禁）
-REACTIVITY.md                        ← 本文件（反应性权威现状与口径）
-REACTIVITY_PLAN.md                   ← R-WP-* 执行源（加深 / 卫生，不重复 WP 正文）
+REACTIVITY.md                        ← 本文件（反应性领域规范）
+REACTIVITY_PLAN.md                   ← 冻结展开（R-WP 验收矩阵）
   ├─ reactivity_and_hot_reload.md    ← 三档用法与热重载手册（从属）
   ├─ element_identity.md             ← 身份四轴（交叉权威）
   ├─ COMPONENT_LIBRARY.md §4         ← 受控 Signal / id 与组件边界
   └─ gap_analysis.md §5              ← 历史 Solid 表（镜像；非执行源）
 ```
 
-争议：反应性口径以本文为准；勾选以总计划 WP-2.4/2.5 + [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) 为准；禁止静默改 ADR-1 或引入 VDOM。
+争议：反应性口径以本文为准；勾选以 [`AUTHORITY.md`](AUTHORITY.md) 为准；禁止静默改 ADR-1 或引入 VDOM。
 
 ---
 

@@ -1,12 +1,11 @@
 # RUI 细粒度响应式完善计划（R-WP）
 
-> **文档地位**：把 [`REACTIVITY.md`](REACTIVITY.md) 的开放缺口落成**可执行工作包（R-WP）**。  
-> **与总计划关系**：不替代 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)。**WP-2.4 / WP-2.5 仍是巩固期门禁勾选源**；本计划写清验收矩阵、加深项与「禁止重复劳动」。  
-> **与组件计划关系**：受控 Signal / 空串身份 / `"{id}__…"` 与 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md) **C-WP-V.5 / C-WP-2.6** 对齐；行为状态机下沉仍归 C-WP，不把组件开合塞进 R-WP。  
+> **冻结展开（2026-08-12）**：勾选、排期以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为**唯一执行源**。本文仅保留 R-WP 验收矩阵与加深细则；旧编号对照见 AUTHORITY §9。**禁止**在此改勾选充进度。  
+> **原地位**：把 [`REACTIVITY.md`](REACTIVITY.md) 的开放缺口落成 R-WP。行为状态机下沉归组件域，不把开合塞进反应性包。  
 > **前提**：ADR-1 已锁；主路径 API 已齐；**优先硬化，禁止为对齐 Leptos/Floem 扩表面**。  
 > **日期**：2026-08-12  
 
-交叉：[`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`element_identity.md`](element_identity.md) · 总计划 WP-2.4 / 2.5
+交叉：[`AUTHORITY.md`](AUTHORITY.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`element_identity.md`](element_identity.md)
 
 ---
 
@@ -199,15 +198,14 @@ flowchart LR
 ## 7. 文档拓扑
 
 ```text
+AUTHORITY.md                        ← ★执行源（WP-2.4 / 2.5 / 2.7 / WP-R.*）
 ENGINEERING_GRADE_FRAMEWORK.md
-ENGINEERING_IMPLEMENTATION_PLAN.md  ← WP-2.4 / 2.5 ★巩固门禁勾选
-REACTIVITY.md                       ← 权威现状
-REACTIVITY_PLAN.md                  ← 本文件 R-WP-*
-COMPONENT_LIBRARY.md / _PLAN.md     ← 受控 Signal · C-WP-V.5/2.6
+REACTIVITY.md                       ← 领域规范
+REACTIVITY_PLAN.md                  ← 本文件（R-WP 冻结展开）
 reactivity_and_hot_reload.md        ← 手册
 element_identity.md
 ```
 
 ---
 
-*计划随 R-WP / WP-2.4·2.5 关闭而改勾选；新增 R-WP 须映射到 REACTIVITY.md §6 缺口或纲领六门槛之一。*
+*冻结：勾选改 [`AUTHORITY.md`](AUTHORITY.md)；本文仅保留 R-WP 细则。*

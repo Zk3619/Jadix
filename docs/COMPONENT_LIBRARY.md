@@ -1,9 +1,9 @@
 # RUI 基础组件库（权威规范）
 
-> **文档地位**：组件产品面的**单一权威规范**。选型、分层、API 契约、清单与质量门以本文为准。  
-> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；执行排期见 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)；与巩固期总计划 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 并行，不另开架构分叉。  
+> **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
+> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
-> **日期**：2026-08-10（§5 分桶表落地）  
+> **日期**：2026-08-10（§5 分桶）；执行移交 2026-08-12  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
 
@@ -56,7 +56,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
      ▼
  style/theme + color_space(OKLCH) + utility 变体 + focus_ring
 
- 私有（非产品面）：components/internal/{text_edit,dialog_shell}
+ 私有（非产品面）：components/internal/text_edit（Dialog 壳在 `dialog.rs`）
 ```
 
 ### 2.1 职责与禁区
@@ -67,7 +67,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入 | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
-| 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dialog/AlertDialog 模态壳（`dialog_shell`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime |
+| 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**Dialog 壳在 `dialog.rs`，非 internal** |
 
 现状缺口（须按计划下沉，见实施计划 C-WP）：
 
@@ -187,7 +187,7 @@ let _: Element = vstack()
 ### 4.2 身份与状态（`id` 勿过度使用）
 
 > **跨层权威契约**：不变量、AccessKit 派生、组件/宏/框架职责与事故原型见 **[`element_identity.md`](element_identity.md)**（本文仅组件 API 摘要）。  
-> **现状判断**：多数 Builder 把 `id: impl Into<String>` 当作**首位必参**，Gallery 也充满 `gal-*` 字符串。这把「实例键 / 焦点 / 信号命名空间 / 测试选择器」揉进同一个 prop，造成**过度使用 `id`**；空串写入 `template_id`/`focus_id` 曾导致读屏树重复 `NodeId` 崩溃。实现分期收敛见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) **C-WP-V.5 / C-WP-2.6** 与总计划 **WP-2.4**。
+> **现状判断**：多数 Builder 把 `id: impl Into<String>` 当作**首位必参**，Gallery 也充满 `gal-*` 字符串。这把「实例键 / 焦点 / 信号命名空间 / 测试选择器」揉进同一个 prop，造成**过度使用 `id`**；空串写入 `template_id`/`focus_id` 曾导致读屏树重复 `NodeId` 崩溃。实现分期收敛见 [`AUTHORITY.md`](AUTHORITY.md) **WP-CV.4 / WP-2.8 / WP-2.4**。
 
 #### 4.2.1 四条身份轴（禁止混为一谈）
 
@@ -293,7 +293,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 |------|----------------------------|----------------------------|
 | **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button=`verified`；Label/Separator/Card=`stable-candidate`；其余=`experimental`（越出 §5.2） |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Select/Combobox=`verified`（窄主路径）；其余稳定面项=`stable-candidate`；Date/Time/Color/File=`experimental` |
-| **浮层 / 反馈** | Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command；（共享壳 `internal/dialog_shell`） | Dialog=`verified`（Esc 栈）；AlertDialog/Toast/Tooltip=`stable-candidate`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
+| **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog=`verified`（Esc 栈；壳在 `dialog.rs`）；Toast/Tooltip=`stable-candidate`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
 | **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | 全部 `experimental`（§5.2 外或深度未承诺） |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`stable-candidate`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea=`verified`（含 Input 滚动）；Scrollbar=`stable-candidate`；Viewport/Resizable=`experimental` |
@@ -314,7 +314,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | 稳定面（0.1 起承诺 semver） | 实验面（可破坏，须标 `experimental` 或文档警告） |
 |-----------------------------|--------------------------------------------------|
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
-| ScrollArea / Scrollbar、Tabs、Dialog、AlertDialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
+| ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Form（校验 Context）、Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化 |
 | Theme / `set_theme_mode`、utility `class` 主集 | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
@@ -326,6 +326,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 - 为「纯无头公共 API」另起一套与 `components/` 平行的完整产品面（可渐进抽出 headless builder，但默认文档与 prelude 仍指向样式组件）。  
 - **废除或边缘化 Builder / 纯 Rust 书写面**（或反之只保留 Builder、废弃 `ui!`）——双书写面均为一等公民，见 §3。  
 - **把用户 `id` 当作每个控件的必填 HTML 式属性**——身份轴拆分见 §4.2；过度必填是债务，不是设计目标。  
+- **复活独立 `AlertDialog`**——确认框用 `Dialog` + Header/Footer 组合；planned **Alert** 仅指页内非模态横幅。  
 - 移动 / 鸿蒙一等公民组件变体。  
 - 完整 CSSOM、DOM 选择器、Web 专有 a11y 树。
 
@@ -368,20 +369,19 @@ cargo check -p gallery
 ## 7. 文档拓扑（组件相关）
 
 ```text
+AUTHORITY.md                       ← ★执行源（CV / 组件 WP 并入统一计划）
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
-ENGINEERING_IMPLEMENTATION_PLAN.md ← 巩固期 Wave 1–4
-REACTIVITY.md                      ← Solid 细粒度权威（受控 Signal / 三档更新口径）
-REACTIVITY_PLAN.md                 ← R-WP（与 WP-2.4/2.5、C-WP-V.5/2.6 对齐）
-COMPONENT_LIBRARY.md               ← 本文件（组件权威规范；§3 prelude + 双书写面）
-COMPONENT_LIBRARY_PLAN.md          ← 组件库专项 WP / 波次（含 CV 门禁）
+REACTIVITY.md                      ← 细粒度领域规范（受控 Signal / 三档更新）
+COMPONENT_LIBRARY.md               ← 本文件（组件领域规范；§3 prelude + 双书写面）
 component_inventory.md             ← §5 分桶附录（verified/broken + id 策略 + EUI 密度）
-crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
+crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
+COMPONENT_LIBRARY_PLAN.md          ← 冻结展开（C-WP 细则）
 headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md / reactivity_and_hot_reload.md
 gap_analysis.md §6                 ← 历史 EUI 密度摘要（真源转 inventory §3）
 ```
 
-争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。受控 Signal / 细粒度更新争议以 [`REACTIVITY.md`](REACTIVITY.md) 为准。
+争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。受控 Signal / 细粒度更新争议以 [`REACTIVITY.md`](REACTIVITY.md) 为准。排期以 [`AUTHORITY.md`](AUTHORITY.md) 为准。
 
 ---
 

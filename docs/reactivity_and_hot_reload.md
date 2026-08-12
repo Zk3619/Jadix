@@ -1,7 +1,7 @@
 # 细粒度响应式与热重载约定
 
 > **文档地位**：开发者**用法手册**（三档更新、宏降级、热重载槽）。  
-> **权威口径**：编程模型、Leptos/Floem 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。  
+> **权威口径**：编程模型、Leptos/Floem 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 / 2.5 / 2.7。  
 > **身份轴**：[`element_identity.md`](element_identity.md)。  
 
 本文档说明 `reactive!` / `Reactive` / `bind_*` / `<Show>` / `<For>` 与开发期热重载（`template_patch`）如何协同，避免补丁误伤子树 reconcile。

@@ -1,7 +1,7 @@
 # 历史文档归档（已冻结）
 
 > **地位**：选型过程、早期随笔与误名文档。**不是**权威规范或巩固期执行源。  
-> **权威四件套**：[`../ENGINEERING_GRADE_FRAMEWORK.md`](../ENGINEERING_GRADE_FRAMEWORK.md) · [`../ENGINEERING_IMPLEMENTATION_PLAN.md`](../ENGINEERING_IMPLEMENTATION_PLAN.md) · [`../COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) · [`../COMPONENT_LIBRARY_PLAN.md`](../COMPONENT_LIBRARY_PLAN.md)  
+> **权威入口**：[`../AUTHORITY.md`](../AUTHORITY.md)。领域规范：[`../ENGINEERING_GRADE_FRAMEWORK.md`](../ENGINEERING_GRADE_FRAMEWORK.md) · [`../COMPONENT_LIBRARY.md`](../COMPONENT_LIBRARY.md) · [`../REACTIVITY.md`](../REACTIVITY.md)。  
 > **归档日期**：2026-08-09  
 
 | 文件 | 原用途 | 为何归档 |

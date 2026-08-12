@@ -1,6 +1,6 @@
 # 组件清单分桶表（C-WP-0.2）
 
-> **文档地位**：规范 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §5 的**可执行分桶附录**；对接 C-WP-V.1 走查、C-WP-V.5 身份审计、CV 门禁。  
+> **文档地位**：规范 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §5 的**分桶数据表**；对接 [`AUTHORITY.md`](AUTHORITY.md) WP-CV.* 走查与身份审计。  
 > **事实来源**：`crates/rui/src/components/mod.rs` `pub use` · `examples/gallery` 侧栏分区 · [`desktop_smoke.md`](desktop_smoke.md) · `crate_tests/`。  
 > **参考分工**（只取所需，不搬架构）：  
 > - [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) → 产品面命名 / `variant`·`size` / 分区对标  
@@ -8,7 +8,7 @@
 > - [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) → **仅密度标尺**（§3）；禁作 API/架构参照  
 > **日期**：2026-08-10  
 
-交叉：[`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md) C-WP-0.2 · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
+交叉：[`AUTHORITY.md`](AUTHORITY.md) WP-CV.0 · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
 
 ---
 
@@ -78,16 +78,15 @@
 
 | 公开 API | 导出符号（摘要） | 桶 | id 策略 | 证据 / 笔记 |
 |----------|------------------|----|---------|-------------|
-| Dialog | `dialog` / 复合 `Dialog*` / `use_dialog` | **verified**（Esc 栈） | 必填实例键（`{id}__open`）；子件可派生 | smoke#7 |
-| AlertDialog | `alert_dialog` / `AlertDialogBuilder` | **stable-candidate** | 必填实例键 | 共享 `internal/dialog_shell` |
-| Toast | `toast` / `toast_host` / `toast_push` / … | **stable-candidate** | 队列项 **仅内部自动** `u64`；host **展示型不要求** | host 勿占 flex（gallery 回归） |
-| Tooltip | `tooltip` / `TooltipBuilder` | **stable-candidate** | 必填实例键；**锚点用 focus_id** | §5.2 |
+| Dialog | `dialog` / 复合 `Dialog*` / `use_dialog` | **verified**（Esc 栈） | 必填实例键（`{id}__open`）；子件可派生 | smoke#7；确认框直接组合 Header/Footer；模态壳在 `dialog.rs` |
+| Toast | `Toaster` / `toast` / `position`(六向) / `overflow`(`displace`\|`wait`) / `limit` | **stable-candidate** | 队列项 **仅内部自动** `u64`；host **展示型不要求** | **`limit`=展示上限**；displace 挤出进等待、有空位末尾回归；关闭/拖拽/退场动画；stack 冻全部 / list 冻单条 |
+| Tooltip | 复合 `Tooltip`/`TooltipTrigger`/`TooltipContent`（`tooltip_scope`）+ Builder | **stable-candidate** | 必填实例键；**锚点用 focus_id**；`ui!` 宏展开 | §5.2 |
 | Sheet | `sheet` / `SheetBuilder` | **experimental** | 必填实例键 | ≈ shadcn Sheet / EUI 侧滑；不在 §5.2 |
 | Popover | `popover_panel` / `PopoverBuilder` | **experimental** | **可选** `.id()`；**锚点用 focus_id** | 低层面板；可不进 prelude |
 | Dropdown | `dropdown` / `DropdownBuilder` | **experimental** | 必填实例键；可选 `anchor_focus_id` | 暂仅 Builder |
 | ContextMenu | `context_menu` / `ContextMenuBuilder` | **experimental** | 必填实例键 | |
 | Command | `command` / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | 搜索算法实验面 |
-| （私有）dialog_shell | `internal::dialog_shell` | — | 内部 | **禁止**产品面 / prelude |
+| （私有）text_edit | `internal::text_edit` | — | 内部 | Input/Textarea chrome；**禁止**产品面 / prelude |
 
 ### 1.4 数据（Gallery `data`）
 
@@ -104,7 +103,7 @@
 
 | 公开 API | 导出符号（摘要） | 桶 | id 策略 | 证据 / 笔记 |
 |----------|------------------|----|---------|-------------|
-| Tabs | `tabs_headless` / `Tabs` / `tabs_list` / … | **stable-candidate** | 必填实例键；焦点前缀 `tabstrip:` | §5.2；CV 要求 layout 宽高>0 |
+| Tabs | `tabs_scope` / `Tabs` / `TabsList` / `TabsTrigger` / `TabsContent`；另 `tabs_headless` / `tabs_list` | **stable-candidate** | 复合必填实例键；无头焦点前缀 `tabstrip:` | §5.2；CV 要求 layout 宽高>0 |
 | Menubar | `menubar` / `MenubarBuilder` / `MenuSection` | **experimental** | 必填实例键；section/item 派生 focus | 应用命令菜单 |
 | Navbar | `navbar` / `NavbarBuilder` | **experimental** | 可选 / 布局壳偏 **展示型不要求**（现 API 仍要 id） | ≠ NavigationMenu ≠ 页面栈 |
 | NavigationMenu | `navigation_menu` / … | **experimental** | 必填实例键 | ShadCN 链接导览 |
@@ -147,7 +146,7 @@
 | **Avatar** | 基础 | P1 | 可选 | Image + 占位字 / 回退；可组合非必须新原语 |
 | **Skeleton** | 基础 | P1 | 展示型不要求 | 加载占位；脉冲可用既有动效或静态灰块 |
 | **Spinner** | 基础 | P1 | 展示型不要求 | 不确定进度；与 Progress 互补 |
-| **Alert** | 浮层 / 反馈 | P1 | 展示型不要求 | **非模态**横幅（≠ AlertDialog、≠ Toast） |
+| **Alert** | 浮层 / 反馈 | P1 | 展示型不要求 | **非模态**横幅（≠ Dialog 确认、≠ Toast） |
 | **Accordion** | 基础 / 布局 | P1 | 必填实例键（开合） | 单/多开；可复用 Collapsible 原语 |
 | **Collapsible** | 基础 / 布局 | P1 | 必填实例键或受控 Signal | Accordion 积木；headless 开合宜下沉 utils |
 | **Breadcrumb** | 导航 | P1 | 展示型不要求 | 路径导航；与 Navbar / NavigationMenu 分工 |
@@ -172,7 +171,7 @@
 | Item | 列表行组合 | 用 HStack + Label；不必先成组件 |
 | AspectRatio | 布局约束 | 宜 `primitives` / utility，非产品组件优先 |
 | Direction | RTL/LTR | 主题级；未开国际化前不单列 |
-| Alert（若只要确认） | 勿与 **AlertDialog** 混名 | planned Alert = 页内横幅 |
+| Alert（若只要确认） | 用 **Dialog** Header/Footer | planned Alert = 页内横幅；确认框勿复活 AlertDialog |
 
 #### 明确暂不跟
 
@@ -192,7 +191,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | ScrollArea | verified（滚动+IME） | Scrollbar 连带勾选 |
 | Label / Separator / Card | stable-candidate | V.1 可见性走查即可 |
 | Textarea / Checkbox / Switch / RadioGroup / Slider | stable-candidate | V.2 layout 矩阵 |
-| Tabs / AlertDialog / Toast / Tooltip | stable-candidate | V.1 + 浮层 Esc |
+| Tabs / Toast / Tooltip | stable-candidate | V.1 + 浮层 Esc |
 | Form / （Select·Combobox 已 verified） | Form → candidate | 校验路径走查 |
 | Theme / utility class | stable-candidate | 换肤冒烟条目 |
 
@@ -236,7 +235,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 状态 | 数量（约） | 项 |
 |------|------------|-----|
-| **已导出对位** | 35+ | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、AlertDialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
+| **已导出对位** | 34+ | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
 | **planned P1** | 9 | Badge、Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination |
 | **planned P2** | 7 | HoverCard、Calendar、Empty、Kbd、ButtonGroup、InputOTP、InputGroup |
 | **等价不单列** | 6 | Drawer→Sheet、Sonner→Toast、DropdownMenu→Dropdown、NativeSelect→Select、Field→Form、Item→组合 |
@@ -258,7 +257,9 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`alert_dialog`, `button`, `card`, `carousel`, `chart`(`bar_chart`/`line_chart`), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`, `tree_view`, `virtual_list`。
+`button`, `card`, `carousel`, `chart`(`bar_chart`/`line_chart`), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
+
+**已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 
 未入产品清单：`base::BaseComponentBuilder`（样式底座）、`internal::*`。  
 **§1.9 `planned` 不得出现在本列表**，直到首次 `pub use` 并改桶为 `experimental`。

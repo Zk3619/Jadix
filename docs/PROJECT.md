@@ -1,7 +1,7 @@
 # PROJECT: Rust Native UI Stack (SolidJS + Tailwind + ShadCN 风格)
 
 > **愿景与早期阶段叙事**（非巩固期执行源）。  
-> **权威文档**：[ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) · [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) · [REACTIVITY.md](REACTIVITY.md) · [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) · [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) · [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)  
+> **权威文档**：[AUTHORITY.md](AUTHORITY.md)（执行源）· [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) · [REACTIVITY.md](REACTIVITY.md) · [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)  
 > 历史选型过程见 [archive/](archive/README.md)。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。
 
 ## 1. 项目愿景与目标 (Vision & Goals)
@@ -141,7 +141,7 @@ rect!(
 
 ### Stage 7+: 抛光与工程级发布（已移交巩固期）
 
-阶段七～十二 **MVP 已落地**（见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) / [gap_analysis.md](gap_analysis.md) §7）。后续 Beta DoD、WP 勾选以 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) 为准；组件稳定面以 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) 为准。
+阶段七～十二 **MVP 已落地**（见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) / [gap_analysis.md](gap_analysis.md) §7）。后续 Beta DoD、WP 勾选以 [AUTHORITY.md](AUTHORITY.md) 为准；组件稳定面以 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) 为准。
 
 ---
 *愿景文档；实现进度以权威四件套与代码为准。*

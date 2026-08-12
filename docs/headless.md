@@ -1,6 +1,6 @@
 # RUI 无头组件（Headless）契约
 
-> **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（组件库权威规范）。本文只展开三层边界与 Signal/a11y 细则；产品选型（默认 shadcn 样式面）与清单以规范为准。实施见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)。  
+> **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（组件领域规范）。本文只展开三层边界与 Signal/a11y 细则；产品选型与清单以规范为准。实施见 [AUTHORITY.md](AUTHORITY.md) Wave CV / WP-3.*。  
 > **日期**：2026-08-09  
 
 本文档说明 **primitives（布局/交互叶子）**、**tokens（设计令牌）**、**utils（行为工具）** 与 **components（样式层）** 的职责边界，以及如何与 `Signal`、`ui!`、`#[component]` 配合。
@@ -21,7 +21,7 @@
 | `toggle` 布尔状态 | 仍在 `components/{toggle,checkbox,switch}` | C-WP-1.2 下沉到 `primitives/` 或 `utils/toggle_state` |
 | `popup` 开合契约 | 几何在 `utils/popup`；开合多内嵌各组件 | C-WP-1.1 固化唯一路径 |
 
-用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。私有壳（`components/internal/{text_edit,dialog_shell}`）不是公开无头 API。
+用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态壳在 `components/dialog.rs`。
 
 ## 受控与非受控
 

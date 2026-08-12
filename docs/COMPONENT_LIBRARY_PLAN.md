@@ -1,10 +1,9 @@
 # RUI 基础组件库实施计划
 
-> **文档地位**：把 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 落成**可执行工作包（C-WP）**。  
-> **与总计划关系**：不替代 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)；组件专项与巩固期 **W1–W4 交错**。重叠项（焦点环、a11y、golden、Gallery）以总计划验收为准，本计划补**分层下沉、API 归一、清单工程化**。受控 Signal / Owner 注册表与 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) **R-WP-1**、总计划 **WP-2.4** 对齐，不在此重复实现反应性内核。  
-> **前提**：阶段一～十二组件 MVP 已落地；选型已定为 **shadcn 产品面 + headless 骨架**，书写为 **`ui!` ↔ Builder 双轨兼容**（ADR-6 / ADR-9，不可再分叉）。  
-> **执行原则**：**先验证稳定面、再行为下沉与 API 归一**。大量组件仍属「Gallery 可演示、库测/冒烟未盖住」——**禁止**在未过 CV 门禁前大面积做 C1/C2 重构。  
-> **日期**：2026-08-09（基线与勾选相对 2026-08-07 刷新）  
+> **冻结展开（2026-08-12）**：勾选、排期、CV 门禁以 [`AUTHORITY.md`](AUTHORITY.md) **Wave CV / WP-3.*** 为**唯一执行源**。本文仅保留 C-WP 细则；旧编号对照见 AUTHORITY §9。**禁止**在此改勾选充进度。  
+> **原地位**：把 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 落成 C-WP。重叠项（焦点、a11y、golden、Gallery）并入统一计划，不另开架构分叉。  
+> **前提**：shadcn 产品面 + headless 骨架；`ui!` ↔ Builder 双轨（ADR-6 / ADR-9）。**未过 CV 禁止**大面积 C1/C2 重构。  
+> **日期**：2026-08-09（基线）；执行移交 2026-08-12  
 
 ---
 
@@ -50,12 +49,12 @@
 
 | 项 | 事实 |
 |----|------|
-| 组件模块 | `components/` **45** 个公开模块；私有壳在 `components/internal/`（`dialog_shell` / `text_edit`）不计入产品面 |
+| 组件模块 | `components/` **45** 个公开模块；私有壳在 `components/internal/`（`text_edit`）不计入产品面；Dialog 壳在 `dialog.rs` |
 | 自动化覆盖 | `crate_tests/`：reactive / layout / components（Button·Input·Textarea）/ interaction；**多数组件仍无行为/像素验收** |
 | Golden | 仅 2 个 offscreen fixtures；**缺** Button/Input/Dialog/… 组件场景矩阵 |
 | 冒烟 | `desktop_smoke.md` 偏 IME/焦点，**非组件矩阵全覆盖**；三平台未签署 |
 | 原语 | `primitives/`：box / interactive / overlay / text / path / portal；**无**独立 toggle 模块 |
-| 浮层 | `utils/popup.rs` 统一 placement；`components/internal/dialog_shell` 共享 Dialog/AlertDialog 模态壳；开合状态仍多在各组件 |
+| 浮层 | `utils/popup.rs` 统一 placement；Dialog 模态壳在 `components/dialog.rs`；开合状态仍多在各组件 |
 | 主题 | `style/theme.rs` + `color_space.rs` 对齐 shadcn v4 OKLCH；light/dark（见 [`color.md`](color.md)） |
 | Gallery | 八分区**已落地**（与总计划 WP-3.1 同步 ☑）；示例侧常堆 `gal-*` **id**（示范习惯 ≠ API 必填） |
 | **身份债** | 多数 Builder 首位强制 `id`；空串/`template_id` 曾致 AccessKit 重复 NodeId；全局 `use_signal("{id}__…")` 揉焦点/锚点 → [`element_identity.md`](element_identity.md) / C-WP-V.5 / C-WP-2.6 / 总计划 WP-2.4 |
@@ -200,10 +199,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`app/portal_overlay`、`components/internal/dialog_shell`、Dialog / Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
-| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、`internal/dialog_shell`；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
+| **路径** | `utils/popup.rs`、`app/portal_overlay`、`components/dialog.rs`、Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
+| **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、Dialog 壳；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
 | **验收** | 审计表关闭或仅剩标注实验；Escape 顶层单测或 smoke 条目 |
-| **状态** | ☐（**前置：CV 通过**）placement/`internal/dialog_shell` 已存在；契约审计与冒烟未关门 |
+| **状态** | ☐（**前置：CV 通过**）placement / Dialog 壳已存在；契约审计与冒烟未关门 |
 | **对齐** | 总计划 WP-1.2、WP-3.4 |
 
 ### C-WP-1.2 Toggle / 布尔控件 headless 抽取
@@ -430,16 +429,15 @@ flowchart TB
 ## 11. 文档拓扑
 
 ```text
+AUTHORITY.md                         ← ★执行源（Wave CV / WP-3.*）
 ENGINEERING_GRADE_FRAMEWORK.md
-ENGINEERING_IMPLEMENTATION_PLAN.md   ← 巩固期总 WP（★执行源）
-REACTIVITY.md / REACTIVITY_PLAN.md   ← 细粒度口径 + R-WP（WP-2.4/2.5 · C-WP-V.5/2.6）
-COMPONENT_LIBRARY.md                 ← 组件权威规范
-COMPONENT_LIBRARY_PLAN.md            ← 本文件（含 CV 门禁）
-element_identity.md                  ← 跨层身份契约（与 C-WP-V.5 / 2.6、WP-2.4 同步）
-headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md / reactivity_and_hot_reload.md
-archive/                             ← 选型与早期随笔（已冻结）
+COMPONENT_LIBRARY.md                 ← 组件领域规范
+COMPONENT_LIBRARY_PLAN.md            ← 本文件（C-WP 冻结展开）
+element_identity.md
+headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md
+archive/
 ```
 
 ---
 
-*计划随 C-WP 关闭而改勾选；新增 C-WP 须映射到规范 §1 某条门槛，否则进 §8 Backlog。*
+*冻结：勾选改 [`AUTHORITY.md`](AUTHORITY.md)；本文仅保留 C-WP 细则。*

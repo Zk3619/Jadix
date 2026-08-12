@@ -1,6 +1,6 @@
 # RUI 工程级后续发展路线图（阶段七～十二）
 
-> **历史排期（非巩固期执行源）**。阶段七～十二 **MVP 勾选已完成**；深化与 Beta DoD 请跟 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) / [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)。门槛见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。
+> **历史排期（非巩固期执行源）**。阶段七～十二 **MVP 勾选已完成**；深化与 Beta DoD 请跟 [AUTHORITY.md](AUTHORITY.md)。门槛见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)。
 
 依据 [gap_analysis.md](gap_analysis.md)、[PROJECT.md](PROJECT.md)。**底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`；差距在原生层、产品面与发布工程。
 
@@ -127,7 +127,7 @@ flowchart TB
 **目标**：填占位与高优先级缺失控件；图表先补绘制原语。
 
 - **A. 占位落地**：DatePicker / TimePicker / ColorPicker
-- **B. 导航与命令**：AlertDialog、Sheet、Menubar、Command、Navbar/Sidebar
+- **B. 导航与命令**：Sheet、Menubar、Command、Navbar/Sidebar（确认框并入 Dialog，已无独立 AlertDialog）
 - **C. 反馈与流程**：Progress、Stepper、Segmented、Carousel
 - **D. 绘制 → 图表**：路径原语 → Bar/Line/Pie
 - **E. VirtualMasonry**（依赖阶段八行高）

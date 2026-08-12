@@ -1,11 +1,11 @@
 # RUI 工程级实现计划（巩固期）
 
-> **文档地位**：把 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) 的六条门槛与三轨，落成**可执行工作包（WP）**。巩固期**唯一执行源**（阶段七～十二历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)，不再并行开新阶段编号）。  
-> **前提**：阶段一～十二 **MVP 已完成**；本计划只做「MVP → 工程可承诺」。  
-> **底座不变**：Solid 式响应式 + `winit/wgpu/taffy/glyphon`（禁区见纲领 §7）。  
-> **日期**：2026-08-09（基线与进度相对 2026-08-07 刷新）  
+> **冻结展开（2026-08-12）**：勾选、排期、DoD 以 [`AUTHORITY.md`](AUTHORITY.md) 为**唯一执行源**。本文仅保留 WP 细则与历史签署笔记，**禁止**在此改勾选充进度。  
+> **原地位**：把 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) 的六条门槛与三轨，落成工作包正文。阶段七～十二历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。  
+> **前提**：阶段一～十二 **MVP 已完成**；底座不变（Solid 式 + `winit/wgpu/taffy/glyphon`）。  
+> **日期**：2026-08-09（基线）；执行移交 2026-08-12  
 
-交叉文档：[COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [REACTIVITY.md](REACTIVITY.md) · [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)（R-WP，与 WP-2.4/2.5 互补）· [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
+交叉：[`AUTHORITY.md`](AUTHORITY.md) · [REACTIVITY.md](REACTIVITY.md) · [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
 
 ---
 
@@ -30,7 +30,7 @@
 
 | 项 | 事实 |
 |----|------|
-| 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有壳 `components/internal/{dialog_shell,text_edit}` |
+| 代码 | `crates/` ≈ **5.3 万行** / **182** `.rs`；`components/` **45** 模块；私有壳 `components/internal/text_edit`（Dialog 壳在 `dialog.rs`） |
 | 响应式 | ErrorBoundary / `switch_reactive` / `on_mount` / Store produce **已有**；`REGISTERED_*`→Owner 仍开放（权威：[REACTIVITY.md](REACTIVITY.md)；加深：[REACTIVITY_PLAN.md](REACTIVITY_PLAN.md)） |
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
 | Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
@@ -40,7 +40,7 @@
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）；**WP-2.3 ☑ Win 视觉已签署**。macOS / Linux 冒烟仍 ☐。W2.4+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项见 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md)（CV 门禁仍 ☐）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）；**WP-2.3 ☑ Win 视觉已签署**。macOS / Linux 冒烟仍 ☐。W2.4+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（门禁仍 ☐）。
 
 ---
 
@@ -219,10 +219,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`components/internal/dialog_shell` |
+| **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`components/dialog.rs` |
 | **任务** | 与 WP-1.2/1.3 对齐：焦点陷阱、类型即搜（Command）、菜单 Role；Dialog 走共享壳 |
 | **验收** | smoke #6–#7 + Command 打开关闭单测或手工清单项 |
-| **状态** | ☐ popup/Esc/`internal/dialog_shell` 已有；产品化打磨未关门 |
+| **状态** | ☐ popup/Esc/Dialog 壳已有；产品化打磨未关门 |
 
 ### WP-3.5 Router + 次窗协作
 
@@ -396,21 +396,17 @@ cargo check -p gallery
 ## 11. 文档拓扑（实施期）
 
 ```text
+AUTHORITY.md                       ← ★唯一执行源（勾选 / DoD）
 ENGINEERING_GRADE_FRAMEWORK.md     ← 为何 / 门槛 / 禁区（纲领）
-ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：WP / 波次 / DoD（★执行源）
-REACTIVITY.md                      ← Solid 细粒度权威规范
-REACTIVITY_PLAN.md                 ← R-WP（与 WP-2.4/2.5 互补；硬化不扩面）
-COMPONENT_LIBRARY.md               ← 组件库权威规范（shadcn 面 + headless 骨架）
-COMPONENT_LIBRARY_PLAN.md          ← 组件专项 C-WP（与本计划 W1–W4 交错）
-element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
-STAGE7_ROADMAP.md / gap_analysis.md← 历史阶段排期与审计（非执行源）
+ENGINEERING_IMPLEMENTATION_PLAN.md ← 本文件：工程 WP 冻结展开
+REACTIVITY.md / COMPONENT_LIBRARY.md / element_identity.md
+STAGE7_ROADMAP.md / gap_analysis.md← 历史（非执行源）
 PUBLISH.md / desktop_smoke.md / a11y_smoke.md / ime.md / text_align.md / damage.md / layout_subtree.md
-headless.md / custom_components.md / color.md / keyboard_nav.md / reactivity_and_hot_reload.md
-archive/                           ← 选型与早期随笔（已冻结）
+archive/
 ```
 
-组件产品面的选型与分层**不在此重开辩论**；**双书写面（`ui!` ↔ Builder）兼容**见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md) / 纲领 ADR-9。反应性口径见 [REACTIVITY.md](REACTIVITY.md)。重叠验收（焦点 / a11y / Gallery / golden / 文档索引）与 [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) 双清单勾选即可；Owner 注册表与 Store 契约与 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) 双清单对齐。
+组件选型与双书写面见 [COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md)。反应性口径见 [REACTIVITY.md](REACTIVITY.md)。重叠项勾选只在 [AUTHORITY.md](AUTHORITY.md)。
 
 ---
 
-*计划随 WP 关闭而改勾选；新增 WP 须映射到纲领六条门槛之一，否则进 §7 Backlog。*
+*冻结：勾选改 [`AUTHORITY.md`](AUTHORITY.md)；本文仅保留细则。*

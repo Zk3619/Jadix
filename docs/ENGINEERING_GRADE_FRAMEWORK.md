@@ -1,9 +1,10 @@
 # 迈向工程级：Rust 原生跨平台 UI 框架（权威纲领）
 
-> **文档地位**：本文件是 RUI 从「可运行 Alpha」迈向「工程级 / 可发布」的**单一权威纲领**。  
-> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)（阶段七～十二历史排期）、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
-> **审计日期**：2026-08-09（基线相对 2026-08-07 刷新）  
-> **版本口径**：阶段一～十二 **MVP 已落地**；巩固期执行以 [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md) 为准。本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
+> **文档地位**：工程门槛、ADR、锁定栈与禁区的**领域规范**（「是什么」）。  
+> **执行源**：巩固期勾选 / 排期 / DoD 以 [`AUTHORITY.md`](AUTHORITY.md) 为准。本文**不**再充当入口或第二套计划。  
+> **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
+> **审计日期**：2026-08-09（基线）；治理收口 2026-08-12  
+> **版本口径**：阶段一～十二 **MVP 已落地**。本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
 
 ---
 
@@ -141,7 +142,7 @@ crates/
 | 渲染 | damage+scissor MVP；opacity/translate/rotate/scale；多层阴影；渐变条带；离屏 golden |
 | 文本 | prepare/layout + 缓存；inline + **块级** markdown MVP；变宽绕排 MVP；RTL/letter-spacing；FontSystem 共享 |
 | 原生 | IME 光标区（库测 + 诊断钩子）；焦点环 token；roving；focus_trap；AccessKit Role/Action/live（lifecycle 接线） |
-| 组件 | 浮层引擎、`components/internal/dialog_shell` 共享模态壳、表单、表格、树、虚拟列表、Command/Menubar、Date/Color、Chart Bar/Line MVP、Carousel、Gallery 八分区 |
+| 组件 | 浮层引擎、Dialog 模态壳（`components/dialog.rs`）、表单、表格、树、虚拟列表、Command/Menubar、Date/Color、Chart Bar/Line MVP、Carousel、Gallery 八分区 |
 | 外壳 | **Router**（历史 back/forward 有测）/ **次窗 wired MVP** / 托盘 stub / 剪贴板助手 |
 | 工程 | 三平台 CI；`RUI_FORCE_SOFTWARE` offscreen（2 golden）；tracing feature；layout bench；`PUBLISH.md`；库测分布在 `crate_tests/` + 模块内测 |
 
@@ -149,7 +150,7 @@ crates/
 
 衡量的是**细粒度响应式编程模型**覆盖度，不是 solid-main 仓库对齐度。DOM/SSR 相关 API **不在范围内**。
 
-**权威展开**：现状、Leptos/`reactive_graph` × Floem/`floem_reactive` 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)（R-WP，与 WP-2.4/2.5 互补）。巩固期**禁止**以「追平 Leptos API 面」替代工程门槛。
+**权威展开**：现状、Leptos/`reactive_graph` × Floem/`floem_reactive` 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 / 2.5 / 2.7。巩固期**禁止**以「追平 Leptos API 面」替代工程门槛。
 
 | 状态 | 代表 API |
 |------|----------|
@@ -159,7 +160,7 @@ crates/
 
 ### 4.3 组件面（相对 EUI 密度标尺）
 
-`components/` 约 **45** 个公开模块；私有壳在 `components/internal/`（`dialog_shell` / `text_edit`）不计入产品面。相对 EUI 的产品空洞主要在：
+`components/` 约 **45** 个公开模块；私有壳在 `components/internal/`（`text_edit`）不计入产品面；Dialog 壳在 `dialog.rs`。相对 EUI 的产品空洞主要在：
 
 - 图表深度（Pie / 真实 path 批处理 vs 矩形条 + path stub）
 - VirtualMasonry（依赖可信行高）
@@ -176,7 +177,8 @@ crates/
 | P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
 | P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
-| P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md)；执行 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1 + WP-2.4 |
+| P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md)；执行 [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 |
+| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | 默认 BorderBox + 百分比 content-box 已齐；见 [`box_model.md`](box_model.md) · WP-2.9 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
 
@@ -231,14 +233,14 @@ crates/
 ### 6.4 文档拓扑
 
 ```text
-ENGINEERING_GRADE_FRAMEWORK.md      ← 本纲领（为何 + 门槛 + 禁区）
-ENGINEERING_IMPLEMENTATION_PLAN.md  ← 巩固期完整实现计划（WP / 波次 / DoD）★执行源
-REACTIVITY.md                       ← Solid 细粒度响应式权威规范（对照 Leptos/Floem）
-REACTIVITY_PLAN.md                  ← 反应性 R-WP（硬化；与 WP-2.4/2.5 互补）
-COMPONENT_LIBRARY.md                ← 组件库权威规范（shadcn 面 + headless 骨架）
-COMPONENT_LIBRARY_PLAN.md           ← 组件专项 C-WP（与巩固期交错）
-element_identity.md                 ← 跨层身份契约（与组件 C-WP-V.5/2.6、WP-2.4 同步）
+AUTHORITY.md                        ← ★唯一入口 + 唯一执行源（勾选 / 排期 / DoD）
+ENGINEERING_GRADE_FRAMEWORK.md      ← 本纲领（门槛 + ADR + 禁区）
+REACTIVITY.md                       ← 细粒度领域规范
+COMPONENT_LIBRARY.md                ← 组件领域规范
+element_identity.md                 ← 跨层身份契约
+component_inventory.md              ← 分桶数据表
 │
+├─ 冻结展开：ENGINEERING_IMPLEMENTATION_PLAN · COMPONENT_LIBRARY_PLAN · REACTIVITY_PLAN
 ├─ 从属手册：reactivity_and_hot_reload · headless · custom_components
 │            keyboard_nav · ime · desktop_smoke · a11y_smoke · color · font_strategy · font
 │            multi_window · tray · glyphon_audit · size_and_memory
@@ -247,7 +249,7 @@ element_identity.md                 ← 跨层身份契约（与组件 C-WP-V.5/
 └─ archive/                         ← 选型过程 / 早期随笔（已冻结，仅供追溯）
 ```
 
-争议处理：架构与禁区以本纲领 + ADR 为准；**反应性口径**以 [`REACTIVITY.md`](REACTIVITY.md) 为准；组件选型以 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 为准；**身份轴**以 [`element_identity.md`](element_identity.md) 为准；排期勾选以总计划 + 组件计划 + [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) 为准。
+争议处理：架构与禁区以本纲领 + ADR 为准；**反应性口径**以 [`REACTIVITY.md`](REACTIVITY.md) 为准；组件选型以 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 为准；**身份轴**以 [`element_identity.md`](element_identity.md) 为准；**排期勾选**以 [`AUTHORITY.md`](AUTHORITY.md) 为准。
 
 ---
 
@@ -277,7 +279,7 @@ flowchart LR
   trackC --> Gate
 ```
 
-工作包拆解、依赖、工期与勾选清单见 **[ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)**（Wave 1–4 / WP-1.1…WP-4.7）。
+工作包拆解、依赖、工期与勾选清单见 **[AUTHORITY.md](AUTHORITY.md)**（统一 Wave / WP）。细则可对照冻结的 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md)。
 
 ### 轨道 A — 原生可信（桌面「像系统控件」）→ Wave 1
 
@@ -349,10 +351,13 @@ flowchart LR
 
 | 文档 | 用途 |
 |------|------|
-| [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) | **巩固期完整实现计划**（WP / 四波次 / DoD）★执行源 |
+| [AUTHORITY.md](AUTHORITY.md) | **巩固期唯一入口与执行源**（统一 WP / DoD） |
+| [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) | 工程 WP 冻结展开（勾选作废） |
 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) | **组件库权威规范**（默认 shadcn 面 + headless 骨架） |
-| [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) | 组件专项实施计划（C-WP） |
+| [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) | 组件 WP 冻结展开（勾选作废） |
+| [REACTIVITY.md](REACTIVITY.md) | **细粒度响应式领域规范** |
 | [element_identity.md](element_identity.md) | **跨层身份契约**（`id` / `focus_id` / `template_id` / AccessKit） |
+| [box_model.md](box_model.md) | 类 CSS 盒模型契约与缺口（WP-2.9） |
 | [gap_analysis.md](gap_analysis.md) | 历史差距审计底稿（非巩固期执行源） |
 | [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) | 阶段七～十二历史排期（执行已移交巩固期计划） |
 | [PROJECT.md](PROJECT.md) | 愿景与分层初衷 |

@@ -1,7 +1,7 @@
 # Element 身份契约（`id` / `focus_id` / `template_id` / a11y）
 
 > **文档地位**：跨**组件库**与**框架运行时**的身份单一权威契约。凡涉及「给控件起名」、热重载 reconcile、焦点、AccessKit `NodeId`、全局 `use_signal` 键，以本文为准。  
-> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md)；组件 API 面摘要见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4.2；执行排期见下文 §8 与 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md) / [`ENGINEERING_IMPLEMENTATION_PLAN.md`](ENGINEERING_IMPLEMENTATION_PLAN.md)。  
+> **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md)；组件 API 面摘要见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §4.2；执行排期见 [`AUTHORITY.md`](AUTHORITY.md) WP-CV.4 / WP-2.4 / WP-2.8。  
 > **事实来源**：`core/tree.rs`（`Element` 字段）、`a11y/bridge.rs`、`app/hot_reload.rs`、`app/reactive.rs`、`rui_macros`、`components/*` Builder。  
 > **日期**：2026-08-09  
 
@@ -199,18 +199,17 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 
 ## 8. 工作包映射（同步推进）
 
-本文是契约；勾选与排期在计划文件。
+本文是契约；勾选与排期在 [`AUTHORITY.md`](AUTHORITY.md)。
 
-| 工作包 | 计划 | 本文关注点 |
-|--------|------|------------|
-| **C-WP-V.5** `id` 过度使用审计 | 组件计划 | 表列每组件：必填/可选；是否写入 focus/template；空串行为 |
-| **C-WP-2.6** 身份 API 收敛 | 组件计划 | 展示型去必填；信号迁 scoped；Gallery 减噪 |
-| **C-WP-1.4** AccessKit 主路径组件 | 组件计划 | 可聚焦控件非空 `focus_id` + Role；配合 I-3 |
-| **WP-1.3** AccessKit 主路径 | 总计划 | **仅**桥 Role/Action + §4 防御测 + 读屏冒烟；**不含**组件身份 API 收敛 |
-| **WP-2.4** Anchors / scoped ID | 总计划 | Owner 前缀 `template_id`/`focus_id`；注册表随 dispose 清理 |
-| （建议）**身份库测门禁** | 随 V.5/WP-1.3 | `a11y::bridge` 空串/复用 template 测不得删；组件侧增加「空 id 不写 `Some("")`」测 |
+| 工作包 | 本文关注点 |
+|--------|------------|
+| **WP-CV.4** `id` 过度使用审计 | 表列每组件：必填/可选；是否写入 focus/template；空串行为 |
+| **WP-2.8** 身份 API 收敛 | 展示型去必填；信号迁 scoped；Gallery 减噪 |
+| **WP-1.3** AccessKit 主路径 | **仅**桥 Role/Action + §4 防御测 + 读屏冒烟；**不含**组件身份 API 收敛 |
+| **WP-2.4** Anchors / scoped ID | Owner 前缀 `template_id`/`focus_id`；注册表随 dispose 清理 |
+| （建议）**身份库测门禁** | `a11y::bridge` 空串/复用 template 测不得删；组件侧增加「空 id 不写 `Some("")`」测 |
 
-**推进顺序建议**：V.5 审计（真相）→ 桥/测锁死 I-1（已大部分完成）→ 组件按审计表改空串与必填（2.6）→ WP-2.4 scoped 降全局键依赖。禁止只加桥分支、不改组件空串写入。
+**推进顺序**：CV.4 审计 → 桥/测锁死 I-1（已大部分完成）→ WP-2.8 空串与必填 → WP-2.4 scoped 降全局键依赖。禁止只加桥分支、不改组件空串写入。
 
 ---
 
@@ -253,16 +252,15 @@ cargo check -p gallery
 ## 11. 文档拓扑
 
 ```text
+AUTHORITY.md                            ← ★执行源（WP-CV.4 / WP-2.4 / WP-2.8）
 ENGINEERING_GRADE_FRAMEWORK.md          ← 总纲领（P1 DX：scoped id）
-ENGINEERING_IMPLEMENTATION_PLAN.md      ← WP-1.3 / WP-2.4
-REACTIVITY.md / REACTIVITY_PLAN.md      ← 细粒度口径；R-WP-1 承接 WP-2.4 审计
+REACTIVITY.md                           ← 细粒度口径
 COMPONENT_LIBRARY.md §4.2               ← 组件 API 摘要 → 指向本文
-COMPONENT_LIBRARY_PLAN.md               ← C-WP-V.5 / C-WP-2.6 / C-WP-1.4
 element_identity.md                     ← 本文件（跨层身份权威）
 a11y_smoke.md / keyboard_nav.md / reactivity_and_hot_reload.md
 ```
 
-争议：先改本文不变量与职责表，再改代码；禁止在组件 PR 内静默重新定义「id = template_id = focus_id」。Owner 注册表执行细节见 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
+争议：先改本文不变量与职责表，再改代码；禁止在组件 PR 内静默重新定义「id = template_id = focus_id」。Owner 注册表执行见 [`AUTHORITY.md`](AUTHORITY.md) WP-2.4。
 
 ---
 
