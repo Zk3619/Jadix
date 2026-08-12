@@ -1739,11 +1739,9 @@ fn OverlayFeedbackShowcase() -> Element {
                                     </SelectGroup>
                                 </SelectContent>
                             </Select>
-                            <Reactive id="gal-dialog-sel-status">
-                                <Label text_size="0.75rem" color="muted-foreground">
-                                    { format!("Selected: {}", nested_select.get()) }
-                                </Label>
-                            </Reactive>
+                            <Label text_size="0.75rem" color="muted-foreground">
+                                { format!("Selected: {}", nested_select.get()) }
+                            </Label>
                             <Label text_size="0.875rem">"行 1 — 演示长内容"</Label>
                             <Label text_size="0.875rem">"行 2"</Label>
                             <Label text_size="0.875rem">"行 3"</Label>
