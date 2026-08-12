@@ -65,6 +65,10 @@ pub(crate) mod scroll_support;
 mod secondary_window;
 mod state;
 #[cfg(test)]
+pub(crate) use state::{
+    hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
+};
+#[cfg(test)]
 pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;

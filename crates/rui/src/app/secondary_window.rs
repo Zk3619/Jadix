@@ -82,8 +82,7 @@ impl SecondaryWindowState {
             RuiTextRenderer::new(&device, &queue, &config)
         };
 
-        super::state::recompute_scroll_viewport_flags(&mut root_element);
-        let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root_element);
+        let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
 
         let mut layout_tree = LayoutTree::new();
         let scale = window.scale_factor() as f32;
@@ -162,7 +161,7 @@ impl SecondaryWindowState {
             &mut sync_impact,
         );
 
-        let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut self.root_element);
+        let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
         let use_full = self.layout_tree.root_node.is_none()
             || matches!(

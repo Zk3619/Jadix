@@ -500,8 +500,7 @@ impl AppState {
         let scale = window.scale_factor() as f32;
         let logical_w = config.width as f32 / scale.max(1.0);
         let logical_h = config.height as f32 / scale.max(1.0);
-        recompute_scroll_viewport_flags(&mut root_element);
-        let _portal = crate::layout::layout_tree::hoist_portal_subtrees(&mut root_element);
+        let _portal = hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
         let render_result =
             layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
         let scaled_instances = scale_instances(&render_result.instances, scale);
@@ -1253,8 +1252,7 @@ impl AppState {
             self.mark_full_redraw();
         }
 
-        let portal_moves =
-            crate::layout::layout_tree::hoist_portal_subtrees(&mut self.root_element);
+        let portal_moves = hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
         // Viewport/content signals can be stale right after a resize+StructureChanged (not every
         // StructureChanged). In that narrow case, skip preupdate to avoid corrupt geometry from
@@ -2461,7 +2459,19 @@ const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// `ScrollbarBuilder::thickness` when ScrollArea does not override.
 const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
-pub(super) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
+/// Hoist `rui_portal` nodes, then refresh [`Element::contains_scroll_viewport`] flags.
+///
+/// `rebuild_ui` walks the **unhoisted** tree. After lift, the portal layer would otherwise
+/// keep `contains_scroll_viewport = false`, so the scrollbar prepass never updates Dialog
+/// chrome: tracks stay at auto-vis alpha 0 (hittable, invisible) until a later reconcile
+/// such as opening a nested Select.
+pub(crate) fn hoist_portal_subtrees_refreshing_scroll_flags(root: &mut Element) -> usize {
+    let n = crate::layout::layout_tree::hoist_portal_subtrees(root);
+    recompute_scroll_viewport_flags(root);
+    n
+}
+
+pub(crate) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
     let self_is = el
         .focus_id
         .as_deref()

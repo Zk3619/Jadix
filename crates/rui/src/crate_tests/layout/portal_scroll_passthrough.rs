@@ -1,6 +1,9 @@
 //! Empty fullscreen portal layer must not steal wheel/scroll hit chain from shell scroll areas.
 //! Body-mounted portals must escape ancestor overflow clipping (Solid `<Portal>` → document.body).
 
+use crate::app::{
+    hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
+};
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
 use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::Element;
@@ -203,5 +206,68 @@ fn body_portal_escapes_scroll_overflow_clip() {
     assert!(
         right > 200.5,
         "panel must paint past the scroll viewport’s right edge (Solid escape cropping); right={right}"
+    );
+}
+
+fn dialog_like_portal_with_body_scroll() -> Element {
+    let mut body = Element::new()
+        .w("100%")
+        .h(120.0)
+        .overflow_y("auto")
+        .focus_id(format!("{SCROLL_AREA_FOCUS_PREFIX}gal-dialog__body"))
+        .child(Element::new().w("100%").h(400.0));
+    body.template_id = Some("dialog-body".into());
+
+    let mut panel = Element::new()
+        .w(320.0)
+        .h(200.0)
+        .child(body);
+    panel.set_attr("rui_portal", "1");
+    panel.template_id = Some("dialog-panel".into());
+
+    Element::new()
+        .w(800.0)
+        .h(600.0)
+        .child(panel)
+}
+
+fn portal_layer(root: &Element) -> &Element {
+    root.children
+        .iter()
+        .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+        .expect("portal layer")
+}
+
+#[test]
+fn hoist_without_flag_refresh_leaves_portal_scroll_prepass_blind() {
+    let mut root = dialog_like_portal_with_body_scroll();
+    recompute_scroll_viewport_flags(&mut root);
+    assert!(
+        hoist_portal_subtrees(&mut root) > 0,
+        "dialog panel must lift"
+    );
+    assert!(
+        !portal_layer(&root).contains_scroll_viewport,
+        "stale flags after hoist: prepass would skip DialogBody (hittable, alpha-0 chrome)"
+    );
+}
+
+#[test]
+fn hoist_refreshing_flags_marks_portal_layer_scroll_viewport() {
+    let mut root = dialog_like_portal_with_body_scroll();
+    recompute_scroll_viewport_flags(&mut root);
+    assert!(
+        hoist_portal_subtrees_refreshing_scroll_flags(&mut root) > 0,
+        "dialog panel must lift"
+    );
+    let layer = portal_layer(&root);
+    assert!(
+        layer.contains_scroll_viewport,
+        "portal layer must be visible to scrollbar prepass after hoist+refresh"
+    );
+    assert!(
+        layer.scroll_viewport_subtree_count >= 1,
+        "hoisted DialogBody viewport must count on the portal layer, got {}",
+        layer.scroll_viewport_subtree_count
     );
 }
