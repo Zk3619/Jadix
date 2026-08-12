@@ -40,7 +40,7 @@
 - [ ] 稳定面组件均有 Gallery 示例；变体命名与 Button 对齐文档化；**双书写面**（标签 ↔ Builder）在规范 / Getting Started 有对照  
 - [ ] `utils/popup` + Esc 栈成为浮层唯一推荐路径（无第二套 placement）  
 - [ ] 至少 Button / Input / Dialog / Tabs / Checkbox|Switch 满足规范 §1 工程口径（或列入实验面并标明）  
-- [ ] 核心 ≥5 组件 golden 进 CI（与总计划 WP-2.6 / WP-4.5 合并验收）  
+- [x] 核心 ≥5 组件 golden 进 CI（与总计划 WP-2.6 / WP-4.5 合并验收；名单 Button/Input/Dialog/Tabs/ScrollArea）  
 - [ ] CHANGELOG / README 稳定面表与规范 §5.2 一致；**ADR-9 双书写面**无回潮  
 
 ---
@@ -295,7 +295,7 @@ flowchart TB
 | **路径** | [`element_identity.md`](element_identity.md)；规范 §4.2；C-WP-V.5 审计表；优先 Progress / Navbar / Chart / 纯展示 Label 路径 |
 | **任务** | ① 展示型：`id` 改为可选或移除首位必参；② 有状态：文档区分「实例键」与 `focus_id`；能受控则不强迫 id；③ **空串**：一律自动非空键或不写 focus/template（契约 I-1 / I-6）；④ 推动内部信号迁 `use_scoped_signal`（或等价 Owner 键）的试点（Button hover 键或 Toggle 择一）；⑤ Gallery 删掉无必要的 `gal-*` id |
 | **验收** | 至少 2 个原「无故必填 id」的稳定面组件改为可选；稳定候选无 `Some("")` focus/template；规范示例不再教「每个控件都写 id」；试点有测 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-13（勾选源 AUTHORITY WP-2.8；navbar/chart/progress 去必填；Toggle `use_scoped_signal`） |
 | **前置** | C-WP-V.5 |
 | **对齐** | 总计划 WP-2.4（scoped）；WP-1.3 桥防御测不得回退 |
 
@@ -331,9 +331,9 @@ flowchart TB
 | | |
 |--|--|
 | **路径** | offscreen tests + golden fixtures |
-| **任务** | Button、Input、Dialog、VirtualList、Markdown（或 Label 选区）；接续 C-WP-V.4 |
+| **任务** | Button、Input、Dialog、Tabs、ScrollArea（全 verified；替 VirtualList/Markdown）；接续 C-WP-V.4 |
 | **验收** | 总计划 WP-2.6 + WP-4.5；`RUI_UPDATE_GOLDEN` 可重录 |
-| **状态** | ☐ |
+| **状态** | ☑ 随 WP-2.6 2026-08-13（Button/Input/Dialog/Tabs/ScrollArea） |
 
 ### C-WP-3.4 表单与校验路径
 

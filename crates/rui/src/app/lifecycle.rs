@@ -333,6 +333,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             // root has been reconciled and deferred fine-grained reactive anchors have mounted, so
             // making the window visible cannot expose the bootstrap root.
             let builder_ref = self.app_builder.clone();
+            crate::core::reactivity::mark_next_effect_as_ui_root();
             crate::core::reactivity::create_effect(move || {
                 crate::debug_stack::crumb("root_effect: before app_builder");
                 let new_root = (builder_ref.borrow_mut())();

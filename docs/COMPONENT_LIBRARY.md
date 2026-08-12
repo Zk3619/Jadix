@@ -218,7 +218,9 @@ let _: Element = vstack()
 
 - `Button`：空 id → `btn-N`（进程内递增）  
 - `Input`：空 id → `__rui_input_rt_N`（兜底，避免多框共用 value 信号）  
-- RSX 宏：部分省略 id 的标签会生成唯一名（以宏为准）
+- `Navbar` / `bar_chart` / `line_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
+- `Progress` / `Toggle`：空 → `resolve_instance_id`；Toggle 非受控 → `use_scoped_signal`  
+- RSX 宏：部分省略 id 的标签会生成唯一名或 Default 空串（以宏为准）
 
 | 可以 | 不可以指望 |
 |------|------------|
@@ -365,7 +367,7 @@ cargo test -p rui --lib offscreen
 cargo check -p gallery
 ```
 
-组件 golden 目标（巩固期）：Button、Input、Dialog、VirtualList、Markdown ≥5 场景进 CI。
+组件 golden 目标（巩固期 / WP-2.6）：Button、Input、Dialog、Tabs、ScrollArea ≥5 场景进 CI（稳定面；VirtualList/Markdown 升格后再加深）。
 
 ### 6.3 Gallery 契约
 

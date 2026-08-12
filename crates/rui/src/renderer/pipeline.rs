@@ -172,6 +172,26 @@ impl RuiPipeline {
         Self::with_wgsl(device, config, include_str!("rounded_rect.wgsl"))
     }
 
+    /// Offscreen / headless: same shader path as [`Self::new`], without a window surface.
+    pub fn from_format(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+        };
+        Self::new(device, &config)
+    }
+
     pub fn with_wgsl(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,

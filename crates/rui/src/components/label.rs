@@ -225,9 +225,9 @@ pub fn Label(
     builder.into()
 }
 
-pub fn label(id: &str) -> LabelBuilder {
+pub fn label(id: impl Into<String>) -> LabelBuilder {
     LabelBuilder {
-        id: id.to_string(),
+        id: id.into(),
         for_target: String::new(),
         inner: TextBuilder {
             el: apply_label_defaults(Element::new()),
@@ -236,7 +236,7 @@ pub fn label(id: &str) -> LabelBuilder {
 }
 
 // Legacy alias for existing <Text> tags.
-pub fn text_node(id: &str) -> LabelBuilder {
+pub fn text_node(id: impl Into<String>) -> LabelBuilder {
     label(id)
 }
 
@@ -449,6 +449,12 @@ impl LabelBuilder {
     /// Solid `for`：关联控件 `focus_id`。
     pub fn r#for(mut self, target_id: impl Into<String>) -> Self {
         self.for_target = target_id.into();
+        self
+    }
+
+    /// 可选 `template_id` 槽；空串 / 省略 → 不写身份（展示型，WP-2.8）。
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
         self
     }
 }

@@ -70,6 +70,13 @@ jobs:
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
       - name: Offscreen clear/readback + golden
         run: cargo test -p rui --lib offscreen -- --nocapture
+      - name: Component golden (WP-2.6)
+        if: runner.os != 'Windows'
+        # Serialize GPU device creation — software adapters dislike parallel request_device.
+        run: cargo test -p rui --lib golden_component -- --nocapture --test-threads=1
+      - name: Component golden (WP-2.6, Windows WARP)
+        if: runner.os == 'Windows'
+        run: cargo test -p rui --features backend-dx12 --lib golden_component -- --nocapture --test-threads=1
       - name: Library unit tests (smoke)
         # Golden / smoke companion: fast lib tests without full workspace matrix cost.
-        run: cargo test -p rui --lib
+        run: cargo test -p rui --lib -- --skip golden_component

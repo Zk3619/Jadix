@@ -91,8 +91,8 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 代码 | `crates/` ≈ 5.3 万行；`components/` ≈ 45 模块 | 稳定面文档化；破坏性可追踪 |
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
 | 文本/像素 | 测宽对齐 ☑；damage 策略 ☑；golden **仅 2** 场景 | ≥5 组件 golden |
-| 反应性 | API 主路径齐；`REGISTERED_*`→Owner **未收口** | 长会话无泄漏；更新路径可预测 |
-| 组件 | Gallery 八分区 ☑；**WP-CV.1–.4 ☑**（走查 / 矩阵 / P0 / id 审计）；**CV.5** 可选 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
+| 反应性 | API 主路径齐；**WP-2.4 注册表→Owner ☑**；**WP-2.7 根裸 get 可观测 ☑**（2026-08-13） | 长会话无泄漏；更新路径可预测 |
+| 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
 
 ---
@@ -169,7 +169,7 @@ flowchart TB
 | **D0** | 文档治理（本文） | 否（但挡「再开第七套权威」） | 本次 |
 | **W1** | 原生：IME / 焦点 / a11y / 三平台冒烟 | Win 已退出；**三平台列挡 Beta** | 补签 1 周级 |
 | **CV** | 稳定面走查 + 身份审计 + 最小测网 | **挡组件大重构**；不单独挡 0.1 Win-first | 1–2 周 |
-| **W2** | 文本已签；Owner/Store；golden；**盒模型收口** | **WP-2.4 泄漏测 + WP-2.6 golden 挡 Beta**；WP-2.9 不挡 Beta | 2–3 周 |
+| **W2** | 文本已签；Owner/Store；golden；**盒模型收口** | **WP-2.4 / 2.5 / 2.6 ☑**；WP-2.9 不挡 Beta | 2–3 周 |
 | **W3** | Gallery / Chart / 选器 / 外壳；CV 后才下沉行为 | 分区已有；深化不全部挡 Beta | 2–3 周 |
 | **W4** | CHANGELOG / crates.io / 文档站 / CI | **挡 Beta** | 1–2 周 |
 
@@ -211,7 +211,9 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | **WP-CV.2** | 最小自动化网（Button/Input/Dialog/Tabs/Checkbox\|Switch 布局或行为） | C-WP-V.2 | ☑ 2026-08-12；`crate_tests/components/cv_stable_layout.rs` 矩阵 8 测 |
 | **WP-CV.3** | P0 修障或降级 | C-WP-V.3 | ☑ 2026-08-12；inventory 稳定面文档手工复核修错；`broken` = 无；无未分类 P0 |
 | **WP-CV.4** | `id` 过度使用审计（分类表） | C-WP-V.5 | ☑ 2026-08-12；inventory §2.1；稳定面空串 I-1 已修（`resolve_instance_id`） |
-| **WP-CV.5** | 核心 golden 骨架（可选，与 WP-2.6 合并） | C-WP-V.4 | ☐ 不阻塞 CV 退出，阻塞「宣称视觉稳定」 |
+| **WP-CV.5** | 核心 golden 骨架 | C-WP-V.4 | ⏭ **并入 WP-2.6**（2026-08-13；不单独阻塞 CV） |
+
+**CV 已退出**（2026-08-13）。退出条件 = 下表四项 + CV.0–CV.4；**CV.5 不挡退出**，视觉 golden 交给 WP-2.6（挡 Beta / 「宣称视觉稳定」）。
 
 **CV 退出（进入组件下沉前）**
 
@@ -225,7 +227,8 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 **Form**：降出 §5.2.1（Context helpers → `experimental`）；加深见 WP-3.9。  
 **CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。  
 **CV.3**（2026-08-12）：稳定面 inventory 文档手工验证修错后签署；无未分类 P0，不降级。  
-**CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → WP-2.8。  
+**CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → **WP-2.8 ☑**。  
+**CV.5**：不单独开工；golden 五场景 → **WP-2.6**。  
 **样式承诺面**（Theme / utility）：非控件、不进 CV；SemVer 与验收见 inventory §1.8、规范 §5.2.2、WP-2.9 / [`color.md`](color.md)。
 
 ### 5.4 Wave 2 — 文本、像素与内核硬化
@@ -237,14 +240,96 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | **WP-2.1** | 测宽与 glyphon 分行对齐 | — | ☑ |
 | **WP-2.2** | 细粒度 damage 策略可测 | — | ☑（GPU PartialLoad = B8，不挡） |
 | **WP-2.3** | 子树布局上溢升父 | — | ☑ |
-| **WP-2.4** | Anchors/Bindings 挂 Owner + scoped ID | R-WP-1；消费方 C-WP-2.6 | ☐ **Beta 门禁** |
-| **WP-2.5** | Store produce + Resource→EB 契约 | R-WP-4 测 | ☐ |
-| **WP-2.6** | 组件 golden 五场景 | C-WP-3.3 | ☐ **Beta 门禁**（Button/Input/Dialog/VirtualList/Markdown） |
-| **WP-2.7** | 双路径 / 根裸 `get()` 可观测 | R-WP-2 | ☐ 建议进 Beta；0.1 Win-first 可注明已知限制 |
-| **WP-2.8** | 身份 API 收敛（展示型去必填；空串；试点 scoped） | C-WP-2.6 | ☐ **前置 CV.4**；框架能力来自 2.4 |
+| **WP-2.4** | Anchors/Bindings 挂 Owner + scoped ID | R-WP-1；消费方 C-WP-2.6 | ☑ 2026-08-13；`registry_owner` 测 + `scoped_template_id`/`scoped_focus_id`；Gallery「布局 → WP-2.4」 |
+| **WP-2.5** | Store produce + Resource→EB 契约 | R-WP-4 测 | ☑ 2026-08-13；`produce` 切片测 + `throw_resource_error` e2e + `docs/CHANGELOG.md`；Gallery「布局 → WP-2.5」 |
+| **WP-2.6** | 组件 golden 五场景 | C-WP-3.3 | ☑ 2026-08-13；Button/Input/Dialog/Tabs/ScrollArea；`golden_component_*` + `tests/golden/golden_*.rgba` |
+| **WP-2.7** | 双路径 / 根裸 `get()` 可观测 | R-WP-2 | ☑ 2026-08-13；建议进 Beta；0.1 Win-first 可注明已知限制 |
+| **WP-2.8** | 身份 API 收敛（展示型去必填；空串；试点 scoped） | C-WP-2.6 | ☑ 2026-08-13；前置 CV.4 ☑；框架能力来自 2.4 |
 | **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☐ **不挡 Beta**；细则 [`box_model.md`](box_model.md) |
 
-WP-2.4 任务要点（不另开勾选源）：注册表随 Owner dispose；scoped `template_id`/`focus_id`；长会话无膨胀测；文档同步 `reactivity_and_hot_reload.md` + `element_identity.md` §7。审计矩阵细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
+WP-2.4 任务要点（已签）：注册表随 Owner dispose（Anchors + Bindings + COMPONENT_*）；`scoped_template_id` / `scoped_focus_id`；长会话无膨胀测 `crate_tests/reactive/registry_owner.rs`；Gallery「布局 → WP-2.4」。文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7。细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
+
+WP-2.5 任务要点（已签）：`Store::produce` ≡ `update` + 切片 `PartialEq` 契约测；Resource Err→EB 经**显式** `throw_resource_error`（巩固期不自动桥）；`docs/CHANGELOG.md` 实验面草案；Gallery「布局 → WP-2.5」。细则见 R-WP-4。
+
+#### WP-2.4 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 库测（权威，必须）** | `cargo test -p rui --lib registry_owner` | `2 passed`：`owner_dispose_clears_anchor_binding_and_component_props` + `registry_does_not_grow_across_repeated_owner_cycles` | 任一 `FAILED` |
+| **A′ scoped id 测** | `cargo test -p rui --lib scoped_template_and_focus` | `1 passed`；两 root 下同名 local 生成不同字符串，且含 `::tpl:` / `::focus:` | 断言失败 |
+| **B Gallery（建议）** | `cargo run -p gallery` → 侧栏「布局」→ 卡片「WP-2.4)」 | 见下「B 逐步」 | 卸载后 a/b/p **高于**基线；或 scoped 行缺少 `::tpl:`/`::focus:` |
+
+**B 逐步（Gallery）**
+
+1. 若结构岛已显示 → 点 **「卸载岛」**。  
+2. 点 **「刷新当前」**，再点 **「记当前为卸载基线」**（仅卸载态有效；挂载态点了不会写入基线）。  
+3. **「挂载岛」** → **「刷新当前」** → `当前 a` 应 **≥ 基线 a + 1**。  
+4. **「卸载岛」** → **「刷新当前」** → `当前 a/b/p` 均 **≤** 对应基线（等于通过；任一更高 = 泄漏失败）。卡片状态行会显示「通过 / 失败」。  
+5. 重复挂载/卸载至 **cycles ≥ 10**，最后停在卸载态并刷新 → 仍须 **≤ 基线**，且状态为「手工判定: 通过」。  
+6. 挂载态下两行须含 `::tpl:gal_wp24_isle` 与 `::focus:gal_wp24_btn`（前缀为 owner path）。
+
+**签署规则**：A（+A′）绿即可勾 WP-2.4；B 用于人工抽查与回归演示，不替代库测。
+
+#### WP-2.5 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A produce（权威）** | `cargo test -p rui --lib produce_notifies` | `produce_notifies_select_only_when_slice_changes` passed | `FAILED` |
+| **A′ Err→EB（权威）** | `cargo test -p rui --lib resource_err_to_error_boundary` | `resource_err_to_error_boundary_via_throw_resource_error` passed | `FAILED` |
+| **A″ create_resource（权威）** | `cargo test -p rui --lib create_resource_err_sets` | `create_resource_err_sets_state_and_bridges_to_eb` passed | `FAILED` |
+| **A‴ 实验面草稿** | 打开 `docs/CHANGELOG.md` | 含 Store / Resource / `throw_resource_error` 实验表 | 缺条目 |
+| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.5)」 | 见下「B 逐步」 | ticks 误增；或注入 Err 无 fallback |
+
+**B 逐步（Gallery）**
+
+1. **B1 produce**：记下 `name_ticks` / `age_ticks` →「age+1」仅 age +1 →「改名」仅 name +1 →「同值再 set」两 ticks 不变，且 note 为「未通知（符合契约）」。  
+2. **B2 Err→EB**：框内初始 `children ok`；旁路行 `resource=` 同步。→「注入 Err」框内 `fallback: gallery boom` 且旁路为 `Err(...)` →「复位 Ready」回到 `children ok` / `Ready(1)`。
+
+**签署规则**：A+A′+A″ 绿且 CHANGELOG 草案在即可勾 WP-2.5；B 不替代库测。巩固期 Err→EB **显式**桥，不承诺自动桥。
+
+WP-2.6 任务要点（已签）：稳定面五场景像素 golden（**Button / Input / Dialog / Tabs / ScrollArea**）；离屏 harness（LayoutTree→`RuiPipeline`→readback，chrome-only）；`RUI_UPDATE_GOLDEN=1` 重录。VirtualList / Markdown **不**进本门禁（非 verified）。
+
+#### WP-2.6 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 组件 golden（权威）** | `RUI_FORCE_SOFTWARE=1 cargo test -p rui --lib golden_component -- --test-threads=1`（Win 加 `--features backend-dx12`） | 五测 passed：`button` / `input` / `dialog` / `tabs` / `scroll_area` | 任一 `FAILED` / mismatch |
+| **A′ 既有 offscreen** | `cargo test -p rui --lib offscreen` | clear + stage8 等既有测绿 | `FAILED` |
+| **A″ fixtures** | `crates/rui/tests/golden/golden_*.rgba` | ≥5 场景 fixture：`golden_button_default` 等 | 缺文件 |
+| **重录** | `RUI_UPDATE_GOLDEN=1` + 同上 A 命令 | 写入/更新 `.rgba`；PR 勿混无关重录 | — |
+
+**签署规则**：A+A′+A″ 绿即可勾 WP-2.6；名单以稳定面为准，禁止把 experimental 写回 Beta 门禁。
+
+WP-2.7 任务要点（已签）：lifecycle `mark_next_effect_as_ui_root`；诊断钩子 `ui_root_effect_dep_count` / `root_bare_get_count`；debug 构建根订阅非空时 warn 一次；库测 `crate_tests/reactive/root_bare_get.rs`；Gallery「布局 → WP-2.7」。细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-2。
+
+#### WP-2.7 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 库测（权威）** | `cargo test -p rui --lib root_bare_get` | `3 passed`：裸 get 可观测 + bind + Show 根 dep=0 | 任一 `FAILED` |
+| **A′ 诊断 API** | 文档 / rustdoc：`mark_next_effect_as_ui_root` · `ui_root_effect_dep_count` | 公开可调用 | 缺 API |
+| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.7)」 | 见下「B 逐步」 | 对照基线失败（root_deps 抬高） |
+
+**B 逐步（Gallery）**
+
+1. 「刷新根 dep」→「记为基线」（记下 `ui_root_effect_dep_count`；卫生 Gallery 多为 0）。  
+2. **B1 bind**：点「文案 +1」数次 → 文案应变。  
+3. **B2 Show**：点「卸载/挂载面板」切换结构岛。  
+4. 「对照基线」→ `root_deps` **不得高于**基线（本卡操作不新增根订阅）。  
+
+**签署规则**：A 绿即可勾 WP-2.7；B 用于人工抽查与回归演示，不替代库测。不消除双路径（bind vs 结构岛仍为设计）。
+
+WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_chart()` / `progress()` 去必填 id；空串不写 `Some("")`（Progress/Toggle → `resolve_instance_id`）；Toggle 非受控 `use_scoped_signal` 试点；Gallery 减噪 +「布局 → WP-2.8」。细则见冻结 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md) C-WP-2.6。
+
+#### WP-2.8 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 展示型（权威）** | `cargo test -p rui --lib navbar_without_id`；`bar_chart_without_id` | 无 `template_id` / 非 `Some("")` | `FAILED` |
+| **A′ Toggle 试点** | `cargo test -p rui --lib toggle_empty_id`；`toggle_uncontrolled_uses_scoped` | 空 id 非空 focus/template；跨 Owner 独立 | `FAILED` |
+| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.8)」 | Navbar/Chart/Progress/Toggle 无手写 `gal-*`；Toggle 可点 | 仍强制堆展示型 id |
+
+**签署规则**：A+A′ 绿即可勾 WP-2.8；B 不替代库测。
 
 #### WP-2.9 盒模型完善（展开）
 
@@ -263,7 +348,7 @@ WP-2.4 任务要点（不另开勾选源）：注册表随 Owner dispose；scope
 **退出**：2.9.1–2.9.4 ☑；2.9.5 至少文档诚实；2.9.6/7 完成或显式进 §7 Backlog。  
 **禁区**：换 Taffy；outline/shadow 进布局；块级 margin collapse。
 
-**W2 已签署**：2.1–2.3。退出尚欠：2.4 泄漏测、2.6 五 golden。（2.9 并行，不挡升 Beta。）
+**W2 已签署**：2.1–2.8。（2.9 并行；2.9 不挡升 Beta。）
 
 ### 5.5 Wave 3 — 产品面与外壳
 
@@ -275,11 +360,11 @@ WP-2.4 任务要点（不另开勾选源）：注册表随 Owner dispose；scope
 | **WP-3.1** | Gallery 八分区 | C-WP-3.1 | ☑ 侧栏；「每稳定面一入口」随 CV 复核 |
 | **WP-3.2** | Path → Chart 加深（含 Pie） | — | ☐ |
 | **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☐ |
-| **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☐ **前置 CV** |
+| **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☐ **前置 CV ☑** |
 | **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☐ wired MVP 有；演示页无 |
 | **WP-3.6** | 系统托盘原生接线（feature） | — | ☐ 挡发布则可标 stub |
-| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☐ **前置 CV** |
-| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.5 | ☐ **前置 CV**；仅 `verified` |
+| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☐ **前置 CV ☑** |
+| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.5 | ☐ **前置 CV ☑**；仅 `verified` |
 | **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
 
@@ -301,7 +386,7 @@ WP-2.4 任务要点（不另开勾选源）：注册表随 Owner dispose；scope
 
 | ID | 主题 | 别名 | 挡 Beta？ | 状态 |
 |----|------|------|-----------|------|
-| （见 2.4 / 2.5 / 2.7） | 门禁三项 | R-WP-1 / 4 / 2 | 2.4+2.6 是；2.7 建议 | ☐ |
+| （见 2.4 / 2.5 / 2.7） | 门禁三项 | R-WP-1 / 4 / 2 | 2.6 是；2.7 建议 | 2.4 ☑；2.5 ☑；**2.7 ☑** |
 | **WP-R.5** | keyed For / Index | R-WP-5 | 否 | ☐ |
 | **WP-R.6** | 热重载 × 反应槽不变量 | R-WP-6 | 否 | ☐ |
 | **WP-R.7** | 宏降级漏绑 | R-WP-7 | 否 | ☐ |
@@ -319,8 +404,8 @@ WP-2.4 任务要点（不另开勾选源）：注册表随 Owner dispose；scope
 - [ ] 三平台真窗口冒烟 #1–#8（WP-1.4；**Win 已签**，macOS/Linux ☐）  
 - [x] AccessKit 主路径可演示并有文档（WP-1.3）  
 - [x] damage 策略可测（WP-2.2；GPU PartialLoad = B8）  
-- [ ] 测宽对齐测 + ≥5 组件 golden CI（WP-2.1 ☑，**WP-2.6 / 4.5** ☐）  
-- [ ] WP-2.4：Owner 注册表无泄漏测  
+- [x] 测宽对齐测 + ≥5 组件 golden CI（WP-2.1 ☑，**WP-2.6 ☑ 2026-08-13**；WP-4.5 CI 矩阵仍可加深）  
+- [x] WP-2.4：Owner 注册表无泄漏测（2026-08-13；`registry_owner`）  
 - [ ] 开放 P0 = 0（冒烟列、crates、文档站、CHANGELOG）  
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1 / 4.7）  
 

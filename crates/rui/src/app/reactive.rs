@@ -78,6 +78,26 @@ struct BindingRegistration {
     hook: Weak<UnmountHook>,
 }
 
+/// Current size of [`REGISTERED_ANCHORS`] (WP-2.4 diagnostics / leak tests).
+pub fn registered_anchor_count() -> usize {
+    REGISTERED_ANCHORS.with(|registry| registry.borrow().len())
+}
+
+/// Current size of [`REGISTERED_BINDINGS`] (WP-2.4 diagnostics / leak tests).
+pub fn registered_binding_count() -> usize {
+    REGISTERED_BINDINGS.with(|registry| registry.borrow().len())
+}
+
+/// Current size of [`COMPONENT_PROPS`] (WP-2.4 diagnostics / leak tests).
+pub fn component_props_count() -> usize {
+    COMPONENT_PROPS.with(|store| store.borrow().len())
+}
+
+/// Current size of [`COMPONENT_CHILDREN`] stash (WP-2.4 diagnostics / leak tests).
+pub fn component_children_count() -> usize {
+    COMPONENT_CHILDREN.with(|store| store.borrow().len())
+}
+
 /// Reset in-memory reactive anchor registrations (used by app lifecycle re-init).
 pub fn reset_registered_anchors() {
     let registrations: Vec<AnchorRegistration> = REGISTERED_ANCHORS.with(|registry| {
@@ -275,6 +295,16 @@ where
         } else {
             let cell = Rc::new(RefCell::new(Box::new(props.clone()) as Box<dyn Any>));
             store.insert(id.clone(), Rc::clone(&cell));
+            // Owner dispose must drop props/children stash (not only unmount / reset).
+            let cleanup_id = id.clone();
+            crate::core::reactivity::on_cleanup(move || {
+                COMPONENT_PROPS.with(|s| {
+                    s.borrow_mut().remove(&cleanup_id);
+                });
+                COMPONENT_CHILDREN.with(|s| {
+                    s.borrow_mut().remove(&cleanup_id);
+                });
+            });
             cell
         }
     });
@@ -332,6 +362,15 @@ where
         } else {
             let cell = Rc::new(RefCell::new(Box::new(props.clone()) as Box<dyn Any>));
             store.insert(id.clone(), Rc::clone(&cell));
+            let cleanup_id = id.clone();
+            crate::core::reactivity::on_cleanup(move || {
+                COMPONENT_PROPS.with(|s| {
+                    s.borrow_mut().remove(&cleanup_id);
+                });
+                COMPONENT_CHILDREN.with(|s| {
+                    s.borrow_mut().remove(&cleanup_id);
+                });
+            });
             cell
         }
     });
@@ -527,6 +566,22 @@ where
                 hook: Rc::downgrade(&hook),
             },
         );
+    });
+
+    // Owner dispose also drops the registration (unmount alone is not enough for headless /
+    // create_root cycles — WP-2.4 / R-WP-1).
+    let cleanup_key = bind_key.clone();
+    crate::core::reactivity::on_cleanup(move || {
+        let removed =
+            REGISTERED_BINDINGS.with(|registry| registry.borrow_mut().remove(&cleanup_key));
+        if let Some(registration) = removed {
+            if let Some(hook) = registration.hook.upgrade() {
+                hook.disarm();
+            }
+            if let Some(effect_id) = registration.effect_id {
+                dispose_effect(effect_id);
+            }
+        }
     });
 
     let effect_node_id = node_id;

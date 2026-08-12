@@ -3,6 +3,8 @@
 //! 顶栏布局壳：左侧 brand / 中间 slots / 右侧 actions。
 //! 链接导览请嵌 [`crate::components::navigation_menu`]；页面栈见
 //! [`crate::app::navigator::navigation_host`]。
+//!
+//! **身份（WP-2.8）**：展示型壳，**不要求**用户 `id`；空 / 省略 → 不写 `template_id`（I-1）。
 
 use crate::core::tree::Element;
 use crate::primitives::r#box::hstack;
@@ -15,9 +17,10 @@ pub struct NavbarBuilder {
     actions: Vec<Element>,
 }
 
-pub fn navbar(id: impl Into<String>) -> NavbarBuilder {
+/// 展示型入口：默认无用户 id（WP-2.8）。需要热重载槽时再 `.id(...)`。
+pub fn navbar() -> NavbarBuilder {
     NavbarBuilder {
-        id: id.into(),
+        id: String::new(),
         brand: None,
         center: Vec::new(),
         actions: Vec::new(),
@@ -25,6 +28,11 @@ pub fn navbar(id: impl Into<String>) -> NavbarBuilder {
 }
 
 impl NavbarBuilder {
+    /// 可选槽位 / 测试选择器；空串等同未设置。
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
     pub fn brand(mut self, el: impl Into<Element>) -> Self {
         self.brand = Some(el.into());
         self
@@ -72,7 +80,34 @@ impl From<NavbarBuilder> for Element {
         bar = bar.bg(tokens::background());
         bar.style.border_width = 1.0;
         bar.style.border_color = tokens::border();
-        bar.template_id = Some(id);
+        // Display shell: never write Some("") (I-1).
+        if !id.trim().is_empty() {
+            bar.template_id = Some(id);
+        }
         bar
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navbar_without_id_writes_no_template_id() {
+        let el: Element = navbar().into();
+        assert!(el.template_id.is_none());
+    }
+
+    #[test]
+    fn navbar_empty_id_writes_no_template_id() {
+        let el: Element = navbar().id("").into();
+        assert!(el.template_id.is_none());
+        assert_ne!(el.template_id.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn navbar_explicit_id_sets_template_id() {
+        let el: Element = navbar().id("nav-main").into();
+        assert_eq!(el.template_id.as_deref(), Some("nav-main"));
     }
 }

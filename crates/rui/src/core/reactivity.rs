@@ -125,6 +125,12 @@ pub struct Runtime {
     /// In-flight `run_effect` nesting for this runtime (thread-local). Used to defer
     /// `create_effect` while `current_effect` is temporarily cleared (`untrack` / memo).
     effect_run_depth: Cell<usize>,
+    /// Next [`create_effect`] becomes the app UI root (lifecycle `app_builder`). WP-2.7.
+    mark_next_as_ui_root: Cell<bool>,
+    /// Effect id for the marked UI root; bare `Signal::get` deps on this effect are hygiene hits.
+    ui_root_effect: Cell<Option<EffectId>>,
+    /// Latched once per UI-root install so debug builds do not spam on every root re-run.
+    ui_root_bare_get_warned: Cell<bool>,
 }
 
 impl Runtime {
@@ -156,6 +162,9 @@ impl Runtime {
             flushing_deferred: Cell::new(false),
             flushing_pending: Cell::new(false),
             effect_run_depth: Cell::new(0),
+            mark_next_as_ui_root: Cell::new(false),
+            ui_root_effect: Cell::new(None),
+            ui_root_bare_get_warned: Cell::new(false),
         })
     }
 
@@ -464,7 +473,20 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
         .borrow_mut()
         .pop()
         .expect("dep_stack: empty after effect run");
+    let dep_count = new_deps.len();
     rt.effect_deps.borrow_mut().insert(effect_id, new_deps);
+
+    if rt.ui_root_effect.get() == Some(effect_id) && dep_count > 0 {
+        #[cfg(debug_assertions)]
+        if !rt.ui_root_bare_get_warned.get() {
+            rt.ui_root_bare_get_warned.set(true);
+            eprintln!(
+                "[rui] root app_builder subscribed {dep_count} signal(s) via bare Signal::get() \
+                 — prefer bind_* / Show / For / reactive! \
+                 (see docs/reactivity_and_hot_reload.md; diagnose with ui_root_effect_dep_count)"
+            );
+        }
+    }
 
     *rt.current_effect.borrow_mut() = prev_effect;
     *rt.current_owner.borrow_mut() = prev_owner;
@@ -937,6 +959,12 @@ where
         }
         // Also record on parent? The effect's own owner holds it; parent holds the owner as child.
 
+        if rt.mark_next_as_ui_root.get() {
+            rt.mark_next_as_ui_root.set(false);
+            rt.ui_root_effect.set(Some(id));
+            rt.ui_root_bare_get_warned.set(false);
+        }
+
         // Defer when nested under an in-flight effect flush — including windows where
         // `current_effect` is temporarily `None` (`untrack` / `run_memo`). Sync nesting
         // there used to STATUS_STACK_OVERFLOW on Windows when Gallery registered hundreds
@@ -958,10 +986,58 @@ where
     })
 }
 
+/// Mark the next [`create_effect`] as the app UI root (`app_builder` in lifecycle).
+///
+/// Bare `Signal::get()` while that effect runs subscribe the **whole tree**. Prefer
+/// `bind_*` / Show / For / `reactive!`. Diagnose with [`ui_root_effect_dep_count`].
+pub fn mark_next_effect_as_ui_root() {
+    RUNTIME.with(|rt_rc| {
+        rt_rc.borrow().mark_next_as_ui_root.set(true);
+    });
+}
+
+/// Clear the UI-root marker (tests / soft restart). Does not dispose the effect.
+pub fn clear_ui_root_effect() {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        rt.ui_root_effect.set(None);
+        rt.mark_next_as_ui_root.set(false);
+        rt.ui_root_bare_get_warned.set(false);
+    });
+}
+
+/// Number of signals currently subscribed by the marked UI-root effect (0 = hygienic).
+///
+/// After a completed root run: bare `get()` in `app_builder` → `> 0`; bind / Show / For only → `0`.
+pub fn ui_root_effect_dep_count() -> usize {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let Some(id) = rt.ui_root_effect.get() else {
+            return 0;
+        };
+        let n = rt
+            .effect_deps
+            .borrow()
+            .get(&id)
+            .map(|deps| deps.len())
+            .unwrap_or(0);
+        n
+    })
+}
+
+/// Alias of [`ui_root_effect_dep_count`] (WP-2.7 / R-WP-2 diagnostic hook).
+pub fn root_bare_get_count() -> usize {
+    ui_root_effect_dep_count()
+}
+
 /// Dispose one effect and its owner scope (cascades to nested effects / signals / cleanups).
 pub fn dispose_effect(id: EffectId) {
     RUNTIME.with(|rt_rc| {
         let rt = rt_rc.borrow();
+        if rt.ui_root_effect.get() == Some(id) {
+            rt.ui_root_effect.set(None);
+            rt.ui_root_bare_get_warned.set(false);
+        }
         let owner = rt.effects.borrow().get(&id).map(|s| s.owner);
         dispose_effect_inner(&rt, id, false);
         if let Some(owner) = owner {
@@ -1001,6 +1077,9 @@ pub fn clear_effects() {
         rt.flushing_deferred.set(false);
         rt.flushing_pending.set(false);
         rt.effect_run_depth.set(0);
+        rt.mark_next_as_ui_root.set(false);
+        rt.ui_root_effect.set(None);
+        rt.ui_root_bare_get_warned.set(false);
         *rt.current_effect.borrow_mut() = None;
         *rt.current_memo.borrow_mut() = None;
         *rt.current_owner.borrow_mut() = None;
@@ -1156,6 +1235,32 @@ pub fn owner_path_str(id: OwnerId) -> String {
             .map(|n| n.path.clone())
             .unwrap_or_else(|| format!("owner{}", id.0))
     })
+}
+
+/// Owner-prefixed `template_id` (WP-2.4). Prefer for structural islands under a dynamic owner
+/// so remounts under different roots do not collide in the global string space.
+///
+/// Without a current owner, falls back to `__rui_tpl_global::{local}`.
+pub fn scoped_template_id(local: impl AsRef<str>) -> String {
+    let local = local.as_ref().trim();
+    let local = if local.is_empty() { "anon" } else { local };
+    match current_owner() {
+        Some(id) => format!("{}::tpl:{}", owner_path_str(id), local),
+        None => format!("__rui_tpl_global::{local}"),
+    }
+}
+
+/// Owner-prefixed `focus_id` (WP-2.4). Use for focusable chrome that must not share the
+/// global focus namespace across independently disposed owners.
+///
+/// Without a current owner, falls back to `__rui_focus_global::{local}`.
+pub fn scoped_focus_id(local: impl AsRef<str>) -> String {
+    let local = local.as_ref().trim();
+    let local = if local.is_empty() { "anon" } else { local };
+    match current_owner() {
+        Some(id) => format!("{}::focus:{}", owner_path_str(id), local),
+        None => format!("__rui_focus_global::{local}"),
+    }
 }
 
 /// Scoped named signal: key is `{owner_path}::{local_id}`. Re-entry with the same local id under
@@ -1957,6 +2062,16 @@ mod tests {
         a.set(2);
         assert_eq!(a.peek(), 2);
         assert_eq!(b.peek(), 99);
+    }
+
+    #[test]
+    fn scoped_template_and_focus_ids_differ_across_roots() {
+        let (_h1, (t1, f1)) = create_root(|| (scoped_template_id("isle"), scoped_focus_id("btn")));
+        let (_h2, (t2, f2)) = create_root(|| (scoped_template_id("isle"), scoped_focus_id("btn")));
+        assert_ne!(t1, t2);
+        assert_ne!(f1, f2);
+        assert!(t1.contains("::tpl:isle"), "{t1}");
+        assert!(f1.contains("::focus:btn"), "{f1}");
     }
 
     #[test]

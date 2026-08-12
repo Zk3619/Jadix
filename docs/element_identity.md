@@ -183,10 +183,10 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 | 稳定面空 id | 审计表 [`component_inventory.md`](component_inventory.md) §2.1；统一 [`resolve_instance_id`](../crates/rui/src/utils/instance_id.rs)；Label 空 id **不写** `template_id` |
 | Button / Input / Textarea / Checkbox / Switch / Slider | 既有 `btn-N` / `__rui_*_rt_N` |
 | Select / Combobox / Dialog / Tooltip / Tabs / Radio / ScrollArea | CV.4 补 auto（同 `resolve_instance_id`） |
-| 大量 Builder | 首位仍接 `id: impl Into<String>`（可空）；**去必填心智** → WP-2.8 |
-| Gallery | 仍有 `gal-*` 示范；勿写成 API 要求 |
+| 大量 Builder | 展示型已去必填入口（`navbar()` / `bar_chart()` / `line_chart()` / `progress()`）；有状态仍可空→`resolve_instance_id` |
+| Gallery | 布局区 WP-2.8 卡；Navbar/Chart/Progress 示范无 `gal-*` id |
 | AccessKit 桥 | `a11y/bridge.rs` 空串忽略 + path 消歧 + 库测（WP-1.3） |
-| Owner 作用域 id | 未完成（WP-2.4） |
+| Owner 作用域 id | ☑ `scoped_template_id` / `scoped_focus_id`（WP-2.4）；☑ Toggle 非受控 `use_scoped_signal` 试点（WP-2.8） |
 
 ### 7.2 目标态
 
@@ -205,9 +205,9 @@ NodeId = hash(preferred_key).max(2)           // 1 = 窗口根
 | 工作包 | 本文关注点 |
 |--------|------------|
 | **WP-CV.4** `id` 过度使用审计 | 表列每组件：必填/可选；是否写入 focus/template；空串行为 |
-| **WP-2.8** 身份 API 收敛 | 展示型去必填；信号迁 scoped；Gallery 减噪 |
+| **WP-2.8** 身份 API 收敛 | ☑ 展示型去必填；Toggle scoped 试点；Gallery 减噪 |
 | **WP-1.3** AccessKit 主路径 | **仅**桥 Role/Action + §4 防御测 + 读屏冒烟；**不含**组件身份 API 收敛 |
-| **WP-2.4** Anchors / scoped ID | Owner 前缀 `template_id`/`focus_id`；注册表随 dispose 清理 |
+| **WP-2.4** Anchors / scoped ID | ☑ 注册表随 dispose；Owner 前缀辅助 API；Gallery 布局区验收 |
 | （建议）**身份库测门禁** | `a11y::bridge` 空串/复用 template 测不得删；组件侧增加「空 id 不写 `Some("")`」测 |
 
 **推进顺序**：CV.4 审计 → 桥/测锁死 I-1（已大部分完成）→ WP-2.8 空串与必填 → WP-2.4 scoped 降全局键依赖。禁止只加桥分支、不改组件空串写入。

@@ -4,6 +4,7 @@
 //! Public-API / `ui!` macro smoke lives under `crates/rui/tests/`.
 
 mod components;
+mod golden;
 mod interaction;
 mod layout;
 mod reactive;

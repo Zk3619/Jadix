@@ -7,15 +7,15 @@ use crate::core::tree::Element;
 
 use super::reactive::reactive_view;
 
-struct ErrorFrame {
-    error: RefCell<Option<String>>,
+pub(crate) struct ErrorFrame {
+    pub(crate) error: RefCell<Option<String>>,
 }
 
 thread_local! {
     static ERROR_STACK: RefCell<Vec<Rc<ErrorFrame>>> = const { RefCell::new(Vec::new()) };
 }
 
-fn push_error_frame() -> Rc<ErrorFrame> {
+pub(crate) fn push_error_frame() -> Rc<ErrorFrame> {
     let frame = Rc::new(ErrorFrame {
         error: RefCell::new(None),
     });
@@ -23,7 +23,7 @@ fn push_error_frame() -> Rc<ErrorFrame> {
     frame
 }
 
-fn pop_error_frame() {
+pub(crate) fn pop_error_frame() {
     ERROR_STACK.with(|stack| {
         let _ = stack.borrow_mut().pop();
     });
@@ -37,6 +37,19 @@ pub fn throw_error(message: impl Into<String>) {
             *frame.error.borrow_mut() = Some(message);
         }
     });
+}
+
+/// WP-2.5 contract: if `resource` is [`ResourceState::Err`](crate::core::resource::ResourceState::Err),
+/// [`throw_error`] so an enclosing [`error_boundary`] can render fallback.
+///
+/// Consolidation policy: **explicit** bridge (call this inside boundary children). Automatic
+/// Err→EB on every Resource read is deferred (see `docs/REACTIVITY.md` / R-WP-4).
+pub fn throw_resource_error<T: Clone + PartialEq + 'static>(
+    resource: crate::core::resource::Resource<T>,
+) {
+    if let Some(msg) = resource.error() {
+        throw_error(msg);
+    }
 }
 
 /// Solid-style `<ErrorBoundary>`: run `children`; if they [`throw_error`] (or set the frame),
@@ -144,5 +157,34 @@ mod tests {
             tid
         });
         assert_eq!(template_id, "eb-test");
+    }
+
+    #[test]
+    fn resource_err_to_error_boundary_via_throw_resource_error() {
+        use crate::core::resource::{Resource, ResourceState};
+        use crate::core::reactivity::create_signal;
+
+        let (_owner, saw) = create_root(|| {
+            let state = create_signal(ResourceState::Ready(1_i32));
+            let resource = Resource::from_signal(state);
+            let saw = Rc::new(Cell::new(false));
+            let saw2 = saw.clone();
+            create_effect(move || {
+                let frame = push_error_frame();
+                throw_resource_error(resource);
+                let _child = Element::new().text(format!("{:?}", resource.get()));
+                let err = frame.error.borrow().clone();
+                pop_error_frame();
+                saw2.set(err.as_deref() == Some("fetch failed"));
+            });
+            assert!(!saw.get(), "Ready must not throw");
+            resource.set_error("fetch failed");
+            assert!(
+                saw.get(),
+                "Err + throw_resource_error must trip enclosing boundary frame"
+            );
+            saw
+        });
+        assert!(saw.get());
     }
 }

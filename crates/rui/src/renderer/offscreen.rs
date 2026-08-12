@@ -45,12 +45,19 @@ impl OffscreenGpu {
             compatible_surface: None,
             force_fallback_adapter: std::env::var("RUI_FORCE_SOFTWARE").is_ok(),
         }))?;
+        let adapter_limits = adapter.limits();
+        let mut required_limits = wgpu::Limits::downlevel_defaults();
+        required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
+        required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
+        // Rounded-rect VS needs >31 inter-stage components (WebGL2 default is too low).
+        required_limits.max_inter_stage_shader_components = adapter_limits
+            .max_inter_stage_shader_components
+            .max(60);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("rui-offscreen"),
                 required_features: wgpu::Features::empty(),
-                required_limits:
-                    wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                required_limits,
                 memory_hints: Default::default(),
             },
             None,
@@ -61,8 +68,26 @@ impl OffscreenGpu {
 
     /// Clear an offscreen texture to `clear` and read back RGBA8 bytes.
     pub fn clear_readback(&self, width: u32, height: u32, clear: wgpu::Color) -> Option<RgbaImage> {
+        self.render_instances_readback(width, height, clear, &[])
+    }
+
+    /// FullClear + draw rounded-rect [`InstanceInput`]s, then read back RGBA8.
+    ///
+    /// Used by WP-2.6 component goldens. `scale` is fixed at 1.0 (logical == physical).
+    /// Text glyphs are **not** drawn here (chrome / clip geometry only) so CI stays
+    /// cross-OS stable without embedded Inter; layout still measures text leaves.
+    pub fn render_instances_readback(
+        &self,
+        width: u32,
+        height: u32,
+        clear: wgpu::Color,
+        instances: &[super::InstanceInput],
+    ) -> Option<RgbaImage> {
+        use wgpu::util::DeviceExt;
+
         let width = width.max(1);
         let height = height.max(1);
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("rui-offscreen-tex"),
             size: wgpu::Extent3d {
@@ -73,18 +98,34 @@ impl OffscreenGpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let pipeline = super::RuiPipeline::from_format(&self.device, format, width, height);
+        pipeline.update_resolution(&self.queue, width, height);
+
+        let instance_buffer = if instances.is_empty() {
+            None
+        } else {
+            Some(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("rui-offscreen-instances"),
+                        contents: bytemuck::cast_slice(instances),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+            )
+        };
+
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("rui-offscreen-enc"),
             });
         {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rui-offscreen-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -98,62 +139,99 @@ impl OffscreenGpu {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            if let Some(ref ib) = instance_buffer {
+                pass.set_pipeline(&pipeline.render_pipeline);
+                pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, ib.slice(..));
+                pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..pipeline.num_indices, 0, 0..instances.len() as u32);
+            }
         }
 
-        let bytes_per_row = (width * 4).div_ceil(256) * 256;
-        let buffer_size = bytes_per_row as u64 * height as u64;
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rui-offscreen-readback"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit(Some(encoder.finish()));
+        readback_texture(&self.device, &self.queue, &texture, width, height, encoder)
+    }
+}
 
-        let slice = output_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv().ok()?.ok()?;
-
-        let data = slice.get_mapped_range();
-        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        for row in 0..height {
-            let start = (row * bytes_per_row) as usize;
-            let end = start + (width * 4) as usize;
-            pixels.extend_from_slice(&data[start..end]);
-        }
-        drop(data);
-        output_buffer.unmap();
-        Some(RgbaImage {
+fn readback_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    mut encoder: wgpu::CommandEncoder,
+) -> Option<RgbaImage> {
+    let bytes_per_row = (width * 4).div_ceil(256) * 256;
+    let buffer_size = bytes_per_row as u64 * height as u64;
+    let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rui-offscreen-readback"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::ImageCopyTexture {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::ImageCopyBuffer {
+            buffer: &output_buffer,
+            layout: wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
             width,
             height,
-            pixels,
-        })
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(Some(encoder.finish()));
+
+    let slice = output_buffer.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    rx.recv().ok()?.ok()?;
+
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for row in 0..height {
+        let start = (row * bytes_per_row) as usize;
+        let end = start + (width * 4) as usize;
+        pixels.extend_from_slice(&data[start..end]);
     }
+    drop(data);
+    output_buffer.unmap();
+    Some(RgbaImage {
+        width,
+        height,
+        pixels,
+    })
+}
+
+/// Layout `root` at fixed `width`×`height` (scale 1) and render chrome instances to RGBA.
+///
+/// Returns `None` when no GPU adapter is available (skip in that environment).
+pub fn render_element_scene(
+    root: &mut crate::core::tree::Element,
+    width: u32,
+    height: u32,
+    clear: wgpu::Color,
+) -> Option<RgbaImage> {
+    let gpu = OffscreenGpu::new()?;
+    let mut tree = crate::layout::layout_tree::LayoutTree::new();
+    let result = tree.build_and_layout(root, width as f32, height as f32, [-1.0, -1.0]);
+    let mut instances = result.instances;
+    instances.extend(result.input_chrome_instances);
+    // Portal overlay instances are already appended after overlay_split in collect order.
+    gpu.render_instances_readback(width, height, clear, &instances)
 }
 
 /// Max channel difference allowed when comparing goldens (font/AA variance).

@@ -203,4 +203,57 @@ mod tests {
         drop(owner);
         drain_ui_tasks();
     }
+
+    #[test]
+    fn create_resource_err_sets_state_and_bridges_to_eb() {
+        use crate::app::error_boundary::{
+            pop_error_frame, push_error_frame, throw_resource_error,
+        };
+        use crate::core::reactivity::create_effect;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let _guard = UI_QUEUE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = mpsc::sync_channel::<()>(1);
+        let (owner, resource) = create_root(|| {
+            let tx = tx.clone();
+            create_resource(
+                || (),
+                move |_| {
+                    let _ = tx.send(());
+                    Err::<i32, _>("boom".to_string())
+                },
+            )
+        });
+        rx.recv().expect("fetcher ran");
+        wait_until(|| matches!(resource.state(), ResourceState::Err(_)));
+        assert_eq!(resource.error().as_deref(), Some("boom"));
+
+        let saw = Rc::new(Cell::new(false));
+        let saw2 = saw.clone();
+        let _bridge = create_root(|| {
+            create_effect({
+                let resource = resource;
+                move || {
+                    let frame = push_error_frame();
+                    // Track Err so effect re-runs if state were to change later.
+                    let _ = resource.error();
+                    throw_resource_error(resource);
+                    let err = frame.error.borrow().clone();
+                    pop_error_frame();
+                    if err.as_deref() == Some("boom") {
+                        saw2.set(true);
+                    }
+                }
+            });
+        });
+        assert!(
+            saw.get(),
+            "create_resource Err must be throwable into ErrorBoundary via throw_resource_error"
+        );
+        drop(owner);
+        drain_ui_tasks();
+    }
 }

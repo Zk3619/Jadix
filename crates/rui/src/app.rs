@@ -77,7 +77,7 @@ mod window_events;
 pub mod window_keys;
 
 pub use multi_window::{open_secondary_window, open_secondary_window_title_only};
-pub use error_boundary::{error_boundary, throw_error};
+pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};

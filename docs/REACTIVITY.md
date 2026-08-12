@@ -84,7 +84,7 @@
 **公理（对齐 Solid + Floem）**
 
 1. 组件函数 / `app_builder` **意图上挂载一次**；属性走 `bind_*`，结构走 Show/For/reactive。  
-2. 根 `app_builder` 内裸 `signal.get()`（未走 bind/Show/For）会订**整树**根 effect——**卫生红线**。  
+2. 根 `app_builder` 内裸 `signal.get()`（未走 bind/Show/For）会订**整树**根 effect——**卫生红线**（WP-2.7：`ui_root_effect_dep_count` 可测）。  
 3. 动态子树必须能随 Owner dispose 清 effect 与注册表（Floem：child `Scope.dispose`）。  
 4. 失效应区分 Layout ≠ Paint（Floem `request_*`；RUI `LayoutStatus` + damage）。
 
@@ -114,15 +114,25 @@
 | Owner / Root / on_cleanup / on_mount | **done** | `create_root` · `OwnerHandle` | Floem 名 `Scope`；职责同构 |
 | Context | **done** | `provide_context` / `use_context` | 对齐 |
 | batch / untrack / isolate_reads | **done** | 同名 API | Floem 有 batch；Leptos 普通 Effect 靠 tick 合并 |
-| Store select + produce | **partial** | `core/store.rs`；**无** proxy 路径触发器 | Leptos `reactive_stores` 更深 |
+| Store select + produce | **done (MVP)** | `core/store.rs`；**无** proxy；`produce` 切片契约测 ☑ WP-2.5 | Leptos `reactive_stores` 更深（R-WP-3） |
 | Resource + Suspense | **done (MVP)** | `app/resource.rs` | **勿**抄 SSR 水合 Resource |
-| ErrorBoundary | **done (MVP)** | `app/error_boundary.rs`；Err→EB 自动桥未齐 | WP-2.5 / R-WP-4 |
+| ErrorBoundary | **done (MVP)** | `app/error_boundary.rs`；Err→EB **显式** `throw_resource_error` ☑ | 自动桥 deferred（R-WP-4） |
 | Show / For / Switch / Dynamic / Portal | **done / For partial** | `app/reactive.rs`；keyed 深度弱于 Solid | Floem `dyn_stack` / `dyn_view` 可对照 |
 | Index | **partial** | `for_each` ≠ Solid Index 语义 | R-WP-5 |
 | bind_* | **done（亮点）** | 显式细粒度；`ui!` 自动降级 | 对标 Leptos 属性 RenderEffect / Floem UpdaterEffect |
 | reactive! 结构岛 | **done** | `reactive_view` / anchor | 对标 Floem `dyn_*` |
-| REGISTERED_* → Owner | **partial** | Anchor 有部分 `on_cleanup`；Binding 主要靠 unmount | **WP-2.4 / R-WP-1** |
+| REGISTERED_* → Owner | **done** | Anchors + Bindings + COMPONENT_* 均 `on_cleanup`；`registry_owner` 测 | WP-2.4 ☑ |
 | mergeProps / children() / DevTools | **missing（可空缺）** | — | 不阻塞工程级 |
+
+### 4.1 Resource / ErrorBoundary 策略（WP-2.5）
+
+| 场景 | 行为 |
+|------|------|
+| 首载 | `Loading { previous: None }`；`get()` 可标 Suspense pending |
+| Refetch | generation 递增；过期结果丢弃；`previous` 可 stale-while-revalidate |
+| Err | `ResourceState::Err`；**不**自动进 ErrorBoundary |
+| Err→EB | 子树内显式 [`throw_resource_error`](../crates/rui/src/app/error_boundary.rs)（巩固期契约） |
+| `produce` | ≡ `Store::update`；`store_select` 仅在切片 `PartialEq` 变化时通知 |
 
 ---
 
@@ -163,11 +173,11 @@
 
 | ID | 缺口 | 优先级 | 映射 |
 |----|------|--------|------|
-| G1 | `REGISTERED_BINDINGS` / `COMPONENT_*` 未全面随 Owner dispose | P1 DX | WP-2.4 · R-WP-1 |
-| G2 | scoped `template_id` / `focus_id`（owner path）未完成 | P1 | WP-2.4 · identity |
-| G3 | 双路径并存：bind 就地改 vs 根 rebuild 全树 diff | P1 | R-WP-2 |
-| G4 | Store 无 proxy 路径触发器；契约测 / SemVer 面未标清 | P1→P2 | WP-2.5 · R-WP-3 |
-| G5 | Resource Err → ErrorBoundary 端到端契约 | P1 | WP-2.5 · R-WP-4 |
+| G1 | `REGISTERED_*` / `COMPONENT_*` 随 Owner dispose | **closed（WP-2.4 ☑ 2026-08-13）** | `registry_owner` 测；Gallery 布局→WP-2.4 |
+| G2 | scoped `template_id` / `focus_id`（owner path） | **closed（WP-2.4）** | `scoped_template_id` / `scoped_focus_id` |
+| G3 | 双路径并存：bind 就地改 vs 根 rebuild 全树 diff | **closed（可观测，WP-2.7 ☑ 2026-08-13）** | `mark_next_effect_as_ui_root` + `ui_root_effect_dep_count`；双路径仍为设计 |
+| G4 | Store 无 proxy 路径触发器（契约/SemVer 实验面已标） | P2 | R-WP-3；WP-2.5 ☑ produce+CHANGELOG |
+| G5 | Resource Err → ErrorBoundary 端到端契约 | **closed（WP-2.5 ☑ 2026-08-13）** | 显式 `throw_resource_error`；自动桥仍 deferred |
 | G6 | keyed For / Index 语义深度不足 | P2 | R-WP-5 |
 | G7 | 热重载 × 反应槽不变量文档与回归 | P1 DX | R-WP-6 |
 | G8 | 宏自动降级漏绑面（Switch 糖、gallery 扩面） | P2 | R-WP-7 |

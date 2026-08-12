@@ -25,7 +25,8 @@
 **硬规则（仅 `components/` 控件）**：`stable-candidate` ⊆ 规范 §5.2.1 组件稳定面；已导出且越出 §5.2.1 → `experimental`；未导出对位 → `planned`（§1.9）。  
 **WP-CV.1（2026-08-12）**：§5.2.1 行为控件已 Gallery 手工走查并升 `verified`；**Form** 降出组件稳定面（Context helpers）。Theme / utility **不进 CV**，见 §1.8。  
 **WP-CV.3（2026-08-12）**：§2 稳定面文档已手工复核修错；**无未分类 P0**，`broken` = 无（不降级）。  
-**WP-CV.4（2026-08-12）**：稳定面 id 分类见 §2.1；空串 I-1 已修。展示型去必填 / Gallery 减噪 → WP-2.8。  
+**WP-CV.4（2026-08-12）**：稳定面 id 分类见 §2.1；空串 I-1 已修。  
+**WP-2.8（2026-08-13）**：展示型 `navbar`/`chart`/`progress` 去必填；Toggle `use_scoped_signal`；Gallery 减噪。  
 **禁止**：把 `planned` 写进 prelude / Gallery 假装可 import；把 Theme/utility 当控件走 CV 改桶。
 
 ### id 策略列（对接 C-WP-V.5）
@@ -97,7 +98,7 @@
 | Table | `table` / `TableBuilder` / `TableColumn` | **experimental** | 必填实例键；列 `id` 排序键 | 基础 columns+data；分组/筛选取消稳定承诺 |
 | VirtualList | `virtual_list` / `VirtualListBuilder` | **experimental** | 必填实例键 | 测宽依赖；Table/Tree 底座 |
 | TreeView | `tree_view` / `TreeViewBuilder` / `TreeNode` | **experimental** | 必填实例键；节点 id | 大数据实验 |
-| Chart | `bar_chart` / `line_chart` | **experimental** | 展示型偏多（现 API 仍要 id） | path stub；无 pie |
+| Chart | `bar_chart` / `line_chart` | **experimental** | **展示型不要求**（WP-2.8：`bar_chart()` / `line_chart()` 无必填 id） | path stub；无 pie |
 | Carousel | `carousel` / `CarouselBuilder` | **experimental** | 必填实例键 | |
 | Stepper | `stepper` / `StepperBuilder` | **experimental** | 必填实例键 | 产品打磨实验（Gallery 导航区） |
 
@@ -107,7 +108,7 @@
 |----------|------------------|----|---------|-------------|
 | Tabs | `tabs_scope` / `Tabs` / `TabsList` / `TabsTrigger` / `TabsContent`；另 `tabs_headless` / `tabs_list` | **verified** | 复合必填实例键；无头焦点前缀 `tabstrip:` | CV.1 + CV.2 layout 测 |
 | Menubar | `menubar` / `MenubarBuilder` / `MenuSection` | **experimental** | 必填实例键；section/item 派生 focus | 应用命令菜单 |
-| Navbar | `navbar` / `NavbarBuilder` | **experimental** | 可选 / 布局壳偏 **展示型不要求**（现 API 仍要 id） | ≠ NavigationMenu ≠ 页面栈 |
+| Navbar | `navbar` / `NavbarBuilder` | **experimental** | **展示型不要求**（WP-2.8：`navbar()` 无必填 id） | ≠ NavigationMenu ≠ 页面栈 |
 | NavigationMenu | `navigation_menu` / … | **experimental** | 必填实例键 | ShadCN 链接导览 |
 | Sidebar | `sidebar` / `SidebarBuilder` | **experimental** | 可选（测试选择器常见） | Gallery 壳；布局 |
 | （非组件）Navigator / Router | `app::navigator` / `app::router` | — | n/a | 勿当缺失 NavigationMenu |
@@ -187,7 +188,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 组件 | 桶（本表） | CV 下一步 |
 |------|------------|-----------|
-| Button | verified | 保持；CV.2/CV.4 ☑；golden → WP-CV.5 / WP-2.6 |
+| Button | verified | 保持；CV.2/CV.4 ☑；golden → WP-2.6（Button/Input/Dialog/Tabs/ScrollArea） |
 | Input | verified | 保持；CV.2/CV.4 ☑；IME 非 Win 仍开放 |
 | Select | verified | 保持；CV.4 空串 auto ☑；CV.2 外扩 layout 可选 |
 | Combobox | verified | 同上（scope 统一 resolve） |
@@ -246,8 +247,8 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 - **稳定面 id 策略已分类**（本表 + §1 各行「id 策略」列）。  
 - **I-1 空串 `Some("")`**：稳定面已修（`resolve_instance_id` / Label 不写 tid）；桥侧防御测保留。  
-- **遗留 → WP-2.8**：展示型去必填心智（Label/Chart/Navbar 等 API 首位）；显式同 id 多实例仍属调用方契约（I-3）；Gallery 减噪。  
-- **experimental**：多数无空串 auto，空 id 风险同修前 Select；不挡 CV.4，升格前须对齐本表。
+- **WP-2.8 ☑**：展示型 `navbar`/`chart`/`progress` 去必填；Toggle `use_scoped_signal`；Gallery 减噪。显式同 id 多实例仍属调用方契约（I-3）。  
+- **experimental**：升格前须对齐本表；Progress 空 id 已走 `resolve_instance_id`。
 
 ---
 

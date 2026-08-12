@@ -41,8 +41,14 @@ impl<T: Clone + PartialEq + 'static> Store<T> {
 
     /// Solid-style `produce`: in-place mutable update (alias of [`Self::update`]).
     ///
+    /// Contract (WP-2.5): same notification rules as [`Self::update`] — subscribers of the root
+    /// signal and of [`store_select`] memos re-run only when the selected slice's `PartialEq`
+    /// value changes.
+    ///
     /// ```ignore
-    /// store.produce(|v| v.push(1));
+    /// let store = create_store(vec![1, 2]);
+    /// let len = store_select(store, |v| v.len());
+    /// store.produce(|v| v.push(3)); // len observers update (2 → 3)
     /// ```
     pub fn produce(&self, f: impl FnOnce(&mut T)) {
         self.update(f);
@@ -92,6 +98,33 @@ mod tests {
             assert_eq!(store.get(), vec![1, 2, 3, 4]);
             store.produce(|v| v.push(5));
             assert_eq!(store.get(), vec![1, 2, 3, 4, 5]);
+        });
+    }
+
+    #[test]
+    fn produce_notifies_select_only_when_slice_changes() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Form {
+            name: String,
+            age: u32,
+        }
+        let (_owner, ()) = create_root(|| {
+            let store = create_store(Form {
+                name: "a".into(),
+                age: 1,
+            });
+            let name = store_select(store, |f| f.name.clone());
+            let age = store_select(store, |f| f.age);
+            assert_eq!(name.get(), "a");
+            assert_eq!(age.get(), 1);
+
+            store.produce(|f| f.age = 2);
+            assert_eq!(age.get(), 2);
+            assert_eq!(name.get(), "a", "name select must stay equal");
+
+            store.produce(|f| f.name = "b".into());
+            assert_eq!(name.get(), "b");
+            assert_eq!(age.get(), 2);
         });
     }
 }

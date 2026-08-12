@@ -5,17 +5,20 @@
 //!
 //! ## 用法
 //! ```ignore
-//! <Toggle id="bold" variant="outline">"B"</Toggle>
+//! <Toggle variant="outline">"B"</Toggle>
 //! { Element::from(toggle("italic").pressed_signal(on).variant("outline").text("I")) }
 //! ```
 //!
 //! ## 注意
 //! Space/Enter 经焦点路径触发 `on_click` 切换；受控用 `pressed` / `pressed_signal`。
+//! **身份（WP-2.8）**：`id` 可空 → [`resolve_instance_id`]；非受控 `pressed` 用
+//! [`use_scoped_signal`]（Owner 作用域，试点）。
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{use_scoped_signal, use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::hstack;
+use crate::utils::resolve_instance_id;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
@@ -30,7 +33,7 @@ pub struct ToggleBuilder {
     children: Vec<Element>,
 }
 
-/// RSX `<Toggle>`。
+/// RSX `<Toggle>` — `id` 可省略。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Toggle(
@@ -42,7 +45,7 @@ pub fn Toggle(
     size: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    let mut b = toggle(&id)
+    let mut b = toggle(id)
         .default_pressed(default_pressed)
         .disabled(disabled)
         .variant(variant.unwrap_or_else(|| "default".into()))
@@ -56,6 +59,7 @@ pub fn Toggle(
     b.into()
 }
 
+/// `id` 可空（WP-2.8）；空串 → 会话内自动实例键。
 pub fn toggle(id: impl Into<String>) -> ToggleBuilder {
     ToggleBuilder {
         id: id.into(),
@@ -110,10 +114,12 @@ fn size_pad(size: &str) -> (&'static str, &'static str, f32) {
 
 impl From<ToggleBuilder> for Element {
     fn from(builder: ToggleBuilder) -> Self {
-        let scope = format!("{}__toggle", builder.id);
-        let sig = builder
-            .pressed
-            .unwrap_or_else(|| use_signal(scope.as_str(), || builder.default_pressed));
+        let instance = resolve_instance_id(builder.id, "toggle");
+        let default_pressed = builder.default_pressed;
+        let sig = builder.pressed.unwrap_or_else(|| {
+            // WP-2.8 pilot: Owner-scoped pressed (not global `{id}__toggle`).
+            use_scoped_signal(&instance, move || default_pressed)
+        });
         let pressed = sig.peek();
         let disabled = builder.disabled;
         let outline = builder.variant == "outline";
@@ -167,10 +173,9 @@ impl From<ToggleBuilder> for Element {
         }
 
         let sig_click = sig;
-        let id = builder.id.clone();
-        let focus_id = id.clone();
+        let focus_id = instance.clone();
         let mut out: Element = interactive(row)
-            .focus_id(id.clone())
+            .focus_id(instance.clone())
             .focusable(!disabled)
             .focus_ring(!disabled)
             .on_click(move || {
@@ -178,7 +183,7 @@ impl From<ToggleBuilder> for Element {
                     return;
                 }
                 use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
-                sig_click.set(!sig_click.get());
+                sig_click.set(!sig_click.peek());
             })
             .into();
         if disabled {
@@ -186,7 +191,53 @@ impl From<ToggleBuilder> for Element {
         } else {
             out = out.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
-        out.template_id = Some(builder.id);
+        out.template_id = Some(instance);
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::create_root;
+
+    #[test]
+    fn toggle_empty_id_never_writes_empty_focus_or_template() {
+        let el: Element = toggle("").text("B").into();
+        assert_ne!(el.focus_id.as_deref(), Some(""));
+        assert_ne!(el.template_id.as_deref(), Some(""));
+        assert!(el.focus_id.as_ref().is_some_and(|s| !s.is_empty()));
+        assert!(el.template_id.as_ref().is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn toggle_uncontrolled_uses_scoped_signal_per_owner() {
+        let (h1, a) = create_root(|| {
+            let _el: Element = toggle("same_local").default_pressed(false).into();
+            let sig = use_scoped_signal("same_local", || false);
+            sig.set(true);
+            sig.peek()
+        });
+        assert!(a);
+
+        let (h2, b) = create_root(|| {
+            let _el: Element = toggle("same_local").default_pressed(false).into();
+            let sig = use_scoped_signal("same_local", || false);
+            // Fresh owner → independent slot (still default false).
+            sig.peek()
+        });
+        assert!(!b);
+
+        h1.dispose();
+        h2.dispose();
+    }
+
+    #[test]
+    fn toggle_controlled_keeps_explicit_id() {
+        let pressed = use_signal("__rui_test_toggle_ctrl", || true);
+        let el: Element = toggle("t-ctrl").pressed_signal(pressed).into();
+        assert_eq!(el.template_id.as_deref(), Some("t-ctrl"));
+        assert_eq!(el.focus_id.as_deref(), Some("t-ctrl"));
+        assert!(pressed.peek());
     }
 }

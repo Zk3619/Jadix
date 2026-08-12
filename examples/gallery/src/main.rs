@@ -742,6 +742,502 @@ fn DamageShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// WP-2.4 Gallery 验收：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
+#[component]
+fn OwnerRegistryShowcase() -> rui::core::tree::Element {
+    use rui::app::reactive::{
+        component_props_count, registered_anchor_count, registered_binding_count,
+    };
+    use rui::core::reactivity::{scoped_focus_id, scoped_template_id};
+
+    let mount = use_signal("gal_wp24_mount", || true);
+    let cycles = use_signal("gal_wp24_cycles", || 0_u32);
+    let isle_n = use_signal("gal_wp24_isle_n", || 0_u32);
+    // Baseline captured while island is *unmounted* (Gallery other islands still counted).
+    let base_a = use_signal("gal_wp24_base_a", || None::<usize>);
+    let base_b = use_signal("gal_wp24_base_b", || None::<usize>);
+    let base_p = use_signal("gal_wp24_base_p", || None::<usize>);
+    let cur_a = use_signal("gal_wp24_cur_a", || 0_usize);
+    let cur_b = use_signal("gal_wp24_cur_b", || 0_usize);
+    let cur_p = use_signal("gal_wp24_cur_p", || 0_usize);
+
+    let refresh_cur = move || {
+        cur_a.set(registered_anchor_count());
+        cur_b.set(registered_binding_count());
+        cur_p.set(component_props_count());
+    };
+
+    let capture_baseline = move || {
+        refresh_cur();
+        // Only valid while this card's island is unmounted; otherwise baseline is inflated.
+        if mount.peek() {
+            return;
+        }
+        base_a.set(Some(cur_a.peek()));
+        base_b.set(Some(cur_b.peek()));
+        base_p.set(Some(cur_p.peek()));
+        cycles.set(0);
+    };
+
+    ui! {
+        <MyCard title="WP-2.4) Owner 注册表 + scoped ID">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "权威判定：库测全绿即 WP-2.4 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.4 验收」。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "A · 库测（必须）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "命令：cargo test -p rui --lib registry_owner"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "通过：2 passed。失败：任一 FAILED。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B · Gallery 手工（建议）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "1) 若岛已挂载 → 先点「卸载岛」  2) 「刷新当前」  3) 「记当前为卸载基线」（仅卸载态有效）  4) 「挂载岛」→「刷新当前」→ a 应 ≥ 基线 a+1  5) 「卸载岛」→「刷新当前」→ a/b/p 均 ≤ 基线  6) 重复至 cycles≥10，最后卸载态仍 ≤ 基线  7) 挂载时两行须含 ::tpl:gal_wp24_isle 与 ::focus:gal_wp24_btn。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "说明：基线含其它 Gallery 岛，故判「≤ 基线」而非归零。卸载后任一计数 > 基线 = 泄漏失败。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { {
+                        let ba = base_a.get();
+                        let bb = base_b.get();
+                        let bp = base_p.get();
+                        let mounted = mount.get();
+                        match (ba, bb, bp) {
+                            (Some(ba), Some(bb), Some(bp)) => format!(
+                                "基线(卸载): a={} b={} p={}  |  当前: a={} b={} p={}  |  cycles={}  |  {}",
+                                ba,
+                                bb,
+                                bp,
+                                cur_a.get(),
+                                cur_b.get(),
+                                cur_p.get(),
+                                cycles.get(),
+                                if mounted {
+                                    "状态: 已挂载（卸后再刷新才能判通过）"
+                                } else if cur_a.get() <= ba
+                                    && cur_b.get() <= bb
+                                    && cur_p.get() <= bp
+                                {
+                                    if cycles.get() >= 10 {
+                                        "手工判定: 通过（卸载≤基线 且 cycles≥10）"
+                                    } else {
+                                        "手工判定: 卸载≤基线（请继续循环到 cycles≥10）"
+                                    }
+                                } else {
+                                    "手工判定: 失败（卸载后计数 > 基线）"
+                                }
+                            ),
+                            _ => {
+                                if mount.get() {
+                                    "尚未记基线：先「卸载岛」→「刷新当前」→「记当前为卸载基线」。"
+                                        .to_string()
+                                } else {
+                                    "尚未记基线：点「刷新当前」后点「记当前为卸载基线」。"
+                                        .to_string()
+                                }
+                            }
+                        }
+                    } }
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="outline" on_click={move || {
+                        let next = !mount.peek();
+                        mount.set(next);
+                        if !next {
+                            cycles.set(cycles.peek().wrapping_add(1));
+                        }
+                    }}>
+                        { if mount.get() { "卸载岛" } else { "挂载岛" } }
+                    </Button>
+                    <Button variant="secondary" on_click={move || refresh_cur()}>
+                        "刷新当前"
+                    </Button>
+                    <Button variant="default" on_click={move || capture_baseline()}>
+                        "记当前为卸载基线"
+                    </Button>
+                </HStack>
+                <Show when={mount.get()}>
+                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <VStack gap="0.5rem" w="100%">
+                            <Label text_size="0.875rem" font_weight="600">"结构岛（挂载时注册 anchor）"</Label>
+                            <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                                { format!(
+                                    "scoped template_id = {}\nscoped focus_id = {}",
+                                    scoped_template_id("gal_wp24_isle"),
+                                    scoped_focus_id("gal_wp24_btn")
+                                ) }
+                            </Label>
+                            <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                                "通过条件：上一行须同时出现 \"::tpl:gal_wp24_isle\" 与 \"::focus:gal_wp24_btn\"（前面有 root…/ 路径）。"
+                            </Label>
+                            <Reactive id="gal_wp24_isle">
+                                <VStack gap="0.5rem" w="100%">
+                                    <Label text_size="0.875rem">
+                                        { format!("reactive ticks = {}", isle_n.get()) }
+                                    </Label>
+                                    <Button variant="secondary" size="sm" on_click={move || {
+                                        isle_n.set(isle_n.peek().wrapping_add(1));
+                                    }}>
+                                        "岛内 +1"
+                                    </Button>
+                                </VStack>
+                            </Reactive>
+                        </VStack>
+                    </Rect>
+                </Show>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn StoreResourceShowcase() -> rui::core::tree::Element {
+    use rui::app::{error_boundary, throw_resource_error};
+    use rui::core::reactivity::{create_effect, create_memo};
+    use rui::core::resource::{Resource, ResourceState};
+    use rui::core::store::{create_store, store_select};
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Form {
+        name: String,
+        age: u32,
+    }
+
+    let store = create_store(Form {
+        name: "alice".into(),
+        age: 20,
+    });
+    let name = store_select(store, |f| f.name.clone());
+    let age = store_select(store, |f| f.age);
+    let name_ticks = use_signal("gal_wp25_name_ticks", || 0_u32);
+    let age_ticks = use_signal("gal_wp25_age_ticks", || 0_u32);
+    let action_note = use_signal("gal_wp25_action_note", || "尚未操作".to_string());
+    create_effect({
+        let name = name;
+        let name_ticks = name_ticks;
+        move || {
+            let _ = name.get();
+            name_ticks.update(|n| *n = n.wrapping_add(1));
+        }
+    });
+    create_effect({
+        let age = age;
+        let age_ticks = age_ticks;
+        move || {
+            let _ = age.get();
+            age_ticks.update(|n| *n = n.wrapping_add(1));
+        }
+    });
+
+    // Named signal: survives section rebuilds; EB + buttons share one handle.
+    let res_state = use_signal("gal_wp25_res", || ResourceState::Ready(1_i32));
+    let resource = Resource::from_signal(res_state);
+    let res_summary = create_memo(move || match res_state.get() {
+        ResourceState::Ready(v) => format!("Ready({v})"),
+        ResourceState::Err(e) => format!("Err({e})"),
+        ResourceState::Loading { .. } => "Loading".into(),
+    });
+
+    let eb = error_boundary(
+        "gal_wp25_eb",
+        |msg| {
+            ui! {
+                <Label w="100%" text_size="0.875rem" color="destructive" font_weight="600" leading="normal">
+                    { format!("fallback: {msg}") }
+                </Label>
+            }
+        },
+        move || {
+            throw_resource_error(resource);
+            ui! {
+                <Label w="100%" text_size="0.875rem" leading="normal">
+                    { format!("children ok · resource = {:?}", resource.state()) }
+                </Label>
+            }
+        },
+    );
+
+    ui! {
+        <MyCard title="WP-2.5) Store produce + Resource→EB">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "权威判定：库测全绿即 WP-2.5 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.5 验收」。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "A · 库测（必须）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "命令：cargo test -p rui --lib produce_notifies   与   cargo test -p rui --lib resource_err_to_error_boundary   与   cargo test -p rui --lib create_resource_err_sets"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "通过：三测均 passed。失败：任一 FAILED。CHANGELOG 草案：docs/CHANGELOG.md。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B1 · produce 切片（建议）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "1) 记下 name_ticks / age_ticks  2) 「age+1」→ 仅 age_ticks +1，name_ticks 不变  3) 「改名」→ 仅 name_ticks +1  4) 「同值再 set」→ ticks 不变，下方 note 写「未通知」。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { format!(
+                        "name={:?} age={}  |  name_ticks={}  age_ticks={}",
+                        name.get(),
+                        age.get(),
+                        name_ticks.get(),
+                        age_ticks.get()
+                    ) }
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="outline" on_click={move || {
+                        store.produce(|f| f.age = f.age.wrapping_add(1));
+                        action_note.set("produce: age+1（应仅 age_ticks +1）".into());
+                    }}>
+                        "age+1"
+                    </Button>
+                    <Button variant="outline" on_click={move || {
+                        store.produce(|f| {
+                            f.name = if f.name == "alice" {
+                                "bob".into()
+                            } else {
+                                "alice".into()
+                            };
+                        });
+                        action_note.set("produce: 改名（应仅 name_ticks +1）".into());
+                    }}>
+                        "改名"
+                    </Button>
+                    <Button variant="secondary" on_click={move || {
+                        let before_n = name_ticks.peek();
+                        let before_a = age_ticks.peek();
+                        let same = store.get();
+                        store.set(same);
+                        let same_ticks =
+                            name_ticks.peek() == before_n && age_ticks.peek() == before_a;
+                        action_note.set(if same_ticks {
+                            "同值再 set：未通知（符合契约）".into()
+                        } else {
+                            "同值再 set：失败（ticks 不应变化）".into()
+                        });
+                    }}>
+                        "同值再 set"
+                    </Button>
+                </HStack>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B2 · Resource Err → ErrorBoundary（建议）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "契约：巩固期须显式 throw_resource_error。1) 初始 children ok  2) 「注入 Err」→ fallback: gallery boom  3) 「复位 Ready」→ 回到 children ok。旁路行 resource= 应同步变。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { format!("resource(旁路) = {}  |  note: {}", res_summary.get(), action_note.get()) }
+                </Label>
+                <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    { eb }
+                </Rect>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="destructive" on_click={move || {
+                        resource.set_error("gallery boom");
+                        action_note.set("已注入 Err → 框内应见 fallback".into());
+                    }}>
+                        "注入 Err"
+                    </Button>
+                    <Button variant="default" on_click={move || {
+                        resource.mutate(1);
+                        action_note.set("已复位 Ready → 框内应见 children ok".into());
+                    }}>
+                        "复位 Ready"
+                    </Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// WP-2.7 Gallery 验收：根裸 `get()` 可观测；bind / Show 不抬高 UI-root dep。
+#[component]
+fn RootBareGetShowcase() -> rui::core::tree::Element {
+    use rui::core::reactivity::ui_root_effect_dep_count;
+
+    let root_deps = use_signal("gal_wp27_root_deps", || ui_root_effect_dep_count());
+    let baseline = use_signal("gal_wp27_baseline", || None::<usize>);
+    let label_n = use_signal("gal_wp27_label_n", || 0_u32);
+    let panel_open = use_signal("gal_wp27_panel", || true);
+    let verdict = use_signal("gal_wp27_verdict", || "尚未判定：先「刷新根 dep」并「记为基线」。".to_string());
+
+    let refresh_deps = move || {
+        root_deps.set(ui_root_effect_dep_count());
+    };
+
+    let capture_baseline = move || {
+        refresh_deps();
+        baseline.set(Some(root_deps.peek()));
+        verdict.set(format!(
+            "已记基线 root_deps={}。再做 B1/B2 后点「对照基线」。",
+            root_deps.peek()
+        ));
+    };
+
+    let compare_baseline = move || {
+        refresh_deps();
+        let cur = root_deps.peek();
+        match baseline.peek() {
+            Some(b) if cur == b => verdict.set(format!(
+                "手工判定: 通过（root_deps={cur} 相对基线 {b} 未抬高）"
+            )),
+            Some(b) if cur < b => verdict.set(format!(
+                "手工判定: 通过（root_deps={cur} < 基线 {b}；可能其它岛卸载）"
+            )),
+            Some(b) => verdict.set(format!(
+                "手工判定: 失败（root_deps={cur} > 基线 {b}；本卡操作或别处新增了根订阅）"
+            )),
+            None => verdict.set("尚未记基线：先点「记为基线」。".into()),
+        }
+    };
+
+    ui! {
+        <MyCard title="WP-2.7) 根裸 get() 可观测">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "权威判定：库测全绿即 WP-2.7 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.7 验收」。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "A · 库测（必须）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "命令：cargo test -p rui --lib root_bare_get"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "通过：3 passed（裸 get 可观测 + bind + Show 根 dep=0）。失败：任一 FAILED。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B · Gallery 手工（建议）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "1) 「刷新根 dep」→「记为基线」  2) B1 点「文案 +1」数次，文案应变  3) B2 切换「面板」  4) 「对照基线」→ root_deps 不得高于基线。说明：数值是整棵 Gallery 根 effect 订阅面；卫生目标多为 0；本卡只验证 bind/Show 不抬高。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { {
+                        let b = baseline.get();
+                        format!(
+                            "ui_root_effect_dep_count = {}  |  基线 = {}  |  {}",
+                            root_deps.get(),
+                            b.map(|n| n.to_string()).unwrap_or_else(|| "—".into()),
+                            verdict.get()
+                        )
+                    } }
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="secondary" on_click={move || refresh_deps()}>
+                        "刷新根 dep"
+                    </Button>
+                    <Button variant="default" on_click={move || capture_baseline()}>
+                        "记为基线"
+                    </Button>
+                    <Button variant="outline" on_click={move || compare_baseline()}>
+                        "对照基线"
+                    </Button>
+                </HStack>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B1 · bind_text（正确档）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "属性走 bind，不订根。点「文案 +1」后文案变；对照基线应仍通过。"
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Label text_size="0.875rem" font_weight="600">
+                        { format!("bind label = {}", label_n.get()) }
+                    </Label>
+                    <Button variant="outline" size="sm" on_click={move || {
+                        label_n.set(label_n.peek().wrapping_add(1));
+                    }}>
+                        "文案 +1"
+                    </Button>
+                </HStack>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B2 · Show（结构档）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "条件挂载走 show_reactive / Show，不在根 builder 裸 if get()。"
+                </Label>
+                <HStack gap="0.75rem" items="center" wrap="wrap">
+                    <Button variant="outline" size="sm" on_click={move || {
+                        panel_open.set(!panel_open.peek());
+                    }}>
+                        { if panel_open.get() { "卸载面板" } else { "挂载面板" } }
+                    </Button>
+                </HStack>
+                <Show when={panel_open.get()}>
+                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <Label text_size="0.875rem" leading="normal">
+                            "结构岛面板（Show when）— 切换不应抬高根 dep。"
+                        </Label>
+                    </Rect>
+                </Show>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// WP-2.8 Gallery 验收：展示型无必填 id；空串不写身份；Toggle scoped 试点。
+#[component]
+fn IdentityApiShowcase() -> rui::core::tree::Element {
+    let note = use_signal("gal_wp28_note", || "尚未操作".to_string());
+    let navbar_el: Element = navbar().brand(label("").text("Brand")).into();
+    let chart_el: Element = bar_chart().values([0.3, 0.6, 0.4]).h("3rem").into();
+    let progress_el: Element = progress().default_value(0.4).into();
+    let toggle_el: Element = toggle("").text("B").variant("outline").into();
+
+    ui! {
+        <MyCard title="WP-2.8) 身份 API 收敛">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "权威判定：库测全绿即 WP-2.8 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.8 验收」。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "A · 库测（必须）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "命令：cargo test -p rui --lib navbar_without_id   与   bar_chart_without_id   与   toggle_empty_id   与   toggle_uncontrolled_uses_scoped"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "通过：展示型无 template_id；Toggle 空 id 非空 focus/template；scoped 跨 Owner 独立。失败：任一 FAILED。"
+                </Label>
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "B · Gallery 手工（建议）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "1) 下方 Navbar / Chart / Progress / Toggle 均无手写 gal-* id  2) Toggle 可点切换  3) 读屏/焦点不因空串崩溃（I-1）。展示型勿再堆无意义 id。"
+                </Label>
+                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
+                    { note.get() }
+                </Label>
+                <Label text_size="0.75rem" font_weight="600">"navbar() — 无 id"</Label>
+                { navbar_el }
+                <Label text_size="0.75rem" font_weight="600">"bar_chart() — 无 id"</Label>
+                { chart_el }
+                <Label text_size="0.75rem" font_weight="600">"progress() — 自动实例键"</Label>
+                { progress_el }
+                <Label text_size="0.75rem" font_weight="600">"toggle(\"\") — scoped pressed"</Label>
+                <HStack gap="0.5rem" items="center">
+                    { toggle_el }
+                    <Button variant="secondary" size="sm" on_click={move || {
+                        note.set("已点旁路按钮（Toggle 请直接点 B）".into());
+                    }}>
+                        "记一笔"
+                    </Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn LogicalShowcase() -> rui::core::tree::Element {
     ui! {
@@ -1806,7 +2302,7 @@ fn OverlayFeedbackShowcase() -> Element {
                 </Rect>
             }
         });
-    let progress_el: Element = progress("gal-progress").value_signal(progress_val).into();
+    let progress_el: Element = progress().value_signal(progress_val).into();
 
     ui! {
         <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Progress">
@@ -2040,12 +2536,12 @@ fn DataChartShowcase() -> Element {
         }])
         .into();
 
-    let bars: Element = bar_chart("gal-bars")
+    let bars: Element = bar_chart()
         .values([0.2, 0.5, 0.8, 0.4, 0.9])
         .labels(["Mon", "Tue", "Wed", "Thu", "Fri"])
         .h("6rem")
         .into();
-    let line: Element = line_chart("gal-line")
+    let line: Element = line_chart()
         .values([0.1, 0.35, 0.55, 0.4, 0.85, 0.7])
         .size(320.0, 120.0)
         .into();
@@ -2126,13 +2622,13 @@ fn NavbarNavigationMenuShowcase() -> Element {
             move || picked.set("About".into())
         })
         .into();
-    let brand: Element = label("gal-nav-brand").text("RUI").into();
-    let action: Element = button("gal-nav-action")
+    let brand: Element = label("").text("RUI").into();
+    let action: Element = button("")
         .variant("outline")
         .size("sm")
         .text("Action")
         .into();
-    let bar: Element = navbar("gal-navbar")
+    let bar: Element = navbar()
         .brand(brand)
         .center_child(nav_menu)
         .action(action)
@@ -2142,7 +2638,7 @@ fn NavbarNavigationMenuShowcase() -> Element {
         <MyCard title="Navbar · NavigationMenu">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Navbar 是布局壳；center 嵌 NavigationMenu（链接导览，非 Menubar 命令、非页面栈）。"
+                    "Navbar 是布局壳（WP-2.8：无用户 id）；center 嵌 NavigationMenu（链接导览，非 Menubar 命令、非页面栈）。"
                 </Label>
                 { bar }
                 <Label text_size="0.875rem">{ format!("Selected: {}", picked.get()) }</Label>
@@ -2284,6 +2780,10 @@ fn gallery_section_body(section: &str) -> Element {
                     <Label text_size="1.25rem" font_weight="700">"布局"</Label>
                     <LayoutSubtreeShowcase />
                     <DamageShowcase />
+                    <OwnerRegistryShowcase />
+                    <StoreResourceShowcase />
+                    <RootBareGetShowcase />
+                    <IdentityApiShowcase />
                     <ScrollShowcase />
                     <LogicalShowcase />
                     <UtilityClassShowcase />

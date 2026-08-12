@@ -19,7 +19,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / **ErrorBoundary** / **`switch_reactive`** / `on_mount` | 热路径无全局表泄漏；`REGISTERED_*` 挂 Owner；Store produce 契约完整 |
 | 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty` | 细粒度 damage 默认路径；测宽≡绘制 |
 | 桌面可用 | IME 光标区代码路径；焦点环 / roving / focus_trap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **stub** | 三平台真窗口冒烟签署；读屏主路径可演示 |
-| 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（**2** 场景：clear + `stage8_pattern`） | ≥5 组件 golden；真窗冒烟或等价 |
+| 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（clear + stage8 + **5 组件场景**） | 真窗冒烟或等价；glyph 级 golden 可加深 |
 | 发布 | `PUBLISH.md`；文档站 stub；**无 CHANGELOG / 未 crates.io** | `cargo add rui` 可用；文档站有 Getting Started |
 
 ---
@@ -292,7 +292,7 @@ flowchart LR
 ### 轨道 B — 文本与像素可信 → Wave 2
 
 1. `layout_lines` / soft-wrap / chip 与 glyphon 绘制分行对齐测试。  
-2. 组件级 golden 矩阵进 CI（不少于核心 5 场景：Button、Input、Dialog、VirtualList、Markdown）。  
+2. 组件级 golden 矩阵进 CI（不少于核心 5 场景：Button、Input、Dialog、Tabs、ScrollArea）。  
 3. 结构未变时默认走元素 damage union；全帧 Clear 仅保留给结构变更。
 
 **退出标准**：虚拟列表行高在固定字号下可断言；CI golden 稳定（含 `RUI_UPDATE_GOLDEN` 流程文档）。

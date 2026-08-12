@@ -1,7 +1,7 @@
 //! 实例键空串兜底（身份契约 I-1）。
 //!
 //! 空 / 空白用户 `id` → 会话内递增 `__rui_{kind}_rt_N`；**不**保证跨 rebuild 同一逻辑实例。
-//! 需要稳定身份时：显式非空键、受控 Signal、或未来 Owner 作用域（WP-2.4）。
+//! 需要稳定身份时：显式非空键、受控 Signal、或 Owner 作用域（`use_scoped_signal` / WP-2.4+2.8）。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

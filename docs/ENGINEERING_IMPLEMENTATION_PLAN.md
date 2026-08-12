@@ -167,7 +167,7 @@ flowchart TB
 | **路径** | `core/store.rs`、`app/resource.rs`、`app/error_boundary.rs` |
 | **任务** | ① `produce` 语义与文档示例；② Resource Err → ErrorBoundary 端到端测；③ 标明实验 API（若尚不承诺） |
 | **验收** | 库测覆盖 produce + EB；SemVer 面草稿记入 CHANGELOG 草案 |
-| **状态** | ☐ API 已存在；契约测 + CHANGELOG 草案未完成 |
+| **状态** | ☑ 2026-08-13；`produce_notifies_*` + `throw_resource_error` e2e + `docs/CHANGELOG.md`；Gallery「布局 → WP-2.5」 |
 | **互补** | 异步策略表 / 加深见 [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) **R-WP-4**；Store proxy 加深为 **R-WP-3**（P2，本 WP 退出后） |
 
 ### WP-2.6 组件 golden 骨架（5 场景）
@@ -175,10 +175,10 @@ flowchart TB
 | | |
 |--|--|
 | **路径** | `renderer/offscreen.rs`、`crates/rui/tests/golden/`、CI `offscreen` job |
-| **任务** | 落地场景：**Button**、**Input**、**Dialog**、**VirtualList**（或列表行）、**Markdown 块**；稳定哈希 / RGBA 比对；`RUI_UPDATE_GOLDEN=1` 流程写入 docs |
+| **任务** | 落地场景：**Button**、**Input**、**Dialog**、**Tabs**、**ScrollArea**（全 `verified`；替旧 VirtualList/Markdown）；稳定哈希 / RGBA 比对；`RUI_UPDATE_GOLDEN=1` 流程写入 docs |
 | **验收** | CI 跑通 ≥5 golden；更新失败时有明确重录说明 |
-| **状态** | ☐ 现仅 2 fixtures（clear + stage8_pattern）；组件场景未录 |
-| **注意** | 软件渲染确定性：固定尺寸、禁动画、固定字体策略（见 [font_strategy.md](font_strategy.md)） |
+| **状态** | ☑ 2026-08-13；五场景 `golden_component_*` + fixtures；chrome-only 离屏 harness；重录见上 |
+| **注意** | 软件渲染确定性：固定尺寸、禁动画、固定主题 Light；`--test-threads=1`；Win WARP 需 `backend-dx12`（见 [font_strategy.md](font_strategy.md)） |
 
 **Wave 2 退出**：对齐测 + ≥5 golden CI；damage **策略可测已签**（WP-2.2）；Owner 注册表无泄漏测。GPU PartialLoad 不阻塞本 Wave（B8）。
 

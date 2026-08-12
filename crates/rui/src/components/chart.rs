@@ -2,6 +2,8 @@
 //!
 //! 图表 MVP：[`bar_chart`] 用堆叠矩形条；[`line_chart`] 挂折线 path attrs（GPU path 见
 //! [`crate::primitives::path`] stub）。
+//!
+//! **身份（WP-2.8）**：展示型偏多，**不要求**用户 `id`；空 / 省略 → 不写 `template_id`（I-1）。
 
 use crate::core::tree::Element;
 use crate::primitives::path::{attach_polyline, Point2};
@@ -16,9 +18,10 @@ pub struct BarChartBuilder {
     height: String,
 }
 
-pub fn bar_chart(id: impl Into<String>) -> BarChartBuilder {
+/// 展示型入口：默认无用户 id（WP-2.8）。
+pub fn bar_chart() -> BarChartBuilder {
     BarChartBuilder {
-        id: id.into(),
+        id: String::new(),
         values: Vec::new(),
         labels: Vec::new(),
         height: "8rem".into(),
@@ -26,6 +29,10 @@ pub fn bar_chart(id: impl Into<String>) -> BarChartBuilder {
 }
 
 impl BarChartBuilder {
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
     pub fn values(mut self, v: impl IntoIterator<Item = f32>) -> Self {
         self.values = v.into_iter().collect();
         self
@@ -81,7 +88,9 @@ impl From<BarChartBuilder> for Element {
                 .into();
             row = row.child(col);
         }
-        row.template_id = Some(id);
+        if !id.trim().is_empty() {
+            row.template_id = Some(id);
+        }
         row
     }
 }
@@ -93,9 +102,10 @@ pub struct LineChartBuilder {
     height: f32,
 }
 
-pub fn line_chart(id: impl Into<String>) -> LineChartBuilder {
+/// 展示型入口：默认无用户 id（WP-2.8）。
+pub fn line_chart() -> LineChartBuilder {
     LineChartBuilder {
-        id: id.into(),
+        id: String::new(),
         values: Vec::new(),
         width: 240.0,
         height: 120.0,
@@ -103,6 +113,10 @@ pub fn line_chart(id: impl Into<String>) -> LineChartBuilder {
 }
 
 impl LineChartBuilder {
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
     pub fn values(mut self, v: impl IntoIterator<Item = f32>) -> Self {
         self.values = v.into_iter().collect();
         self
@@ -135,7 +149,11 @@ impl From<LineChartBuilder> for Element {
             pts.push((x, y));
         }
         // Visual MVP: also draw thin bars so demos show something without GPU path.
-        let mut bars = hstack().w(format!("{width}px")).h(format!("{height}px")).gap("2px").items("end");
+        let mut bars = hstack()
+            .w(format!("{width}px"))
+            .h(format!("{height}px"))
+            .gap("2px")
+            .items("end");
         for v in &values {
             let ratio = (*v / max_v).clamp(0.0, 1.0);
             let mut b: Element = r#box()
@@ -148,7 +166,26 @@ impl From<LineChartBuilder> for Element {
         let mut el: Element = bars.into();
         el = attach_polyline(el, &pts);
         el.set_attr("rui_chart", "line");
-        el.template_id = Some(id);
+        if !id.trim().is_empty() {
+            el.template_id = Some(id);
+        }
         el
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bar_chart_without_id_writes_no_template_id() {
+        let el: Element = bar_chart().values([1.0, 2.0]).into();
+        assert!(el.template_id.is_none());
+    }
+
+    #[test]
+    fn line_chart_empty_id_writes_no_template_id() {
+        let el: Element = line_chart().id("  ").values([1.0, 3.0, 2.0]).into();
+        assert!(el.template_id.is_none());
     }
 }

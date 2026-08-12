@@ -22,10 +22,10 @@
 
 **硬退出（反应性专项 DoD）**：
 
-- [ ] WP-2.4 ☑（总计划）：Anchors/Bindings 随 Owner dispose；scoped id 辅助 API；无表膨胀测  
-- [ ] WP-2.5 ☑（总计划）：produce 文档+测；Resource Err→EB e2e；SemVer 面草稿  
-- [ ] R-WP-2：根裸 `get()` 可观测或 debug 断言；文档红线可测  
-- [ ] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G5 关闭或显式降级为 P2/Backlog  
+- [x] WP-2.4 ☑（总计划）：Anchors/Bindings 随 Owner dispose；scoped id 辅助 API；无表膨胀测  
+- [x] WP-2.5 ☑（总计划）：produce 文档+测；Resource Err→EB e2e；SemVer 面草稿  
+- [x] R-WP-2：根裸 `get()` 可观测或 debug 断言；文档红线可测  
+- [x] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G3 / G5 关闭；G4 降 P2（proxy→R-WP-3） 
 - [ ] [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) 与 identity §7 与实现同步  
 
 ---
@@ -90,7 +90,7 @@ flowchart LR
 | **路径** | `app/reactive.rs`（`REGISTERED_*`、`COMPONENT_PROPS`/`CHILDREN`）、`core/reactivity.rs` |
 | **任务** | ① 审计：Anchor / Binding / COMPONENT_* 是否均在 owner dispose 或等价路径移除；② Binding 补 `on_cleanup`（若仅 unmount 不足）；③ 长会话挂载/卸载测：registry 键数不单调膨胀；④ 与 C-WP-2.6 对照全局 `"{id}__…"` 清单 |
 | **验收** | 测矩阵写入本包附录或 `crate_tests/reactive/`；dispose 后无残留键；更新 [REACTIVITY.md](REACTIVITY.md) G1 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-13（勾选源 AUTHORITY WP-2.4） |
 
 ### R-WP-2 双路径收敛 / 根订阅可观测
 
@@ -99,7 +99,7 @@ flowchart LR
 | **路径** | `app/lifecycle`（根 effect）、`app/reactive.rs`、可选 debug feature |
 | **任务** | ① 文档红线可测：根 `app_builder` 裸 `get()` 检测（debug assert 或计数钩子）；② 统计或测试锁定「优先 bind / Show，避免整树 diff」；③ 缩小必须走全树属性 diff 的场景说明 |
 | **验收** | 至少一测证明误用可被发现或文档示例全部走三档；更新手册红线节 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-13（勾选源 AUTHORITY WP-2.7；`root_bare_get` 测 + `ui_root_effect_dep_count`） |
 | **对照** | Floem：UpdaterEffect 推 `update_state`，非重建 View；Leptos：RenderEffect 绑叶子 |
 
 ### R-WP-3 Store 路径订阅加深（P2）
@@ -120,7 +120,7 @@ flowchart LR
 | **路径** | `app/resource.rs`、`app/error_boundary.rs`、`core/resource.rs` |
 | **任务** | ① Resource Err→EB **端到端测**（2.5 门禁）；② 首载 / refetch / generation 取消策略表写入 REACTIVITY 或手册；③ 自动桥 vs 显式 `throw_error` 二选一文档化（巩固期允许显式） |
 | **验收** | 2.5 勾选 + 策略表；无 SSR 语义 |
-| **状态** | ☐ |
+| **状态** | ①③ 随 WP-2.5 ☑（显式 `throw_resource_error`）；② 策略摘要见 [`REACTIVITY.md`](REACTIVITY.md) §4.1；自动桥加深仍可选 |
 
 ### R-WP-5 列表 reconcile 硬化
 
@@ -163,17 +163,21 @@ flowchart LR
 
 ### WP-2.4（镜像）
 
-- [ ] Anchors：owner dispose → 键消失（已有部分 `on_cleanup`，审计全覆盖）  
-- [ ] Bindings：同等保证  
-- [ ] scoped `template_id` / `focus_id` 辅助 API  
-- [ ] 长会话无膨胀测  
-- [ ] 文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7  
+- [x] Anchors：owner dispose → 键消失（已有部分 `on_cleanup`，审计全覆盖）  
+- [x] Bindings：同等保证  
+- [x] scoped `template_id` / `focus_id` 辅助 API  
+- [x] 长会话无膨胀测（`crate_tests/reactive/registry_owner.rs`）  
+- [x] 文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7  
+
+勾选源仍以 [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 为准（☑ 2026-08-13）。
 
 ### WP-2.5（镜像）
 
-- [ ] `produce` 语义与文档示例  
-- [ ] Resource Err → ErrorBoundary e2e  
-- [ ] 实验 API 列入 CHANGELOG 草案  
+- [x] `produce` 语义与文档示例  
+- [x] Resource Err → ErrorBoundary e2e  
+- [x] 实验 API 列入 CHANGELOG 草案  
+
+勾选源仍以 [`AUTHORITY.md`](AUTHORITY.md) WP-2.5 为准（☑ 2026-08-13）。
 
 ---
 

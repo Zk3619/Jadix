@@ -16,6 +16,20 @@
 
 **根 effect 卫生：** 在根 `app_builder` 里裸写 `signal.get()`（且未走 `bind_*` / `<Show when={…get()}>` / `<For each={…get()}>` / `<Reactive>`）仍会订阅整棵 app。
 
+**诊断（WP-2.7 ☑）：** lifecycle 对根 effect 调用 [`mark_next_effect_as_ui_root`](../crates/rui/src/core/reactivity.rs)；完成后用 [`ui_root_effect_dep_count`](../crates/rui/src/core/reactivity.rs) / `root_bare_get_count`（应为 `0`）。debug 构建下若根订阅非空，首次 warn 一次。库测：`cargo test -p rui --lib root_bare_get`。
+
+### 仍须整树 / 结构路径的场景（不是 bug）
+
+双路径是**设计**：属性走 bind 就地改；下列情况仍走结构岛或根 `rebuild_ui`，不要用「消灭 rebuild」当目标。
+
+| 场景 | 正确做法 | 勿做 |
+|------|----------|------|
+| 纯文本 / 单属性闪烁 | `bind_text` / `bind_*` / `ui!` 自动降级 | 根上裸 `get()` 拼字符串驱动整树 |
+| 条件挂载 / 列表 | `show_reactive` / `for_*` / `reactive!` | `if sig.get() { … } else { … }` 写在根 builder |
+| 拓扑变化（Navigator / Portal / VirtualList） | 结构岛 + 稳定 `template_id` | 强行降成 bind |
+| 热重载空 templates / `StructureChanged` | 框架全树 reconcile（见 `state::rebuild_ui`） | 手写第二套 diff |
+| 高频 chrome（hover / caret） | `ReactiveSync` + `peek` | effect 风暴订根 |
+
 ## 首帧与订阅
 
 根 `app_builder` 在 `lifecycle::resumed` 中会先**无 effect 上下文**执行一次以建树；随后注册的根 `create_effect` 再次执行时，`signal.get()` 才会挂到根 effect 上。
@@ -45,9 +59,9 @@
 - `when` / `each` 含 `.get()` → `show_reactive` / `for_reactive`
 - 否则 → `show_scoped` / 直接 `Vec<Element>`
 - 多分支：[`switch_reactive`](../crates/rui/src/app/reactive.rs)（`key` + `render(&key)`）
-- 子树错误：[`error_boundary`](../crates/rui/src/app/error_boundary.rs) + [`throw_error`](../crates/rui/src/app/error_boundary.rs)
+- 子树错误：[`error_boundary`](../crates/rui/src/app/error_boundary.rs) + [`throw_error`](../crates/rui/src/app/error_boundary.rs)；Resource Err 须显式 [`throw_resource_error`](../crates/rui/src/app/error_boundary.rs)（WP-2.5）
 
-`reactive_anchor` 注册时挂 [`on_cleanup`](../crates/rui/src/core/reactivity.rs)，owner dispose 时从 `REGISTERED_ANCHORS` 移除并 dispose effect。
+`reactive_anchor` / `bind_prop` / 首次 `reactive_component` 注册时均挂 [`on_cleanup`](../crates/rui/src/core/reactivity.rs)：owner dispose 时从 `REGISTERED_ANCHORS` / `REGISTERED_BINDINGS` / `COMPONENT_PROPS`（及未 take 的 `COMPONENT_CHILDREN`）移除并 dispose effect（WP-2.4 ☑）。诊断计数：`registered_anchor_count` / `registered_binding_count` / `component_props_count`。
 
 ## `#[component(reactive)]`（字段级 / getter-props）
 
@@ -64,7 +78,8 @@
 | [`on_cleanup`](../crates/rui/src/core/reactivity.rs) | owner 销毁时 LIFO 回调 |
 | [`on_mount`](../crates/rui/src/core/reactivity.rs) | owner 首次 tick 跑一次（不随无关 signal 重跑） |
 | [`create_context`](../crates/rui/src/core/reactivity.rs) / `provide_context` / `use_context` | 沿 owner 父链查找 |
-| [`use_scoped_signal`](../crates/rui/src/core/reactivity.rs) | `{owner_path}::{local_id}`；全局持久状态仍用 `use_signal` |
+| [`use_scoped_signal`](../crates/rui/src/core/reactivity.rs) | owner 本地槽；全局持久状态仍用 `use_signal` |
+| [`scoped_template_id`](../crates/rui/src/core/reactivity.rs) / [`scoped_focus_id`](../crates/rui/src/core/reactivity.rs) | Owner path 前缀的 UI 身份键（WP-2.4） |
 | [`Signal::with`](../crates/rui/src/core/reactivity.rs) / `update` | 借用读 / 原地写 |
 | [`create_memo`](../crates/rui/src/core/reactivity.rs) | 惰性 dirty；flush 按 depth，菱形无中间态 |
 | [`Store::produce`](../crates/rui/src/core/store.rs) | Solid 式原地更新（`update` 别名） |

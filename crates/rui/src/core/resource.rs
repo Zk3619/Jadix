@@ -51,6 +51,11 @@ impl<T> Clone for Resource<T> {
 impl<T> Copy for Resource<T> {}
 
 impl<T: Clone + PartialEq + 'static> Resource<T> {
+    /// Wrap an existing state signal (tests / sync demos; prefer [`crate::app::resource::create_resource`] for fetch).
+    pub fn from_signal(state: Signal<ResourceState<T>>) -> Self {
+        Self { state }
+    }
+
     pub fn state(&self) -> ResourceState<T> {
         self.state.get()
     }
@@ -90,6 +95,11 @@ impl<T: Clone + PartialEq + 'static> Resource<T> {
             ResourceState::Err(e) => Some(e),
             _ => None,
         }
+    }
+
+    /// Test / demo helper: force [`ResourceState::Err`] without a fetcher.
+    pub fn set_error(&self, message: impl Into<String>) {
+        self.state.set(ResourceState::Err(message.into()));
     }
 }
 
