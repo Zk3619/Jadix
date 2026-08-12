@@ -65,6 +65,37 @@ pub(crate) fn scrollbar_min_thumb_along_track(track_inner: f32) -> f32 {
     cap.max(3.0).min(t * 0.9)
 }
 
+/// Track border-box → content-box origin (where Taffy lays out the thumb).
+///
+/// The track uses a 1px layout border and **no padding**: `thumb_cross = thickness - 2`
+/// then sits in the remaining 8px inside a 10px BorderBox. Adding padding on top of the
+/// border double-counts and shifts the thumb ~1px down-right.
+#[inline]
+pub(crate) fn scrollbar_track_content_inset_px(
+    padding: f32,
+    border_width: f32,
+    has_border: bool,
+) -> f32 {
+    let pad = padding.max(0.0);
+    let border = if has_border {
+        border_width.max(0.0)
+    } else {
+        0.0
+    };
+    pad + border
+}
+
+#[inline]
+pub(crate) fn scrollbar_track_content_inset(track: &Element) -> f32 {
+    let pad = match track.style.padding.left {
+        taffy::style::LengthPercentage::Length(px) if px.is_finite() => px.max(0.0),
+        _ => 0.0,
+    };
+    let has_border =
+        track.style.border_style != crate::style::LineStyle::None && track.style.border_width > 0.0;
+    scrollbar_track_content_inset_px(pad, track.style.border_width, has_border)
+}
+
 pub struct ScrollbarBuilder {
     _id: String,
     orientation: ScrollbarOrientation,
@@ -401,7 +432,6 @@ impl From<ScrollbarBuilder> for Element {
         let mut track = Element::new()
             .flex_grow(builder.flex_grow)
             .flex_shrink(builder.flex_shrink)
-            .p("0.0625rem")
             .rounded(track_radius)
             .bg(track_color)
             .border(track_border_color, 1.0);
@@ -452,5 +482,18 @@ impl From<ScrollbarBuilder> for Element {
             }
         }
         track
+    }
+}
+
+#[cfg(test)]
+mod content_inset_tests {
+    use super::scrollbar_track_content_inset_px;
+
+    #[test]
+    fn track_content_inset_is_border_when_padding_is_zero() {
+        assert!((scrollbar_track_content_inset_px(0.0, 1.0, true) - 1.0).abs() < f32::EPSILON);
+        assert!((scrollbar_track_content_inset_px(1.0, 1.0, true) - 2.0).abs() < f32::EPSILON);
+        assert!((scrollbar_track_content_inset_px(1.0, 1.0, false) - 1.0).abs() < f32::EPSILON);
+        assert!((scrollbar_track_content_inset_px(0.0, 0.0, true) - 0.0).abs() < f32::EPSILON);
     }
 }

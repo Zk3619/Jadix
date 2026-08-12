@@ -10,8 +10,8 @@ use std::time::Instant;
 use taffy::prelude::*;
 
 use crate::components::scrollbar::{
-    scrollbar_min_thumb_along_track, scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX,
-    SCROLLBAR_TRACK_FOCUS_PREFIX,
+    scrollbar_min_thumb_along_track, scrollbar_track_content_inset, scrollbar_visibility_signal_key,
+    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
@@ -2525,9 +2525,10 @@ fn scrollbar_track_overlay_abs(
 
     let track_rect = [base_abs_x, base_abs_y, track_w, track_h];
 
-    // Overlay path bypasses Taffy for the thumb and must match [`components::scrollbar`] track
-    // `.p("0.0625rem")` (~1px): the thumb is laid out inside the track **content** box, i.e.
-    // border-box origin + `inset` on each axis. Omitting this shifts the thumb up-left vs Full mode.
+    // Overlay path bypasses Taffy for the thumb and must match the track **content** box
+    // (border-box origin + layout border; track has no padding so the 1px border is the
+    // only inset — padding+border double-counted and sat the thumb 1px down-right).
+    let content_inset = scrollbar_track_content_inset(track_el);
     let thumb_rect = match axis {
         "x" => {
             let track = (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0);
@@ -2547,7 +2548,12 @@ fn scrollbar_track_overlay_abs(
             } else {
                 (track_inner, 0.0)
             };
-            [base_abs_x + inset + ml, base_abs_y + inset, tw, thumb_cross]
+            [
+                base_abs_x + content_inset + ml,
+                base_abs_y + content_inset,
+                tw,
+                thumb_cross,
+            ]
         }
         _ => {
             let track = (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0);
@@ -2567,7 +2573,12 @@ fn scrollbar_track_overlay_abs(
             } else {
                 (track_inner, 0.0)
             };
-            [base_abs_x + inset, base_abs_y + inset + mt, thumb_cross, th]
+            [
+                base_abs_x + content_inset,
+                base_abs_y + content_inset + mt,
+                thumb_cross,
+                th,
+            ]
         }
     };
 

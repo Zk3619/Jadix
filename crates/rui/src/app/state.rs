@@ -1404,11 +1404,14 @@ impl AppState {
             // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
             // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
             // 避免仅 hover 颜色每帧全量 Taffy。
+            // Keep overlay collect while dragging a thumb: idle frames paint via overlay, and
+            // switching to Taffy on press used to jump the thumb by the track border (~1px down-right).
             let scrollbar_overlay_collect = scrollbar_update_resolved
                 == ScrollbarUpdateMode::ViewportsOnly
                 || (scrollbar_skip_flex_layout
                     && scrollbar_update_resolved == ScrollbarUpdateMode::Full
-                    && scroll_only);
+                    && scroll_only)
+                || active_drag_rest.is_some();
             self.layout_tree.build_and_layout_fast_ex(
                 &mut self.root_element,
                 logical_w,
