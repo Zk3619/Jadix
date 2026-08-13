@@ -380,7 +380,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
 | **WP-3.1** | Gallery 八分区 | C-WP-3.1 | ☑ 侧栏；「每稳定面一入口」随 CV 复核 |
-| **WP-3.2** | Path → Chart 加深（含 Pie）；与 3.11 **共用 path 核** | — | ☑ 2026-08-13 path 光栅贴图 + Line/Pie + Gallery |
+| **WP-3.2** | Path → Chart 加深（含 Pie）；与 3.11 **共用 path 核** | — | ☑ 2026-08-13 path 光栅 + 预设；grammar：`define_chart` + cartesian/polar + log/time + tooltip/crosshair |
 | **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☐ |
 | **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☐ **前置 CV ☑** |
 | **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☐ wired MVP 有；演示页无 |

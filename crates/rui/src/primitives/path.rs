@@ -34,6 +34,8 @@ pub const ATTR_PATH_POINTS: &str = "rui_path_points";
 pub const ATTR_PATH_VIEWBOX: &str = "rui_path_viewbox";
 /// 可选标记点（viewBox / 局部坐标，`x,y;x,y`），光栅时画实心圆。
 pub const ATTR_PATH_MARKERS: &str = "rui_path_markers";
+/// 多层 scene 键（Chart 等）；布局期按叶宽光栅，避免 `image_texture` 低分拉伸 + `d` 默认描边叠画。
+pub const ATTR_PATH_SCENE: &str = "rui_path_scene";
 
 /// 路径绘制命令（直线核；曲线留给 3.11 加深）。
 #[derive(Clone, Debug, PartialEq)]
@@ -134,6 +136,26 @@ pub fn pie_sector(
         pts.push((cx + r * a.cos(), cy + r * a.sin()));
     }
     polygon(&pts)
+}
+
+/// 实心圆：圆周多边形（不含圆心顶点），fill 为盘、stroke 为圆周。
+/// 点 mark 必须用这个而不是 [`pie_sector`] 满周——后者 stroke 会画出半径。
+pub fn filled_circle(cx: f32, cy: f32, r: f32, segments: usize) -> Vec<PathCommand> {
+    let n = segments.max(8);
+    let r = r.max(0.5);
+    let mut pts = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = std::f32::consts::TAU * (i as f32) / (n as f32);
+        pts.push((cx + r * a.cos(), cy + r * a.sin()));
+    }
+    polygon(&pts)
+}
+
+/// 轴对齐矩形（柱、气泡 backing）。
+pub fn filled_rect(x: f32, y: f32, w: f32, h: f32) -> Vec<PathCommand> {
+    let w = w.max(1.0);
+    let h = h.max(1.0);
+    polygon(&[(x, y), (x + w, y), (x + w, y + h), (x, y + h)])
 }
 
 /// 环形扇区（TanStack donut）：外弧 + 反向内弧。`inner >= outer` 时退回实心扇区。
@@ -600,7 +622,7 @@ pub fn parse_path_viewbox(s: &str) -> Option<[f32; 4]> {
     Some([it.next()?, it.next()?, it.next()?, it.next()?])
 }
 
-/// viewBox 像素轴锁定绘制尺寸，避免滚动列把叶撑高后折线「跳」到下方图表。
+/// viewBox：**高**在 span≥2 时锁定像素轴（防滚动列撑高）；**宽**始终跟叶，避免 Chart 320 逻辑宽被锁死后横向拉伸发虚。
 pub fn path_target_leaf_size(attrs: &HashMap<String, String>, leaf: [f32; 2]) -> [f32; 2] {
     let Some(vb) = attrs
         .get(ATTR_PATH_VIEWBOX)
@@ -608,14 +630,13 @@ pub fn path_target_leaf_size(attrs: &HashMap<String, String>, leaf: [f32; 2]) ->
     else {
         return [leaf[0].max(1.0), leaf[1].max(1.0)];
     };
-    let axis = |span: f32, leaf_edge: f32| {
-        if span >= 2.0 {
-            span.min(leaf_edge.max(1.0))
-        } else {
-            leaf_edge.max(1.0)
-        }
+    let w = leaf[0].max(1.0);
+    let h = if vb[3] >= 2.0 {
+        vb[3].min(leaf[1].max(1.0))
+    } else {
+        leaf[1].max(1.0)
     };
-    [axis(vb[2], leaf[0]), axis(vb[3], leaf[1])]
+    [w, h]
 }
 
 fn scale_commands(cmds: &[PathCommand], vb: [f32; 4], leaf: [f32; 2]) -> Vec<PathCommand> {
@@ -639,6 +660,57 @@ fn scale_commands(cmds: &[PathCommand], vb: [f32; 4], leaf: [f32; 2]) -> Vec<Pat
         .collect()
 }
 
+/// 闭合正多边形（点 mark 的实心圆）：中心按各轴缩放，半径按 `min(sx,sy)`，避免被压成椭圆。
+fn detect_regular_circle(cmds: &[PathCommand]) -> Option<(f32, f32, f32, usize)> {
+    let closed = cmds.iter().any(|c| matches!(c, PathCommand::Close));
+    if !closed {
+        return None;
+    }
+    let pts = points_from_commands(cmds);
+    let n = pts.len();
+    if n < 8 {
+        return None;
+    }
+    let nf = n as f32;
+    let cx = pts.iter().map(|p| p.0).sum::<f32>() / nf;
+    let cy = pts.iter().map(|p| p.1).sum::<f32>() / nf;
+    let mut r_min = f32::MAX;
+    let mut r_max = 0.0f32;
+    for &(x, y) in &pts {
+        let r = (x - cx).hypot(y - cy);
+        r_min = r_min.min(r);
+        r_max = r_max.max(r);
+    }
+    if r_min < 0.5 || r_max > r_min * 1.12 {
+        return None;
+    }
+    Some((cx, cy, (r_min + r_max) * 0.5, n))
+}
+
+fn scale_commands_preserve_circles(
+    cmds: &[PathCommand],
+    vb: [f32; 4],
+    target: [f32; 2],
+) -> Vec<PathCommand> {
+    let sx = if vb[2].abs() > 1e-6 {
+        target[0] / vb[2]
+    } else {
+        1.0
+    };
+    let sy = if vb[3].abs() > 1e-6 {
+        target[1] / vb[3]
+    } else {
+        1.0
+    };
+    if (sx - sy).abs() > 0.02 {
+        if let Some((cx, cy, r, n)) = detect_regular_circle(cmds) {
+            let c = ((cx - vb[0]) * sx, (cy - vb[1]) * sy);
+            return filled_circle(c.0, c.1, r * sx.min(sy).max(0.25), n);
+        }
+    }
+    scale_commands(cmds, vb, target)
+}
+
 /// 布局期：attrs → 世界坐标四边形。`origin` = 叶左上；`leaf_size` 用于 viewBox 缩放。
 pub fn path_quads_from_element_attrs(
     attrs: &HashMap<String, String>,
@@ -654,7 +726,7 @@ pub fn path_quads_from_element_attrs(
         .get(ATTR_PATH_VIEWBOX)
         .and_then(|s| parse_path_viewbox(s))
     {
-        scale_commands(&raw, vb, target)
+        scale_commands_preserve_circles(&raw, vb, target)
     } else {
         raw
     };
@@ -672,9 +744,58 @@ pub fn path_quads_from_element_attrs(
 
 const MAX_RASTER_PX: u32 = 1024 * 1024;
 const MAX_RASTER_CACHE: usize = 48;
+const MAX_SCENE_STORE: usize = 64;
+
+#[derive(Clone)]
+struct PathScene {
+    layers: Vec<(Vec<PathCommand>, PathStyle)>,
+    markers: Vec<Point2>,
+    marker_r: f32,
+    vb: [f32; 4],
+}
 
 thread_local! {
     static RASTER_CACHE: RefCell<HashMap<u64, ()>> = RefCell::new(HashMap::new());
+    static SCENE_STORE: RefCell<HashMap<u64, PathScene>> = RefCell::new(HashMap::new());
+}
+
+/// 注册多层 path 场景，返回 hex 键（写入 [`ATTR_PATH_SCENE`]）。
+pub fn register_path_scene(
+    layers: Vec<(Vec<PathCommand>, PathStyle)>,
+    markers: Vec<Point2>,
+    marker_r: f32,
+    vb_w: f32,
+    vb_h: f32,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    vb_w.to_bits().hash(&mut hasher);
+    vb_h.to_bits().hash(&mut hasher);
+    marker_r.to_bits().hash(&mut hasher);
+    for (cmds, style) in &layers {
+        encode_path_d(cmds).hash(&mut hasher);
+        hash_style(&mut hasher, style);
+    }
+    for &(x, y) in &markers {
+        x.to_bits().hash(&mut hasher);
+        y.to_bits().hash(&mut hasher);
+    }
+    let id = hasher.finish();
+    SCENE_STORE.with(|s| {
+        let mut g = s.borrow_mut();
+        if g.len() >= MAX_SCENE_STORE {
+            g.clear();
+        }
+        g.insert(
+            id,
+            PathScene {
+                layers,
+                markers,
+                marker_r,
+                vb: [0.0, 0.0, vb_w.max(1.0), vb_h.max(1.0)],
+            },
+        );
+    });
+    id
 }
 
 fn ring_pts(pts: &[Point2]) -> &[Point2] {
@@ -895,8 +1016,16 @@ fn paint_layer_premul(
             let y1 = ((m.1 + r + 1.5).ceil() as usize + 1).min(h);
             for y in y0..y1 {
                 for x in x0..x1 {
-                    let d = (x as f32 + 0.5 - m.0).hypot(y as f32 + 0.5 - m.1);
-                    let cover = (r + 0.5 - d).clamp(0.0, 1.0);
+                    let mut cover = 0.0;
+                    for sy in 0..ssaa {
+                        for sx in 0..ssaa {
+                            let px = x as f32 + (sx as f32 + 0.5) * inv_ssaa;
+                            let py = y as f32 + (sy as f32 + 0.5) * inv_ssaa;
+                            let d = (px - m.0).hypot(py - m.1);
+                            cover += (r + 0.35 - d).clamp(0.0, 1.0);
+                        }
+                    }
+                    cover *= inv_ssaa * inv_ssaa;
                     if cover > 0.0 {
                         let i = (y * w + x) * 4;
                         src_over_premul(buf, i, color[0], color[1], color[2], color[3] * cover);
@@ -1017,10 +1146,29 @@ pub fn ensure_raster_texture(
         }
     });
     if miss {
-        let rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
+        let mut rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
+        // TexturedQuadPipeline 顶点 uv：rect 顶 → uv.y=1。上传前竖直翻转，使逻辑 y=0
+        //（叶顶、图表高值）显示在屏幕上方，与命中坐标一致。
+        flip_rgba_vertical(&mut rgba, width, height);
         crate::queue_image_rgba8(tex_id.clone(), width, height, rgba);
     }
     Some(tex_id)
+}
+
+/// RGBA8 行互换：缓冲顶行 ↔ 底行。
+pub(crate) fn flip_rgba_vertical(rgba: &mut [u8], width: u32, height: u32) {
+    let stride = width as usize * 4;
+    let h = height as usize;
+    if stride == 0 || h < 2 || rgba.len() < stride * h {
+        return;
+    }
+    for y in 0..h / 2 {
+        let top = y * stride;
+        let bot = (h - 1 - y) * stride;
+        for i in 0..stride {
+            rgba.swap(top + i, bot + i);
+        }
+    }
 }
 
 /// 布局期：attrs → 光栅贴图键 + 绘制宽高（viewBox 像素轴已锁定）。失败则 tessellate。
@@ -1037,6 +1185,34 @@ pub fn path_raster_from_element_attrs(
     }
     let w = w as u32;
     let h = h as u32;
+
+    if let Some(scene_hex) = attrs.get(ATTR_PATH_SCENE) {
+        if let Ok(id) = u64::from_str_radix(scene_hex.trim(), 16) {
+            let scene = SCENE_STORE.with(|s| s.borrow().get(&id).cloned());
+            if let Some(scene) = scene {
+                let scaled: Vec<(Vec<PathCommand>, PathStyle)> = scene
+                    .layers
+                    .iter()
+                    .map(|(cmds, st)| {
+                        (
+                            scale_commands_preserve_circles(cmds, scene.vb, target),
+                            st.clone(),
+                        )
+                    })
+                    .collect();
+                if scaled.iter().all(|(c, _)| c.is_empty()) && scene.markers.is_empty() {
+                    return None;
+                }
+                let markers = scale_points(&scene.markers, scene.vb, target);
+                let sx = target[0] / scene.vb[2].max(1e-6);
+                let sy = target[1] / scene.vb[3].max(1e-6);
+                let mr = scene.marker_r * sx.min(sy).max(0.25);
+                let tex = ensure_raster_texture(&scaled, &markers, mr, w, h, 2)?;
+                return Some((tex, target[0], target[1]));
+            }
+        }
+    }
+
     let raw = commands_from_attrs(attrs);
     if raw.is_empty() {
         return None;
@@ -1045,7 +1221,7 @@ pub fn path_raster_from_element_attrs(
         .get(ATTR_PATH_VIEWBOX)
         .and_then(|s| parse_path_viewbox(s));
     let cmds = if let Some(vb) = vb {
-        scale_commands(&raw, vb, target)
+        scale_commands_preserve_circles(&raw, vb, target)
     } else {
         raw
     };
@@ -1061,6 +1237,12 @@ pub fn path_raster_from_element_attrs(
         .get("rui_path_marker_r")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| style.stroke_width.max(2.5) * 0.9);
+    let sx = if let Some(vb) = vb {
+        target[0] / vb[2].max(1e-6)
+    } else {
+        1.0
+    };
+    let marker_r = marker_r * sx.max(0.25);
     let tex = ensure_raster_texture(&[(cmds, style)], &markers, marker_r, w, h, 2)?;
     Some((tex, target[0], target[1]))
 }
@@ -1084,6 +1266,60 @@ mod tests {
         );
         let s = encode_points(&[(1.5, 2.5)]);
         assert_eq!(s, "1.500,2.500");
+        let c = filled_circle(10.0, 20.0, 5.0, 16);
+        let pts = points_from_commands(&c);
+        let n = pts.len().max(1) as f32;
+        let cx = pts.iter().map(|p| p.0).sum::<f32>() / n;
+        let cy = pts.iter().map(|p| p.1).sum::<f32>() / n;
+        assert!(
+            (cx - 10.0).abs() < 0.2 && (cy - 20.0).abs() < 0.2,
+            "centroid=({cx},{cy})"
+        );
+    }
+
+    #[test]
+    fn circle_stays_round_when_viewbox_is_stretched_wide() {
+        let cmds = filled_circle(160.0, 70.0, 8.0, 20);
+        let scaled =
+            scale_commands_preserve_circles(&cmds, [0.0, 0.0, 320.0, 140.0], [640.0, 140.0]);
+        let pts = points_from_commands(&scaled);
+        let n = pts.len().max(1) as f32;
+        let cx = pts.iter().map(|p| p.0).sum::<f32>() / n;
+        let cy = pts.iter().map(|p| p.1).sum::<f32>() / n;
+        let mut r_min = f32::MAX;
+        let mut r_max = 0.0f32;
+        for &(x, y) in &pts {
+            let r = (x - cx).hypot(y - cy);
+            r_min = r_min.min(r);
+            r_max = r_max.max(r);
+        }
+        assert!(
+            (r_max - r_min) < 1.0,
+            "dot must stay circular under anisotropic stretch, r=[{r_min},{r_max}]"
+        );
+        assert!(
+            (cx - 320.0).abs() < 1.0 && (cy - 70.0).abs() < 1.0,
+            "centroid should map by sx/sy, got ({cx},{cy})"
+        );
+    }
+
+    #[test]
+    fn polyline_still_stretches_anisotropically() {
+        let cmds = polyline(&[(0.0, 0.0), (320.0, 140.0)]);
+        let scaled =
+            scale_commands_preserve_circles(&cmds, [0.0, 0.0, 320.0, 140.0], [640.0, 140.0]);
+        let pts = points_from_commands(&scaled);
+        assert_eq!(pts.len(), 2);
+        assert!((pts[1].0 - 640.0).abs() < 0.5 && (pts[1].1 - 140.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn pie_sector_is_not_treated_as_circle() {
+        let cmds = pie_sector(50.0, 50.0, 40.0, 0.0, std::f32::consts::FRAC_PI_2, 12);
+        assert!(
+            detect_regular_circle(&cmds).is_none(),
+            "wedge with a center vertex must keep anisotropic scale"
+        );
     }
 
     #[test]
@@ -1243,5 +1479,18 @@ mod tests {
             }
             _ => panic!("expected MoveTo"),
         }
+    }
+
+    #[test]
+    fn flip_rgba_vertical_swaps_first_and_last_rows() {
+        let mut rgba = vec![
+            1, 0, 0, 255, 2, 0, 0, 255, // row 0
+            0, 3, 0, 255, 0, 4, 0, 255, // row 1
+            0, 0, 5, 255, 0, 0, 6, 255, // row 2
+        ];
+        flip_rgba_vertical(&mut rgba, 2, 3);
+        assert_eq!(&rgba[0..8], &[0, 0, 5, 255, 0, 0, 6, 255]);
+        assert_eq!(&rgba[8..16], &[0, 3, 0, 255, 0, 4, 0, 255]);
+        assert_eq!(&rgba[16..24], &[1, 0, 0, 255, 2, 0, 0, 255]);
     }
 }

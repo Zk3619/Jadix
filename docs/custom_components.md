@@ -149,7 +149,7 @@ RUI components should use design tokens provided by the `DesignToken` system. Th
 
 ## Drawing primitives（W3）
 
-Custom charts / icons / paint go through public **Svg / Canvas** leaves (not a second renderer). Spec: [`drawing.md`](drawing.md). `#[component]` may wrap `svg()` / `canvas().paint(…)`; keep paint callbacks on `peek` so they do not subscribe the component root.
+Custom charts: prefer [`define_chart`] + built-in marks / [`custom_mark`] (same path kernel as Svg). Icons / freeform paint go through public **Svg / Canvas** leaves (not a second renderer). Spec: [`drawing.md`](drawing.md). `#[component]` may wrap `svg()` / `canvas().paint(…)`; keep paint callbacks on `peek` so they do not subscribe the component root.
 
 ## Hot Reload Compatibility
 

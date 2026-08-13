@@ -164,7 +164,7 @@ crates/
 
 `components/` 约 **45** 个公开模块；私有壳在 `components/internal/`（`text_edit`）不计入产品面；Dialog 壳在 `dialog.rs`。相对 EUI 的产品空洞主要在：
 
-- 图表深度（WP-3.2 已：Pie + path 光栅贴图；曲线/多层 mark / 完整 polar 仍可加深）
+- 图表深度（WP-3.2 已：grammar + cartesian/polar 族 + log/time scale + Chart tooltip/crosshair + path 光栅；仍可加深 pow scale / 动画轴，见 `drawing.md` §8）
 - VirtualMasonry（依赖可信行高）
 - 块级 markdown 产品打磨；选器键盘与本地化
 - 各控件键盘 / a11y 的「系统控件级」一致性；稳定面分桶与 CV 验证（见组件计划）

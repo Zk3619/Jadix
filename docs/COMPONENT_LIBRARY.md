@@ -221,7 +221,7 @@ let _: Element = vstack()
 
 - `Button`：空 id → `btn-N`（进程内递增）  
 - `Input`：空 id → `__rui_input_rt_N`（兜底，避免多框共用 value 信号）  
-- `Navbar` / `bar_chart` / `line_chart` / `area_chart` / `pie_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
+- `Navbar` / `bar_chart` / `line_chart` / `area_chart` / `pie_chart` / `define_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
 - `Progress` / `Toggle`：空 → `resolve_instance_id`；Toggle 非受控 → `use_scoped_signal`  
 - RSX 宏：部分省略 id 的标签会生成唯一名或 Default 空串（以宏为准）
 
@@ -299,7 +299,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；其余=`experimental`（越出 §5.2.1） |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1）；Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
-| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`/`area_chart`/`pie_chart` + RSX 标签）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
+| **数据** | VirtualList、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
 | **绘制**（W3 可选新分区） | Svg / Canvas / Scene3d / 未来 B16 fx · B17 bits | 先 `experimental`；规范 [`drawing.md`](drawing.md)；未落地前 Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |

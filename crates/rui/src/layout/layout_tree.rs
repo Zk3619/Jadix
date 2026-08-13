@@ -2148,6 +2148,8 @@ impl LayoutTree {
 
         // WP-3.2 / 3.11 path kernel: CPU coverage raster → texture; tessellate fallback.
         // 绘制尺寸跟 viewBox 像素轴，不跟可能被滚动列撑高的叶高。
+        // Chart 多层 scene / 单层 `d` 已在此出图时，勿再画 `image_texture`（否则低分拉伸 + 默认黑描边叠一层）。
+        let mut path_tex_drawn = false;
         if visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
             if let Some((tex_key, dw, dh)) = crate::primitives::path::path_raster_from_element_attrs(
                 &element.attrs,
@@ -2158,6 +2160,7 @@ impl LayoutTree {
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
                     textured_draws.push(draw);
+                    path_tex_drawn = true;
                 }
             } else if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
                 &element.attrs,
@@ -2286,15 +2289,17 @@ impl LayoutTree {
             }
         }
 
-        if let Some(tex_key) = element.image_texture.as_ref() {
-            if !tex_key.is_empty() {
-                if let Some(draw) = TexturedDraw::clipped(
-                    [vis_x, vis_y, vis_w, vis_h],
-                    parent_clip,
-                    tex_key.clone(),
-                    opacity,
-                ) {
-                    textured_draws.push(draw);
+        if !path_tex_drawn {
+            if let Some(tex_key) = element.image_texture.as_ref() {
+                if !tex_key.is_empty() {
+                    if let Some(draw) = TexturedDraw::clipped(
+                        [vis_x, vis_y, vis_w, vis_h],
+                        parent_clip,
+                        tex_key.clone(),
+                        opacity,
+                    ) {
+                        textured_draws.push(draw);
+                    }
                 }
             }
         }

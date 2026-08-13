@@ -85,10 +85,14 @@ pub use card::{
 };
 pub use carousel::{carousel, CarouselBuilder};
 pub use chart::{
-    area_chart, bar_chart, line_chart, pie_chart, pie_layout, scale_band, scale_linear, AreaChart,
-    AreaChartProps, BarChart, BarChartBuilder, BarChartProps, ChartDatum, ChartSelect,
-    ChartSelected, LineChart, LineChartBuilder, LineChartProps, PieChart, PieChartBuilder,
-    PieChartProps,
+    area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, dot, format_time_label,
+    line_chart, line_y, pie, pie_chart, pie_layout, pie_layout_span, radial_area, radial_bar,
+    radial_dot, radial_line, rule_x, rule_x_num, rule_y, scale_band, scale_linear, scale_log,
+    scale_point, scale_time, unix_ms_to_utc, AreaChart, AreaChartProps, BarChart, BarChartBuilder,
+    BarChartProps, Chart, ChartBuilder, ChartDatum, ChartDefinition, ChartMark, ChartPaint,
+    ChartProps, ChartSelect, ChartSelected, ChartTheme, CustomMarkBuilder, LineChart,
+    LineChartBuilder, LineChartProps, MarkChannels, MarkRenderContext, MarkStyle, PieChart,
+    PieChartBuilder, PieChartProps, SceneLayer,
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use color_picker::{color_picker, ColorPicker, ColorPickerBuilder, ColorPickerProps};
@@ -182,8 +186,9 @@ pub use toast::{
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};
 pub use tooltip::{
-    tooltip, tooltip_content, tooltip_scope, tooltip_side_to_placement, use_tooltip,
-    TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger, TooltipTriggerProps,
+    tooltip, tooltip_bubble, tooltip_content, tooltip_scope, tooltip_side_to_placement,
+    use_tooltip, TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger,
+    TooltipTriggerProps,
 };
 pub use tree_view::{tree_view, TreeNode, TreeViewBuilder};
 pub use virtual_list::{virtual_list, VirtualListBuilder};

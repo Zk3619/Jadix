@@ -201,10 +201,10 @@ flowchart TB
 
 | | |
 |--|--|
-| **路径** | `primitives/path.rs`、`components/chart.rs`、renderer path 提交 |
+| **路径** | `primitives/path.rs`、`components/chart/`、renderer path 提交 |
 | **任务** | ① path 可描边/填充进批处理；② Line 真实折线；③ Pie MVP（扇区或近似）；④ Gallery 页；⑤ **与 WP-3.11 共用 path 核**（禁止第二套折线格式） |
 | **验收** | 三种图至少两种可交互演示；非整矩形 stub |
-| **状态** | ☑ 2026-08-13 path 光栅贴图 + Line 真折线 + Pie；Gallery 可点选 |
+| **状态** | ☑ 2026-08-13 path 光栅 + Line/Pie；同日 grammar + polar 族 + log/time + tooltip/crosshair；Gallery 可点选 |
 
 ### WP-3.11 `<svg>` 标签 + 矢量绘制
 

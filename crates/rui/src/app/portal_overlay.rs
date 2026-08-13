@@ -527,6 +527,7 @@ mod tests {
             hoisted_portal: true,
             portal_key: Some("panel:dlg".into()),
             floating_id: None,
+            bounds: [0.0; 4],
         }];
         assert!(
             !hit_path_on_top_exclusive_surface(&on_dialog),
@@ -544,6 +545,7 @@ mod tests {
             hoisted_portal: true,
             portal_key: Some("panel:sel".into()),
             floating_id: Some("sel".into()),
+            bounds: [0.0; 4],
         }];
         assert!(hit_path_on_top_exclusive_surface(&on_menu));
     }

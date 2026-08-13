@@ -36,6 +36,29 @@ fn prelude_chart_tags_and_builders_compile() {
     let _l: Element = line_chart().values([0.1, 0.9]).h(80.0).into();
     let _a: Element = area_chart().values([0.2, 0.5]).h(80.0).into();
     let _p: Element = pie_chart().values([1.0, 2.0]).inner_radius(0.55).into();
+    let rows = [ChartDatum::new("A", 1.0), ChartDatum::new("B", 2.0)];
+    let _c: Element = define_chart()
+        .mark(line_y(rows.clone()).stroke("#2563eb"))
+        .mark(dot(rows).r(3.0))
+        .mark(rule_y([1.5]).stroke_dash([4.0, 2.0]))
+        .theme(ChartTheme::tokens())
+        .tooltip(true)
+        .h(80.0)
+        .into();
+    let t0 = 1_700_000_000_000i64;
+    let _t: Element = define_chart()
+        .mark(line_y([
+            ChartDatum::at(t0, 1.0),
+            ChartDatum::at(t0 + 86_400_000, 2.0),
+        ]))
+        .x_time()
+        .h(60.0)
+        .into();
+    let _r: Element = define_chart()
+        .mark(radial_bar([("A", 2.0f32), ("B", 1.0)]))
+        .mark(radial_line([("A", 2.0f32), ("B", 1.0)]))
+        .size(80.0)
+        .into();
     let pick: Option<usize> = None;
     let el = ui! {
         <VStack gap="0.5rem">
@@ -43,6 +66,7 @@ fn prelude_chart_tags_and_builders_compile() {
             <LineChart values={vec![0.1, 0.9]} h={80.0} selected={pick} />
             <AreaChart values={vec![0.2, 0.5]} h={80.0} selected={pick} />
             <PieChart values={vec![1.0, 2.0]} inner_radius={0.55} selected={pick} />
+            <Chart definition={define_chart().mark(bar_y([("X", 1.0f32), ("Y", 2.0)])).h(60.0)} />
         </VStack>
     };
     let _: Element = el;

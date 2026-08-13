@@ -87,7 +87,10 @@ pub use crate::style::{
 pub use crate::components::{
     // Chart
     area_chart,
+    area_y,
     bar_chart,
+    bar_x,
+    bar_y,
     // Button
     button,
     // Carousel
@@ -107,14 +110,17 @@ pub use crate::components::{
     command,
     // ContextMenu
     context_menu,
+    custom_mark,
     // Date / Time
     date_picker,
+    define_chart,
     // Dialog（复合标签 + Builder）
     dialog,
     dialog_close,
     dialog_content,
     dialog_open,
     dialog_scope,
+    dot,
     // Dropdown（暂仅 Builder）
     dropdown,
     // Label（不 re-export `text` 别名，避免与 primitives::text 撞名）
@@ -127,19 +133,30 @@ pub use crate::components::{
     input,
     label,
     line_chart,
+    line_y,
     // Menubar
     menubar,
     // Navbar / NavigationMenu / Sidebar
     navbar,
     navigation_menu,
+    pie,
     pie_chart,
     // Progress
     progress,
+    radial_area,
+    radial_bar,
+    radial_dot,
+    radial_line,
     // Radio / Slider / Switch / Toggle*
     radio_group,
     radio_group_scope,
     // Resizable
     resizable,
+    rule_x,
+    rule_x_num,
+    rule_y,
+    scale_log,
+    scale_time,
     // Scroll*
     scroll_area,
     scroll_viewport,
@@ -187,6 +204,7 @@ pub use crate::components::{
     toggle_group,
     // Tooltip
     tooltip,
+    tooltip_bubble,
     tooltip_content,
     tooltip_scope,
     tooltip_side_to_placement,
@@ -204,8 +222,6 @@ pub use crate::components::{
     BarChart,
     BarChartBuilder,
     BarChartProps,
-    ChartSelect,
-    ChartSelected,
     Button,
     ButtonBuilder,
     ButtonProps,
@@ -225,7 +241,16 @@ pub use crate::components::{
     CardTitle,
     CardTitleProps,
     CarouselBuilder,
+    Chart,
+    ChartBuilder,
     ChartDatum,
+    ChartDefinition,
+    ChartMark,
+    ChartPaint,
+    ChartProps,
+    ChartSelect,
+    ChartSelected,
+    ChartTheme,
     Checkbox,
     CheckboxBuilder,
     CheckboxProps,
@@ -292,6 +317,8 @@ pub use crate::components::{
     LineChart,
     LineChartBuilder,
     LineChartProps,
+    MarkRenderContext,
+    MarkStyle,
     MenuItem,
     MenuSection,
     MenubarBuilder,
@@ -314,6 +341,7 @@ pub use crate::components::{
     RadioGroupItemProps,
     RadioGroupProps,
     ResizableBuilder,
+    SceneLayer,
     ScrollArea,
     ScrollAreaBuilder,
     ScrollAreaProps,

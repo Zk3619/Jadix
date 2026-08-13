@@ -99,7 +99,7 @@
 | Table | `table` / `TableBuilder` / `TableColumn` | **experimental** | 必填实例键；列 `id` 排序键 | 基础 columns+data；分组/筛选取消稳定承诺 |
 | VirtualList | `virtual_list` / `VirtualListBuilder` | **experimental** | 必填实例键 | 测宽依赖；Table/Tree 底座 |
 | TreeView | `tree_view` / `TreeViewBuilder` / `TreeNode` | **experimental** | 必填实例键；节点 id | 大数据实验 |
-| Chart | `bar_chart` / `line_chart` / `area_chart` / `pie_chart`；RSX `BarChart`/`LineChart`/`AreaChart`/`PieChart`；`ChartDatum` | **experimental** | **展示型不要求**（WP-2.8：无必填 id） | WP-3.2：path 核光栅贴图；TanStack marks=Bar/Line/Area/Pie+Donut（`inner_radius`）；不搬 defineChart |
+| Chart | `define_chart` + marks（cartesian `bar_y`/`line_y`/`area_y`/`dot`/`rule_*`；polar `pie`/`radial_bar`/`radial_line`/`radial_area`/`radial_dot`；`custom_mark`）+ `ChartTheme`/`MarkStyle`；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `bar_chart`/`line_chart`/`area_chart`/`pie_chart`；RSX `Chart`/`BarChart`…；`ChartDatum`（`series`/`time`） | **experimental** | **展示型不要求**（WP-2.8：无必填 id） | WP-3.2 grammar（对照 TanStack，不搬 D3）；path 核光栅；禁区/可加深见 `drawing.md` §8 |
 | Carousel | `carousel` / `CarouselBuilder` | **experimental** | 必填实例键 | |
 | Stepper | `stepper` / `StepperBuilder` | **experimental** | 必填实例键 | 产品打磨实验（Gallery 导航区） |
 
@@ -321,7 +321,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`button`, `card`, `carousel`, `chart`(`bar_chart`/`line_chart`/`area_chart`/`pie_chart`), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
+`button`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

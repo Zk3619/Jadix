@@ -116,15 +116,18 @@ fn find_path_d_bounds(el: &Element) -> Option<[f32; 4]> {
     el.children.iter().find_map(find_path_d_bounds)
 }
 
-fn find_image_tex_bounds(el: &Element) -> Option<[f32; 4]> {
-    if el
-        .image_texture
-        .as_deref()
-        .is_some_and(|k| k.starts_with("rui_path:"))
+fn find_chart_tex_bounds(el: &Element, kind: &str) -> Option<[f32; 4]> {
+    if el.get_attr("rui_chart").map(|s| s.as_str()) == Some(kind)
+        && el
+            .image_texture
+            .as_deref()
+            .is_some_and(|k| k.starts_with("rui_path:"))
     {
         return Some(el.layout_bounds);
     }
-    el.children.iter().find_map(find_image_tex_bounds)
+    el.children
+        .iter()
+        .find_map(|c| find_chart_tex_bounds(c, kind))
 }
 
 #[test]
@@ -173,7 +176,7 @@ fn line_path_leaf_stays_plot_height_above_pie_in_scroll_column() {
     );
 
     let line_b = find_path_d_bounds(&root).expect("line path leaf");
-    let pie_b = find_image_tex_bounds(&root).expect("pie raster texture");
+    let pie_b = find_chart_tex_bounds(&root, "pie").expect("pie raster texture");
     assert!(
         line_b[3] > 120.0 && line_b[3] <= 150.0,
         "line path layout height must stay ~140px, got {:?}",
@@ -226,14 +229,44 @@ fn bar_chart_still_lays_out_columns() {
         "plot row + label row, got {}",
         el.children.len()
     );
+    let tex = result
+        .textured_draws
+        .iter()
+        .any(|d| d.rect[2] > 40.0 && d.rect[3] > 20.0 && d.texture_key.starts_with("rui_path:"));
     let tall_bars = result
         .instances
         .iter()
         .filter(|i| i.rect_size[1] > 8.0 && i.color[3] > 0.2)
         .count();
     assert!(
-        tall_bars >= 3,
-        "bar chart must paint visible columns, got {tall_bars} / {} instances",
+        tex || tall_bars >= 3,
+        "bar chart must paint visible columns via path texture or SDF, tex={tex} bars={tall_bars} / {} instances",
         result.instances.len()
+    );
+}
+
+#[test]
+fn bar_chart_texture_follows_leaf_width_without_double_draw() {
+    let mut el: Element = bar_chart()
+        .values([0.3, 0.8, 0.5])
+        .labels(["A", "B", "C"])
+        .h("80px")
+        .into();
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut el, 400.0, 140.0, [-1.0, -1.0]);
+    let path_draws: Vec<_> = result
+        .textured_draws
+        .iter()
+        .filter(|d| d.texture_key.starts_with("rui_path:"))
+        .collect();
+    let max_w = path_draws.iter().map(|d| d.rect[2]).fold(0.0_f32, f32::max);
+    assert!(
+        max_w > 280.0,
+        "chart texture should fill leaf width (~400), got {max_w}; draws={path_draws:?}"
+    );
+    assert!(
+        path_draws.len() <= 2,
+        "must not stack image_texture + path_d rasters, n={} draws={path_draws:?}",
+        path_draws.len()
     );
 }

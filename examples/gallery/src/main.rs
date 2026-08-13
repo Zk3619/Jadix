@@ -2764,7 +2764,6 @@ fn DataChartShowcase() -> Element {
         }])
         .into();
 
-    let chart_pick = chart_sel.get();
     let bar_rows = vec![
         ChartDatum::new("Mon", 0.2),
         ChartDatum::new("Tue", 0.5),
@@ -2780,6 +2779,99 @@ fn DataChartShowcase() -> Element {
         ChartDatum::new("Other", 12.0),
     ];
     let line_vals = vec![0.1, 0.35, 0.55, 0.4, 0.85, 0.7];
+    let compose_rows = vec![
+        ChartDatum::new("Mon", 42.0),
+        ChartDatum::new("Tue", 58.0),
+        ChartDatum::new("Wed", 51.0),
+        ChartDatum::new("Thu", 73.0),
+        ChartDatum::new("Fri", 86.0),
+    ];
+    let composed: Element = define_chart()
+        .id("gal-compose")
+        .theme(
+            ChartTheme::tokens().palette([
+                parse_color("#2563eb"),
+                parse_color("#16a34a"),
+            ]),
+        )
+        .mark(
+            area_y(compose_rows.clone())
+                .fill("#2563eb")
+                .fill_opacity(0.28)
+                .stroke("#2563eb")
+                .stroke_width(2.0),
+        )
+        .mark(line_y(compose_rows.clone()).stroke("#2563eb").stroke_width(2.5))
+        .mark(dot(compose_rows.clone()).r(4.0).fill("#2563eb"))
+        .mark(
+            rule_y([60.0])
+                .stroke("#dc2626")
+                .stroke_width(1.5)
+                .stroke_dash([4.0, 2.0]),
+        )
+        .y_linear()
+        .y_nice()
+        .guides(true)
+        .tooltip(true)
+        .crosshair(true)
+        .on_select(move |i| chart_sel.set(Some(i)))
+        .h(160.0)
+        .into();
+    let t0 = 1_704_067_200_000i64;
+    let time_rows = vec![
+        ChartDatum::at(t0, 12.0),
+        ChartDatum::at(t0 + 86_400_000, 19.0),
+        ChartDatum::at(t0 + 2 * 86_400_000, 15.0),
+        ChartDatum::at(t0 + 3 * 86_400_000, 28.0),
+        ChartDatum::at(t0 + 4 * 86_400_000, 22.0),
+    ];
+    let time_chart: Element = define_chart()
+        .id("gal-time")
+        .mark(line_y(time_rows.clone()).stroke("#0f766e").stroke_width(2.5))
+        .mark(dot(time_rows).r(4.0).fill("#0f766e"))
+        .x_time()
+        .y_nice()
+        .tooltip(true)
+        .crosshair(true)
+        .on_select(move |i| chart_sel.set(Some(i)))
+        .h(140.0)
+        .into();
+    let log_rows = vec![
+        ChartDatum::new("1", 1.0),
+        ChartDatum::new("2", 8.0),
+        ChartDatum::new("3", 64.0),
+        ChartDatum::new("4", 512.0),
+    ];
+    let log_chart: Element = define_chart()
+        .id("gal-log")
+        .mark(line_y(log_rows).stroke("#7c3aed").stroke_width(2.5))
+        .y_log()
+        .y_nice()
+        .guides(true)
+        .on_select(move |i| chart_sel.set(Some(i)))
+        .h(120.0)
+        .into();
+    let radial_rows = vec![
+        ChartDatum::new("N", 8.0),
+        ChartDatum::new("NE", 5.0),
+        ChartDatum::new("E", 7.0),
+        ChartDatum::new("SE", 3.0),
+        ChartDatum::new("S", 6.0),
+        ChartDatum::new("SW", 4.0),
+        ChartDatum::new("W", 9.0),
+        ChartDatum::new("NW", 2.0),
+    ];
+    let radial_chart: Element = define_chart()
+        .id("gal-radial")
+        .mark(radial_bar(radial_rows.clone()).inner_radius(0.2))
+        .mark(radial_line(radial_rows.clone()).stroke("#2563eb").stroke_width(2.0))
+        .mark(radial_dot(radial_rows).r(3.5).fill("#2563eb"))
+        .guides(true)
+        .legend(true)
+        .tooltip(true)
+        .on_select(move |i| chart_sel.set(Some(i)))
+        .size(180.0)
+        .into();
     let carousel_el: Element = carousel("gal-carousel")
         .slide(|| {
             ui! {
@@ -2808,7 +2900,7 @@ fn DataChartShowcase() -> Element {
         <MyCard title="Table · TreeView · Chart · Carousel">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "数据面：Table / 树 / Chart（Bar/Line/Area 默认 guides；Pie 可 inner_radius=donut）/ 轮播。点柱、折线或扇区可选中。"
+                    "数据面：Table / 树 / Chart（预设 + define_chart grammar：cartesian/polar、log/time scale、tooltip/crosshair）/ 轮播。点柱、折线或扇区可选中；tooltip 钉在按下点。"
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "Table" }</Label>
                 { table_el }
@@ -2819,38 +2911,46 @@ fn DataChartShowcase() -> Element {
                 { tree_el }
                 <Label font_weight="600" text_size="0.875rem">{ "BarChart" }</Label>
                 <BarChart
+                    id="gal-bar"
                     data={bar_rows.clone()}
                     h="6rem"
-                    selected={chart_pick}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "LineChart" }</Label>
                 <LineChart
+                    id="gal-line"
                     values={line_vals.clone()}
                     h={140.0}
-                    selected={chart_pick}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "AreaChart" }</Label>
                 <AreaChart
+                    id="gal-area"
                     values={line_vals.clone()}
                     h={140.0}
-                    selected={chart_pick}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "PieChart" }</Label>
                 <PieChart
+                    id="gal-pie"
                     data={pie_rows.clone()}
-                    selected={chart_pick}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
                 <Label font_weight="600" text_size="0.875rem">{ "Donut" }</Label>
                 <PieChart
+                    id="gal-donut"
                     data={pie_rows.clone()}
                     inner_radius={0.55}
-                    selected={chart_pick}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
+                <Label font_weight="600" text_size="0.875rem">{ "define_chart · Area+Line+Dot+Rule · tooltip/crosshair" }</Label>
+                { composed }
+                <Label font_weight="600" text_size="0.875rem">{ "define_chart · 时间轴" }</Label>
+                { time_chart }
+                <Label font_weight="600" text_size="0.875rem">{ "define_chart · y log" }</Label>
+                { log_chart }
+                <Label font_weight="600" text_size="0.875rem">{ "define_chart · radial_bar + line + dot" }</Label>
+                { radial_chart }
                 <Label text_size="0.75rem" color="muted-foreground">
                     { match chart_sel.get() {
                         Some(i) => format!("Chart 选中 index = {i}"),

@@ -1130,6 +1130,7 @@ impl super::App {
                             .get(crate::utils::popup::ATTR_FLOATING)
                             .map(|s| s.trim().to_string())
                             .filter(|s| !s.is_empty()),
+                        bounds: el.layout_bounds,
                     }]
                 } else {
                     super::pointer_events::hit_path(&state.root_element, x, y)
@@ -2789,6 +2790,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                         .get(crate::utils::popup::ATTR_FLOATING)
                                         .map(|s| s.trim().to_string())
                                         .filter(|s| !s.is_empty()),
+                                    bounds: el.layout_bounds,
                                 }]
                             } else {
                                 super::pointer_events::hit_path(&state.root_element, x, y)

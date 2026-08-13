@@ -30,7 +30,7 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 |------|------|------|
 | 矩形 / 圆角 / 阴影 / 渐变 SDF | wgpu 主路径 | — |
 | `primitives/path` | `PathCommand` + `rui_path_d`（M/L/Z）+ **CPU 覆盖率光栅 → RGBA 贴图**（tessellate 四边形仅回退） | 曲线（C/Q）；GPU 三角网（仍非主路径） |
-| Chart | Bar / Line / Area / Pie+Donut = **同一 path 核**；RSX `<BarChart>` 等 | 完整 polar 包 / 时间轴 / defineChart（对照 TanStack，非本波） |
+| Chart | **grammar**：`define_chart` + cartesian / **polar 族** / `custom_mark` + `ChartTheme`；**compact scales**（linear / band / point / **log** / **time**）；tooltip · crosshair；预设薄封装；**同一 path 核** | 公开 `<svg>` 叶（归 3.11）；JS D3 运行时（禁） |
 | emoji SVG | `emoji-svg` feature：`resvg`/`usvg` **光栅成贴图** | **不是**公开 `<svg>` 场景图 |
 | 用户 `<canvas>` / paint 回调 | **无** | WP-3.12 |
 | 3D mesh / camera | **无**（仅 2D rotate/scale MVP） | WP-3.13 / 原 B6 |
@@ -75,7 +75,7 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 子 | `path` / `circle` / `rect` / `line` / `polyline` / `g`（组 + transform）；文本可后置（glyphon 或轮廓） |
 | 绘制 | 描边 / 填充 / opacity / transform；颜色走 token 或 `parse_color` |
 | 实现倾向 | 与 WP-3.2 同源 `PathCommand`；产品 Chart 已 CPU 覆盖率光栅贴图；`<svg>` 可先 GPU 批或继续光栅叶；emoji-svg 的 `resvg` **不算**本包 |
-| 与 Chart | WP-3.2 Bar/Line/Area/Pie+Donut **应消费同一 path 核**，禁止第二套折线格式 |
+| 与 Chart | WP-3.2 grammar（`define_chart` + marks）与预设 **应消费同一 path 核**，禁止第二套折线格式 |
 | 不做 | 完整 SVG 1.1 / SMIL / 外链 `<image>` 全家桶；浏览器 CSS 选中 SVG 子元素 |
 
 **验收（MVP）**：Gallery 一页：圆 + path 描边/填充；`ui!` 与 Builder 各一例；离屏或 layout 测证明叶尺寸正确。
@@ -167,7 +167,7 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 
 | 包 | 管 | 不管 |
 |----|----|------|
-| **WP-3.2** Path → Chart | Bar/Line/Area/Pie+Donut 真实绘制（path 核进批）、RSX 标签、Gallery 图 | 公开 `<svg>` 语法糖（归 3.11）；Canvas paint（归 3.12） |
+| **WP-3.2** Path → Chart | grammar（`define_chart` + cartesian/polar marks + log/time scale + tooltip/crosshair）+ 预设；path 核进批 | 公开 `<svg>` 语法糖（**归 3.11**）；Canvas paint（**归 3.12**）；通用运动原语（**归 B17**）；JS `d3-scale` 运行时（**禁区**） |
 | **WP-3.11** Svg | 标签 + 场景图 + 与 path 核合一 | Chart 产品 API |
 | **WP-3.12** Canvas | 叶 + paint / 2D context MVP | 3D API |
 | **WP-3.13** 2D/3D 能力 | 2D 合成纪律；3D feature；矩阵加深 | 创意组件目录（B16 / B17） |
@@ -178,7 +178,23 @@ W3 **退出不要求** 3.13 3D / B16 / B17；3.11/3.12 MVP **建议**在 W3 内�
 
 ---
 
-## 8. 明确不做
+## 8. Chart / 自绘：禁区 · 可加深 · 别的包
+
+不要把「Chart 还没做完」写成永远不做。分层如下（对照 TanStack Charts 心智，**不搬 JS 运行时**）：
+
+```text
+禁区     DOM · SVG 1.1 / SMIL 全家桶 · JS D3 运行时 · 换渲染器（Skia/Vello）
+可加深   polar 族 · 时间轴 · Rust 专用 scale（log / time / 将来 pow…）· Chart tooltip / crosshair
+别的包   公开 <svg>（WP-3.11）· Canvas paint（WP-3.12）· 通用运动原语（B17）
+```
+
+| 层 | 含义 | Chart 怎么接 |
+|----|------|----------------|
+| **禁区** | 浏览器 SVG DOM / HTML-in-canvas；完整 SVG 1.1；`npm i d3-scale` 当核；第二渲染器主线 | 场景仍是 `PathCommand` → path 核 → wgpu |
+| **可加深（本包 · WP-3.2）** | `radial_bar` / `radial_line` / `radial_area` / `radial_dot` + polar guides；`scale_time` / `scale_log`（同一 `ResolvedScale.map` 边界，对位 TanStack compact→专用，**实现是 Rust**）；`.tooltip(true)` / `.crosshair(true)`（钉在命中点，不跟 GSAP/Framer 运动核） | 继续叠 mark，不新开图表类型组件 |
+| **别的包** | 公开 `<svg>` 叶、Canvas paint、duration/easing/弹簧 | Chart **应消费同一 path 核**；3.11 落地后组合图可画在 Svg 叶上，而不是只出 RGBA 贴图 |
+
+**明确仍不做（全库，不只 Chart）**：
 
 - 第二渲染器主线（Skia / Vello / FemtoVG）替代 wgpu  
 - 浏览器 `<canvas>` / SVG DOM / HTML-in-canvas  

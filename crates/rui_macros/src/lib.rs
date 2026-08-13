@@ -1797,7 +1797,15 @@ fn expand_node(
                         }
                     }
 
-                    let is_base = matches!(
+                    // Chart `h`/`height` 是绘图区高度（轴标签在外），不能当 base 钳死整棵 vstack，
+                    // 否则 BarChart 标签会溢到下一张图的标题上。
+                    let chart_plot_height = matches!(
+                        name_str.as_str(),
+                        "BarChart" | "LineChart" | "AreaChart" | "Chart"
+                    ) && matches!(attr_name, "h" | "height");
+
+                    let is_base = !chart_plot_height
+                        && matches!(
                         attr_name,
                         "w" | "width"
                             | "max_w"

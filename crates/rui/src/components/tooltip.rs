@@ -104,6 +104,31 @@ fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
 
+/// shadcn `TooltipContent` 气泡样式（无 Portal / 无 floating 锚点）。
+/// Chart 选中钉与 [`tooltip_content`] 共用，避免第二套面板。
+pub fn tooltip_bubble(mut body: Element) -> Element {
+    let mut panel: Element = r#box()
+        .px("0.75rem")
+        .py("0.375rem")
+        .rounded("0.375rem")
+        .max_w("20rem")
+        .into();
+    panel = panel
+        .bg(tokens::popover())
+        .border_style("solid")
+        .border_width(1.0)
+        .border_color(tokens::border())
+        .shadow([0.0, 0.0, 0.0, 0.06], 3.0);
+    if is_text_leaf(&body) {
+        let t = body.text.clone().unwrap_or_default();
+        body = text(t)
+            .size(12.0)
+            .color(parse_text_color("popover-foreground"))
+            .into();
+    }
+    panel.child(body)
+}
+
 fn chain_hover(mut el: Element, open: Signal<bool>) -> Element {
     let prev = el.on_hover.clone();
     el = el.on_hover(move |hovered| {
@@ -211,29 +236,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         if !is_open {
             return Element::new();
         }
-        let mut panel: Element = r#box()
-            .px("0.75rem")
-            .py("0.375rem")
-            .rounded("0.375rem")
-            .max_w("20rem")
-            .into();
-        // solid-ui: bg-popover；轻阴影（避免压过触发器）。
-        panel = panel
-            .bg(tokens::popover())
-            .border_style("solid")
-            .border_width(1.0)
-            .border_color(tokens::border())
-            .shadow([0.0, 0.0, 0.0, 0.06], 3.0);
-        let mut inner = body();
-        // 纯文本叶子：套上 sm muted/foreground 字号。
-        if is_text_leaf(&inner) {
-            let t = inner.text.clone().unwrap_or_default();
-            inner = text(t)
-                .size(12.0)
-                .color(parse_text_color("popover-foreground"))
-                .into();
-        }
-        panel = panel.child(inner);
+        let mut panel = tooltip_bubble(body());
         if let Some(ref c) = class {
             panel = crate::style::with_class_list(panel, c);
         }

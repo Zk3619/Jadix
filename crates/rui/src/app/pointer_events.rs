@@ -32,6 +32,8 @@ pub struct PointerEvent {
     pub phase: EventPhase,
     /// Click count (1 = single, 2 = double, …).
     pub detail: u8,
+    /// 当前正在分发的节点**可视**盒（窗口像素 `[x,y,w,h]`，已扣祖先 scroll）。
+    pub current_bounds: [f32; 4],
     consumed: Cell<bool>,
 }
 
@@ -43,6 +45,7 @@ impl PointerEvent {
             button,
             phase: EventPhase::Target,
             detail,
+            current_bounds: [0.0; 4],
             consumed: Cell::new(false),
         }
     }
@@ -75,6 +78,9 @@ pub struct HitPathEntry {
     pub portal_key: Option<String>,
     /// `rui_floating` id when present (Select / Popover / Menu panel).
     pub floating_id: Option<String>,
+    /// 该节点可视盒（窗口像素，已扣祖先 `scroll_acc`）。与命中判定同一套坐标，
+    /// 供 handler 把指针映射到局部逻辑坐标（Chart / ScrollArea 内控件）。
+    pub bounds: [f32; 4],
 }
 
 /// Collect the hit path from root to the deepest hit node (inclusive).
@@ -171,6 +177,7 @@ fn hit_path_rec(
             == Some("1"),
         portal_key,
         floating_id,
+        bounds: [vx, vy, b[2], b[3]],
     });
 
     let mut child_hit = false;
@@ -253,6 +260,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     // Capture: root → parent of target
     event.phase = EventPhase::Capture;
     for entry in path.iter().take(path.len().saturating_sub(1)) {
+        event.current_bounds = entry.bounds;
         fire_handler(entry, event, kind);
         if event.is_consumed() {
             return;
@@ -262,6 +270,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     // Target
     event.phase = EventPhase::Target;
     let target = &path[path.len() - 1];
+    event.current_bounds = target.bounds;
     fire_handler(target, event, kind);
     if event.is_consumed() {
         return;
@@ -270,6 +279,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     // Bubble: parent → root (skip target)
     event.phase = EventPhase::Bubble;
     for entry in path.iter().rev().skip(1) {
+        event.current_bounds = entry.bounds;
         fire_handler(entry, event, kind);
         if event.is_consumed() {
             return;
@@ -420,6 +430,33 @@ mod tests {
     }
 
     #[test]
+    fn hit_path_bounds_are_visual_under_scroll() {
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [0.0, 200.0, 80.0, 80.0];
+        leaf.focus_id = Some("plot".into());
+        leaf.on_pointer_down = Some(Rc::new(RefCell::new(|_e: &PointerEvent| {})));
+
+        let mut viewport = Element::new().overflow("hidden");
+        viewport.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        viewport.scroll_offset = [0.0, 180.0];
+        viewport.children.push(leaf);
+
+        // Visual leaf: y = 200 - 180 = 20.
+        let path = hit_path(&viewport, 40.0, 40.0);
+        let leaf_e = path
+            .iter()
+            .find(|e| e.focus_id.as_deref() == Some("plot"))
+            .expect("scrolled leaf on path");
+        assert!(
+            (leaf_e.bounds[1] - 20.0).abs() < 0.5,
+            "expected visual y=20, got {:?}",
+            leaf_e.bounds
+        );
+        assert!((leaf_e.bounds[0] - 0.0).abs() < 0.5);
+        assert!((leaf_e.bounds[2] - 80.0).abs() < 0.5);
+    }
+
+    #[test]
     fn label_for_resolves_compound_checkbox_control_not_row() {
         use std::cell::Cell;
 
@@ -458,6 +495,7 @@ mod tests {
             hoisted_portal: false,
             portal_key: None,
             floating_id: None,
+            bounds: [0.0; 4],
         }];
         let (cb, fid) = resolve_click_from_path(&row, &path);
         assert_eq!(fid.as_deref(), Some("terms"));
