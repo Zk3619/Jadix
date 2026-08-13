@@ -32,13 +32,14 @@ pub(crate) mod internal;
 pub mod base;
 pub mod button;
 pub mod card;
+pub mod carousel;
+pub mod chart;
 pub mod checkbox;
 pub mod color_picker;
-pub mod command;
 pub mod combobox;
+pub mod command;
 pub mod context_menu;
 pub mod date_picker;
-pub mod table;
 pub mod dialog;
 pub mod dropdown;
 pub mod form;
@@ -58,12 +59,11 @@ pub mod scrollbar;
 pub mod select;
 pub mod separator;
 pub mod sheet;
-pub mod carousel;
-pub mod chart;
 pub mod sidebar;
 pub mod slider;
 pub mod stepper;
 pub mod switch;
+pub mod table;
 pub mod tabs;
 pub mod textarea;
 pub mod toast;
@@ -84,10 +84,14 @@ pub use card::{
     CardTitle, CardTitleProps,
 };
 pub use carousel::{carousel, CarouselBuilder};
-pub use chart::{bar_chart, line_chart, BarChartBuilder, LineChartBuilder};
+pub use chart::{
+    area_chart, bar_chart, line_chart, pie_chart, pie_layout, scale_band, scale_linear, AreaChart,
+    AreaChartProps, BarChart, BarChartBuilder, BarChartProps, ChartDatum, ChartSelect,
+    ChartSelected, LineChart, LineChartBuilder, LineChartProps, PieChart, PieChartBuilder,
+    PieChartProps,
+};
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 pub use color_picker::{color_picker, ColorPicker, ColorPickerBuilder, ColorPickerProps};
-pub use command::{command, CommandAction, CommandBuilder};
 pub use combobox::{
     combobox, combobox_content, combobox_scope, use_combobox, Combobox, ComboboxBuilder,
     ComboboxContentOpts, ComboboxCtx, ComboboxEmpty, ComboboxEmptyProps, ComboboxGroup,
@@ -96,8 +100,8 @@ pub use combobox::{
     ComboboxListProps, ComboboxProps, ComboboxSeparator, ComboboxSeparatorProps,
     ComboboxVisibleItem,
 };
+pub use command::{command, CommandAction, CommandBuilder};
 pub use context_menu::{context_menu, ContextMenuBuilder, ContextMenuItem};
-pub use table::{table, TableBuilder, TableColumn, TableSortDir, TableSortState};
 pub use date_picker::{
     date_picker, time_picker, DatePicker, DatePickerBuilder, DatePickerKind, DatePickerProps,
     TimePicker, TimePickerBuilder, TimePickerProps,
@@ -117,11 +121,10 @@ pub use image::{Image, ImageProps};
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,
-    filter_url_insert, input,
-    input_caret_signal_key, input_ime_anchor_signal_key, input_overwrite_signal_key,
-    input_password_reveal_signal_key, input_selection_signal_key, input_type_signal_key,
-    input_value_signal_key, Input, InputBuilder, InputProps, InputType, IME_ACTIVE_SIGNAL,
-    INPUT_FOCUS_PREFIX,
+    filter_url_insert, input, input_caret_signal_key, input_ime_anchor_signal_key,
+    input_overwrite_signal_key, input_password_reveal_signal_key, input_selection_signal_key,
+    input_type_signal_key, input_value_signal_key, Input, InputBuilder, InputProps, InputType,
+    IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
 };
 pub use label::{
     enable_label_selection, label, label_selection_signal_key, selectable_text_key,
@@ -136,9 +139,9 @@ pub use navigation_menu::{
 pub use popover::{popover_panel, PopoverBuilder};
 pub use progress::{progress, Progress, ProgressBuilder, ProgressProps};
 pub use radio_group::{
-    radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder,
-    RadioGroupCtx, RadioGroupItem, RadioGroupItemLabel, RadioGroupItemLabelProps,
-    RadioGroupItemProps, RadioGroupProps,
+    radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx,
+    RadioGroupItem, RadioGroupItemLabel, RadioGroupItemLabelProps, RadioGroupItemProps,
+    RadioGroupProps,
 };
 pub use resizable::{resizable, ResizableBuilder};
 pub use scroll_area::{scroll_area, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps};
@@ -161,10 +164,12 @@ pub use sidebar::{sidebar, SidebarBuilder};
 pub use slider::{slider, Slider, SliderBuilder, SliderProps};
 pub use stepper::{stepper, StepperBuilder};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
+pub use table::{table, TableBuilder, TableColumn, TableSortDir, TableSortState};
 pub use tabs::{
     tabs_content, tabs_headless, tabs_headless_root, tabs_list, tabs_scope, use_tabs, Tabs,
     TabsContent, TabsContentProps, TabsCtx, TabsHeadlessBuilder, TabsList, TabsListBuilder,
-    TabsListProps, TabsOrientation, TabsProps, TabsTrigger, TabsTriggerProps, TABSTRIP_FOCUS_PREFIX,
+    TabsListProps, TabsOrientation, TabsProps, TabsTrigger, TabsTriggerProps,
+    TABSTRIP_FOCUS_PREFIX,
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
 pub use toast::{
@@ -177,8 +182,8 @@ pub use toast::{
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};
 pub use tooltip::{
-    tooltip, tooltip_content, tooltip_scope, tooltip_side_to_placement, use_tooltip, TooltipBuilder,
-    TooltipContentOpts, TooltipCtx, TooltipTrigger, TooltipTriggerProps,
+    tooltip, tooltip_content, tooltip_scope, tooltip_side_to_placement, use_tooltip,
+    TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger, TooltipTriggerProps,
 };
 pub use tree_view::{tree_view, TreeNode, TreeViewBuilder};
 pub use virtual_list::{virtual_list, VirtualListBuilder};

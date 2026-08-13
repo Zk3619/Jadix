@@ -1,4 +1,4 @@
-﻿//! Input / Textarea 共享 chrome（[`crate::components::internal`]，不进公开 API / prelude）。
+//! Input / Textarea 共享 chrome（[`crate::components::internal`]，不进公开 API / prelude）。
 //!
 //! 产品面：[`crate::components::input`] / [`crate::components::textarea`]；
 //! 编辑能力：[`crate::utils::text_field`]。
@@ -8,4 +8,3 @@ mod paint;
 
 pub(crate) use build::{build_text_edit_element, TextEditBuildParams};
 pub(crate) use paint::sync_text_edit_paint_subtree;
-

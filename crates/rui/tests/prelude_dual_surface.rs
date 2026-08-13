@@ -31,12 +31,32 @@ fn prelude_ui_embeds_builder() {
 }
 
 #[test]
+fn prelude_chart_tags_and_builders_compile() {
+    let _b: Element = bar_chart().values([0.2, 0.8]).h("3rem").into();
+    let _l: Element = line_chart().values([0.1, 0.9]).h(80.0).into();
+    let _a: Element = area_chart().values([0.2, 0.5]).h(80.0).into();
+    let _p: Element = pie_chart().values([1.0, 2.0]).inner_radius(0.55).into();
+    let pick: Option<usize> = None;
+    let el = ui! {
+        <VStack gap="0.5rem">
+            <BarChart values={vec![0.2, 0.8]} h="3rem" selected={pick} />
+            <LineChart values={vec![0.1, 0.9]} h={80.0} selected={pick} />
+            <AreaChart values={vec![0.2, 0.5]} h={80.0} selected={pick} />
+            <PieChart values={vec![1.0, 2.0]} inner_radius={0.55} selected={pick} />
+        </VStack>
+    };
+    let _: Element = el;
+}
+
+#[test]
 fn prelude_builder_embeds_ui() {
     let el: Element = vstack()
         .gap("0.5rem")
         .child(ui! { <Label id="prelude-embed-l">"内嵌标签"</Label> })
         .child(Element::from(
-            button("prelude-embed-b2").variant("default").text("外层 Builder"),
+            button("prelude-embed-b2")
+                .variant("default")
+                .text("外层 Builder"),
         ))
         .into();
     assert!(!el.children.is_empty());

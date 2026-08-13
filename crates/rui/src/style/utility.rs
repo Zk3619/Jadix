@@ -323,10 +323,8 @@ fn tick_rui_transition_spring(el: &mut Element) -> bool {
         .unwrap_or_else(|| format!("rui:tr:{}", el.layout_bounds[0] as i32));
     match kind.as_str() {
         "opacity" => {
-            let spring = crate::style::use_ui_transition_spring(
-                &format!("{key}:opacity"),
-                el.style.opacity,
-            );
+            let spring =
+                crate::style::use_ui_transition_spring(&format!("{key}:opacity"), el.style.opacity);
             let target = el.style.opacity;
             // Seed target each frame from resolved style; spring value overwrites display.
             spring.set(target);
@@ -340,14 +338,10 @@ fn tick_rui_transition_spring(el: &mut Element) -> bool {
             }
         }
         "transform" => {
-            let sx = crate::style::use_ui_transition_spring(
-                &format!("{key}:tx"),
-                el.style.translate[0],
-            );
-            let sy = crate::style::use_ui_transition_spring(
-                &format!("{key}:ty"),
-                el.style.translate[1],
-            );
+            let sx =
+                crate::style::use_ui_transition_spring(&format!("{key}:tx"), el.style.translate[0]);
+            let sy =
+                crate::style::use_ui_transition_spring(&format!("{key}:ty"), el.style.translate[1]);
             let sr =
                 crate::style::use_ui_transition_spring(&format!("{key}:rot"), el.style.rotate_deg);
             let ss = crate::style::use_ui_transition_spring(&format!("{key}:sc"), el.style.scale);
@@ -731,7 +725,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::TransitionOpacity => {
-            let prev = el.attrs.insert("rui_transition".to_string(), "opacity".to_string());
+            let prev = el
+                .attrs
+                .insert("rui_transition".to_string(), "opacity".to_string());
             if prev.as_deref() == Some("opacity") {
                 LayoutStatus::Clean
             } else {
@@ -749,7 +745,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::AnimateSpin => {
-            let prev = el.attrs.insert("rui_animate".to_string(), "spin".to_string());
+            let prev = el
+                .attrs
+                .insert("rui_animate".to_string(), "spin".to_string());
             if prev.as_deref() == Some("spin") {
                 LayoutStatus::Clean
             } else {
@@ -757,7 +755,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::AnimateNone => {
-            let prev = el.attrs.insert("rui_animate".to_string(), "none".to_string());
+            let prev = el
+                .attrs
+                .insert("rui_animate".to_string(), "none".to_string());
             if prev.as_deref() == Some("none") {
                 LayoutStatus::Clean
             } else {
@@ -928,11 +928,17 @@ mod p1_utility_tests {
     fn apply_transition_and_animate_attrs() {
         let mut el = Element::new();
         apply_class_list(&mut el, "transition-opacity");
-        assert_eq!(el.attrs.get("rui_transition").map(|s| s.as_str()), Some("opacity"));
+        assert_eq!(
+            el.attrs.get("rui_transition").map(|s| s.as_str()),
+            Some("opacity")
+        );
 
         let mut el = Element::new();
         apply_class_list(&mut el, "animate-spin");
-        assert_eq!(el.attrs.get("rui_animate").map(|s| s.as_str()), Some("spin"));
+        assert_eq!(
+            el.attrs.get("rui_animate").map(|s| s.as_str()),
+            Some("spin")
+        );
 
         let mut el = Element::new();
         apply_class_list(&mut el, "transition-transform animate-none");
@@ -940,7 +946,10 @@ mod p1_utility_tests {
             el.attrs.get("rui_transition").map(|s| s.as_str()),
             Some("transform")
         );
-        assert_eq!(el.attrs.get("rui_animate").map(|s| s.as_str()), Some("none"));
+        assert_eq!(
+            el.attrs.get("rui_animate").map(|s| s.as_str()),
+            Some("none")
+        );
     }
 
     #[test]

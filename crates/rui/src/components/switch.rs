@@ -96,12 +96,7 @@ fn switch_anim_bg_key(id: &str) -> String {
 }
 
 fn unpack_switch_children(mut children: Vec<Element>) -> Vec<Element> {
-    if children.len() == 1
-        && children[0]
-            .attrs
-            .get("rui_fragment")
-            .map(|s| s.as_str())
-            == Some("1")
+    if children.len() == 1 && children[0].attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1")
     {
         return std::mem::take(&mut children[0].children);
     }
@@ -274,7 +269,11 @@ pub fn Switch(
                 }
                 (handler.0)(());
             });
-        } else if let Some(idx) = el.children.iter().position(|c| c.switch_checked_sync.is_some()) {
+        } else if let Some(idx) = el
+            .children
+            .iter()
+            .position(|c| c.switch_checked_sync.is_some())
+        {
             let mut ctrl = std::mem::take(&mut el.children[idx]);
             let mut old_on_click = ctrl.on_click.clone();
             ctrl = ctrl.on_click(move || {

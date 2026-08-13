@@ -72,7 +72,7 @@ rui/
 └─ docs/                    # 权威纲领 / 计划 / 从属手册（见下）
 ```
 
-**文档入口 | Docs entry**：[AUTHORITY.md](docs/AUTHORITY.md)（唯一执行源）· [ENGINEERING_GRADE_FRAMEWORK.md](docs/ENGINEERING_GRADE_FRAMEWORK.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [REACTIVITY.md](docs/REACTIVITY.md) · [box_model.md](docs/box_model.md)（盒模型契约 / WP-2.9）
+**文档入口 | Docs entry**：[AUTHORITY.md](docs/AUTHORITY.md)（唯一执行源；**W2 已退出 → W3**）· [ENGINEERING_GRADE_FRAMEWORK.md](docs/ENGINEERING_GRADE_FRAMEWORK.md) · [COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) · [REACTIVITY.md](docs/REACTIVITY.md) · [box_model.md](docs/box_model.md) · [drawing.md](docs/drawing.md)（`<svg>` / `<canvas>` / 2D·3D）
 
 ---
 

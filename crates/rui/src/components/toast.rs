@@ -555,11 +555,14 @@ fn begin_toast_exit(id: u64, from_drag: Option<[f32; 2]>) {
     t.exiting = true;
     t.exit_started = Some(Instant::now());
     TOAST_EXIT_VIS.with(|m| {
-        m.borrow_mut().insert(id, ToastExitVis {
-            as_front,
-            rank,
-            to_pending: false,
-        });
+        m.borrow_mut().insert(
+            id,
+            ToastExitVis {
+                as_front,
+                rank,
+                to_pending: false,
+            },
+        );
     });
     let from = from_drag.unwrap_or([0.0, 0.0]);
     toast_exit_from_xy(id).set(from);
@@ -714,7 +717,9 @@ fn position_signal() -> Signal<String> {
 }
 
 fn overflow_signal() -> Signal<String> {
-    use_signal(TOAST_OVERFLOW_KEY, || ToastOverflow::Displace.as_str().to_string())
+    use_signal(TOAST_OVERFLOW_KEY, || {
+        ToastOverflow::Displace.as_str().to_string()
+    })
 }
 
 fn limit_signal() -> Signal<usize> {
@@ -879,12 +884,14 @@ fn prune_expired(q: &mut Vec<ToastItem>) -> bool {
         t.exiting = true;
         t.exit_started = Some(now);
         TOAST_EXIT_VIS.with(|m| {
-            m.borrow_mut()
-                .insert(id, ToastExitVis {
+            m.borrow_mut().insert(
+                id,
+                ToastExitVis {
                     as_front,
                     rank,
                     to_pending: false,
-                });
+                },
+            );
         });
         toast_exit_from_xy(id).set([0.0, 0.0]);
         pause_toast_timer(id);
@@ -1373,7 +1380,13 @@ pub fn Toast(
         exiting: false,
         exit_started: None,
     };
-    build_toast_card(&item, ToastSwipeDirs::for_position(ToastPosition::TopRight), 1.0, None, false)
+    build_toast_card(
+        &item,
+        ToastSwipeDirs::for_position(ToastPosition::TopRight),
+        1.0,
+        None,
+        false,
+    )
 }
 
 /// 标题叶（文档/自定义组合用）。
@@ -1480,9 +1493,9 @@ fn render_stack(
             n_active += 1;
         }
     }
-    let has_front_exit = items.iter().any(|t| {
-        t.exiting && toast_exit_vis(t.id).is_some_and(|v| v.as_front)
-    });
+    let has_front_exit = items
+        .iter()
+        .any(|t| t.exiting && toast_exit_vis(t.id).is_some_and(|v| v.as_front));
     let pile_n = n_active.max(usize::from(has_front_exit));
 
     let pile_h = if expanded {
@@ -1503,9 +1516,7 @@ fn render_stack(
     for draw_i in (0..n).rev() {
         let item = items[draw_i];
         let exit_vis = toast_exit_vis(item.id);
-        let behind_fade = item.exiting
-            && !expanded
-            && exit_vis.is_some_and(|v| !v.as_front);
+        let behind_fade = item.exiting && !expanded && exit_vis.is_some_and(|v| !v.as_front);
 
         let (rank, target_scale, hide_content, pointer_none, z) = if item.exiting {
             if let Some(v) = exit_vis {
@@ -1545,7 +1556,11 @@ fn render_stack(
             rank as f32 * STACK_PEEK
         };
 
-        let spring_key = format!("rui:toast:stack:{}:{}", item.id, if from_bottom { "b" } else { "t" });
+        let spring_key = format!(
+            "rui:toast:stack:{}:{}",
+            item.id,
+            if from_bottom { "b" } else { "t" }
+        );
         let lift_s = use_ui_transition_spring(&format!("{spring_key}:lift"), base_lift);
         // 收起时后方缩小是 Sonner 特性，保留 scale 弹簧。
         let sc_s = use_ui_transition_spring(&format!("{spring_key}:sc"), target_scale);
@@ -1616,8 +1631,13 @@ fn render_list(items: &[&ToastItem], from_bottom: bool, swipe: ToastSwipeDirs) -
     let mut col = vstack().gap("0.5rem").w(TOAST_WIDTH).max_w("420px");
     for item in items {
         let id = item.id;
-        let card =
-            apply_enter_motion(build_toast_card(item, swipe, 1.0, None, false), item, from_bottom, false).w("100%");
+        let card = apply_enter_motion(
+            build_toast_card(item, swipe, 1.0, None, false),
+            item,
+            from_bottom,
+            false,
+        )
+        .w("100%");
         let card: Element = interactive(card)
             .on_hover(move |h| {
                 set_item_timer_paused(id, h);
@@ -1827,10 +1847,7 @@ mod tests {
         assert!(toast_queue().get().iter().any(|t| t.id == id));
         toast_dismiss(id);
         assert!(
-            toast_queue()
-                .get()
-                .iter()
-                .any(|t| t.id == id && t.exiting),
+            toast_queue().get().iter().any(|t| t.id == id && t.exiting),
             "dismiss starts exit animation"
         );
         settle_toast_exits();
@@ -1867,9 +1884,15 @@ mod tests {
     #[test]
     fn toast_set_layout_switches_signal() {
         toast_set_layout("list");
-        assert_eq!(ToastLayout::parse(&layout_signal().peek()), ToastLayout::List);
+        assert_eq!(
+            ToastLayout::parse(&layout_signal().peek()),
+            ToastLayout::List
+        );
         toast_set_layout("stack");
-        assert_eq!(ToastLayout::parse(&layout_signal().peek()), ToastLayout::Stack);
+        assert_eq!(
+            ToastLayout::parse(&layout_signal().peek()),
+            ToastLayout::Stack
+        );
     }
 
     #[test]
@@ -2022,9 +2045,18 @@ mod tests {
         assert_eq!(ToastPosition::parse("top-left"), ToastPosition::TopLeft);
         assert_eq!(ToastPosition::parse("top_center"), ToastPosition::TopCenter);
         assert_eq!(ToastPosition::parse("top-right"), ToastPosition::TopRight);
-        assert_eq!(ToastPosition::parse("bottom-left"), ToastPosition::BottomLeft);
-        assert_eq!(ToastPosition::parse("bottom-center"), ToastPosition::BottomCenter);
-        assert_eq!(ToastPosition::parse("bottom_right"), ToastPosition::BottomRight);
+        assert_eq!(
+            ToastPosition::parse("bottom-left"),
+            ToastPosition::BottomLeft
+        );
+        assert_eq!(
+            ToastPosition::parse("bottom-center"),
+            ToastPosition::BottomCenter
+        );
+        assert_eq!(
+            ToastPosition::parse("bottom_right"),
+            ToastPosition::BottomRight
+        );
         assert_eq!(ToastPosition::parse("nope"), ToastPosition::TopRight);
         assert!(ToastPosition::BottomCenter.is_bottom());
         assert!(!ToastPosition::TopLeft.is_bottom());

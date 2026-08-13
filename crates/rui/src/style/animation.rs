@@ -395,7 +395,10 @@ mod tests {
         tw.set(1.0);
         let _ = tick_animations(0.05);
         let elapsed_mid = tw.0.borrow().elapsed;
-        assert!(elapsed_mid > 0.04, "expected ~50ms progress, got {elapsed_mid}");
+        assert!(
+            elapsed_mid > 0.04,
+            "expected ~50ms progress, got {elapsed_mid}"
+        );
         // Chrome sync 风格：每帧再 set 同一目标
         tw.set(1.0);
         tw.set(1.0);

@@ -105,9 +105,14 @@ mod tests {
                 gs.len(),
                 1,
                 "{name}: expected one grapheme, got {gs:?} codepoints={:?}",
-                seq.chars().map(|c| format!("U+{:04X}", c as u32)).collect::<Vec<_>>()
+                seq.chars()
+                    .map(|c| format!("U+{:04X}", c as u32))
+                    .collect::<Vec<_>>()
             );
-            assert!(emoji_detect::grapheme_is_emoji(seq), "{name} not detected as emoji");
+            assert!(
+                emoji_detect::grapheme_is_emoji(seq),
+                "{name} not detected as emoji"
+            );
         }
     }
 
@@ -168,7 +173,10 @@ mod tests {
         // Hard signal: family must fragment into >1 glyph under the deferred-emoji path,
         // or flags must yield zero Color (font-fallback reject) — both match the gallery.
         let family_before = before_rows.iter().find(|(n, _, _)| *n == "family").unwrap();
-        let flag_before = before_rows.iter().find(|(n, _, _)| *n == "flag_cn").unwrap();
+        let flag_before = before_rows
+            .iter()
+            .find(|(n, _, _)| *n == "flag_cn")
+            .unwrap();
         assert!(
             family_before.1 > 1 || flag_before.2 == 0,
             "expected family multi-glyph or flag zero-Color before emoji font load; got family={:?} flag={:?}",
@@ -206,8 +214,7 @@ mod tests {
                 ui_glyphs,
                 em_glyphs
             );
-            if matches!(*name, "family" | "flag_cn" | "flag_us" | "keycap") && ui_glyphs.len() > 1
-            {
+            if matches!(*name, "family" | "flag_cn" | "flag_us" | "keycap") && ui_glyphs.len() > 1 {
                 ui_splits_complex = true;
             }
         }
@@ -377,7 +384,8 @@ mod tests {
             let stem = crate::renderer::twemoji_name::twemoji_stem(seq);
             let candidates = [
                 std::path::PathBuf::from("assets/twemoji/72x72"),
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/twemoji/72x72"),
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../assets/twemoji/72x72"),
             ];
             if let Some(dir) = candidates.into_iter().find(|p| p.is_dir()) {
                 let path = dir.join(format!("{stem}.png"));
@@ -401,7 +409,10 @@ mod tests {
         // First-Color-only returned ~16x32; a composite of the four CBDT layers is wider
         // and/or has substantially more ink than a single adult glyph.
         let ink = family.rgba.chunks(4).filter(|px| px[3] > 0).count();
-        println!("family composite {}x{} ink={ink}", family.width, family.height);
+        println!(
+            "family composite {}x{} ink={ink}",
+            family.width, family.height
+        );
         assert!(
             family.width >= 24 && ink > 400,
             "expected composited family raster, got {}x{} ink={ink}",
@@ -426,7 +437,10 @@ mod tests {
                 }
             }
         }
-        println!("😀 {}x{} ink_in_bottom_{bottom_rows}_rows={ink_bottom}", w, h);
+        println!(
+            "😀 {}x{} ink_in_bottom_{bottom_rows}_rows={ink_bottom}",
+            w, h
+        );
         assert!(
             ink_bottom > 0,
             "face emoji ink reaches the bottom of the raster — TextBounds must not shave those rows"
@@ -479,7 +493,11 @@ mod tests {
         buffer.shape_until_scroll(&mut fs, false);
 
         let (left, top) = crate::renderer::emoji_layout::custom_emoji_left_centered_top(
-            &buffer, &layout, emoji_start, size, size,
+            &buffer,
+            &layout,
+            emoji_start,
+            size,
+            size,
         )
         .expect("emoji slot position");
         let bottom = top + size;
@@ -619,13 +637,10 @@ mod tests {
             let over = paint.saturating_mul(2).clamp(paint, 128);
             let raw =
                 crate::renderer::prepare_text::load_font_fallback_raster(seq, over, 400).unwrap();
-            let fitted =
-                crate::renderer::prepare_text::fit_emoji_to_pixel_square(&raw, paint);
+            let fitted = crate::renderer::prepare_text::fit_emoji_to_pixel_square(&raw, paint);
             let (bw, bh, ar, fill) =
                 yellow_fill(&fitted.rgba, fitted.width as usize, fitted.height as usize);
-            println!(
-                "{seq} paint={paint} yellow={bw}x{bh} aspect={ar:.3} max_dim/em={fill:.3}"
-            );
+            println!("{seq} paint={paint} yellow={bw}x{bh} aspect={ar:.3} max_dim/em={fill:.3}");
             assert!(
                 fill >= 0.82,
                 "{seq}: yellow face must fill most of the paint square, fill={fill}"
@@ -654,9 +669,7 @@ mod tests {
         let last_row_ink = (0..dst)
             .filter(|&x| fitted.rgba[((dst - 1) * dst + x) * 4 + 3] > 32)
             .count();
-        let first_row_ink = (0..dst)
-            .filter(|&x| fitted.rgba[x * 4 + 3] > 32)
-            .count();
+        let first_row_ink = (0..dst).filter(|&x| fitted.rgba[x * 4 + 3] > 32).count();
         let top = (lh - pixel as f32).max(0.0) * 0.5;
         let bottom = top + pixel as f32;
         let overshoot = (bottom - lh).max(0.0);

@@ -6,9 +6,9 @@
 > - [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) → 产品面命名 / `variant`·`size` / 分区对标  
 > - [`Reference/SolidJS`](../Reference/SolidJS) → 受控 Signal、细粒度 sync、非组件清单  
 > - [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) → **仅密度标尺**（§3）；禁作 API/架构参照  
-> **日期**：2026-08-12（样式承诺面拆出 §1.8；§5.2 → §5.2.1/§5.2.2）  
+> **日期**：2026-08-12（样式承诺面拆出 §1.8；§5.2 → §5.2.1/§5.2.2）；**2026-08-13** §1.10 公开自绘面（含 B16 / B17）  
 
-交叉：[`AUTHORITY.md`](AUTHORITY.md) WP-CV.0 · WP-CV.1 · WP-CV.3 · WP-CV.4 · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
+交叉：[`AUTHORITY.md`](AUTHORITY.md) WP-CV.0 · WP-CV.1 · WP-CV.3 · WP-CV.4 · WP-3.11–3.13 · [`drawing.md`](drawing.md) · [`element_identity.md`](element_identity.md) · [`gap_analysis.md`](gap_analysis.md) §6
 
 ---
 
@@ -99,7 +99,7 @@
 | Table | `table` / `TableBuilder` / `TableColumn` | **experimental** | 必填实例键；列 `id` 排序键 | 基础 columns+data；分组/筛选取消稳定承诺 |
 | VirtualList | `virtual_list` / `VirtualListBuilder` | **experimental** | 必填实例键 | 测宽依赖；Table/Tree 底座 |
 | TreeView | `tree_view` / `TreeViewBuilder` / `TreeNode` | **experimental** | 必填实例键；节点 id | 大数据实验 |
-| Chart | `bar_chart` / `line_chart` | **experimental** | **展示型不要求**（WP-2.8：`bar_chart()` / `line_chart()` 无必填 id） | path stub；无 pie |
+| Chart | `bar_chart` / `line_chart` / `area_chart` / `pie_chart`；RSX `BarChart`/`LineChart`/`AreaChart`/`PieChart`；`ChartDatum` | **experimental** | **展示型不要求**（WP-2.8：无必填 id） | WP-3.2：path 核光栅贴图；TanStack marks=Bar/Line/Area/Pie+Donut（`inner_radius`）；不搬 defineChart |
 | Carousel | `carousel` / `CarouselBuilder` | **experimental** | 必填实例键 | |
 | Stepper | `stepper` / `StepperBuilder` | **experimental** | 必填实例键 | 产品打磨实验（Gallery 导航区） |
 
@@ -183,6 +183,19 @@
 
 Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小节「暂不跟」，不进 §5.1 已导出表。
 
+### 1.10 公开自绘面（W3 · `planned` → 落地先 `experimental`）
+
+规范 [`drawing.md`](drawing.md)；执行 AUTHORITY **WP-3.11 / 3.12 / 3.13**；创意库 **B16 / B17**。  
+**不是** ShadCN registry 对位；emoji-svg 光栅 ≠ 公开 `<svg>`。
+
+| 规划名 | 建议 Gallery | 优先级 | id 策略 | 笔记 |
+|--------|--------------|--------|---------|------|
+| **Svg**（`<svg>` / `svg()`） | 数据 / 新「绘制」区 | P1（W3） | 展示型不要求 | 矢量场景图；与 WP-3.2 path 核合一 |
+| **Canvas**（`<canvas>` / `canvas().paint`） | 绘制 | P1（W3） | 展示型不要求；paint 内 peek | 自定义 2D 绘制；非 DOM Canvas2D |
+| **Scene3d**（`<scene3d>`） | 绘制（可选） | P2 | 展示型不要求 | feature 门；默认构建须绿 |
+| **canvas-ui 式 fx**（Liquid/Glass/…） | 绘制 / 实验分区 | P2 · B16 | 包住子树；命中仍走底层 Element | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**不搬** HTML-in-canvas |
+| **react-bits 式 bits**（BlurText / 背景 / …） | 绘制 / 动效实验区 | P2 · B17 | 展示型不要求；动效内 peek | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；glyphon 字形动效 + Canvas 背景；**不搬**每字 DOM span / CSS 运行时 |
+
 ---
 
 ## 2. 组件稳定面草案（CV 范围 · ≤ 规范 §5.2.1）
@@ -265,7 +278,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | scroll / scrollview | ScrollArea / ScrollViewport / Scrollbar | 齐 |
 | navbar / sidebar / progress / stepper / carousel | 有，**experimental** | 齐密度、未承诺 semver |
 | datatable / virtuallist | Table / VirtualList，experimental | 齐密度 |
-| barchart / linechart | 有 MVP | 齐；**piechart 缺** |
+| barchart / linechart / piechart | 有 MVP | 齐；Area + Donut RSX |
 | datepicker / timepicker / colorpicker | 有，experimental | 齐密度 |
 | markdown | inline MVP；**块级缺** | 落后 |
 | segmented | 无独立模块；用 **ToggleGroup** | 可接受等价 |
@@ -308,7 +321,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`button`, `card`, `carousel`, `chart`(`bar_chart`/`line_chart`), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
+`button`, `card`, `carousel`, `chart`(`bar_chart`/`line_chart`/`area_chart`/`pie_chart`), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

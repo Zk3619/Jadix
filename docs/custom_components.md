@@ -147,6 +147,10 @@ RUI components should use design tokens provided by the `DesignToken` system. Th
 -   **Static Trees**: The `ui!` macro generates specialized builder calls. Avoid complex logic inside the `ui!` block; perform calculations in the function body instead.
 -   **Layout**: Use `HStack` and `VStack` for standard flexbox-like layouts. For custom positioning, use `Box` with absolute positioning or specific margins.
 
+## Drawing primitives（W3）
+
+Custom charts / icons / paint go through public **Svg / Canvas** leaves (not a second renderer). Spec: [`drawing.md`](drawing.md). `#[component]` may wrap `svg()` / `canvas().paint(…)`; keep paint callbacks on `peek` so they do not subscribe the component root.
+
 ## Hot Reload Compatibility
 
 For a component to support hot reload:

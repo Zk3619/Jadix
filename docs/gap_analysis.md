@@ -3,7 +3,7 @@
 > **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [AUTHORITY.md](AUTHORITY.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；**Solid 细粒度现状**见 [REACTIVITY.md](REACTIVITY.md)。  
 > 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`docs/`  
 > 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法  
-> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md
+> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md；**2026-08-13**：公开自绘面移交 [`drawing.md`](drawing.md) / AUTHORITY WP-3.11–3.13
 
 三个问题：**距离工程级 UI 框架还差什么**、**类 SolidJS 能力还缺什么**、**还需要哪些组件**。
 
@@ -22,7 +22,8 @@
 > - 体量现约 **5.3 万行 / 182 `.rs`**（文内旧「3.3 万 / 121」为阶段六时点）。  
 > - Solid 表：`ErrorBoundary`、`switch_reactive`、`on_mount` **已落地**（勿再读 §5 旧「无」）。  
 > - 组件清单以 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5 为准（约 45 模块），勿再依赖本节「26/3/21」旧计数。  
-> - 巩固期开放 P0：冒烟签署、crates.io、文档站正文、CHANGELOG——见纲领 §4.4 / 总计划 §1。
+> - 巩固期开放 P0：冒烟签署、crates.io、文档站正文、CHANGELOG——见纲领 §4.4 / 总计划 §1。  
+> - **公开 `<svg>` / `<canvas>` / 2D·3D** 不是历史 P0；W3 起见 [`drawing.md`](drawing.md)。emoji-svg 光栅 ≠ 公开 Svg。
 
 ---
 
@@ -211,7 +212,8 @@
 ## 5. SolidJS 能力对齐
 
 > **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。  
-> **2026-08-12**：下表为**历史镜像**；权威清单、Leptos/Floem 对照与开放缺口以 [REACTIVITY.md](REACTIVITY.md) §4–§6 为准；执行 [AUTHORITY.md](AUTHORITY.md)。
+> **2026-08-12**：下表为**历史镜像**；权威清单、四框架机制对照（Solid / Leptos / Floem / Dioxus）与完整细粒度不变量以 [REACTIVITY.md](REACTIVITY.md) §4–§6 / §5.7 为准；执行 [AUTHORITY.md](AUTHORITY.md)。  
+> **2026-08-13**：For 行勿再读成「已对齐 Solid」——RUI 仍是整表 `for_reactive` + keyed Element reconcile，项级 `mapArray`/`createRoot` 见 G6 / WP-R.5b。
 
 | Solid API | RUI 对应 | 状态 | 备注 |
 |-----------|----------|------|------|
@@ -234,8 +236,8 @@
 | `createSelector` | `create_selector` / `Selector::is` | 有 | 阶段六 |
 | `createDeferred` / transition | `create_deferred` | 有 | 阶段六；单 flush 延迟，非 idle |
 | `<Show>` | `show_reactive` / `show_scoped` | 有 | |
-| `<For>` | `for_reactive` / `for_keyed` | 有 | |
-| `<Index>` | `for_each` | 部分 | |
+| `<For>` | `for_reactive` / `for_keyed` | 部分 | 整表 render + `template_id` reconcile；≠ `mapArray` 项级 Owner（REACTIVITY §5.5） |
+| `<Index>` | `for_each` | 部分 | 仅下标键，不是 Accessor 项 |
 | `<Switch>` / `<Match>` | `switch_reactive` | 有 | 阶段九 MVP |
 | `<Dynamic>` | `<Dynamic component={…}>` | 有 | 阶段六 |
 | `<Portal>` | `Portal` | 有 | |

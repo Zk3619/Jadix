@@ -213,10 +213,7 @@ fn single_select_focus_roving_handler(
     index: usize,
     disabled: bool,
 ) -> impl FnMut(KeyEvent) -> bool {
-    let ids: Vec<String> = values
-        .iter()
-        .map(|v| format!("{group_id}:{v}"))
-        .collect();
+    let ids: Vec<String> = values.iter().map(|v| format!("{group_id}:{v}")).collect();
     move |ev: KeyEvent| {
         if disabled {
             return false;
@@ -448,7 +445,12 @@ fn sync_toggle_group_pressed(
     let mut changed = false;
     let count = option_values.len();
     let border_w = if outline && !joined { 1.0 } else { 0.0 };
-    for (i, (option, value)) in root.children.iter_mut().zip(option_values.iter()).enumerate() {
+    for (i, (option, value)) in root
+        .children
+        .iter_mut()
+        .zip(option_values.iter())
+        .enumerate()
+    {
         let pressed = is_pressed(value.as_str());
         let (want_bg, want_border, want_fg) =
             toggle_chip_colors(pressed, disabled, outline, joined);
@@ -471,9 +473,10 @@ fn sync_toggle_group_pressed(
                 changed = true;
             }
             // Prefer keyboard focus ring over pressed chip shadow (same token/blur as Input).
-            let show_ring = option.focus_id.as_deref().is_some_and(|fid| {
-                control_focus_ring_active(fid, option.focusable, disabled)
-            });
+            let show_ring = option
+                .focus_id
+                .as_deref()
+                .is_some_and(|fid| control_focus_ring_active(fid, option.focusable, disabled));
             let (want_shadow, want_blur) = if show_ring {
                 (focus_ring_color(), FOCUS_RING_BLUR)
             } else if pressed {

@@ -18,6 +18,7 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4
 | Headless patterns | Headless 模式 | [headless.md](../headless.md) |
 | Color tokens | 颜色与混色 | [color.md](../color.md) |
 | Box model | 类 CSS 盒模型 | [box_model.md](../box_model.md) |
+| Drawing (Svg/Canvas/3D) | 公开自绘面 | [drawing.md](../drawing.md) |
 
 ## Desktop shell · 桌面外壳
 

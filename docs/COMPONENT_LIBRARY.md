@@ -2,10 +2,10 @@
 
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
-> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12  
+> **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入  
 
-交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md)
+交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
 ---
 
@@ -63,7 +63,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
-| 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal` | 写死 primary 色、圆角、阴影等视觉常量 |
+| 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
 | 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入 | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
@@ -82,6 +82,9 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | Radix Primitives | `interactive` + popup/roving 契约 + 未来抽出的 headless builders | 无 DOM；行为用 Signal + focus_id |
 | shadcn/ui | `components/*` + Theme tokens + `variant`/`size` | **源码在库内**，非「复制进用户仓库」；定制靠 token / class / 组合原语 |
 | Tailwind / Uno | `class`/`tw` + `rui_style_tokens` + attributify 属性 | 不全量 CSSOM |
+| `<svg>` / `<canvas>` | RUI `<svg>` / `<canvas>` 叶 + 2D·3D（[`drawing.md`](drawing.md)） | **无 DOM**；不搬 HTML-in-canvas；完整 SVG/Canvas2D 规范不在范围 |
+| canvas-ui 式特效 | 未来 **B16**（包住子树的 shader/paint） | 不改默认 shadcn 产品面；不挡 W3 |
+| react-bits 式动效 | 未来 **B17**（文字 / 背景 / 动画 UI 目录） | 不替代稳定面控件；不搬 CSS `@keyframes` 运行时；见 [`drawing.md`](drawing.md) §6.2 |
 
 **不采用**：npm-shadcn「复制粘贴组件文件」为默认 DX。Rust crate 的正确模型是**库内分层 + 稳定公开 API + token 覆盖**；用户要完全异形皮肤时，用 `#[component]` 组合原语（见 [`custom_components.md`](custom_components.md)）。
 
@@ -218,7 +221,7 @@ let _: Element = vstack()
 
 - `Button`：空 id → `btn-N`（进程内递增）  
 - `Input`：空 id → `__rui_input_rt_N`（兜底，避免多框共用 value 信号）  
-- `Navbar` / `bar_chart` / `line_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
+- `Navbar` / `bar_chart` / `line_chart` / `area_chart` / `pie_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
 - `Progress` / `Toggle`：空 → `resolve_instance_id`；Toggle 非受控 → `use_scoped_signal`  
 - RSX 宏：部分省略 id 的标签会生成唯一名或 Default 空串（以宏为准）
 
@@ -296,7 +299,8 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；其余=`experimental`（越出 §5.2.1） |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1）；Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
-| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
+| **数据** | VirtualList、Table、TreeView、Chart（`bar_chart`/`line_chart`/`area_chart`/`pie_chart` + RSX 标签）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
+| **绘制**（W3 可选新分区） | Svg / Canvas / Scene3d / 未来 B16 fx · B17 bits | 先 `experimental`；规范 [`drawing.md`](drawing.md)；未落地前 Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
 | **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 选区随 Label；inline=`experimental`；块级 md **缺失**（密度项） |
@@ -371,7 +375,7 @@ cargo check -p gallery
 
 ### 6.3 Gallery 契约
 
-- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · 导航 · 布局 · 文本 · 关于。  
+- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · 导航 · 布局 · 文本 · 关于；**W3 可增「绘制」**（Svg/Canvas，见 [`drawing.md`](drawing.md)），未落地前 Chart 仍在「数据」。  
 - **每公开稳定面组件至少一处可运行示例**。  
 - 变体矩阵优先展示在「基础 / 表单」（Button variants/sizes 已是标杆）。  
 - 「关于」或基础区宜保留 **Builder 写法** 对照示例，避免用户以为只能写标签。

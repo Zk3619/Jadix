@@ -50,9 +50,8 @@ impl OffscreenGpu {
         required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
         required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
         // Rounded-rect VS needs >31 inter-stage components (WebGL2 default is too low).
-        required_limits.max_inter_stage_shader_components = adapter_limits
-            .max_inter_stage_shader_components
-            .max(60);
+        required_limits.max_inter_stage_shader_components =
+            adapter_limits.max_inter_stage_shader_components.max(60);
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("rui-offscreen"),

@@ -133,7 +133,10 @@ fn adornment_slots_keep_stable_width_when_hidden() {
         .style
         .size
         .width;
-    assert_eq!(clear_w, clear_w2, "focus must not change adornment slot width");
+    assert_eq!(
+        clear_w, clear_w2,
+        "focus must not change adornment slot width"
+    );
 }
 
 #[test]

@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use crate::core::reactivity::{create_effect, dispose_effect, untrack, use_signal, EffectId};
-use crate::core::tree::{Element, IntoCssDim, LayoutStatus, UnmountHook, UnitSlot};
+use crate::core::tree::{Element, IntoCssDim, LayoutStatus, UnitSlot, UnmountHook};
 
 use super::runtime;
 
@@ -346,7 +346,11 @@ where
 ///
 /// Use for components whose internal signals (e.g. Select `open`) must rebuild the
 /// subtree. Prefer [`reactive_component`] when the body should only refresh on props.
-pub fn reactive_component_live<P, F>(anchor_id: impl Into<String>, props: P, mut render: F) -> Element
+pub fn reactive_component_live<P, F>(
+    anchor_id: impl Into<String>,
+    props: P,
+    mut render: F,
+) -> Element
 where
     P: Clone + PartialEq + 'static,
     F: FnMut(P) -> Element + 'static,
@@ -705,11 +709,7 @@ where
 ///
 /// Returns [`LayoutStatus::LayoutChanged`] when the dimension actually changes so
 /// `update_element_by_template_id` queues Taffy `mark_dirty` + root compute.
-pub fn apply_bound_size(
-    el: &mut Element,
-    axis: &str,
-    next: impl IntoCssDim,
-) -> LayoutStatus {
+pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> LayoutStatus {
     let dim = next.into_css_dim();
     let slot = match axis {
         "w" | "width" | "inline_size" | "inlineSize" => UnitSlot::Width,
@@ -954,9 +954,11 @@ mod intrinsic_width_tests {
             let out = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
             let out2 = out.clone();
             create_effect(move || {
-                let el = switch_reactive("sw-test", move || key.get(), |k| {
-                    Element::new().text(format!("arm-{k}"))
-                });
+                let el = switch_reactive(
+                    "sw-test",
+                    move || key.get(),
+                    |k| Element::new().text(format!("arm-{k}")),
+                );
                 *out2.borrow_mut() = el.template_id.clone();
             });
             let tid = out.borrow().clone().expect("id");

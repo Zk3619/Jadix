@@ -5,9 +5,9 @@ mod input_adornments;
 mod input_caret;
 mod input_shape_suffix;
 mod label_emoji_clip;
+mod textarea_empty_scroll;
 mod textarea_gallery_diag;
 mod textarea_multiline;
-mod textarea_empty_scroll;
 
 #[cfg(test)]
 mod glyphon_newline_diag {

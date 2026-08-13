@@ -326,10 +326,7 @@ fn apply_bound_size_marks_layout_changed_on_width() {
     let mut el = Element::new().w("3.5rem");
     let narrow = IntoDimension::into_dimension("3.5rem");
     let wide = IntoDimension::into_dimension("11rem");
-    assert_eq!(
-        apply_bound_size(&mut el, "w", narrow),
-        LayoutStatus::Clean
-    );
+    assert_eq!(apply_bound_size(&mut el, "w", narrow), LayoutStatus::Clean);
     assert_eq!(
         apply_bound_size(&mut el, "w", wide),
         LayoutStatus::LayoutChanged
@@ -350,9 +347,6 @@ fn bind_prop_applies_initial_width() {
         move || IntoDimension::into_dimension(if wide.get() { "11rem" } else { "3.5rem" }),
         |el, dim| apply_bound_size(el, "w", dim),
     );
-    assert_eq!(
-        el.style.size.width,
-        IntoDimension::into_dimension("3.5rem")
-    );
+    assert_eq!(el.style.size.width, IntoDimension::into_dimension("3.5rem"));
     reset_registered_anchors();
 }

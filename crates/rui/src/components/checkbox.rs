@@ -162,12 +162,7 @@ fn indicator_fg(on: bool) -> [u8; 4] {
 }
 
 fn unpack_checkbox_children(mut children: Vec<Element>) -> Vec<Element> {
-    if children.len() == 1
-        && children[0]
-            .attrs
-            .get("rui_fragment")
-            .map(|s| s.as_str())
-            == Some("1")
+    if children.len() == 1 && children[0].attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1")
     {
         return std::mem::take(&mut children[0].children);
     }

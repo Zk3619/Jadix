@@ -1,8 +1,8 @@
 //! Regression: Textarea leaf height must grow with hard `\n` after paint sync.
 
 use crate::components::input::input_value_signal_key;
-use crate::components::textarea::textarea;
 use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -45,9 +45,7 @@ fn textarea_leaf_grows_with_hard_newlines_after_paint_sync() {
     let mut root = Element::new().w(400.0).h(400.0).child(el);
     let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
 
-    let h0 = find_tid(&root, &tid)
-        .expect("text leaf")
-        .layout_bounds[3];
+    let h0 = find_tid(&root, &tid).expect("text leaf").layout_bounds[3];
     assert!(
         h0 > lh * 0.8 && h0 < lh + ink * 2.0 + 4.0,
         "placeholder leaf should be ~1 line + bottom ink (lh={lh} ink={ink}), got {h0}"
@@ -145,7 +143,9 @@ fn textarea_leaf_height_ignores_chrome_resize() {
     let mut impact = LayoutStatus::Clean;
     sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
     let _ = tree.build_and_layout_fast(&mut root, 400.0, 400.0, [-1.0, -1.0], false, false);
-    let h_tall = find_tid(&root, &tid).expect("text leaf after resize").layout_bounds[3];
+    let h_tall = find_tid(&root, &tid)
+        .expect("text leaf after resize")
+        .layout_bounds[3];
 
     assert!(
         (h_short - h_tall).abs() < 1.0,
@@ -201,7 +201,8 @@ fn textarea_short_chrome_clips_content_tall_leaf_not_flex_shrink() {
         sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
         let _ = tree.build_and_layout_fast(&mut root, 400.0, 500.0, [-1.0, -1.0], false, false);
     }
-    let result_tall = tree.build_and_layout_fast(&mut root, 400.0, 500.0, [-1.0, -1.0], false, false);
+    let result_tall =
+        tree.build_and_layout_fast(&mut root, 400.0, 500.0, [-1.0, -1.0], false, false);
     let leaf_h_tall = find_tid(&root, &tid).expect("text leaf tall").layout_bounds[3];
     let chrome_h_tall = root.children[0].layout_bounds[3];
     let info_tall = result_tall
@@ -261,11 +262,7 @@ fn textarea_parent_flex_shrink_does_not_crush_leaf_height() {
 
     let el: Element = textarea(id).rows(4).resizable(true).into();
     let mut tree = LayoutTree::new();
-    let mut root = Element::new()
-        .w(400.0)
-        .h(lh * 1.6)
-        .flex_col()
-        .child(el);
+    let mut root = Element::new().w(400.0).h(lh * 1.6).flex_col().child(el);
     let result = tree.build_and_layout(&mut root, 400.0, lh * 1.6, [-1.0, -1.0]);
     let leaf_h = find_tid(&root, &tid).expect("text leaf").layout_bounds[3];
     let chrome_h = root.children[0].layout_bounds[3];
@@ -344,7 +341,11 @@ fn textarea_shaped_line_height_matches_style_not_chrome() {
     );
     buffer.shape_until_scroll(&mut fs, false);
     let runs: Vec<_> = buffer.layout_runs().collect();
-    assert!(runs.len() >= 2, "expected 2 shaped lines, got {}", runs.len());
+    assert!(
+        runs.len() >= 2,
+        "expected 2 shaped lines, got {}",
+        runs.len()
+    );
     for (i, run) in runs.iter().enumerate() {
         assert!(
             (run.line_height - lh).abs() < 0.5,
@@ -501,7 +502,9 @@ fn textarea_leaf_shrinks_when_hard_lines_deleted() {
         "delete lines must LayoutChanged, got {impact:?}"
     );
     let _ = tree.build_and_layout_fast(&mut root, 400.0, 400.0, [-1.0, -1.0], false, false);
-    let h_short = find_tid(&root, &tid).expect("text leaf after shrink").layout_bounds[3];
+    let h_short = find_tid(&root, &tid)
+        .expect("text leaf after shrink")
+        .layout_bounds[3];
     assert!(
         h_short < h_tall - lh,
         "leaf must shrink after deleting lines (tall={h_tall} short={h_short} lh={lh})"
@@ -570,8 +573,7 @@ fn textarea_wheel_scroll_not_clamped_to_caret_every_frame() {
 #[test]
 fn textarea_has_overlay_y_scrollbar_track() {
     let id = "ta-ml-scrollbar";
-    use_signal(&input_value_signal_key(id), String::new)
-        .set("1\n2\n3\n4\n5\n6\n7\n8".into());
+    use_signal(&input_value_signal_key(id), String::new).set("1\n2\n3\n4\n5\n6\n7\n8".into());
     let el: Element = textarea(id).rows(2).into();
     let rest = crate::utils::text_field::textarea_scroll_rest(id);
     let track_fid = format!(
@@ -815,9 +817,7 @@ fn textarea_newline_at_bottom_scrolls_last_line_fully_visible() {
 #[test]
 fn textarea_trailing_newline_scrolls_before_content_h_signal_refreshes() {
     use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
-    use crate::core::scroll_viewport::{
-        scroll_content_h_signal_key, scroll_offset_y_signal_key,
-    };
+    use crate::core::scroll_viewport::{scroll_content_h_signal_key, scroll_offset_y_signal_key};
 
     let mut fs = font_loader::create_font_system();
     font_loader::apply_default_families(fs.db_mut());
@@ -941,7 +941,11 @@ fn textarea_nested_in_scroll_area_keeps_own_overflow_metrics() {
     let cy = info.y + clip_h.min(info.height) * 0.5;
     let mut chain = Vec::new();
     assert!(collect_scroll_rest_chain_at(
-        &root, cx, cy, [0.0, 0.0], &mut chain
+        &root,
+        cx,
+        cy,
+        [0.0, 0.0],
+        &mut chain
     ));
     assert_eq!(
         chain.first().map(String::as_str),
@@ -1088,12 +1092,7 @@ fn controlled_value_update_keeps_tall_leaf_and_large_max_scroll() {
         .flex_col()
         .gap(12.0)
         .p(24.0)
-        .child(
-            textarea(id)
-                .rows(4)
-                .resizable(true)
-                .value_signal(notes),
-        );
+        .child(textarea(id).rows(4).resizable(true).value_signal(notes));
     let mut root = Element::from(
         scroll_area("root-scroll-ta")
             .w(900.0)
@@ -1230,8 +1229,7 @@ fn textarea_overflow_content_enables_y_scroll_metrics() {
     let rest = crate::utils::text_field::textarea_scroll_rest(id);
     let h_key = crate::utils::text_field::textarea_height_signal_key(id);
     use_signal(&h_key, || 0.0_f32).set(chrome_h);
-    use_signal(&input_value_signal_key(id), String::new)
-        .set("1\n2\n3\n4\n5\n6\n7\n8".into());
+    use_signal(&input_value_signal_key(id), String::new).set("1\n2\n3\n4\n5\n6\n7\n8".into());
 
     let el: Element = textarea(id).rows(2).into();
     let mut tree = LayoutTree::new();

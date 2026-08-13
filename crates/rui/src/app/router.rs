@@ -115,10 +115,7 @@ impl Router {
         let view_id = format!("{}__router_view", self.id);
         reactive_view(view_id, move || {
             let name = current.get();
-            routes
-                .get(&name)
-                .map(|f| f())
-                .unwrap_or_default()
+            routes.get(&name).map(|f| f()).unwrap_or_default()
         })
     }
 }

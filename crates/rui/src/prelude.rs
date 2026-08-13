@@ -67,8 +67,8 @@ pub use crate::core::tree::Element;
 // ---------------------------------------------------------------------------
 
 pub use crate::primitives::{
-    gstack, hstack, icon, interactive, r#box, text, vstack, BoxBuilder, InteractiveBuilder,
-    Portal, PortalProps, TextBuilder,
+    gstack, hstack, icon, interactive, r#box, text, vstack, BoxBuilder, InteractiveBuilder, Portal,
+    PortalProps, TextBuilder,
 };
 
 // ---------------------------------------------------------------------------
@@ -76,8 +76,8 @@ pub use crate::primitives::{
 // ---------------------------------------------------------------------------
 
 pub use crate::style::{
-    get_theme, is_dark_theme, set_theme_mode, theme_mode, toggle_theme_mode, FocusRingStyle,
-    Theme, ThemeMode,
+    get_theme, is_dark_theme, set_theme_mode, theme_mode, toggle_theme_mode, FocusRingStyle, Theme,
+    ThemeMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -85,8 +85,127 @@ pub use crate::style::{
 // ---------------------------------------------------------------------------
 
 pub use crate::components::{
+    // Chart
+    area_chart,
+    bar_chart,
     // Button
     button,
+    // Carousel
+    carousel,
+    // Checkbox
+    checkbox,
+    // Form
+    clear_all_errors,
+    clear_field_error,
+    // ColorPicker
+    color_picker,
+    // Combobox
+    combobox,
+    combobox_content,
+    combobox_scope,
+    // Command
+    command,
+    // ContextMenu
+    context_menu,
+    // Date / Time
+    date_picker,
+    // Dialog（复合标签 + Builder）
+    dialog,
+    dialog_close,
+    dialog_content,
+    dialog_open,
+    dialog_scope,
+    // Dropdown（暂仅 Builder）
+    dropdown,
+    // Label（不 re-export `text` 别名，避免与 primitives::text 撞名）
+    enable_label_selection,
+    form_errors_signal,
+    form_field,
+    form_provider,
+    form_validate,
+    // Input
+    input,
+    label,
+    line_chart,
+    // Menubar
+    menubar,
+    // Navbar / NavigationMenu / Sidebar
+    navbar,
+    navigation_menu,
+    pie_chart,
+    // Progress
+    progress,
+    // Radio / Slider / Switch / Toggle*
+    radio_group,
+    radio_group_scope,
+    // Resizable
+    resizable,
+    // Scroll*
+    scroll_area,
+    scroll_viewport,
+    scrollarea,
+    scrollbar,
+    scrollviewport,
+    // Select
+    select,
+    select_content,
+    select_scope,
+    // Separator
+    separator,
+    set_field_error,
+    // Sheet
+    sheet,
+    sidebar,
+    slider,
+    // Stepper
+    stepper,
+    switch,
+    // Table / Tree / VirtualList
+    table,
+    // Tabs
+    tabs_content,
+    tabs_headless,
+    tabs_headless_root,
+    tabs_list,
+    tabs_scope,
+    // Textarea
+    textarea,
+    time_picker,
+    // Toast / Toaster（默认 stack 堆叠；list 为逐条展开）
+    toast,
+    toast_dismiss,
+    toast_host,
+    toast_pending,
+    toast_push,
+    toast_queue,
+    toast_set_layout,
+    toast_set_limit,
+    toast_set_overflow,
+    toast_set_position,
+    toaster,
+    toggle,
+    toggle_group,
+    // Tooltip
+    tooltip,
+    tooltip_content,
+    tooltip_scope,
+    tooltip_side_to_placement,
+    tree_view,
+    try_copy_label_selection,
+    use_combobox,
+    use_dialog,
+    use_radio_group,
+    use_select,
+    use_tabs,
+    use_tooltip,
+    virtual_list,
+    AreaChart,
+    AreaChartProps,
+    BarChart,
+    BarChartBuilder,
+    BarChartProps,
+    ChartSelect,
+    ChartSelected,
     Button,
     ButtonBuilder,
     ButtonProps,
@@ -105,29 +224,14 @@ pub use crate::components::{
     CardProps,
     CardTitle,
     CardTitleProps,
-    // Carousel
-    carousel,
     CarouselBuilder,
-    // Chart
-    bar_chart,
-    line_chart,
-    BarChartBuilder,
-    LineChartBuilder,
-    // Checkbox
-    checkbox,
+    ChartDatum,
     Checkbox,
     CheckboxBuilder,
     CheckboxProps,
-    // ColorPicker
-    color_picker,
     ColorPicker,
     ColorPickerBuilder,
     ColorPickerProps,
-    // Combobox
-    combobox,
-    combobox_content,
-    combobox_scope,
-    use_combobox,
     Combobox,
     ComboboxBuilder,
     ComboboxContentOpts,
@@ -150,31 +254,14 @@ pub use crate::components::{
     ComboboxSeparator,
     ComboboxSeparatorProps,
     ComboboxVisibleItem,
-    // Command
-    command,
     CommandAction,
     CommandBuilder,
-    // ContextMenu
-    context_menu,
     ContextMenuBuilder,
     ContextMenuItem,
-    // Date / Time
-    date_picker,
-    time_picker,
     DatePicker,
     DatePickerBuilder,
     DatePickerKind,
     DatePickerProps,
-    TimePicker,
-    TimePickerBuilder,
-    TimePickerProps,
-    // Dialog（复合标签 + Builder）
-    dialog,
-    dialog_close,
-    dialog_content,
-    dialog_open,
-    dialog_scope,
-    use_dialog,
     DialogBody,
     DialogBodyProps,
     DialogBuilder,
@@ -190,57 +277,34 @@ pub use crate::components::{
     DialogTitleProps,
     DialogTrigger,
     DialogTriggerProps,
-    // Dropdown（暂仅 Builder）
-    dropdown,
     DropdownBuilder,
-    // Form
-    clear_all_errors,
-    clear_field_error,
-    form_errors_signal,
-    form_field,
-    form_provider,
-    form_validate,
-    set_field_error,
     FormState,
     // Image
     Image,
     ImageProps,
-    // Input
-    input,
     Input,
     InputBuilder,
     InputProps,
     InputType,
-    // Label（不 re-export `text` 别名，避免与 primitives::text 撞名）
-    enable_label_selection,
-    label,
-    try_copy_label_selection,
     Label,
     LabelBuilder,
     LabelProps,
-    // Menubar
-    menubar,
+    LineChart,
+    LineChartBuilder,
+    LineChartProps,
     MenuItem,
     MenuSection,
     MenubarBuilder,
-    // Navbar / NavigationMenu / Sidebar
-    navbar,
     NavbarBuilder,
-    navigation_menu,
     NavigationMenuBuilder,
     NavigationMenuItem,
     NavigationMenuLink,
-    sidebar,
-    SidebarBuilder,
-    // Progress
-    progress,
+    PieChart,
+    PieChartBuilder,
+    PieChartProps,
     Progress,
     ProgressBuilder,
     ProgressProps,
-    // Radio / Slider / Switch / Toggle*
-    radio_group,
-    radio_group_scope,
-    use_radio_group,
     RadioGroup,
     RadioGroupBuilder,
     RadioGroupCtx,
@@ -249,46 +313,17 @@ pub use crate::components::{
     RadioGroupItemLabelProps,
     RadioGroupItemProps,
     RadioGroupProps,
-    slider,
-    Slider,
-    SliderBuilder,
-    SliderProps,
-    switch,
-    Switch,
-    SwitchBuilder,
-    SwitchProps,
-    toggle,
-    Toggle,
-    ToggleBuilder,
-    ToggleProps,
-    toggle_group,
-    ToggleGroup,
-    ToggleGroupBuilder,
-    ToggleGroupProps,
-    // Resizable
-    resizable,
     ResizableBuilder,
-    // Scroll*
-    scroll_area,
-    scrollarea,
     ScrollArea,
     ScrollAreaBuilder,
     ScrollAreaProps,
-    scroll_viewport,
-    scrollviewport,
     ScrollViewport,
     ScrollViewportBuilder,
     ScrollViewportProps,
-    scrollbar,
     Scrollbar,
     ScrollbarBuilder,
     ScrollbarOrientation,
     ScrollbarProps,
-    // Select
-    select,
-    select_content,
-    select_scope,
-    use_select,
     Select,
     SelectBuilder,
     SelectContentOpts,
@@ -309,36 +344,23 @@ pub use crate::components::{
     SelectTriggerProps,
     SelectValue,
     SelectValueProps,
-    // Separator
-    separator,
     Separator,
     SeparatorBuilder,
     SeparatorProps,
-    // Sheet
-    sheet,
     SheetBuilder,
     SheetSide,
-    // Stepper
-    stepper,
+    SidebarBuilder,
+    Slider,
+    SliderBuilder,
+    SliderProps,
     StepperBuilder,
-    // Table / Tree / VirtualList
-    table,
+    Switch,
+    SwitchBuilder,
+    SwitchProps,
     TableBuilder,
     TableColumn,
     TableSortDir,
     TableSortState,
-    tree_view,
-    TreeNode,
-    TreeViewBuilder,
-    virtual_list,
-    VirtualListBuilder,
-    // Tabs
-    tabs_content,
-    tabs_headless,
-    tabs_headless_root,
-    tabs_list,
-    tabs_scope,
-    use_tabs,
     Tabs,
     TabsContent,
     TabsContentProps,
@@ -351,24 +373,12 @@ pub use crate::components::{
     TabsProps,
     TabsTrigger,
     TabsTriggerProps,
-    TABSTRIP_FOCUS_PREFIX,
-    // Textarea
-    textarea,
     Textarea,
     TextareaBuilder,
     TextareaProps,
-    // Toast / Toaster（默认 stack 堆叠；list 为逐条展开）
-    toast,
-    toast_dismiss,
-    toast_host,
-    toast_pending,
-    toast_push,
-    toast_queue,
-    toast_set_layout,
-    toast_set_limit,
-    toast_set_overflow,
-    toast_set_position,
-    toaster,
+    TimePicker,
+    TimePickerBuilder,
+    TimePickerProps,
     Toast,
     ToastBuilder,
     ToastClose,
@@ -386,15 +396,19 @@ pub use crate::components::{
     Toaster,
     ToasterBuilder,
     ToasterProps,
-    // Tooltip
-    tooltip,
-    tooltip_content,
-    tooltip_scope,
-    tooltip_side_to_placement,
-    use_tooltip,
+    Toggle,
+    ToggleBuilder,
+    ToggleGroup,
+    ToggleGroupBuilder,
+    ToggleGroupProps,
+    ToggleProps,
     TooltipBuilder,
     TooltipContentOpts,
     TooltipCtx,
     TooltipTrigger,
     TooltipTriggerProps,
+    TreeNode,
+    TreeViewBuilder,
+    VirtualListBuilder,
+    TABSTRIP_FOCUS_PREFIX,
 };

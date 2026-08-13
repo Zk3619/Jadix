@@ -11,7 +11,9 @@ use super::reactivity::Signal;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResourceState<T> {
     /// In-flight (or not yet resolved). `previous` is stale-while-revalidate data.
-    Loading { previous: Option<T> },
+    Loading {
+        previous: Option<T>,
+    },
     Ready(T),
     Err(String),
 }

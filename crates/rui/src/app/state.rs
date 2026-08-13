@@ -10,7 +10,7 @@ use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
     BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
-    TexturedInstanceInput, TexturedQuadPipeline,
+    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -174,6 +174,67 @@ pub(super) struct AppState {
     /// (pixels move across the viewport; scissor from hover/bind_text would paint scroll only
     /// inside the old dirty rect).
     last_scroll_offset_fp: u64,
+}
+
+/// `queue.write_buffer` 在 submit 时先于 render pass 执行；同一 buffer 多次写 offset 0
+/// 会只留下最后一次（饼图一进视口，折线实例被盖成饼图矩形）。须一次打包、按 instance range 画。
+fn upload_textured_instance_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &mut wgpu::Buffer,
+    capacity: &mut usize,
+    insts: &[TexturedInstanceInput],
+) {
+    if insts.is_empty() {
+        return;
+    }
+    let stride = std::mem::size_of::<TexturedInstanceInput>();
+    if insts.len() > *capacity {
+        let new_cap = insts.len().max(256);
+        *buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Textured instance buffer"),
+            size: (stride * new_cap) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        *capacity = new_cap;
+    }
+    queue.write_buffer(buffer, 0, bytemuck::cast_slice(insts));
+}
+
+fn draw_packed_textured_runs<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    pipeline: &'pass TexturedQuadPipeline,
+    instance_buffer: &'pass wgpu::Buffer,
+    image_textures: &'pass HashMap<String, super::image_registry::GpuImageTexture>,
+    scaled_tex: &[ScaledTexturedDraw],
+    start: usize,
+    end: usize,
+) {
+    let end = end.min(scaled_tex.len());
+    let mut ti = start.min(end);
+    while ti < end {
+        let key = scaled_tex[ti].texture_key.as_str();
+        let Some(gpu_img) = image_textures.get(key) else {
+            ti += 1;
+            continue;
+        };
+        let run = scaled_tex[ti..end]
+            .iter()
+            .take_while(|d| d.texture_key == key)
+            .count();
+        if run == 0 {
+            ti += 1;
+            continue;
+        }
+        pass.set_pipeline(&pipeline.render_pipeline);
+        pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, instance_buffer.slice(..));
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..pipeline.num_indices, 0, ti as u32..(ti + run) as u32);
+        ti += run;
+    }
 }
 
 impl AppState {
@@ -638,9 +699,8 @@ impl AppState {
         self.damage_rect = Some(match self.damage_rect {
             Some(existing) => {
                 // Prefer multi-rect helper so Stage-8 API stays live on the hot path.
-                super::damage::rects_union(&[existing, rect]).unwrap_or_else(|| {
-                    super::damage::union_rects(existing, rect)
-                })
+                super::damage::rects_union(&[existing, rect])
+                    .unwrap_or_else(|| super::damage::union_rects(existing, rect))
             }
             None => rect,
         });
@@ -967,8 +1027,7 @@ impl AppState {
                 continue;
             };
             if let Some(mut old_child) = old_by_id.remove(&id) {
-                let child_status =
-                    Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
+                let child_status = Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
                 status = Self::merge_layout_status(status, child_status);
             } else {
                 status = LayoutStatus::StructureChanged;
@@ -1268,10 +1327,7 @@ impl AppState {
             // same-frame `ReactiveSync` (e.g. VirtualList window remount). Do **not** promote on
             // chrome-only LayoutChanged inside sync_impact (hover/shadow) — that was the old
             // flicker path when chrome was merged into `layout_status`.
-            scrollbar_update_resolved = match (
-                pre_chrome_layout_status,
-                sync_impact,
-            ) {
+            scrollbar_update_resolved = match (pre_chrome_layout_status, sync_impact) {
                 (LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged, _)
                 | (_, LayoutStatus::StructureChanged) => ScrollbarUpdateMode::Full,
                 (LayoutStatus::StyleChanged | LayoutStatus::Clean, _) => scrollbar_update,
@@ -1343,8 +1399,7 @@ impl AppState {
                 crate::core::tree::LayoutStatus::LayoutChanged
             ) || !self.pending_layout_dirty.is_empty())
         {
-            let dirty: std::collections::HashSet<_> =
-                self.pending_layout_dirty.drain(..).collect();
+            let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
             if dirty.is_empty() {
                 // Resize settle / paint→fit relayout: available space often unchanged, so Taffy
                 // will not remasure unless text leaves are marked dirty.
@@ -1442,16 +1497,12 @@ impl AppState {
             scale_instances(&render_result.input_chrome_instances, self.ui_scale());
         self.num_instances = render_result.instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
-        let overlay_inst_start = overlay_split
-            .instance_start
-            .min(scaled_instances.len());
+        let overlay_inst_start = overlay_split.instance_start.min(scaled_instances.len());
         let overlay_text_start = overlay_split.text_start.min(self.text_nodes.len());
         let overlay_tex_start = overlay_split
             .textured_start
             .min(render_result.textured_draws.len());
-        let overlay_chrome_start = overlay_split
-            .chrome_start
-            .min(scaled_input_chrome.len());
+        let overlay_chrome_start = overlay_split.chrome_start.min(scaled_input_chrome.len());
         // Portal overlays span arbitrary screen regions; partial-damage scissors leave
         // stale page chrome and clipped panels (esp. GLES). Always clear the full frame.
         if overlay_inst_start < scaled_instances.len()
@@ -1511,9 +1562,6 @@ impl AppState {
         let ui_scale = self.ui_scale();
 
         for (id, rgba, w, h) in super::pending_images::take_pending() {
-            if self.image_textures.contains_key(&id) {
-                continue;
-            }
             let gpu = super::image_registry::upload_rgba8(
                 &self.device,
                 &self.queue,
@@ -1525,6 +1573,15 @@ impl AppState {
             self.image_textures.insert(id, gpu);
         }
         let scaled_tex = scale_textured_draws(&render_result.textured_draws, ui_scale);
+        let tex_insts: Vec<TexturedInstanceInput> =
+            scaled_tex.iter().map(|d| d.to_instance()).collect();
+        upload_textured_instance_buffer(
+            &self.device,
+            &self.queue,
+            &mut self.textured_instance_buffer,
+            &mut self.textured_instance_capacity,
+            &tex_insts,
+        );
         let has_dynamic_text = self
             .text_nodes
             .iter()
@@ -1578,44 +1635,44 @@ impl AppState {
                     self.last_shadow_tex_draws.clone(),
                 )
             } else {
-            for bm in &prep_out.shadow_new_bitmaps {
-                let gpu = super::image_registry::upload_rgba8(
-                    &self.device,
-                    &self.queue,
-                    &self.textured_pipeline,
-                    &bm.rgba,
-                    bm.width,
-                    bm.height,
-                );
-                self.shadow_tex_cache.insert(bm.cache_key, gpu);
-                self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
-            }
-            self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
-            self.last_text_ui_scale = ui_scale;
-            self.last_text_surface_size = [self.config.width, self.config.height];
-            self.last_underline_instances = prep_out.underline_instances.clone();
-            self.last_caret_instances = prep_out.caret_instances.clone();
-            self.last_shadow_tex_draws = prep_out.shadow_tex_draws.clone();
-            self.last_caret_blink_phase = caret_phase;
-            if self.text_backend == TextRendererBackend::CpuTextHybrid {
-                self.cpu_text_profiler.record(
-                    (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
-                    overlay_text_start,
-                );
-            }
-            if prep_out.needs_warmup {
-                self.window.request_redraw();
-            }
-            // P1: paint spill→fit may need a taller leaf; remeasure next frame from FIT_CACHE.
-            if crate::text::take_fit_needs_relayout() {
-                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
-                self.window.request_redraw();
-            }
-            (
-                prep_out.underline_instances,
-                prep_out.caret_instances,
-                prep_out.shadow_tex_draws,
-            )
+                for bm in &prep_out.shadow_new_bitmaps {
+                    let gpu = super::image_registry::upload_rgba8(
+                        &self.device,
+                        &self.queue,
+                        &self.textured_pipeline,
+                        &bm.rgba,
+                        bm.width,
+                        bm.height,
+                    );
+                    self.shadow_tex_cache.insert(bm.cache_key, gpu);
+                    self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
+                }
+                self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
+                self.last_text_ui_scale = ui_scale;
+                self.last_text_surface_size = [self.config.width, self.config.height];
+                self.last_underline_instances = prep_out.underline_instances.clone();
+                self.last_caret_instances = prep_out.caret_instances.clone();
+                self.last_shadow_tex_draws = prep_out.shadow_tex_draws.clone();
+                self.last_caret_blink_phase = caret_phase;
+                if self.text_backend == TextRendererBackend::CpuTextHybrid {
+                    self.cpu_text_profiler.record(
+                        (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
+                        overlay_text_start,
+                    );
+                }
+                if prep_out.needs_warmup {
+                    self.window.request_redraw();
+                }
+                // P1: paint spill→fit may need a taller leaf; remeasure next frame from FIT_CACHE.
+                if crate::text::take_fit_needs_relayout() {
+                    self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                    self.window.request_redraw();
+                }
+                (
+                    prep_out.underline_instances,
+                    prep_out.caret_instances,
+                    prep_out.shadow_tex_draws,
+                )
             }
         };
 
@@ -1785,10 +1842,7 @@ impl AppState {
             viewport_logical,
         );
         let mut scissor_physical = None;
-        if matches!(
-            logical_policy,
-            super::damage::FrameClearPolicy::PartialLoad
-        ) {
+        if matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad) {
             scissor_physical = self.damage_rect.and_then(|damage| {
                 super::damage::damage_to_scissor_physical(
                     damage,
@@ -1803,10 +1857,7 @@ impl AppState {
             }
         }
         let want_gpu_partial = Self::gpu_partial_damage_enabled()
-            && matches!(
-                logical_policy,
-                super::damage::FrameClearPolicy::PartialLoad
-            );
+            && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad);
         // Experimental path only (`RUI_PARTIAL_DAMAGE=1`): Load when retain is warm; otherwise
         // one FullClear-into-retain to prime. Default builds never enter this branch.
         let use_partial_damage = want_gpu_partial && self.present_retain.contents_valid();
@@ -1886,64 +1937,15 @@ impl AppState {
                         0..overlay_inst_start as u32,
                     );
                     if overlay_tex_start > 0 {
-                        let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
-                        let mut ti = 0;
-                        while ti < overlay_tex_start {
-                            let key = scaled_tex[ti].texture_key.clone();
-                            let Some(gpu_img) = self.image_textures.get(&key) else {
-                                ti += 1;
-                                continue;
-                            };
-                            let run = scaled_tex[ti..overlay_tex_start]
-                                .iter()
-                                .take_while(|d| d.texture_key == key)
-                                .count();
-                            let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
-                                .iter()
-                                .map(|d| TexturedInstanceInput {
-                                    rect_pos: [d.rect[0], d.rect[1]],
-                                    rect_size: [d.rect[2], d.rect[3]],
-                                    tint: [1.0, 1.0, 1.0, d.opacity],
-                                })
-                                .collect();
-                            if !insts.is_empty() {
-                                if insts.len() > self.textured_instance_capacity {
-                                    let new_cap = insts.len().max(256);
-                                    self.textured_instance_buffer =
-                                        self.device.create_buffer(&wgpu::BufferDescriptor {
-                                            label: Some("Textured instance buffer"),
-                                            size: (tex_stride * new_cap) as u64,
-                                            usage: wgpu::BufferUsages::VERTEX
-                                                | wgpu::BufferUsages::COPY_DST,
-                                            mapped_at_creation: false,
-                                        });
-                                    self.textured_instance_capacity = new_cap;
-                                }
-                                self.queue.write_buffer(
-                                    &self.textured_instance_buffer,
-                                    0,
-                                    bytemuck::cast_slice(&insts),
-                                );
-                                page_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                                page_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                                page_pass.set_vertex_buffer(
-                                    0,
-                                    self.textured_pipeline.vertex_buffer.slice(..),
-                                );
-                                page_pass
-                                    .set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
-                                page_pass.set_index_buffer(
-                                    self.textured_pipeline.index_buffer.slice(..),
-                                    wgpu::IndexFormat::Uint16,
-                                );
-                                page_pass.draw_indexed(
-                                    0..self.textured_pipeline.num_indices,
-                                    0,
-                                    0..insts.len() as u32,
-                                );
-                            }
-                            ti += run;
-                        }
+                        draw_packed_textured_runs(
+                            &mut page_pass,
+                            &self.textured_pipeline,
+                            &self.textured_instance_buffer,
+                            &self.image_textures,
+                            &scaled_tex,
+                            0,
+                            overlay_tex_start,
+                        );
                     }
                     if !underline_instances.is_empty() {
                         page_pass.set_pipeline(&self.pipeline.render_pipeline);
@@ -2062,61 +2064,15 @@ impl AppState {
             }
 
             if allow_primitives && overlay_tex_start > 0 && !use_backdrop_blur {
-                let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
-                let mut ti = 0;
-                while ti < overlay_tex_start {
-                    let key = scaled_tex[ti].texture_key.clone();
-                    let Some(gpu_img) = self.image_textures.get(&key) else {
-                        ti += 1;
-                        continue;
-                    };
-                    let run = scaled_tex[ti..overlay_tex_start]
-                        .iter()
-                        .take_while(|d| d.texture_key == key)
-                        .count();
-                    let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
-                        .iter()
-                        .map(|d| TexturedInstanceInput {
-                            rect_pos: [d.rect[0], d.rect[1]],
-                            rect_size: [d.rect[2], d.rect[3]],
-                            tint: [1.0, 1.0, 1.0, d.opacity],
-                        })
-                        .collect();
-                    if !insts.is_empty() {
-                        if insts.len() > self.textured_instance_capacity {
-                            let new_cap = insts.len().max(256);
-                            self.textured_instance_buffer =
-                                self.device.create_buffer(&wgpu::BufferDescriptor {
-                                    label: Some("Textured instance buffer"),
-                                    size: (tex_stride * new_cap) as u64,
-                                    usage: wgpu::BufferUsages::VERTEX
-                                        | wgpu::BufferUsages::COPY_DST,
-                                    mapped_at_creation: false,
-                                });
-                            self.textured_instance_capacity = new_cap;
-                        }
-                        self.queue.write_buffer(
-                            &self.textured_instance_buffer,
-                            0,
-                            bytemuck::cast_slice(&insts),
-                        );
-                        render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                        render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                        render_pass
-                            .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
-                        render_pass.set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
-                        render_pass.set_index_buffer(
-                            self.textured_pipeline.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        render_pass.draw_indexed(
-                            0..self.textured_pipeline.num_indices,
-                            0,
-                            0..insts.len() as u32,
-                        );
-                    }
-                    ti += run;
-                }
+                draw_packed_textured_runs(
+                    &mut render_pass,
+                    &self.textured_pipeline,
+                    &self.textured_instance_buffer,
+                    &self.image_textures,
+                    &scaled_tex,
+                    0,
+                    overlay_tex_start,
+                );
             }
 
             if !use_backdrop_blur {
@@ -2128,6 +2084,8 @@ impl AppState {
                         rect_pos: [sd.rect[0], sd.rect[1]],
                         rect_size: [sd.rect[2], sd.rect[3]],
                         tint: [1.0, 1.0, 1.0, 1.0],
+                        uv_offset: [0.0, 0.0],
+                        uv_scale: [1.0, 1.0],
                     };
                     let shadow_inst_buf =
                         self.device
@@ -2138,7 +2096,8 @@ impl AppState {
                             });
                     render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                    render_pass
+                        .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
                     render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
                     render_pass.set_index_buffer(
                         self.textured_pipeline.index_buffer.slice(..),
@@ -2244,64 +2203,15 @@ impl AppState {
                 }
 
                 if allow_primitives && band.textured.0 < band.textured.1 {
-                    let tex_stride = std::mem::size_of::<TexturedInstanceInput>();
-                    let mut ti = band.textured.0;
-                    while ti < band.textured.1 {
-                        let key = scaled_tex[ti].texture_key.clone();
-                        let Some(gpu_img) = self.image_textures.get(&key) else {
-                            ti += 1;
-                            continue;
-                        };
-                        let run = scaled_tex[ti..band.textured.1]
-                            .iter()
-                            .take_while(|d| d.texture_key == key)
-                            .count();
-                        let insts: Vec<TexturedInstanceInput> = scaled_tex[ti..ti + run]
-                            .iter()
-                            .map(|d| TexturedInstanceInput {
-                                rect_pos: [d.rect[0], d.rect[1]],
-                                rect_size: [d.rect[2], d.rect[3]],
-                                tint: [1.0, 1.0, 1.0, d.opacity],
-                            })
-                            .collect();
-                        if !insts.is_empty() {
-                            if insts.len() > self.textured_instance_capacity {
-                                let new_cap = insts.len().max(256);
-                                self.textured_instance_buffer =
-                                    self.device.create_buffer(&wgpu::BufferDescriptor {
-                                        label: Some("Textured instance buffer"),
-                                        size: (tex_stride * new_cap) as u64,
-                                        usage: wgpu::BufferUsages::VERTEX
-                                            | wgpu::BufferUsages::COPY_DST,
-                                        mapped_at_creation: false,
-                                    });
-                                self.textured_instance_capacity = new_cap;
-                            }
-                            self.queue.write_buffer(
-                                &self.textured_instance_buffer,
-                                0,
-                                bytemuck::cast_slice(&insts),
-                            );
-                            render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                            render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                            render_pass.set_vertex_buffer(
-                                0,
-                                self.textured_pipeline.vertex_buffer.slice(..),
-                            );
-                            render_pass
-                                .set_vertex_buffer(1, self.textured_instance_buffer.slice(..));
-                            render_pass.set_index_buffer(
-                                self.textured_pipeline.index_buffer.slice(..),
-                                wgpu::IndexFormat::Uint16,
-                            );
-                            render_pass.draw_indexed(
-                                0..self.textured_pipeline.num_indices,
-                                0,
-                                0..insts.len() as u32,
-                            );
-                        }
-                        ti += run;
-                    }
+                    draw_packed_textured_runs(
+                        &mut render_pass,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        &scaled_tex,
+                        band.textured.0,
+                        band.textured.1,
+                    );
                 }
 
                 if allow_primitives && band.chrome.0 < band.chrome.1 {
@@ -2492,7 +2402,6 @@ pub(crate) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
 fn normalize_anchor_template_id(id: &str) -> String {
     id.replace('\\', "/").to_ascii_lowercase()
 }
-
 
 /// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.
 fn find_reactive_subtree_by_anchor_id_mut<'a>(

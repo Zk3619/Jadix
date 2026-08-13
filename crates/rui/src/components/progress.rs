@@ -23,10 +23,7 @@ pub struct ProgressBuilder {
 #[allow(non_snake_case)]
 pub fn Progress(id: String, value: Option<f32>, children: Option<Element>) -> Element {
     let _ = children;
-    progress()
-        .id(id)
-        .default_value(value.unwrap_or(0.0))
-        .into()
+    progress().id(id).default_value(value.unwrap_or(0.0)).into()
 }
 
 /// Builder 入口：默认无用户 id（WP-2.8）。
@@ -62,10 +59,9 @@ impl From<ProgressBuilder> for Element {
         } = builder;
         let instance = resolve_instance_id(id, "progress");
         let val = value.unwrap_or_else(|| {
-            use_signal(
-                format!("{instance}__progress").as_str(),
-                move || default_value,
-            )
+            use_signal(format!("{instance}__progress").as_str(), move || {
+                default_value
+            })
         });
         let view_id = format!("{instance}__progress_view");
         crate::app::reactive::reactive_view(view_id, move || {

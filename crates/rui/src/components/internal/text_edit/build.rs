@@ -1,4 +1,4 @@
-﻿//! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
+//! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
@@ -175,8 +175,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         line_height_px,
         leading_scale,
     );
-    let default_h =
-        crate::utils::text_field::textarea_default_height(rows, line_box, pad_y);
+    let default_h = crate::utils::text_field::textarea_default_height(rows, line_box, pad_y);
     let resize_min_h = default_h;
     let resize_max_h = resize_max_h.max(resize_min_h);
     let scroll_rest = if multiline {
@@ -271,8 +270,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         };
         let overwrite_highlight =
             if overwrite_sig.peek() && preedit.is_empty() && sel_draw.is_none() {
-                let ix =
-                    real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
+                let ix = real_display.floor_char_boundary(caret_in_real.min(real_display.len()));
                 if ix < real_display.len() {
                     let end = ix + real_display[ix..].chars().next().unwrap().len_utf8();
                     Some(if mask {
@@ -314,12 +312,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .py("0.5rem")
             .child(text_el);
         region = crate::core::scroll_viewport::activate_scroll_viewport(
-            region,
-            rest,
-            "hidden",
-            "scroll",
-            "smooth",
-            "area",
+            region, rest, "hidden", "scroll", "smooth", "area",
         );
         region.template_id = Some(format!("__rui_textarea:{field_id}:region"));
         region
@@ -444,8 +437,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 })
                 .set(None);
                 use_signal(&input_caret_signal_key(&id_clear), || None::<usize>).set(Some(0));
-                use_signal(&input_selection_signal_key(&id_clear), || None::<(usize, usize)>)
-                    .set(None);
+                use_signal(&input_selection_signal_key(&id_clear), || {
+                    None::<(usize, usize)>
+                })
+                .set(None);
                 use_signal(&input_ime_anchor_signal_key(&id_clear), || None::<usize>).set(None);
                 // Drop system candidate / composition — clearing value alone leaves TIP UI up.
                 crate::app::ime_support::cancel_os_ime_composition();
@@ -493,8 +488,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     };
 
     let type_key = input_type_signal_key(&field_id);
-    use_signal(&type_key, || input_type.as_str().to_string())
-        .set(input_type.as_str().to_string());
+    use_signal(&type_key, || input_type.as_str().to_string()).set(input_type.as_str().to_string());
 
     let sync = TextEditPaintSync {
         base_id: field_id.clone(),
@@ -535,4 +529,3 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     }
     out
 }
-

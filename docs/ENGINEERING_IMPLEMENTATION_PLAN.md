@@ -3,9 +3,9 @@
 > **冻结展开（2026-08-12）**：勾选、排期、DoD 以 [`AUTHORITY.md`](AUTHORITY.md) 为**唯一执行源**。本文仅保留 WP 细则与历史签署笔记，**禁止**在此改勾选充进度。  
 > **原地位**：把 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) 的六条门槛与三轨，落成工作包正文。阶段七～十二历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。  
 > **前提**：阶段一～十二 **MVP 已完成**；底座不变（Solid 式 + `winit/wgpu/taffy/glyphon`）。  
-> **日期**：2026-08-09（基线）；执行移交 2026-08-12  
+> **日期**：2026-08-09（基线）；执行移交 2026-08-12；**2026-08-13** W2 退出后补 WP-3.11–3.13 / B16 / B17 细则（勾选仍以 AUTHORITY 为准）  
 
-交叉：[`AUTHORITY.md`](AUTHORITY.md) · [REACTIVITY.md](REACTIVITY.md) · [element_identity.md](element_identity.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
+交叉：[`AUTHORITY.md`](AUTHORITY.md) · [REACTIVITY.md](REACTIVITY.md) · [element_identity.md](element_identity.md) · [`drawing.md`](drawing.md) · [PUBLISH.md](PUBLISH.md) · [desktop_smoke.md](desktop_smoke.md) · [a11y_smoke.md](a11y_smoke.md) · [ime.md](ime.md) · [gap_analysis.md](gap_analysis.md)（历史）
 
 ---
 
@@ -40,7 +40,7 @@
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**WP-2.1 ☑ 已签署**；**WP-2.2 ☑ 策略可测已签署**（逻辑脏区 + 计数；GPU PartialLoad 默认关 → Backlog **B8**）；**WP-2.3 ☑ Win 视觉已签署**。macOS / Linux 冒烟仍 ☐。W2.4+ 未验收；W3.1 完成；W3.5 部分落地；W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（门禁仍 ☐）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**Wave 2 已退出**（2026-08-13；2.1–2.9 ☑）。macOS / Linux 冒烟仍 ☐。**进入 Wave 3**（3.1 ☑；焦点 3.2 / 3.4 / 3.11 Svg / 3.12 Canvas；3.13 / B16 / B17 不挡退出）。W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（**CV 已退出**）。
 
 ---
 
@@ -202,9 +202,59 @@ flowchart TB
 | | |
 |--|--|
 | **路径** | `primitives/path.rs`、`components/chart.rs`、renderer path 提交 |
-| **任务** | ① path 可描边/填充进批处理；② Line 真实折线；③ Pie MVP（扇区或近似）；④ Gallery 页 |
+| **任务** | ① path 可描边/填充进批处理；② Line 真实折线；③ Pie MVP（扇区或近似）；④ Gallery 页；⑤ **与 WP-3.11 共用 path 核**（禁止第二套折线格式） |
 | **验收** | 三种图至少两种可交互演示；非整矩形 stub |
-| **状态** | ☐ Bar/Line MVP + path stub；Pie / 批处理未产品化 |
+| **状态** | ☑ 2026-08-13 path 光栅贴图 + Line 真折线 + Pie；Gallery 可点选 |
+
+### WP-3.11 `<svg>` 标签 + 矢量绘制
+
+| | |
+|--|--|
+| **对齐** | AUTHORITY WP-3.11；规范 [`drawing.md`](drawing.md) §3 |
+| **路径** | 新 `primitives/svg` 或 `components/svg`；renderer 消费 `PathCommand`；`rui_macros` `<svg>`/`<path>`/`<circle>` |
+| **任务** | ① Element 叶 + `viewBox`；② 子形状场景图（不各占 taffy）；③ 描边/填充像素；④ `ui!` + Builder 双入口；⑤ Gallery |
+| **验收** | AUTHORITY 3.11 A 表；emoji-svg **不算**本包完成 |
+| **状态** | ☐ |
+
+### WP-3.12 `<canvas>` 标签 + 自定义绘制
+
+| | |
+|--|--|
+| **对齐** | AUTHORITY WP-3.12；[`drawing.md`](drawing.md) §4 |
+| **路径** | `primitives/canvas` 或 `components/canvas`；paint trait；离屏纹理上传 |
+| **任务** | ① 叶 + 尺寸；② `paint`/`Canvas2D` MVP（clear/fill/stroke/transform/clip）；③ dirty → StyleChanged；④ peek 不订根；⑤ Gallery 自绘例 |
+| **验收** | AUTHORITY 3.12 A 表 |
+| **状态** | ☐ |
+
+### WP-3.13 2D / 3D 能力层
+
+| | |
+|--|--|
+| **对齐** | AUTHORITY WP-3.13（**并入原 B6**）；[`drawing.md`](drawing.md) §5 |
+| **路径** | 2D 合成纪律（与 3.11/3.12 共享）；`scene3d` feature；矩阵/perspective |
+| **任务** | ① 文档化 2D 变换/clip；② `<scene3d>` 实验 + 默认 feature 关闭仍能构建；③ 一 mesh/立方或 GLB opt-in |
+| **验收** | 2D 建议随 3.12；3D **不挡** W3 退出 |
+| **状态** | ☐ |
+
+### B16 canvas-ui 式创意组件库（W3 后 / Backlog）
+
+| | |
+|--|--|
+| **对照** | [canvas-ui](https://github.com/DavidHDev/canvas-ui) |
+| **依赖** | WP-3.11–3.13 |
+| **任务** | 子树离屏纹理 + shader/paint/3D pass；Liquid/Glass 等 **包住 children**；命中/a11y 仍走底层 Element；可选独立 crate |
+| **禁区** | HTML-in-canvas、Chrome flag、DOM 纹理 |
+| **状态** | ☐ 不挡 W3 / Beta |
+
+### B17 react-bits 式动效目录（W3 后 / Backlog）
+
+| | |
+|--|--|
+| **对照** | [react-bits](https://github.com/DavidHDev/react-bits) |
+| **依赖** | 动画原语 + glyphon；背景/3D 跟 WP-3.12 / 3.13；与 B16 **可组合、不合并产品面** |
+| **任务** | ① 通用 duration/easing/弹簧；② Text Animations（字形/簇级，测宽纪律不破）；③ Backgrounds = 装饰 Canvas 叶；④ 创意 chrome `#[component]`；⑤ `components/bits/` 或 `rui_bits` |
+| **禁区** | CSS-in-JS / Framer / GSAP；每字 DOM `<span>`；4 套 JS/TS×CSS/TW 变体；替代 shadcn 稳定面 |
+| **状态** | ☐ 不挡 W3 / Beta；细则 [`drawing.md`](drawing.md) §6.2 |
 
 ### WP-3.3 Date / Time / Color 键盘与格式
 
@@ -254,7 +304,7 @@ flowchart TB
 | **状态** | ☐ |
 | **优先级** | P2；不阻塞 Beta，阻塞「EUI 密度对标完成」叙事 |
 
-**Wave 3 退出**：Gallery 分区完整；Chart≥2 种真实绘制；Router 历史可演示；托盘要么接线要么 README 诚实标注 stub。
+**Wave 3 退出**：Gallery 分区完整；Chart≥2 种真实绘制；Router 历史可演示；托盘要么接线要么 README 诚实标注 stub；**Svg 或 Canvas 至少一项 MVP**（AUTHORITY 口径）。
 
 ---
 
@@ -338,7 +388,9 @@ flowchart TB
 | B3 | backdrop-blur 离屏缓存 | 视觉打磨 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 仅留扩展点 |
 | B5 | VirtualMasonry 产品化 | 见 WP-3.7 |
-| B6 | 完整 3D/矩阵变换 | 当前 rotate/scale MVP 足够 |
+| B6 | 完整 3D/矩阵变换 | **并入 WP-3.13**；rotate/scale 2D MVP 仍可用 |
+| B16 | canvas-ui 式创意组件库 | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；依赖 3.11–3.13；不搬 HTML-in-canvas；见 [`drawing.md`](drawing.md) §6.1 |
+| B17 | react-bits 式动效目录 | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；文字/背景/动画 UI；不搬 CSS 运行时；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI（云桌面 / self-hosted） | 冒烟签署可先顶上 |
 | B8 | **GPU PartialLoad / retain**（默认开启） | **前置**：实例/文本按脏区裁剪 draw-list，或 profiling 证 FullClear 填色为瓶颈。约束与验收见 [damage.md](damage.md)「如何把 GPU PartialLoad 做好 / 何时做」。不阻塞 W2/Beta；建议 WP-2.6 golden 稳后或独立性能 WP。代码预留：`present_retain.*`、`RUI_PARTIAL_DAMAGE=1` |
 

@@ -304,9 +304,7 @@ pub fn top_stacked_exclusive_id() -> Option<String> {
 ///
 /// Unlike [`hit_path_on_hoisted_portal`], this ignores other hoisted surfaces (e.g. Dialog
 /// stage) so clicking Dialog chrome outside the menu still dismisses the menu.
-pub fn hit_path_on_top_exclusive_surface(
-    path: &[super::pointer_events::HitPathEntry],
-) -> bool {
+pub fn hit_path_on_top_exclusive_surface(path: &[super::pointer_events::HitPathEntry]) -> bool {
     let Some(id) = top_stacked_exclusive_id() else {
         return false;
     };
@@ -350,7 +348,10 @@ mod tests {
         // Dialog close: portal_sync with open=false must clear nested Select too.
         modal.set(false);
         assert!(portal_sync("dlg", modal, OverlayKind::Modal, OverlayMode::Stacked).is_none());
-        assert!(!menu.peek(), "nested menu open signal must be cleared with modal");
+        assert!(
+            !menu.peek(),
+            "nested menu open signal must be cleared with modal"
+        );
         assert_eq!(depth(), 0);
         clear();
     }

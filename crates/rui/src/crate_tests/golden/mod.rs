@@ -37,9 +37,7 @@ fn clear_background() -> wgpu::Color {
 }
 
 fn assert_scene(name: &str, root: &mut Element, w: u32, h: u32) {
-    let _guard = GOLDEN_GPU_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = GOLDEN_GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     set_theme_mode(ThemeMode::Light);
     let Some(img) = render_element_scene(root, w, h, clear_background()) else {
         // Dedicated CI step must exercise a real adapter (Linux mesa / Windows backend-dx12).
@@ -75,9 +73,7 @@ fn golden_component_input_idle() {
         .w(240.0)
         .h(64.0)
         .bg(parse_color("background"))
-        .child(
-            Element::from(input("golden-input").w(200.0).h(36.0).placeholder("Name")).m(12.0),
-        );
+        .child(Element::from(input("golden-input").w(200.0).h(36.0).placeholder("Name")).m(12.0));
     assert_scene("golden_input_idle", &mut root, 240, 64);
 }
 

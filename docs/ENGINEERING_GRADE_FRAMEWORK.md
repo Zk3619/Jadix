@@ -3,7 +3,7 @@
 > **文档地位**：工程门槛、ADR、锁定栈与禁区的**领域规范**（「是什么」）。  
 > **执行源**：巩固期勾选 / 排期 / DoD 以 [`AUTHORITY.md`](AUTHORITY.md) 为准。本文**不**再充当入口或第二套计划。  
 > **事实来源**：`crates/rui` 实现、[`gap_analysis.md`](gap_analysis.md)（历史审计）、[`STAGE7_ROADMAP.md`](STAGE7_ROADMAP.md)、[`PROJECT.md`](PROJECT.md)、[`PUBLISH.md`](PUBLISH.md)，以及对标参考库（见 §3）。  
-> **审计日期**：2026-08-09（基线）；治理收口 2026-08-12  
+> **审计日期**：2026-08-09（基线）；治理收口 2026-08-12；**2026-08-13** 公开自绘叶（Svg/Canvas/2D·3D）挂 ADR-3  
 > **版本口径**：阶段一～十二 **MVP 已落地**。本文区分 **MVP（可演示、可测）** 与 **工程级（可依赖、可发布、可维护）**。
 
 ---
@@ -17,7 +17,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 |------|-------------------------------|------------|
 | 代码体量 | `crates/` ≈ **5.3 万行** / **182** 个 `.rs`；`components/` **45** 个模块（含 `mod.rs` 共 46 文件） | API 稳定面文档化；破坏性变更可追踪 |
 | 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / **ErrorBoundary** / **`switch_reactive`** / `on_mount` | 热路径无全局表泄漏；`REGISTERED_*` 挂 Owner；Store produce 契约完整 |
-| 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty` | 细粒度 damage 默认路径；测宽≡绘制 |
+| 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty`；**公开 Svg/Canvas 叶仍 ☐**（[`drawing.md`](drawing.md)） | 细粒度 damage 默认路径；测宽≡绘制；W3 自绘面起步 |
 | 桌面可用 | IME 光标区代码路径；焦点环 / roving / focus_trap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **stub** | 三平台真窗口冒烟签署；读屏主路径可演示 |
 | 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（clear + stage8 + **5 组件场景**） | 真窗冒烟或等价；glyph 级 golden 可加深 |
 | 发布 | `PUBLISH.md`；文档站 stub；**无 CHANGELOG / 未 crates.io** | `cargo add rui` 可用；文档站有 Getting Started |
@@ -87,7 +87,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 层 | 实现 | 职责 | 边界 |
 |----|------|------|------|
 | OS / 窗口 | `winit` + `accesskit_winit` | 窗口、IME、剪贴板、事件、a11y 适配 | 不写平台 GUI 控件 |
-| 图形 | `wgpu` + 自研 SDF / 阴影 / 渐变 WGSL | 像素、批处理、HiDPI | 不引入 Skia |
+| 图形 | `wgpu` + 自研 SDF / 阴影 / 渐变 WGSL | 像素、批处理、HiDPI；**公开叶：Svg / Canvas / 2D·3D**（见 [`drawing.md`](drawing.md)） | 不引入 Skia 主线；不搬 HTML-in-canvas |
 | 文本 | `glyphon` / `cosmic-text` + `text/measure` | shaping、测宽、soft-wrap、markdown | 不自研完整 shaping |
 | 布局 | `taffy` | Flex / Grid | 不换布局算法 |
 | 响应式 | 自研 Solid 式（`core/reactivity`、`store`、`resource`） | Signal / Owner / Effect | 不对齐 DOM/SSR |
@@ -112,15 +112,17 @@ crates/
 
 ## 3. 参考基线：各司其职，禁止错位搬运
 
-对照目录：`Reference/SolidJS`、`ShadCN-UI`、`TailwindCSS`、`UnoCSS`、`EUI-NEO-main`、`pretext-main`、`dioxus`、以及同仓 `xilem` / `freya` / `shadcn-rs`（架构对照，非默认依赖）。
+对照目录：`Reference/SolidJS`、`ShadCN-UI`、`TailwindCSS`、`UnoCSS`、`EUI-NEO-main`、`pretext-main`、`dioxus`、`leptos-main`、`floem-main`，以及同仓 `xilem` / `freya` / `shadcn-rs`（架构对照，非默认依赖）。
 
 | 层 | 参考 | 学什么 | 不学 / 不搬 |
 |----|------|--------|-------------|
-| 编程模型 | **SolidJS** | 组件跑一次；Signal 驱动局部更新；Owner / cleanup / Context；`Show` / `For` / memo 心智 | DOM、SSR、hydration、Web 并发调度 |
+| 编程模型 | **SolidJS** | 组件跑一次；Signal 驱动局部更新；Owner / cleanup / Context；`Show` / `For` / memo；**`mapArray` 项级 root** | DOM、SSR、hydration、Web 并发调度 |
+| 图协议 | **Leptos `reactive_graph`** | Owner 树；Clean/Check/Dirty 思想；RenderEffect vs Effect 分层 | 换核依赖；SSR；tachys HTML |
+| 原生绑定 | **Floem `floem_reactive`** | `UpdaterEffect`（订阅/应用拆开）；Scope dispose；`dyn_stack` diff 纪律 | 整套 API 改名；Web 式 Resource |
 | 样式与组件体验 | **ShadCN-UI** + **Tailwind** + **UnoCSS** | a11y 契约、无头拆分、变体命名、原子类心智、shortcuts 思想 | Web 专有 CSS、DOM 选择器、完整 Attributify 运行时 |
 | 产品完整度 | **EUI-NEO** | 组件密度标尺（chart / markdown / datepicker / virtualmasonry 等）；gallery 驱动；batch 纪律 | 命令式 DSL；为缩体积弃 wgpu |
 | 文本算法 | **pretext** | `prepare` 一次 / `layout` 纯算术；变宽绕排；稳定行高 | 不当布局总方案；不原样移植 JS |
-| DX 热重载 | **Dioxus** | 监视源码、免全量重编的补丁心智 | VDOM / WebView 桌面壳 |
+| DX 热重载 | **Dioxus** | 监视源码、免全量重编的补丁心智；RSX 体验 | **VDOM / 组件级 diff 当细粒度**；WebView 桌面壳 |
 | 性能上限对照 | **Xilem** / **Freya** | 保留树、增量更新讨论 | 不强制对齐其公开 API |
 
 **推论**：工业级缺口在 **原生层**（IME、焦点、a11y、多窗）与 **工程层**（Store 深度、golden、发布），Solid 本身解决不了——必须自研补齐。因此**下一阶段不开「是否放弃 Solid」的架构分叉**。
@@ -150,19 +152,19 @@ crates/
 
 衡量的是**细粒度响应式编程模型**覆盖度，不是 solid-main 仓库对齐度。DOM/SSR 相关 API **不在范围内**。
 
-**权威展开**：现状、Leptos/`reactive_graph` × Floem/`floem_reactive` 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 / 2.5 / 2.7。巩固期**禁止**以「追平 Leptos API 面」替代工程门槛。
+**权威展开**：战略 **超过 Floem、逼近 Solid 机制**（§0.1 / §5.9 记分牌）、四框架对照、不变量 → [`REACTIVITY.md`](REACTIVITY.md)；执行 → [`AUTHORITY.md`](AUTHORITY.md) WP-R.5 / R.3 / R.9 / R.7。发布门槛仍是原生+crates.io（ADR-8），**不是** Solid API 百分百。
 
 | 状态 | 代表 API |
 |------|----------|
-| 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`** |
-| 部分 | keyed reconcile、`Index`；Store 完整 proxy 语义；Anchors/`REGISTERED_*` → Owner |
-| 可长期空缺 | `mergeProps` / `splitProps` / `children()` helper / DevTools |
+| 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`**；**REGISTERED_* → Owner**（WP-2.4） |
+| 部分 | 列表仍为整表 effect + keyed Element reconcile（≠ Solid `mapArray` 项级 Owner）；`for_each` ≠ `<Index>`；Store 无路径触发器 |
+| 可长期空缺 | `mergeProps` / `splitProps` / `children()` helper / DevTools；Read/Write 半边拆分；`RenderEffect` 类型 |
 
 ### 4.3 组件面（相对 EUI 密度标尺）
 
 `components/` 约 **45** 个公开模块；私有壳在 `components/internal/`（`text_edit`）不计入产品面；Dialog 壳在 `dialog.rs`。相对 EUI 的产品空洞主要在：
 
-- 图表深度（Pie / 真实 path 批处理 vs 矩形条 + path stub）
+- 图表深度（WP-3.2 已：Pie + path 光栅贴图；曲线/多层 mark / 完整 polar 仍可加深）
 - VirtualMasonry（依赖可信行高）
 - 块级 markdown 产品打磨；选器键盘与本地化
 - 各控件键盘 / a11y 的「系统控件级」一致性；稳定面分桶与 CV 验证（见组件计划）
@@ -177,7 +179,7 @@ crates/
 | P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
 | P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
-| P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md)；执行 [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 |
+| P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
 | P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
@@ -301,7 +303,7 @@ flowchart LR
 
 1. 按 [`PUBLISH.md`](PUBLISH.md) 完成首次 crates.io（或 0.1 预发布）。  
 2. 文档站从 stub 升级为可浏览 Getting Started + 组件索引（mdBook / VitePress 任选）。  
-3. Gallery：每公开组件至少一页可运行示例；Chart/Path、Date/Time 补齐键盘与格式。
+3. Gallery：每公开组件至少一页可运行示例；Chart/Path、Date/Time 补齐键盘与格式；**Svg/Canvas 公开自绘面起步**（WP-3.11 / 3.12）。
 
 **退出标准**：外部用户仅凭文档 `cargo add rui` 跑出最小窗口；README 状态从「Alpha」升为「Beta」需同时满足轨道 A/B 退出标准。
 
@@ -311,7 +313,8 @@ flowchart LR
 - 完整 Solid DOM/SSR/hydration  
 - 移动端 / 鸿蒙作为一等公民（仅保留 `PlatformWindow` 扩展点）  
 - 为对标 egui 体积而砍文本栈或 SDF 管线  
-- 无验收标准的「大重构」
+- 无验收标准的「大重构」  
+- HTML-in-canvas / Chrome flag / 换 Skia 主线做公开自绘（见 [`drawing.md`](drawing.md)）
 
 ---
 
@@ -321,7 +324,7 @@ flowchart LR
 |----|------|------|
 | ADR-1 | 细粒度 Signal，不采用 VDOM | 接受 |
 | ADR-2 | 保留 Element + taffy NodeId | 接受 |
-| ADR-3 | 图形主线 wgpu；Windows 默认优先 GL 以降内存 | 接受 |
+| ADR-3 | 图形主线 wgpu；Windows 默认优先 GL 以降内存；公开自绘面挂 wgpu 叶（Svg/Canvas/Scene） | 接受 |
 | ADR-4 | 布局固定 taffy；文本 measure 分层对齐 Pretext 思想 | 接受 |
 | ADR-5 | 样式走 utility + 变体，单一 `rui_style_tokens` 真源 | 接受 |
 | ADR-6 | 组件 ShadCN 无头分层（primitives / tokens / components） | 接受 |

@@ -176,10 +176,8 @@ fn apply_label_for(el: &mut Element, for_id: &str) {
         .map(|s| s.as_str())
         .is_none_or(|s| s.is_empty())
     {
-        el.attrs.insert(
-            "accesskit_id".to_string(),
-            label_accesskit_id_for(for_id),
-        );
+        el.attrs
+            .insert("accesskit_id".to_string(), label_accesskit_id_for(for_id));
     }
     if el.cursor.is_none() {
         el.cursor = Some(crate::core::tree::CursorKind::Pointer);
@@ -586,7 +584,9 @@ mod tests {
         let mounted = Rc::new(RefCell::new(None::<Element>));
         let mounted_a = Rc::clone(&mounted);
         let root = create_effect(move || {
-            let bound = bind_text("bind:label-adopt", || "Selected variant: default".to_string());
+            let bound = bind_text("bind:label-adopt", || {
+                "Selected variant: default".to_string()
+            });
             assert!(bound.on_unmount.is_some());
             let hook = Rc::downgrade(bound.on_unmount.as_ref().unwrap());
             let el: Element = label("lbl-auto").child(bound).into();
@@ -611,7 +611,10 @@ mod tests {
     #[test]
     fn label_for_sets_accesskit_id() {
         let el: Element = label("").text("Email").r#for("input:email").into();
-        assert_eq!(el.attrs.get(ATTR_LABEL_FOR).map(|s| s.as_str()), Some("input:email"));
+        assert_eq!(
+            el.attrs.get(ATTR_LABEL_FOR).map(|s| s.as_str()),
+            Some("input:email")
+        );
         assert_eq!(
             el.attrs.get("accesskit_id").map(|s| s.as_str()),
             Some("lbl:for:input:email")
@@ -622,6 +625,9 @@ mod tests {
     fn label_empty_id_does_not_write_empty_template_id() {
         let el: Element = label("").text("x").into();
         assert_ne!(el.template_id.as_deref(), Some(""));
-        assert!(el.template_id.is_none(), "display Label empty id → no template_id");
+        assert!(
+            el.template_id.is_none(),
+            "display Label empty id → no template_id"
+        );
     }
 }

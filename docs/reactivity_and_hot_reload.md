@@ -1,7 +1,7 @@
 # 细粒度响应式与热重载约定
 
 > **文档地位**：开发者**用法手册**（三档更新、宏降级、热重载槽）。  
-> **权威口径**：编程模型、Leptos/Floem 对照、开放缺口 → [`REACTIVITY.md`](REACTIVITY.md)；执行包 → [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 / 2.5 / 2.7。  
+> **权威口径**：编程模型、四框架机制对照、完整细粒度不变量 → [`REACTIVITY.md`](REACTIVITY.md) §5；执行包 → [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 / 2.5 / 2.7 / WP-R.5。  
 > **身份轴**：[`element_identity.md`](element_identity.md)。  
 
 本文档说明 `reactive!` / `Reactive` / `bind_*` / `<Show>` / `<For>` 与开发期热重载（`template_patch`）如何协同，避免补丁误伤子树 reconcile。
@@ -60,6 +60,15 @@
 - 否则 → `show_scoped` / 直接 `Vec<Element>`
 - 多分支：[`switch_reactive`](../crates/rui/src/app/reactive.rs)（`key` + `render(&key)`）
 - 子树错误：[`error_boundary`](../crates/rui/src/app/error_boundary.rs) + [`throw_error`](../crates/rui/src/app/error_boundary.rs)；Resource Err 须显式 [`throw_resource_error`](../crates/rui/src/app/error_boundary.rs)（WP-2.5）
+
+**列表粒度（勿当成已对齐 Solid `<For>`）**
+
+| API | 实际机制 | 不是 |
+|-----|----------|------|
+| `for_reactive` + `for_keyed` | 列表 signal 变 → **整表** `render_list()` 再跑 → `reconcile_keyed_children` 按 `template_id` 复用 Element/`layout_node` | Solid `mapArray`：未变 key **不**重跑项 `render`、每项独立 `createRoot` |
+| `for_each` | 下标当 `{scope}:{idx}` | Solid `<Index>`（项为 Accessor、下标固定） |
+
+战略：[`REACTIVITY.md`](REACTIVITY.md) §0.1 / §5.9 —— **超过 Floem 须 WP-R.5b**；**逼近 Solid 还须 5c Index + Store 路径 + effect 分相**。执行 WP-R.5（5a → 5b → 5c）。
 
 `reactive_anchor` / `bind_prop` / 首次 `reactive_component` 注册时均挂 [`on_cleanup`](../crates/rui/src/core/reactivity.rs)：owner dispose 时从 `REGISTERED_ANCHORS` / `REGISTERED_BINDINGS` / `COMPONENT_PROPS`（及未 take 的 `COMPONENT_CHILDREN`）移除并 dispose effect（WP-2.4 ☑）。诊断计数：`registered_anchor_count` / `registered_binding_count` / `component_props_count`。
 

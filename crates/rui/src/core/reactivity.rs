@@ -1695,9 +1695,9 @@ where
 }
 
 pub use crate::style::{
-    tick_animations, use_scrollbar_visibility_spring, use_spring, use_ui_transition_cubic,
-    use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState, Spring, SpringState,
-    any_ui_animation_active,
+    any_ui_animation_active, tick_animations, use_scrollbar_visibility_spring, use_spring,
+    use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState,
+    Spring, SpringState,
 };
 
 #[cfg(test)]
@@ -2036,7 +2036,11 @@ mod tests {
         assert_eq!(mounts.get(), 1);
         sig.set(1);
         sig.set(2);
-        assert_eq!(mounts.get(), 1, "on_mount must not re-run on signal changes");
+        assert_eq!(
+            mounts.get(),
+            1,
+            "on_mount must not re-run on signal changes"
+        );
     }
 
     #[test]
@@ -2133,17 +2137,14 @@ mod tests {
         let a = Signal::new(1_i32);
         let b = Signal::new(100_i32);
         let seen = Rc::new(RefCell::new(Vec::new()));
-        on(
-            move || a.get(),
-            {
-                let seen = seen.clone();
-                move |cur, prev| {
-                    // Reading b inside body must not subscribe.
-                    let _ = b.peek();
-                    seen.borrow_mut().push((*cur, prev.copied()));
-                }
-            },
-        );
+        on(move || a.get(), {
+            let seen = seen.clone();
+            move |cur, prev| {
+                // Reading b inside body must not subscribe.
+                let _ = b.peek();
+                seen.borrow_mut().push((*cur, prev.copied()));
+            }
+        });
         assert_eq!(*seen.borrow(), vec![(1, None)]);
         b.set(200);
         assert_eq!(*seen.borrow(), vec![(1, None)]);

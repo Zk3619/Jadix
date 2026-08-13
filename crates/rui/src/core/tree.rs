@@ -8,10 +8,10 @@ pub use crate::layout::dimension::{
     IntoF32Raw, IntoLengthPercentage, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
-pub use crate::style::{Style, UnitSlot};
 pub use crate::style::{
     parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextOverflow, TextStyle,
 };
+pub use crate::style::{Style, UnitSlot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorKind {
@@ -1041,8 +1041,7 @@ impl Element {
     }
     /// Space-separated `accesskit_id` / `focus_id` keys of labeling nodes (`aria-labelledby`).
     pub fn aria_labelledby(mut self, ids: impl Into<String>) -> Self {
-        self.attrs
-            .insert("aria-labelledby".to_string(), ids.into());
+        self.attrs.insert("aria-labelledby".to_string(), ids.into());
         self
     }
     pub fn bg(mut self, color: [f32; 4]) -> Self {
@@ -1066,7 +1065,8 @@ impl Element {
         self
     }
     pub fn border_width(mut self, width: impl IntoBorderWidths) -> Self {
-        self.style.set_border_widths_trbl(width.into_border_widths());
+        self.style
+            .set_border_widths_trbl(width.into_border_widths());
         self
     }
     pub fn border_top_width(mut self, width: impl IntoF32) -> Self {

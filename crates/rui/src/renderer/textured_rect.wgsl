@@ -7,6 +7,8 @@ struct InstanceInput {
     @location(2) rect_pos: vec2<f32>,
     @location(3) rect_size: vec2<f32>,
     @location(4) tint: vec4<f32>,
+    @location(5) uv_offset: vec2<f32>,
+    @location(6) uv_scale: vec2<f32>,
 };
 
 struct Globals {
@@ -36,7 +38,7 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     let x = (physical.x / globals.resolution.x) * 2.0 - 1.0;
     let y = 1.0 - (physical.y / globals.resolution.y) * 2.0;
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = v.uv;
+    out.uv = inst.uv_offset + v.uv * inst.uv_scale;
     out.tint = inst.tint;
     return out;
 }

@@ -91,10 +91,7 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
         .expect("TextLayoutInfo for emoji label");
     // Leaf itself does not set overflow — clip comes from ancestors. When none, paint
     // uses the leaf rect as the effective clip for this assertion.
-    let clip_h = info
-        .clip_bounds
-        .map(|c| c[3])
-        .unwrap_or(info.height);
+    let clip_h = info.clip_bounds.map(|c| c[3]).unwrap_or(info.height);
     let clip_y = info.clip_bounds.map(|c| c[1]).unwrap_or(info.y);
 
     eprintln!(

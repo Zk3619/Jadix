@@ -73,15 +73,13 @@ fn picker_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> 
         .border(border, 1.0)
         .shadow([0.0, 0.0, 0.0, 0.06], 1.0)
         .into();
-    row = row
-        .child(leading)
-        .child(Element::from(
-            hstack()
-                .flex_grow(1.0)
-                .min_w("0")
-                .items_center()
-                .child(main),
-        ));
+    row = row.child(leading).child(Element::from(
+        hstack()
+            .flex_grow(1.0)
+            .min_w("0")
+            .items_center()
+            .child(main),
+    ));
     let cursor = if disabled {
         row.cursor_not_allowed()
     } else {
@@ -291,11 +289,7 @@ fn build_date_picker_view(
     year: Signal<i32>,
     month: Signal<u32>,
 ) -> Element {
-    let DatePickerRenderProps {
-        id,
-        kind,
-        disabled,
-    } = props;
+    let DatePickerRenderProps { id, kind, disabled } = props;
 
     let _ = open.get();
     let current = val.get();
@@ -336,11 +330,7 @@ fn build_date_picker_view(
 
     if let Some(oz) = portal_sync(&id, open, OverlayKind::Popover, OverlayMode::Stacked) {
         if open.peek() {
-            let mut panel: Element = vstack()
-                .gap("0.5rem")
-                .p("0.75rem")
-                .w("17.5rem")
-                .into();
+            let mut panel: Element = vstack().gap("0.5rem").p("0.75rem").w("17.5rem").into();
             panel = panel
                 .bg(tokens::background())
                 .rounded("0.375rem")
@@ -572,11 +562,7 @@ impl From<DatePickerBuilder> for Element {
         let year = use_signal(format!("{id}__dp_year").as_str(), move || iy);
         let month = use_signal(format!("{id}__dp_month").as_str(), move || im);
         let view_id = format!("{id}__dp_view");
-        let props = DatePickerRenderProps {
-            id,
-            kind,
-            disabled,
-        };
+        let props = DatePickerRenderProps { id, kind, disabled };
         reactive_component_live(view_id, props, move |p| {
             build_date_picker_view(p, open, val, year, month)
         })
@@ -709,12 +695,7 @@ fn build_time_picker_view(
                 .gap("0.5rem")
                 .p("0.75rem")
                 .w("12rem")
-                .child(
-                    hstack()
-                        .gap("0.5rem")
-                        .child(hours_col)
-                        .child(mins_col),
-                )
+                .child(hstack().gap("0.5rem").child(hours_col).child(mins_col))
                 .child(apply)
                 .into();
             panel = panel

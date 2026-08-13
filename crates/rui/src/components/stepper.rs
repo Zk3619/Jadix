@@ -47,19 +47,14 @@ impl From<StepperBuilder> for Element {
             current,
             default_step,
         } = builder;
-        let cur = current.unwrap_or_else(|| {
-            use_signal(format!("{id}__step").as_str(), move || default_step)
-        });
+        let cur = current
+            .unwrap_or_else(|| use_signal(format!("{id}__step").as_str(), move || default_step));
         let active = cur.get();
         let mut row: Element = hstack().w("100%").gap("0.75rem").items_center().into();
         for (i, label) in steps.iter().enumerate() {
             let done = i < active;
             let here = i == active;
-            let mut badge: Element = r#box()
-                .w("1.5rem")
-                .h("1.5rem")
-                .rounded("9999px")
-                .into();
+            let mut badge: Element = r#box().w("1.5rem").h("1.5rem").rounded("9999px").into();
             badge = badge.bg(if done || here {
                 tokens::primary()
             } else {

@@ -485,13 +485,9 @@ impl Style {
                 UnitSlot::MaxHeight => {
                     max_size.height = dim.to_dimension_axis(ctx, PercentAxis::Block)
                 }
-                UnitSlot::FlexBasis => {
-                    flex_basis = dim.to_dimension_axis(ctx, PercentAxis::Inline)
-                }
+                UnitSlot::FlexBasis => flex_basis = dim.to_dimension_axis(ctx, PercentAxis::Inline),
                 // CSS: padding/margin % is always relative to containing-block **width**.
-                UnitSlot::PadL => {
-                    padding.left = dim.to_length_percentage(ctx, PercentAxis::Inline)
-                }
+                UnitSlot::PadL => padding.left = dim.to_length_percentage(ctx, PercentAxis::Inline),
                 UnitSlot::PadR => {
                     padding.right = dim.to_length_percentage(ctx, PercentAxis::Inline)
                 }
@@ -590,12 +586,7 @@ impl Style {
     pub fn border_is_uniform(&self) -> bool {
         let w = self.resolved_border_widths();
         let c = self.resolved_border_colors();
-        w[0] == w[1]
-            && w[1] == w[2]
-            && w[2] == w[3]
-            && c[0] == c[1]
-            && c[1] == c[2]
-            && c[2] == c[3]
+        w[0] == w[1] && w[1] == w[2] && w[2] == w[3] && c[0] == c[1] && c[1] == c[2] && c[2] == c[3]
     }
 
     pub fn set_border_side_width(&mut self, side: usize, width: f32) {

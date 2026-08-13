@@ -101,25 +101,21 @@ fn nested_flex_child_width_growth_reflows_footer() {
 #[test]
 fn promote_lifts_past_auto_sized_parent() {
     let mut tree = LayoutTree::new();
-    let mut root = Element::new()
-        .flex_col()
-        .w(300.0)
-        .h(300.0)
-        .child(
-            Element::new()
-                .flex_col()
-                .w(300.0)
-                // Fixed outer panel: promotion should stop here once past auto mid.
-                .h(200.0)
-                .template_id("panel")
-                .child(
-                    Element::new()
-                        .flex_col()
-                        .w(300.0)
-                        .template_id("mid")
-                        .child(Element::new().w(40.0).h(40.0).template_id("leaf")),
-                ),
-        );
+    let mut root = Element::new().flex_col().w(300.0).h(300.0).child(
+        Element::new()
+            .flex_col()
+            .w(300.0)
+            // Fixed outer panel: promotion should stop here once past auto mid.
+            .h(200.0)
+            .template_id("panel")
+            .child(
+                Element::new()
+                    .flex_col()
+                    .w(300.0)
+                    .template_id("mid")
+                    .child(Element::new().w(40.0).h(40.0).template_id("leaf")),
+            ),
+    );
 
     tree.build_and_layout(&mut root, 300.0, 300.0, [0.0, 0.0]);
     let leaf_node = find_tid(&root, "leaf")
@@ -158,18 +154,14 @@ fn promote_lifts_past_auto_sized_parent() {
 #[test]
 fn fixed_parent_keeps_shallow_pick_without_promote() {
     let mut tree = LayoutTree::new();
-    let mut root = Element::new()
-        .flex_col()
-        .w(200.0)
-        .h(200.0)
-        .child(
-            Element::new()
-                .flex_col()
-                .w(200.0)
-                .h(100.0)
-                .template_id("panel")
-                .child(Element::new().w(50.0).h(20.0).template_id("leaf")),
-        );
+    let mut root = Element::new().flex_col().w(200.0).h(200.0).child(
+        Element::new()
+            .flex_col()
+            .w(200.0)
+            .h(100.0)
+            .template_id("panel")
+            .child(Element::new().w(50.0).h(20.0).template_id("leaf")),
+    );
 
     tree.build_and_layout(&mut root, 200.0, 200.0, [0.0, 0.0]);
     let leaf_node = find_tid(&root, "leaf")

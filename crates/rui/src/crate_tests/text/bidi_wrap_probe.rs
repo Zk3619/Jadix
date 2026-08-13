@@ -1,9 +1,7 @@
 //! Gallery bidi: fit is cached; paint shapes at cached wrap width (not full leaf).
 use crate::renderer::font_loader;
 use crate::renderer::text_hit::best_font_family;
-use crate::text::{
-    glyphon_fit_soft_wrap, invalidate_prepare_cache, prepare, shutdown_layout_text,
-};
+use crate::text::{glyphon_fit_soft_wrap, invalidate_prepare_cache, prepare, shutdown_layout_text};
 use glyphon::{Attrs, Buffer, Metrics, Shaping};
 
 /// Same controls as the Text Compatibility gallery Edge Cases sample.
@@ -115,16 +113,17 @@ fn gallery_bidi_paint_uses_fit_wrap_width_not_full_leaf() {
     );
 
     let runs = run_logical_slices(&buffer, GALLERY_BIDI);
-    assert!(runs.len() >= 2, "expected wrap at ~{leaf_w}px, got {runs:?}");
     assert!(
-        runs
-            .iter()
+        runs.len() >= 2,
+        "expected wrap at ~{leaf_w}px, got {runs:?}"
+    );
+    assert!(
+        runs.iter()
             .any(|r| r.contains('ع') && r.contains('٤') && r.contains('٦')),
         "Arabic isolate split: {runs:?}"
     );
     assert!(
-        runs
-            .iter()
+        runs.iter()
             .any(|r| r.contains('ע') && r.contains('7') && r.contains('9')),
         "Hebrew isolate split: {runs:?}"
     );

@@ -3,7 +3,7 @@
 > **冻结展开（2026-08-12）**：勾选、排期、CV 门禁以 [`AUTHORITY.md`](AUTHORITY.md) **Wave CV / WP-3.*** 为**唯一执行源**。本文仅保留 C-WP 细则；旧编号对照见 AUTHORITY §9。**禁止**在此改勾选充进度。  
 > **原地位**：把 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) 落成 C-WP。重叠项（焦点、a11y、golden、Gallery）并入统一计划，不另开架构分叉。  
 > **前提**：shadcn 产品面 + headless 骨架；`ui!` ↔ Builder 双轨（ADR-6 / ADR-9）。**未过 CV 禁止**大面积 C1/C2 重构。  
-> **日期**：2026-08-09（基线）；执行移交 2026-08-12  
+> **日期**：2026-08-09（基线）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）见 [`drawing.md`](drawing.md) / AUTHORITY WP-3.11–3.13，不另开 C-WP  
 
 ---
 

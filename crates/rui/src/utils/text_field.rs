@@ -113,11 +113,7 @@ pub fn textarea_scroll_content_h(
         };
         let layout_h = child.layout_bounds[3];
         // Layout is authoritative; stale style must not inflate scroll when leaf is shorter.
-        let mut child_h = if layout_h > 0.5 {
-            layout_h
-        } else {
-            style_h
-        };
+        let mut child_h = if layout_h > 0.5 { layout_h } else { style_h };
         if let Some(text) = &child.text {
             let w = child.layout_bounds[2].max(1.0);
             let lh = child
@@ -254,7 +250,11 @@ pub fn ensure_caret_visible_scroll_y(
     let (line_i, _) = caret_line_and_local(text, caret_byte);
     let line_count = text.split('\n').count().max(1);
     let on_last_line = line_i + 1 >= line_count;
-    let ink = if on_last_line { insets.ink_bottom.max(0.0) } else { 0.0 };
+    let ink = if on_last_line {
+        insets.ink_bottom.max(0.0)
+    } else {
+        0.0
+    };
     // Coordinates in scroll-content space (includes scrollport padding).
     let caret_top = insets.pad_top + line_i as f32 * lh;
     let caret_bot = insets.pad_top + (line_i + 1) as f32 * lh + ink;
@@ -379,7 +379,11 @@ pub fn commit_value_sig(field_id: &str, store: Signal<String>, value: String) {
 /// Paint 路径专用：失焦时把外部值 **silent** 拉进 store；焦点内不写外部（由 [`commit_value`] 负责）。
 ///
 /// 返回 store 被外部改写后的新 committed（供当帧绘制）。
-pub fn pull_controlled_into_store(field_id: &str, store_value: &str, is_focused: bool) -> Option<String> {
+pub fn pull_controlled_into_store(
+    field_id: &str,
+    store_value: &str,
+    is_focused: bool,
+) -> Option<String> {
     if is_focused {
         return None;
     }
@@ -433,7 +437,8 @@ mod tests {
         // line 4 at y=80..100, viewport 50 tall scrolled to 0 → need sy=50
         let text = "a\nb\nc\nd\ne";
         let caret = text.len();
-        let new_sy = ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 0.0, 50.0, Default::default());
+        let new_sy =
+            ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 0.0, 50.0, Default::default());
         assert_eq!(new_sy, Some(50.0));
         assert_eq!(
             ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 50.0, 50.0, Default::default()),
@@ -469,11 +474,27 @@ mod tests {
         let text = "a\nb";
         // Unready viewport still clears a stale scroll offset (gallery squash).
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 0.0, 40.0, 0.0, Default::default()),
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                0.0,
+                40.0,
+                0.0,
+                Default::default()
+            ),
             Some(0.0)
         );
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 5.0, 0.0, 0.0, Default::default()),
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                5.0,
+                0.0,
+                0.0,
+                Default::default()
+            ),
             None
         );
     }
@@ -482,7 +503,15 @@ mod tests {
     fn ensure_caret_visible_clears_stale_sy_when_content_fits() {
         let text = "a\nb";
         assert_eq!(
-            ensure_caret_visible_scroll_y(text, text.len(), 20.0, 100.0, 40.0, 0.0, Default::default()),
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                100.0,
+                40.0,
+                0.0,
+                Default::default()
+            ),
             Some(0.0)
         );
     }

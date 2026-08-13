@@ -180,7 +180,11 @@ fn overflow_clip_uses_border_box_not_padding_inset() {
     let child_el = &parent_el.children[0];
     let pb = parent_el.layout_bounds;
     let pad = length_px(parent_el.style.padding.left);
-    assert!((pb[2] - 200.0).abs() < 1.0, "parent border-box 200, got {}", pb[2]);
+    assert!(
+        (pb[2] - 200.0).abs() < 1.0,
+        "parent border-box 200, got {}",
+        pb[2]
+    );
     assert!((pad - 20.0).abs() < 0.5, "parent padding 20, got {pad}");
     assert!(
         (child_el.layout_bounds[0] - (pb[0] + pad)).abs() < 1.5,
@@ -242,13 +246,7 @@ fn taffy_len(v: taffy::style::LengthPercentage) -> f32 {
 fn vw_vh_dvh_resolve_against_layout_viewport_not_parent() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let child = Element::from(
-                r#box()
-                    .w("50vw")
-                    .h("25vh")
-                    .min_h("10dvh")
-                    .flex_shrink(0.0),
-            );
+            let child = Element::from(r#box().w("50vw").h("25vh").min_h("10dvh").flex_shrink(0.0));
             let parent = Element::from(r#box().w(200.0).h(100.0).child(child));
             let mut root = Element::new().w("100%").h("100%").child(parent);
             let mut layout = LayoutTree::new();
@@ -272,26 +270,15 @@ fn vw_vh_dvh_resolve_against_layout_viewport_not_parent() {
 fn vw_vh_update_on_fast_relayout_when_viewport_resizes() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let child = Element::from(
-                r#box()
-                    .w("50vw")
-                    .h("25vh")
-                    .flex_shrink(0.0),
-            );
+            let child = Element::from(r#box().w("50vw").h("25vh").flex_shrink(0.0));
             let mut root = Element::new().child(child);
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
             assert!((root.children[0].layout_bounds[2] - 400.0).abs() < 1.0);
             assert!((root.children[0].layout_bounds[3] - 150.0).abs() < 1.0);
 
-            let _ = layout.build_and_layout_fast(
-                &mut root,
-                1200.0,
-                800.0,
-                [-1.0, -1.0],
-                false,
-                false,
-            );
+            let _ =
+                layout.build_and_layout_fast(&mut root, 1200.0, 800.0, [-1.0, -1.0], false, false);
             let w = root.children[0].layout_bounds[2];
             let h = root.children[0].layout_bounds[3];
             assert!(
@@ -310,25 +297,14 @@ fn vw_vh_update_on_fast_relayout_when_viewport_resizes() {
 fn calc_vw_updates_on_fast_relayout_when_viewport_resizes() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let el = Element::from(
-                r#box()
-                    .w("calc(50vw - 2rem)")
-                    .h(20.0)
-                    .flex_shrink(0.0),
-            );
+            let el = Element::from(r#box().w("calc(50vw - 2rem)").h(20.0).flex_shrink(0.0));
             let mut root = Element::new().child(el);
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
             assert!((root.children[0].layout_bounds[2] - 368.0).abs() < 1.0);
 
-            let _ = layout.build_and_layout_fast(
-                &mut root,
-                1000.0,
-                600.0,
-                [-1.0, -1.0],
-                false,
-                false,
-            );
+            let _ =
+                layout.build_and_layout_fast(&mut root, 1000.0, 600.0, [-1.0, -1.0], false, false);
             let w = root.children[0].layout_bounds[2];
             assert!(
                 (w - 468.0).abs() < 1.0,
@@ -353,9 +329,7 @@ fn em_padding_uses_element_font_size_not_root_16() {
             let mut root = Element::new().w(400.0).h(200.0).child(el);
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0, -1.0]);
-            let node = root.children[0]
-                .layout_node
-                .expect("laid out");
+            let node = root.children[0].layout_node.expect("laid out");
             let style = layout.taffy.style(node).expect("taffy style");
             let pad = taffy_len(style.padding.left);
             assert!(
@@ -370,12 +344,7 @@ fn em_padding_uses_element_font_size_not_root_16() {
 fn calc_vw_minus_rem_resolves_at_layout() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let el = Element::from(
-                r#box()
-                    .w("calc(50vw - 2rem)")
-                    .h(20.0)
-                    .flex_shrink(0.0),
-            );
+            let el = Element::from(r#box().w("calc(50vw - 2rem)").h(20.0).flex_shrink(0.0));
             let mut root = Element::new().w(800.0).h(600.0).child(el);
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
@@ -531,7 +500,10 @@ fn per_side_border_writes_taffy_rect_and_paints_strips() {
                 left.rect_size[1]
             );
             assert!(
-                result.instances.iter().all(|i| (i.border_width - 16.0).abs() > 0.5),
+                result
+                    .instances
+                    .iter()
+                    .all(|i| (i.border_width - 16.0).abs() > 0.5),
                 "non-uniform border must not use max-width SDF stroke"
             );
         });

@@ -94,24 +94,14 @@ fn require_radio_group(part: &str) -> RadioGroupCtx {
 
 fn take_packed(mut el: Element) -> Vec<Element> {
     // 宏多子节点打成 `rui_fragment`；勿把 RadioGroupItem 的横排（control+label）拆开。
-    if el
-        .attrs
-        .get("rui_fragment")
-        .map(|s| s.as_str())
-        == Some("1")
-    {
+    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
         return std::mem::take(&mut el.children);
     }
     vec![el]
 }
 
 fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {
-    if children.len() == 1
-        && children[0]
-            .attrs
-            .get("rui_fragment")
-            .map(|s| s.as_str())
-            == Some("1")
+    if children.len() == 1 && children[0].attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1")
     {
         return std::mem::take(&mut children[0].children);
     }
@@ -137,10 +127,7 @@ fn is_label_element(el: &Element) -> bool {
     el.attrs.get("accesskit_role").map(|s| s.as_str()) == Some("label")
 }
 
-fn wire_radio_captions(
-    control_id: &str,
-    children: Vec<Element>,
-) -> (Vec<Element>, Option<String>) {
+fn wire_radio_captions(control_id: &str, children: Vec<Element>) -> (Vec<Element>, Option<String>) {
     let mut captions = Vec::with_capacity(children.len());
     let mut labelled_by = None::<String>;
     for child in children {
@@ -350,8 +337,7 @@ pub fn radio_group_scope(
         .children(kids)
         .into();
     root = root.accesskit_role("radiogroup");
-    root.attrs
-        .insert("accesskit_id".to_string(), id.clone());
+    root.attrs.insert("accesskit_id".to_string(), id.clone());
     root.template_id = Some(id);
     root
 }
@@ -363,11 +349,7 @@ pub fn radio_group_scope(
 /// solid-ui `RadioGroupItem`：圆形控制面 + 可选文案。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn RadioGroupItem(
-    value: String,
-    disabled: bool,
-    children: Option<Element>,
-) -> Element {
+pub fn RadioGroupItem(value: String, disabled: bool, children: Option<Element>) -> Element {
     let ctx = require_radio_group("RadioGroupItem");
     let disabled = disabled || ctx.disabled;
     let captions = children
@@ -383,16 +365,12 @@ pub fn RadioGroupItemLabel(children: Option<Element>) -> Element {
     let _ = require_radio_group("RadioGroupItemLabel");
     match children {
         Some(c) if is_caption_text_leaf(&c) || c.text.as_ref().is_some_and(|t| !t.is_empty()) => {
-            let text = c
-                .text
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    c.children
-                        .iter()
-                        .find_map(|ch| ch.text.clone().filter(|s| !s.is_empty()))
-                        .unwrap_or_default()
-                });
+            let text = c.text.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                c.children
+                    .iter()
+                    .find_map(|ch| ch.text.clone().filter(|s| !s.is_empty()))
+                    .unwrap_or_default()
+            });
             label("")
                 .text(text)
                 .text_size(14.0)
@@ -513,9 +491,9 @@ impl From<RadioGroupBuilder> for Element {
         let disabled = builder.disabled;
         let options = builder.options;
         let extra = builder.children;
-        let selected = builder
-            .selected
-            .unwrap_or_else(|| use_signal(format!("{id}__radio").as_str(), || default_value.clone()));
+        let selected = builder.selected.unwrap_or_else(|| {
+            use_signal(format!("{id}__radio").as_str(), || default_value.clone())
+        });
 
         provide_context(
             radio_group_context(),
@@ -546,8 +524,7 @@ impl From<RadioGroupBuilder> for Element {
             .children(items)
             .into();
         root = root.accesskit_role("radiogroup");
-        root.attrs
-            .insert("accesskit_id".to_string(), id.clone());
+        root.attrs.insert("accesskit_id".to_string(), id.clone());
         root.template_id = Some(id);
         root
     }

@@ -3,8 +3,8 @@
 
 use crate::app::reactive::{bind_text, reset_registered_anchors, show_reactive};
 use crate::core::reactivity::{
-    clear_ui_root_effect, create_effect, create_signal, dispose_effect, mark_next_effect_as_ui_root,
-    root_bare_get_count, ui_root_effect_dep_count,
+    clear_ui_root_effect, create_effect, create_signal, dispose_effect,
+    mark_next_effect_as_ui_root, root_bare_get_count, ui_root_effect_dep_count,
 };
 use crate::core::tree::Element;
 use std::cell::RefCell;

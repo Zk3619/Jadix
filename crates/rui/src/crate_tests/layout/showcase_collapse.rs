@@ -83,28 +83,24 @@ fn build_card() -> Element {
                     .font_weight(700.0)
                     .w("100%"),
             )
-            .child(
-                Element::from(
-                    vstack()
-                        .w("100%")
-                        .gap("0.75rem")
-                        .child(
-                            Element::from(
-                                hstack()
-                                    .w("100%")
-                                    .gap("0.5rem")
-                                    .wrap("wrap")
-                                    .child(Element::from(
-                                        button("d1").child(Element::new().text("Default (0)")),
-                                    ))
-                                    .child(Element::from(
-                                        button("s1").child(Element::new().text("Secondary")),
-                                    )),
-                            ),
-                        )
-                        .child(Element::new().template_id("show-anchor")),
-                ),
-            ),
+            .child(Element::from(
+                vstack()
+                    .w("100%")
+                    .gap("0.75rem")
+                    .child(Element::from(
+                        hstack()
+                            .w("100%")
+                            .gap("0.5rem")
+                            .wrap("wrap")
+                            .child(Element::from(
+                                button("d1").child(Element::new().text("Default (0)")),
+                            ))
+                            .child(Element::from(
+                                button("s1").child(Element::new().text("Secondary")),
+                            )),
+                    ))
+                    .child(Element::new().template_id("show-anchor")),
+            )),
     )
 }
 
@@ -138,7 +134,15 @@ fn subtree_compute_zeros_parent_location() {
     let sub = tree
         .pick_subtree_compute_root(&dirty)
         .expect("nested show should pick a parent");
-    let _ = tree.build_and_layout_fast_ex(&mut card, 800.0, 600.0, [-1.0, -1.0], false, false, Some(sub));
+    let _ = tree.build_and_layout_fast_ex(
+        &mut card,
+        800.0,
+        600.0,
+        [-1.0, -1.0],
+        false,
+        false,
+        Some(sub),
+    );
 
     let mut after = Vec::new();
     dump_abs(&tree, &card, 0.0, 0.0, &mut after);
@@ -211,15 +215,8 @@ fn showcase_show_toggle_keeps_title_above_buttons() {
         let dirty = std::collections::HashSet::from([n]);
         tree.mark_dirty_nodes_in_tree(&card, &dirty);
     }
-    let _ = tree.build_and_layout_fast_ex(
-        &mut card,
-        800.0,
-        600.0,
-        [-1.0, -1.0],
-        false,
-        false,
-        None,
-    );
+    let _ =
+        tree.build_and_layout_fast_ex(&mut card, 800.0, 600.0, [-1.0, -1.0], false, false, None);
 
     let mut after = Vec::new();
     dump_abs(&tree, &card, 0.0, 0.0, &mut after);

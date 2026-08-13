@@ -2322,16 +2322,23 @@ fn expand_node(
                                 "default_checked" | "invalid" | "disabled"
                             )
                         {
+                            // 字面量 / `"true"` 仍走 bool 解析；非 bool 类型 props
+                            //（如 Chart `selected: ChartSelected`）走 `.into()`，
+                            // 避免全局 boolish 名单把 Option<usize> 误判成 bool。
                             if let Some(b) = expr_as_bool_compat(value) {
                                 quote! { Some(#b) }
-                            } else if !in_reactive_boundary && expr_reads_get(value) {
-                                quote! {
-                                    Some(rui::core::reactivity::untrack(|| {
-                                        rui::core::tree::parse_bool_like(#value)
-                                    }))
-                                }
-                            } else {
+                            } else if matches!(
+                                value,
+                                syn::Expr::Lit(syn::ExprLit {
+                                    lit: syn::Lit::Str(_),
+                                    ..
+                                })
+                            ) {
                                 quote! { Some(rui::core::tree::parse_bool_like(#value)) }
+                            } else if !in_reactive_boundary && expr_reads_get(value) {
+                                quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
+                            } else {
+                                quote! { Some((#value).into()) }
                             }
                         } else if !in_reactive_boundary && expr_reads_get(value) {
                             // Avoid subscribing the parent effect during props construction.

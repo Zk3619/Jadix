@@ -12,9 +12,11 @@
 | `Store` / `create_store` / `store_select` / `Store::produce` | `core/store.rs` | `produce` ≡ `update`；无 proxy 路径触发器（R-WP-3） |
 | `create_resource` / `Resource` / `suspense` | `app/resource.rs` | 桌面语义；无 SSR |
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
+| `pie_chart` / `area_chart` / `ChartDatum` / path 核光栅贴图 | `components/chart.rs` · `primitives/path.rs` | WP-3.2；RSX `BarChart`/`LineChart`/`AreaChart`/`PieChart`；Donut=`inner_radius`；未进 SemVer |
 
 ### Added
 
+- WP-3.2：共用 path 核（`rui_path_d` M/L/Z）CPU 覆盖率光栅成贴图；`line_chart` / `area_chart` / `pie_chart`（Donut `inner_radius`）；RSX `<BarChart>`/`<LineChart>`/`<AreaChart>`/`<PieChart>`；`ChartDatum` + band/linear/pie 刻度（对照 TanStack grammar，不搬运行时）。Gallery「数据」可点选。
 - WP-2.5：`throw_resource_error`；Resource `from_signal` / `set_error`；`produce` 切片契约测；Resource Err→EB e2e 测。
 - WP-2.9：Builder `.border_box()`；utility `box-border` / `box-content`；命中/裁剪库测；测宽叶审计见 `docs/box_model.md` 附录 A。
 - 盒模型单位：布局期真 `vw`/`vh`/`dvh`、局部 `em`、`calc(A ± B)`（含 `calc(100% - Npx)` 相对父 content box）；逻辑 `*-inline`/`*-block` 双值；`row-gap`/`column-gap`。
@@ -25,3 +27,4 @@
 
 - 稳定面控件 API 仍见 inventory / COMPONENT_LIBRARY；本文件只标反应性异步与 Store 实验边界。
 - 盒模型默认仍为 BorderBox；禁止静默改默认。见 [`box_model.md`](box_model.md)。
+- **W2 退出（2026-08-13）** → Wave 3。公开自绘面（`<svg>` / `<canvas>` / 2D·3D）与未来创意库见 [`drawing.md`](drawing.md)：B16 canvas-ui · B17 react-bits；执行 WP-3.11–3.13，尚未进 SemVer。

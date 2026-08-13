@@ -8,10 +8,7 @@ fn fragment_sets_attr_and_children() {
             <Text>"two"</Text>
         </Fragment>
     };
-    assert_eq!(
-        frag.get_attr("rui_fragment").map(|s| s.as_str()),
-        Some("1")
-    );
+    assert_eq!(frag.get_attr("rui_fragment").map(|s| s.as_str()), Some("1"));
     assert_eq!(frag.children.len(), 2);
     let kids = rui::core::tree::Element::unpack_fragment_children(Some(frag));
     assert_eq!(kids.len(), 2);

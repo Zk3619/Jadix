@@ -122,12 +122,7 @@ pub(super) fn pick_cursor(
     pick_cursor_hit(el, x, y, scroll_acc).into_option()
 }
 
-fn pick_cursor_hit(
-    el: &Element,
-    x: f32,
-    y: f32,
-    scroll_acc: [f32; 2],
-) -> LayerHit<CursorKind> {
+fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerHit<CursorKind> {
     if pointer_events_blocked(el) {
         return LayerHit::Miss;
     }
@@ -249,12 +244,7 @@ pub(super) fn find_focus_id_at(
     find_focus_id_at_hit(el, x, y, scroll_acc).into_option()
 }
 
-fn find_focus_id_at_hit(
-    el: &Element,
-    x: f32,
-    y: f32,
-    scroll_acc: [f32; 2],
-) -> LayerHit<String> {
+fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerHit<String> {
     if pointer_events_blocked(el) {
         return LayerHit::Miss;
     }
@@ -623,12 +613,7 @@ enum HoverHit {
     Hit(Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>),
 }
 
-fn pick_hover_target(
-    el: &Element,
-    x: f32,
-    y: f32,
-    scroll_acc: [f32; 2],
-) -> HoverHit {
+fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> HoverHit {
     if pointer_events_blocked(el) {
         return HoverHit::Miss;
     }
@@ -779,8 +764,7 @@ pub(super) fn find_element_by_focus_id<'a>(el: &'a Element, focus_id: &str) -> O
 /// `signal.set`, which flushes `reactive_view` → [`crate::app::runtime::try_reconcile_subtree`]
 /// → `borrow_mut` and panics with `RefCell already borrowed`.
 pub(super) struct FocusedKeyHandlers {
-    pub on_key_down:
-        Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
+    pub on_key_down: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub focusable: bool,
 }
@@ -1084,10 +1068,7 @@ mod textarea_text_hit_tests {
             .expect("line 2 must hit textarea text leaf through scroll viewport");
         assert_eq!(hit.0, "ta-hit");
         assert_eq!(hit.5, format!("{TEXTAREA_FOCUS_PREFIX}ta-hit"));
-        assert!(
-            hit.2.contains('\n'),
-            "display must include hard newlines"
-        );
+        assert!(hit.2.contains('\n'), "display must include hard newlines");
     }
 
     #[test]

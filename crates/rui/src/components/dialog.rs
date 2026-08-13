@@ -271,11 +271,7 @@ fn dialog_shell_frame(
     let overlay_el = dialog_overlay(open, zs.underlay, overlay_opts);
 
     // Swallow clicks only — `panel_block_clicks` would nest a second `rui_portal` under stage.
-    let mut panel: Element = vstack()
-        .w("100%")
-        .min_h("0")
-        .child(inner)
-        .into();
+    let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
     panel = apply_dialog_shell_surface(panel);
     panel = swallow_clicks(panel.relative());
     if let Some(mut close) = chrome_close {

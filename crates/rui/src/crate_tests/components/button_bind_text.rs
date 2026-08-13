@@ -24,7 +24,10 @@ fn find_tid_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
     None
 }
 
-fn assert_caption_single_line(result_text: &crate::layout::layout_tree::TextLayoutInfo, label: &str) {
+fn assert_caption_single_line(
+    result_text: &crate::layout::layout_tree::TextLayoutInfo,
+    label: &str,
+) {
     let prepared = result_text
         .prepared
         .as_ref()
@@ -176,15 +179,8 @@ fn button_bind_text_layout_changed_widens_instead_of_wrapping() {
     leaf.text = Some(long.into());
     let dirty_set = std::collections::HashSet::from([dirty]);
     tree.mark_dirty_nodes_in_tree(&root, &dirty_set);
-    let after = tree.build_and_layout_fast_ex(
-        &mut root,
-        640.0,
-        200.0,
-        [-1.0, -1.0],
-        false,
-        false,
-        None,
-    );
+    let after =
+        tree.build_and_layout_fast_ex(&mut root, 640.0, 200.0, [-1.0, -1.0], false, false, None);
     let after_cap = after
         .text_nodes
         .iter()
@@ -234,9 +230,10 @@ fn stale_box_after_longer_caption_without_layout_wraps() {
     let short = "Default (0)";
     let long = "Default (999)";
     let caption = Element::new().text(short).template_id("diag:btn:stale");
-    let mut root = Element::new().w(400.0).h(80.0).child(Element::from(
-        button("diag-stale").child(caption),
-    ));
+    let mut root = Element::new()
+        .w(400.0)
+        .h(80.0)
+        .child(Element::from(button("diag-stale").child(caption)));
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
     let before_btn = find_btn_bounds(&root, "diag-stale");
@@ -269,8 +266,7 @@ fn stale_box_after_longer_caption_without_layout_wraps() {
         crate::text::intrinsic_width(prepared)
     );
     assert!(
-        (after_btn[2] - before_btn[2]).abs() < 0.5
-            && (after_btn[3] - before_btn[3]).abs() < 0.5,
+        (after_btn[2] - before_btn[2]).abs() < 0.5 && (after_btn[3] - before_btn[3]).abs() < 0.5,
         "without layout, button size stays stale: before={before_btn:?} after={after_btn:?}"
     );
     reset_registered_anchors();
@@ -293,7 +289,10 @@ fn button_bind_text_subpixel_growth_must_request_layout() {
 
     let next = text.to_string();
     let needs_layout = crate::app::reactive::text_intrinsic_width(&leaf, text)
-        .zip(crate::app::reactive::text_intrinsic_width(&leaf, next.as_str()))
+        .zip(crate::app::reactive::text_intrinsic_width(
+            &leaf,
+            next.as_str(),
+        ))
         .map(|(b, a)| {
             a > b + 0.01 || (leaf.layout_bounds[2] > 1.0 && a > leaf.layout_bounds[2] + 0.01)
         })
@@ -301,8 +300,7 @@ fn button_bind_text_subpixel_growth_must_request_layout() {
     assert!(
         needs_layout,
         "intrinsic {:.3} vs stale box {:.3} must LayoutChanged",
-        intrinsic,
-        leaf.layout_bounds[2]
+        intrinsic, leaf.layout_bounds[2]
     );
     reset_registered_anchors();
 }
@@ -358,12 +356,13 @@ fn button_bind_text_growing_caption_must_request_layout() {
     );
 
     let next = long.to_string();
-    let width_grew = crate::app::reactive::text_intrinsic_width(
-        &leaf,
-        leaf.text.as_deref().unwrap_or(""),
-    )
-    .zip(crate::app::reactive::text_intrinsic_width(&leaf, next.as_str()))
-    .is_none_or(|(a, b)| b > a + 0.01);
+    let width_grew =
+        crate::app::reactive::text_intrinsic_width(&leaf, leaf.text.as_deref().unwrap_or(""))
+            .zip(crate::app::reactive::text_intrinsic_width(
+                &leaf,
+                next.as_str(),
+            ))
+            .is_none_or(|(a, b)| b > a + 0.01);
     leaf.text = Some(next);
     let status = if width_grew {
         LayoutStatus::LayoutChanged

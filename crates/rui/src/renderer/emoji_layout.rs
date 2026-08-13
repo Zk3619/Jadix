@@ -181,7 +181,10 @@ mod tests {
         assert!((l0 - 100.0).abs() < f32::EPSILON);
         // Same line: collapsed left is pushed forward.
         let l1 = advance_emoji_left_cursor(10.0, 0.0, slot, &mut cursor, &mut line_top);
-        assert!(l1 + 0.1 >= 100.0, "same-line backstop should keep monotonic left, got {l1}");
+        assert!(
+            l1 + 0.1 >= 100.0,
+            "same-line backstop should keep monotonic left, got {l1}"
+        );
         // Soft-wrap to next visual line: must return to the measured left (margin), not stair-step.
         let l2 = advance_emoji_left_cursor(4.0, 24.0, slot, &mut cursor, &mut line_top);
         assert!(

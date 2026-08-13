@@ -59,14 +59,22 @@ fn overlay_collect_y_thumb_matches_full_taffy_origin() {
                 .find(|(id, ..)| id == "diag-thumb-overlay")
                 .expect("scroll metrics");
 
-            use_signal(&scroll_viewport_w_signal_key("diag-thumb-overlay"), || 0.0_f32)
-                .set(bounds[2]);
-            use_signal(&scroll_viewport_h_signal_key("diag-thumb-overlay"), || 0.0_f32)
-                .set(bounds[3]);
-            use_signal(&scroll_content_w_signal_key("diag-thumb-overlay"), || 0.0_f32)
-                .set(content_size[0]);
-            use_signal(&scroll_content_h_signal_key("diag-thumb-overlay"), || 0.0_f32)
-                .set(content_size[1]);
+            use_signal(&scroll_viewport_w_signal_key("diag-thumb-overlay"), || {
+                0.0_f32
+            })
+            .set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key("diag-thumb-overlay"), || {
+                0.0_f32
+            })
+            .set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key("diag-thumb-overlay"), || {
+                0.0_f32
+            })
+            .set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key("diag-thumb-overlay"), || {
+                0.0_f32
+            })
+            .set(content_size[1]);
 
             let taffy_thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
                 .expect("Y thumb after Full Taffy");
@@ -80,14 +88,8 @@ fn overlay_collect_y_thumb_matches_full_taffy_origin() {
                  padding+border used to shift it ~1px right"
             );
 
-            let _overlay = layout.build_and_layout_fast(
-                &mut root,
-                220.0,
-                120.0,
-                [-1.0, -1.0],
-                true,
-                true,
-            );
+            let _overlay =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
             let overlay_thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
                 .expect("Y thumb after overlay collect");
             let overlay_track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")

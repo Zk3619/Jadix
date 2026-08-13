@@ -1,11 +1,11 @@
 //! Portal hoist: root overlay layer + optional Solid-style `mount` host.
 
 use crate::core::tree::Element;
-use crate::layout::layout_tree::{
-    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
-    PORTAL_LAYER_ID,
-};
 use crate::layout::layout_tree::LayoutTree;
+use crate::layout::layout_tree::{
+    hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT,
+    ATTR_PORTAL_SLOT, PORTAL_LAYER_ID,
+};
 
 fn portal_layer(root: &Element) -> Option<&Element> {
     root.children
@@ -19,12 +19,7 @@ fn count_in_layer(root: &Element) -> usize {
             layer
                 .children
                 .iter()
-                .filter(|c| {
-                    c.attrs
-                        .get(ATTR_HOISTED_PORTAL)
-                        .map(|s| s.as_str())
-                        == Some("1")
-                })
+                .filter(|c| c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1"))
                 .count()
         })
         .unwrap_or(0)
@@ -52,7 +47,10 @@ fn hoist_mounts_into_absolute_portal_layer_not_flex_siblings() {
             .h("100%")
             .template_id("main")
             .child({
-                let mut portal = Element::new().w("100%").h("100%").template_id("page-portal");
+                let mut portal = Element::new()
+                    .w("100%")
+                    .h("100%")
+                    .template_id("page-portal");
                 portal.set_attr("rui_portal", "1");
                 portal
             }),
@@ -83,10 +81,7 @@ fn hoist_mounts_into_absolute_portal_layer_not_flex_siblings() {
         .iter()
         .find(|c| c.template_id.as_deref() == Some("main"))
         .unwrap();
-    assert!(
-        (side.layout_bounds[2] - 200.0).abs() < 1.0,
-        "side width"
-    );
+    assert!((side.layout_bounds[2] - 200.0).abs() < 1.0, "side width");
     assert!(
         main.layout_bounds[2] > 700.0,
         "main must keep remaining width; got {}",
@@ -104,7 +99,10 @@ fn hoist_replaces_previous_portals_instead_of_accumulating() {
             .h("100%")
             .template_id("main")
             .child({
-                let mut portal = Element::new().w("100%").h("100%").template_id("page-portal");
+                let mut portal = Element::new()
+                    .w("100%")
+                    .h("100%")
+                    .template_id("page-portal");
                 portal.set_attr("rui_portal", "1");
                 portal
             }),
@@ -119,7 +117,10 @@ fn hoist_replaces_previous_portals_instead_of_accumulating() {
         .find(|c| c.template_id.as_deref() == Some("main"))
     {
         main.children.clear();
-        let mut portal = Element::new().w("100%").h("100%").template_id("page-portal");
+        let mut portal = Element::new()
+            .w("100%")
+            .h("100%")
+            .template_id("page-portal");
         portal.set_attr("rui_portal", "1");
         main.children.push(portal);
     }
@@ -162,7 +163,8 @@ fn hoist_mount_attr_attaches_to_named_host() {
         .w(400.0)
         .h(200.0)
         .template_id("card-host");
-    host.children.push(Element::new().w(40.0).h(20.0).template_id("host-label"));
+    host.children
+        .push(Element::new().w(40.0).h(20.0).template_id("host-label"));
 
     let mut portal = Element::new()
         .w("100%")
@@ -171,15 +173,21 @@ fn hoist_mount_attr_attaches_to_named_host() {
     portal.set_attr("rui_portal", "1");
     portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
 
-    let mut root = Element::new().flex_col().w(800.0).h(600.0).children([
-        Element::new()
+    let mut root = Element::new()
+        .flex_col()
+        .w(800.0)
+        .h(600.0)
+        .children([Element::new()
             .flex_grow(1.0)
             .template_id("main")
-            .children([host, portal]),
-    ]);
+            .children([host, portal])]);
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
-    assert_eq!(count_in_layer(&root), 0, "mounted portal must not sit on body layer");
+    assert_eq!(
+        count_in_layer(&root),
+        0,
+        "mounted portal must not sit on body layer"
+    );
 
     let host = find_by_tid(&root, "card-host").expect("host");
     let hoisted = host
@@ -216,19 +224,13 @@ fn hoist_unknown_mount_falls_back_to_root_layer() {
     portal.set_attr("rui_portal", "1");
     portal.set_attr(ATTR_PORTAL_MOUNT, "missing-host");
 
-    let mut root = Element::new().children([
-        Element::new().template_id("main").child(portal),
-    ]);
+    let mut root = Element::new().children([Element::new().template_id("main").child(portal)]);
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(count_in_layer(&root), 1);
-    assert!(
-        find_by_tid(&root, "orphan-portal")
-            .map(|n| {
-                n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
-            })
-            .unwrap_or(false)
-    );
+    assert!(find_by_tid(&root, "orphan-portal")
+        .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
+        .unwrap_or(false));
 }
 
 #[test]
@@ -245,11 +247,8 @@ fn hoist_clears_previous_host_mount_when_source_gone() {
     portal.set_attr("rui_portal", "1");
     portal.set_attr(ATTR_PORTAL_MOUNT, "card-host");
 
-    let mut root = Element::new().children([
-        Element::new()
-            .template_id("main")
-            .children([host, portal]),
-    ]);
+    let mut root =
+        Element::new().children([Element::new().template_id("main").children([host, portal])]);
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(
@@ -267,7 +266,8 @@ fn hoist_clears_previous_host_mount_when_source_gone() {
         .iter_mut()
         .find(|c| c.template_id.as_deref() == Some("main"))
     {
-        main.children.retain(|c| c.template_id.as_deref() != Some("local-portal"));
+        main.children
+            .retain(|c| c.template_id.as_deref() != Some("local-portal"));
         // After strip+lift the portal lives under host; clear source by rebuilding main without portal.
         // Host still has hoisted child until next hoist strips it.
         main.children.clear();
@@ -282,10 +282,7 @@ fn hoist_clears_previous_host_mount_when_source_gone() {
 
     assert_eq!(hoist_portal_subtrees(&mut root), 0);
     assert!(
-        find_by_tid(&root, "card-host")
-            .unwrap()
-            .children
-            .is_empty(),
+        find_by_tid(&root, "card-host").unwrap().children.is_empty(),
         "closing local portal must clear host mount"
     );
 }
@@ -306,9 +303,10 @@ fn hoist_dialog_stage_keeps_inner_panel() {
     stage.set_attr("rui_portal", "1");
     stage.set_attr(ATTR_PORTAL_KEY, "panel:1001");
 
-    let mut root = Element::new().w(800.0).h(600.0).children([
-        Element::new().child(underlay).child(stage),
-    ]);
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .children([Element::new().child(underlay).child(stage)]);
 
     assert_eq!(hoist_portal_subtrees(&mut root), 2);
     assert_eq!(count_in_layer(&root), 2);
@@ -323,10 +321,7 @@ fn hoist_dialog_stage_keeps_inner_panel() {
         1,
         "panel must remain a child of the hoisted stage"
     );
-    assert_eq!(
-        stage.children[0].template_id.as_deref(),
-        Some("dlg-panel")
-    );
+    assert_eq!(stage.children[0].template_id.as_deref(), Some("dlg-panel"));
 }
 
 /// Nested `rui_portal` lift count must match (regression for debug_assert pending vs lifted).
@@ -359,9 +354,10 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
     stage.set_attr("rui_portal", "1");
     stage.set_attr(ATTR_PORTAL_KEY, "panel:dlg");
 
-    let mut root = Element::new().w(800.0).h(600.0).children([
-        Element::new().child(stage),
-    ]);
+    let mut root = Element::new()
+        .w(800.0)
+        .h(600.0)
+        .children([Element::new().child(stage)]);
 
     assert!(hoist_portal_subtrees(&mut root) >= 1);
     assert_eq!(count_in_layer(&root), 1);

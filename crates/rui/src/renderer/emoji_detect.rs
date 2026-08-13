@@ -83,7 +83,9 @@ mod tests {
     fn box_shape_symbols_are_text_not_emoji() {
         // Gallery "Box/shape symbols" must stay text glyphs — emoji pipeline + Twemoji miss
         // turns them into tiny/missing custom quads.
-        for g in ["■", "□", "▲", "△", "●", "○", "◆", "◇", "★", "☆", "※", "◎", "◉"] {
+        for g in [
+            "■", "□", "▲", "△", "●", "○", "◆", "◇", "★", "☆", "※", "◎", "◉",
+        ] {
             assert!(
                 !grapheme_is_emoji(g),
                 "{g} (U+{:04X}) must not be classified as emoji",

@@ -61,13 +61,7 @@ fn spacer_column_keeps_total_scroll_height() {
                 .min_h(total_h)
                 .flex_shrink(0.0);
             if top_h > 0.0 {
-                body = body.child(
-                    r#box()
-                        .w("100%")
-                        .h(top_h)
-                        .min_h(top_h)
-                        .flex_shrink(0.0),
-                );
+                body = body.child(r#box().w("100%").h(top_h).min_h(top_h).flex_shrink(0.0));
             }
             for _ in start..end {
                 body = body.child(
@@ -225,7 +219,10 @@ fn silent_scroll_reuses_overlapping_row_layout_nodes() {
                 .get("__rui_vlist_created")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
-            assert!(reused >= 4, "expected overlap reuse, reused={reused} created={created}");
+            assert!(
+                reused >= 4,
+                "expected overlap reuse, reused={reused} created={created}"
+            );
             assert!(created > 0, "expected some newly mounted rows");
 
             let node5 = body

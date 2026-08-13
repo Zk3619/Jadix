@@ -9,7 +9,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
 use crate::utils::text_field::{
-    bind_controlled_value, input_text_template_id, text_edit_line_box_px, textarea_height_signal_key,
+    bind_controlled_value, input_text_template_id, text_edit_line_box_px,
+    textarea_height_signal_key,
 };
 
 fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
@@ -117,12 +118,7 @@ fn gallery_scroll_area_in_view_textarea_clip_fills_chrome() {
         .gap(16.0)
         .p(24.0)
         .child(Element::new().w("100%").h(40.0))
-        .child(
-            textarea(id)
-                .rows(4)
-                .resizable(true)
-                .value_signal(notes),
-        )
+        .child(textarea(id).rows(4).resizable(true).value_signal(notes))
         .into();
     let mut root = Element::new().w(900.0).h(800.0).child(
         Element::new()

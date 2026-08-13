@@ -162,7 +162,9 @@ pub fn accumulate_paint_damage(damage_rect: &mut Option<[f32; 4]>, bounds: [f32;
         return;
     }
     *damage_rect = Some(match *damage_rect {
-        Some(existing) => rects_union(&[existing, bounds]).unwrap_or_else(|| union_rects(existing, bounds)),
+        Some(existing) => {
+            rects_union(&[existing, bounds]).unwrap_or_else(|| union_rects(existing, bounds))
+        }
         None => bounds,
     });
 }
@@ -197,10 +199,7 @@ pub fn damage_covers_full(viewport: [f32; 4], damage: [f32; 4]) -> bool {
     const EPS: f32 = 0.5;
     let (vx, vy, vw, vh) = (viewport[0], viewport[1], viewport[2], viewport[3]);
     let (dx, dy, dw, dh) = (damage[0], damage[1], damage[2], damage[3]);
-    dx <= vx + EPS
-        && dy <= vy + EPS
-        && dx + dw + EPS >= vx + vw
-        && dy + dh + EPS >= vy + vh
+    dx <= vx + EPS && dy <= vy + EPS && dx + dw + EPS >= vx + vw && dy + dh + EPS >= vy + vh
 }
 
 #[cfg(test)]

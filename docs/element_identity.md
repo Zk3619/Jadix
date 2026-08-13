@@ -255,7 +255,7 @@ cargo check -p gallery
 ```text
 AUTHORITY.md                            ← ★执行源（WP-CV.4 / WP-2.4 / WP-2.8）
 ENGINEERING_GRADE_FRAMEWORK.md          ← 总纲领（P1 DX：scoped id）
-REACTIVITY.md                           ← 细粒度口径
+REACTIVITY.md                           ← 细粒度口径（§5.7 不变量；列表项级 ≠ template_id）
 COMPONENT_LIBRARY.md §4.2               ← 组件 API 摘要 → 指向本文
 element_identity.md                     ← 本文件（跨层身份权威）
 a11y_smoke.md / keyboard_nav.md / reactivity_and_hot_reload.md

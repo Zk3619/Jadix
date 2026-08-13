@@ -174,11 +174,8 @@ pub(crate) fn button_chrome_for_variant(
         }
         "secondary" => {
             let rest = parse_color("secondary");
-            let hover = color_mix_oklch_pct(
-                parse_color("secondary"),
-                parse_color("foreground"),
-                5.0,
-            );
+            let hover =
+                color_mix_oklch_pct(parse_color("secondary"), parse_color("foreground"), 5.0);
             let bg = lerp_display_srgb_linear(rest, hover, t);
             (bg, parse_text_color("secondary-foreground"), None)
         }
@@ -617,11 +614,7 @@ impl ButtonBuilder {
     /// Sets `width: 100%` + `min-width: 0` + `max-width: 100%` so flex `min-width: auto`
     /// does not inflate past the parent (Dialog / form rows).
     pub fn w_full(mut self) -> Self {
-        self.container = self
-            .container
-            .w("100%")
-            .min_w(0.0)
-            .max_w("100%");
+        self.container = self.container.w("100%").min_w(0.0).max_w("100%");
         self
     }
     pub fn h(mut self, h: impl IntoCssDim) -> Self {

@@ -331,7 +331,10 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
 /// box at the portal origin (children still paint → “lost container” at top-left) whenever
 /// [`sync_floating_placement`] would otherwise skip writing because the place signal is unchanged.
 pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
-    let place = use_signal(floating_place_signal_key(id).as_str(), FloatingPlace::default);
+    let place = use_signal(
+        floating_place_signal_key(id).as_str(),
+        FloatingPlace::default,
+    );
     let p = place.peek();
     // Default (0,0) before first sync is fine — sync will correct. Always write so absolute
     // panels never stay on `auto` insets.
@@ -376,12 +379,7 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
         let b = el.layout_bounds;
         out.push((
             fid.clone(),
-            [
-                b[0] - scroll_acc[0],
-                b[1] - scroll_acc[1],
-                b[2],
-                b[3],
-            ],
+            [b[0] - scroll_acc[0], b[1] - scroll_acc[1], b[2], b[3]],
         ));
     }
     let mut next_acc = scroll_acc;
@@ -472,14 +470,8 @@ fn apply_floating_menus(
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(FLOATING_TRIGGER_GAP)
                 .max(0.0);
-            let (x, y, available_max_h, _) = compute_anchored_placement(
-                *tb,
-                viewport,
-                estimate_w,
-                estimate_h,
-                preferred,
-                gap,
-            );
+            let (x, y, available_max_h, _) =
+                compute_anchored_placement(*tb, viewport, estimate_w, estimate_h, preferred, gap);
             let max_h = el
                 .attrs
                 .get(ATTR_FLOATING_MAX_H)
@@ -752,7 +744,12 @@ mod tests {
         trigger.layout_bounds = [20.0, 40.0, 80.0, 28.0];
 
         let mut panel = Element::new().absolute().w(300.0);
-        mark_floating(&mut panel, "indep-menu", "t-wide", PopupPlacement::BottomStart);
+        mark_floating(
+            &mut panel,
+            "indep-menu",
+            "t-wide",
+            PopupPlacement::BottomStart,
+        );
         // match_trigger=0 and no rui_floating_w → content auto, min ≥ trigger
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.layout_bounds = [0.0, 0.0, 220.0, 60.0];
@@ -969,7 +966,12 @@ mod tests {
         trigger.layout_bounds = [80.0, 120.0, 100.0, 32.0];
 
         let mut panel = Element::new().absolute();
-        mark_floating(&mut panel, "reopen-menu", "t-reopen", PopupPlacement::BottomStart);
+        mark_floating(
+            &mut panel,
+            "reopen-menu",
+            "t-reopen",
+            PopupPlacement::BottomStart,
+        );
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_W, "100px");
         panel.layout_bounds = [0.0, 0.0, 100.0, 60.0];

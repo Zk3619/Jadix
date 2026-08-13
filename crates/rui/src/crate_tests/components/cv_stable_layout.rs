@@ -45,10 +45,7 @@ fn layout_in_viewport(root: &mut Element, vw: f32, vh: f32) {
 
 fn find_checkbox_indicator<'a>(el: &'a Element) -> &'a Element {
     find_first(el, &|c| {
-        c.attrs
-            .get("data-slot")
-            .map(|s| s.as_str())
-            == Some("checkbox-indicator")
+        c.attrs.get("data-slot").map(|s| s.as_str()) == Some("checkbox-indicator")
     })
     .expect("checkbox indicator")
 }
@@ -64,9 +61,10 @@ fn cv_button_layout_nonzero_bounds() {
 
 #[test]
 fn cv_input_layout_nonzero_bounds() {
-    let mut root = Element::new().w(400.0).h(80.0).child(Element::from(
-        input("cv-input").placeholder("Name"),
-    ));
+    let mut root = Element::new()
+        .w(400.0)
+        .h(80.0)
+        .child(Element::from(input("cv-input").placeholder("Name")));
     layout_in_viewport(&mut root, 400.0, 80.0);
     assert_positive_bounds(&root, "input root");
     assert_positive_bounds(&root.children[0], "input");
@@ -97,56 +95,46 @@ fn cv_dialog_open_layout_nonzero_bounds() {
 #[test]
 fn cv_tabs_layout_nonzero_bounds() {
     let value = use_signal("cv-tabs__value", || "one".to_string());
-    let el = tabs_scope(
-        "cv-tabs",
-        Some(value),
-        "one",
-        "horizontal",
-        false,
-        || {
-            let list = TabsList(TabsListProps {
-                id: String::new(),
-                variant: None,
-                value: None,
-                default_value: None,
-                options: None,
-                children: Some({
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(vec![
-                        TabsTrigger(TabsTriggerProps {
-                            value: Some("one".into()),
-                            disabled: None,
-                            children: Some(Element::new().text("One")),
-                            base: None,
-                        }),
-                        TabsTrigger(TabsTriggerProps {
-                            value: Some("two".into()),
-                            disabled: None,
-                            children: Some(Element::new().text("Two")),
-                            base: None,
-                        }),
-                    ])
-                }),
-                base: None,
-            });
-            let panel = tabs_content("one", || Element::new().text("Panel one"));
-            let mut pack = Element::new();
-            pack.set_attr("rui_fragment", "1");
-            pack = pack.children(vec![list, panel]);
-            pack
-        },
-    );
+    let el = tabs_scope("cv-tabs", Some(value), "one", "horizontal", false, || {
+        let list = TabsList(TabsListProps {
+            id: String::new(),
+            variant: None,
+            value: None,
+            default_value: None,
+            options: None,
+            children: Some({
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![
+                    TabsTrigger(TabsTriggerProps {
+                        value: Some("one".into()),
+                        disabled: None,
+                        children: Some(Element::new().text("One")),
+                        base: None,
+                    }),
+                    TabsTrigger(TabsTriggerProps {
+                        value: Some("two".into()),
+                        disabled: None,
+                        children: Some(Element::new().text("Two")),
+                        base: None,
+                    }),
+                ])
+            }),
+            base: None,
+        });
+        let panel = tabs_content("one", || Element::new().text("Panel one"));
+        let mut pack = Element::new();
+        pack.set_attr("rui_fragment", "1");
+        pack = pack.children(vec![list, panel]);
+        pack
+    });
     let mut root = Element::new().w(640.0).h(240.0).child(el);
     layout_in_viewport(&mut root, 640.0, 240.0);
     assert_positive_bounds(&root, "tabs root");
     let tabs = &root.children[0];
     assert_positive_bounds(tabs, "tabs scope");
     let list = find_first(tabs, &|c| {
-        c.attrs
-            .get("data-slot")
-            .map(|s| s.as_str())
-            == Some("tabs-list")
+        c.attrs.get("data-slot").map(|s| s.as_str()) == Some("tabs-list")
     })
     .expect("tabs list");
     assert_positive_bounds(list, "tabs list");
@@ -166,7 +154,10 @@ fn cv_checkbox_layout_nonzero_bounds() {
 
 #[test]
 fn cv_switch_layout_nonzero_bounds() {
-    let mut root = Element::new().w(400.0).h(80.0).child(Element::from(switch("cv-sw")));
+    let mut root = Element::new()
+        .w(400.0)
+        .h(80.0)
+        .child(Element::from(switch("cv-sw")));
     layout_in_viewport(&mut root, 400.0, 80.0);
     let track = &root.children[0];
     assert_positive_bounds(track, "switch track");
@@ -175,9 +166,7 @@ fn cv_switch_layout_nonzero_bounds() {
 #[test]
 fn cv_checkbox_checked_sync_updates_indicator() {
     let checked = use_signal("cv-cb-sync__checkbox", || false);
-    let mut root: Element = checkbox("cv-cb-sync")
-        .checked_signal(checked)
-        .into();
+    let mut root: Element = checkbox("cv-cb-sync").checked_signal(checked).into();
 
     assert!(
         find_checkbox_indicator(&root).text_style.color[3] < 10,

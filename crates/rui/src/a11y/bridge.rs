@@ -2,18 +2,14 @@
 //!
 //! Part of [`crate::a11y`]; Adapter lifecycle remains in `app`.
 
-use accesskit::{
-    Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate,
-};
+use accesskit::{Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate};
 use std::hash::{Hash, Hasher};
 
 use crate::components::label::ATTR_LABEL_FOR;
 use crate::components::tabs::TABSTRIP_FOCUS_PREFIX;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
-use crate::utils::text_field::{
-    input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
-};
+use crate::utils::text_field::{input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX};
 use std::collections::HashMap;
 
 const ROOT_ID: NodeId = NodeId(1);
@@ -147,9 +143,9 @@ fn infer_role(el: &Element, fid: Option<&str>) -> Role {
         Role::CheckBox
     } else if el.radio_selected_sync.is_some() {
         Role::RadioButton
-    } else if fid.is_some_and(|f| {
-        f.starts_with(INPUT_FOCUS_PREFIX) || f.starts_with(TEXTAREA_FOCUS_PREFIX)
-    }) {
+    } else if fid
+        .is_some_and(|f| f.starts_with(INPUT_FOCUS_PREFIX) || f.starts_with(TEXTAREA_FOCUS_PREFIX))
+    {
         Role::TextInput
     } else if fid.is_some_and(|f| f.starts_with(TABSTRIP_FOCUS_PREFIX)) {
         Role::TabList
@@ -252,7 +248,12 @@ fn uses_name_from_contents(el: &Element) -> bool {
 
 /// Plain text leaf that should fold into an ancestor's accessible name, not a sibling Label.
 fn is_plain_text_name_leaf(el: &Element) -> bool {
-    if el.text.as_deref().map(str::trim).is_none_or(|s| s.is_empty()) {
+    if el
+        .text
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(|s| s.is_empty())
+    {
         return false;
     }
     if el.on_click.is_some() {
@@ -267,7 +268,9 @@ fn is_plain_text_name_leaf(el: &Element) -> bool {
     {
         return false;
     }
-    if el.switch_checked_sync.is_some() || el.checkbox_sync.is_some() || el.radio_selected_sync.is_some()
+    if el.switch_checked_sync.is_some()
+        || el.checkbox_sync.is_some()
+        || el.radio_selected_sync.is_some()
     {
         return false;
     }
@@ -275,7 +278,12 @@ fn is_plain_text_name_leaf(el: &Element) -> bool {
 }
 
 fn is_plain_text_name_leaf_or_empty(el: &Element) -> bool {
-    if el.text.as_deref().map(str::trim).is_some_and(|s| !s.is_empty()) {
+    if el
+        .text
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty())
+    {
         return is_plain_text_name_leaf(el);
     }
     el.on_click.is_none()
@@ -301,20 +309,15 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
 
     // Label：用自身文案；勿把内嵌 Checkbox 勾选字形拼进读屏名。
     if role == Role::Label {
-        if let Some(t) = el
-            .text
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             return Some(t.to_string());
         }
         return collect_label_caption(el);
     }
 
     // 已有 labelledby 时，名称交给关联 Label（避免勾选 glyph 当可读名）。
-    let has_labelled_by = el.attrs.contains_key("accesskit_labelled_by")
-        || el.attrs.contains_key("aria-labelledby");
+    let has_labelled_by =
+        el.attrs.contains_key("accesskit_labelled_by") || el.attrs.contains_key("aria-labelledby");
     if has_labelled_by
         && matches!(
             role,
@@ -690,9 +693,7 @@ fn find_element_by_node_id<'a>(
         } else {
             format!("{path}/{i}")
         };
-        if let Some(found) =
-            find_element_by_node_id(child, target, &child_path, used, absorb)
-        {
+        if let Some(found) = find_element_by_node_id(child, target, &child_path, used, absorb) {
             return Some(found);
         }
     }
@@ -797,11 +798,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for (_, node) in &update.nodes {
             for child in node.children() {
-                assert!(
-                    seen.insert(*child),
-                    "duplicate AccessKit child {:?}",
-                    child
-                );
+                assert!(seen.insert(*child), "duplicate AccessKit child {:?}", child);
             }
         }
     }
@@ -863,7 +860,10 @@ mod tests {
         let update = tree_update_from_elements(&root, None);
         assert_no_duplicate_children(&update);
         let root_a11y = node_id_for_key("rui:path:root");
-        assert_eq!(child_ids_of(&update.nodes, ROOT_ID), vec![document_node_id()]);
+        assert_eq!(
+            child_ids_of(&update.nodes, ROOT_ID),
+            vec![document_node_id()]
+        );
         assert_eq!(document_children(&update), vec![root_a11y]);
         assert_eq!(
             child_ids_of(&update.nodes, root_a11y),
@@ -1122,9 +1122,7 @@ mod tests {
         let mut lbl = Element::new().text("Email");
         lbl.attrs
             .insert("accesskit_id".to_string(), "email-lbl".to_string());
-        let mut input = Element::new()
-            .focus_id("input:email")
-            .focusable(true);
+        let mut input = Element::new().focus_id("input:email").focusable(true);
         input
             .attrs
             .insert("aria-labelledby".to_string(), "email-lbl".to_string());
@@ -1153,12 +1151,9 @@ mod tests {
     #[test]
     fn label_for_maps_to_labelled_by_without_control_attr() {
         let mut lbl = Element::new().text("Accept terms").accesskit_role("label");
+        lbl.attrs.insert("for".to_string(), "terms-cb".to_string());
         lbl.attrs
-            .insert("for".to_string(), "terms-cb".to_string());
-        lbl.attrs.insert(
-            "accesskit_id".to_string(),
-            "lbl:for:terms-cb".to_string(),
-        );
+            .insert("accesskit_id".to_string(), "lbl:for:terms-cb".to_string());
         let mut cb = Element::new().focus_id("terms-cb").focusable(true);
         cb.checkbox_sync = Some(crate::core::reactivity::use_signal(
             "a11y_label_for_cb",

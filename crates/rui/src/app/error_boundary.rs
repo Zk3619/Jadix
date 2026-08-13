@@ -56,11 +56,7 @@ pub fn throw_resource_error<T: Clone + PartialEq + 'static>(
 /// render `fallback(message)` instead.
 ///
 /// Both arms run inside a [`reactive_view`] so signal reads stay local to the boundary.
-pub fn error_boundary<F, C>(
-    anchor_id: impl Into<String>,
-    fallback: F,
-    children: C,
-) -> Element
+pub fn error_boundary<F, C>(anchor_id: impl Into<String>, fallback: F, children: C) -> Element
 where
     F: Fn(String) -> Element + 'static,
     C: Fn() -> Element + 'static,
@@ -161,8 +157,8 @@ mod tests {
 
     #[test]
     fn resource_err_to_error_boundary_via_throw_resource_error() {
-        use crate::core::resource::{Resource, ResourceState};
         use crate::core::reactivity::create_signal;
+        use crate::core::resource::{Resource, ResourceState};
 
         let (_owner, saw) = create_root(|| {
             let state = create_signal(ResourceState::Ready(1_i32));

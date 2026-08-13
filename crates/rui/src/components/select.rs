@@ -342,11 +342,20 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         // 先订阅 open，再 sync；关闭时 portal_sync 返回 None 也必须保留订阅。
         let is_open = open.get();
         if !is_open {
-            let _ = portal_sync(&id_for_effect, open, OverlayKind::Menu, OverlayMode::Stacked);
+            let _ = portal_sync(
+                &id_for_effect,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+            );
             return Element::new().w(0.0).h(0.0);
         }
-        let Some(oz) = portal_sync(&id_for_effect, open, OverlayKind::Menu, OverlayMode::Stacked)
-        else {
+        let Some(oz) = portal_sync(
+            &id_for_effect,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
             return Element::new().w(0.0).h(0.0);
         };
 
@@ -517,20 +526,13 @@ pub fn SelectItem(
     let bid = format!("{}:opt:{}", ctx.id, value);
     let ov = value.clone();
 
-    let mut row = select_item_row(
-        &bid,
-        &label_text,
-        selected,
-        disabled,
-        align,
-        move || {
-            if disabled {
-                return;
-            }
-            open.set(false);
-            val_sig.set(ov.clone());
-        },
-    );
+    let mut row = select_item_row(&bid, &label_text, selected, disabled, align, move || {
+        if disabled {
+            return;
+        }
+        open.set(false);
+        val_sig.set(ov.clone());
+    });
     if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
         row = with_class_list(row, &c);
     }
@@ -808,8 +810,11 @@ impl From<SelectBuilder> for Element {
         let open = use_signal(format!("{id}__select_open").as_str(), || false);
         // Empty default → placeholder; only honor explicit `default_value`.
         let default_initial = default_value;
-        let val = value
-            .unwrap_or_else(|| use_signal(format!("{id}__select_value").as_str(), move || default_initial.clone()));
+        let val = value.unwrap_or_else(|| {
+            use_signal(format!("{id}__select_value").as_str(), move || {
+                default_initial.clone()
+            })
+        });
         let labels = use_signal(format!("{id}__select_labels").as_str(), HashMap::new);
 
         // Pre-register labels for SelectValue.
@@ -1063,15 +1068,7 @@ pub fn Select(
     // 若已有复合子树（Trigger/Content），走 scope。
     if let Some(c) = children {
         let tc = class.clone().unwrap_or_default();
-        return select_scope(
-            id,
-            None,
-            value,
-            placeholder,
-            tc,
-            String::new(),
-            || c,
-        );
+        return select_scope(id, None, value, placeholder, tc, String::new(), || c);
     }
     let mut b = select(&id)
         .default_value(default_value)

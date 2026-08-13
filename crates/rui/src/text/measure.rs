@@ -37,10 +37,7 @@ impl PreparedText {
         let end = end.min(self.segments.len());
         let start = start.min(end);
         let segments = self.segments[start..end].to_vec();
-        let max_segment_width = segments
-            .iter()
-            .map(|s| s.width)
-            .fold(0.0_f32, f32::max);
+        let max_segment_width = segments.iter().map(|s| s.width).fold(0.0_f32, f32::max);
         PreparedText {
             segments,
             size: self.size,
@@ -334,8 +331,7 @@ pub fn prepare_rich(
             match span.kind {
                 TextSpanKind::Text => {
                     for (seg, break_after) in split_segments(&span.text) {
-                        let width =
-                            measure_run_width(font_system, &seg, size, lh, weight, family);
+                        let width = measure_run_width(font_system, &seg, size, lh, weight, family);
                         max_seg = max_seg.max(width);
                         segments.push(PreparedSegment {
                             text: seg,
@@ -545,11 +541,7 @@ fn buffer_max_ink(buffer: &Buffer) -> (usize, f32) {
     let mut m = 0.0_f32;
     for run in buffer.layout_runs() {
         n += 1;
-        let gr = run
-            .glyphs
-            .iter()
-            .map(|g| g.x + g.w)
-            .fold(0.0_f32, f32::max);
+        let gr = run.glyphs.iter().map(|g| g.x + g.w).fold(0.0_f32, f32::max);
         m = m.max(gr).max(run.line_w);
     }
     (n, m)
@@ -757,11 +749,7 @@ pub fn layout_lines(prepared: &PreparedText, avail_width: f32) -> Vec<PreparedLi
             continue;
         }
         // Soft-wrap only at a prior break opportunity (`break_after` on previous segment).
-        if line_w > 0.0
-            && can_break_after
-            && line_w + seg.width > avail
-            && seg.width <= avail
-        {
+        if line_w > 0.0 && can_break_after && line_w + seg.width > avail && seg.width <= avail {
             flush(&mut lines, &mut start, i, &mut line_w, &mut line_text);
         }
         line_w += seg.width;
@@ -802,11 +790,7 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
             can_break_after = false;
             continue;
         }
-        if line_w > 0.0
-            && can_break_after
-            && line_w + seg.width > avail
-            && seg.width <= avail
-        {
+        if line_w > 0.0 && can_break_after && line_w + seg.width > avail && seg.width <= avail {
             max_line_width = max_line_width.max(line_w);
             line_count = (line_count + 1).min(MAX_TOTAL_LINES);
             line_w = seg.width;
@@ -1017,14 +1001,21 @@ mod tests {
         for text in samples {
             let p = prepare(text, size, 500, lh);
             let intrinsic = intrinsic_width(&p);
-            let avail = (intrinsic * 0.45).max(p.max_segment_width + 1.0).min(intrinsic - 1.0);
+            let avail = (intrinsic * 0.45)
+                .max(p.max_segment_width + 1.0)
+                .min(intrinsic - 1.0);
             let m = layout(&p, avail);
             let (w, h) = measure_leaf(text, size, 500, lh, Some(avail), None, 0.0, false);
             let glyphon_n = glyphon_soft_wrap_line_count(text, size, 500, lh, avail);
             println!(
                 "text={:?}\nintrinsic={intrinsic:.1} max_seg={:.1} avail={avail:.1}\n\
                  layout lines={} max_line={:.1} measure=({w:.1},{h:.1}) glyphon_runs={glyphon_n}",
-                &text[..text.chars().take(24).collect::<String>().len().min(text.len())],
+                &text[..text
+                    .chars()
+                    .take(24)
+                    .collect::<String>()
+                    .len()
+                    .min(text.len())],
                 p.max_segment_width,
                 m.line_count,
                 m.max_line_width,
@@ -1059,14 +1050,11 @@ mod tests {
         let miss = try_glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
         assert!(miss.is_none(), "empty cache must not trigger fit shaping");
         let fit = glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
-        let hit = try_glyphon_fit_soft_wrap(
-            text,
-            size,
-            500,
-            lh,
-            layout_wrap_target(243.0, true),
+        let hit = try_glyphon_fit_soft_wrap(text, size, 500, lh, layout_wrap_target(243.0, true));
+        assert!(
+            hit.is_some(),
+            "quantized resize target should reuse fit cache"
         );
-        assert!(hit.is_some(), "quantized resize target should reuse fit cache");
         assert!(
             fit.wrap_width <= 240.0 + 1.0 || fit.max_ink <= 240.0 * 1.08 + 2.0,
             "fit must tighten wrap for bidi"
@@ -1099,7 +1087,10 @@ mod tests {
             (h - metrics.height.max(lh)).abs() < 0.01,
             "resize fast must not compute fit on miss"
         );
-        assert!(try_glyphon_fit_soft_wrap(text, size, 500, lh, layout_wrap_target(avail, true)).is_none());
+        assert!(
+            try_glyphon_fit_soft_wrap(text, size, 500, lh, layout_wrap_target(avail, true))
+                .is_none()
+        );
         set_layout_text_fast_mode(false);
         shutdown_layout_text();
     }
@@ -1131,7 +1122,9 @@ mod tests {
             "first layout miss must warm FIT_CACHE"
         );
         let fit = try_glyphon_fit_soft_wrap(text, size, 500, lh, avail).unwrap();
-        let expect = (lh * fit.line_count.max(1) as f32).max(metrics.height).max(lh);
+        let expect = (lh * fit.line_count.max(1) as f32)
+            .max(metrics.height)
+            .max(lh);
         assert!(
             (h1 - expect).abs() < 0.01,
             "height must track fit line_count, h={h1} expect={expect}"
@@ -1172,7 +1165,9 @@ mod tests {
             (h - metrics.height.max(lh)).abs() < 0.01,
             "MinContent / max_seg width must stay on arithmetic height"
         );
-        assert!(try_glyphon_fit_soft_wrap(text, size, 500, lh, prepared.max_segment_width).is_none());
+        assert!(
+            try_glyphon_fit_soft_wrap(text, size, 500, lh, prepared.max_segment_width).is_none()
+        );
         shutdown_layout_text();
     }
 
@@ -1219,11 +1214,7 @@ mod tests {
             max_segment_width: 16_384.0,
         };
         let m = layout(&prepared, 40.0);
-        assert!(
-            m.line_count <= 64,
-            "line_count blew up: {}",
-            m.line_count
-        );
+        assert!(m.line_count <= 64, "line_count blew up: {}", m.line_count);
         assert!(m.height < 21.0 * 65.0);
     }
 
@@ -1303,9 +1294,9 @@ mod tests {
         assert_eq!(lines[0].text, text);
         // Mid-segment split would produce a line whose text is a proper prefix of the chip.
         assert!(
-            !lines.iter().any(|l| text.starts_with(&l.text)
-                && l.text != text
-                && !l.text.is_empty()),
+            !lines
+                .iter()
+                .any(|l| text.starts_with(&l.text) && l.text != text && !l.text.is_empty()),
             "chip must not split mid-segment"
         );
     }
@@ -1315,7 +1306,9 @@ mod tests {
         // "Hi " (word + space break_after) + chip — narrow width forces wrap after the space.
         let spans = [
             crate::style::TextSpan::new("Hi "),
-            crate::style::TextSpan::new("ChipLabel").chip().padding_x(4.0),
+            crate::style::TextSpan::new("ChipLabel")
+                .chip()
+                .padding_x(4.0),
         ];
         let rich = prepare_rich(&spans, 14.0, 400, 21.0);
         assert!(

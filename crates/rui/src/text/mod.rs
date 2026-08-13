@@ -14,7 +14,7 @@ pub use measure::{
     invalidate_prepare_cache, layout, layout_lines, layout_text_fast_mode, layout_wrap_target,
     measure_leaf, note_fit_needs_relayout, prepare, prepare_rich, prepare_with_family,
     set_layout_text_fast_mode, shared_font_system_ptr, shutdown_layout_text,
-    take_fit_needs_relayout, try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, LINE_WIDTH_EPS,
-    PreparedLine, PreparedText, TextLayoutMetrics,
+    take_fit_needs_relayout, try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, PreparedLine,
+    PreparedText, TextLayoutMetrics, LINE_WIDTH_EPS,
 };
 pub use wrap_variable::layout_lines_variable_width;

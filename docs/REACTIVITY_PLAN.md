@@ -2,8 +2,8 @@
 
 > **冻结展开（2026-08-12）**：勾选、排期以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为**唯一执行源**。本文仅保留 R-WP 验收矩阵与加深细则；旧编号对照见 AUTHORITY §9。**禁止**在此改勾选充进度。  
 > **原地位**：把 [`REACTIVITY.md`](REACTIVITY.md) 的开放缺口落成 R-WP。行为状态机下沉归组件域，不把开合塞进反应性包。  
-> **前提**：ADR-1 已锁；主路径 API 已齐；**优先硬化，禁止为对齐 Leptos/Floem 扩表面**。  
-> **日期**：2026-08-12  
+> **前提**：ADR-1 已锁；主路径 API 已齐；**禁止为对齐 Leptos/Floem/Dioxus 扩 API 表面**。战略：[`REACTIVITY.md`](REACTIVITY.md) **§0.1 超过 Floem、逼近 Solid 机制**（§5.9 记分牌），不是 JSX/SSR。  
+> **日期**：2026-08-12；**机制对照修订 2026-08-13**；**战略升格 2026-08-13**  
 
 交叉：[`AUTHORITY.md`](AUTHORITY.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`element_identity.md`](element_identity.md)
 
@@ -11,21 +11,21 @@
 
 ## 0. 目标与原则
 
-**总目标**：反应性从「Alpha 可用」升到「长会话无泄漏、更新路径可预测、Store/异步契约可写入 SemVer」。
+**总目标**：卫生与契约可写入 SemVer；细粒度机制 **超过 Floem、逼近 SolidJS**（[`REACTIVITY.md`](REACTIVITY.md) §0.1 / §5.9）。顺序：I-7 For 项级 → I-11 Index → I-8 Store 路径 → I-12 effect 分相。不换核、不抄 VDOM/SSR。
 
 | 原则 | 含义 |
 |------|------|
-| **硬化 > 扩面** | 先 G1–G3 / WP-2.4；不先做 proxy Store 全家桶 |
-| **不挡工程化** | R-WP 与 W1 冒烟、W2 文本/golden、W4 发布**并行**；不以「Solid 追平」为 Beta 前置 |
+| **硬化 > 扩面** | 卫生已齐；加深按 §0.1 序，不先做 DevTools / mergeProps |
+| **不挡工程化** | 与 W1/W2/W4 **并行**；不以 Solid API / SSR 为 Beta 前置；**宣称超过 Floem** 须 WP-R.5b；0.1 Win-first 仍可不挡 |
 | **一门禁一勾选** | WP-2.4 / 2.5 关闭条件仍记在总计划；R-WP-1/4 提供审计清单与加深，不另开第二套勾选互掐 |
-| **原生优先对照** | 实现灵感：Floem UpdaterEffect / Scope dispose；图协议：Leptos；**禁止**抄 SSR |
+| **原生优先对照** | **标尺 Solid**（要逼近机制）；**近邻 Floem**（要超过纯度）；图协议可借鉴 Leptos；**反例** Dioxus；禁止抄 SSR / 换核 |
 
 **硬退出（反应性专项 DoD）**：
 
 - [x] WP-2.4 ☑（总计划）：Anchors/Bindings 随 Owner dispose；scoped id 辅助 API；无表膨胀测  
 - [x] WP-2.5 ☑（总计划）：produce 文档+测；Resource Err→EB e2e；SemVer 面草稿  
 - [x] R-WP-2：根裸 `get()` 可观测或 debug 断言；文档红线可测  
-- [x] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G3 / G5 关闭；G4 降 P2（proxy→R-WP-3） 
+- [x] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G3 / G5 关闭；G4 **升 P1**（逼近 Solid → WP-R.3B） 
 - [ ] [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) 与 identity §7 与实现同步  
 
 ---
@@ -37,10 +37,12 @@
 | **WP-2.4** Anchors/Bindings→Owner + scoped ID | **R-WP-1** | 2.4 = 任务与 ☐ 勾选；R-WP-1 = 审计清单、测矩阵、`COMPONENT_*` 覆盖 |
 | **WP-2.5** Store/Resource 契约 | **R-WP-3**（Store 加深，2.5 之后）· **R-WP-4**（异步契约，承接 2.5 测） | 2.5 只做 produce 契约 + EB e2e + 实验面标注；proxy / 自动桥为可选加深 |
 | （无对应） | **R-WP-2** 双路径 / 根订阅 | 纯反应性卫生 |
-| （无对应） | **R-WP-5** 列表 reconcile | 纲领「部分 keyed/Index」 |
+| **WP-R.5** | **R-WP-5** 5a/b/c 列表 | 超 Floem + 逼近 Solid |
+| **WP-R.3** | **R-WP-3B** Store 路径 | 逼近 Solid I-8 |
+| **WP-R.9** | **R-WP-9** effect 分相 | 逼近 Solid I-12 |
 | （无对应） | **R-WP-6** 热重载×反应槽 | 手册 + 回归 |
-| （无对应） | **R-WP-7** 宏降级 | DX |
-| （无对应） | **R-WP-8** 可观测 | P2 / Backlog 切片 |
+| **WP-R.7** | **R-WP-7** 宏降级 | 否则 5b 只写在纸上 |
+| （无对应） | **R-WP-8** 可观测 | P2 |
 
 组件侧：**C-WP-V.5 / 2.6** 管身份分类与空串；R-WP-1 提供 Owner 前缀能力后由组件计划消费。
 
@@ -56,27 +58,33 @@ flowchart LR
     R1[R-WP-1]
     R4a[R-WP-4 测]
   end
-  subgraph deepen [加深 / 可与 W3 交错]
-    R2[R-WP-2]
-    R5[R-WP-5]
-    R6[R-WP-6]
-    R7[R-WP-7]
+  subgraph exceedFloem [超过 Floem]
+    R5b[R-WP-5b For 项级]
+    R7[R-WP-7 漏绑]
   end
-  subgraph later [P2 / Backlog]
-    R3[R-WP-3]
+  subgraph nearSolid [逼近 Solid]
+    R5c[R-WP-5c Index]
+    R3[R-WP-3B Store 路径]
+    R9[R-WP-9 effect 分相]
+  end
+  subgraph later [P2]
     R8[R-WP-8]
   end
   WP24 --> R1
   WP25 --> R4a
-  R1 --> R2
-  R4a --> R3
+  R1 --> R5b
+  R5b --> R5c
+  R5c --> R3
+  R3 --> R9
+  R5b --> R7
 ```
 
 | 阶段 | 包 | 说明 |
 |------|----|------|
-| **Gate（与 W2 并行）** | WP-2.4 + R-WP-1；WP-2.5 + R-WP-4 契约测 | 阻塞「可预测更新模型」门槛 |
-| **Deepen** | R-WP-2 · 5 · 6 · 7 | 不阻塞 crates.io 0.1 Win-first，但进 Beta 建议 R-WP-2 关闭 |
-| **Later** | R-WP-3 · 8 | 明确 P2；可进 Backlog |
+| **Gate（与 W2 并行）** | WP-2.4 + R-WP-1；WP-2.5 + R-WP-4 | 可预测更新门槛（已关） |
+| **超过 Floem** | R-WP-5a/b + R-WP-7 | I-7 测绿才许宣称纯度超过 Floem |
+| **逼近 Solid** | R-WP-5c + R-WP-3B + R-WP-9 | I-11 / I-8 / I-12 |
+| **Later** | R-WP-8 | 可观测；非 DevTools UI |
 
 ---
 
@@ -102,15 +110,15 @@ flowchart LR
 | **状态** | ☑ 2026-08-13（勾选源 AUTHORITY WP-2.7；`root_bare_get` 测 + `ui_root_effect_dep_count`） |
 | **对照** | Floem：UpdaterEffect 推 `update_state`，非重建 View；Leptos：RenderEffect 绑叶子 |
 
-### R-WP-3 Store 路径订阅加深（P2）
+### R-WP-3 Store 路径订阅（逼近 Solid · 选 B）
 
 | | |
 |--|--|
-| **依赖** | **WP-2.5 退出后** |
+| **依赖** | WP-2.5 ☑；建议在 R-WP-5b 之后 |
 | **路径** | `core/store.rs` |
-| **任务** | 二选一写进 ADR 小记：**(A)** 文档冻结「仅 `store_select` + `produce`」，标实验；**(B)** 引入路径触发器（思想对齐 `reactive_stores`，实现自研） |
-| **验收** | SemVer 面明确；若选 B 须有字段级更新测 |
-| **状态** | ☐ 默认倾向 A，直到有真实组件痛点 |
+| **任务** | **选 B**：路径触发器（思想对齐 Solid proxy / Leptos `reactive_stores`，实现自研）。兄字段 `set` **不**重跑弟 select/compute。`store_select`+`produce` 作过渡 SemVer 实验面可留 |
+| **验收** | 字段级更新测：改 `age` 时 `name` select 的 compute 计数不变；CHANGELOG 标明路径 API |
+| **状态** | ☐ **P1**（AUTHORITY WP-R.3；不再默认冻结 A） |
 
 ### R-WP-4 Async 边界完整契约
 
@@ -122,14 +130,19 @@ flowchart LR
 | **验收** | 2.5 勾选 + 策略表；无 SSR 语义 |
 | **状态** | ①③ 随 WP-2.5 ☑（显式 `throw_resource_error`）；② 策略摘要见 [`REACTIVITY.md`](REACTIVITY.md) §4.1；自动桥加深仍可选 |
 
-### R-WP-5 列表 reconcile 硬化
+### R-WP-5 列表：超过 Floem（5b）→ 逼近 Solid Index（5c）
+
+> 对照：Solid `mapArray` / `indexArray`；Floem `dyn_stack`（子 View diff，**弱于** Solid For）；**不要**学 Dioxus keyed 组件重跑。见 [`REACTIVITY.md`](REACTIVITY.md) §5.5 / §5.9。
 
 | | |
 |--|--|
-| **路径** | `app/reactive.rs`（`for_reactive` / `for_keyed`）、`app/state.rs` reconcile |
-| **任务** | ① keyed 移动/复用测；② 文档区分 For vs `for_each`（Index 近似）vs 真 Index；③ 对照 Floem `dyn_stack` 仅学 diff 纪律 |
-| **验收** | 库测覆盖插入/删除/换位；REACTIVITY §4 Index 行更新 |
+| **路径** | `app/reactive.rs`、`app/state.rs` `reconcile_keyed_children` |
+| **5a 硬化** | keyed 插/删/**换位**库测；文档标明现状 ≠ Solid For/Index |
+| **5b 超 Floem（I-7）** | 每 key 一个 child `Owner`；列表 signal 只 insert/remove/reorder；未动 key **不**重跑项 `render`（Solid `mapArray`） |
+| **5c 逼近 Solid（I-11）** | 真 `<Index>`：下标固定，项为 Accessor/`Signal`；同下标改值不重建节点 |
+| **验收** | **5a** 插删换位绿；**5b** 无关项 / 换位时未变 key 的 render 计数不变 + Owner 无泄漏；**5c** 改 `items[i]` 只触发订了该项的 `bind_*` |
 | **状态** | ☐ |
+| **宣称门** | 5b 绿 → 可说「细粒度纯度超过 Floem」；5b+5c → 列表机制逼近 Solid |
 
 ### R-WP-6 热重载 × 反应槽不变量
 
@@ -147,7 +160,7 @@ flowchart LR
 | **路径** | `rui_macros`、`#[component(reactive)]`、gallery 试点 |
 | **任务** | ① `isolate_reads` 下漏绑回归；② Switch/Match 糖评估（可延后）；③ gallery 扩 `ReactiveStatusBadge` 模式 |
 | **验收** | 漏绑有测或已知限制表 |
-| **状态** | ☐ |
+| **状态** | ☐ **P1**（否则超 Floem 只写在纸上） |
 
 ### R-WP-8 信号图可观测（P2 / Backlog）
 
@@ -156,6 +169,16 @@ flowchart LR
 | **任务** | effect/owner/订阅计数或泄漏诊断钩子；**非**完整 DevTools UI |
 | **验收** | feature 门或 debug API 文档；进纲领 P2 |
 | **状态** | ☐ |
+
+### R-WP-9 Effect 分相（逼近 Solid · I-12）
+
+| | |
+|--|--|
+| **对齐** | 总计划 **WP-R.9** |
+| **路径** | `core/reactivity.rs` `flush_pending`；`bind_*` 标记为渲染绑 |
+| **任务** | ① flush 序：dirty memo / Computed → `bind_*`（渲染）→ 用户 `create_effect`；② 可选 `create_computed`（同步写其它 Signal，对齐 Solid `createComputed`，**不必**改名 RenderEffect）；③ 测：一次 `set` 下 bind 先于用户 effect 观察到新值 |
+| **验收** | 分相测绿；REACTIVITY §5.9 I-12 行更新；无 SSR tick 假设（可同帧，但顺序固定） |
+| **状态** | ☐ P1 |
 
 ---
 
@@ -185,7 +208,7 @@ flowchart LR
 
 - 为追 Leptos 而引入 SSR / hydrate / `Resource` 编解码  
 - 把 `core/reactivity` 替换为依赖 `reactive_graph` / `floem_reactive`（对照学习可以，换核需独立 ADR）  
-- 巩固期实现完整 Store proxy（除非 R-WP-3 选 B 且有组件痛点）  
+- 巩固期实现 **JS Proxy 式** Store 运行时（WP-R.3B 是自研路径触发器，不是把 Proxy 搬进 Element）  
 - 用反应性专项阻塞 Win-first 0.1 发布（门禁仅 WP-2.4 泄漏测建议进 Beta；0.1 Alpha 可注明已知限制）  
 
 ---
@@ -195,7 +218,7 @@ flowchart LR
 1. **一 R-WP 一 PR**（或与对应 WP-2.x 同 PR，描述写清双勾选）。  
 2. 关闭 G 项时同步改 [`REACTIVITY.md`](REACTIVITY.md) §6。  
 3. 测试基线同总计划 §10；反应性改动优先 `crate_tests/reactive/` + 模块内测。  
-4. 对照代码只读 `reference/leptos-main`、`reference/floem-main`，禁止无 ADR 复制粘贴进 `crates/rui`。  
+4. 对照代码只读 `Reference/SolidJS`、`Reference/leptos-main`、`Reference/floem-main`、`Reference/dioxus`，禁止无 ADR 复制粘贴进 `crates/rui`。  
 
 ---
 
@@ -204,8 +227,8 @@ flowchart LR
 ```text
 AUTHORITY.md                        ← ★执行源（WP-2.4 / 2.5 / 2.7 / WP-R.*）
 ENGINEERING_GRADE_FRAMEWORK.md
-REACTIVITY.md                       ← 领域规范
-REACTIVITY_PLAN.md                  ← 本文件（R-WP 冻结展开）
+REACTIVITY.md                       ← 领域规范（§5 四框架机制 + §5.7 完整 FG）
+REACTIVITY_PLAN.md                  ← 本文件（R-WP 冻结展开；R-WP-5 = 5a/5b）
 reactivity_and_hot_reload.md        ← 手册
 element_identity.md
 ```

@@ -133,12 +133,7 @@ fn require_tabs(part: &str) -> TabsCtx {
 }
 
 fn take_packed(mut el: Element) -> Vec<Element> {
-    if el
-        .attrs
-        .get("rui_fragment")
-        .map(|s| s.as_str())
-        == Some("1")
-    {
+    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
         return std::mem::take(&mut el.children);
     }
     if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
@@ -148,12 +143,7 @@ fn take_packed(mut el: Element) -> Vec<Element> {
 }
 
 fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {
-    if children.len() == 1
-        && children[0]
-            .attrs
-            .get("rui_fragment")
-            .map(|s| s.as_str())
-            == Some("1")
+    if children.len() == 1 && children[0].attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1")
     {
         return std::mem::take(&mut children[0].children);
     }
@@ -192,7 +182,6 @@ fn list_variant_of(el: &Element) -> &str {
         _ => "default",
     }
 }
-
 
 fn length_px(v: taffy::style::LengthPercentage) -> f32 {
     match v {
@@ -365,12 +354,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     (paint, layout)
 }
 
-fn build_trigger(
-    ctx: &TabsCtx,
-    value: &str,
-    label: String,
-    disabled: bool,
-) -> Element {
+fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> Element {
     let selected = ctx.value.peek() == value;
     let (bg, fg) = trigger_colors(selected, disabled, false);
     let mut chip: Element = hstack()
@@ -491,17 +475,11 @@ pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'stat
     let selected = ctx.value;
     let want = value.clone();
     let anchor = format!("{}:content:{value}", ctx.id);
-    let mut panel = show_reactive(
-        anchor,
-        move || selected.get() == want,
-        body,
-    );
+    let mut panel = show_reactive(anchor, move || selected.get() == want, body);
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
-    panel
-        .attrs
-        .insert(ATTR_TABS_VALUE.to_string(), value);
+    panel.attrs.insert(ATTR_TABS_VALUE.to_string(), value);
     panel = panel.accesskit_role("tabpanel");
     panel
 }
@@ -600,8 +578,7 @@ pub fn TabsList(
     }
     list.attrs
         .insert(ATTR_SLOT.to_string(), SLOT_LIST.to_string());
-    list.attrs
-        .insert(ATTR_VARIANT.to_string(), variant.clone());
+    list.attrs.insert(ATTR_VARIANT.to_string(), variant.clone());
     list.set_attr("rui_tabs_list", "1");
     list = list.accesskit_role("tablist");
     if let Some(ctx) = ctx.as_ref() {
@@ -844,10 +821,7 @@ impl From<TabsListBuilder> for Element {
             default_value,
         } = builder;
         let default_value = if default_value.is_empty() {
-            options
-                .first()
-                .map(|(v, _)| v.clone())
-                .unwrap_or_default()
+            options.first().map(|(v, _)| v.clone()).unwrap_or_default()
         } else {
             default_value
         };
@@ -955,10 +929,7 @@ mod tests {
                 root.children(vec![list])
             },
         );
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
-            Some(SLOT_TABS)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(|s| s.as_str()), Some(SLOT_TABS));
         let list = el
             .children
             .iter()

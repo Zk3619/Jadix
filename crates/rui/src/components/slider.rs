@@ -153,8 +153,8 @@ fn apply_thumb_shadow_t(thumb: &mut Element, t: f32) -> bool {
         && (thumb.style.shadow_color[2] - color[2]).abs() <= 0.001
         && (thumb.style.shadow_color[3] - color[3]).abs() <= 0.001;
     let blur_ok = (thumb.style.shadow_blur - blur).abs() <= 0.01;
-    let offset_ok = thumb.style.shadow_offset[0].abs() <= 0.01
-        && thumb.style.shadow_offset[1].abs() <= 0.01;
+    let offset_ok =
+        thumb.style.shadow_offset[0].abs() <= 0.01 && thumb.style.shadow_offset[1].abs() <= 0.01;
     if color_ok && blur_ok && offset_ok {
         return false;
     }

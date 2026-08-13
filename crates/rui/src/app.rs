@@ -49,6 +49,7 @@ pub use ime_support::{
     apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
 };
+pub mod error_boundary;
 mod input_controller;
 mod lifecycle;
 pub mod multi_window;
@@ -57,7 +58,6 @@ pub mod pending_images;
 pub mod pointer_events;
 pub mod portal_overlay;
 pub mod reactive;
-pub mod error_boundary;
 pub mod resource;
 pub mod router;
 pub mod runtime;
@@ -76,8 +76,8 @@ pub mod ui_bridge;
 mod window_events;
 pub mod window_keys;
 
-pub use multi_window::{open_secondary_window, open_secondary_window_title_only};
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
+pub use multi_window::{open_secondary_window, open_secondary_window_title_only};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
@@ -140,10 +140,8 @@ struct App {
     /// Primary + secondary window slots (wired MVP).
     window_registry: multi_window::WindowRegistry,
     /// Secondary windows with independent UI trees / swapchains.
-    secondaries: std::collections::HashMap<
-        winit::window::WindowId,
-        secondary_window::SecondaryWindowState,
-    >,
+    secondaries:
+        std::collections::HashMap<winit::window::WindowId, secondary_window::SecondaryWindowState>,
     drag_reorder: Option<DragReorderState>,
     /// ??????? input `rest`?`input:{rest}` ?? id??
     input_drag_rest: Option<String>,

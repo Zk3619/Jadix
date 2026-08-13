@@ -528,11 +528,20 @@ pub fn combobox_content(
         let _ = input_store.get();
         let _ = value.get();
         if !is_open {
-            let _ = portal_sync(&id_for_effect, open, OverlayKind::Menu, OverlayMode::Stacked);
+            let _ = portal_sync(
+                &id_for_effect,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+            );
             return Element::new().w(0.0).h(0.0);
         }
-        let Some(oz) = portal_sync(&id_for_effect, open, OverlayKind::Menu, OverlayMode::Stacked)
-        else {
+        let Some(oz) = portal_sync(
+            &id_for_effect,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
             return Element::new().w(0.0).h(0.0);
         };
 
@@ -787,13 +796,7 @@ pub fn ComboboxEmpty(children: Option<Element>) -> Element {
         .size(14.0)
         .color(parse_text_color("muted-foreground"))
         .into();
-    Element::from(
-        vstack()
-            .w("100%")
-            .px("0.375rem")
-            .py("0.5rem")
-            .child(empty),
-    )
+    Element::from(vstack().w("100%").px("0.375rem").py("0.5rem").child(empty))
 }
 
 /// Aria `cn-combobox-item` 行。
@@ -1087,13 +1090,7 @@ impl From<ComboboxBuilder> for Element {
                     },
                     move || build_builder_entries(&entries_body),
                 );
-                Element::from(
-                    vstack()
-                        .gap("0")
-                        .w("100%")
-                        .child(input_el)
-                        .child(content),
-                )
+                Element::from(vstack().gap("0").w("100%").child(input_el).child(content))
             },
         )
     }
@@ -1258,12 +1255,7 @@ mod tests {
     #[test]
     fn combobox_menu_chrome_marks_floating() {
         let mut menu = Element::new().absolute();
-        mark_floating(
-            &mut menu,
-            "cb_c",
-            "input:cb_c",
-            PopupPlacement::BottomStart,
-        );
+        mark_floating(&mut menu, "cb_c", "input:cb_c", PopupPlacement::BottomStart);
         menu.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
         assert_eq!(
             menu.attrs.get(ATTR_FLOATING).map(|s| s.as_str()),

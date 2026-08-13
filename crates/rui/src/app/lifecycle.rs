@@ -199,10 +199,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 match ev.window_event {
                     AkWindowEvent::ActionRequested(req) => {
                         if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                            if crate::a11y::dispatch_accesskit_action(
-                                &state.root_element,
-                                &req,
-                            ) {
+                            if crate::a11y::dispatch_accesskit_action(&state.root_element, &req) {
                                 state.window.request_redraw();
                             }
                         }
@@ -496,9 +493,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     self.os_window_focused = false;
                     self.ime_os_blur_at =
                         Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        self.ime_os_blur_at.unwrap(),
-                    ));
+                    event_loop
+                        .set_control_flow(ControlFlow::WaitUntil(self.ime_os_blur_at.unwrap()));
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {

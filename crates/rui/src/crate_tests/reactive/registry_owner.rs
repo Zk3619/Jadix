@@ -4,8 +4,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::app::reactive::{
-    bind_text, component_children_count, component_props_count, reactive_anchor, reactive_component,
-    registered_anchor_count, registered_binding_count, reset_registered_anchors,
+    bind_text, component_children_count, component_props_count, reactive_anchor,
+    reactive_component, registered_anchor_count, registered_binding_count,
+    reset_registered_anchors,
 };
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::Element;

@@ -82,7 +82,10 @@ impl super::App {
                 // App already ended composition; ignore OS CPS_CANCEL / teardown echoes
                 // until Disabled clears the drain.
                 if ime_support::ime_diag_enabled() {
-                    log::info!("RUI_IME_DIAG drop compose echo during end-drain fid={}", fid);
+                    log::info!(
+                        "RUI_IME_DIAG drop compose echo during end-drain fid={}",
+                        fid
+                    );
                 }
             }
             Ime::Preedit(s, cursor) => {
@@ -352,8 +355,7 @@ impl super::App {
                                                     s.replace_range(lo..hi, "");
                                                     lo
                                                 } else {
-                                                    let mut at =
-                                                        caret_sig.get().unwrap_or(s.len());
+                                                    let mut at = caret_sig.get().unwrap_or(s.len());
                                                     at = at.min(s.len());
                                                     s.floor_char_boundary(at)
                                                 };
@@ -423,8 +425,11 @@ impl super::App {
                                     caret_move_left(&s, caret)
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -448,8 +453,11 @@ impl super::App {
                                     caret_move_right(&s, caret)
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -463,8 +471,11 @@ impl super::App {
                                     caret_line_home(&s, caret)
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -478,8 +489,11 @@ impl super::App {
                                     caret_line_end(&s, caret)
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -494,8 +508,11 @@ impl super::App {
                                     0
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -509,8 +526,11 @@ impl super::App {
                                     s.len()
                                 };
                                 if shift {
-                                    text_sel_sig
-                                        .set(Some(extend_selection(caret, text_sel_sig.get(), dest)));
+                                    text_sel_sig.set(Some(extend_selection(
+                                        caret,
+                                        text_sel_sig.get(),
+                                        dest,
+                                    )));
                                 } else {
                                     text_sel_sig.set(None);
                                 }
@@ -524,7 +544,9 @@ impl super::App {
                                     let hi = a.max(b);
                                     if lo < hi && hi <= s.len() {
                                         s.replace_range(lo..hi, "");
-                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                        crate::utils::text_field::commit_value_sig(
+                                            rest, val_sig, s,
+                                        );
                                         text_sel_sig.set(None);
                                         caret_sig.set(Some(lo));
                                     }
@@ -532,7 +554,9 @@ impl super::App {
                                     let mut c = caret_sig.get().unwrap_or(s.len()).min(s.len());
                                     c = s.floor_char_boundary(c);
                                     if delete_char_forward(&mut s, c) {
-                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                        crate::utils::text_field::commit_value_sig(
+                                            rest, val_sig, s,
+                                        );
                                         caret_sig.set(Some(c));
                                     }
                                 }
@@ -575,7 +599,11 @@ impl super::App {
                                 let hi = a.max(b);
                                 if lo < hi && hi <= s.len() {
                                     s.replace_range(lo..hi, "");
-                                    crate::utils::text_field::commit_value_sig(rest, val_sig, s.clone());
+                                    crate::utils::text_field::commit_value_sig(
+                                        rest,
+                                        val_sig,
+                                        s.clone(),
+                                    );
                                     text_sel_sig.set(None);
                                     caret_sig.set(Some(lo));
                                 } else if lo == hi && lo <= s.len() && lo > 0 {
@@ -599,10 +627,7 @@ impl super::App {
                     } else if let Some(t) = event.text.as_ref() {
                         if ime_support::ime_end_drain_active() {
                             if ime_support::ime_diag_enabled() {
-                                log::info!(
-                                    "RUI_IME_DIAG drop text during end-drain rest={}",
-                                    rest
-                                );
+                                log::info!("RUI_IME_DIAG drop text during end-drain rest={}", rest);
                             }
                             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
@@ -661,11 +686,15 @@ impl super::App {
                                         let first = s[insert_at..].chars().next().unwrap();
                                         let olen = first.len_utf8();
                                         s.replace_range(insert_at..insert_at + olen, &text);
-                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                        crate::utils::text_field::commit_value_sig(
+                                            rest, val_sig, s,
+                                        );
                                         caret_sig.set(Some(insert_at + text.len()));
                                     } else {
                                         s.insert_str(insert_at, &text);
-                                        crate::utils::text_field::commit_value_sig(rest, val_sig, s);
+                                        crate::utils::text_field::commit_value_sig(
+                                            rest, val_sig, s,
+                                        );
                                         caret_sig.set(Some(insert_at + text.len()));
                                     }
                                 }

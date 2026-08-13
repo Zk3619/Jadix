@@ -465,11 +465,7 @@ fn correct_bidi_ink_spill(
     let mut runs = 0usize;
     for run in buffer.layout_runs() {
         runs += 1;
-        let gr = run
-            .glyphs
-            .iter()
-            .map(|g| g.x + g.w)
-            .fold(0.0_f32, f32::max);
+        let gr = run.glyphs.iter().map(|g| g.x + g.w).fold(0.0_f32, f32::max);
         max_ink = max_ink.max(gr).max(run.line_w);
     }
     let horizontal_spill = max_ink > soft_w_target + 1.0;
@@ -744,8 +740,7 @@ fn set_shaped_buffer_text(
         buffer.set_text(font_system, &layout, attrs, shaping);
         return;
     }
-    let rich: Vec<(&str, glyphon::Attrs)> =
-        owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+    let rich: Vec<(&str, glyphon::Attrs)> = owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
     buffer.set_rich_text(font_system, rich, attrs, shaping);
 }
 
@@ -1061,12 +1056,13 @@ pub(crate) fn fit_emoji_to_pixel_square(
 /// Paint size for custom emoji quads — slightly above font-size so color emoji
 /// matches typical system UI (Segoe in Notepad/Chrome reads larger than the text em).
 pub(crate) fn emoji_paint_pixel_size(scaled_text_size: f32) -> u16 {
-    (scaled_text_size * 1.15)
-        .ceil()
-        .clamp(1.0, 512.0) as u16
+    (scaled_text_size * 1.15).ceil().clamp(1.0, 512.0) as u16
 }
 
-pub(crate) fn load_twemoji_raster(sequence: &str, pixel_size: u16) -> Option<super::text::EmojiRaster> {
+pub(crate) fn load_twemoji_raster(
+    sequence: &str,
+    pixel_size: u16,
+) -> Option<super::text::EmojiRaster> {
     let base = twemoji_dir();
     let path = base.join(twemoji_filename(sequence));
     if !Path::new(&path).exists() {
@@ -1105,12 +1101,7 @@ struct FallbackGlyphBlit {
     data: Vec<u8>,
 }
 
-fn blit_premultiplied_or_mask(
-    dst: &mut [u8],
-    dst_w: i32,
-    dst_h: i32,
-    blit: &FallbackGlyphBlit,
-) {
+fn blit_premultiplied_or_mask(dst: &mut [u8], dst_w: i32, dst_h: i32, blit: &FallbackGlyphBlit) {
     for row in 0..blit.h as i32 {
         for col in 0..blit.w as i32 {
             let x = blit.x0 + col;
@@ -1294,8 +1285,7 @@ pub(crate) fn load_font_fallback_raster(
     // Wide enough for ZWJ strips (family) and RI pairs.
     let canvas_w = (size * 6.0).max(size * 2.0);
     let canvas_h = (size * 2.0).max(size);
-    let mut buffer =
-        glyphon::Buffer::new(font_system, glyphon::Metrics::new(size, size * 1.2));
+    let mut buffer = glyphon::Buffer::new(font_system, glyphon::Metrics::new(size, size * 1.2));
     buffer.set_size(font_system, Some(canvas_w), Some(canvas_h));
     buffer.set_text(
         font_system,
@@ -1313,9 +1303,9 @@ pub(crate) fn load_font_fallback_raster(
             let physical = g.physical((0.0, 0.0), 1.0);
             // Prefer our COLR path (avoids swash ColorOutline bottom crop).
             let font_arc = font_system.get_font(g.font_id);
-            let colr = font_arc.as_ref().and_then(|f| {
-                rasterize_colr_glyph_unclipped(f.as_swash(), g.glyph_id, size)
-            });
+            let colr = font_arc
+                .as_ref()
+                .and_then(|f| rasterize_colr_glyph_unclipped(f.as_swash(), g.glyph_id, size));
             if let Some((left, top, w, h, data)) = colr {
                 if w > 0 && h > 0 {
                     blits.push(FallbackGlyphBlit {
@@ -1626,7 +1616,9 @@ pub fn prepare_text_frame(
             while text_renderer.shaped_cache.len() <= i {
                 text_renderer
                     .shaped_cache
-                    .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
+                    .push(make_dummy_cache_entry(unsafe {
+                        &mut *text_renderer.font_system
+                    }));
             }
             frame_meta.push(None);
             continue;
@@ -1691,20 +1683,17 @@ pub fn prepare_text_frame(
         // leading-normal — that packs CJK into a flat strip while the caret (style lh)
         // still looks normal-height.
         if is_input_text {
-            let min_lh = scaled_size
-                * crate::utils::text_field::text_edit_default_leading_scale();
+            let min_lh = scaled_size * crate::utils::text_field::text_edit_default_leading_scale();
             line_height = line_height.max(min_lh);
         }
         // Input field text must keep a stable shaping mode across focus: caret install used to
         // flip ASCII placeholders (e.g. password "Password") from Basic → Advanced and tighten
         // glyph advances. Labels may still use Basic for scroll perf.
-        let is_ascii_basic =
-            !is_input_text && st.input_caret.is_none() && info.text.is_ascii();
+        let is_ascii_basic = !is_input_text && st.input_caret.is_none() && info.text.is_ascii();
         let shaping = match perf_mode {
             // Editing/caret keeps advanced shaping for cursor fidelity.
             TextPerfMode::HighQuality => {
-                if (force_fast_mode && st.input_caret.is_none() && !is_input_text)
-                    || is_ascii_basic
+                if (force_fast_mode && st.input_caret.is_none() && !is_input_text) || is_ascii_basic
                 {
                     glyphon::Shaping::Basic
                 } else {
@@ -1738,7 +1727,9 @@ pub fn prepare_text_frame(
         let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
         let layout_w = if let Some(ref prepared) = info.prepared {
             if nowrap {
-                crate::text::intrinsic_width(prepared).max(info.width).max(1.0)
+                crate::text::intrinsic_width(prepared)
+                    .max(info.width)
+                    .max(1.0)
             } else {
                 info.width.max(1.0)
             }
@@ -1746,7 +1737,10 @@ pub fn prepare_text_frame(
             info.width.max(1.0)
         };
         let soft_w_target = (layout_w * ui_scale).max(1.0);
-        let metrics = info.prepared.as_ref().map(|p| crate::text::layout(p, layout_w));
+        let metrics = info
+            .prepared
+            .as_ref()
+            .map(|p| crate::text::layout(p, layout_w));
         let hard_lines = info.text.split('\n').count().max(1) as f32;
         let ink_fudge = if is_input_text {
             crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
@@ -1762,10 +1756,7 @@ pub fn prepare_text_frame(
                     .max(hard_lines * line_height)
                     .max(line_height)
             })
-            .unwrap_or_else(|| {
-                (hard_lines * line_height.max(1.0))
-                    .max(line_height)
-            });
+            .unwrap_or_else(|| (hard_lines * line_height.max(1.0)).max(line_height));
         let buffer_soft_h = if is_input_text {
             metrics_h + ink_fudge
         } else {
@@ -1850,7 +1841,9 @@ pub fn prepare_text_frame(
         while text_renderer.shaped_cache.len() <= i {
             text_renderer
                 .shaped_cache
-                .push(make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system }));
+                .push(make_dummy_cache_entry(unsafe {
+                    &mut *text_renderer.font_system
+                }));
         }
 
         // Wrap: FIT_CACHE hit always. Fast miss → leaf (smooth resize). Settle miss →
@@ -2101,14 +2094,10 @@ pub fn prepare_text_frame(
                         st.color[3],
                     ));
                 if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
-                    let mut owned: Vec<(String, glyphon::Attrs)> =
-                        Vec::with_capacity(spans.len());
+                    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
                     for (si, span) in spans.iter().enumerate() {
-                        let mut body = apply_letter_spacing_approx(
-                            &span.text,
-                            st.letter_spacing,
-                            scaled_size,
-                        );
+                        let mut body =
+                            apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size);
                         if si == 0 {
                             let m = direction_mark(st.direction);
                             if !m.is_empty() {
@@ -2370,11 +2359,7 @@ pub fn prepare_text_frame(
         // Padded ContentBox chips (Tabs): leaf border is taller than one line. Cosmic lays out
         // from the top of the buffer — without a dy, labels sit in the top padding (and look
         // top-biased). Center a single nowrap line in the border box.
-        let dy = if !is_input_text
-            && nowrap
-            && hard_lines_n == 1
-            && scaled_h > line_height + 1.0
-        {
+        let dy = if !is_input_text && nowrap && hard_lines_n == 1 && scaled_h > line_height + 1.0 {
             (scaled_h - line_height) * 0.5
         } else {
             0.0
@@ -3046,26 +3031,75 @@ mod shape_cache_key_tests {
         let text = "Bidirectional sample: English 123 - العربية";
         let color = [30u8, 30, 30, 255];
         let shape_a = node_shape_identity_hash(
-            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+            text,
+            14.0,
+            21.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
         );
         let shape_b = node_shape_identity_hash(
-            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+            text,
+            14.0,
+            21.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
         );
         assert_eq!(shape_a, shape_b, "identity must ignore leaf bounds");
 
         let key_narrow = node_shape_hash(
-            text, 14.0, 21.0, 160.0, 42.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, false,
+            text,
+            14.0,
+            21.0,
+            160.0,
+            42.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            false,
         );
         let key_wide = node_shape_hash(
-            text, 14.0, 21.0, 260.0, 42.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, false,
+            text,
+            14.0,
+            21.0,
+            260.0,
+            42.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            false,
         );
         assert_ne!(key_narrow, key_wide, "bounds change must miss Exact key");
         // Same shape_hash + different key_hash ⇒ Bounds path (iced Difference::Bounds).
         assert_eq!(
             node_shape_identity_hash(
-                text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, color,
+                text,
+                14.0,
+                21.0,
+                400,
+                family,
+                align,
+                shaping,
+                0.0,
+                TextDirection::Auto,
+                color,
             ),
             shape_a
         );
@@ -3078,21 +3112,68 @@ mod shape_cache_key_tests {
         let shaping = glyphon::Shaping::Advanced;
         let color = [0u8, 0, 0, 255];
         let a = node_shape_hash(
-            "hi", 14.0, 21.0, 201.0, 40.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, true,
+            "hi",
+            14.0,
+            21.0,
+            201.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            true,
         );
         let b = node_shape_hash(
-            "hi", 14.0, 21.0, 202.0, 40.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, true,
+            "hi",
+            14.0,
+            21.0,
+            202.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            true,
         );
-        assert_eq!(a, b, "2px quantize during fast should collapse nearby widths");
+        assert_eq!(
+            a, b,
+            "2px quantize during fast should collapse nearby widths"
+        );
         let c = node_shape_hash(
-            "hi", 14.0, 21.0, 201.0, 40.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, false,
+            "hi",
+            14.0,
+            21.0,
+            201.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            false,
         );
         let d = node_shape_hash(
-            "hi", 14.0, 21.0, 202.0, 40.0, 400, family, align, shaping, 0.0,
-            TextDirection::Auto, color, false,
+            "hi",
+            14.0,
+            21.0,
+            202.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            color,
+            false,
         );
         assert_ne!(c, d, "rest path keeps 1px Exact sensitivity");
     }
@@ -3189,9 +3270,7 @@ mod input_shaping_stability_tests {
         let last = (0..14)
             .filter(|&x| out.rgba[(13 * 14 + x) * 4 + 3] > 0)
             .count();
-        let first = (0..14)
-            .filter(|&x| out.rgba[x * 4 + 3] > 0)
-            .count();
+        let first = (0..14).filter(|&x| out.rgba[x * 4 + 3] > 0).count();
         assert_eq!(last, 0, "full-bleed source must gain bottom pad");
         assert_eq!(first, 0, "full-bleed source must gain top pad");
     }

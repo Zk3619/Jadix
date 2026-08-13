@@ -82,8 +82,9 @@ pub fn tooltip_scope(
 ) -> Element {
     let id = crate::utils::resolve_instance_id(id, "tooltip");
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__tooltip_open").as_str(), || false));
-    let trigger_fid =
-        use_signal(format!("{id}__tooltip_trigger_fid").as_str(), || format!("{id}__tooltip_trigger"));
+    let trigger_fid = use_signal(format!("{id}__tooltip_trigger_fid").as_str(), || {
+        format!("{id}__tooltip_trigger")
+    });
     provide_context(
         tooltip_context(),
         TooltipCtx {
@@ -293,19 +294,13 @@ impl TooltipBuilder {
                 children: Some(trigger),
                 base: None,
             });
-            let tip = tooltip_content(
-                TooltipContentOpts {
-                    side,
-                    class: None,
-                },
-                move || {
-                    Element::from(
-                        text(content.as_str())
-                            .size(12.0)
-                            .color(parse_text_color("popover-foreground")),
-                    )
-                },
-            );
+            let tip = tooltip_content(TooltipContentOpts { side, class: None }, move || {
+                Element::from(
+                    text(content.as_str())
+                        .size(12.0)
+                        .color(parse_text_color("popover-foreground")),
+                )
+            });
             // Fragment：Trigger 可与兄弟并排放在父 HStack。
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
@@ -336,10 +331,7 @@ mod tests {
 
     #[test]
     fn tooltip_side_maps() {
-        assert_eq!(
-            tooltip_side_to_placement("top"),
-            PopupPlacement::TopCenter
-        );
+        assert_eq!(tooltip_side_to_placement("top"), PopupPlacement::TopCenter);
         assert_eq!(
             tooltip_side_to_placement("bottom"),
             PopupPlacement::BottomCenter

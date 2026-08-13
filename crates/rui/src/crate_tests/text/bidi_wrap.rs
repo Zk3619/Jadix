@@ -37,22 +37,8 @@ fn gallery_bidi_labels_shrink_and_wrap_in_narrow_card() {
                 .leading(1.5)
                 .text("RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例")
                 .into();
-            let inner = Element::from(
-                r#box()
-                    .flex_col()
-                    .w("100%")
-                    .gap(8.0)
-                    .child(bidi)
-                    .child(rtl),
-            );
-            let card = Element::from(
-                r#box()
-                    .flex_col()
-                    .w("100%")
-                    .min_w(0.0)
-                    .p(12.0)
-                    .child(inner),
-            );
+            let inner = Element::from(r#box().flex_col().w("100%").gap(8.0).child(bidi).child(rtl));
+            let card = Element::from(r#box().flex_col().w("100%").min_w(0.0).p(12.0).child(inner));
             let mut root = Element::new().w("100%").h("100%").min_w(0.0).child(card);
 
             let viewport_w = 280.0_f32;
@@ -117,7 +103,8 @@ fn gallery_bidi_labels_wrap_without_ancestor_min_w_zero() {
             let text = leaf.text.as_deref().unwrap_or("");
             let size = leaf.text_style.size;
             let lh = size * 1.5;
-            let runs = glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight, lh, w.max(1.0));
+            let runs =
+                glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight, lh, w.max(1.0));
             println!("no-ancestor-min_w: lay={w:.1}x{h:.1} runs={runs}");
             assert!(
                 w <= viewport_w + 1.0,
@@ -146,14 +133,7 @@ fn gallery_bidi_labels_wrap_inside_scroll_area_like_root() {
                 .leading(1.5)
                 .text("RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例")
                 .into();
-            let inner = Element::from(
-                r#box()
-                    .flex_col()
-                    .w("100%")
-                    .gap(8.0)
-                    .child(bidi)
-                    .child(rtl),
-            );
+            let inner = Element::from(r#box().flex_col().w("100%").gap(8.0).child(bidi).child(rtl));
             let card = Element::from(
                 r#box()
                     .flex_col()
@@ -185,9 +165,17 @@ fn gallery_bidi_labels_wrap_inside_scroll_area_like_root() {
                 let text = leaf.text.as_deref().unwrap_or("");
                 let size = leaf.text_style.size;
                 let lh = size * 1.5;
-                let runs =
-                    glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight, lh, w.max(1.0));
-                println!("{tid}: lay={w:.1}x{h:.1} runs={runs} leaf={:?}", leaf.layout_bounds);
+                let runs = glyphon_soft_wrap_line_count(
+                    text,
+                    size,
+                    leaf.text_style.weight,
+                    lh,
+                    w.max(1.0),
+                );
+                println!(
+                    "{tid}: lay={w:.1}x{h:.1} runs={runs} leaf={:?}",
+                    leaf.layout_bounds
+                );
                 assert!(
                     w <= 320.0 + 1.0,
                     "{tid} must fit scroll viewport width, got {w}"

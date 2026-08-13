@@ -1,4 +1,4 @@
-﻿#![allow(non_snake_case)]
+#![allow(non_snake_case)]
 // Release GUI builds should not spawn a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -1069,7 +1069,9 @@ fn RootBareGetShowcase() -> rui::core::tree::Element {
     let baseline = use_signal("gal_wp27_baseline", || None::<usize>);
     let label_n = use_signal("gal_wp27_label_n", || 0_u32);
     let panel_open = use_signal("gal_wp27_panel", || true);
-    let verdict = use_signal("gal_wp27_verdict", || "尚未判定：先「刷新根 dep」并「记为基线」。".to_string());
+    let verdict = use_signal("gal_wp27_verdict", || {
+        "尚未判定：先「刷新根 dep」并「记为基线」。".to_string()
+    });
 
     let refresh_deps = move || {
         root_deps.set(ui_root_effect_dep_count());
@@ -2703,6 +2705,7 @@ fn OverlayFeedbackShowcase() -> Element {
 #[component]
 fn DataChartShowcase() -> Element {
     let table_sel = use_signal("gal_dt_sel", || None::<usize>);
+    let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
     let expanded = use_signal("gal_tree_exp", || {
         let mut s = HashSet::new();
         s.insert("root".into());
@@ -2761,15 +2764,22 @@ fn DataChartShowcase() -> Element {
         }])
         .into();
 
-    let bars: Element = bar_chart()
-        .values([0.2, 0.5, 0.8, 0.4, 0.9])
-        .labels(["Mon", "Tue", "Wed", "Thu", "Fri"])
-        .h("6rem")
-        .into();
-    let line: Element = line_chart()
-        .values([0.1, 0.35, 0.55, 0.4, 0.85, 0.7])
-        .size(320.0, 120.0)
-        .into();
+    let chart_pick = chart_sel.get();
+    let bar_rows = vec![
+        ChartDatum::new("Mon", 0.2),
+        ChartDatum::new("Tue", 0.5),
+        ChartDatum::new("Wed", 0.8),
+        ChartDatum::new("Thu", 0.4),
+        ChartDatum::new("Fri", 0.9),
+    ];
+    let pie_rows = vec![
+        ChartDatum::new("Alpha", 32.0),
+        ChartDatum::new("Beta", 24.0),
+        ChartDatum::new("Gamma", 18.0),
+        ChartDatum::new("Delta", 14.0),
+        ChartDatum::new("Other", 12.0),
+    ];
+    let line_vals = vec![0.1, 0.35, 0.55, 0.4, 0.85, 0.7];
     let carousel_el: Element = carousel("gal-carousel")
         .slide(|| {
             ui! {
@@ -2796,9 +2806,9 @@ fn DataChartShowcase() -> Element {
 
     ui! {
         <MyCard title="Table · TreeView · Chart · Carousel">
-            <VStack w="100%" gap="0.75rem">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "数据面：Table（columns+cell，可排序）/ 树 / 柱状与折线 / 轮播。"
+                    "数据面：Table / 树 / Chart（Bar/Line/Area 默认 guides；Pie 可 inner_radius=donut）/ 轮播。点柱、折线或扇区可选中。"
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "Table" }</Label>
                 { table_el }
@@ -2808,9 +2818,45 @@ fn DataChartShowcase() -> Element {
                 <Label font_weight="600" text_size="0.875rem">{ "TreeView" }</Label>
                 { tree_el }
                 <Label font_weight="600" text_size="0.875rem">{ "BarChart" }</Label>
-                { bars }
+                <BarChart
+                    data={bar_rows.clone()}
+                    h="6rem"
+                    selected={chart_pick}
+                    on_select={move |i| chart_sel.set(Some(i))}
+                />
                 <Label font_weight="600" text_size="0.875rem">{ "LineChart" }</Label>
-                { line }
+                <LineChart
+                    values={line_vals.clone()}
+                    h={140.0}
+                    selected={chart_pick}
+                    on_select={move |i| chart_sel.set(Some(i))}
+                />
+                <Label font_weight="600" text_size="0.875rem">{ "AreaChart" }</Label>
+                <AreaChart
+                    values={line_vals.clone()}
+                    h={140.0}
+                    selected={chart_pick}
+                    on_select={move |i| chart_sel.set(Some(i))}
+                />
+                <Label font_weight="600" text_size="0.875rem">{ "PieChart" }</Label>
+                <PieChart
+                    data={pie_rows.clone()}
+                    selected={chart_pick}
+                    on_select={move |i| chart_sel.set(Some(i))}
+                />
+                <Label font_weight="600" text_size="0.875rem">{ "Donut" }</Label>
+                <PieChart
+                    data={pie_rows.clone()}
+                    inner_radius={0.55}
+                    selected={chart_pick}
+                    on_select={move |i| chart_sel.set(Some(i))}
+                />
+                <Label text_size="0.75rem" color="muted-foreground">
+                    { match chart_sel.get() {
+                        Some(i) => format!("Chart 选中 index = {i}"),
+                        None => "Chart 未选中".into(),
+                    } }
+                </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "Carousel" }</Label>
                 { carousel_el }
             </VStack>
@@ -2929,7 +2975,6 @@ fn MenubarStepperShowcase() -> Element {
         </MyCard>
     }
 }
-
 
 fn nav_item(section: Signal<String>, id: &'static str, label: &'static str) -> Element {
     let s_click = section;
@@ -3073,30 +3118,24 @@ fn build_gallery_app() -> Element {
     let side = Element::from(
         sidebar("gal-sidebar")
             .w("13rem")
-            .header(
-                Element::from(
-                    vstack()
-                        .w("100%")
-                        .p("0.75rem")
-                        .gap("0.25rem")
-                        .child(
-                            Element::from(
-                                label("gal-side-title")
-                                    .text("RUI Gallery")
-                                    .size(16.0)
-                                    .font_weight(700.0),
-                            ),
-                        )
-                        .child(
-                            Element::from(
-                                label("gal-side-sub")
-                                    .text("组件与能力")
-                                    .size(12.0)
-                                    .color(parse_text_color("muted-foreground")),
-                            ),
-                        ),
-                ),
-            )
+            .header(Element::from(
+                vstack()
+                    .w("100%")
+                    .p("0.75rem")
+                    .gap("0.25rem")
+                    .child(Element::from(
+                        label("gal-side-title")
+                            .text("RUI Gallery")
+                            .size(16.0)
+                            .font_weight(700.0),
+                    ))
+                    .child(Element::from(
+                        label("gal-side-sub")
+                            .text("组件与能力")
+                            .size(12.0)
+                            .color(parse_text_color("muted-foreground")),
+                    )),
+            ))
             .item(nav_item(sec_side, "basics", "基础"))
             .item(nav_item(sec_side, "forms", "表单"))
             .item(nav_item(sec_side, "overlays", "浮层 / 反馈"))
@@ -3134,9 +3173,10 @@ fn build_gallery_app() -> Element {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
-        "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off",
-    ))
+    env_logger::Builder::from_env(
+        env_logger::Env::default()
+            .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off"),
+    )
     .init();
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
@@ -3158,7 +3198,8 @@ mod mount_tests {
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 // Match App: `switch_reactive` body builds under `isolate_reads`.
-                let mut tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                let mut tree =
+                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                 fn find_btn<'a>(
                     el: &'a rui::core::tree::Element,
                 ) -> Option<&'a rui::core::tree::Element> {
@@ -3262,7 +3303,9 @@ mod mount_tests {
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree = InputShowcase(InputShowcaseProps::default());
-                fn find_caption<'a>(el: &'a mut rui::core::tree::Element) -> Option<&'a mut rui::core::tree::Element> {
+                fn find_caption<'a>(
+                    el: &'a mut rui::core::tree::Element,
+                ) -> Option<&'a mut rui::core::tree::Element> {
                     if el.text.as_deref() == Some("Mark invalid") {
                         return Some(el);
                     }
@@ -3404,8 +3447,7 @@ mod mount_tests {
                 let mut widths = Vec::new();
                 for section in ["overlays", "basics", "overlays", "basics", "overlays"] {
                     rui::app::reactive::reset_registered_anchors();
-                    use_signal("gal_nav_section", || "basics".to_string())
-                        .set(section.to_string());
+                    use_signal("gal_nav_section", || "basics".to_string()).set(section.to_string());
                     let mut app = build_gallery_app();
                     let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
                     let mut layout = rui::core::tree::LayoutTree::new();
@@ -3454,10 +3496,7 @@ mod mount_tests {
                 let scroll = find_id(&app, "scroll-basics").expect("scroll-basics");
                 let side_w = side.layout_bounds[2];
                 let scroll_w = scroll.layout_bounds[2];
-                assert!(
-                    (side_w - 208.0).abs() < 1.5,
-                    "sidebar width, got {side_w}"
-                );
+                assert!((side_w - 208.0).abs() < 1.5, "sidebar width, got {side_w}");
                 assert!(
                     scroll_w > 700.0,
                     "main ScrollArea must use remaining width after sidebar; got {scroll_w} (toast host was stealing flex space)"
@@ -3546,7 +3585,14 @@ mod mount_tests {
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 for key in [
-                    "basics", "forms", "overlays", "data", "navigation", "layout", "text", "about",
+                    "basics",
+                    "forms",
+                    "overlays",
+                    "data",
+                    "navigation",
+                    "layout",
+                    "text",
+                    "about",
                 ] {
                     let mut tree = gallery_section_body(key);
                     let mut layout = rui::core::tree::LayoutTree::new();

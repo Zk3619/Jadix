@@ -58,15 +58,13 @@ fn picker_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> 
         .border(border, 1.0)
         .shadow([0.0, 0.0, 0.0, 0.06], 1.0)
         .into();
-    row = row
-        .child(leading)
-        .child(Element::from(
-            hstack()
-                .flex_grow(1.0)
-                .min_w("0")
-                .items_center()
-                .child(main),
-        ));
+    row = row.child(leading).child(Element::from(
+        hstack()
+            .flex_grow(1.0)
+            .min_w("0")
+            .items_center()
+            .child(main),
+    ));
     let cursor = if disabled {
         row.cursor_not_allowed()
     } else {
@@ -223,7 +221,10 @@ fn build_color_picker_view(
 
             // HSV-ish quick tones: darken / lighten of current via simple presets around primary
             let mut tones: Element = hstack().gap("0.25rem").wrap("wrap").into();
-            for (i, t) in ["#1e3a8a", "#2563eb", "#60a5fa", "#bfdbfe"].iter().enumerate() {
+            for (i, t) in ["#1e3a8a", "#2563eb", "#60a5fa", "#bfdbfe"]
+                .iter()
+                .enumerate()
+            {
                 let v_sig = val;
                 let o_sig = open;
                 let hex_v = (*t).to_string();
@@ -290,6 +291,8 @@ impl From<ColorPickerBuilder> for Element {
         });
         let view_id = format!("{id}__cp_view");
         let props = ColorPickerRenderProps { id, disabled };
-        reactive_component_live(view_id, props, move |p| build_color_picker_view(p, open, val))
+        reactive_component_live(view_id, props, move |p| {
+            build_color_picker_view(p, open, val)
+        })
     }
 }

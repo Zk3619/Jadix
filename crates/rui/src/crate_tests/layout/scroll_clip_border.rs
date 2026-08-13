@@ -36,15 +36,12 @@ fn scrolled_card_border_keeps_true_top_not_viewport_edge() {
     let card_inst = result
         .instances
         .iter()
-        .find(|i| {
-            i.border_width > 0.5
-                && (i.rect_size[1] - 120.0).abs() < 1.0
-                && i.color[0] > 0.9
-        })
+        .find(|i| i.border_width > 0.5 && (i.rect_size[1] - 120.0).abs() < 1.0 && i.color[0] > 0.9)
         .or_else(|| {
-            result.instances.iter().find(|i| {
-                i.border_width > 0.5 && (i.rect_size[1] - 120.0).abs() < 1.0
-            })
+            result
+                .instances
+                .iter()
+                .find(|i| i.border_width > 0.5 && (i.rect_size[1] - 120.0).abs() < 1.0)
         })
         .expect("card instance with border");
 

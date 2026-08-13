@@ -1,6 +1,7 @@
 mod box_model_contract;
 mod headless_smoke;
 mod mark_dirty;
+mod path_batch;
 mod percent_content_box;
 mod portal_hoist;
 mod portal_scroll_passthrough;

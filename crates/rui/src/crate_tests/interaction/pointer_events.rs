@@ -3,7 +3,9 @@
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
 use crate::app::tree_hit::find_click;
 use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
-use crate::core::tree::{pointer_events_targets_children, pointer_events_targets_self, Element, PointerEvents};
+use crate::core::tree::{
+    pointer_events_targets_children, pointer_events_targets_self, Element, PointerEvents,
+};
 use crate::style::apply_class_list;
 
 #[test]
@@ -95,10 +97,7 @@ fn box_none_shell_does_not_block_scroll_underneath() {
         .h(600.0);
     overlay.layout_bounds = [0.0, 0.0, 1000.0, 600.0];
 
-    let mut root = Element::new()
-        .w(1000.0)
-        .h(600.0)
-        .children([side, overlay]);
+    let mut root = Element::new().w(1000.0).h(600.0).children([side, overlay]);
     root.layout_bounds = [0.0, 0.0, 1000.0, 600.0];
 
     let mut chain = Vec::new();

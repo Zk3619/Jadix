@@ -4,9 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::core::reactivity::{create_effect, create_signal};
-use crate::core::resource::{
-    pop_suspense_frame, push_suspense_frame, suspense_frame_is_pending,
-};
+use crate::core::resource::{pop_suspense_frame, push_suspense_frame, suspense_frame_is_pending};
 use crate::core::tree::Element;
 
 use super::reactive::reactive_view;
@@ -43,9 +41,7 @@ where
                 ResourceState::Loading { previous } => previous,
                 ResourceState::Err(_) => None,
             };
-            resource
-                .state
-                .set(ResourceState::Loading { previous });
+            resource.state.set(ResourceState::Loading { previous });
             let gen = generation.fetch_add(1, Ordering::SeqCst) + 1;
             let fetcher = Arc::clone(&fetcher);
             let generation = Arc::clone(&generation);
@@ -113,9 +109,7 @@ mod tests {
 
     #[test]
     fn create_resource_resolves_on_ui_thread() {
-        let _guard = UI_QUEUE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (tx, rx) = mpsc::sync_channel::<()>(1);
         let (owner, resource) = create_root(|| {
             let tx = tx.clone();
@@ -138,9 +132,7 @@ mod tests {
 
     #[test]
     fn create_resource_refetch_keeps_previous() {
-        let _guard = UI_QUEUE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (tx, rx) = mpsc::sync_channel::<i32>(4);
         let (owner, (resource, src)) = create_root(|| {
             let src = Signal::new(1_i32);
@@ -175,9 +167,7 @@ mod tests {
 
     #[test]
     fn suspense_shows_fallback_while_loading() {
-        let _guard = UI_QUEUE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (tx, rx) = mpsc::sync_channel::<()>(1);
         let (owner, _) = create_root(|| {
             let tx = tx.clone();
@@ -206,16 +196,12 @@ mod tests {
 
     #[test]
     fn create_resource_err_sets_state_and_bridges_to_eb() {
-        use crate::app::error_boundary::{
-            pop_error_frame, push_error_frame, throw_resource_error,
-        };
+        use crate::app::error_boundary::{pop_error_frame, push_error_frame, throw_resource_error};
         use crate::core::reactivity::create_effect;
         use std::cell::Cell;
         use std::rc::Rc;
 
-        let _guard = UI_QUEUE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (tx, rx) = mpsc::sync_channel::<()>(1);
         let (owner, resource) = create_root(|| {
             let tx = tx.clone();

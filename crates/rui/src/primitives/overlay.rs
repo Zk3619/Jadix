@@ -128,7 +128,10 @@ mod tests {
         if let Some(cb) = &underlay.on_click {
             cb.borrow_mut()();
         }
-        assert!(!menu.peek(), "underlay click must dismiss nested menu first");
+        assert!(
+            !menu.peek(),
+            "underlay click must dismiss nested menu first"
+        );
         assert!(dialog.peek(), "dialog must stay open while menu was on top");
         clear_overlay_stack();
     }

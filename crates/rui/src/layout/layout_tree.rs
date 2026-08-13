@@ -10,8 +10,8 @@ use std::time::Instant;
 use taffy::prelude::*;
 
 use crate::components::scrollbar::{
-    scrollbar_min_thumb_along_track, scrollbar_track_content_inset, scrollbar_visibility_signal_key,
-    SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    scrollbar_min_thumb_along_track, scrollbar_track_content_inset,
+    scrollbar_visibility_signal_key, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
@@ -195,10 +195,7 @@ fn count_rui_portal_nodes(node: &Element) -> usize {
 
 /// Drop hoisted nodes whose portal key is no longer declared by a slot / open overlay.
 /// Returns how many nodes were removed (non-zero → Taffy rebuild).
-fn prune_unwanted_hoisted(
-    root: &mut Element,
-    wanted: &std::collections::HashSet<String>,
-) -> usize {
+fn prune_unwanted_hoisted(root: &mut Element, wanted: &std::collections::HashSet<String>) -> usize {
     let mut dropped = 0usize;
     if let Some(layer) = root
         .children
@@ -292,10 +289,7 @@ fn portal_key_of(el: &Element) -> String {
 }
 
 fn prepare_hoisted_node(node: &mut Element, key: &str) {
-    let mount = node
-        .attrs
-        .remove(ATTR_PORTAL_MOUNT)
-        .unwrap_or_default();
+    let mount = node.attrs.remove(ATTR_PORTAL_MOUNT).unwrap_or_default();
     node.attrs.remove("rui_portal");
     node.set_attr(ATTR_HOISTED_PORTAL, "1");
     node.set_attr(ATTR_PORTAL_KEY, key);
@@ -871,8 +865,7 @@ impl OverlayPaintSplit {
                 ),
                 text: (
                     b.text_start.min(text_len),
-                    next.map(|n| n.text_start.min(text_len))
-                        .unwrap_or(text_len),
+                    next.map(|n| n.text_start.min(text_len)).unwrap_or(text_len),
                 ),
                 chrome: (
                     b.chrome_start.min(chrome_len),
@@ -1341,8 +1334,7 @@ impl LayoutTree {
                         weight: element.text_style.weight,
                         letter_spacing: element.text_style.letter_spacing,
                         spans: element.text_spans.clone(),
-                        nowrap: element.text_style.white_space
-                            == crate::style::WhiteSpace::Nowrap,
+                        nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
                     },
                 );
                 return;
@@ -1829,8 +1821,7 @@ impl LayoutTree {
                         weight: element.text_style.weight,
                         letter_spacing: element.text_style.letter_spacing,
                         spans: element.text_spans.clone(),
-                        nowrap: element.text_style.white_space
-                            == crate::style::WhiteSpace::Nowrap,
+                        nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
                     },
                 );
             }
@@ -2014,7 +2005,8 @@ impl LayoutTree {
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
         let paint_visible = intersect_rect(parent_clip, render_rect);
-        if (has_bg || has_border || has_shadow) && paint_visible[2] > 0.0 && paint_visible[3] > 0.0 {
+        if (has_bg || has_border || has_shadow) && paint_visible[2] > 0.0 && paint_visible[3] > 0.0
+        {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
             let need_fill_instance = has_bg || has_shadow || (has_border && !use_border_strips);
@@ -2154,6 +2146,52 @@ impl LayoutTree {
             }
         }
 
+        // WP-3.2 / 3.11 path kernel: CPU coverage raster → texture; tessellate fallback.
+        // 绘制尺寸跟 viewBox 像素轴，不跟可能被滚动列撑高的叶高。
+        if visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
+            if let Some((tex_key, dw, dh)) = crate::primitives::path::path_raster_from_element_attrs(
+                &element.attrs,
+                vis_w,
+                vis_h,
+            ) {
+                if let Some(draw) =
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                {
+                    textured_draws.push(draw);
+                }
+            } else if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
+                &element.attrs,
+                [vis_x, vis_y],
+                [vis_w, vis_h],
+            ) {
+                for q in quads {
+                    if q.color[3] <= 0.0 || q.size.0 <= 0.0 || q.size.1 <= 0.0 {
+                        continue;
+                    }
+                    instances.push(
+                        InstanceInput {
+                            rect_pos: [q.pos.0, q.pos.1],
+                            rect_size: [q.size.0, q.size.1],
+                            color: mul_color_alpha(q.color, opacity),
+                            border_color: [0.0, 0.0, 0.0, 0.0],
+                            radii: q.radii,
+                            border_width: 0.0,
+                            shadow_color: [0.0, 0.0, 0.0, 0.0],
+                            shadow_offset: [0.0, 0.0],
+                            shadow_blur: 0.0,
+                            shadow_spread: 0.0,
+                            shadow_inset: 0.0,
+                            rotate_deg: q.rotate_deg,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            _pad: 0.0,
+                        }
+                        .with_clip(parent_clip),
+                    );
+                }
+            }
+        }
+
         // Tabs line variant: paint-only underline / side bar (no absolute child node).
         if let Some(ind) = element
             .attrs
@@ -2164,17 +2202,11 @@ impl LayoutTree {
             let color = crate::style::parse_color("foreground");
             let (pos, size) = match ind {
                 "h" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
-                    [
-                        render_rect[0],
-                        render_rect[1] + render_rect[3] - line_w,
-                    ],
+                    [render_rect[0], render_rect[1] + render_rect[3] - line_w],
                     [render_rect[2], line_w],
                 ),
                 "v" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
-                    [
-                        render_rect[0] + render_rect[2] - line_w,
-                        render_rect[1],
-                    ],
+                    [render_rect[0] + render_rect[2] - line_w, render_rect[1]],
                     [line_w, render_rect[3]],
                 ),
                 _ => ([0.0, 0.0], [0.0, 0.0]),
@@ -2255,12 +2287,15 @@ impl LayoutTree {
         }
 
         if let Some(tex_key) = element.image_texture.as_ref() {
-            if !tex_key.is_empty() && visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
-                textured_draws.push(TexturedDraw {
-                    rect: visible_rect,
-                    texture_key: tex_key.clone(),
+            if !tex_key.is_empty() {
+                if let Some(draw) = TexturedDraw::clipped(
+                    [vis_x, vis_y, vis_w, vis_h],
+                    parent_clip,
+                    tex_key.clone(),
                     opacity,
-                });
+                ) {
+                    textured_draws.push(draw);
+                }
             }
         }
 
@@ -2368,11 +2403,11 @@ impl LayoutTree {
         let mut max_bottom = abs_y + lay_h;
 
         let push_portal_band = |overlay_split: &mut OverlayPaintSplit,
-                                    instances: &Vec<InstanceInput>,
-                                    textured_draws: &Vec<TexturedDraw>,
-                                    text_nodes: &Vec<TextLayoutInfo>,
-                                    input_chrome_instances: &Vec<InstanceInput>,
-                                    band_root: &Element| {
+                                instances: &Vec<InstanceInput>,
+                                textured_draws: &Vec<TexturedDraw>,
+                                text_nodes: &Vec<TextLayoutInfo>,
+                                input_chrome_instances: &Vec<InstanceInput>,
+                                band_root: &Element| {
             if is_body_portal_layer {
                 overlay_split.bands.push(OverlayPaintBand {
                     instance_start: instances.len(),
@@ -2419,7 +2454,10 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     child,
                     child_nodes[i],
-                    [abs_x + element.style.translate[0], abs_y + element.style.translate[1]],
+                    [
+                        abs_x + element.style.translate[0],
+                        abs_y + element.style.translate[1],
+                    ],
                     next_scroll_acc,
                     clip,
                     pass_to_children,
@@ -2483,7 +2521,10 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     &mut element.children[i],
                     child_nodes[i],
-                    [abs_x + element.style.translate[0], abs_y + element.style.translate[1]],
+                    [
+                        abs_x + element.style.translate[0],
+                        abs_y + element.style.translate[1],
+                    ],
                     next_scroll_acc,
                     clip,
                     pass_to_children,
@@ -2778,7 +2819,13 @@ fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     }
 }
 
-fn prefix_width_logical(text: &str, byte_ix: usize, size: f32, weight: u16, line_height: f32) -> f32 {
+fn prefix_width_logical(
+    text: &str,
+    byte_ix: usize,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+) -> f32 {
     let ix = text.floor_char_boundary(byte_ix.min(text.len()));
     if ix == 0 {
         return 0.0;
@@ -2874,8 +2921,7 @@ fn push_input_chrome_instances(
     // Only hard/soft multi-line text — never infer from leaf box_h (ink pad would
     // false-trigger and make single-line Input caret look "full field height").
     let multi_line_layout = line_count > 1;
-    let caret_h =
-        crate::utils::text_field::text_edit_caret_height_px(line_height, style.size);
+    let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, style.size);
     let sel_h = if multi_line_layout {
         line_height.max(1.0)
     } else {
@@ -2889,9 +2935,7 @@ fn push_input_chrome_instances(
         }
     };
     let line_top_y = |line_i: usize| -> f32 { line_origin_y(line_i) };
-    let caret_y = |line_i: usize| -> f32 {
-        line_origin_y(line_i) + (line_height - caret_h) * 0.5
-    };
+    let caret_y = |line_i: usize| -> f32 { line_origin_y(line_i) + (line_height - caret_h) * 0.5 };
 
     let range_opt: Option<(usize, usize)> = if let Some((sa, sb)) = caret.selection {
         let mut s = sa.min(sb).min(text.len());
@@ -2981,10 +3025,7 @@ fn push_input_chrome_instances(
     let mut ix = caret.caret_byte_index.min(text.len());
     ix = text.floor_char_boundary(ix);
     let (line_i, local) = caret_line_and_local(text, ix);
-    let line_body = lines
-        .get(line_i)
-        .map(|(_, body)| *body)
-        .unwrap_or("");
+    let line_body = lines.get(line_i).map(|(_, body)| *body).unwrap_or("");
     let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
     let caret_w = 2.0_f32;
     let mut caret_x = x + prefix_w.min(box_w);
@@ -3308,8 +3349,7 @@ mod portal_hoist_tests {
             "overlay must contribute text nodes after the split"
         );
         // Page glyphs are collected before the portal suffix.
-        assert!(result
-            .text_nodes[..result.overlay_split.text_start]
+        assert!(result.text_nodes[..result.overlay_split.text_start]
             .iter()
             .any(|t| t.text == "page"));
         assert!(result.text_nodes[result.overlay_split.text_start..]
@@ -3384,16 +3424,12 @@ mod portal_hoist_tests {
             b.text.0 >= a.text.1,
             "upper band text follows lower band text"
         );
-        assert!(
-            result.text_nodes[a.text.0..a.text.1]
-                .iter()
-                .any(|t| t.text == "lower-glyph")
-        );
-        assert!(
-            result.text_nodes[b.text.0..b.text.1]
-                .iter()
-                .any(|t| t.text == "upper-glyph")
-        );
+        assert!(result.text_nodes[a.text.0..a.text.1]
+            .iter()
+            .any(|t| t.text == "lower-glyph"));
+        assert!(result.text_nodes[b.text.0..b.text.1]
+            .iter()
+            .any(|t| t.text == "upper-glyph"));
     }
 
     #[test]

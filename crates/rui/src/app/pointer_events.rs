@@ -10,9 +10,7 @@ use std::rc::Rc;
 
 use winit::event::MouseButton;
 
-use crate::core::tree::{
-    pointer_events_targets_children, pointer_events_targets_self, Element,
-};
+use crate::core::tree::{pointer_events_targets_children, pointer_events_targets_self, Element};
 use crate::layout::layout_tree::portal_hit_passthrough;
 
 use super::tree_hit;
@@ -437,9 +435,7 @@ mod tests {
         });
 
         let mut caption = Element::new().text("Accept");
-        caption
-            .attrs
-            .insert("for".to_string(), "terms".to_string());
+        caption.attrs.insert("for".to_string(), "terms".to_string());
 
         let mut row = Element::new().child(control).child(caption);
         row.template_id = Some("terms".into());

@@ -209,7 +209,10 @@ impl From<TableBuilder> for Element {
         let selected =
             selected.unwrap_or_else(|| use_signal(format!("{id}__table_sel").as_str(), || None));
         let sort = sort.unwrap_or_else(|| {
-            use_signal(format!("{id}__table_sort").as_str(), TableSortState::default)
+            use_signal(
+                format!("{id}__table_sort").as_str(),
+                TableSortState::default,
+            )
         });
         let view_id = format!("{id}__table_view");
 
@@ -220,7 +223,8 @@ impl From<TableBuilder> for Element {
 
             let mut header = hstack().w("100%").bg(tokens::muted());
             for col in &columns {
-                let label = if sortable && sort_state.column_id.as_deref() == Some(col.id.as_str()) {
+                let label = if sortable && sort_state.column_id.as_deref() == Some(col.id.as_str())
+                {
                     match sort_state.dir {
                         TableSortDir::Asc => format!("{} ↑", col.header),
                         TableSortDir::Desc => format!("{} ↓", col.header),

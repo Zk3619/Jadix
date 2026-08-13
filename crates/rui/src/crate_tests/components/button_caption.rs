@@ -126,7 +126,14 @@ fn measure_uses_normalized_weight_so_captions_fit() {
         "precondition: Segoe-like stacks should remap 500 → nearest face (often 600)"
     );
 
-    let labels = ["Ghost", "Secondary", "Outline", "Link", "Destructive", "Disabled"];
+    let labels = [
+        "Ghost",
+        "Secondary",
+        "Outline",
+        "Link",
+        "Destructive",
+        "Disabled",
+    ];
     for text in labels {
         let prepared = prepare(text, 14.0, raw, 21.0);
         let measure_w = intrinsic_width(&prepared);

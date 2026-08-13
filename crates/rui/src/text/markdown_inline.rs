@@ -64,10 +64,7 @@ pub fn parse_markdown_inline(input: &str) -> Vec<TextSpan> {
         }
 
         // Italic: *...* or _..._ (single, not part of **)
-        if (c == '*' || c == '_')
-            && !matches_delim(&chars, i, &[c, c])
-            && i + 1 < chars.len()
-        {
+        if (c == '*' || c == '_') && !matches_delim(&chars, i, &[c, c]) && i + 1 < chars.len() {
             if let Some(end) = find_single_close(&chars, i + 1, c) {
                 flush_plain(&mut plain, &mut out);
                 let body: String = chars[i + 1..end].iter().collect();

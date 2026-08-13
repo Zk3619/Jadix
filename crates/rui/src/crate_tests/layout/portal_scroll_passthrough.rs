@@ -1,16 +1,14 @@
 //! Empty fullscreen portal layer must not steal wheel/scroll hit chain from shell scroll areas.
 //! Body-mounted portals must escape ancestor overflow clipping (Solid `<Portal>` → document.body).
 
-use crate::app::{
-    hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
-};
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
+use crate::app::{hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags};
 use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::Element;
+use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
     hoist_portal_subtrees, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
 };
-use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::pipeline::InstanceInput;
 use crate::utils::popup::panel_block_clicks;
 
@@ -156,11 +154,7 @@ fn body_portal_escapes_scroll_overflow_clip() {
     panel.set_attr(ATTR_PORTAL_KEY, "panel:escape-clip");
     panel = panel_block_clicks(panel, 1001);
 
-    let host = Element::new()
-        .relative()
-        .w(200.0)
-        .h(200.0)
-        .child(panel);
+    let host = Element::new().relative().w(200.0).h(200.0).child(panel);
     scroller = scroller.child(host);
 
     let mut root = Element::new().w(800.0).h(600.0).child(scroller);
@@ -218,17 +212,11 @@ fn dialog_like_portal_with_body_scroll() -> Element {
         .child(Element::new().w("100%").h(400.0));
     body.template_id = Some("dialog-body".into());
 
-    let mut panel = Element::new()
-        .w(320.0)
-        .h(200.0)
-        .child(body);
+    let mut panel = Element::new().w(320.0).h(200.0).child(body);
     panel.set_attr("rui_portal", "1");
     panel.template_id = Some("dialog-panel".into());
 
-    Element::new()
-        .w(800.0)
-        .h(600.0)
-        .child(panel)
+    Element::new().w(800.0).h(600.0).child(panel)
 }
 
 fn portal_layer(root: &Element) -> &Element {

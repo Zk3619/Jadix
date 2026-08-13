@@ -71,9 +71,7 @@ mod tests {
 
     #[test]
     fn queue_drains_without_proxy() {
-        let _guard = UI_QUEUE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let flag = Arc::new(Mutex::new(false));
         let flag2 = Arc::clone(&flag);
         run_on_ui_thread(move || {

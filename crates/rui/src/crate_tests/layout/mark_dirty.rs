@@ -46,15 +46,7 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
     let dirty = std::collections::HashSet::from([leaf_node]);
     // pick may succeed, but live path must still compute from app root (location safety).
     let _picked = tree.pick_subtree_compute_root(&dirty);
-    tree.build_and_layout_fast_ex(
-        &mut root,
-        200.0,
-        200.0,
-        [0.0, 0.0],
-        false,
-        false,
-        None,
-    );
+    tree.build_and_layout_fast_ex(&mut root, 200.0, 200.0, [0.0, 0.0], false, false, None);
     assert_eq!(
         tree.last_compute_root,
         Some(root_node),

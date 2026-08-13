@@ -31,11 +31,7 @@ fn gallery_style_password_input_shows_adornment_glyphs() {
 
     let clear_tid = format!("__rui_input:{id}:clear");
     let reveal_tid = format!("__rui_input:{id}:reveal");
-    let tids: Vec<_> = el
-        .children
-        .iter()
-        .map(|c| c.template_id.clone())
-        .collect();
+    let tids: Vec<_> = el.children.iter().map(|c| c.template_id.clone()).collect();
     assert!(
         el.children
             .iter()

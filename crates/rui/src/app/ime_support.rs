@@ -164,10 +164,7 @@ pub(crate) fn set_ime_allowed_latched(
 
 /// Bind/release Windows IME HWND drive to the current text-edit focus id.
 /// `None` / empty = no field owns the candidate window.
-pub(crate) fn sync_ime_focus_owner(
-    window: &winit::window::Window,
-    focus_id: Option<&str>,
-) {
+pub(crate) fn sync_ime_focus_owner(window: &winit::window::Window, focus_id: Option<&str>) {
     #[cfg(target_os = "windows")]
     win_ime::sync_focus_owner(window, focus_id.filter(|s| !s.is_empty()));
     #[cfg(not(target_os = "windows"))]
@@ -178,8 +175,7 @@ pub(crate) fn sync_ime_focus_owner(
 /// committed `value`; discards in-flight preedit (incl. IME syllable `'` marks).
 /// Does **not** clear focus id.
 pub(crate) fn on_os_focus_lost(window: &winit::window::Window) {
-    let focused =
-        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+    let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
     if is_text_edit_focus(&focused) {
         finish_composition_preserve_text(&focused);
     }
@@ -203,18 +199,9 @@ pub(crate) fn clamp_ime_anchor_y(anchor_y: f32, line_h: f32, win_h: f32) -> f32 
 }
 
 /// 文本编辑焦点盒是否已完全离开窗口客户区（逻辑坐标）。
-pub(crate) fn visual_fully_outside_window(
-    visual: [f32; 4],
-    win_w: f32,
-    win_h: f32,
-) -> bool {
+pub(crate) fn visual_fully_outside_window(visual: [f32; 4], win_w: f32, win_h: f32) -> bool {
     let [x, y, w, h] = visual;
-    w <= 0.0
-        || h <= 0.0
-        || x + w <= 0.0
-        || y + h <= 0.0
-        || x >= win_w
-        || y >= win_h
+    w <= 0.0 || h <= 0.0 || x + w <= 0.0 || y + h <= 0.0 || x >= win_w || y >= win_h
 }
 
 /// Strip IME syllable-separator apostrophes from a preedit string before force-commit.
@@ -323,7 +310,9 @@ pub(crate) fn apply_ime_cursor_area(
         let prev = LAST_Y.get();
         if prev == i32::MIN || (py - prev).abs() >= 2 {
             let now = std::time::Instant::now();
-            let allow = LAST_LOG.get().is_none_or(|t| now.duration_since(t).as_millis() >= 80);
+            let allow = LAST_LOG
+                .get()
+                .is_none_or(|t| now.duration_since(t).as_millis() >= 80);
             if allow {
                 log::warn!(
                     "RUI_IME_DIAG move visual_y={:.1} phys_y={} (dpy={}) composing={composing}",
@@ -369,8 +358,8 @@ mod win_ime {
     use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::UI::Input::Ime::{
         ImmGetContext, ImmGetDefaultIMEWnd, ImmNotifyIME, ImmReleaseContext,
-        ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, IMECHARPOSITION,
-        IMC_SETCOMPOSITIONWINDOW, IMR_QUERYCHARPOSITION, NI_COMPOSITIONSTR,
+        ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, IMC_SETCOMPOSITIONWINDOW,
+        IMECHARPOSITION, IMR_QUERYCHARPOSITION, NI_COMPOSITIONSTR,
     };
     use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -481,7 +470,11 @@ mod win_ime {
             log::warn!(
                 "RUI_IME_DIAG focus switch {} -> {} (fold preedit sans ', end compose)",
                 last,
-                if next.is_empty() { "(none)" } else { next.as_str() }
+                if next.is_empty() {
+                    "(none)"
+                } else {
+                    next.as_str()
+                }
             );
         } else if next.is_empty() {
             release_ui_control(window, true);
@@ -724,7 +717,10 @@ mod win_ime {
             let last = LAST_RELOCATE_LOG_MS.load(Ordering::Relaxed);
             if last == 0 || t.wrapping_sub(last).abs() >= 80 {
                 LAST_RELOCATE_LOG_MS.store(t, Ordering::Relaxed);
-                log::warn!("RUI_IME_DIAG scroll-follow-y n={moved} dy={dy} anchor_y={}", anchor.y);
+                log::warn!(
+                    "RUI_IME_DIAG scroll-follow-y n={moved} dy={dy} anchor_y={}",
+                    anchor.y
+                );
             }
         }
     }
@@ -954,11 +950,8 @@ pub(crate) fn estimate_caret_x_in_field(
             } else {
                 glyphon::Family::SansSerif
             };
-            let weight = crate::utils::font::normalize_weight_for_family(
-                fs.db(),
-                family,
-                text_style.weight,
-            );
+            let weight =
+                crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
             let prefix_w_phys = crate::renderer::text_hit::measure_prefix_width(
                 fs,
                 display_prefix,
@@ -988,13 +981,37 @@ mod tests {
     #[test]
     fn visual_fully_outside_window_edges() {
         let win = (400.0, 300.0);
-        assert!(!visual_fully_outside_window([10.0, 10.0, 80.0, 24.0], win.0, win.1));
-        assert!(visual_fully_outside_window([10.0, -30.0, 80.0, 24.0], win.0, win.1)); // above
-        assert!(visual_fully_outside_window([10.0, 300.0, 80.0, 24.0], win.0, win.1)); // below
-        assert!(visual_fully_outside_window([-90.0, 10.0, 80.0, 24.0], win.0, win.1)); // left
-        assert!(visual_fully_outside_window([400.0, 10.0, 80.0, 24.0], win.0, win.1)); // right
-        // Still intersecting by 1px → not fully outside (focus stays either way).
-        assert!(!visual_fully_outside_window([10.0, -23.0, 80.0, 24.0], win.0, win.1));
+        assert!(!visual_fully_outside_window(
+            [10.0, 10.0, 80.0, 24.0],
+            win.0,
+            win.1
+        ));
+        assert!(visual_fully_outside_window(
+            [10.0, -30.0, 80.0, 24.0],
+            win.0,
+            win.1
+        )); // above
+        assert!(visual_fully_outside_window(
+            [10.0, 300.0, 80.0, 24.0],
+            win.0,
+            win.1
+        )); // below
+        assert!(visual_fully_outside_window(
+            [-90.0, 10.0, 80.0, 24.0],
+            win.0,
+            win.1
+        )); // left
+        assert!(visual_fully_outside_window(
+            [400.0, 10.0, 80.0, 24.0],
+            win.0,
+            win.1
+        )); // right
+            // Still intersecting by 1px → not fully outside (focus stays either way).
+        assert!(!visual_fully_outside_window(
+            [10.0, -23.0, 80.0, 24.0],
+            win.0,
+            win.1
+        ));
     }
 
     #[test]

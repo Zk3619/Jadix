@@ -80,7 +80,10 @@ fn strip_viewport_unit(s: &str) -> Option<&str> {
     for suffix in SUFFIXES {
         if let Some(rest) = s.strip_suffix(suffix) {
             // Reject bare unit or junk like "85dvhpx".
-            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+            if !rest.is_empty()
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
             {
                 return Some(rest);
             }
@@ -531,10 +534,7 @@ mod tests {
         }
         let pct_calc = parse_css_dim("calc(100% - 40px)").unwrap();
         assert!(pct_calc.has_percent());
-        assert!(matches!(
-            pct_calc.to_dimension(&ctx),
-            Dimension::Auto
-        ));
+        assert!(matches!(pct_calc.to_dimension(&ctx), Dimension::Auto));
         let ctx_cb = ctx.with_containing_block(Some(260.0), Some(180.0));
         match pct_calc.to_dimension(&ctx_cb) {
             Dimension::Length(px) => {
@@ -600,7 +600,11 @@ impl IntoBorderWidths for &str {
     fn into_border_widths(self) -> [f32; 4] {
         let parts: Vec<f32> = self
             .split_whitespace()
-            .map(|p| parse_css_length_px(p, CSS_ROOT_FONT_SIZE_PX).unwrap_or(0.0).max(0.0))
+            .map(|p| {
+                parse_css_length_px(p, CSS_ROOT_FONT_SIZE_PX)
+                    .unwrap_or(0.0)
+                    .max(0.0)
+            })
             .collect();
         match parts.as_slice() {
             [a] => [*a; 4],

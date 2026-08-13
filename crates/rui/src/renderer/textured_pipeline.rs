@@ -10,6 +10,8 @@ pub struct TexturedInstanceInput {
     pub rect_pos: [f32; 2],
     pub rect_size: [f32; 2],
     pub tint: [f32; 4],
+    pub uv_offset: [f32; 2],
+    pub uv_scale: [f32; 2],
 }
 
 impl TexturedInstanceInput {
@@ -32,6 +34,16 @@ impl TexturedInstanceInput {
                     offset: 16,
                     shader_location: 4,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 40,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }

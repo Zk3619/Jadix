@@ -129,7 +129,7 @@ impl EmojiGlyphCache {
                 && k.scale_bits == key.scale_bits
                 && k.color_mode == key.color_mode
                 && k.wrap_width_q != key.wrap_width_q)
-            .then_some(entry)
+                .then_some(entry)
         })
     }
 
@@ -158,7 +158,9 @@ impl EmojiGlyphCache {
         }
         // Glyphon asserts Some→None never happens for the same request. If an id was
         // handed out but the bitmap is gone/mismatched, return a transparent placeholder.
-        let n = (input.width as usize).saturating_mul(input.height as usize).saturating_mul(4);
+        let n = (input.width as usize)
+            .saturating_mul(input.height as usize)
+            .saturating_mul(4);
         Some(RasterizedCustomGlyph {
             data: vec![0; n],
             content_type: ContentType::Color,

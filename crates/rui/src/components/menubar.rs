@@ -13,9 +13,7 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
-use crate::utils::popup::{
-    mark_floating, panel_block_clicks, PopupPlacement,
-};
+use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
 use crate::utils::roving::{focus_by_id, focus_roving_key, roving_move, FocusRovingAxis};
 use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
@@ -207,9 +205,7 @@ impl From<MenubarBuilder> for Element {
                 });
 
                 let mut root: Element = vstack().relative(true).child(trigger).into();
-                if let Some(oz) =
-                    portal_sync(&sid, open, OverlayKind::Menu, OverlayMode::Stacked)
-                {
+                if let Some(oz) = portal_sync(&sid, open, OverlayKind::Menu, OverlayMode::Stacked) {
                     if open.peek() {
                         let mut menu = vstack().gap("0.125rem").p("0.25rem").min_w("8rem");
                         for (i, item) in items.iter().enumerate() {
@@ -276,12 +272,7 @@ impl From<MenubarBuilder> for Element {
                             .absolute(true)
                             .into();
                         panel = panel.accesskit_role("menu");
-                        mark_floating(
-                            &mut panel,
-                            &sid,
-                            &trigger_id,
-                            PopupPlacement::BottomStart,
-                        );
+                        mark_floating(&mut panel, &sid, &trigger_id, PopupPlacement::BottomStart);
                         panel = panel_block_clicks(panel, oz.panel);
                         root = root.child(panel);
                     }

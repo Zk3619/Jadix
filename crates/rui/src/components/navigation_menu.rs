@@ -296,9 +296,10 @@ impl From<NavigationMenuBuilder> for Element {
             viewport,
         } = builder;
 
-        let expanded = use_signal(format!("{id}__navmenu_expanded").as_str(), || {
-            None::<String>
-        });
+        let expanded = use_signal(
+            format!("{id}__navmenu_expanded").as_str(),
+            || None::<String>,
+        );
 
         // One open signal per trigger (created outside reactive_view — hook discipline).
         let mut trigger_meta: Vec<(String, String, Vec<NavigationMenuLink>, Signal<bool>)> =
@@ -365,9 +366,7 @@ impl From<NavigationMenuBuilder> for Element {
                         let exp_click = exp;
                         let exp_keys = exp;
                         let ids = top_ids.clone();
-                        let first_link = links
-                            .first()
-                            .map(|l| format!("{root_id}:link:{}", l.id));
+                        let first_link = links.first().map(|l| format!("{root_id}:link:{}", l.id));
                         let chip = trigger_chip(
                             &trigger_focus,
                             label,
@@ -383,10 +382,7 @@ impl From<NavigationMenuBuilder> for Element {
                                 if ev.state != ElementState::Pressed || ev.repeat {
                                     return false;
                                 }
-                                if matches!(
-                                    ev.logical_key,
-                                    Key::Named(NamedKey::ArrowDown)
-                                ) {
+                                if matches!(ev.logical_key, Key::Named(NamedKey::ArrowDown)) {
                                     if let Some(ref lid) = first_link {
                                         if exp_keys.peek().as_deref() != Some(tid_keys.as_str()) {
                                             exp_keys.set(Some(tid_keys.clone()));

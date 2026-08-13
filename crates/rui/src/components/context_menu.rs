@@ -12,9 +12,7 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::tokens;
-use crate::utils::popup::{
-    mark_floating, panel_block_clicks, PopupPlacement,
-};
+use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
 use crate::utils::roving::{roving_edge, roving_move};
 use winit::keyboard::{Key, NamedKey};
 

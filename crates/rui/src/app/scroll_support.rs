@@ -37,12 +37,7 @@ pub(super) struct ContentScrollDrag {
 /// Exponential friction decay for fling inertia (`vx`/`vy` in px/s of scroll offset).
 ///
 /// `friction_per_sec` ≈ how many e-folds of speed drop per second (higher = stops sooner).
-pub(super) fn decay_scroll_velocity(
-    vx: f32,
-    vy: f32,
-    dt: f32,
-    friction_per_sec: f32,
-) -> [f32; 2] {
+pub(super) fn decay_scroll_velocity(vx: f32, vy: f32, dt: f32, friction_per_sec: f32) -> [f32; 2] {
     let dt = dt.max(0.0);
     let damp = (-friction_per_sec * dt).exp();
     let mut nx = vx * damp;
@@ -160,10 +155,7 @@ pub(super) fn collect_scroll_areas_at(
 }
 
 /// Visit children topmost-first (z_index, then DOM order), matching [`super::tree_hit`].
-fn for_each_hit_child<'a>(
-    el: &'a Element,
-    mut f: impl FnMut(&'a Element) -> bool,
-) -> bool {
+fn for_each_hit_child<'a>(el: &'a Element, mut f: impl FnMut(&'a Element) -> bool) -> bool {
     if super::tree_hit::children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
             if f(child) {
@@ -383,7 +375,6 @@ pub(crate) fn set_scroll_offset_with_behavior(
     tx.set_silent(target_x);
     ty.set_silent(target_y);
 }
-
 
 pub fn get_system_scroll_lines() -> f32 {
     #[cfg(target_os = "windows")]

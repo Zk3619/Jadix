@@ -353,7 +353,10 @@ pub fn caret_index_from_display_hit(rest: &str, display_ix: usize) -> usize {
         format!("{}{}{}", &committed[..a], preedit, &committed[a..])
     };
     let ty = InputType::parse(
-        &use_signal(&input_type_signal_key(rest), || InputType::Text.as_str().to_string()).peek(),
+        &use_signal(&input_type_signal_key(rest), || {
+            InputType::Text.as_str().to_string()
+        })
+        .peek(),
     );
     let reveal = use_signal(&input_password_reveal_signal_key(rest), || false).peek();
     let ix = if ty.is_password() && !reveal {
@@ -364,7 +367,12 @@ pub fn caret_index_from_display_hit(rest: &str, display_ix: usize) -> usize {
     real_display.floor_char_boundary(ix.min(real_display.len()))
 }
 
-pub(crate) fn map_byte_range_to_masked(real: &str, lo: usize, hi: usize, masked: &str) -> (usize, usize) {
+pub(crate) fn map_byte_range_to_masked(
+    real: &str,
+    lo: usize,
+    hi: usize,
+    masked: &str,
+) -> (usize, usize) {
     (
         map_byte_index_to_masked(real, lo, masked),
         map_byte_index_to_masked(real, hi, masked),
@@ -725,10 +733,7 @@ mod tests {
     fn password_disallows_ime_and_filters_to_ascii() {
         assert!(!InputType::Password.allows_ime());
         assert!(InputType::Text.allows_ime());
-        assert_eq!(
-            filter_password_insert("", "Ab1!你'好\n\u{7f}"),
-            "Ab1!'"
-        );
+        assert_eq!(filter_password_insert("", "Ab1!你'好\n\u{7f}"), "Ab1!'");
         assert_eq!(
             filter_insert_for_type(InputType::Password, "", "pāss字"),
             "pss"

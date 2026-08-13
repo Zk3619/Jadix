@@ -112,14 +112,7 @@ fn make_spacer(list_id: &str, which: &str, height: f32) -> Element {
     } else {
         bot_spacer_id(list_id)
     };
-    Element::from(
-        r#box()
-            .w("100%")
-            .h(height)
-            .min_h(height)
-            .flex_shrink(0.0),
-    )
-    .template_id(tid)
+    Element::from(r#box().w("100%").h(height).min_h(height).flex_shrink(0.0)).template_id(tid)
 }
 
 fn tune_spacer(mut el: Element, height: f32) -> Element {
@@ -253,9 +246,12 @@ fn apply_body_window(
     apply_body_style(root, total_h);
     root.children = next;
     root.attrs.insert(RANGE_ATTR.to_string(), key);
-    root.attrs.insert(REUSED_ATTR.to_string(), reused.to_string());
-    root.attrs.insert(CREATED_ATTR.to_string(), created.to_string());
-    root.attrs.insert(DROPPED_ATTR.to_string(), dropped.to_string());
+    root.attrs
+        .insert(REUSED_ATTR.to_string(), reused.to_string());
+    root.attrs
+        .insert(CREATED_ATTR.to_string(), created.to_string());
+    root.attrs
+        .insert(DROPPED_ATTR.to_string(), dropped.to_string());
     LayoutStatus::StructureChanged
 }
 
@@ -290,8 +286,7 @@ impl From<VirtualListBuilder> for Element {
         body.attrs.insert(CREATED_ATTR.to_string(), "0".into());
         body.attrs.insert(DROPPED_ATTR.to_string(), "0".into());
         body = body.reactive_sync(move |root, _layout| {
-            let sy =
-                use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32).peek();
+            let sy = use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32).peek();
             let vh = use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height).peek();
             let vh = if vh > 1.0 { vh } else { height };
             let (start, end) = visible_item_range(sy, vh, item_height, item_count, overscan);
@@ -344,7 +339,9 @@ mod tests {
 
     #[test]
     fn build_body_total_height_matches_item_count() {
-        let body = build_body("vl", 120, 21.0, 11, 28, &|i| Element::new().text(format!("{i}")));
+        let body = build_body("vl", 120, 21.0, 11, 28, &|i| {
+            Element::new().text(format!("{i}"))
+        });
         match body.style.size.height {
             taffy::style::Dimension::Length(h) => assert!((h - 120.0 * 21.0).abs() < 0.01),
             other => panic!("expected Length total height, got {other:?}"),
@@ -353,7 +350,9 @@ mod tests {
 
     #[test]
     fn apply_body_window_is_idempotent_for_same_range() {
-        let mut root = build_body("vl", 50, 20.0, 0, 10, &|i| Element::new().text(format!("{i}")));
+        let mut root = build_body("vl", 50, 20.0, 0, 10, &|i| {
+            Element::new().text(format!("{i}"))
+        });
         root.attrs.insert(RANGE_ATTR.to_string(), "0:10".into());
         assert_eq!(
             apply_body_window(&mut root, "vl", 50, 20.0, 0, 10, &|i| {

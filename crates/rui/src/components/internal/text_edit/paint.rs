@@ -1,4 +1,4 @@
-﻿//! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
+//! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
 use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
@@ -77,11 +77,7 @@ fn sync_one_text_edit_paint(
     };
 
     let reveal = if desc.password_toggle && input_ty.is_password() {
-        use_signal(
-            &input_password_reveal_signal_key(&desc.base_id),
-            || false,
-        )
-        .peek()
+        use_signal(&input_password_reveal_signal_key(&desc.base_id), || false).peek()
     } else {
         false
     };
@@ -364,8 +360,7 @@ fn sync_one_text_edit_paint(
     if desc.clearable {
         let clear_tid = input_clear_template_id(&desc.base_id);
         if let Some(btn) = find_descendant_by_template_id_mut(el, &clear_tid) {
-            let show =
-                (!committed.is_empty() || !preedit.is_empty()) && !desc.disabled;
+            let show = (!committed.is_empty() || !preedit.is_empty()) && !desc.disabled;
             if set_adornment_visible(btn, show) {
                 adorn_style = true;
             }
@@ -454,7 +449,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }
@@ -521,9 +516,7 @@ fn sync_one_text_edit_paint(
                 None
             };
             if let Some(new_sy) = new_sy {
-                crate::app::scroll_support::set_scroll_offset_with_behavior(
-                    rest, sx, new_sy, true,
-                );
+                crate::app::scroll_support::set_scroll_offset_with_behavior(rest, sx, new_sy, true);
                 for child in &mut el.children {
                     if child.focus_id.as_deref() == Some(vp_fid.as_str()) {
                         child.scroll_offset = [sx, new_sy];
@@ -610,4 +603,3 @@ fn find_descendant_by_template_id_ref<'a>(el: &'a Element, tid: &str) -> Option<
     }
     None
 }
-

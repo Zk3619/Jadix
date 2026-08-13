@@ -12,8 +12,8 @@ mod extended_pictographic;
 pub mod font_loader;
 pub mod offscreen;
 pub mod pipeline;
-pub mod present_retain;
 pub mod prepare_text;
+pub mod present_retain;
 pub mod text;
 pub mod text_hit;
 pub(crate) mod text_prepare_debug;
@@ -22,9 +22,9 @@ pub mod twemoji_name;
 
 pub use backdrop_blur::BackdropBlurPipeline;
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
-pub use present_retain::PresentRetainPipeline;
-pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
 pub use prepare_text::prepare_text_frame;
+pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
+pub use present_retain::PresentRetainPipeline;
 pub use text::RuiTextRenderer;
 pub use text_hit::{
     best_font_family, hit_test_input_text_index, is_single_line_text_box, measure_prefix_width,
@@ -68,17 +68,80 @@ pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceI
 #[derive(Clone, Debug)]
 pub struct TexturedDraw {
     pub rect: [f32; 4],
+    /// 贴图 UV 起点（已计入 Y 翻转，见 [`uv_for_subrect`]）。
+    pub uv_offset: [f32; 2],
+    pub uv_scale: [f32; 2],
     pub texture_key: String,
     /// Combined ancestor × element opacity for tint alpha.
     pub opacity: f32,
+}
+
+impl TexturedDraw {
+    /// `full_rect` = 叶布局矩形；`clip` = 祖先 overflow。
+    /// 只提交相交像素，并用 UV 取完整贴图对应区域（禁止把整图挤进可见缝）。
+    pub fn clipped(
+        full_rect: [f32; 4],
+        clip: Option<[f32; 4]>,
+        texture_key: impl Into<String>,
+        opacity: f32,
+    ) -> Option<Self> {
+        let draw = match clip {
+            Some(c) if c[2] > 0.0 && c[3] > 0.0 => aabb_intersect(c, full_rect),
+            _ => full_rect,
+        };
+        if draw[2] <= 0.0 || draw[3] <= 0.0 || full_rect[2] <= 0.0 || full_rect[3] <= 0.0 {
+            return None;
+        }
+        let (uv_offset, uv_scale) = uv_for_subrect(full_rect, draw);
+        Some(Self {
+            rect: draw,
+            uv_offset,
+            uv_scale,
+            texture_key: texture_key.into(),
+            opacity,
+        })
+    }
+}
+
+fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
+}
+
+/// `textured_rect` 顶点 Y 翻转：rect 顶 → `uv.y=1`。子矩形 UV 必须同一约定。
+pub fn uv_for_subrect(full: [f32; 4], sub: [f32; 4]) -> ([f32; 2], [f32; 2]) {
+    let fw = full[2].max(1e-6);
+    let fh = full[3].max(1e-6);
+    let u0 = ((sub[0] - full[0]) / fw).clamp(0.0, 1.0);
+    let v0 = ((sub[1] - full[1]) / fh).clamp(0.0, 1.0);
+    let us = (sub[2] / fw).clamp(0.0, 1.0);
+    let vs = (sub[3] / fh).clamp(0.0, 1.0);
+    ([u0, 1.0 - v0 - vs], [us, vs])
 }
 
 /// 缩放至物理像素后的纹理绘制矩形。
 #[derive(Clone, Debug)]
 pub struct ScaledTexturedDraw {
     pub rect: [f32; 4],
+    pub uv_offset: [f32; 2],
+    pub uv_scale: [f32; 2],
     pub texture_key: String,
     pub opacity: f32,
+}
+
+impl ScaledTexturedDraw {
+    pub fn to_instance(&self) -> TexturedInstanceInput {
+        TexturedInstanceInput {
+            rect_pos: [self.rect[0], self.rect[1]],
+            rect_size: [self.rect[2], self.rect[3]],
+            tint: [1.0, 1.0, 1.0, self.opacity],
+            uv_offset: self.uv_offset,
+            uv_scale: self.uv_scale,
+        }
+    }
 }
 
 pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTexturedDraw> {
@@ -91,8 +154,85 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
                 d.rect[2] * scale,
                 d.rect[3] * scale,
             ],
+            uv_offset: d.uv_offset,
+            uv_scale: d.uv_scale,
             texture_key: d.texture_key.clone(),
             opacity: d.opacity,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod textured_uv_tests {
+    use super::{scale_textured_draws, uv_for_subrect, TexturedDraw};
+
+    #[test]
+    fn packed_instances_keep_per_draw_rect_not_last_write() {
+        let draws = [
+            TexturedDraw {
+                rect: [10.0, 20.0, 100.0, 80.0],
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                texture_key: "rui_path:line".into(),
+                opacity: 1.0,
+            },
+            TexturedDraw {
+                rect: [10.0, 200.0, 180.0, 180.0],
+                uv_offset: [0.0, 0.0],
+                uv_scale: [1.0, 1.0],
+                texture_key: "rui_path:pie".into(),
+                opacity: 1.0,
+            },
+        ];
+        let scaled = scale_textured_draws(&draws, 1.0);
+        let insts: Vec<_> = scaled.iter().map(|d| d.to_instance()).collect();
+        assert_eq!(insts.len(), 2);
+        assert!(
+            (insts[0].rect_pos[1] - 20.0).abs() < 1e-3
+                && (insts[0].rect_size[1] - 80.0).abs() < 1e-3,
+            "line instance must keep its own rect, got {:?}",
+            insts[0]
+        );
+        assert!(
+            (insts[1].rect_pos[1] - 200.0).abs() < 1e-3
+                && (insts[1].rect_size[1] - 180.0).abs() < 1e-3,
+            "pie instance must keep its own rect, got {:?}",
+            insts[1]
+        );
+    }
+
+    #[test]
+    fn full_rect_keeps_identity_uv() {
+        let (off, scale) = uv_for_subrect([0.0, 0.0, 100.0, 80.0], [0.0, 0.0, 100.0, 80.0]);
+        assert!((off[0]).abs() < 1e-5 && (off[1]).abs() < 1e-5);
+        assert!((scale[0] - 1.0).abs() < 1e-5 && (scale[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn top_half_clip_samples_upper_texel_band() {
+        let (off, scale) = uv_for_subrect([0.0, 0.0, 100.0, 80.0], [0.0, 0.0, 100.0, 40.0]);
+        assert!((scale[1] - 0.5).abs() < 1e-5);
+        assert!(
+            (off[1] - 0.5).abs() < 1e-5,
+            "top half → uv.y starts at 0.5 (Y-flip)"
+        );
+    }
+
+    #[test]
+    fn clipped_draw_does_not_squash_into_sliver_without_uv() {
+        let d = TexturedDraw::clipped(
+            [10.0, 100.0, 180.0, 180.0],
+            Some([0.0, 200.0, 400.0, 80.0]),
+            "rui_path:test",
+            1.0,
+        )
+        .expect("intersect");
+        assert!(d.rect[3] < 180.0, "visible h={}", d.rect[3]);
+        assert!(
+            (d.uv_scale[1] - d.rect[3] / 180.0).abs() < 1e-4,
+            "uv_scale.y must match visible/full height, got {} vs {}",
+            d.uv_scale[1],
+            d.rect[3] / 180.0
+        );
+    }
 }

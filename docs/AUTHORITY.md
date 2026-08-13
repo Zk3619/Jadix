@@ -1,7 +1,7 @@
 # RUI 权威入口与统一计划（巩固期）
 
 > **文档地位**：巩固期**唯一入口**与**唯一执行源**（勾选、排期、DoD、禁区摘要）。  
-> **日期**：2026-08-12  
+> **日期**：2026-08-12；**W2 退出 / 进入 W3**：2026-08-13  
 > **前提**：阶段一～十二 MVP 已落地；底座锁定（ADR-1～9）。本文**不**新开架构分叉。
 
 读本文即可知道：现在做到哪、下一步做什么、争议找哪份规范。  
@@ -42,6 +42,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │   COMPONENT_LIBRARY.md             组件产品面 · 双书写 · API 契约
 │   REACTIVITY.md                    细粒度模型 · 三档更新 · 缺口事实
 │   element_identity.md              身份四轴（跨组件 / 宏 / 运行时）
+│   drawing.md                       Svg / Canvas / 2D·3D 公开自绘面
 │
 ├─ 数据表（随代码改，不另开计划）
 │   component_inventory.md           分桶 + id 策略 + planned
@@ -50,6 +51,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
 │   reactivity_and_hot_reload · headless · custom_components
 │   color · font* · damage · layout_subtree · text_align · box_model
+│   drawing（自绘面规范，亦作手册入口）
 │   glyphon_audit · PUBLISH · size_and_memory · multi_window · tray
 │
 └─ 非执行源
@@ -64,7 +66,8 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 |----------|------|------|
 | 要不要换 VDOM / 弃 wgpu / 废 Builder | 纲领 ADR + 本文 §3 | 在组件 PR 里静默改哲学 |
 | 默认交付面 = shadcn？双书写？ | `COMPONENT_LIBRARY.md` | 另起纯无头产品包 |
-| 这次 `set` 触发什么？Store/Resource 语义 | `REACTIVITY.md` | 以「追平 Leptos API」替代门槛 |
+| 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid | `REACTIVITY.md`（§0.1 / §5.7 / **§5.9 记分牌**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
+| `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2.1） | 只改 Gallery 文案 |
@@ -90,8 +93,8 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 |------|---------------------|--------|
 | 代码 | `crates/` ≈ 5.3 万行；`components/` ≈ 45 模块 | 稳定面文档化；破坏性可追踪 |
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
-| 文本/像素 | 测宽对齐 ☑；damage 策略 ☑；golden **仅 2** 场景 | ≥5 组件 golden |
-| 反应性 | API 主路径齐；**WP-2.4 注册表→Owner ☑**；**WP-2.7 根裸 get 可观测 ☑**（2026-08-13） | 长会话无泄漏；更新路径可预测 |
+| 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | 细粒度 damage 默认；glyph 级 golden 可加深 |
+| 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；主缺口 I-7 For 项级 → I-11 Index → I-8 Store 路径 → I-12 effect 分相 | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 须 I-8/11/12 + G8；**不挡** Win-first 0.1 |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
 
@@ -105,7 +108,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 |----|------|
 | ADR-1 | 细粒度 Signal，不采用 VDOM |
 | ADR-2 | 保留 Element + taffy `NodeId` |
-| ADR-3 | 图形主线 wgpu；Windows 默认优先 GL 以降内存 |
+| ADR-3 | 图形主线 wgpu；Windows 默认优先 GL 以降内存；**公开自绘面 = Svg/Canvas/Scene 叶，不另开渲染器**（[`drawing.md`](drawing.md)） |
 | ADR-4 | 布局固定 taffy；文本 measure 对齐 Pretext 思想 |
 | ADR-5 | utility + 变体，单一 `rui_style_tokens` |
 | ADR-6 | 组件 = shadcn 产品面 + headless 骨架 |
@@ -114,6 +117,8 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | ADR-9 | `ui!` 与 Builder **双书写面**一等公民，禁止只留其一 |
 
 **巩固期明确不做**：换 VDOM / EUI DSL / 弃 wgpu；Solid DOM/SSR/hydration；移动/鸿蒙一等公民；完整 CSSOM；平行「纯 Radix 组件包」；未过 CV 对全量组件做行为大重构；无验收大重构；DevTools（Backlog）。
+
+**细粒度战略**（展开 `REACTIVITY.md` §0.1 / §5.9）：**超过 Floem 纯度、逼近 SolidJS 机制**（非 DOM/SSR/API 名）。I-1…I-6 已齐；**超 Floem 决胜 = WP-R.5b（I-7）**；逼近 Solid = 5c Index + WP-R.3B Store 路径 + WP-R.9 effect 分相 + G8。ADR-8 仍禁止用 Solid 百分百 API 替代发布门槛。
 
 **三档更新**（开发者红线，展开 `REACTIVITY.md` §3）：
 
@@ -129,9 +134,9 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 
 | 域 | 规范管 | 计划（本文）管 | 不管 |
 |----|--------|----------------|------|
-| **工程** | 六门槛、栈、发布叙事、质量门命令 | W1 冒烟、W2 文本/damage/golden、W3 外壳、W4 crates.io | 单个组件 variant 名 |
+| **工程** | 六门槛、栈、发布叙事、质量门命令；自绘面纪律 [`drawing.md`](drawing.md) | W1 冒烟、**W2 已退出**、W3 产品+Svg/Canvas、W4 crates.io | 单个组件 variant 名 |
 | **组件** | 分层、双书写、受控 API、清单、质量门模板 | CV 走查（仅 `components/` 控件）、行为下沉、Gallery 覆盖 | 重写 Signal 内核；Theme/utility SemVer |
-| **响应式** | API 清单、缺口 G1–G9、与组件的受控边界 | Owner 注册表、双路径、Store/EB 契约 | 浮层 placement、chrome 色值 |
+| **响应式** | §0.1 战略、§5.9 记分牌、§5.7 不变量、缺口 G1–G10 | WP-R.5a/b/c、R.3B、R.9、R.7 | 浮层 placement、chrome 色值；换 `reactive_graph` / VDOM / 抄 Solid DOM |
 | **身份**（横切） | 四轴不变量 I-1… | 审计 + 空串收敛 + scoped API（并入 WP-2.4 / CV） | 当「第四套计划」 |
 
 组件受控 Signal 的**语义**以反应性规范为准；**暴露面**（`*_signal` / 非受控键）以组件规范为准；**键的生命周期**以身份契约 + WP-2.4 为准。
@@ -152,7 +157,7 @@ flowchart TB
   W1[W1 原生可信]
   CV[Wave CV 稳定面验证]
   W2[W2 文本像素与内核]
-  W3[W3 产品面]
+  W3[W3 产品面与自绘]
   W4[W4 发布]
   D0 --> W1
   W1 --> CV
@@ -169,8 +174,8 @@ flowchart TB
 | **D0** | 文档治理（本文） | 否（但挡「再开第七套权威」） | 本次 |
 | **W1** | 原生：IME / 焦点 / a11y / 三平台冒烟 | Win 已退出；**三平台列挡 Beta** | 补签 1 周级 |
 | **CV** | 稳定面走查 + 身份审计 + 最小测网 | **挡组件大重构**；不单独挡 0.1 Win-first | 1–2 周 |
-| **W2** | 文本已签；Owner/Store；golden；**盒模型收口** | **WP-2.4 / 2.5 / 2.6 ☑**；WP-2.9 不挡 Beta | 2–3 周 |
-| **W3** | Gallery / Chart / 选器 / 外壳；CV 后才下沉行为 | 分区已有；深化不全部挡 Beta | 2–3 周 |
+| **W2** | 文本已签；Owner/Store；golden；**盒模型收口** | **已退出（2026-08-13）** 2.1–2.9 ☑；2.9 不挡 Beta | 2–3 周 |
+| **W3** | Gallery / Chart / 选器 / 外壳；**Svg/Canvas 自绘**；CV 后才下沉行为 | 分区已有；3.11/3.12 MVP 建议；3D/B16/B17 不挡 | 2–3 周 |
 | **W4** | CHANGELOG / crates.io / 文档站 / CI | **挡 Beta** | 1–2 周 |
 
 \*单人全职量级。每波结束：代码合入 + 测试绿 + **只改本文勾选** + 必要时改对应规范事实表。
@@ -364,15 +369,18 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **W2 已签署**：2.1–2.9。（2.9 不挡升 Beta。）
 
-### 5.5 Wave 3 — 产品面与外壳
+**W2 退出（2026-08-13）**：2.1–2.9 全部 ☑；进入 **Wave 3**。反应性加深（WP-R.*）仍与 W3 **并行**，不挡 W3 开工。
 
-**目标**：Gallery 可作名片；关键键盘完整；外壳可演示。  
-**3.4 / 3.7 / 3.8 仅 CV 通过后开工。**
+### 5.5 Wave 3 — 产品面、外壳与公开自绘
+
+**目标**：Gallery 可作名片；关键键盘完整；外壳可演示；**引入 `<svg>` / `<canvas>` 与 2D·3D 能力**（规范 [`drawing.md`](drawing.md)）。  
+**3.4 / 3.7 / 3.8 仅 CV 通过后开工（CV 已 ☑）。**  
+**当前焦点（进入 W3）**：3.2 · 3.3 · 3.4 · 3.5 · **3.11 · 3.12**；3.13 可交错；B16 / B17 不挡本波。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
 | **WP-3.1** | Gallery 八分区 | C-WP-3.1 | ☑ 侧栏；「每稳定面一入口」随 CV 复核 |
-| **WP-3.2** | Path → Chart 加深（含 Pie） | — | ☐ |
+| **WP-3.2** | Path → Chart 加深（含 Pie）；与 3.11 **共用 path 核** | — | ☑ 2026-08-13 path 光栅贴图 + Line/Pie + Gallery |
 | **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☐ |
 | **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☐ **前置 CV ☑** |
 | **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☐ wired MVP 有；演示页无 |
@@ -381,6 +389,22 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.5 | ☐ **前置 CV ☑**；仅 `verified` |
 | **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
+| **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☐ 规范 [`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
+| **WP-3.12** | **`<canvas>` 标签 + 画布自定义绘制**（paint / 2D context MVP） | — | ☐ [`drawing.md`](drawing.md) §4 |
+| **WP-3.13** | **2D / 3D 能力层**（2D 合成纪律；`<scene3d>` 实验 feature；原 B6 矩阵并入） | — | ☐ [`drawing.md`](drawing.md) §5；**3D 不挡 W3 退出** |
+
+#### WP-3.11 / 3.12 / 3.13 验收（可判定 · 进入 W3 前已写清）
+
+| ID | A 库测 / API | B Gallery（建议） | 失败 |
+|----|----------------|-------------------|------|
+| **3.11 Svg MVP** | `ui!`+Builder 各建一叶；`viewBox`+至少 `circle`/`path`；叶 `layout_bounds` 正确 | 「数据」或新「绘制」区：圆+path 可见描边/填充 | 仅 attr stub 无像素；与 Chart 第二套 path 格式 |
+| **3.12 Canvas MVP** | `paint` 回调可 `fill_rect`/`stroke`；resize → LayoutChanged；回调内 `peek` 不抬根 dep | 拖线或时钟自绘 | 每帧重建整棵 UI；订根 effect |
+| **3.13 2D** | 变换/clip 有测或与 3.12 同页 | 可见 rotate/clip | 换 Skia 主线 |
+| **3.13 3D MVP** | feature 关闭时默认构建绿；开启时一 mesh/立方 | 可选演示页 | 默认 feature 塞 glTF 全家桶 |
+
+**签署**：3.11/3.12 A 绿即可勾；3.13 2D 建议随 3.12；3D 可标 experimental。细则 [`drawing.md`](drawing.md)。
+
+**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2）；Router 历史可演示；托盘接线或 README 标 stub；**3.11 或 3.12 至少一项 MVP**（公开自绘面起步）。
 
 ### 5.6 Wave 4 — 发布与质量矩阵
 
@@ -394,17 +418,18 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-4.6** | 体积/内存发布核对 | — | ☐ |
 | **WP-4.7** | 对外叙事升 Beta | — | ☐ 依赖 §6 全勾 |
 
-### 5.7 反应性加深（不挡 Win-first 0.1）
+### 5.7 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
 
-并入 W2 之后或与 W3 交错；勾选仍只在本表。
+并入 W2 之后或与 W3 交错；勾选仍只在本表。顺序：**5 → 3 → 9 → 7**（见 `REACTIVITY.md` §0.1）。
 
 | ID | 主题 | 别名 | 挡 Beta？ | 状态 |
 |----|------|------|-----------|------|
 | （见 2.4 / 2.5 / 2.7） | 门禁三项 | R-WP-1 / 4 / 2 | 2.6 是；2.7 建议 | 2.4 ☑；2.5 ☑；**2.7 ☑** |
-| **WP-R.5** | keyed For / Index | R-WP-5 | 否 | ☐ |
+| **WP-R.5** | 列表：**5a** keyed 插删换位测；**5b** 项级 For Owner（I-7，**超 Floem 决胜**）；**5c** 真 Index Accessor（I-11） | R-WP-5 | 否（0.1）；**挡「宣称超过 Floem」= 5b**；**挡「逼近 Solid」= 5b+5c** | ☐ |
+| **WP-R.3** | Store **路径触发器**（选 B；兄变不重跑弟） | R-WP-3 | 否 · **P1**（逼近 Solid；不再默认冻结 A） | ☐ |
+| **WP-R.9** | Effect 分相：Computed → `bind_*` → 用户 effect（I-12） | R-WP-9 | 否 · P1（逼近 Solid） | ☐ |
+| **WP-R.7** | 宏降级漏绑 | R-WP-7 | 否 · **P1**（否则 5b 只写在纸上） | ☐ |
 | **WP-R.6** | 热重载 × 反应槽不变量 | R-WP-6 | 否 | ☐ |
-| **WP-R.7** | 宏降级漏绑 | R-WP-7 | 否 | ☐ |
-| **WP-R.3** | Store 路径触发器（默认文档冻结 select+produce） | R-WP-3 | 否 · P2 | ☐ |
 | **WP-R.8** | 信号图可观测（非 DevTools UI） | R-WP-8 | 否 · P2 | ☐ |
 
 ---
@@ -436,7 +461,9 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | B3 | backdrop-blur 离屏缓存 | 工程 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
 | B5 | VirtualMasonry 产品化 | 工程 WP-3.10 / 组件 CB2 |
-| B6 | 完整 3D/矩阵变换 | 工程 |
+| B6 | 完整 3D/矩阵变换 | **并入 WP-3.13**（2026-08-13）；不再单列挡 W3 |
+| B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；依赖 3.11–3.13；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
+| B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；动画原语 + glyphon；背景/3D 跟 3.12/3.13；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI | 工程 |
 | B8 | GPU PartialLoad / retain 默认开 | 工程；见 `damage.md` |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
@@ -456,7 +483,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | 0 | D0（本文）；并行起草 WP-4.1 CHANGELOG 骨架 |
 | 1–2 | **CV**（走查 + 最小测网 + 身份审计）∥ 启动 WP-2.4；macOS/Linux 冒烟可并行 |
 | 3–4 | WP-2.4 / 2.5 / 2.6 / 2.7 / **2.9**（盒模型）；CV 收尾 |
-| 5–6 | CV 通过后：WP-3.4 / 3.7 / 3.8；同时 3.2 / 3.3 / 3.5 |
+| 5–6 | **W3**：3.4 / 3.7 / 3.8 + **3.11 Svg / 3.12 Canvas**；并行 3.2 Path·Chart / 3.3 / 3.5；3.13 2D 可跟 3.12 |
 | 7 | WP-4.2–4.6；冻结承诺面 |
 | 8 | publish + 升 Beta |
 
@@ -497,6 +524,7 @@ cargo check -p gallery
 | R-WP-3 | WP-R.3 |
 | R-WP-4 | WP-2.5 |
 | R-WP-5～8 | WP-R.5～.8 |
+| R-WP-9 | WP-R.9（effect 分相） |
 
 ---
 

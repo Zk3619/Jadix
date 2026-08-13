@@ -24,11 +24,7 @@ impl super::App {
         log::warn!("RUI_IME_DIAG os blur hard-release (stop system IME drive)");
         super::ime_support::on_os_focus_lost(window);
         super::ime_support::sync_ime_focus_owner(window, None);
-        super::ime_support::set_ime_allowed_latched(
-            window,
-            false,
-            &mut self.ime_allowed_latched,
-        );
+        super::ime_support::set_ime_allowed_latched(window, false, &mut self.ime_allowed_latched);
     }
 
     /// Whether a pointer hit should keep the current Input/Textarea focus.
@@ -48,8 +44,7 @@ impl super::App {
         };
         let resize_fid = crate::utils::text_field::textarea_resize_focus_id(rest);
         let scroll_rest = crate::utils::text_field::textarea_scroll_rest(rest);
-        let scroll_fid =
-            crate::core::scroll_viewport::focus_id_for_scroll_viewport(&scroll_rest);
+        let scroll_fid = crate::core::scroll_viewport::focus_id_for_scroll_viewport(&scroll_rest);
         for entry in path {
             let Some(fid) = entry.focus_id.as_deref() else {
                 continue;
@@ -210,13 +205,14 @@ impl super::App {
             None
         }
 
-        let text_style = super::tree_hit::find_input_text_leaf_for_rest(&st.root_element, None, rest)
-            .map(|(_, _, style, _)| style)
-            .or_else(|| {
-                super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
-                    .and_then(first_text_style)
-            })
-            .unwrap_or_default();
+        let text_style =
+            super::tree_hit::find_input_text_leaf_for_rest(&st.root_element, None, rest)
+                .map(|(_, _, style, _)| style)
+                .or_else(|| {
+                    super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+                        .and_then(first_text_style)
+                })
+                .unwrap_or_default();
 
         let line_h = crate::utils::text_field::text_edit_line_box_px(
             text_style.size,
@@ -627,13 +623,15 @@ impl super::App {
 
         // Always apply: occluders (modal underlay) return None and must reset to Default,
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
-        window.set_cursor(match cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
-            crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
-            crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-            crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
-            crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
-            crate::core::tree::CursorKind::Default => winit::window::CursorIcon::Default,
-        });
+        window.set_cursor(
+            match cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
+                crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
+                crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
+                crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
+                crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
+                crate::core::tree::CursorKind::Default => winit::window::CursorIcon::Default,
+            },
+        );
 
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
@@ -999,32 +997,29 @@ impl super::App {
                 if let Some(fid) =
                     super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
                 {
-                    if let Some(field_id) = fid
-                        .strip_prefix(crate::utils::text_field::TEXTAREA_RESIZE_FOCUS_PREFIX)
+                    if let Some(field_id) =
+                        fid.strip_prefix(crate::utils::text_field::TEXTAREA_RESIZE_FOCUS_PREFIX)
                     {
-                        let h_key =
-                            crate::utils::text_field::textarea_height_signal_key(field_id);
+                        let h_key = crate::utils::text_field::textarea_height_signal_key(field_id);
                         let start_h =
                             crate::core::reactivity::use_signal(&h_key, || 0.0_f32).peek();
-                        let (min_h, max_h) = super::tree_hit::find_element_by_focus_id(
-                            &state.root_element,
-                            &fid,
-                        )
-                        .map(|grip| {
-                            let min = grip
-                                .attrs
-                                .get("__rui_ta_resize_min")
-                                .and_then(|s| s.parse::<f32>().ok())
-                                .unwrap_or(start_h.max(32.0));
-                            let max = grip
-                                .attrs
-                                .get("__rui_ta_resize_max")
-                                .and_then(|s| s.parse::<f32>().ok())
-                                .unwrap_or(480.0)
-                                .max(min);
-                            (min, max)
-                        })
-                        .unwrap_or((start_h.max(32.0), 480.0_f32.max(start_h)));
+                        let (min_h, max_h) =
+                            super::tree_hit::find_element_by_focus_id(&state.root_element, &fid)
+                                .map(|grip| {
+                                    let min = grip
+                                        .attrs
+                                        .get("__rui_ta_resize_min")
+                                        .and_then(|s| s.parse::<f32>().ok())
+                                        .unwrap_or(start_h.max(32.0));
+                                    let max = grip
+                                        .attrs
+                                        .get("__rui_ta_resize_max")
+                                        .and_then(|s| s.parse::<f32>().ok())
+                                        .unwrap_or(480.0)
+                                        .max(min);
+                                    (min, max)
+                                })
+                                .unwrap_or((start_h.max(32.0), 480.0_f32.max(start_h)));
                         drop(state_borrow);
                         self.textarea_resize_drag = Some(super::TextareaResizeDrag {
                             field_id: field_id.to_string(),
@@ -1212,11 +1207,8 @@ impl super::App {
                         true
                     };
                     if !keep {
-                        crate::core::reactivity::use_signal(
-                            "__rui_button_focus_id",
-                            String::new,
-                        )
-                        .set(String::new());
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .set(String::new());
                         need_paint_sync_redraw = true;
                     }
                 }
@@ -1230,16 +1222,11 @@ impl super::App {
             {
                 let should_outside_dismiss = if let Some(st) = (*self.state.borrow()).as_ref() {
                     !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
-                        && !crate::utils::popup::path_hits_floating_trigger(
-                            &st.root_element,
-                            &path,
-                        )
+                        && !crate::utils::popup::path_hits_floating_trigger(&st.root_element, &path)
                 } else {
                     false
                 };
-                if should_outside_dismiss
-                    && super::portal_overlay::try_dismiss_outside_press()
-                {
+                if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press() {
                     need_paint_sync_redraw = true;
                 }
             }
@@ -1367,22 +1354,16 @@ impl super::App {
             if let Some(field) = crate::utils::text_field::text_edit_rest(&focused) {
                 if focused.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX) {
                     let ta_rest = crate::utils::text_field::textarea_scroll_rest(field);
-                    let resize_fid =
-                        crate::utils::text_field::textarea_resize_focus_id(field);
+                    let resize_fid = crate::utils::text_field::textarea_resize_focus_id(field);
                     let scroll_fid =
                         crate::core::scroll_viewport::focus_id_for_scroll_viewport(&ta_rest);
-                    let over_field = super::tree_hit::find_focus_id_at(
-                        &state.root_element,
-                        x,
-                        y,
-                        [0.0, 0.0],
-                    )
-                    .is_some_and(|hit| {
-                        hit == focused || hit == scroll_fid || hit == resize_fid
-                    });
+                    let over_field =
+                        super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
+                            .is_some_and(|hit| {
+                                hit == focused || hit == scroll_fid || hit == resize_fid
+                            });
                     if over_field
-                        && metrics_for_rest(&ta_rest)
-                            .is_some_and(|(_, [_, max_y], _)| max_y > 0.5)
+                        && metrics_for_rest(&ta_rest).is_some_and(|(_, [_, max_y], _)| max_y > 0.5)
                     {
                         target_rests.retain(|r| r != &ta_rest);
                         target_rests.insert(0, ta_rest);
@@ -1462,13 +1443,11 @@ impl super::App {
                     keys.activity.clone(),
                 )
             };
-            let behavior =
-                crate::core::reactivity::use_signal(&behavior_key, || {
-                    crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
-                })
-                .peek();
-            let is_smooth_mode =
-                crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
+            let behavior = crate::core::reactivity::use_signal(&behavior_key, || {
+                crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+            })
+            .peek();
+            let is_smooth_mode = crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
 
             let sx = crate::core::reactivity::use_signal(&offset_x_key, || 0.0_f32);
             let sy = crate::core::reactivity::use_signal(&offset_y_key, || 0.0_f32);
@@ -2096,23 +2075,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     &mut hover_to_run,
                 );
 
-                window.set_cursor(match hover_cursor_pick
-                    .unwrap_or(crate::core::tree::CursorKind::Default)
-                {
-                    crate::core::tree::CursorKind::Pointer => {
-                        winit::window::CursorIcon::Pointer
-                    }
-                    crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                    crate::core::tree::CursorKind::NotAllowed => {
-                        winit::window::CursorIcon::NotAllowed
-                    }
-                    crate::core::tree::CursorKind::NwseResize => {
-                        winit::window::CursorIcon::NwseResize
-                    }
-                    crate::core::tree::CursorKind::Default => {
-                        winit::window::CursorIcon::Default
-                    }
-                });
+                window.set_cursor(
+                    match hover_cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
+                        crate::core::tree::CursorKind::Pointer => {
+                            winit::window::CursorIcon::Pointer
+                        }
+                        crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
+                        crate::core::tree::CursorKind::NotAllowed => {
+                            winit::window::CursorIcon::NotAllowed
+                        }
+                        crate::core::tree::CursorKind::NwseResize => {
+                            winit::window::CursorIcon::NwseResize
+                        }
+                        crate::core::tree::CursorKind::Default => {
+                            winit::window::CursorIcon::Default
+                        }
+                    },
+                );
 
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
@@ -2141,12 +2120,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             Some((visual, scroll_acc, fid.clone(), "painted"))
                         }
                         (None, Some((b, sa))) => {
-                            let visual = [
-                                b[0] - sa[0],
-                                b[1] - sa[1],
-                                b[2],
-                                b[3],
-                            ];
+                            let visual = [b[0] - sa[0], b[1] - sa[1], b[2], b[3]];
                             Some((visual, sa, fid.clone(), "focus_bounds"))
                         }
                         (None, None) => None,
@@ -2558,9 +2532,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         .filter(|&until| until > now)
                         .min();
                     if let Some(until) = earliest {
-                        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-                            until,
-                        ));
+                        event_loop
+                            .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(until));
                     }
                 }
 
@@ -2584,7 +2557,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             .map(|rest| {
                                 let key = crate::components::input::input_type_signal_key(rest);
                                 let raw = crate::core::reactivity::use_signal(&key, || {
-                                    crate::components::input::InputType::Text.as_str().to_string()
+                                    crate::components::input::InputType::Text
+                                        .as_str()
+                                        .to_string()
                                 })
                                 .peek();
                                 crate::components::input::InputType::parse(&raw).allows_ime()
@@ -2616,17 +2591,15 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 line_h,
                                 win_h,
                             );
-                            let compose_visual_x = (visual[0] + compose_x_in_field)
-                                .clamp(0.0, (win_w - 1.0).max(0.0));
+                            let compose_visual_x =
+                                (visual[0] + compose_x_in_field).clamp(0.0, (win_w - 1.0).max(0.0));
                             let caret_w = 2.0_f32.max(1.0 / ui_scale.max(0.001));
                             let composing = {
                                 let rest = super::ime_support::text_edit_rest(&fid_clone);
                                 rest.map(|r| {
-                                    let pk =
-                                        crate::components::input::input_preedit_signal_key(r);
-                                    let pre =
-                                        crate::core::reactivity::use_signal(&pk, String::new)
-                                            .peek();
+                                    let pk = crate::components::input::input_preedit_signal_key(r);
+                                    let pre = crate::core::reactivity::use_signal(&pk, String::new)
+                                        .peek();
                                     let active = crate::core::reactivity::use_signal(
                                         crate::components::IME_ACTIVE_SIGNAL,
                                         || false,
@@ -2846,12 +2819,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         (path, cb_resolved.0, cb_resolved.1)
                     };
                     let detail = self.click_count.max(1);
-                    let mut pev = super::pointer_events::PointerEvent::new(
-                        x,
-                        y,
-                        MouseButton::Left,
-                        detail,
-                    );
+                    let mut pev =
+                        super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
                     super::pointer_events::dispatch_pointer(
                         &path,
                         &mut pev,
@@ -2879,7 +2848,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                     "__rui_button_focus_id",
                                     String::new,
                                 )
-                                    .set(fid);
+                                .set(fid);
                             }
                             if let Some(cb) = cb_to_run {
                                 (*cb.borrow_mut())();
@@ -2902,8 +2871,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             _ => false,
                         }
                     };
-                    if should_outside_dismiss
-                        && super::portal_overlay::try_dismiss_outside_press()
+                    if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press()
                     {
                         super::runtime::request_redraw();
                     }

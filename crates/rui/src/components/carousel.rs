@@ -42,10 +42,7 @@ impl From<CarouselBuilder> for Element {
         let view_id = format!("{id}__carousel");
         reactive_view(view_id, move || {
             let i = idx.get() % n;
-            let slide = slides
-                .get(i)
-                .map(|f| f())
-                .unwrap_or_else(Element::new);
+            let slide = slides.get(i).map(|f| f()).unwrap_or_else(Element::new);
             let prev_i = idx;
             let next_i = idx;
             let prev: Element = button(format!("{id}:prev"))
