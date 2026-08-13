@@ -1,4 +1,101 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::core::tree::Element;
+
+/// 打开下拉后把某一项滚进视口（布局写出 content/viewport 后再应用，避免菜单 effect 订阅滚动信号）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollItemAlign {
+    Start,
+    Center,
+}
+
+#[derive(Clone, Debug)]
+struct PendingScrollItemAlign {
+    index: usize,
+    item_count: usize,
+    align: ScrollItemAlign,
+    tries: u8,
+}
+
+thread_local! {
+    static PENDING_SCROLL_ITEM_ALIGN: RefCell<HashMap<String, PendingScrollItemAlign>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn scroll_offset_to_center_item(
+    index: usize,
+    item_h: f32,
+    viewport_h: f32,
+    item_count: usize,
+) -> f32 {
+    let content_h = item_count as f32 * item_h;
+    let max_sy = (content_h - viewport_h).max(0.0);
+    let center = index as f32 * item_h + item_h * 0.5;
+    (center - viewport_h * 0.5).clamp(0.0, max_sy)
+}
+
+pub(crate) fn request_scroll_item_into_view(
+    rest: impl Into<String>,
+    index: usize,
+    item_count: usize,
+    align: ScrollItemAlign,
+) {
+    PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+        m.borrow_mut().insert(
+            rest.into(),
+            PendingScrollItemAlign {
+                index,
+                item_count: item_count.max(1),
+                align,
+                tries: 0,
+            },
+        );
+    });
+}
+
+pub(crate) fn cancel_scroll_item_into_view(rest: &str) {
+    PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+        m.borrow_mut().remove(rest);
+    });
+}
+
+pub(crate) fn has_pending_scroll_item_align() -> bool {
+    PENDING_SCROLL_ITEM_ALIGN.with(|m| !m.borrow().is_empty())
+}
+
+/// 用布局后的真实 `content_h` / `viewport_h` 对齐。度量未就绪时保留请求。
+pub(crate) fn apply_pending_scroll_item_into_view(
+    rest: &str,
+    viewport_h: f32,
+    content_h: f32,
+) -> bool {
+    let pending = PENDING_SCROLL_ITEM_ALIGN.with(|m| m.borrow_mut().remove(rest));
+    let Some(mut pending) = pending else {
+        return false;
+    };
+    if viewport_h <= 1.0 || content_h <= 1.0 {
+        pending.tries = pending.tries.saturating_add(1);
+        if pending.tries < 12 {
+            PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+                m.borrow_mut().insert(rest.to_string(), pending);
+            });
+        }
+        return false;
+    }
+    let item_h = content_h / pending.item_count as f32;
+    let sy = match pending.align {
+        ScrollItemAlign::Center => {
+            scroll_offset_to_center_item(pending.index, item_h, viewport_h, pending.item_count)
+        }
+        ScrollItemAlign::Start => {
+            let max_sy = (content_h - viewport_h).max(0.0);
+            (pending.index as f32 * item_h).clamp(0.0, max_sy)
+        }
+    };
+    set_scroll_offset_with_behavior(rest, 0.0, sy, true);
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ScrollAxis {
@@ -361,12 +458,13 @@ pub(crate) fn set_scroll_offset_with_behavior(
 
     let sx = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32);
     let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
-    let tx = crate::core::reactivity::use_signal(&tx_key, || sx.get());
-    let ty = crate::core::reactivity::use_signal(&ty_key, || sy.get());
+    // peek：调用方常在 tracked effect 内（Select/Combobox 菜单）。`.get()` 会把整棵菜单订到
+    // 滚动偏移/behavior，滚轮或布局一动就重建上百个 Item → 悬停闪烁。
+    let tx = crate::core::reactivity::use_signal(&tx_key, || sx.peek());
+    let ty = crate::core::reactivity::use_signal(&ty_key, || sy.peek());
     let _behavior = crate::core::reactivity::use_signal(&behavior_key, || {
         crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
-    })
-    .get();
+    });
 
     if immediate {
         sx.set_silent(target_x);
@@ -439,5 +537,56 @@ mod clamp_scroll_extent_tests {
         // Standard browser-like: stay near bottom when max shrinks.
         let (o, t) = clamp_scroll_offset_and_target(350.0, 350.0, 200.0);
         assert_eq!((o, t), (200.0, 200.0));
+    }
+}
+
+#[cfg(test)]
+mod scroll_item_align_tests {
+    use super::{
+        apply_pending_scroll_item_into_view, cancel_scroll_item_into_view, has_pending_scroll_item_align,
+        request_scroll_item_into_view, scroll_offset_to_center_item, ScrollItemAlign,
+    };
+    use crate::core::reactivity::create_root;
+    use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+
+    #[test]
+    fn year_center_uses_real_row_height_not_32px() {
+        // 1900..=2100 → 201 items; 2026 is index 126. Real Aria row ≈ 26px, not 32.
+        let sy_real = scroll_offset_to_center_item(126, 26.0, 248.0, 201);
+        let sy_wrong = scroll_offset_to_center_item(126, 32.0, 248.0, 201);
+        assert!(
+            (sy_wrong - sy_real).abs() > 500.0,
+            "32px guess is hundreds of px off, got real={sy_real} wrong={sy_wrong}"
+        );
+        let expected = 126.0 * 26.0 + 13.0 - 124.0;
+        assert!((sy_real - expected).abs() < 0.5);
+    }
+
+    #[test]
+    fn pending_align_waits_for_metrics_then_writes_offset() {
+        let _ = create_root(|| {
+            cancel_scroll_item_into_view("t-year-align");
+            request_scroll_item_into_view("t-year-align", 126, 201, ScrollItemAlign::Center);
+            assert!(has_pending_scroll_item_align());
+            assert!(!apply_pending_scroll_item_into_view("t-year-align", 0.0, 0.0));
+            assert!(has_pending_scroll_item_align());
+            let content_h = 201.0 * 26.0;
+            assert!(apply_pending_scroll_item_into_view(
+                "t-year-align",
+                248.0,
+                content_h
+            ));
+            assert!(!has_pending_scroll_item_align());
+            let sy = crate::core::reactivity::use_signal(
+                &scroll_offset_y_signal_key("t-year-align"),
+                || 0.0_f32,
+            )
+            .peek();
+            let expected = scroll_offset_to_center_item(126, 26.0, 248.0, 201);
+            assert!(
+                (sy - expected).abs() < 0.5,
+                "offset should match real row height, got {sy} expected {expected}"
+            );
+        });
     }
 }

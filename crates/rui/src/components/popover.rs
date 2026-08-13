@@ -2,6 +2,7 @@
 //!
 //! 非模态浮层面板（边框 / 圆角）。`ui!` 中 `<Popover open={…}>` 由宏编成 [`popover_panel`]。
 //! 可选 `anchor_focus_id` + `placement` 走统一 floating sync。
+//! `.strategy("fixed")`：钉在触发器首选侧，滚动不夹高度（可溢出视口）。
 //!
 //! ## 用法
 //! ```ignore
@@ -15,7 +16,9 @@ use crate::app::reactive::reactive_view;
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
-use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
+use crate::utils::popup::{
+    mark_floating, panel_block_clicks, PopupPlacement, ATTR_FLOATING_STRATEGY,
+};
 
 pub struct PopoverBuilder {
     open: Signal<bool>,
@@ -24,6 +27,8 @@ pub struct PopoverBuilder {
     z_override: Option<i32>,
     anchor_focus_id: Option<String>,
     placement: PopupPlacement,
+    /// `flip`（默认）或 `fixed`：钉在触发器首选侧，滚动不挤压高度。
+    strategy: String,
 }
 
 /// 非模态浮层面板；`open` 为 false 时为空。见模块文档。
@@ -35,6 +40,7 @@ pub fn popover_panel(open: Signal<bool>) -> PopoverBuilder {
         z_override: None,
         anchor_focus_id: None,
         placement: PopupPlacement::BottomStart,
+        strategy: String::new(),
     }
 }
 
@@ -63,6 +69,12 @@ impl PopoverBuilder {
         self.placement = p;
         self
     }
+
+    /// `fixed`：浮层钉在触发器下方/上方，尺寸不随滚动夹 `max_h`（可溢出视口）。
+    pub fn strategy(mut self, s: impl Into<String>) -> Self {
+        self.strategy = s.into();
+        self
+    }
 }
 
 impl From<PopoverBuilder> for Element {
@@ -74,6 +86,7 @@ impl From<PopoverBuilder> for Element {
             z_override,
             anchor_focus_id,
             placement,
+            strategy,
         } = builder;
         let id = id.unwrap_or_else(|| "popover".into());
         let view_id = format!("{id}__popover_view");
@@ -100,6 +113,9 @@ impl From<PopoverBuilder> for Element {
             }
             if let Some(anchor) = &anchor_focus_id {
                 mark_floating(&mut inner, &id, anchor, placement);
+                if strategy.eq_ignore_ascii_case("fixed") {
+                    inner.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
+                }
                 inner = inner.absolute();
             }
             let z = z_override.unwrap_or(oz.panel);

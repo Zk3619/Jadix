@@ -400,6 +400,8 @@ pub struct ButtonBuilder {
     container: BoxBuilder,
     content: Vec<Element>,
     text_style: TextNodeConfig,
+    /// `Some` → 覆盖变体字色（含 hover 同步）；Calendar outside days 用。
+    explicit_text_color: Option<[u8; 4]>,
 }
 
 static NEXT_BUTTON_ID: AtomicUsize = AtomicUsize::new(1);
@@ -512,6 +514,7 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
             leading_scale: None,
             font_family: None,
         },
+        explicit_text_color: None,
     }
 }
 
@@ -557,6 +560,7 @@ impl ButtonBuilder {
 
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.color = color;
+        self.explicit_text_color = Some(color);
         self
     }
 
@@ -713,8 +717,9 @@ impl From<ButtonBuilder> for Element {
                 .py(builder.size.padding_v());
         }
 
-        let (mut bg, text_color, border) =
+        let (mut bg, variant_text_color, border) =
             button_chrome_for_variant(builder.variant.as_paint_key(), t);
+        let text_color = builder.explicit_text_color.unwrap_or(variant_text_color);
         if builder.disabled {
             bg[3] *= 0.5;
         }
@@ -751,6 +756,7 @@ impl From<ButtonBuilder> for Element {
             variant: builder.variant.as_paint_key().to_string(),
             disabled: builder.disabled,
             hover_easing: builder.hover_easing.clone(),
+            text_color: builder.explicit_text_color,
         });
 
         for mut child in builder.content {
@@ -865,7 +871,8 @@ fn paint_button_root_from_hover(
 ) {
     let hover_t = hover_t_for_id(focus_id, &desc.hover_easing);
     let t = if desc.disabled { 0.0 } else { hover_t };
-    let (mut bg, text_color, border) = button_chrome_for_variant(&desc.variant, t);
+    let (mut bg, variant_text_color, border) = button_chrome_for_variant(&desc.variant, t);
+    let text_color = desc.text_color.unwrap_or(variant_text_color);
     if desc.disabled {
         bg[3] *= 0.5;
     }
@@ -1082,7 +1089,8 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
         return LayoutStatus::Clean;
     }
     desc.variant = variant.to_string();
-    let (bg, text_color, border) = button_chrome_for_variant(variant, 0.0);
+    let (bg, variant_text_color, border) = button_chrome_for_variant(variant, 0.0);
+    let text_color = desc.text_color.unwrap_or(variant_text_color);
     el.style.bg_color = bg;
     match border {
         Some(b) => {
@@ -1194,6 +1202,30 @@ mod chrome_tests {
         assert_eq!(hex(rest), "#F5F5F5");
         assert_eq!(hex(hover), "#E5E5E5");
         assert!(luminance(hover) < luminance(rest));
+    }
+
+    #[test]
+    fn explicit_text_color_overrides_ghost_chrome() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::Element;
+        use super::button;
+        let muted = parse_text_color("muted-foreground");
+        let (_h, el) = create_root(|| -> Element {
+            button("t-btn-muted")
+                .variant("ghost")
+                .text("26")
+                .text_color(muted)
+                .into()
+        });
+        let fg = el
+            .children
+            .iter()
+            .find_map(|c| c.text.as_ref().map(|_| c.text_style.color));
+        assert_eq!(fg, Some(muted));
+        assert_eq!(
+            el.button_hover_paint.as_ref().and_then(|p| p.text_color),
+            Some(muted)
+        );
     }
 
     #[test]

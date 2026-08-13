@@ -21,6 +21,11 @@
 - Chart 点/命中：dot 改为 path 圆画在折线之上（中心对齐顶点）；折线/面积不再按 datum[0] 整组变淡；`HitPathEntry.bounds` 用可视盒（ScrollArea 内饼/环/tooltip 可点）；radial_line 命中加距离上限，不再抢走 radial_bar。
 - Chart 交互：选中点仅 +1px；再点同一 datum / 点空白取消选中；tooltip 随选中编进同一 compile 树（复用 `tooltip_bubble`，百分比定位，不再把底画进被拉伸的 path 贴图）。靠近右/上缘时左右/上下翻转并夹 `max_w`，避免 `overflow: hidden` 裁切。预设 Line/Area/Bar/Pie 默认 `.tooltip(true)`。
 - Chart 点：viewBox→叶宽非等比时，闭合正圆按 `min(sx,sy)` 保半径，避免折线/面积选中点被压成椭圆。
+- WP-3.3：独立 [`Calendar`]（`caption_layout` label/dropdown，ISO `YYYY-MM-DD`，方向键）；Date/TimePicker 复用并补 Enter/Esc；ColorPicker HSV+色相/透明度+hex/rgb/hsl（对照 Reader）；Command ↑↓ 高亮 + Enter；RSX `captionLayout` / `valueSignal` / `showAlpha` 宏别名。
+- Calendar / DatePicker `caption_layout=dropdown` 与 `kind=month` 年月选择复用 [`Select`]（Aria Month/Year picker）；Date/Time/Color 浮层改为 `floating_portal_anchor` + `scroll:` 视口视觉锚点，滚动不再错位。
+- 浮层嵌套：Popover 内 Menu（DatePicker caption Select）可叠层；关闭 Popover 一并关掉其上 Select。`max_h` 随视口可回升；DatePicker 浮层 `w-fit`（`min_w=0`）+ Calendar `min_w=17.5rem`。
+- Popover / Date·Time·Color `strategy=fixed`：钉在触发器下方，滚动不挤压高度。Select `scroll_selected`（`none`/`start`/`center`，默认 none）；打开后用布局真实 `content_h` 把当前项滚到视口中线（不再在菜单 effect 里订滚动信号，避免整树重建/悬停闪烁）。Calendar 六周等分列宽；非本月日 muted 可点并切月。
+- TimePicker：三个 Combobox 选时分秒（限 0–23 / 0–59）；`datetime-local` 日历下 `Separator` + 时间行。行内 Calendar 下拉可重复打开。DateTime：日历与 `Separator` 间距 `pt 1rem`；HMS→val / val→HMS 分向同步；浮层用 `isolate_reads`（勿 `untrack`，否则 Calendar/Combobox 无法注册 anchor，浮层空壳）。Combobox/Select **实例根** `with_child_owner`（Trigger+下拉同属该实例 owner；`#[component]` 不会自动开 scope）。Combobox 打开时 `active`/滚动对齐当前 value（如 `"09"` → index 9）。Calendar 非本月日 `muted-foreground`；日网格占位固定 `17rem` + `overflow:hidden`。
 - Chart 交互按实例隔离：未传 `selected_signal` 时每图自带选中/pin 信号（不再共用 `chart_pin`）；饼/环选中改为 TanStack `radialArc` 式外半径加大 + 同色描边，不平移扇区。
 - WP-2.5：`throw_resource_error`；Resource `from_signal` / `set_error`；`produce` 切片契约测；Resource Err→EB e2e 测。
 - WP-2.9：Builder `.border_box()`；utility `box-border` / `box-content`；命中/裁剪库测；测宽叶审计见 `docs/box_model.md` 附录 A。

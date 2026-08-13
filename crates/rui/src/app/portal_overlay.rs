@@ -3,8 +3,9 @@
 //! 与 [`crate::app::navigator`]（页面栈）分离。常驻 UI 用 [`OverlayMode::Pinned`]，不进栈。
 //! 组件在构建时调用 [`portal_sync`]；内容仍用树内 `rui_portal` 提升。
 //!
-//! **互斥**：新打开的 Menu / Popover / Tooltip 会关掉栈内其它同类；打开 Modal 也会关掉这些
-//! 临时表面。Modal 之间仍可叠层。
+//! **互斥**：新 Popover 关掉栈内 Menu / Popover / Tooltip；新 Menu 关掉其它 Menu / Tooltip
+//!（**不**关 Popover，以便 DatePicker 内嵌 Select）。打开 Modal 会关掉这些临时表面。
+//! Modal 之间仍可叠层。
 
 use std::cell::RefCell;
 
@@ -60,31 +61,17 @@ fn z_for_index(i: usize) -> OverlayZ {
     }
 }
 
-/// Drop layers whose `open` is already false. If a Modal is pruned this way, also
-/// remove exclusive surfaces (Menu/Popover/Tooltip) and return their signals so the
+/// Drop the first already-closed layer and everything stacked above it (nested
+/// Select inside a closed DatePicker / Dialog). Return still-open signals so the
 /// caller can `try_set(false)` after releasing the stack borrow.
 fn prune_closed(stack: &mut Vec<OverlayLayer>) -> Vec<Signal<bool>> {
     let mut to_close = Vec::new();
-    let mut closed_modal = false;
-    stack.retain(|l| {
-        if l.open.peek() {
-            true
-        } else {
-            if matches!(l.kind, OverlayKind::Modal) {
-                closed_modal = true;
-            }
-            false
-        }
-    });
-    if closed_modal {
-        stack.retain(|l| {
-            if is_exclusive_surface(l.kind) {
+    if let Some(pos) = stack.iter().position(|l| !l.open.peek()) {
+        for l in stack.drain(pos..) {
+            if l.open.peek() {
                 to_close.push(l.open);
-                false
-            } else {
-                true
             }
-        });
+        }
     }
     to_close
 }
@@ -100,13 +87,23 @@ fn is_exclusive_surface(kind: OverlayKind) -> bool {
 }
 
 /// Whether `existing` should close when a new overlay of `incoming` is pushed.
+///
+/// Popover keeps nested Menu (Select / Combobox inside DatePicker). Sibling Menus stay
+/// exclusive; a new Popover still dismisses an open Menu.
 fn should_dismiss_for_incoming(existing: OverlayKind, incoming: OverlayKind) -> bool {
     match existing {
-        // Modals stay until Esc / underlay / explicit close.
         OverlayKind::Modal => false,
-        OverlayKind::Menu | OverlayKind::Popover | OverlayKind::Tooltip => {
-            // Another exclusive surface, or a modal, takes over.
+        OverlayKind::Tooltip => {
             is_exclusive_surface(incoming) || matches!(incoming, OverlayKind::Modal)
+        }
+        OverlayKind::Menu => {
+            matches!(
+                incoming,
+                OverlayKind::Menu | OverlayKind::Popover | OverlayKind::Modal
+            )
+        }
+        OverlayKind::Popover => {
+            matches!(incoming, OverlayKind::Popover | OverlayKind::Modal)
         }
     }
 }
@@ -164,10 +161,15 @@ pub fn portal_sync(
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
                 } else {
-                    // Closing: drop this id. Closing a Modal (by kind arg — the layer may
-                    // already have been prune_closed after `open.set(false)`) must also
-                    // dismiss nested exclusive surfaces so Select open state cannot stick.
-                    stack.retain(|l| l.id != id);
+                    // Closing: drop this id and anything stacked above it (nested Select
+                    // inside DatePicker). Closing a Modal also clears leftover exclusives.
+                    if let Some(pos) = stack.iter().position(|l| l.id == id) {
+                        for l in stack.drain(pos..) {
+                            if l.id != id {
+                                to_close.push(l.open);
+                            }
+                        }
+                    }
                     if matches!(kind, OverlayKind::Modal) {
                         stack.retain(|l| {
                             if is_exclusive_surface(l.kind) {
@@ -562,8 +564,37 @@ mod tests {
         assert_eq!(depth(), 1);
 
         assert!(portal_sync("menu-b", menu_b, OverlayKind::Menu, OverlayMode::Stacked).is_some());
-        assert!(!pop.peek(), "menu must dismiss prior popover");
+        assert!(
+            pop.peek(),
+            "Select/Menu must stack inside Popover (DatePicker caption)"
+        );
         assert!(menu_b.peek());
+        assert_eq!(depth(), 2);
+    }
+
+    #[test]
+    fn closing_popover_dismisses_nested_menu() {
+        clear();
+        let pop = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync("pop", pop, OverlayKind::Popover, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(depth(), 2);
+        pop.set(false);
+        assert!(portal_sync("pop", pop, OverlayKind::Popover, OverlayMode::Stacked).is_none());
+        assert!(!menu.peek(), "nested Select must close with DatePicker");
+        assert_eq!(depth(), 0);
+    }
+
+    #[test]
+    fn sibling_menus_remain_exclusive() {
+        clear();
+        let a = Signal::new(true);
+        let b = Signal::new(true);
+        assert!(portal_sync("a", a, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("b", b, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert!(!a.peek());
+        assert!(b.peek());
         assert_eq!(depth(), 1);
     }
 

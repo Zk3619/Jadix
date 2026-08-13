@@ -21,7 +21,7 @@
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
-//! - 颜色 / 日期选择器：[`color_picker`] / [`date_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
+//! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
 //!   页面栈宿主在 [`crate::app::navigator::navigation_host`]（非本层、非 NavigationMenu）。
 #![allow(non_snake_case)]
@@ -31,6 +31,7 @@ pub(crate) mod internal;
 
 pub mod base;
 pub mod button;
+pub mod calendar;
 pub mod card;
 pub mod carousel;
 pub mod chart;
@@ -78,6 +79,10 @@ pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,
     ButtonProps,
 };
+pub use calendar::{
+    calendar, days_in_month, format_long_date, format_month_year, format_ymd, parse_ymd, today_ymd,
+    weekday, Calendar, CalendarBuilder, CalendarCaption, CalendarProps,
+};
 pub use card::{
     Card, CardAction, CardActionProps, CardContent, CardContentProps, CardDescription,
     CardDescriptionProps, CardFooter, CardFooterProps, CardHeader, CardHeaderProps, CardProps,
@@ -95,7 +100,10 @@ pub use chart::{
     PieChartBuilder, PieChartProps, SceneLayer,
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
-pub use color_picker::{color_picker, ColorPicker, ColorPickerBuilder, ColorPickerProps};
+pub use color_picker::{
+    color_picker, format_color, parse_color_str, ColorFormat, ColorPicker, ColorPickerBuilder,
+    ColorPickerProps, ColorPickerVariant, Rgba,
+};
 pub use combobox::{
     combobox, combobox_content, combobox_scope, use_combobox, Combobox, ComboboxBuilder,
     ComboboxContentOpts, ComboboxCtx, ComboboxEmpty, ComboboxEmptyProps, ComboboxGroup,
@@ -104,7 +112,7 @@ pub use combobox::{
     ComboboxListProps, ComboboxProps, ComboboxSeparator, ComboboxSeparatorProps,
     ComboboxVisibleItem,
 };
-pub use command::{command, CommandAction, CommandBuilder};
+pub use command::{command, Command, CommandAction, CommandBuilder, CommandProps};
 pub use context_menu::{context_menu, ContextMenuBuilder, ContextMenuItem};
 pub use date_picker::{
     date_picker, time_picker, DatePicker, DatePickerBuilder, DatePickerKind, DatePickerProps,
@@ -159,6 +167,7 @@ pub use scrollbar::{
 pub use select::{
     select, select_content, select_scope, use_select, Select, SelectBuilder, SelectContentOpts,
     SelectCtx, SelectGroup, SelectGroupData, SelectGroupProps, SelectItem, SelectItemAlign,
+    SelectScrollSelected,
     SelectItemData, SelectItemProps, SelectLabel, SelectLabelProps, SelectProps, SelectSeparator,
     SelectSeparatorProps, SelectTrigger, SelectTriggerProps, SelectValue, SelectValueProps,
 };

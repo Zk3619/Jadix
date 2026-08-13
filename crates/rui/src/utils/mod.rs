@@ -25,12 +25,14 @@ pub use instance_id::resolve_instance_id;
 pub use lucide::{apply_bound_icon_name, lucide_glyph};
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
-    disarm_underlay_close, mark_floating, mark_portal, mark_portal_mount, panel_block_clicks,
-    path_hits_floating_trigger, portal_panel, portal_panel_mount, swallow_clicks,
-    sync_floating_placement, underlay_close_is_armed, underlay_close_on_click, PopupPlacement,
+    disarm_underlay_close, floating_portal_anchor, mark_floating, mark_portal, mark_portal_mount,
+    panel_block_clicks, path_hits_floating_trigger, portal_panel, portal_panel_mount,
+    swallow_clicks,
+    sync_floating_placement, underlay_close_is_armed, underlay_close_on_click,
+    visit_floating_panels, PopupPlacement,
     ATTR_FLOATING, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
-    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_TRIGGER,
-    ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
+    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_STRATEGY,
+    ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
 };
 pub use roving::{roving_edge, roving_move};
 pub use text_field::{

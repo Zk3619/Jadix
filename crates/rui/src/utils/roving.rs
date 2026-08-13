@@ -71,6 +71,9 @@ pub fn roving_move_skipping(
 }
 
 /// Move keyboard focus ring to `focus_id` (`focus-visible` on).
+///
+/// For pointer / programmatic open (DatePicker popover), use [`focus_id_only`] so the
+/// ring only appears after Tab, matching [`crate::style::focus_ring`].
 pub fn focus_by_id(focus_id: impl Into<String>) {
     let id = focus_id.into();
     if id.is_empty() {
@@ -78,6 +81,15 @@ pub fn focus_by_id(focus_id: impl Into<String>) {
     }
     use_signal("__rui_button_focus_id", String::new).set(id);
     use_signal("__rui_focus_visible", || false).set(true);
+}
+
+/// Move focus without enabling the keyboard focus ring.
+pub fn focus_id_only(focus_id: impl Into<String>) {
+    let id = focus_id.into();
+    if id.is_empty() {
+        return;
+    }
+    use_signal("__rui_button_focus_id", String::new).set(id);
 }
 
 /// Axis for [`attach_focus_roving`] / [`focus_roving_key`].
@@ -212,6 +224,19 @@ mod tests {
         let n = 3;
         assert_eq!(roving_move(n, 2, 1), Some(0));
         assert_eq!(roving_move(n, 0, -1), Some(2));
+    }
+
+    #[test]
+    fn focus_id_only_does_not_set_focus_visible() {
+        use_signal("__rui_focus_visible", || false).set(false);
+        focus_id_only("cal");
+        assert_eq!(
+            use_signal("__rui_button_focus_id", String::new).peek(),
+            "cal"
+        );
+        assert!(!use_signal("__rui_focus_visible", || false).peek());
+        focus_by_id("cal2");
+        assert!(use_signal("__rui_focus_visible", || false).peek());
     }
 
     #[test]

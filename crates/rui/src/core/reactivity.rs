@@ -1337,6 +1337,40 @@ pub fn provide_context<T: 'static>(ctx: Context<T>, value: T) {
     });
 }
 
+struct OwnerRestore(Option<OwnerId>);
+
+impl Drop for OwnerRestore {
+    fn drop(&mut self) {
+        let prev = self.0;
+        let _ = RUNTIME.try_with(|rt_rc| {
+            rt_rc.borrow().current_owner.replace(prev);
+        });
+    }
+}
+
+/// Run `f` under a **component-instance owner**, then restore the previous current owner.
+///
+/// RUI `#[component]` / Builder `From` 只是普通函数调用，**不会**像 Solid 那样每实例自动开
+/// rendering scope。因此带 [`provide_context`] 的复合控件（Combobox / Select / RadioGroup）
+/// 必须在实例根调用本函数：Trigger、下拉 `reactive_anchor`/`create_effect`、Item 的
+/// `use_context` 都挂在这棵子树上，下拉属于该实例，而不是父级 DatePicker 浮层。
+///
+/// 子 owner 留在树上，随父级 dispose。若省略，同父级上多次 `provide_context` 会覆盖同一
+/// [`Context`] id，表现为三个 TimePicker Combobox 共用最后一个的菜单。
+pub fn with_child_owner<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let prev = RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let parent = ensure_owner(&rt);
+        let child = create_child_owner(&rt, parent);
+        rt.current_owner.replace(Some(child))
+    });
+    let _restore = OwnerRestore(prev);
+    f()
+}
+
 pub fn use_context<T: Clone + 'static>(ctx: Context<T>) -> Option<T> {
     RUNTIME.with(|rt_rc| {
         let rt = rt_rc.borrow();
@@ -2054,6 +2088,36 @@ mod tests {
             use_context(ctx)
         });
         assert_eq!(value.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn sibling_context_isolated_with_child_owner() {
+        let ctx = create_context::<String>();
+        let (_root, (a, b)) = create_root(|| {
+            let seen_a = Rc::new(RefCell::new(None::<String>));
+            let seen_b = Rc::new(RefCell::new(None::<String>));
+            with_child_owner({
+                let seen_a = seen_a.clone();
+                move || {
+                    provide_context(ctx, "hour".to_string());
+                    create_effect(move || {
+                        *seen_a.borrow_mut() = use_context(ctx);
+                    });
+                }
+            });
+            with_child_owner({
+                let seen_b = seen_b.clone();
+                move || {
+                    provide_context(ctx, "second".to_string());
+                    create_effect(move || {
+                        *seen_b.borrow_mut() = use_context(ctx);
+                    });
+                }
+            });
+            (seen_a, seen_b)
+        });
+        assert_eq!(a.borrow().as_deref(), Some("hour"));
+        assert_eq!(b.borrow().as_deref(), Some("second"));
     }
 
     #[test]

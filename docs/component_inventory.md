@@ -71,11 +71,12 @@
 | RadioGroup | `radio_group` / `RadioGroup` | **verified** | 必填 `group_id` | CV.1 走查；reactive sync lib |
 | Slider | `slider` / `Slider` | **verified** | 必填实例键 | CV.1 走查；reactive sync lib |
 | Form | `form_provider` / `form_field` / `form_validate` / … | **experimental** | provider **必填实例键**（错误 map 命名空间） | **非独立产品组件**；Context 校验 helpers；降出 §5.2.1；加深见 WP-3.9 |
-| Select | `select` / `Select` / `SelectItem` / `SelectGroup` | **verified** | 必填实例键；**锚点用 focus_id**；默认 `match_trigger`；可 `menu_width`/`menu_height`/`min_height`/`max_height` | CV.1 完整交互走查；smoke#7；`mark_floating`+sync；项左对齐可覆盖 |
+| Select | `select` / `Select` / `SelectItem` / `SelectGroup` | **verified** | 必填实例键；**锚点用 focus_id**；默认 `match_trigger`；可 `menu_width`/`menu_height`/`min_height`/`max_height`；`scroll_selected`=`none\|start\|center`（默认 none） | CV.1 完整交互走查；smoke#7；`mark_floating`+sync；项左对齐可覆盖；打开时可滚到选中项 |
 | Combobox | `combobox` / `ComboboxBuilder` | **verified** | 必填实例键；浮层锚点 | CV.1 完整交互走查；smoke#6 |
-| DatePicker | `date_picker` / `DatePicker` | **experimental** | 必填实例键 | 不在 §5.2.1；本地化未承诺 |
-| TimePicker | `time_picker` / `TimePicker` | **experimental** | 必填实例键 | 同上 |
-| ColorPicker | `color_picker` / `ColorPicker` | **experimental** | 必填实例键 | 同上 |
+| DatePicker | `date_picker` / `DatePicker` | **experimental** | 必填实例键 | WP-3.3：浮层内嵌 [`Calendar`]；ISO `YYYY-MM-DD` / `YYYY-MM-DDTHH:MM:SS`；`datetime-local` 日历下 `Separator` + 时分秒 Combobox；年月下拉复用 [`Select`]；Enter/Esc；本地化未承诺 |
+| TimePicker | `time_picker` / `TimePicker` | **experimental** | 必填实例键 | WP-3.3：三个 Combobox 选时/分/秒；`HH:MM:SS`（兼容 `HH:MM`）；输入限 0–23 / 0–59 |
+| ColorPicker | `color_picker` / `ColorPicker` | **experimental** | 必填实例键 | WP-3.3：HSV 面积+色相/透明度；`hex`/`rgb`/`hsl`(+alpha)；`variant=inline\|default`；对照 Reader color-picker |
+| Calendar | `calendar` / `Calendar` | **experimental** | 必填实例键 | WP-3.3：从 DatePicker 抽出；`caption_layout=label\|dropdown`（dropdown 复用 [`Select`]）；ISO `YYYY-MM-DD`；键盘日/周/月 |
 | （能力）FileDialog | `utils::file_dialog` | **experimental** | n/a | **非** `components/` 导出；平台差异 |
 
 ### 1.3 浮层 / 反馈（Gallery `overlays`）
@@ -89,7 +90,7 @@
 | Popover | `popover_panel` / `PopoverBuilder` | **experimental** | **可选** `.id()`；**锚点用 focus_id** | 低层面板；可不进 prelude |
 | Dropdown | `dropdown` / `DropdownBuilder` | **experimental** | 必填实例键；可选 `anchor_focus_id` | 暂仅 Builder |
 | ContextMenu | `context_menu` / `ContextMenuBuilder` | **experimental** | 必填实例键 | |
-| Command | `command` / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | 搜索算法实验面 |
+| Command | `command` / `Command` / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | WP-3.3：↑↓ 高亮 + Enter 执行 + Esc 关；RSX `<Command>` |
 | （私有）text_edit | `internal::text_edit` | — | 内部 | Input/Textarea chrome；**禁止**产品面 / prelude |
 
 ### 1.4 数据（Gallery `data`）
@@ -158,7 +159,7 @@
 | **Breadcrumb** | 导航 | P1 | 展示型不要求 | 路径导航；与 Navbar / NavigationMenu 分工 |
 | **Pagination** | 数据 | P1 | 可选；受控页码 Signal | 常跟 Table；先控页 API，虚拟滚动另议 |
 | **HoverCard** | 浮层 / 反馈 | P2 | 可选；**锚点用 focus_id** | 悬停卡片；复用 popover placement + 延时 |
-| **Calendar** | 表单 | P2 | 必填实例键 | 月网格可从 DatePicker **抽出**共享；对外可独立 |
+| **Calendar** | 表单 | — | 必填实例键 | **已落地 experimental**（WP-3.3）；见 §1.2 |
 | **Empty** | 数据 / 基础 | P2 | 展示型不要求 | 空状态插画槽 + 标题/描述/CTA |
 | **Kbd** | 基础 / 文本 | P2 | 展示型不要求 | 快捷键胶囊；纯展示 |
 | **ButtonGroup** | 基础 | P2 | 展示型不要求 | Button 水平/垂直组；圆角合并 |
@@ -321,7 +322,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`button`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
+`button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

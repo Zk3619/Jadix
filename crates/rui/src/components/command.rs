@@ -1,6 +1,19 @@
 //! # Command
 //!
-//! 命令面板 MVP：过滤输入 + 动作列表；Enter 执行首个匹配项，Esc / 遮罩关闭。
+//! 命令面板：过滤输入 + 动作列表。对照 ShadCN Command / cmdk：**类型即搜**，
+//! ↑↓ 移动高亮，Enter 执行，Esc 关闭（portal 栈顶）。
+//!
+//! ## 用法
+//! ```ignore
+//! // A · RSX（↑↓ 高亮 · Enter 执行 · Esc 关）
+//! ui! {
+//!     <Command id="pal" open={open_sig} placeholder="Type a command…" actions={actions} />
+//! }
+//! // B · Builder
+//! command("pal")
+//!     .open_signal(open_sig)
+//!     .action(CommandAction::new("ping", "Ping", || log::info!("ping")))
+//! ```
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_view;
@@ -12,6 +25,8 @@ use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use crate::tokens;
 use crate::utils::popup::{panel_block_clicks, portal_panel, underlay_close_on_click};
+use crate::utils::roving::{roving_edge, roving_move};
+use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
 /// 一条可过滤命令。
@@ -30,6 +45,30 @@ impl CommandAction {
             run: std::rc::Rc::new(run),
         }
     }
+}
+
+/// RSX `<Command>`。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn Command(
+    id: String,
+    open: Option<Signal<bool>>,
+    placeholder: Option<String>,
+    actions: Option<Vec<CommandAction>>,
+    children: Option<Element>,
+) -> Element {
+    let _ = children;
+    let mut b = command(&id);
+    if let Some(s) = open {
+        b = b.open_signal(s);
+    }
+    if let Some(p) = placeholder {
+        b = b.placeholder(p);
+    }
+    if let Some(a) = actions {
+        b = b.actions(a);
+    }
+    b.into()
 }
 
 pub struct CommandBuilder {
@@ -76,8 +115,10 @@ impl From<CommandBuilder> for Element {
             actions,
             placeholder,
         } = builder;
+        let id = crate::utils::resolve_instance_id(id, "command");
         let open = open.unwrap_or_else(|| use_signal(format!("{id}__cmd_open").as_str(), || false));
         let input_id = format!("{id}__filter");
+        let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize);
         let view_id = format!("{id}__cmd_view");
 
         reactive_view(view_id, move || {
@@ -96,21 +137,63 @@ impl From<CommandBuilder> for Element {
                 .filter(|a| query.is_empty() || a.label.to_ascii_lowercase().contains(&query))
                 .cloned()
                 .collect();
+            let n = filtered.len();
+            if n == 0 {
+                active.set(0);
+            } else if active.peek() >= n {
+                active.set(n - 1);
+            }
+            let hi = active.get().min(n.saturating_sub(1));
 
             let open_esc = open;
+            let active_k = active;
+            let filtered_k = filtered.clone();
             let mut filter: Element = input(&input_id).placeholder(placeholder.as_str()).into();
-            let first = filtered.first().cloned();
             filter = filter.on_key_down(move |ev| {
-                if matches!(ev.logical_key, Key::Named(NamedKey::Escape)) {
-                    open_esc.set(false);
-                    return true;
-                }
-                if matches!(ev.logical_key, Key::Named(NamedKey::Enter)) {
-                    if let Some(a) = &first {
-                        (a.run)();
+                match &ev.logical_key {
+                    Key::Named(NamedKey::Escape) => {
                         open_esc.set(false);
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .set(String::new());
+                        return true;
                     }
-                    return true;
+                    Key::Named(NamedKey::ArrowDown) => {
+                        if let Some(next) = roving_move(filtered_k.len(), active_k.peek(), 1) {
+                            active_k.set(next);
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        if let Some(next) = roving_move(filtered_k.len(), active_k.peek(), -1) {
+                            active_k.set(next);
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::Home) => {
+                        if let Some(i) = roving_edge(filtered_k.len(), false) {
+                            active_k.set(i);
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::End) => {
+                        if let Some(i) = roving_edge(filtered_k.len(), true) {
+                            active_k.set(i);
+                        }
+                        return true;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if let Some(a) = filtered_k.get(active_k.peek()) {
+                            (a.run)();
+                            open_esc.set(false);
+                            crate::core::reactivity::use_signal(
+                                "__rui_button_focus_id",
+                                String::new,
+                            )
+                            .set(String::new());
+                        }
+                        return true;
+                    }
+                    _ => {}
                 }
                 false
             });
@@ -119,14 +202,18 @@ impl From<CommandBuilder> for Element {
             for (i, action) in filtered.iter().enumerate() {
                 let run = action.run.clone();
                 let o_sig = open;
+                let a_sig = active;
                 let bid = format!("{id}:act{i}");
                 let row: Element = button(&bid)
-                    .variant("ghost")
+                    .variant(if i == hi { "secondary" } else { "ghost" })
                     .size("sm")
                     .w("100%")
                     .on_click(move || {
+                        a_sig.set(i);
                         run();
                         o_sig.set(false);
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .set(String::new());
                     })
                     .text(action.label.clone())
                     .into();
@@ -159,5 +246,17 @@ impl From<CommandBuilder> for Element {
             root = root.child(portal_panel(panel_block_clicks(panel, oz.panel), oz.panel));
             root.into()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_action_holds_label() {
+        let a = CommandAction::new("ping", "Ping host", || {});
+        assert_eq!(a.id, "ping");
+        assert_eq!(a.label, "Ping host");
     }
 }

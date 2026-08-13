@@ -18,6 +18,10 @@
 | 裸 `{id}` | Button、Checkbox、Switch、Toggle |
 | `{id}:trigger` / `{id}:opt:{n}` | Select 触发器与选项 |
 | `{id}__opt{n}` | Combobox 选项（触发器为 `input:{id}`） |
+| `{id}:trigger` / `{id}__grid__cal_focus` | DatePicker / ColorPicker 触发器；打开后日历网格 |
+| `input:{id}__h` / `__m` / `__s` | TimePicker 时/分/秒 Combobox |
+| `{id}__cal_focus` | 独立 [`Calendar`](../crates/rui/src/components/calendar.rs) |
+| `{id}__filter` / `{id}:act{n}` | Command 过滤框与动作行 |
 | `{menubar}:{section}:trigger` / `:item{n}` | Menubar |
 | `{id}__ctx_trigger` / `{id}__item{n}` | ContextMenu |
 | `tabstrip:{id}` | Tabs 无头条带 |
@@ -39,7 +43,7 @@ Gallery / 应用应保证上述 id **页面内唯一**；Tab 顺序 = 树 DFS �
 
 1. 顶层 portal / overlay 登记在 [`portal_overlay`](../crates/rui/src/app/portal_overlay.rs) Esc 栈。
 2. Escape **只关闭最顶层**（`try_close_top`）；不穿透到下层对话框，除非顶层已关闭。
-3. Combobox / Select / ContextMenu / Popover / Dialog / Menubar 菜单必须在打开时 `portal_sync` push、关闭时随 `open=false` pop。
+3. Combobox / Select / ContextMenu / Popover / Dialog / Menubar / DatePicker / TimePicker / ColorPicker / Command 必须在打开时 `portal_sync` push、关闭时随 `open=false` pop。Popover 内 Menu（DatePicker 年月 Select）叠层；Esc 先关顶层 Select。
 4. 库测：`portal_overlay::push_two_esc_closes_top_only`、`three_layers_esc_closes_top_only_each_time`。
 
 ## 列表 / 菜单 Roving
@@ -53,6 +57,11 @@ Gallery / 应用应保证上述 id **页面内唯一**；Tab 顺序 = 树 DFS �
 | TabsList / 单选 ToggleGroup | ←→/↑↓ / Home / End **只移焦点环**；Enter / Space / 点击才改选中；TabsList `required` 禁止空选 |
 | NavigationMenu | 顶栏芯片 ←→ 移焦点环；↓ 进入下拉首链；面板内 ↑↓；Esc 回触发器 |
 | Sidebar | 槽位内可聚焦控件 ↑↓ / Home / End 移焦点环（`attach_focus_roving`） |
+| Calendar | ←→ 日；↑↓ 周；Home/End 周首尾；PageUp/PageDown 月；Enter/Space 选定；dropdown 年月为 Select（Esc 关 Select 菜单） |
+| DatePicker | 触发器 Enter/Space 开合；Esc 关浮层；打开后焦点进 Calendar（同上） |
+| TimePicker | 三个 Combobox：输入过滤 + ↑↓ 选项；Esc 关 Combobox 菜单 |
+| ColorPicker | 触发器 Enter/Space 开合、Esc 关；HSV 面积 ←→ 饱和度 ↑↓ 明度；色相/透明度滑块 ←→（Shift ×10） |
+| Command | 过滤框 ↑↓ / Home / End 高亮；Enter 执行并关；Esc 关 |
 
 Helpers：[`roving_move`](../crates/rui/src/utils/roving.rs) / [`roving_edge`](../crates/rui/src/utils/roving.rs) / `roving_move_skipping`。
 

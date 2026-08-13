@@ -47,7 +47,7 @@
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -321,25 +321,27 @@ pub fn radio_group_scope(
     let default_value = default_value.into();
     let value =
         value.unwrap_or_else(|| use_signal(format!("{id}__radio").as_str(), || default_value));
-    provide_context(
-        radio_group_context(),
-        RadioGroupCtx {
-            id: id.clone(),
-            value,
-            disabled,
-        },
-    );
-    let kids = take_packed(body());
-    let mut root: Element = vstack()
-        .gap("0.5rem")
-        .w("100%")
-        .min_w(0.0)
-        .children(kids)
-        .into();
-    root = root.accesskit_role("radiogroup");
-    root.attrs.insert("accesskit_id".to_string(), id.clone());
-    root.template_id = Some(id);
-    root
+    with_child_owner(move || {
+        provide_context(
+            radio_group_context(),
+            RadioGroupCtx {
+                id: id.clone(),
+                value,
+                disabled,
+            },
+        );
+        let kids = take_packed(body());
+        let mut root: Element = vstack()
+            .gap("0.5rem")
+            .w("100%")
+            .min_w(0.0)
+            .children(kids)
+            .into();
+        root = root.accesskit_role("radiogroup");
+        root.attrs.insert("accesskit_id".to_string(), id.clone());
+        root.template_id = Some(id);
+        root
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -495,38 +497,40 @@ impl From<RadioGroupBuilder> for Element {
             use_signal(format!("{id}__radio").as_str(), || default_value.clone())
         });
 
-        provide_context(
-            radio_group_context(),
-            RadioGroupCtx {
-                id: id.clone(),
-                value: selected,
-                disabled,
-            },
-        );
+        with_child_owner(move || {
+            provide_context(
+                radio_group_context(),
+                RadioGroupCtx {
+                    id: id.clone(),
+                    value: selected,
+                    disabled,
+                },
+            );
 
-        let mut items = Vec::with_capacity(options.len() + extra.len());
-        for (value, label_text) in options {
-            let caption = Element::new().text(label_text);
-            items.push(build_radio_item(
-                &id,
-                selected,
-                &value,
-                vec![caption],
-                disabled,
-            ));
-        }
-        items.extend(extra);
+            let mut items = Vec::with_capacity(options.len() + extra.len());
+            for (value, label_text) in options {
+                let caption = Element::new().text(label_text);
+                items.push(build_radio_item(
+                    &id,
+                    selected,
+                    &value,
+                    vec![caption],
+                    disabled,
+                ));
+            }
+            items.extend(extra);
 
-        let mut root: Element = vstack()
-            .gap("0.5rem")
-            .w("100%")
-            .min_w(0.0)
-            .children(items)
-            .into();
-        root = root.accesskit_role("radiogroup");
-        root.attrs.insert("accesskit_id".to_string(), id.clone());
-        root.template_id = Some(id);
-        root
+            let mut root: Element = vstack()
+                .gap("0.5rem")
+                .w("100%")
+                .min_w(0.0)
+                .children(items)
+                .into();
+            root = root.accesskit_role("radiogroup");
+            root.attrs.insert("accesskit_id".to_string(), id.clone());
+            root.template_id = Some(id);
+            root
+        })
     }
 }
 

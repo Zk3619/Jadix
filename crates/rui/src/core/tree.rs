@@ -115,6 +115,8 @@ pub struct ButtonHoverPaint {
     pub disabled: bool,
     /// `"spring"`（欠阻尼弹簧）或 `"cubic"`（`cubic-bezier` 时长型过渡）。
     pub hover_easing: String,
+    /// 显式字色（如 Calendar 非本月 `muted-foreground`）；`None` 跟变体 chrome。
+    pub text_color: Option<[u8; 4]>,
 }
 
 /// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input/Textarea 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。

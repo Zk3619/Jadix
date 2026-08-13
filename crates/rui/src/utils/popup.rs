@@ -8,7 +8,9 @@
 use std::cell::Cell;
 
 use crate::core::reactivity::{use_signal, Signal};
+use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
 use crate::core::tree::Element;
+use crate::layout::layout_tree::PORTAL_LAYER_ID;
 use crate::primitives::overlay::overlay;
 
 thread_local! {
@@ -89,6 +91,8 @@ pub const ATTR_FLOATING_MIN_H: &str = "rui_floating_min_h";
 pub const ATTR_FLOATING_MIN_W: &str = "rui_floating_min_w";
 /// Optional per-panel gap in px between trigger and floating panel (default [`FLOATING_TRIGGER_GAP`]).
 pub const ATTR_FLOATING_GAP: &str = "rui_floating_gap";
+/// `flip`（默认）：视口内翻转并按剩余空间夹 `max_h`。`fixed`：钉在触发器首选侧，尺寸不随滚动挤压（可溢出视口）。
+pub const ATTR_FLOATING_STRATEGY: &str = "rui_floating_strategy";
 
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
@@ -189,6 +193,54 @@ pub fn compute_anchored_placement(
     (x, y, max_h, !place_below)
 }
 
+/// `strategy=fixed`：钉在触发器首选侧，不翻转、不按剩余视口夹高度（滚动时跟触发器走，可溢出窗口）。
+fn compute_fixed_anchor(
+    trigger: [f32; 4],
+    viewport: [f32; 2],
+    menu_w: f32,
+    menu_h_estimate: f32,
+    preferred: PopupPlacement,
+    gap: f32,
+) -> (f32, f32) {
+    let [tx, ty, tw, th] = trigger;
+    let [vw, _] = viewport;
+    let margin = FLOATING_VIEWPORT_MARGIN;
+    let gap = gap.max(0.0);
+    let w = if menu_w > 0.0 { menu_w } else { tw };
+    let prefer_bottom = matches!(
+        preferred,
+        PopupPlacement::BottomStart | PopupPlacement::BottomEnd | PopupPlacement::BottomCenter
+    );
+    let prefer_end = matches!(
+        preferred,
+        PopupPlacement::BottomEnd | PopupPlacement::TopEnd
+    );
+    let prefer_center = matches!(
+        preferred,
+        PopupPlacement::BottomCenter | PopupPlacement::TopCenter
+    );
+    let y = if prefer_bottom {
+        ty + th + gap
+    } else {
+        ty - gap - menu_h_estimate.max(0.0)
+    };
+    let mut x = if prefer_center {
+        tx + (tw - w) * 0.5
+    } else if prefer_end {
+        tx + tw - w
+    } else {
+        tx
+    };
+    let x_max = (vw - margin - w).max(margin);
+    if x + w > vw - margin {
+        x = x_max;
+    }
+    if x < margin {
+        x = margin;
+    }
+    (x, y)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct FloatingPlace {
     x: f32,
@@ -253,11 +305,15 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
             el.style.size.width = taffy::style::Dimension::Auto;
             changed = true;
         }
-        let min_w = place.min_w.max(place.w).max(0.0);
-        if min_w > 0.0
-            && dimension_length(el.style.min_size.width).is_none_or(|v| (v - min_w).abs() > 0.5)
-        {
-            el.style.min_size.width = taffy::style::Dimension::Length(min_w);
+        let min_w = place.min_w.max(0.0);
+        if min_w > 0.0 {
+            if dimension_length(el.style.min_size.width).is_none_or(|v| (v - min_w).abs() > 0.5)
+            {
+                el.style.min_size.width = taffy::style::Dimension::Length(min_w);
+                changed = true;
+            }
+        } else if dimension_length(el.style.min_size.width).unwrap_or(0.0) > 0.5 {
+            el.style.min_size.width = taffy::style::Dimension::Auto;
             changed = true;
         }
     } else {
@@ -293,15 +349,17 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
         }
     }
 
-    // Viewport-available max, never raise above a smaller max already on the style/attr.
-    let mut next_max = place.max_h;
-    if let Some(existing) = dimension_length(el.style.max_size.height) {
-        if existing > 0.0 {
-            next_max = next_max.min(existing);
+    // `max_h <= 0` → unbounded (`strategy=fixed` without ATTR_FLOATING_MAX_H).
+    // Viewport-available max must be allowed to **grow** after scroll (no ratchet).
+    if place.max_h <= 0.0 {
+        if !matches!(el.style.max_size.height, taffy::style::Dimension::Auto) {
+            el.style.max_size.height = taffy::style::Dimension::Auto;
+            changed = true;
         }
-    }
-    if dimension_length(el.style.max_size.height).is_none_or(|v| (v - next_max).abs() > 0.5) {
-        el.style.max_size.height = taffy::style::Dimension::Length(next_max);
+    } else if dimension_length(el.style.max_size.height)
+        .is_none_or(|v| (v - place.max_h).abs() > 0.5)
+    {
+        el.style.max_size.height = taffy::style::Dimension::Length(place.max_h.max(1.0));
         changed = true;
     }
 
@@ -335,9 +393,46 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
         floating_place_signal_key(id).as_str(),
         FloatingPlace::default,
     );
-    let p = place.peek();
-    // Default (0,0) before first sync is fine — sync will correct. Always write so absolute
-    // panels never stay on `auto` insets.
+    let mut p = place.peek();
+    // Unsynced default is 160×256 definite — DatePicker calendar cannot fit. Seed from
+    // attrs so the first layout is content-sized (`match_trigger=0` / explicit w).
+    if p == FloatingPlace::default() {
+        let match_trigger = el
+            .attrs
+            .get(ATTR_FLOATING_MATCH_TRIGGER)
+            .or_else(|| el.attrs.get("rui_select_match_trigger"))
+            .map(|s| s.as_str() != "0")
+            .unwrap_or(true);
+        if let Some(w) = el
+            .attrs
+            .get(ATTR_FLOATING_W)
+            .or_else(|| el.attrs.get("rui_select_menu_w"))
+        {
+            p.w = parse_css_px(w, 0.0);
+            p.width_auto = false;
+        } else if !match_trigger {
+            p.width_auto = true;
+            p.w = 0.0;
+            p.min_w = el
+                .attrs
+                .get(ATTR_FLOATING_MIN_W)
+                .map(|s| parse_len_vs_trigger(s, 0.0))
+                .unwrap_or(0.0);
+        }
+        let strategy_fixed = el
+            .attrs
+            .get(ATTR_FLOATING_STRATEGY)
+            .map(|s| s.eq_ignore_ascii_case("fixed"))
+            .unwrap_or(false);
+        p.max_h = el
+            .attrs
+            .get(ATTR_FLOATING_MAX_H)
+            .or_else(|| el.attrs.get("rui_select_max_h"))
+            .map(|s| parse_css_px(s, 4096.0))
+            .unwrap_or(if strategy_fixed { 0.0 } else { 4096.0 });
+        place.set_silent(p);
+    }
+    // Always write so absolute panels never stay on `auto` insets.
     let _ = write_floating_place(el, p);
 }
 
@@ -374,7 +469,17 @@ fn parse_len_vs_trigger(raw: &str, trigger_w: f32) -> f32 {
 /// yields viewport coordinates. Floating panels live on the portal layer (viewport space), so
 /// anchoring must use these visual rects. Using raw `layout_bounds` places menus far below the
 /// trigger once the page is scrolled (gallery pickers looked unbound and “vanished”).
+///
+/// Must match paint / hit-test: `scroll:` viewports still contribute offset when overflow was
+/// cleared to `Visible`, and the portal layer / `position: fixed` resets accumulation.
 fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(String, [f32; 4])>) {
+    let scroll_acc = if el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+        || el.style.position_fixed
+    {
+        [0.0_f32, 0.0_f32]
+    } else {
+        scroll_acc
+    };
     if let Some(fid) = &el.focus_id {
         let b = el.layout_bounds;
         out.push((
@@ -383,10 +488,14 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
         ));
     }
     let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
+    let is_scroll_viewport = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
+    if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
         next_acc[0] += el.scroll_offset[0];
     }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
+    if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
         next_acc[1] += el.scroll_offset[1];
     }
     for c in &el.children {
@@ -470,15 +579,41 @@ fn apply_floating_menus(
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(FLOATING_TRIGGER_GAP)
                 .max(0.0);
-            let (x, y, available_max_h, _) =
-                compute_anchored_placement(*tb, viewport, estimate_w, estimate_h, preferred, gap);
-            let max_h = el
+            let strategy_fixed = el
                 .attrs
-                .get(ATTR_FLOATING_MAX_H)
-                .or_else(|| el.attrs.get("rui_select_max_h"))
-                .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
-                .unwrap_or(available_max_h)
-                .max(1.0);
+                .get(ATTR_FLOATING_STRATEGY)
+                .map(|s| s.eq_ignore_ascii_case("fixed"))
+                .unwrap_or(false);
+            let (x, y, max_h) = if strategy_fixed {
+                let (x, y) = compute_fixed_anchor(
+                    *tb,
+                    viewport,
+                    estimate_w,
+                    estimate_h,
+                    preferred,
+                    gap,
+                );
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| parse_css_px(s, 0.0))
+                    .filter(|h| *h > 0.0)
+                    .unwrap_or(0.0);
+                (x, y, max_h)
+            } else {
+                let (x, y, available_max_h, _) = compute_anchored_placement(
+                    *tb, viewport, estimate_w, estimate_h, preferred, gap,
+                );
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                    .unwrap_or(available_max_h)
+                    .max(1.0);
+                (x, y, max_h)
+            };
             let next = FloatingPlace {
                 x,
                 y,
@@ -513,12 +648,28 @@ fn apply_floating_menus(
 
 /// 布局后根据触发器位置更新带 `rui_floating`（或兼容 `rui_select_*`）的浮层坐标。
 /// 几何有变时返回 `true`（调用方应再跑一轮 layout）。
+///
+/// 滚动跟随时通常只改 `left/top`：调用方应 [`visit_floating_panels`] + `mark_element_layout_dirty`
+/// 后走 **fast** relayout，禁止每帧 `build_and_layout` 全量重建 Taffy 节点。
 pub fn sync_floating_placement(root: &mut Element, viewport_w: f32, viewport_h: f32) -> bool {
     let mut triggers = Vec::new();
     collect_focus_bounds(root, [0.0, 0.0], &mut triggers);
     let mut changed = false;
     apply_floating_menus(root, &triggers, [viewport_w, viewport_h], &mut changed);
     changed
+}
+
+/// 遍历已标记的浮层面板（含兼容 `rui_select_menu`）。
+pub fn visit_floating_panels(root: &Element, mut f: impl FnMut(&Element)) {
+    fn walk(el: &Element, f: &mut impl FnMut(&Element)) {
+        if floating_id_of(el).is_some() {
+            f(el);
+        }
+        for c in &el.children {
+            walk(c, f);
+        }
+    }
+    walk(root, &mut f);
 }
 
 /// 标记 `rui_portal=1`，布局时提升到根 portal 叠层（Solid `<Portal>` / `document.body`）。
@@ -628,9 +779,39 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
     portal_panel(swallow_clicks(inner), z)
 }
 
+/// Zero-size mount for a portal-hoisted floating panel (Select / DatePicker / ColorPicker).
+///
+/// The panel stays in the tree until [`hoist_portal_subtrees`] lifts it; the anchor must **not**
+/// sit in a `relative` trigger wrapper inside a `ScrollArea`, or pre-hoist `left/top` (viewport
+/// space) is applied against a scrolled containing block → placement jumps and children paint
+/// at mixed coordinates.
+pub fn floating_portal_anchor(panel: Element) -> Element {
+    Element::new()
+        .w(0.0)
+        .h(0.0)
+        .child(panel)
+        .pointer_events_box_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visit_floating_panels_finds_marked() {
+        let mut panel = Element::new();
+        mark_floating(
+            &mut panel,
+            "m1",
+            "t1",
+            PopupPlacement::BottomStart,
+        );
+        let nested = Element::new().child(panel);
+        let root = Element::new().child(Element::new()).child(nested);
+        let mut n = 0usize;
+        visit_floating_panels(&root, |_| n += 1);
+        assert_eq!(n, 1);
+    }
 
     #[test]
     fn write_floating_place_pairs_max_h_with_overflow_scroll() {
@@ -674,8 +855,37 @@ mod tests {
             "ScrollArea h:100% must not stretch floating menus"
         );
         match el.style.max_size.height {
-            taffy::style::Dimension::Length(h) => assert!((h - 192.0).abs() < 0.1),
-            other => panic!("expected capped max height, got {other:?}"),
+            taffy::style::Dimension::Length(h) => assert!(
+                (h - 400.0).abs() < 0.1,
+                "viewport max_h must not ratchet against prior style.max_h, got {h}"
+            ),
+            other => panic!("expected max height length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_floating_place_max_h_can_grow_after_viewport_opens() {
+        let mut el = Element::new().absolute().w(160.0);
+        let small = FloatingPlace {
+            x: 10.0,
+            y: 20.0,
+            w: 160.0,
+            max_h: 80.0,
+            width_auto: true,
+            min_w: 0.0,
+        };
+        assert!(write_floating_place(&mut el, small));
+        let big = FloatingPlace {
+            max_h: 320.0,
+            ..small
+        };
+        assert!(write_floating_place(&mut el, big));
+        match el.style.max_size.height {
+            taffy::style::Dimension::Length(h) => assert!(
+                (h - 320.0).abs() < 0.1,
+                "max_h must grow back after scroll, got {h}"
+            ),
+            other => panic!("expected Length max height, got {other:?}"),
         }
     }
 
@@ -960,6 +1170,40 @@ mod tests {
     }
 
     #[test]
+    fn sync_floating_uses_scroll_viewport_prefix_when_overflow_visible() {
+        // ScrollArea viewport may keep scroll_offset after overflow is cleared to Visible.
+        // Paint/hit-test still accumulate via `scroll:` focus id; floating must too.
+        let mut trigger = Element::new().focus_id("t-sv");
+        trigger.layout_bounds = [20.0, 480.0, 100.0, 32.0];
+
+        let mut scroller = Element::new().child(trigger);
+        scroller.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}gallery"));
+        scroller.style.overflow.y = taffy::style::Overflow::Visible;
+        scroller.scroll_offset = [0.0, 360.0];
+        scroller.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(&mut panel, "menu-sv", "t-sv", PopupPlacement::BottomStart);
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_W, "100px");
+        panel.layout_bounds = [0.0, 0.0, 100.0, 80.0];
+
+        let mut root = Element::new().child(scroller).child(panel);
+        root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let top = match root.children[1].style.inset.top {
+            taffy::style::LengthPercentageAuto::Length(v) => v,
+            _ => panic!("expected Length top inset"),
+        };
+        // visual trigger y=120, h=32, gap 8 → y=160 (not unscrolled 480+32+8=520)
+        assert!(
+            (top - 160.0).abs() < 0.5,
+            "y must follow scroll: viewport offset, got {top}"
+        );
+    }
+
+    #[test]
     fn sync_floating_reapplies_place_onto_fresh_panel() {
         // First open writes place into the signal + element.
         let mut trigger = Element::new().focus_id("t-reopen");
@@ -1011,6 +1255,37 @@ mod tests {
         assert!((left - 80.0).abs() < 0.5, "reopen left={left}");
         assert!((top - 160.0).abs() < 0.5, "reopen top={top}");
         assert!((width - 100.0).abs() < 0.5, "reopen width={width}");
+    }
+
+    #[test]
+    fn sync_floating_fixed_strategy_keeps_height_near_viewport_edge() {
+        let mut trigger = Element::new().focus_id("t-fixed");
+        trigger.layout_bounds = [40.0, 520.0, 120.0, 36.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "dp-fixed",
+            "t-fixed",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
+        panel.layout_bounds = [0.0, 0.0, 280.0, 320.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+
+        let menu = &root.children[1];
+        let top = inset_length(menu.style.inset.top).unwrap();
+        // trigger bottom 556 + gap 8 → 564; not flipped above
+        assert!((top - 564.0).abs() < 0.5, "fixed y must stay below trigger, got {top}");
+        assert!(
+            matches!(menu.style.max_size.height, taffy::style::Dimension::Auto),
+            "fixed strategy must not clamp max_h to remaining viewport"
+        );
     }
 
     #[test]

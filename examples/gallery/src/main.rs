@@ -246,7 +246,7 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
         <MyCard title="2b) Pickers (file dialog · color · date · time)">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "文件/目录走 utils::file_dialog 能力；颜色/日期/时间为组件。"
+                    "WP-3.3：Calendar 内联（sidebar-12）+ Date/Time/Color 键盘（Enter/Esc/方向键）。格式 ISO YYYY-MM-DD / HH:MM / #RRGGBB。"
                 </Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                     <Button
@@ -272,13 +272,20 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                     <ColorPicker id="gal-color" value="#3b82f6" flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <DatePicker id="gal-date" kind="date" flex_grow="1" />
+                    <DatePicker id="gal-date" kind="date" captionLayout="dropdown" flex_grow="1" />
                     <DatePicker id="gal-dt" kind="datetime-local" flex_grow="1" />
                     <TimePicker id="gal-time" flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                     <DatePicker id="gal-month" kind="month" flex_grow="1" />
                     <DatePicker id="gal-week" kind="week" flex_grow="1" />
+                </HStack>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground">
+                    "Inline Calendar（captionLayout=dropdown）· ColorPicker inline HSV"
+                </Label>
+                <HStack gap="1rem" items="start" wrap="wrap" w="100%">
+                    <Calendar id="gal-cal" captionLayout="dropdown" />
+                    <ColorPicker id="gal-color-inline" variant="inline" showAlpha={true} format="hsla" />
                 </HStack>
             </VStack>
         </MyCard>
@@ -2788,12 +2795,7 @@ fn DataChartShowcase() -> Element {
     ];
     let composed: Element = define_chart()
         .id("gal-compose")
-        .theme(
-            ChartTheme::tokens().palette([
-                parse_color("#2563eb"),
-                parse_color("#16a34a"),
-            ]),
-        )
+        .theme(ChartTheme::tokens().palette([parse_color("#2563eb"), parse_color("#16a34a")]))
         .mark(
             area_y(compose_rows.clone())
                 .fill("#2563eb")
@@ -2801,7 +2803,11 @@ fn DataChartShowcase() -> Element {
                 .stroke("#2563eb")
                 .stroke_width(2.0),
         )
-        .mark(line_y(compose_rows.clone()).stroke("#2563eb").stroke_width(2.5))
+        .mark(
+            line_y(compose_rows.clone())
+                .stroke("#2563eb")
+                .stroke_width(2.5),
+        )
         .mark(dot(compose_rows.clone()).r(4.0).fill("#2563eb"))
         .mark(
             rule_y([60.0])
@@ -2827,7 +2833,11 @@ fn DataChartShowcase() -> Element {
     ];
     let time_chart: Element = define_chart()
         .id("gal-time")
-        .mark(line_y(time_rows.clone()).stroke("#0f766e").stroke_width(2.5))
+        .mark(
+            line_y(time_rows.clone())
+                .stroke("#0f766e")
+                .stroke_width(2.5),
+        )
         .mark(dot(time_rows).r(4.0).fill("#0f766e"))
         .x_time()
         .y_nice()
@@ -2864,7 +2874,11 @@ fn DataChartShowcase() -> Element {
     let radial_chart: Element = define_chart()
         .id("gal-radial")
         .mark(radial_bar(radial_rows.clone()).inner_radius(0.2))
-        .mark(radial_line(radial_rows.clone()).stroke("#2563eb").stroke_width(2.0))
+        .mark(
+            radial_line(radial_rows.clone())
+                .stroke("#2563eb")
+                .stroke_width(2.0),
+        )
         .mark(radial_dot(radial_rows).r(3.5).fill("#2563eb"))
         .guides(true)
         .legend(true)

@@ -349,6 +349,24 @@ where
 pub fn reactive_component_live<P, F>(
     anchor_id: impl Into<String>,
     props: P,
+    render: F,
+) -> Element
+where
+    P: Clone + PartialEq + 'static,
+    F: FnMut(P) -> Element + 'static,
+{
+    reactive_component_live_sized(anchor_id, props, "100%", "100%", render)
+}
+
+/// Like [`reactive_component_live`], with explicit placeholder size.
+///
+/// Calendar 等放进 DateTime 浮层时须 `h: auto`：默认 `100%×100%` 会按面板高度拉伸，
+/// 日网格盖住下方 `Separator`。
+pub fn reactive_component_live_sized<P, F>(
+    anchor_id: impl Into<String>,
+    props: P,
+    width: impl IntoCssDim,
+    height: impl IntoCssDim,
     mut render: F,
 ) -> Element
 where
@@ -406,7 +424,7 @@ where
             .clone();
         render(props)
     });
-    reactive_placeholder(id)
+    reactive_placeholder_sized(id, width, height)
 }
 
 /// Solid-style text binding: register one effect that patches `text` on a mounted node in place.

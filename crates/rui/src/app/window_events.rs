@@ -638,7 +638,8 @@ impl super::App {
 
         let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
-        if slider_dragging || toast_dragging {
+        let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
+        if slider_dragging || toast_dragging || color_dragging {
             window.request_redraw();
         }
 
@@ -741,6 +742,7 @@ impl super::App {
             && self.label_drag_key.is_none()
             && self.drag_reorder.is_none()
             && !crate::components::slider::is_slider_dragging()
+            && !crate::components::color_picker::is_color_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -1257,6 +1259,7 @@ impl super::App {
             self.textarea_resize_drag = None;
             crate::components::slider::clear_slider_drag_if_any();
             crate::components::toast::clear_toast_drag_if_any();
+            crate::components::color_picker::clear_color_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -2506,6 +2509,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         cw.set_silent(new_cw);
                         ch.set_silent(new_ch);
                     }
+                    if super::scroll_support::apply_pending_scroll_item_into_view(
+                        rest, new_vh, new_ch,
+                    ) {
+                        scrollbar_fade_animating = true;
+                    }
                 }
                 self.scroll_metrics_cache = scroll_metrics
                     .into_iter()
@@ -2522,6 +2530,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // 必须在此用 `any_ui_animation_active` 补泵，否则停在第 0 帧。
                 if smooth_scroll_animating
                     || scrollbar_fade_animating
+                    || super::scroll_support::has_pending_scroll_item_align()
                     || crate::style::any_ui_animation_active()
                 {
                     window.request_redraw();

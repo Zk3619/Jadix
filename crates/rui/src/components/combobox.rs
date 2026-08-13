@@ -63,7 +63,8 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    create_context, provide_context, untrack, use_context, use_signal, with_child_owner, Context,
+    Signal,
 };
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
@@ -154,6 +155,17 @@ fn filter_active(open: bool, query: &str, selected: &str, selected_label: &str) 
     open && !query.is_empty() && (selected.is_empty() || query != selected_label)
 }
 
+/// 打开时把 `active` 指到当前 value（TimePicker `"09"` → index 9），避免高亮停在 `00`。
+fn active_index_for_value(visible: &[ComboboxVisibleItem], value: &str) -> usize {
+    if let Some(i) = visible.iter().position(|it| it.value == value) {
+        return i;
+    }
+    match value.parse::<usize>() {
+        Ok(i) if visible.is_empty() || i < visible.len() => i,
+        _ => 0,
+    }
+}
+
 fn label_matches_query(label: &str, query: &str) -> bool {
     let q = query.to_ascii_lowercase();
     q.is_empty() || label.to_ascii_lowercase().contains(&q)
@@ -163,7 +175,11 @@ fn label_matches_query(label: &str, query: &str) -> bool {
 // Root scope（宏 `<Combobox>` / 复合子树）
 // ---------------------------------------------------------------------------
 
-/// 提供 Combobox 上下文并构建子树。
+/// 一个 Combobox **实例**的根：自带 owner，再 `provide_context`。
+///
+/// Trigger + Content（下拉 portal / Item）都在这棵子树上构建；下拉 effect 的 parent owner
+/// 就是本实例，而不是外层 TimePicker / DatePicker。勿把三个 HMS Combobox 建在同一父 owner
+/// 上提供 context（后写覆盖前写）。
 pub fn combobox_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -197,50 +213,53 @@ pub fn combobox_scope(
     // 宽度由 class 控制：默认 16rem（避免撑满卡片）；`w-full` 时吃满父级。
     let full_width = class_is_full_width(&trigger_class);
     let has_width = class_has_width_token(&trigger_class);
-    provide_context(
-        combobox_context(),
-        ComboboxCtx {
-            id: id.clone(),
-            open,
-            value,
-            active,
-            placeholder,
-            clearable,
-            labels,
-            visible,
-            match_trigger: true,
-            menu_width: None,
-            menu_height: None,
-            min_height: None,
-            max_height: None,
-            placement: PopupPlacement::BottomStart,
-            trigger_class: trigger_class.clone(),
-            content_class,
-        },
-    );
-    let mut root = body();
-    let kids = take_packed(root);
-    let mut shell = vstack()
-        .gap("0")
-        .relative(true)
-        .min_w(0.0)
-        .max_w("100%")
-        .children(kids);
-    shell = if full_width {
-        shell.w("100%")
-    } else if has_width {
-        shell.w("auto")
-    } else {
-        // shadcn 示例常见 ~200–256px；过宽会像「输入框/菜单拉满整列」。
-        shell.w("16rem")
-    };
-    root = Element::from(shell);
-    if !trigger_class.is_empty() && (full_width || has_width) {
-        // 把 `w-*` 落到壳上，Input 再 `w-100%` 填满壳。
-        root = with_class_list(root, &trigger_class);
-    }
-    root.template_id = Some(format!("{id}__combobox"));
-    root
+    // 实例 owner：context + Input + Content 同属这一 Combobox，下拉不是父级的。
+    with_child_owner(move || {
+        provide_context(
+            combobox_context(),
+            ComboboxCtx {
+                id: id.clone(),
+                open,
+                value,
+                active,
+                placeholder,
+                clearable,
+                labels,
+                visible,
+                match_trigger: true,
+                menu_width: None,
+                menu_height: None,
+                min_height: None,
+                max_height: None,
+                placement: PopupPlacement::BottomStart,
+                trigger_class: trigger_class.clone(),
+                content_class,
+            },
+        );
+        let mut root = body();
+        let kids = take_packed(root);
+        let mut shell = vstack()
+            .gap("0")
+            .relative(true)
+            .min_w(0.0)
+            .max_w("100%")
+            .children(kids);
+        shell = if full_width {
+            shell.w("100%")
+        } else if has_width {
+            shell.w("auto")
+        } else {
+            // shadcn 示例常见 ~200–256px；过宽会像「输入框/菜单拉满整列」。
+            shell.w("16rem")
+        };
+        root = Element::from(shell);
+        if !trigger_class.is_empty() && (full_width || has_width) {
+            // 把 `w-*` 落到壳上，Input 再 `w-100%` 填满壳。
+            root = with_class_list(root, &trigger_class);
+        }
+        root.template_id = Some(format!("{id}__combobox"));
+        root
+    })
 }
 
 fn class_is_full_width(class: &str) -> bool {
@@ -369,6 +388,8 @@ pub fn ComboboxInput(
 
         let o_chev = open;
         let a_chev = active;
+        let v_chev = value;
+        let vis_chev = visible;
         let chev_id = id.clone();
         let chevron = input_adornment_button(
             format!("{id}__combo_chevron"),
@@ -377,7 +398,7 @@ pub fn ComboboxInput(
             move || {
                 let next = !o_chev.peek();
                 if next {
-                    a_chev.set(0);
+                    a_chev.set(active_index_for_value(&vis_chev.peek(), &v_chev.peek()));
                     disarm_underlay_close();
                 }
                 o_chev.set(next);
@@ -389,10 +410,15 @@ pub fn ComboboxInput(
         trigger = trigger.gap("0.25rem").child(chevron);
 
         trigger = trigger
-            .on_click(move || {
-                a_sig.set(0);
-                disarm_underlay_close();
-                o_focus.set(true);
+            .on_click({
+                let a_sig = a_sig;
+                let val_sig = val_sig;
+                let vis = vis;
+                move || {
+                    a_sig.set(active_index_for_value(&vis.peek(), &val_sig.peek()));
+                    disarm_underlay_close();
+                    o_focus.set(true);
+                }
             })
             .on_key_down(move |ev| {
                 let list = vis.peek();
@@ -400,7 +426,7 @@ pub fn ComboboxInput(
                 match &ev.logical_key {
                     Key::Named(NamedKey::ArrowDown) => {
                         if !o_focus.peek() {
-                            a_sig.set(0);
+                            a_sig.set(active_index_for_value(&list, &val_sig.peek()));
                             disarm_underlay_close();
                             o_focus.set(true);
                         } else if let Some(next) = roving_move(n, a_sig.peek(), 1) {
@@ -528,6 +554,9 @@ pub fn combobox_content(
         let _ = input_store.get();
         let _ = value.get();
         if !is_open {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
             let _ = portal_sync(
                 &id_for_effect,
                 open,
@@ -545,20 +574,42 @@ pub fn combobox_content(
             return Element::new().w(0.0).h(0.0);
         };
 
+        let cur = value.peek();
+        let ix0 = active_index_for_value(&visible.peek(), &cur);
+        if active.peek() != ix0 {
+            active.set_silent(ix0);
+        }
         visible.set(Vec::new());
-        let rows = body();
+        let mut rows = untrack(|| body());
+        let ix = active_index_for_value(&visible.peek(), &cur);
+        if active.peek() != ix {
+            active.set_silent(ix);
+            visible.set(Vec::new());
+            rows = untrack(|| body());
+        }
         let scroll_id = format!("{id_for_effect}:menu_scroll");
-        let viewport: Element = scroll_area(&scroll_id)
-            .overflow_x("hidden")
-            .overflow_y("auto")
-            .scrollbar_visibility("auto")
-            .w("100%")
-            .h("100%")
-            .min_h(0.0)
-            .flex_grow(1.0)
-            .flex_shrink(1.0)
-            .child(rows)
-            .into();
+        let n = visible.peek().len().max(1);
+        if n > 1 {
+            crate::app::scroll_support::request_scroll_item_into_view(
+                scroll_id.as_str(),
+                ix,
+                n,
+                crate::app::scroll_support::ScrollItemAlign::Center,
+            );
+        }
+        let viewport: Element = untrack(|| {
+            scroll_area(&scroll_id)
+                .overflow_x("hidden")
+                .overflow_y("auto")
+                .scrollbar_visibility("auto")
+                .w("100%")
+                .h("100%")
+                .min_h(0.0)
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .child(rows)
+                .into()
+        });
 
         let mut menu: Element = vstack()
             .w("auto")
@@ -947,6 +998,7 @@ pub struct ComboboxBuilder {
     placeholder: String,
     placement: PopupPlacement,
     clearable: bool,
+    class: String,
 }
 
 pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
@@ -958,6 +1010,7 @@ pub fn combobox(id: impl Into<String>) -> ComboboxBuilder {
         placeholder: "Search…".into(),
         placement: PopupPlacement::BottomStart,
         clearable: false,
+        class: String::new(),
     }
 }
 
@@ -1012,6 +1065,12 @@ impl ComboboxBuilder {
         self.clearable = v;
         self
     }
+
+    /// Trigger/shell utility class（`w-*` / `min-w-*` 落到壳上，避免默认 `16rem`）。
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.class = c.into();
+        self
+    }
 }
 
 fn collect_labels(entries: &[ComboboxEntry]) -> HashMap<String, String> {
@@ -1042,6 +1101,7 @@ impl From<ComboboxBuilder> for Element {
             placeholder,
             placement,
             clearable,
+            class,
         } = builder;
         let labels_map = collect_labels(&entries);
         let default_initial = default_value;
@@ -1059,7 +1119,7 @@ impl From<ComboboxBuilder> for Element {
             Some(value),
             ph,
             clearable,
-            String::new(),
+            class,
             String::new(),
             move || {
                 // Seed labels before Input sync.
@@ -1209,6 +1269,93 @@ mod tests {
     use crate::utils::popup::{
         mark_floating, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER,
     };
+
+    #[test]
+    fn combobox_class_overrides_default_16rem_shell() {
+        let plain: Element = combobox("cb-plain").options([("a", "A")]).into();
+        let sized: Element = combobox("cb-w")
+            .options([("a", "A")])
+            .class("w-[4.75rem] min-w-[4.75rem]")
+            .into();
+        match plain.style.size.width {
+            taffy::style::Dimension::Length(px) => {
+                assert!((px - 16.0 * 16.0).abs() < 0.5, "default shell 16rem, got {px}")
+            }
+            other => panic!("default combobox shell should be 16rem, got {other:?}"),
+        }
+        match sized.style.size.width {
+            taffy::style::Dimension::Length(px) => assert!(
+                (px - 4.75 * 16.0).abs() < 0.5,
+                "class should set 4.75rem, got {px}"
+            ),
+            other => panic!("expected 4.75rem width, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sibling_combobox_scopes_keep_distinct_context() {
+        use crate::core::reactivity::create_effect;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let (_owner, (id_h, id_s)) = create_root(|| {
+            let id_h = Rc::new(RefCell::new(String::new()));
+            let id_s = Rc::new(RefCell::new(String::new()));
+            let _h = combobox_scope(
+                "cb-hms-h",
+                None,
+                None,
+                "HH",
+                false,
+                "",
+                "",
+                {
+                    let id_h = id_h.clone();
+                    move || {
+                        create_effect(move || {
+                            *id_h.borrow_mut() = require_combobox("sibling-h").id.clone();
+                        });
+                        Element::new()
+                    }
+                },
+            );
+            let _s = combobox_scope(
+                "cb-hms-s",
+                None,
+                None,
+                "SS",
+                false,
+                "",
+                "",
+                {
+                    let id_s = id_s.clone();
+                    move || {
+                        create_effect(move || {
+                            *id_s.borrow_mut() = require_combobox("sibling-s").id.clone();
+                        });
+                        Element::new()
+                    }
+                },
+            );
+            (id_h, id_s)
+        });
+        assert_eq!(id_h.borrow().as_str(), "cb-hms-h");
+        assert_eq!(id_s.borrow().as_str(), "cb-hms-s");
+    }
+
+    #[test]
+    fn active_index_follows_zero_padded_value() {
+        let items: Vec<ComboboxVisibleItem> = (0..=23)
+            .map(|i| ComboboxVisibleItem {
+                value: format!("{i:02}"),
+                label: format!("{i:02}"),
+                disabled: false,
+            })
+            .collect();
+        assert_eq!(active_index_for_value(&items, "09"), 9);
+        assert_eq!(active_index_for_value(&items, "00"), 0);
+        assert_eq!(active_index_for_value(&[], "09"), 9);
+        assert_eq!(active_index_for_value(&items, "xx"), 0);
+    }
 
     #[test]
     fn combobox_builds() {

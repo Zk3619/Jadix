@@ -1428,6 +1428,35 @@ impl AppState {
             );
             scrollbar_update_resolved = ScrollbarUpdateMode::Full;
         }
+        // Scroll offsets do not affect Taffy sizing; skip full `compute_layout` when only
+        // viewports were synced (no scrollbar thumb/style changes this frame).
+        // `StyleChanged` from per-frame chrome（颜色/阴影等）不改变 flex 几何时可与 `Clean` 一样走
+        // scroll-only；`LayoutChanged`（如边框宽度、下划线开关）仍必须跑 `compute_layout`。
+        // Full + overlay 淡入淡出 / 平滑滚：预更新已写滚动条样式，flex 树在 Clean 下与上一帧同构。
+        let scroll_only = (scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
+            && matches!(
+                layout_for_build,
+                crate::core::tree::LayoutStatus::Clean
+                    | crate::core::tree::LayoutStatus::StyleChanged
+            ))
+            || (scrollbar_skip_flex_layout
+                && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                && matches!(
+                    layout_for_build,
+                    crate::core::tree::LayoutStatus::Clean
+                        | crate::core::tree::LayoutStatus::StyleChanged
+                ));
+        // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
+        // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
+        // 避免仅 hover 颜色每帧全量 Taffy。
+        // Keep overlay collect while dragging a thumb: idle frames paint via overlay, and
+        // switching to Taffy on press used to jump the thumb by the track border (~1px down-right).
+        let scrollbar_overlay_collect = scrollbar_update_resolved
+            == ScrollbarUpdateMode::ViewportsOnly
+            || (scrollbar_skip_flex_layout
+                && scrollbar_update_resolved == ScrollbarUpdateMode::Full
+                && scroll_only)
+            || active_drag_rest.is_some();
         let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
@@ -1436,35 +1465,6 @@ impl AppState {
                 mouse_pos,
             )
         } else {
-            // Scroll offsets do not affect Taffy sizing; skip full `compute_layout` when only
-            // viewports were synced (no scrollbar thumb/style changes this frame).
-            // `StyleChanged` from per-frame chrome（颜色/阴影等）不改变 flex 几何时可与 `Clean` 一样走
-            // scroll-only；`LayoutChanged`（如边框宽度、下划线开关）仍必须跑 `compute_layout`。
-            // Full + overlay 淡入淡出 / 平滑滚：预更新已写滚动条样式，flex 树在 Clean 下与上一帧同构。
-            let scroll_only = (scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
-                && matches!(
-                    layout_for_build,
-                    crate::core::tree::LayoutStatus::Clean
-                        | crate::core::tree::LayoutStatus::StyleChanged
-                ))
-                || (scrollbar_skip_flex_layout
-                    && scrollbar_update_resolved == ScrollbarUpdateMode::Full
-                    && matches!(
-                        layout_for_build,
-                        crate::core::tree::LayoutStatus::Clean
-                            | crate::core::tree::LayoutStatus::StyleChanged
-                    ));
-            // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
-            // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
-            // 避免仅 hover 颜色每帧全量 Taffy。
-            // Keep overlay collect while dragging a thumb: idle frames paint via overlay, and
-            // switching to Taffy on press used to jump the thumb by the track border (~1px down-right).
-            let scrollbar_overlay_collect = scrollbar_update_resolved
-                == ScrollbarUpdateMode::ViewportsOnly
-                || (scrollbar_skip_flex_layout
-                    && scrollbar_update_resolved == ScrollbarUpdateMode::Full
-                    && scroll_only)
-                || active_drag_rest.is_some();
             self.layout_tree.build_and_layout_fast_ex(
                 &mut self.root_element,
                 logical_w,
@@ -1475,17 +1475,24 @@ impl AppState {
                 layout_subtree_root,
             )
         };
-        // Select 浮层：首帧用占位坐标，布局后按触发器/视口纠正并再 layout 一次。
+        // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
+        // 只 dirty 浮层节点 + fast compute，禁止每帧全量重建 Taffy（打开 DatePicker 后整页滚动卡顿）。
         if crate::utils::popup::sync_floating_placement(
             &mut self.root_element,
             logical_w,
             logical_h,
         ) {
-            render_result = self.layout_tree.build_and_layout(
+            crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
+                self.layout_tree.mark_element_layout_dirty(el);
+            });
+            render_result = self.layout_tree.build_and_layout_fast_ex(
                 &mut self.root_element,
                 logical_w,
                 logical_h,
                 mouse_pos,
+                false,
+                scrollbar_overlay_collect,
+                None,
             );
         }
         #[cfg(debug_assertions)]

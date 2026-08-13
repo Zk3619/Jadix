@@ -133,7 +133,7 @@ Win-first 0.1 / 升 Beta **仍不**以本战略为硬门禁（原生+发布优�
 | Memo（惰性 + depth flush） | **done** | `create_memo` | 对齐 Leptos Memo / Floem Memo |
 | Effect | **done** | `create_effect`；重跑前 dispose 子 Owner | **未拆类型**：渲染绑走 `bind_*`（UpdaterEffect 形），用户副作用同调度；不强制拆 RenderEffect |
 | Owner / Root / on_cleanup / on_mount | **done** | `create_root` · `OwnerHandle` | Floem 名 `Scope`；职责同构 |
-| Context | **done** | `provide_context` / `use_context` | 对齐 |
+| Context | **done** | `provide_context` / `use_context`；复合控件实例根用 `with_child_owner`（`#[component]` 不自动开 scope） | 对齐 Solid 组件执行域；省略则同父级多次 provide 会覆盖 |
 | batch / untrack / isolate_reads | **done** | 同名 API | Floem 有 batch；Leptos 普通 Effect 靠 tick 合并 |
 | Store select + produce | **done (MVP)** | `core/store.rs`；**无** proxy；`produce` 切片契约测 ☑ WP-2.5 | Leptos `reactive_stores`：改兄字段不重跑弟 getter（R-WP-3） |
 | Resource + Suspense | **done (MVP)** | `app/resource.rs` | **勿**抄 SSR 水合 Resource |

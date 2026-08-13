@@ -31,6 +31,39 @@ fn prelude_ui_embeds_builder() {
 }
 
 #[test]
+fn prelude_picker_tags_and_builders_compile() {
+    let _c: Element = calendar("pre-cal")
+        .caption_layout(CalendarCaption::Dropdown)
+        .default_value("2026-08-14")
+        .into();
+    let _d: Element = date_picker("pre-dp")
+        .kind(DatePickerKind::Date)
+        .caption_layout(CalendarCaption::Label)
+        .into();
+    let _t: Element = time_picker("pre-tp").default_value("09:30").into();
+    let _p: Element = color_picker("pre-cp")
+        .variant(ColorPickerVariant::Inline)
+        .format(ColorFormat::Hex)
+        .show_alpha(true)
+        .into();
+    let actions = vec![CommandAction::new("x", "Example", || {})];
+    let open = use_signal("pre-cmd-open", || false);
+    let date_sig = use_signal("pre-cal-sig", || "2026-08-14".to_string());
+    let color_sig = use_signal("pre-cp-sig", || "#3b82f6".to_string());
+    let el = ui! {
+        <VStack gap="0.5rem">
+            <Calendar id="pre-cal-tag" captionLayout="dropdown" defaultValue="2026-08-01" />
+            <Calendar id="pre-cal-sig-tag" valueSignal={date_sig} captionLayout="label" />
+            <DatePicker id="pre-dp-tag" kind="date" captionLayout="label" />
+            <TimePicker id="pre-tp-tag" value="09:30" />
+            <ColorPicker id="pre-cp-tag" variant="inline" showAlpha={false} />
+            <ColorPicker id="pre-cp-sig-tag" valueSignal={color_sig} />
+            <Command id="pre-cmd-tag" open={open} actions={actions} />
+        </VStack>
+    };
+    let _: Element = el;
+}
+
 fn prelude_chart_tags_and_builders_compile() {
     let _b: Element = bar_chart().values([0.2, 0.8]).h("3rem").into();
     let _l: Element = line_chart().values([0.1, 0.9]).h(80.0).into();

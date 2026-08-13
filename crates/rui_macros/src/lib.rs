@@ -149,7 +149,10 @@ impl Parse for RsxNode {
                     let content;
                     braced!(content in input);
                     content.parse().map_err(|e| {
-                        syn::Error::new(e.span(), format!("Failed to parse spread `..{{...}}`: {}", e))
+                        syn::Error::new(
+                            e.span(),
+                            format!("Failed to parse spread `..{{...}}`: {}", e),
+                        )
                     })?
                 } else {
                     input.parse().map_err(|e| {
@@ -665,23 +668,14 @@ fn expand_node(
         }
         RsxNode::Element(el) => {
             let name_str = el.name.to_string();
-            let select_is_compound = name_str == "Select"
-                && !el
-                    .attributes
-                    .iter()
-                    .any(|(k, _)| k == "options");
-            let combobox_is_compound = name_str == "Combobox"
-                && !el
-                    .attributes
-                    .iter()
-                    .any(|(k, _)| k == "options");
-            let radio_group_is_compound = name_str == "RadioGroup"
-                && !el
-                    .attributes
-                    .iter()
-                    .any(|(k, _)| k == "options");
-            let tabs_is_compound = name_str == "Tabs"
-                && !el.attributes.iter().any(|(k, _)| k == "count");
+            let select_is_compound =
+                name_str == "Select" && !el.attributes.iter().any(|(k, _)| k == "options");
+            let combobox_is_compound =
+                name_str == "Combobox" && !el.attributes.iter().any(|(k, _)| k == "options");
+            let radio_group_is_compound =
+                name_str == "RadioGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
+            let tabs_is_compound =
+                name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -802,8 +796,10 @@ fn expand_node(
                     let value_expr = get_attr("value");
                     let placeholder_expr = get_attr("placeholder");
                     let class_expr = get_attr("class");
-                    let content_class_expr = get_attr("content_class")
-                        .or_else(|| get_attr("contentClass"));
+                    let content_class_expr =
+                        get_attr("content_class").or_else(|| get_attr("contentClass"));
+                    let scroll_selected_expr = get_attr("scroll_selected")
+                        .or_else(|| get_attr("scrollSelected"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -858,6 +854,11 @@ fn expand_node(
                     } else {
                         quote! { String::new() }
                     };
+                    let scroll_selected_ts = if let Some(s) = scroll_selected_expr {
+                        quote! { (#s).to_string() }
+                    } else {
+                        quote! { String::new() }
+                    };
                     return quote! {
                         rui::components::select_scope(
                             #id_ts,
@@ -866,6 +867,7 @@ fn expand_node(
                             #placeholder_ts,
                             #class_ts,
                             #content_class_ts,
+                            #scroll_selected_ts,
                             || #child_el,
                         )
                     };
@@ -874,10 +876,9 @@ fn expand_node(
                 if radio_group_is_compound {
                     // solid-ui / ShadCN compound RadioGroup：先 provide context 再构建 Item。
                     let id_expr = get_attr("id");
-                    let value_expr = get_attr("value")
-                        .or_else(|| get_attr("selected"));
-                    let default_expr = get_attr("default_value")
-                        .or_else(|| get_attr("defaultValue"));
+                    let value_expr = get_attr("value").or_else(|| get_attr("selected"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let disabled_expr = get_attr("disabled");
                     let idx = *node_counter;
                     *node_counter += 1;
@@ -942,8 +943,8 @@ fn expand_node(
                     // solid-ui / ShadCN compound Tabs：先 provide context 再构建 List/Trigger/Content。
                     let id_expr = get_attr("id");
                     let value_expr = get_attr("value");
-                    let default_expr = get_attr("default_value")
-                        .or_else(|| get_attr("defaultValue"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let orientation_expr = get_attr("orientation");
                     let disabled_expr = get_attr("disabled");
                     let idx = *node_counter;
@@ -1017,11 +1018,7 @@ fn expand_node(
                     };
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
-                        expanded_children.push(expand_node(
-                            child,
-                            node_counter,
-                            true,
-                        ));
+                        expanded_children.push(expand_node(child, node_counter, true));
                     }
                     let child_el = if expanded_children.is_empty() {
                         quote! { rui::core::tree::Element::new() }
@@ -1180,6 +1177,10 @@ fn expand_node(
                     let placement = get_attr("placement")
                         .map(|e| quote! { Some(#e) })
                         .unwrap_or_else(|| quote! { None });
+                    let scroll_selected = get_attr("scroll_selected")
+                        .or_else(|| get_attr("scrollSelected"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         // Body is rendered inside SelectContent's reactive_view.
@@ -1213,6 +1214,7 @@ fn expand_node(
                                 min_height: #min_height,
                                 max_height: #max_height,
                                 placement: #placement,
+                                scroll_selected: #scroll_selected,
                             },
                             move || #child_el,
                         )
@@ -1227,8 +1229,8 @@ fn expand_node(
                     let placeholder_expr = get_attr("placeholder");
                     let clearable_expr = get_attr("clearable");
                     let class_expr = get_attr("class");
-                    let content_class_expr = get_attr("content_class")
-                        .or_else(|| get_attr("contentClass"));
+                    let content_class_expr =
+                        get_attr("content_class").or_else(|| get_attr("contentClass"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -1806,171 +1808,171 @@ fn expand_node(
 
                     let is_base = !chart_plot_height
                         && matches!(
-                        attr_name,
-                        "w" | "width"
-                            | "max_w"
-                            | "maxWidth"
-                            | "max_width"
-                            | "min_w"
-                            | "minWidth"
-                            | "min_width"
-                            | "h"
-                            | "height"
-                            | "max_h"
-                            | "maxHeight"
-                            | "max_height"
-                            | "min_h"
-                            | "minHeight"
-                            | "min_height"
-                            | "p"
-                            | "padding"
-                            | "mx"
-                            | "my"
-                            | "px"
-                            | "py"
-                            | "pt"
-                            | "pr"
-                            | "pb"
-                            | "pl"
-                            | "mt"
-                            | "mr"
-                            | "mb"
-                            | "ml"
-                            | "rounded"
-                            | "bg"
-                            | "color"
-                            | "text_color"
-                            | "font_weight"
-                            | "text_weight"
-                            | "flex_grow"
-                            | "flex_shrink"
-                            | "grow"
-                            | "shrink"
-                            | "aria_label"
-                            | "aria-label"
-                            | "aria_labelledby"
-                            | "aria-labelledby"
-                            | "accesskit_name"
-                            | "accesskit_role"
-                            | "accesskit_id"
-                            | "flex_basis"
-                            | "absolute"
-                            | "relative"
-                            | "pointer_events"
-                            | "pointerEvents"
-                            | "top"
-                            | "right"
-                            | "bottom"
-                            | "left"
-                            | "inset"
-                            | "z_index"
-                            | "cols"
-                            | "grid_cols"
-                            | "rows"
-                            | "grid_rows"
-                            | "col_span"
-                            | "grid_column_span"
-                            | "row_span"
-                            | "grid_row_span"
-                            | "align_self"
-                            | "text_size"
-                            | "leading"
-                            | "text_leading"
-                            | "line_height"
-                            | "lineHeight"
-                            | "underline"
-                            | "text_decoration"
-                            | "textDecoration"
-                            | "text_decoration_line"
-                            | "textDecorationLine"
-                            | "text_decoration_style"
-                            | "textDecorationStyle"
-                            | "text_decoration_color"
-                            | "textDecorationColor"
-                            | "text_decoration_thickness"
-                            | "textDecorationThickness"
-                            | "items"
-                            | "wrap"
-                            | "gap"
-                            | "gap_x"
-                            | "gapX"
-                            | "gap_y"
-                            | "gapY"
-                            | "column_gap"
-                            | "columnGap"
-                            | "row_gap"
-                            | "rowGap"
-                            | "border_style"
-                            | "borderStyle"
-                            | "border_color"
-                            | "borderColor"
-                            | "border_width"
-                            | "borderWidth"
-                            | "border_top"
-                            | "borderTop"
-                            | "border_right"
-                            | "borderRight"
-                            | "border_bottom"
-                            | "borderBottom"
-                            | "border_left"
-                            | "borderLeft"
-                            | "border_top_width"
-                            | "borderTopWidth"
-                            | "border_right_width"
-                            | "borderRightWidth"
-                            | "border_bottom_width"
-                            | "borderBottomWidth"
-                            | "border_left_width"
-                            | "borderLeftWidth"
-                            | "border_top_color"
-                            | "borderTopColor"
-                            | "border_right_color"
-                            | "borderRightColor"
-                            | "border_bottom_color"
-                            | "borderBottomColor"
-                            | "border_left_color"
-                            | "borderLeftColor"
-                            | "outline_style"
-                            | "outlineStyle"
-                            | "outline_color"
-                            | "outlineColor"
-                            | "outline_width"
-                            | "outlineWidth"
-                            | "shadow"
-                            | "box_shadow"
-                            | "boxShadow"
-                            | "box-shadow"
-                            | "box_shadow_color"
-                            | "boxShadowColor"
-                            | "box_shadow_blur"
-                            | "boxShadowBlur"
-                            | "backdrop_blur"
-                            | "backdropBlur"
-                            | "box_shadow_offset_x"
-                            | "boxShadowOffsetX"
-                            | "box_shadow_offset_y"
-                            | "boxShadowOffsetY"
-                            | "box_shadow_spread"
-                            | "boxShadowSpread"
-                            | "box_shadow_inset"
-                            | "boxShadowInset"
-                            | "text_shadow"
-                            | "textShadow"
-                            | "text-shadow"
-                            | "text_shadow_color"
-                            | "textShadowColor"
-                            | "text_shadow_blur"
-                            | "textShadowBlur"
-                            | "text_shadow_offset_x"
-                            | "textShadowOffsetX"
-                            | "text_shadow_offset_y"
-                            | "textShadowOffsetY"
-                            | "text_align"
-                            | "class"
-                            | "className"
-                            | "tw"
-                            | "uno"
-                    );
+                            attr_name,
+                            "w" | "width"
+                                | "max_w"
+                                | "maxWidth"
+                                | "max_width"
+                                | "min_w"
+                                | "minWidth"
+                                | "min_width"
+                                | "h"
+                                | "height"
+                                | "max_h"
+                                | "maxHeight"
+                                | "max_height"
+                                | "min_h"
+                                | "minHeight"
+                                | "min_height"
+                                | "p"
+                                | "padding"
+                                | "mx"
+                                | "my"
+                                | "px"
+                                | "py"
+                                | "pt"
+                                | "pr"
+                                | "pb"
+                                | "pl"
+                                | "mt"
+                                | "mr"
+                                | "mb"
+                                | "ml"
+                                | "rounded"
+                                | "bg"
+                                | "color"
+                                | "text_color"
+                                | "font_weight"
+                                | "text_weight"
+                                | "flex_grow"
+                                | "flex_shrink"
+                                | "grow"
+                                | "shrink"
+                                | "aria_label"
+                                | "aria-label"
+                                | "aria_labelledby"
+                                | "aria-labelledby"
+                                | "accesskit_name"
+                                | "accesskit_role"
+                                | "accesskit_id"
+                                | "flex_basis"
+                                | "absolute"
+                                | "relative"
+                                | "pointer_events"
+                                | "pointerEvents"
+                                | "top"
+                                | "right"
+                                | "bottom"
+                                | "left"
+                                | "inset"
+                                | "z_index"
+                                | "cols"
+                                | "grid_cols"
+                                | "rows"
+                                | "grid_rows"
+                                | "col_span"
+                                | "grid_column_span"
+                                | "row_span"
+                                | "grid_row_span"
+                                | "align_self"
+                                | "text_size"
+                                | "leading"
+                                | "text_leading"
+                                | "line_height"
+                                | "lineHeight"
+                                | "underline"
+                                | "text_decoration"
+                                | "textDecoration"
+                                | "text_decoration_line"
+                                | "textDecorationLine"
+                                | "text_decoration_style"
+                                | "textDecorationStyle"
+                                | "text_decoration_color"
+                                | "textDecorationColor"
+                                | "text_decoration_thickness"
+                                | "textDecorationThickness"
+                                | "items"
+                                | "wrap"
+                                | "gap"
+                                | "gap_x"
+                                | "gapX"
+                                | "gap_y"
+                                | "gapY"
+                                | "column_gap"
+                                | "columnGap"
+                                | "row_gap"
+                                | "rowGap"
+                                | "border_style"
+                                | "borderStyle"
+                                | "border_color"
+                                | "borderColor"
+                                | "border_width"
+                                | "borderWidth"
+                                | "border_top"
+                                | "borderTop"
+                                | "border_right"
+                                | "borderRight"
+                                | "border_bottom"
+                                | "borderBottom"
+                                | "border_left"
+                                | "borderLeft"
+                                | "border_top_width"
+                                | "borderTopWidth"
+                                | "border_right_width"
+                                | "borderRightWidth"
+                                | "border_bottom_width"
+                                | "borderBottomWidth"
+                                | "border_left_width"
+                                | "borderLeftWidth"
+                                | "border_top_color"
+                                | "borderTopColor"
+                                | "border_right_color"
+                                | "borderRightColor"
+                                | "border_bottom_color"
+                                | "borderBottomColor"
+                                | "border_left_color"
+                                | "borderLeftColor"
+                                | "outline_style"
+                                | "outlineStyle"
+                                | "outline_color"
+                                | "outlineColor"
+                                | "outline_width"
+                                | "outlineWidth"
+                                | "shadow"
+                                | "box_shadow"
+                                | "boxShadow"
+                                | "box-shadow"
+                                | "box_shadow_color"
+                                | "boxShadowColor"
+                                | "box_shadow_blur"
+                                | "boxShadowBlur"
+                                | "backdrop_blur"
+                                | "backdropBlur"
+                                | "box_shadow_offset_x"
+                                | "boxShadowOffsetX"
+                                | "box_shadow_offset_y"
+                                | "boxShadowOffsetY"
+                                | "box_shadow_spread"
+                                | "boxShadowSpread"
+                                | "box_shadow_inset"
+                                | "boxShadowInset"
+                                | "text_shadow"
+                                | "textShadow"
+                                | "text-shadow"
+                                | "text_shadow_color"
+                                | "textShadowColor"
+                                | "text_shadow_blur"
+                                | "textShadowBlur"
+                                | "text_shadow_offset_x"
+                                | "textShadowOffsetX"
+                                | "text_shadow_offset_y"
+                                | "textShadowOffsetY"
+                                | "text_align"
+                                | "class"
+                                | "className"
+                                | "tw"
+                                | "uno"
+                        );
 
                     if is_base {
                         // a11y attrs apply on the finished Element (not BaseComponentBuilder).
@@ -2294,16 +2296,17 @@ fn expand_node(
                                 "onClick" => syn::Ident::new("on_click", attr.span()),
                                 "onChange" => syn::Ident::new("on_change", attr.span()),
                                 // ShadCN / HTML 别名
-                                "defaultChecked" => {
-                                    syn::Ident::new("default_checked", attr.span())
-                                }
-                                "defaultValue" => {
-                                    syn::Ident::new("default_value", attr.span())
-                                }
+                                "defaultChecked" => syn::Ident::new("default_checked", attr.span()),
+                                "defaultValue" => syn::Ident::new("default_value", attr.span()),
                                 "onCheckedChange" => syn::Ident::new("on_click", attr.span()),
                                 "ariaInvalid" | "aria_invalid" => {
                                     syn::Ident::new("invalid", attr.span())
                                 }
+                                // Calendar / DatePicker / ColorPicker / Command（Aria + Reader）
+                                "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
+                                "valueSignal" => syn::Ident::new("value_signal", attr.span()),
+                                "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
+                                "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
                                 // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
                                 "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),
@@ -2317,11 +2320,7 @@ fn expand_node(
                             quote! { #value }
                         } else if matches!(
                             attr_name,
-                            "on_click"
-                                | "onClick"
-                                | "on_change"
-                                | "onChange"
-                                | "onCheckedChange"
+                            "on_click" | "onClick" | "on_change" | "onChange" | "onCheckedChange"
                         ) {
                             quote! { Some(rui::core::tree::Handler::from(rui::core::tree::ZeroArgFn(#value))) }
                         } else if is_boolish_attr(attr_name)
@@ -3116,9 +3115,7 @@ fn expand_node(
                     "disabled" => element = quote! { #element.disabled(#value) },
                     "placeholder" => element = quote! { #element.placeholder(#value) },
                     "invalid" => element = quote! { #element.invalid(#value) },
-                    "aria_label" | "aria-label" => {
-                        element = quote! { #element.aria_label(#value) }
-                    }
+                    "aria_label" | "aria-label" => element = quote! { #element.aria_label(#value) },
                     "aria_labelledby" | "aria-labelledby" => {
                         element = quote! { #element.aria_labelledby(#value) }
                     }

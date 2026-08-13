@@ -661,17 +661,32 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     root_node.set_children(vec![doc_id]);
     nodes.push((ROOT_ID, root_node));
 
-    let focus = match focused_fid.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(DOCUMENT_FOCUS_ID) => doc_id,
-        Some(fid) => node_id_for_focus(fid),
-        // Prefer Document so Narrator starts in content/reading context, not empty Window.
-        None => doc_id,
-    };
+    let focus = resolve_tree_focus(&nodes, focused_fid, doc_id);
 
     TreeUpdate {
         nodes,
         tree: Some(Tree::new(ROOT_ID)),
         focus,
+    }
+}
+
+/// AccessKit consumer panics if `TreeUpdate.focus` is absent from `nodes`
+/// (e.g. DatePicker/Command closed while `__rui_button_focus_id` still names the panel).
+fn resolve_tree_focus(
+    nodes: &[(NodeId, Node)],
+    focused_fid: Option<&str>,
+    doc_id: NodeId,
+) -> NodeId {
+    let candidate = match focused_fid.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(DOCUMENT_FOCUS_ID) => doc_id,
+        Some(fid) => node_id_for_focus(fid),
+        // Prefer Document so Narrator starts in content/reading context, not empty Window.
+        None => return doc_id,
+    };
+    if nodes.iter().any(|(id, _)| *id == candidate) {
+        candidate
+    } else {
+        doc_id
     }
 }
 
@@ -1071,6 +1086,28 @@ mod tests {
         assert_eq!(node.label(), Some("Search…"));
         assert_eq!(node.value(), Some("hello"));
         assert_eq!(update.focus, nid);
+    }
+
+    #[test]
+    fn stale_focus_id_falls_back_to_document() {
+        let btn = Element::new().focus_id("alive").on_click(|| {});
+        let root = Element::new().child(btn);
+        let update = tree_update_from_elements(&root, Some("gone-popover__cal_focus"));
+        let ids: std::collections::HashSet<_> = update.nodes.iter().map(|(id, _)| *id).collect();
+        assert!(
+            ids.contains(&update.focus),
+            "AccessKit focus {:?} must be in node list",
+            update.focus
+        );
+        assert_eq!(update.focus, document_node_id());
+    }
+
+    #[test]
+    fn live_focus_id_stays_on_control() {
+        let btn = Element::new().focus_id("alive").on_click(|| {});
+        let root = Element::new().child(btn);
+        let update = tree_update_from_elements(&root, Some("alive"));
+        assert_eq!(update.focus, node_id_for_key("alive"));
     }
 
     #[test]

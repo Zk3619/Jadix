@@ -21,7 +21,10 @@
 //! ```
 //!
 //! 便捷 Builder（单入口、内建 Trigger+Content）仍可用：
-//! `select("id").item(…).trigger_width("100%")`。
+//! `select("id").item(…).trigger_width("100%").scroll_selected("center")`。
+//!
+//! **打开时滚动**：[`SelectBuilder::scroll_selected`] / `<Select scrollSelected>` /
+//! `<SelectContent scrollSelected>`，取值 `none`（默认）| `start` | `center`。
 //!
 //! ## 浮层契约
 //! 菜单经 [`mark_floating`] + [`panel_block_clicks`] 提升到根 portal；
@@ -39,7 +42,8 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    create_context, provide_context, untrack, use_context, use_signal, with_child_owner, Context,
+    Signal,
 };
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
@@ -47,9 +51,9 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, panel_block_clicks,
-    PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
-    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    apply_stored_floating_place, disarm_underlay_close, floating_portal_anchor, mark_floating,
+    panel_block_clicks, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -75,6 +79,31 @@ pub struct SelectCtx {
     pub placement: PopupPlacement,
     pub trigger_class: String,
     pub content_class: String,
+    /// 打开菜单时是否把当前选中项滚进视口（见 [`SelectScrollSelected`]）。
+    pub scroll_selected: SelectScrollSelected,
+}
+
+/// 打开 Select 菜单时如何滚动到当前选中项。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectScrollSelected {
+    /// 不自动滚动（默认）。
+    #[default]
+    None,
+    /// 选中项对齐视口顶部。
+    Start,
+    /// 选中项对齐视口中线。
+    Center,
+}
+
+impl SelectScrollSelected {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "center" | "middle" => Self::Center,
+            "start" | "top" => Self::Start,
+            "true" | "1" => Self::Center,
+            _ => Self::None,
+        }
+    }
 }
 
 fn select_context() -> Context<SelectCtx> {
@@ -109,7 +138,7 @@ fn register_label(labels: Signal<HashMap<String, String>>, value: &str, label: &
 // Root scope（宏 `<Select>` / Builder 共用）
 // ---------------------------------------------------------------------------
 
-/// 提供 Select 上下文并构建子树。
+/// 一个 Select **实例**的根：自带 owner，再 `provide_context`（Trigger + Content 同属该实例）。
 pub fn select_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -117,48 +146,53 @@ pub fn select_scope(
     placeholder: impl Into<String>,
     trigger_class: impl Into<String>,
     content_class: impl Into<String>,
+    scroll_selected: impl Into<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = crate::utils::resolve_instance_id(id, "select");
     let placeholder = placeholder.into();
     let trigger_class = trigger_class.into();
     let content_class = content_class.into();
+    let scroll_selected = SelectScrollSelected::parse(&scroll_selected.into());
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__select_open").as_str(), || false));
     let value =
         value.unwrap_or_else(|| use_signal(format!("{id}__select_value").as_str(), String::new));
     let labels = use_signal(format!("{id}__select_labels").as_str(), HashMap::new);
-    provide_context(
-        select_context(),
-        SelectCtx {
-            id: id.clone(),
-            open,
-            value,
-            placeholder,
-            labels,
-            match_trigger: true,
-            menu_width: None,
-            menu_height: None,
-            min_height: None,
-            max_height: None,
-            placement: PopupPlacement::BottomStart,
-            trigger_class,
-            content_class,
-        },
-    );
-    let mut root = body();
-    // 复合 Trigger + Content：相对定位容器；宽度吃满父级且允许收缩（避免撑破 Dialog）。
-    let kids = take_packed(root);
-    root = Element::from(
-        vstack()
-            .gap("0")
-            .relative(true)
-            .w("100%")
-            .min_w(0.0)
-            .max_w("100%")
-            .children(kids),
-    );
-    root.template_id = Some(format!("{id}__select"));
-    root
+    with_child_owner(move || {
+        provide_context(
+            select_context(),
+            SelectCtx {
+                id: id.clone(),
+                open,
+                value,
+                placeholder,
+                labels,
+                match_trigger: true,
+                menu_width: None,
+                menu_height: None,
+                min_height: None,
+                max_height: None,
+                placement: PopupPlacement::BottomStart,
+                trigger_class,
+                content_class,
+                scroll_selected,
+            },
+        );
+        let mut root = body();
+        // 复合 Trigger + Content：相对定位容器；宽度吃满父级且允许收缩（避免撑破 Dialog）。
+        let kids = take_packed(root);
+        root = Element::from(
+            vstack()
+                .gap("0")
+                .relative(true)
+                .w("100%")
+                .min_w(0.0)
+                .max_w("100%")
+                .children(kids),
+        );
+        root.template_id = Some(format!("{id}__select"));
+        root
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -307,12 +341,15 @@ pub struct SelectContentOpts {
     pub min_height: Option<String>,
     pub max_height: Option<String>,
     pub placement: Option<PopupPlacement>,
+    /// `none` | `start` | `center`；空则用根 [`SelectCtx::scroll_selected`]。
+    pub scroll_selected: Option<String>,
 }
 
 /// ShadCN `SelectContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
 pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_select("SelectContent");
     let open = ctx.open;
+    let value = ctx.value;
     let id = ctx.id.clone();
     let view_id = format!("{id}__select_content");
     let trigger_id = format!("{id}:trigger");
@@ -326,6 +363,11 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         .class
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.content_class.clone());
+    let scroll_mode = opts
+        .scroll_selected
+        .as_deref()
+        .map(SelectScrollSelected::parse)
+        .unwrap_or(ctx.scroll_selected);
 
     // 复合 API：Items 只在 Content 内；先静默构建一次以注册 value→label，避免首屏闪 raw id。
     if ctx.labels.peek().is_empty() {
@@ -342,6 +384,9 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         // 先订阅 open，再 sync；关闭时 portal_sync 返回 None 也必须保留订阅。
         let is_open = open.get();
         if !is_open {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
             let _ = portal_sync(
                 &id_for_effect,
                 open,
@@ -359,22 +404,45 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             return Element::new().w(0.0).h(0.0);
         };
 
-        let rows = body();
+        // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
+        let rows = untrack(|| body());
         let scroll_id = format!("{id_for_effect}:menu_scroll");
+        if scroll_mode != SelectScrollSelected::None {
+            if let Some(index) = find_select_item_index(&rows, &value.peek()) {
+                let n = count_select_items(&rows).max(1);
+                let align = match scroll_mode {
+                    SelectScrollSelected::Center => {
+                        crate::app::scroll_support::ScrollItemAlign::Center
+                    }
+                    SelectScrollSelected::Start => {
+                        crate::app::scroll_support::ScrollItemAlign::Start
+                    }
+                    SelectScrollSelected::None => unreachable!(),
+                };
+                crate::app::scroll_support::request_scroll_item_into_view(
+                    scroll_id.as_str(),
+                    index,
+                    n,
+                    align,
+                );
+            }
+        }
         // Bounded flex child: when the floating chrome is capped by max_h / viewport,
         // this ScrollArea must shrink (`min_h: 0`) so overflow can scroll — `h: auto`
         // alone sizes to content and never creates a viewport.
-        let viewport: Element = scroll_area(&scroll_id)
-            .overflow_x("hidden")
-            .overflow_y("auto")
-            .scrollbar_visibility("auto")
-            .w("100%")
-            .h("100%")
-            .min_h(0.0)
-            .flex_grow(1.0)
-            .flex_shrink(1.0)
-            .child(rows)
-            .into();
+        let viewport: Element = untrack(|| {
+            scroll_area(&scroll_id)
+                .overflow_x("hidden")
+                .overflow_y("auto")
+                .scrollbar_visibility("auto")
+                .w("100%")
+                .h("100%")
+                .min_h(0.0)
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .child(rows)
+                .into()
+        });
 
         // 外层 chrome 承载 floating 几何（勿把 scroll_area 当作 floating 根）。
         // cn-select-content-aria: bg-popover ring-1 ring-foreground/10 rounded-lg shadow-md min-w-36
@@ -429,29 +497,8 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
 
         menu = panel_block_clicks(menu, oz.panel);
         // 占位锚点：不占布局；菜单已 portal 到根。
-        Element::new()
-            .w(0.0)
-            .h(0.0)
-            .child(menu)
-            .pointer_events_box_none()
+        floating_portal_anchor(menu)
     });
-    // Named `open` survives Dialog remount; force-close when this Content owner is
-    // disposed so the next Dialog open does not inherit a stuck menu / dead effect.
-    if crate::core::reactivity::is_tracking() {
-        let open_reset = open;
-        let id_reset = id.clone();
-        crate::core::reactivity::on_cleanup(move || {
-            if open_reset.peek() {
-                open_reset.set(false);
-            }
-            let _ = portal_sync(
-                &id_reset,
-                open_reset,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
-        });
-    }
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
 
@@ -575,6 +622,34 @@ impl SelectItemAlign {
     }
 }
 
+fn find_select_item_index(el: &Element, value: &str) -> Option<usize> {
+    fn walk(el: &Element, value: &str, idx: &mut usize) -> Option<usize> {
+        if let Some(v) = el.attrs.get("rui_select_item") {
+            if v.as_str() == value {
+                return Some(*idx);
+            }
+            *idx += 1;
+            return None;
+        }
+        for c in &el.children {
+            if let Some(i) = walk(c, value, idx) {
+                return Some(i);
+            }
+        }
+        None
+    }
+    let mut i = 0;
+    walk(el, value, &mut i)
+}
+
+fn count_select_items(el: &Element) -> usize {
+    if el.attrs.contains_key("rui_select_item") {
+        return 1;
+    }
+    el.children.iter().map(count_select_items).sum()
+}
+
+
 fn take_packed(mut el: Element) -> Vec<Element> {
     if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
         std::mem::take(&mut el.children)
@@ -691,6 +766,7 @@ pub struct SelectBuilder {
     placement: PopupPlacement,
     trigger_class: String,
     content_class: String,
+    scroll_selected: SelectScrollSelected,
 }
 
 /// 便捷入口：一个 Builder 即完整 Select（内含 Trigger / Content / Items）。
@@ -710,6 +786,7 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         placement: PopupPlacement::BottomStart,
         trigger_class: String::new(),
         content_class: String::new(),
+        scroll_selected: SelectScrollSelected::None,
     }
 }
 
@@ -785,6 +862,11 @@ impl SelectBuilder {
         self.content_class = c.into();
         self
     }
+    /// 打开时滚动到当前选中项：`none` | `start` | `center`。
+    pub fn scroll_selected(mut self, v: impl AsRef<str>) -> Self {
+        self.scroll_selected = SelectScrollSelected::parse(v.as_ref());
+        self
+    }
 }
 
 impl From<SelectBuilder> for Element {
@@ -804,6 +886,7 @@ impl From<SelectBuilder> for Element {
             placement,
             trigger_class,
             content_class,
+            scroll_selected,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "select");
 
@@ -835,61 +918,65 @@ impl From<SelectBuilder> for Element {
             trigger_class = format!("w-full {trigger_class}");
         }
 
-        provide_context(
-            select_context(),
-            SelectCtx {
-                id: id.clone(),
-                open,
-                value: val,
-                placeholder: placeholder.clone(),
-                labels,
-                match_trigger,
-                menu_width: menu_width.clone(),
-                menu_height: menu_height.clone(),
-                min_height: min_height.clone(),
-                max_height: max_height.clone(),
-                placement,
-                trigger_class: trigger_class.clone(),
-                content_class: content_class.clone(),
-            },
-        );
+        with_child_owner(move || {
+            provide_context(
+                select_context(),
+                SelectCtx {
+                    id: id.clone(),
+                    open,
+                    value: val,
+                    placeholder: placeholder.clone(),
+                    labels,
+                    match_trigger,
+                    menu_width: menu_width.clone(),
+                    menu_height: menu_height.clone(),
+                    min_height: min_height.clone(),
+                    max_height: max_height.clone(),
+                    placement,
+                    trigger_class: trigger_class.clone(),
+                    content_class: content_class.clone(),
+                    scroll_selected,
+                },
+            );
 
-        let trigger = SelectTrigger(SelectTriggerProps {
-            class: Some(trigger_class),
-            size: None,
-            children: Some(SelectValue(SelectValueProps {
-                placeholder: None,
-                children: None,
+            let trigger = SelectTrigger(SelectTriggerProps {
+                class: Some(trigger_class),
+                size: None,
+                children: Some(SelectValue(SelectValueProps {
+                    placeholder: None,
+                    children: None,
+                    base: None,
+                })),
                 base: None,
-            })),
-            base: None,
-        });
-        let entries_body = entries;
-        let id_for_menu = id.clone();
-        let content = select_content(
-            SelectContentOpts {
-                class: Some(content_class).filter(|s| !s.is_empty()),
-                match_trigger: Some(match_trigger),
-                menu_width,
-                menu_height,
-                min_height,
-                max_height,
-                placement: Some(placement),
-            },
-            move || build_entries_element(&id_for_menu, &entries_body, val, open, labels),
-        );
+            });
+            let entries_body = entries;
+            let id_for_menu = id.clone();
+            let content = select_content(
+                SelectContentOpts {
+                    class: Some(content_class).filter(|s| !s.is_empty()),
+                    match_trigger: Some(match_trigger),
+                    menu_width,
+                    menu_height,
+                    min_height,
+                    max_height,
+                    placement: Some(placement),
+                    scroll_selected: None,
+                },
+                move || build_entries_element(&id_for_menu, &entries_body, val, open, labels),
+            );
 
-        Element::from(
-            vstack()
-                .gap("0")
-                .relative(true)
-                .w("100%")
-                .min_w(0.0)
-                .max_w("100%")
-                .child(trigger)
-                .child(content),
-        )
-        .template_id(format!("{id}__select"))
+            Element::from(
+                vstack()
+                    .gap("0")
+                    .relative(true)
+                    .w("100%")
+                    .min_w(0.0)
+                    .max_w("100%")
+                    .child(trigger)
+                    .child(content),
+            )
+            .template_id(format!("{id}__select"))
+        })
     }
 }
 
@@ -953,7 +1040,7 @@ fn build_data_item_row(
     let bid = format!("{select_id}:opt:{}", item.value);
     let disabled = item.disabled;
 
-    select_item_row(
+    let mut row = select_item_row(
         &bid,
         &item.label,
         selected,
@@ -966,8 +1053,9 @@ fn build_data_item_row(
             open.set(false);
             val.set(ov.clone());
         },
-    )
-    .accesskit_role("option")
+    );
+    row.set_attr("rui_select_item", item.value.as_str());
+    row.accesskit_role("option")
 }
 
 /// Aria `cn-select-item` row: ghost hover; label start / check end (分居两侧).
@@ -1063,12 +1151,14 @@ pub fn Select(
     placeholder: String,
     w: Option<String>,
     class: Option<String>,
+    scroll_selected: Option<String>,
     children: Option<Element>,
 ) -> Element {
     // 若已有复合子树（Trigger/Content），走 scope。
     if let Some(c) = children {
         let tc = class.clone().unwrap_or_default();
-        return select_scope(id, None, value, placeholder, tc, String::new(), || c);
+        let ss = scroll_selected.clone().unwrap_or_default();
+        return select_scope(id, None, value, placeholder, tc, String::new(), ss, || c);
     }
     let mut b = select(&id)
         .default_value(default_value)
@@ -1079,6 +1169,9 @@ pub fn Select(
     }
     if let Some(c) = class {
         b = b.class(c);
+    }
+    if let Some(s) = scroll_selected {
+        b = b.scroll_selected(s);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);
@@ -1169,6 +1262,7 @@ mod tests {
                     placement: PopupPlacement::BottomStart,
                     trigger_class: String::new(),
                     content_class: String::new(),
+                    scroll_selected: SelectScrollSelected::None,
                 },
             );
             SelectValue(SelectValueProps {
@@ -1221,5 +1315,47 @@ mod tests {
                 .map(|s| s.as_str()),
             Some("1")
         );
+    }
+
+    #[test]
+    fn scroll_offset_centers_selected_item() {
+        use crate::app::scroll_support::scroll_offset_to_center_item;
+        // 12 months, August (index 7), 16rem menu − pad ≈ 248px viewport.
+        let sy = scroll_offset_to_center_item(7, 32.0, 248.0, 12);
+        assert!(
+            (sy - 116.0).abs() < 0.5,
+            "August should sit near mid, got {sy}"
+        );
+        assert_eq!(scroll_offset_to_center_item(0, 32.0, 248.0, 12), 0.0);
+        let last = scroll_offset_to_center_item(11, 32.0, 248.0, 12);
+        assert!((last - 136.0).abs() < 0.5, "last month max scroll, got {last}");
+    }
+
+    #[test]
+    fn find_select_item_index_reads_attr() {
+        let mut a = Element::new();
+        a.set_attr("rui_select_item", "jan");
+        let mut b = Element::new();
+        b.set_attr("rui_select_item", "aug");
+        let col = Element::new().child(a).child(b);
+        assert_eq!(find_select_item_index(&col, "aug"), Some(1));
+        assert_eq!(count_select_items(&col), 2);
+    }
+
+    #[test]
+    fn scroll_selected_parse() {
+        assert_eq!(
+            SelectScrollSelected::parse("center"),
+            SelectScrollSelected::Center
+        );
+        assert_eq!(
+            SelectScrollSelected::parse("start"),
+            SelectScrollSelected::Start
+        );
+        assert_eq!(
+            SelectScrollSelected::parse("none"),
+            SelectScrollSelected::None
+        );
+        assert_eq!(SelectScrollSelected::parse(""), SelectScrollSelected::None);
     }
 }

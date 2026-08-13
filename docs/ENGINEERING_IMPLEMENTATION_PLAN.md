@@ -263,7 +263,7 @@ flowchart TB
 | **路径** | `components/date_picker.rs`、`color_picker.rs`、Time 相关 |
 | **任务** | 方向键改值；Enter 确认；Escape 关闭；ISO / 本地显示格式文档化 |
 | **验收** | Gallery 可纯键盘完成一次选日期/颜色 |
-| **状态** | ☐ 交互 MVP 已有；键盘闭环未验收 |
+| **状态** | ☐ 交互+键盘 MVP 已落地（Calendar / Date·Time / Color HSV / Command roving）；Gallery「表单」可键盘走查；AUTHORITY 签署待手工 |
 
 ### WP-3.4 浮层与 Command / Menubar a11y 打磨
 
