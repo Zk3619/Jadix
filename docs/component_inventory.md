@@ -27,6 +27,7 @@
 **WP-CV.3（2026-08-12）**：§2 稳定面文档已手工复核修错；**无未分类 P0**，`broken` = 无（不降级）。  
 **WP-CV.4（2026-08-12）**：稳定面 id 分类见 §2.1；空串 I-1 已修。  
 **WP-2.8（2026-08-13）**：展示型 `navbar`/`chart`/`progress` 去必填；Toggle `use_scoped_signal`；Gallery 减噪。  
+**WP-2.9（2026-08-13）**：盒模型 utility `box-border`/`box-content`；测宽叶审计见 [`box_model.md`](box_model.md) 附录 A（Tabs=ContentBox；Button/Input 等拆叶）。  
 **禁止**：把 `planned` 写进 prelude / Gallery 假装可 import；把 Theme/utility 当控件走 CV 改桶。
 
 ### id 策略列（对接 C-WP-V.5）
@@ -136,7 +137,7 @@
 | 公开 API | 位置 | SemVer | 验收归属 | 笔记 |
 |----------|------|--------|----------|------|
 | Theme / `set_theme_mode` | `style/theme.rs` | 0.1 承诺 | WP-2.9、[`color.md`](color.md)、换肤冒烟 | light/dark 与 chrome 同源 |
-| utility `class` 主集 | `rui_style_tokens` + `class`/`tw` | 0.1 承诺 | WP-2.9、[`box_model.md`](box_model.md) | 未知类名编译期提示 |
+| utility `class` 主集 | `rui_style_tokens` + `class`/`tw` | 0.1 承诺 | WP-2.9 ☑、[`box_model.md`](box_model.md) | 含 `box-border` / `box-content`；未知类名编译期提示 |
 
 ### 1.9 ShadCN 对位 · 尚未实现（`planned`）
 

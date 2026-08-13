@@ -21,7 +21,7 @@
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoDimension, IntoF32, LayoutStatus,
+    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
@@ -608,7 +608,7 @@ impl ButtonBuilder {
     }
 
     // Pass-through some layout methods
-    pub fn w(mut self, w: impl IntoDimension) -> Self {
+    pub fn w(mut self, w: impl IntoCssDim) -> Self {
         self.container = self.container.w(w);
         self
     }
@@ -624,15 +624,15 @@ impl ButtonBuilder {
             .max_w("100%");
         self
     }
-    pub fn h(mut self, h: impl IntoDimension) -> Self {
+    pub fn h(mut self, h: impl IntoCssDim) -> Self {
         self.container = self.container.h(h);
         self
     }
-    pub fn p(mut self, p: impl IntoDimension) -> Self {
+    pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.container = self.container.p(p);
         self
     }
-    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+    pub fn gap(mut self, g: impl IntoCssDim) -> Self {
         self.container = self.container.gap(g);
         self
     }

@@ -6,7 +6,7 @@
 use taffy::prelude::TrackSizingFunction;
 
 use crate::core::scroll_viewport::maybe_activate_scroll_viewport;
-use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage};
+use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoF32};
 
 pub struct BoxBuilder {
     pub(crate) el: Element,
@@ -57,172 +57,184 @@ impl BoxBuilder {
         self
     }
 
-    pub fn w(mut self, w: impl IntoDimension) -> Self {
+    pub fn w(mut self, w: impl IntoCssDim) -> Self {
         self.el = self.el.w(w);
         self
     }
 
-    pub fn h(mut self, h: impl IntoDimension) -> Self {
+    pub fn h(mut self, h: impl IntoCssDim) -> Self {
         self.el = self.el.h(h);
         self
     }
 
-    pub fn min_w(mut self, w: impl IntoDimension) -> Self {
+    pub fn min_w(mut self, w: impl IntoCssDim) -> Self {
         self.el = self.el.min_w(w);
         self
     }
 
-    pub fn min_h(mut self, h: impl IntoDimension) -> Self {
+    pub fn min_h(mut self, h: impl IntoCssDim) -> Self {
         self.el = self.el.min_h(h);
         self
     }
 
-    pub fn max_w(mut self, w: impl IntoDimension) -> Self {
+    pub fn max_w(mut self, w: impl IntoCssDim) -> Self {
         self.el = self.el.max_w(w);
         self
     }
 
-    pub fn max_h(mut self, h: impl IntoDimension) -> Self {
+    pub fn max_h(mut self, h: impl IntoCssDim) -> Self {
         self.el = self.el.max_h(h);
         self
     }
 
-    pub fn p(mut self, p: impl IntoLengthPercentage) -> Self {
+    /// CSS `box-sizing: border-box`（默认）。Tailwind `box-border`。
+    pub fn border_box(mut self) -> Self {
+        self.el = self.el.border_box();
+        self
+    }
+
+    /// CSS `box-sizing: content-box`。Tailwind `box-content`。
+    pub fn content_box(mut self) -> Self {
+        self.el = self.el.content_box();
+        self
+    }
+
+    pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.p(p);
         self
     }
 
-    pub fn px(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn px(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.px(p);
         self
     }
 
-    pub fn py(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn py(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.py(p);
         self
     }
 
-    pub fn pt(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pt(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.pt(p);
         self
     }
 
-    pub fn pr(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pr(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.pr(p);
         self
     }
 
-    pub fn pb(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pb(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.pb(p);
         self
     }
 
-    pub fn pl(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pl(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.pl(p);
         self
     }
 
-    pub fn padding_inline(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_inline(mut self, p: impl IntoCssRectPair) -> Self {
         self.el = self.el.padding_inline(p);
         self
     }
 
-    pub fn padding_block(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_block(mut self, p: impl IntoCssRectPair) -> Self {
         self.el = self.el.padding_block(p);
         self
     }
 
-    pub fn padding_inline_start(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_inline_start(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.padding_inline_start(p);
         self
     }
 
-    pub fn padding_inline_end(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_inline_end(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.padding_inline_end(p);
         self
     }
 
-    pub fn padding_block_start(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_block_start(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.padding_block_start(p);
         self
     }
 
-    pub fn padding_block_end(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn padding_block_end(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.padding_block_end(p);
         self
     }
 
-    pub fn m(mut self, m: impl IntoDimension) -> Self {
+    pub fn m(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.m(m);
         self
     }
 
-    pub fn mx(mut self, m: impl IntoDimension) -> Self {
+    pub fn mx(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.mx(m);
         self
     }
 
-    pub fn my(mut self, m: impl IntoDimension) -> Self {
+    pub fn my(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.my(m);
         self
     }
 
-    pub fn mt(mut self, m: impl IntoDimension) -> Self {
+    pub fn mt(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.mt(m);
         self
     }
 
-    pub fn mr(mut self, m: impl IntoDimension) -> Self {
+    pub fn mr(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.mr(m);
         self
     }
 
-    pub fn mb(mut self, m: impl IntoDimension) -> Self {
+    pub fn mb(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.mb(m);
         self
     }
 
-    pub fn ml(mut self, m: impl IntoDimension) -> Self {
+    pub fn ml(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.ml(m);
         self
     }
 
-    pub fn margin_inline(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_inline(mut self, m: impl IntoCssRectPair) -> Self {
         self.el = self.el.margin_inline(m);
         self
     }
 
-    pub fn margin_block(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_block(mut self, m: impl IntoCssRectPair) -> Self {
         self.el = self.el.margin_block(m);
         self
     }
 
-    pub fn margin_inline_start(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_inline_start(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.margin_inline_start(m);
         self
     }
 
-    pub fn margin_inline_end(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_inline_end(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.margin_inline_end(m);
         self
     }
 
-    pub fn margin_block_start(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_block_start(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.margin_block_start(m);
         self
     }
 
-    pub fn margin_block_end(mut self, m: impl IntoDimension) -> Self {
+    pub fn margin_block_end(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.margin_block_end(m);
         self
     }
 
-    pub fn inline_size(mut self, s: impl IntoDimension) -> Self {
+    pub fn inline_size(mut self, s: impl IntoCssDim) -> Self {
         self.el = self.el.inline_size(s);
         self
     }
 
-    pub fn block_size(mut self, s: impl IntoDimension) -> Self {
+    pub fn block_size(mut self, s: impl IntoCssDim) -> Self {
         self.el = self.el.block_size(s);
         self
     }
@@ -244,8 +256,56 @@ impl BoxBuilder {
         self.el = self.el.border_color(color);
         self
     }
-    pub fn border_width(mut self, width: f32) -> Self {
+    pub fn border_width(mut self, width: impl IntoBorderWidths) -> Self {
         self.el = self.el.border_width(width);
+        self
+    }
+    pub fn border_top_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_top_width(width);
+        self
+    }
+    pub fn border_right_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_right_width(width);
+        self
+    }
+    pub fn border_bottom_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_bottom_width(width);
+        self
+    }
+    pub fn border_left_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_left_width(width);
+        self
+    }
+    pub fn border_top(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.el = self.el.border_top(color, width);
+        self
+    }
+    pub fn border_right(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.el = self.el.border_right(color, width);
+        self
+    }
+    pub fn border_bottom(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.el = self.el.border_bottom(color, width);
+        self
+    }
+    pub fn border_left(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.el = self.el.border_left(color, width);
+        self
+    }
+    pub fn border_top_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_top_color(color);
+        self
+    }
+    pub fn border_right_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_right_color(color);
+        self
+    }
+    pub fn border_bottom_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_bottom_color(color);
+        self
+    }
+    pub fn border_left_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_left_color(color);
         self
     }
 
@@ -271,16 +331,24 @@ impl BoxBuilder {
         self
     }
 
-    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+    pub fn gap(mut self, g: impl IntoCssDim) -> Self {
         self.el = self.el.gap(g);
         self
     }
-    pub fn gap_x(mut self, g: impl IntoDimension) -> Self {
+    pub fn gap_x(mut self, g: impl IntoCssDim) -> Self {
         self.el = self.el.gap_x(g);
         self
     }
-    pub fn gap_y(mut self, g: impl IntoDimension) -> Self {
+    pub fn gap_y(mut self, g: impl IntoCssDim) -> Self {
         self.el = self.el.gap_y(g);
+        self
+    }
+    pub fn column_gap(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.column_gap(g);
+        self
+    }
+    pub fn row_gap(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.row_gap(g);
         self
     }
 
@@ -359,7 +427,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
+    pub fn flex_basis(mut self, basis: impl IntoCssDim) -> Self {
         self.el = self.el.flex_basis(basis);
         self
     }
@@ -403,28 +471,36 @@ impl BoxBuilder {
         self
     }
 
-    pub fn top(mut self, val: impl IntoDimension) -> Self {
+    pub fn top(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.top(val);
         self
     }
 
-    pub fn right(mut self, val: impl IntoDimension) -> Self {
+    pub fn right(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.right(val);
         self
     }
 
-    pub fn bottom(mut self, val: impl IntoDimension) -> Self {
+    pub fn bottom(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.bottom(val);
         self
     }
 
-    pub fn left(mut self, val: impl IntoDimension) -> Self {
+    pub fn left(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.left(val);
         self
     }
 
-    pub fn inset(mut self, val: impl IntoDimension) -> Self {
+    pub fn inset(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.inset(val);
+        self
+    }
+    pub fn inset_inline(mut self, val: impl IntoCssRectPair) -> Self {
+        self.el = self.el.inset_inline(val);
+        self
+    }
+    pub fn inset_block(mut self, val: impl IntoCssRectPair) -> Self {
+        self.el = self.el.inset_block(val);
         self
     }
 

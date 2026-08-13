@@ -1,3 +1,4 @@
+mod box_model_contract;
 mod headless_smoke;
 mod mark_dirty;
 mod percent_content_box;

@@ -152,19 +152,16 @@ impl super::App {
             };
             super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
                 .map(|e| {
-                    let border = if e.style.border_style == crate::style::LineStyle::None {
-                        0.0
-                    } else {
-                        e.style.border_width
-                    };
+                    let [_, br, _, bl] = e.style.resolved_border_widths();
                     // CSS % padding resolves against the containing block width. For a
                     // stretched field, border-box ≈ CB; subtract own border so we don't
                     // treat the stroke as part of the percentage basis.
-                    let basis = (visual[2] - 2.0 * border).max(0.0);
-                    match e.style.padding.left {
+                    let basis = (visual[2] - bl - br).max(0.0);
+                    let pad_l = match e.style.padding.left {
                         taffy::style::LengthPercentage::Length(v) => v,
                         taffy::style::LengthPercentage::Percent(p) => basis * p,
-                    }
+                    };
+                    pad_l + bl
                 })
                 .unwrap_or(8.0)
         });

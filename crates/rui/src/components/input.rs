@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_text_color, Element, IntoDimension, IntoF32, LayoutStatus};
+use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_node::build_icon_text_node;
@@ -501,11 +501,11 @@ impl InputBuilder {
         self.password_toggle = v;
         self
     }
-    pub fn w(mut self, width: impl IntoDimension) -> Self {
+    pub fn w(mut self, width: impl IntoCssDim) -> Self {
         self.container = self.container.w(width);
         self
     }
-    pub fn h(mut self, height: impl IntoDimension) -> Self {
+    pub fn h(mut self, height: impl IntoCssDim) -> Self {
         self.container = self.container.h(height);
         self
     }

@@ -23,7 +23,7 @@
 //! `for` 写入 `attrs["for"]`；指针命中时由 hit path 转发到目标 `on_click`。
 //! 关联时写入稳定 `accesskit_id`（`lbl:for:…`），桥侧给目标补 `labelled_by`。
 
-use crate::core::tree::{Element, IntoDimension, IntoF32, IntoLengthPercentage, LayoutStatus};
+use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::text::TextBuilder;
 use crate::style::{parse_color, InputCaretDraw};
 use crate::utils::clipboard::set_text as clipboard_set_text;
@@ -292,11 +292,11 @@ impl LabelBuilder {
     }
 
     // Pass-through some layout/base methods from Element
-    pub fn w(mut self, w: impl IntoDimension) -> Self {
+    pub fn w(mut self, w: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.w(w);
         self
     }
-    pub fn h(mut self, h: impl IntoDimension) -> Self {
+    pub fn h(mut self, h: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.h(h);
         self
     }
@@ -304,59 +304,68 @@ impl LabelBuilder {
         self.inner.el = self.inner.el.bg(bg);
         self
     }
-    pub fn p(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.p(p);
         self
     }
-    pub fn px(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn px(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.px(p);
         self
     }
-    pub fn py(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn py(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.py(p);
         self
     }
-    pub fn pt(mut self, p: impl IntoLengthPercentage) -> Self {
+    /// 文案叶自带 padding 且 `text-align:center` 时请用 ContentBox（见 `docs/box_model.md`）。
+    pub fn content_box(mut self) -> Self {
+        self.inner.el = self.inner.el.content_box();
+        self
+    }
+    pub fn border_box(mut self) -> Self {
+        self.inner.el = self.inner.el.border_box();
+        self
+    }
+    pub fn pt(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.pt(p);
         self
     }
-    pub fn pr(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pr(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.pr(p);
         self
     }
-    pub fn pb(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pb(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.pb(p);
         self
     }
-    pub fn pl(mut self, p: impl IntoLengthPercentage) -> Self {
+    pub fn pl(mut self, p: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.pl(p);
         self
     }
-    pub fn m(mut self, m: impl IntoDimension) -> Self {
+    pub fn m(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.m(m);
         self
     }
-    pub fn mx(mut self, m: impl IntoDimension) -> Self {
+    pub fn mx(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.mx(m);
         self
     }
-    pub fn my(mut self, m: impl IntoDimension) -> Self {
+    pub fn my(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.my(m);
         self
     }
-    pub fn mt(mut self, m: impl IntoDimension) -> Self {
+    pub fn mt(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.mt(m);
         self
     }
-    pub fn mr(mut self, m: impl IntoDimension) -> Self {
+    pub fn mr(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.mr(m);
         self
     }
-    pub fn mb(mut self, m: impl IntoDimension) -> Self {
+    pub fn mb(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.mb(m);
         self
     }
-    pub fn ml(mut self, m: impl IntoDimension) -> Self {
+    pub fn ml(mut self, m: impl IntoCssDim) -> Self {
         self.inner.el = self.inner.el.ml(m);
         self
     }

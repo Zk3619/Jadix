@@ -132,6 +132,10 @@ pub enum KnownUtility<'a> {
     GroupMarker { name: Option<&'a str> },
     /// Marker: this element is a `peer` / `peer/name` for following siblings' `peer-hover:`.
     PeerMarker { name: Option<&'a str> },
+    /// Tailwind `box-border` → `box-sizing: border-box`（RUI 默认）。
+    BoxBorder,
+    /// Tailwind `box-content` → `box-sizing: content-box`。
+    BoxContent,
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -311,6 +315,8 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "animate-none" => return Some(KnownUtility::AnimateNone),
         "group" => return Some(KnownUtility::GroupMarker { name: None }),
         "peer" => return Some(KnownUtility::PeerMarker { name: None }),
+        "box-border" => return Some(KnownUtility::BoxBorder),
+        "box-content" => return Some(KnownUtility::BoxContent),
         _ => {}
     }
 
@@ -607,6 +613,16 @@ mod tests {
         assert!(matches!(
             classify_utility("whitespace-nowrap"),
             Some(KnownUtility::WhitespaceNowrap)
+        ));
+        assert!(is_known_utility("box-border"));
+        assert!(is_known_utility("box-content"));
+        assert!(matches!(
+            classify_utility("box-border"),
+            Some(KnownUtility::BoxBorder)
+        ));
+        assert!(matches!(
+            classify_utility("box-content"),
+            Some(KnownUtility::BoxContent)
         ));
         assert!(!is_known_utility("not-a-real-class"));
     }

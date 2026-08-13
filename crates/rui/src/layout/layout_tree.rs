@@ -21,7 +21,7 @@ use crate::core::scroll_viewport::{
     scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
     scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
-use crate::core::tree::Element;
+use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::TextStyle;
 
@@ -576,6 +576,51 @@ fn resolve_corner_radii(radii: [f32; 4], w: f32, h: f32) -> [f32; 4] {
     out
 }
 
+/// Non-uniform border paint: four axis-aligned strips (corners belong to top/bottom).
+/// SDF `border_width` is single-valued, so per-side width/color cannot use the rounded stroke.
+fn push_per_side_border_strips(
+    instances: &mut Vec<InstanceInput>,
+    render_rect: [f32; 4],
+    widths: [f32; 4],
+    colors: [[f32; 4]; 4],
+    opacity: f32,
+    rotate_deg: f32,
+    parent_clip: Option<[f32; 4]>,
+) {
+    let [x, y, w, h] = render_rect;
+    let [bt, br, bb, bl] = widths;
+    let mut push = |pos: [f32; 2], size: [f32; 2], color: [f32; 4]| {
+        if size[0] <= 0.0 || size[1] <= 0.0 || color[3] <= 0.0 {
+            return;
+        }
+        instances.push(
+            InstanceInput {
+                rect_pos: pos,
+                rect_size: size,
+                color: mul_color_alpha(color, opacity),
+                border_color: [0.0, 0.0, 0.0, 0.0],
+                radii: [0.0; 4],
+                border_width: 0.0,
+                shadow_color: [0.0, 0.0, 0.0, 0.0],
+                shadow_offset: [0.0, 0.0],
+                shadow_blur: 0.0,
+                shadow_spread: 0.0,
+                shadow_inset: 0.0,
+                rotate_deg,
+                clip_pos: [0.0, 0.0],
+                clip_size: InstanceInput::NO_CLIP_SIZE,
+                _pad: 0.0,
+            }
+            .with_clip(parent_clip),
+        );
+    };
+    push([x, y], [w, bt], colors[0]);
+    push([x, y + (h - bb).max(0.0)], [w, bb], colors[2]);
+    let mid_h = (h - bt - bb).max(0.0);
+    push([x, y + bt], [bl, mid_h], colors[3]);
+    push([x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1]);
+}
+
 /// Minimum cross-axis size for an `auto` scrollbar at spring?; must match `app::state`.
 const SCROLLBAR_HIT_SLAB_CROSS: f32 = 8.0;
 /// Default track cross size when `max_w`/`max_h` is missing; matches `ScrollbarBuilder::thickness`.
@@ -879,6 +924,8 @@ pub struct TextLayoutInfo {
 pub struct LayoutTree {
     pub taffy: TaffyTree<()>,
     pub(crate) root_node: Option<NodeId>,
+    /// Current layout viewport (window / compute available size) for `vw`/`vh`/`dvh`.
+    viewport: [f32; 2],
     text_measurements: HashMap<taffy::NodeId, TextMeasureMeta>,
     /// Per-compute_layout text leaf measure memo (cleared each compute).
     measure_layout_cache: RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
@@ -939,6 +986,10 @@ impl TextMeasureCacheKey {
 #[inline]
 fn dimension_is_content_sized(d: Dimension) -> bool {
     matches!(d, Dimension::Auto)
+}
+
+fn element_tree_has_deferred_units(el: &Element) -> bool {
+    el.style.has_deferred_units() || el.children.iter().any(element_tree_has_deferred_units)
 }
 
 #[inline]
@@ -1095,6 +1146,7 @@ impl LayoutTree {
         Self {
             taffy,
             root_node: None,
+            viewport: [0.0, 0.0],
             text_measurements: HashMap::new(),
             measure_layout_cache: RefCell::new(HashMap::new()),
             visited_nodes: std::collections::HashSet::new(),
@@ -1201,9 +1253,49 @@ impl LayoutTree {
         self.promote_compute_root_for_size_overflow(picked)
     }
 
+    #[inline]
+    fn unit_ctx_for(&self, element: &Element) -> UnitCtx {
+        UnitCtx::new(self.viewport[0], self.viewport[1], element.text_style.size)
+    }
+
+    fn unit_ctx_with_cb(&self, element: &Element, cb_w: Option<f32>, cb_h: Option<f32>) -> UnitCtx {
+        self.unit_ctx_for(element).with_containing_block(cb_w, cb_h)
+    }
+
+    /// Containing block = parent **content box** (layout.size − padding − border), or viewport for root.
+    fn unit_ctx_from_parent_layout(&self, element: &Element) -> UnitCtx {
+        let ctx = self.unit_ctx_for(element);
+        let Some(id) = element.layout_node else {
+            return ctx.with_containing_block(Some(self.viewport[0]), Some(self.viewport[1]));
+        };
+        match self.taffy.parent(id) {
+            None => ctx.with_containing_block(Some(self.viewport[0]), Some(self.viewport[1])),
+            Some(pid) => match self.taffy.layout(pid) {
+                Ok(layout) => {
+                    let cw = (layout.size.width
+                        - layout.padding.left
+                        - layout.padding.right
+                        - layout.border.left
+                        - layout.border.right)
+                        .max(0.0);
+                    let ch = (layout.size.height
+                        - layout.padding.top
+                        - layout.padding.bottom
+                        - layout.border.top
+                        - layout.border.bottom)
+                        .max(0.0);
+                    ctx.with_containing_block(Some(cw), Some(ch))
+                }
+                Err(_) => ctx,
+            },
+        }
+    }
+
     pub fn update_taffy_node_style(&mut self, element: &Element) {
         if let Some(node_id) = element.layout_node {
-            let style = element.style.to_taffy_style();
+            let style = element
+                .style
+                .to_taffy_style_with(&self.unit_ctx_from_parent_layout(element));
             self.taffy.set_style(node_id, style).unwrap();
         }
     }
@@ -1323,6 +1415,7 @@ impl LayoutTree {
         let _ = hoist_portal_subtrees(root);
 
         let t_rebuild_begin = Instant::now();
+        self.viewport = [width.max(0.0), height.max(0.0)];
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
         cascade_inheritable_text_style(root, None);
@@ -1330,7 +1423,7 @@ impl LayoutTree {
         self.text_measurements.clear();
         self.visited_nodes.clear();
         // DO NOT clear taffy anymore; we rely on reconciliation and selective removal.
-        let root_node = self.build_taffy_node_mut(root);
+        let root_node = self.build_taffy_node_mut(root, Some(width), Some(height));
         self.root_node = Some(root_node);
 
         // Prune nodes that were not visited in this pass.
@@ -1369,7 +1462,8 @@ impl LayoutTree {
                 )
                 .unwrap();
         }
-        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0;
+        let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
+        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
 
         let mut instances = Vec::new();
         let mut textured_draws = Vec::new();
@@ -1484,6 +1578,7 @@ impl LayoutTree {
         // build (e.g. after maximize / restore while status is `Clean`) and the UI stays a small
         // island in the corner while the swapchain is full-window.
         let t_setup_begin = Instant::now();
+        self.viewport = [width.max(0.0), height.max(0.0)];
         root.style.size.width = Dimension::Length(width);
         root.style.size.height = Dimension::Length(height);
         cascade_inheritable_text_style(root, None);
@@ -1538,7 +1633,9 @@ impl LayoutTree {
             ) {
                 log::error!("taffy compute_layout_with_measure failed: {err:?}");
             }
-            t_compute_begin.elapsed().as_secs_f32() * 1000.0
+            let relayout_ms =
+                self.relayout_deferred_units_if_needed(root, compute_node, available_space);
+            t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms
         } else {
             0.0
         };
@@ -1606,13 +1703,79 @@ impl LayoutTree {
         }
     }
 
-    fn build_taffy_node_mut(&mut self, element: &mut Element) -> NodeId {
+    /// Re-bake `vw`/`vh`/`em`/`calc` after viewport or containing-block changes.
+    /// Resize uses the fast path (root style only); without this, baked Lengths stay stale.
+    fn relayout_deferred_units_if_needed(
+        &mut self,
+        root: &Element,
+        compute_node: NodeId,
+        available_space: Size<AvailableSpace>,
+    ) -> f32 {
+        if !element_tree_has_deferred_units(root) {
+            return 0.0;
+        }
+        let mut dirty = false;
+        self.relayout_deferred_units_walk(root, &mut dirty);
+        if !dirty {
+            return 0.0;
+        }
+        let t0 = Instant::now();
+        self.measure_layout_cache.borrow_mut().clear();
+        let tm = &self.text_measurements;
+        let mcache = &self.measure_layout_cache;
+        if let Err(err) = self.taffy.compute_layout_with_measure(
+            compute_node,
+            available_space,
+            |known_dimensions, available_space, node_id, _context, _style| {
+                measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+            },
+        ) {
+            log::error!("taffy deferred-unit relayout failed: {err:?}");
+        }
+        t0.elapsed().as_secs_f32() * 1000.0
+    }
+
+    fn relayout_deferred_units_walk(&mut self, element: &Element, dirty: &mut bool) {
+        if element.style.has_deferred_units() {
+            if let Some(node_id) = element.layout_node {
+                let ctx = self.unit_ctx_from_parent_layout(element);
+                let new_style = element.style.to_taffy_style_with(&ctx);
+                let changed = self.taffy.style(node_id).ok().map_or(true, |old| {
+                    old.size != new_style.size
+                        || old.min_size != new_style.min_size
+                        || old.max_size != new_style.max_size
+                        || old.flex_basis != new_style.flex_basis
+                        || old.padding != new_style.padding
+                        || old.margin != new_style.margin
+                        || old.gap != new_style.gap
+                        || old.inset != new_style.inset
+                });
+                if changed {
+                    let _ = self.taffy.set_style(node_id, new_style);
+                    *dirty = true;
+                }
+            }
+        }
+        for child in &element.children {
+            self.relayout_deferred_units_walk(child, dirty);
+        }
+    }
+
+    fn build_taffy_node_mut(
+        &mut self,
+        element: &mut Element,
+        cb_w: Option<f32>,
+        cb_h: Option<f32>,
+    ) -> NodeId {
+        let ctx = self.unit_ctx_with_cb(element, cb_w, cb_h);
+        let (child_cb_w, child_cb_h) = element.style.estimate_content_box(&ctx);
+
         let mut child_nodes = Vec::new();
         for child in &mut element.children {
-            child_nodes.push(self.build_taffy_node_mut(child));
+            child_nodes.push(self.build_taffy_node_mut(child, child_cb_w, child_cb_h));
         }
 
-        let style = element.style.to_taffy_style();
+        let style = element.style.to_taffy_style_with(&ctx);
         let is_text_leaf = element.text.is_some() && child_nodes.is_empty();
 
         let node_id = if let Some(existing_id) = element.layout_node {
@@ -1838,10 +2001,14 @@ impl LayoutTree {
         // element's own background / border / outset shadow must use `parent_clip`, otherwise
         // a scrolled panel's soft rounded shadow is sliced into a sharp axis-aligned box.
         // Baking `visible_rect` into pos/size made scrolled borders stick to the viewport edge.
-        let border_w = if element.style.border_style == crate::style::LineStyle::None {
-            0.0
+        let border_widths = element.style.resolved_border_widths();
+        let border_w = border_widths.into_iter().fold(0.0_f32, f32::max);
+        let use_border_strips = border_w > 0.0 && !element.style.border_is_uniform();
+        let sdf_border_w = if use_border_strips { 0.0 } else { border_w };
+        let sdf_border_color = if use_border_strips {
+            [0.0, 0.0, 0.0, 0.0]
         } else {
-            element.style.border_width
+            mul_color_alpha(element.style.border_color, opacity)
         };
         let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
@@ -1850,6 +2017,7 @@ impl LayoutTree {
         if (has_bg || has_border || has_shadow) && paint_visible[2] > 0.0 && paint_visible[3] > 0.0 {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
+            let need_fill_instance = has_bg || has_shadow || (has_border && !use_border_strips);
             if let Some(grad) = element.style.bg_gradient {
                 const STRIPS: usize = 24;
                 let angle = grad.angle_deg.to_radians();
@@ -1904,15 +2072,15 @@ impl LayoutTree {
                         .with_clip(parent_clip),
                     );
                 }
-                if has_border || has_shadow {
+                if has_shadow || (has_border && !use_border_strips) {
                     instances.push(
                         InstanceInput {
                             rect_pos: [render_rect[0], render_rect[1]],
                             rect_size: [render_rect[2], render_rect[3]],
                             color: [0.0, 0.0, 0.0, 0.0],
-                            border_color: mul_color_alpha(element.style.border_color, opacity),
+                            border_color: sdf_border_color,
                             radii: resolved_radii,
-                            border_width: border_w,
+                            border_width: sdf_border_w,
                             shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
                             shadow_offset: element.style.shadow_offset,
                             shadow_blur: element.style.shadow_blur,
@@ -1926,15 +2094,15 @@ impl LayoutTree {
                         .with_clip(parent_clip),
                     );
                 }
-            } else {
+            } else if need_fill_instance {
                 instances.push(
                     InstanceInput {
                         rect_pos: [render_rect[0], render_rect[1]],
                         rect_size: [render_rect[2], render_rect[3]],
                         color: mul_color_alpha(element.style.bg_color, opacity),
-                        border_color: mul_color_alpha(element.style.border_color, opacity),
+                        border_color: sdf_border_color,
                         radii: resolved_radii,
-                        border_width: border_w,
+                        border_width: sdf_border_w,
                         shadow_color: mul_color_alpha(element.style.shadow_color, opacity),
                         shadow_offset: element.style.shadow_offset,
                         shadow_blur: element.style.shadow_blur,
@@ -1946,6 +2114,17 @@ impl LayoutTree {
                         _pad: 0.0,
                     }
                     .with_clip(parent_clip),
+                );
+            }
+            if use_border_strips {
+                push_per_side_border_strips(
+                    instances,
+                    render_rect,
+                    border_widths,
+                    element.style.resolved_border_colors(),
+                    opacity,
+                    rotate_deg,
+                    parent_clip,
                 );
             }
             for sh in &element.style.extra_shadows {

@@ -245,7 +245,7 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | **WP-2.6** | 组件 golden 五场景 | C-WP-3.3 | ☑ 2026-08-13；Button/Input/Dialog/Tabs/ScrollArea；`golden_component_*` + `tests/golden/golden_*.rgba` |
 | **WP-2.7** | 双路径 / 根裸 `get()` 可观测 | R-WP-2 | ☑ 2026-08-13；建议进 Beta；0.1 Win-first 可注明已知限制 |
 | **WP-2.8** | 身份 API 收敛（展示型去必填；空串；试点 scoped） | C-WP-2.6 | ☑ 2026-08-13；前置 CV.4 ☑；框架能力来自 2.4 |
-| **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☐ **不挡 Beta**；细则 [`box_model.md`](box_model.md) |
+| **WP-2.9** | 类 CSS 盒模型完善（文档 / utility / 测宽叶纪律 / 命中测） | — | ☑ 2026-08-13；**不挡 Beta**；细则 [`box_model.md`](box_model.md) |
 
 WP-2.4 任务要点（已签）：注册表随 Owner dispose（Anchors + Bindings + COMPONENT_*）；`scoped_template_id` / `scoped_focus_id`；长会话无膨胀测 `crate_tests/reactive/registry_owner.rs`；Gallery「布局 → WP-2.4」。文档：`reactivity_and_hot_reload.md` + `element_identity.md` §7。细则见冻结 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md) R-WP-1。
 
@@ -337,18 +337,32 @@ WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_c
 
 | 子项 | 任务 | 映射 [`box_model.md`](box_model.md) | 状态 |
 |------|------|--------------------------------------|------|
-| **2.9.1** | 手册落地；纲领/文档站/README 互链；Gallery「布局」区链到契约摘要 | BM1 | ☑ 手册 2026-08-12；入口链 ☐ |
-| **2.9.2** | Builder `.border_box()` + utility `box-border` / `box-content`（`rui_style_tokens` + 宏映射） | BM2 | ☐ |
-| **2.9.3** | 稳定面「单节点文案 + padding」审计：该 ContentBox 的改 ContentBox 或拆叶；表进 inventory 或本手册附录 | BM3 | ☐ |
-| **2.9.4** | 库测：outline 不扩大 hit；overflow+padding 裁剪边；（回归）percent_content_box 保持绿 | BM7 | ☐ |
-| **2.9.5** | `em` 语义：文档标明「现相对根 16px」；可选试点「相对本节点 font-size」并加测 | BM4 | ☐ |
-| **2.9.6** | （P2）分边 border API + 绘制，或写入 Backlog B15 并关闭本子项为「延后」 | BM6 | ☐ → 默认可降 B15 |
-| **2.9.7** | （P2）视口单位：文档诚实写清「布局根 Percent」；真 `vw`/`vh` 另议 | BM5 | ☐ → 默认可降 B15 |
+| **2.9.1** | 手册落地；纲领/文档站/README 互链；Gallery「布局」区链到契约摘要 | BM1 | ☑ 手册 2026-08-12；入口链 + Gallery「WP-2.9)」2026-08-13 |
+| **2.9.2** | Builder `.border_box()` + utility `box-border` / `box-content`（`rui_style_tokens` + 宏映射） | BM2 | ☑ |
+| **2.9.3** | 稳定面「单节点文案 + padding」审计：该 ContentBox 的改 ContentBox 或拆叶；表进 inventory 或本手册附录 | BM3 | ☑ [`box_model.md`](box_model.md) 附录 A |
+| **2.9.4** | 库测：outline 不扩大 hit；overflow+padding 裁剪边；（回归）percent_content_box 保持绿 | BM7 | ☑ `box_model_contract` + `percent_content_box` |
+| **2.9.5** | `em` 语义：文档标明「现相对根 16px」；可选试点「相对本节点 font-size」并加测 | BM4 | ☑ 局部 em（`CssDim` + `text_style.size`）；`IntoDimension`/`IntoF32` 仍根 16px |
+| **2.9.6** | （P2）分边 border API + 绘制 | BM6 | ☑ 2026-08-13 **B15** |
+| **2.9.7** | （P2）视口单位：文档诚实写清「布局根 Percent」；真 `vw`/`vh` 另议 | BM5 | ☑ 真视口（`LayoutTree.viewport` + `to_taffy_style_with`） |
 
-**退出**：2.9.1–2.9.4 ☑；2.9.5 至少文档诚实；2.9.6/7 完成或显式进 §7 Backlog。  
+**退出**：2.9.1–2.9.7 ☑（含分边 border）。  
 **禁区**：换 Taffy；outline/shadow 进布局；块级 margin collapse。
 
-**W2 已签署**：2.1–2.8。（2.9 并行；2.9 不挡升 Beta。）
+WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`；测宽叶审计表（Tabs=ContentBox，Button/Input 等拆叶）；命中/裁剪库测；局部 `em` + 真视口 `vw`/`vh`/`dvh` + `calc`；分边 `border-left` 等（B15）。Gallery「布局 → WP-2.9 / B15」。细则 [`box_model.md`](box_model.md)。
+
+#### WP-2.9 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 盒模型测（权威）** | `cargo test -p rui --lib box_model_contract` | BorderBox/ContentBox 外缘；outline 不扩 hit；border 可点；overflow+padding clip=父 border-box | 任一 `FAILED` |
+| **A′ 百分比回归** | `cargo test -p rui --lib percent_content_box` | 全绿（含 `percent_width_is_parent_content_box_not_border_box`） | `FAILED` |
+| **A″ em / 视口** | `cargo test -p rui --lib em_resolves_against_root`；`box_model_contract` 中 vw/em/calc | `IntoDimension` 的 `1em` ≡ 根 16px；布局期局部 em + 真 vw/vh/dvh + calc | `FAILED` |
+| **A‴ utility** | `cargo test -p rui_style_tokens`；`cargo test -p rui --lib apply_box_sizing_utilities` | `box-border`/`box-content` 已知并写入 `box_sizing` | 未知类 / 未改 sizing |
+| **B Gallery（建议）** | `cargo run -p gallery` →「布局」→「WP-2.9 / B15)」 | `box-content` 明显宽于 `box-border`；洋葱图四边异色；点描边内侧 +1、点 outline 外扩不加 | 两盒同宽；分边同色同宽；点红描边也 +1 |
+
+**签署规则**：A+A′+A″+A‴ 绿即可勾 WP-2.9；B 不替代库测。2.9.6 / B15 分边 border 已签。
+
+**W2 已签署**：2.1–2.9。（2.9 不挡升 Beta。）
 
 ### 5.5 Wave 3 — 产品面与外壳
 
@@ -431,7 +445,7 @@ WP-2.8 任务要点（已签）：展示型 `navbar()` / `bar_chart()` / `line_c
 | B12 | 非默认 brand 主题包 | 组件 CB5 |
 | B13 | 实验面批量升 verified | 组件 CB6；须走 CV 流程 |
 | B14 | ShadCN planned P1（Badge/Avatar/Skeleton/…） | inventory §1.9；落地先 `experimental` |
-| B15 | 盒模型加深：分边 border、真视口 `vw`/`vh`、局部 `em` | [`box_model.md`](box_model.md) BM4–BM6；WP-2.9.5–7 可降入 |
+| B15 | 盒模型加深：分边 border（`border-left` 等） | [`box_model.md`](box_model.md) BM6；☑ 2026-08-13 `border_width_sides` / `border_color_sides` + Taffy `Rect` + 非均匀四边条；`box_model_contract`；Gallery「WP-2.9 / B15」 |
 
 ---
 

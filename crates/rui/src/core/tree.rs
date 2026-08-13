@@ -4,10 +4,11 @@ use winit::event::KeyEvent;
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
-    IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, CSS_ROOT_FONT_SIZE_PX,
+    CssDim, CssRectPair, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32,
+    IntoF32Raw, IntoLengthPercentage, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
-pub use crate::style::Style;
+pub use crate::style::{Style, UnitSlot};
 pub use crate::style::{
     parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextOverflow, TextStyle,
 };
@@ -483,6 +484,18 @@ impl Element {
         }
     }
 
+    fn set_css(mut self, slot: UnitSlot, dim: impl IntoCssDim) -> Self {
+        self.style.set_css_dim(slot, dim.into_css_dim());
+        self
+    }
+
+    fn apply_rect_pair(self, start: UnitSlot, end: UnitSlot, pair: impl IntoCssRectPair) -> Self {
+        match pair.into_css_rect_pair() {
+            CssRectPair::Both(d) => self.set_css(start, d.clone()).set_css(end, d),
+            CssRectPair::StartEnd(a, b) => self.set_css(start, a).set_css(end, b),
+        }
+    }
+
     fn parse_overflow_mode(mode: &str) -> taffy::style::Overflow {
         match mode.to_ascii_lowercase().as_str() {
             "hidden" => taffy::style::Overflow::Hidden,
@@ -576,21 +589,17 @@ impl Element {
     pub fn cursor_not_allowed(self) -> Self {
         self.cursor_kind(CursorKind::NotAllowed)
     }
-    pub fn min_w(mut self, w: impl IntoDimension) -> Self {
-        self.style.min_size.width = w.into_dimension();
-        self
+    pub fn min_w(self, w: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MinWidth, w)
     }
-    pub fn min_h(mut self, h: impl IntoDimension) -> Self {
-        self.style.min_size.height = h.into_dimension();
-        self
+    pub fn min_h(self, h: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MinHeight, h)
     }
-    pub fn max_w(mut self, w: impl IntoDimension) -> Self {
-        self.style.max_size.width = w.into_dimension();
-        self
+    pub fn max_w(self, w: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MaxWidth, w)
     }
-    pub fn max_h(mut self, h: impl IntoDimension) -> Self {
-        self.style.max_size.height = h.into_dimension();
-        self
+    pub fn max_h(self, h: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MaxHeight, h)
     }
     pub fn on_click(mut self, handler: impl FnMut() + 'static) -> Self {
         self.on_click = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
@@ -714,34 +723,28 @@ impl Element {
         self.scroll_offset = [x.max(0.0), y.max(0.0)];
         self
     }
-    fn gap_lp(g: impl IntoDimension) -> taffy::style::LengthPercentage {
-        let dim = g.into_dimension();
-        match dim {
-            Dimension::Length(v) => taffy::style::LengthPercentage::Length(v),
-            Dimension::Percent(v) => taffy::style::LengthPercentage::Percent(v),
-            Dimension::Auto => taffy::style::LengthPercentage::Percent(0.0),
-        }
-    }
-
-    pub fn gap(mut self, g: impl IntoDimension) -> Self {
-        let lp = Self::gap_lp(g);
-        self.style.gap = taffy::geometry::Size {
-            width: lp,
-            height: lp,
-        };
-        self
+    pub fn gap(self, g: impl IntoCssDim) -> Self {
+        let d = g.into_css_dim();
+        self.set_css(UnitSlot::GapX, d.clone())
+            .set_css(UnitSlot::GapY, d)
     }
 
     /// `column-gap` / Tailwind `gap-x-*`。
-    pub fn gap_x(mut self, g: impl IntoDimension) -> Self {
-        self.style.gap.width = Self::gap_lp(g);
-        self
+    pub fn gap_x(self, g: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::GapX, g)
     }
 
     /// `row-gap` / Tailwind `gap-y-*`。
-    pub fn gap_y(mut self, g: impl IntoDimension) -> Self {
-        self.style.gap.height = Self::gap_lp(g);
-        self
+    pub fn gap_y(self, g: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::GapY, g)
+    }
+
+    pub fn column_gap(self, g: impl IntoCssDim) -> Self {
+        self.gap_x(g)
+    }
+
+    pub fn row_gap(self, g: impl IntoCssDim) -> Self {
+        self.gap_y(g)
     }
 
     pub fn overflow(mut self, mode: impl AsRef<str>) -> Self {
@@ -1049,7 +1052,8 @@ impl Element {
     pub fn border(mut self, color: [f32; 4], width: f32) -> Self {
         self.style.border_style = LineStyle::Solid;
         self.style.border_color = color;
-        self.style.border_width = width;
+        self.style.border_color_sides = None;
+        self.style.set_uniform_border_width(width);
         self
     }
     pub fn border_style(mut self, style: impl AsRef<str>) -> Self {
@@ -1058,10 +1062,81 @@ impl Element {
     }
     pub fn border_color(mut self, color: [f32; 4]) -> Self {
         self.style.border_color = color;
+        self.style.border_color_sides = None;
         self
     }
-    pub fn border_width(mut self, width: f32) -> Self {
-        self.style.border_width = width;
+    pub fn border_width(mut self, width: impl IntoBorderWidths) -> Self {
+        self.style.set_border_widths_trbl(width.into_border_widths());
+        self
+    }
+    pub fn border_top_width(mut self, width: impl IntoF32) -> Self {
+        self.style.set_border_side_width(0, width.into_f32());
+        self
+    }
+    pub fn border_right_width(mut self, width: impl IntoF32) -> Self {
+        self.style.set_border_side_width(1, width.into_f32());
+        self
+    }
+    pub fn border_bottom_width(mut self, width: impl IntoF32) -> Self {
+        self.style.set_border_side_width(2, width.into_f32());
+        self
+    }
+    pub fn border_left_width(mut self, width: impl IntoF32) -> Self {
+        self.style.set_border_side_width(3, width.into_f32());
+        self
+    }
+    pub fn border_top_color(mut self, color: [f32; 4]) -> Self {
+        self.style.set_border_side_color(0, color);
+        self
+    }
+    pub fn border_right_color(mut self, color: [f32; 4]) -> Self {
+        self.style.set_border_side_color(1, color);
+        self
+    }
+    pub fn border_bottom_color(mut self, color: [f32; 4]) -> Self {
+        self.style.set_border_side_color(2, color);
+        self
+    }
+    pub fn border_left_color(mut self, color: [f32; 4]) -> Self {
+        self.style.set_border_side_color(3, color);
+        self
+    }
+    pub fn border_top(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.ensure_border_solid()
+            .border_top_color(color)
+            .border_top_width(width)
+    }
+    pub fn border_right(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.ensure_border_solid()
+            .border_right_color(color)
+            .border_right_width(width)
+    }
+    pub fn border_bottom(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.ensure_border_solid()
+            .border_bottom_color(color)
+            .border_bottom_width(width)
+    }
+    pub fn border_left(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.ensure_border_solid()
+            .border_left_color(color)
+            .border_left_width(width)
+    }
+    pub fn border_inline_start_width(self, width: impl IntoF32) -> Self {
+        self.border_left_width(width)
+    }
+    pub fn border_inline_end_width(self, width: impl IntoF32) -> Self {
+        self.border_right_width(width)
+    }
+    pub fn border_block_start_width(self, width: impl IntoF32) -> Self {
+        self.border_top_width(width)
+    }
+    pub fn border_block_end_width(self, width: impl IntoF32) -> Self {
+        self.border_bottom_width(width)
+    }
+    fn ensure_border_solid(mut self) -> Self {
+        if self.style.border_style == LineStyle::None {
+            self.style.border_style = LineStyle::Solid;
+        }
         self
     }
 
@@ -1141,18 +1216,16 @@ impl Element {
         self.style.translate = [x, y];
         self
     }
-    pub fn w(mut self, width: impl IntoDimension) -> Self {
-        self.style.size.width = width.into_dimension();
-        self
+    pub fn w(self, width: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::Width, width)
     }
-    pub fn inline_size(self, size: impl IntoDimension) -> Self {
+    pub fn inline_size(self, size: impl IntoCssDim) -> Self {
         self.w(size)
     }
-    pub fn h(mut self, height: impl IntoDimension) -> Self {
-        self.style.size.height = height.into_dimension();
-        self
+    pub fn h(self, height: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::Height, height)
     }
-    pub fn block_size(self, size: impl IntoDimension) -> Self {
+    pub fn block_size(self, size: impl IntoCssDim) -> Self {
         self.h(size)
     }
     pub fn child(mut self, child: impl Into<Element>) -> Self {
@@ -1225,126 +1298,105 @@ impl Element {
         self.style.align_items = Some(AlignItems::Center);
         self
     }
-    pub fn p(mut self, padding: impl IntoLengthPercentage) -> Self {
-        let p = padding.into_length_percentage();
-        self.style.padding = Rect {
-            left: p,
-            right: p,
-            top: p,
-            bottom: p,
-        };
-        self
+    pub fn p(self, padding: impl IntoCssDim) -> Self {
+        let d = padding.into_css_dim();
+        self.set_css(UnitSlot::PadL, d.clone())
+            .set_css(UnitSlot::PadR, d.clone())
+            .set_css(UnitSlot::PadT, d.clone())
+            .set_css(UnitSlot::PadB, d)
     }
-    pub fn px(mut self, padding: impl IntoLengthPercentage) -> Self {
-        let p = padding.into_length_percentage();
-        self.style.padding.left = p;
-        self.style.padding.right = p;
-        self
+    pub fn px(self, padding: impl IntoCssDim) -> Self {
+        let d = padding.into_css_dim();
+        self.set_css(UnitSlot::PadL, d.clone())
+            .set_css(UnitSlot::PadR, d)
     }
-    pub fn py(mut self, padding: impl IntoLengthPercentage) -> Self {
-        let p = padding.into_length_percentage();
-        self.style.padding.top = p;
-        self.style.padding.bottom = p;
-        self
+    pub fn py(self, padding: impl IntoCssDim) -> Self {
+        let d = padding.into_css_dim();
+        self.set_css(UnitSlot::PadT, d.clone())
+            .set_css(UnitSlot::PadB, d)
     }
-    pub fn pt(mut self, padding: impl IntoLengthPercentage) -> Self {
-        self.style.padding.top = padding.into_length_percentage();
-        self
+    pub fn pt(self, padding: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::PadT, padding)
     }
-    pub fn pr(mut self, padding: impl IntoLengthPercentage) -> Self {
-        self.style.padding.right = padding.into_length_percentage();
-        self
+    pub fn pr(self, padding: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::PadR, padding)
     }
-    pub fn pb(mut self, padding: impl IntoLengthPercentage) -> Self {
-        self.style.padding.bottom = padding.into_length_percentage();
-        self
+    pub fn pb(self, padding: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::PadB, padding)
     }
-    pub fn pl(mut self, padding: impl IntoLengthPercentage) -> Self {
-        self.style.padding.left = padding.into_length_percentage();
-        self
+    pub fn pl(self, padding: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::PadL, padding)
     }
-    pub fn padding_inline(self, padding: impl IntoLengthPercentage) -> Self {
-        self.px(padding)
+    pub fn padding_inline(self, padding: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::PadL, UnitSlot::PadR, padding)
     }
-    pub fn padding_block(self, padding: impl IntoLengthPercentage) -> Self {
-        self.py(padding)
+    pub fn padding_block(self, padding: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::PadT, UnitSlot::PadB, padding)
     }
-    pub fn padding_inline_start(self, padding: impl IntoLengthPercentage) -> Self {
+    pub fn padding_inline_start(self, padding: impl IntoCssDim) -> Self {
         self.pl(padding)
     }
-    pub fn padding_inline_end(self, padding: impl IntoLengthPercentage) -> Self {
+    pub fn padding_inline_end(self, padding: impl IntoCssDim) -> Self {
         self.pr(padding)
     }
-    pub fn padding_block_start(self, padding: impl IntoLengthPercentage) -> Self {
+    pub fn padding_block_start(self, padding: impl IntoCssDim) -> Self {
         self.pt(padding)
     }
-    pub fn padding_block_end(self, padding: impl IntoLengthPercentage) -> Self {
+    pub fn padding_block_end(self, padding: impl IntoCssDim) -> Self {
         self.pb(padding)
     }
-    pub fn padding_h(mut self, val: impl IntoLengthPercentage) -> Self {
-        let p = val.into_length_percentage();
-        self.style.padding.left = p;
-        self.style.padding.right = p;
-        self
+    pub fn padding_h(self, val: impl IntoCssDim) -> Self {
+        self.px(val)
     }
     pub fn flex_row(mut self) -> Self {
         self.style.flex_direction = FlexDirection::Row;
         self
     }
-    pub fn m(mut self, margin: impl IntoDimension) -> Self {
-        let m = Self::into_margin_auto(margin);
-        self.style.margin = Rect {
-            left: m,
-            right: m,
-            top: m,
-            bottom: m,
-        };
-        self
+    pub fn m(self, margin: impl IntoCssDim) -> Self {
+        let d = margin.into_css_dim();
+        self.set_css(UnitSlot::MarginL, d.clone())
+            .set_css(UnitSlot::MarginR, d.clone())
+            .set_css(UnitSlot::MarginT, d.clone())
+            .set_css(UnitSlot::MarginB, d)
     }
-    pub fn mx(mut self, margin: impl IntoDimension) -> Self {
-        let m = Self::into_margin_auto(margin);
-        self.style.margin.left = m;
-        self.style.margin.right = m;
-        self
+    pub fn mx(self, margin: impl IntoCssDim) -> Self {
+        let d = margin.into_css_dim();
+        self.set_css(UnitSlot::MarginL, d.clone())
+            .set_css(UnitSlot::MarginR, d)
     }
-    pub fn my(mut self, margin: impl IntoDimension) -> Self {
-        let m = Self::into_margin_auto(margin);
-        self.style.margin.top = m;
-        self.style.margin.bottom = m;
-        self
+    pub fn my(self, margin: impl IntoCssDim) -> Self {
+        let d = margin.into_css_dim();
+        self.set_css(UnitSlot::MarginT, d.clone())
+            .set_css(UnitSlot::MarginB, d)
     }
-    pub fn mt(mut self, margin: impl IntoDimension) -> Self {
-        self.style.margin.top = Self::into_margin_auto(margin);
-        self
+    pub fn mt(self, margin: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MarginT, margin)
     }
-    pub fn mr(mut self, margin: impl IntoDimension) -> Self {
-        self.style.margin.right = Self::into_margin_auto(margin);
-        self
+    pub fn mr(self, margin: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MarginR, margin)
     }
-    pub fn mb(mut self, margin: impl IntoDimension) -> Self {
-        self.style.margin.bottom = Self::into_margin_auto(margin);
-        self
+    pub fn mb(self, margin: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MarginB, margin)
     }
-    pub fn ml(mut self, margin: impl IntoDimension) -> Self {
-        self.style.margin.left = Self::into_margin_auto(margin);
-        self
+    pub fn ml(self, margin: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::MarginL, margin)
     }
-    pub fn margin_inline(self, margin: impl IntoDimension) -> Self {
-        self.mx(margin)
+    pub fn margin_inline(self, margin: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::MarginL, UnitSlot::MarginR, margin)
     }
-    pub fn margin_block(self, margin: impl IntoDimension) -> Self {
-        self.my(margin)
+    pub fn margin_block(self, margin: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::MarginT, UnitSlot::MarginB, margin)
     }
-    pub fn margin_inline_start(self, margin: impl IntoDimension) -> Self {
+    pub fn margin_inline_start(self, margin: impl IntoCssDim) -> Self {
         self.ml(margin)
     }
-    pub fn margin_inline_end(self, margin: impl IntoDimension) -> Self {
+    pub fn margin_inline_end(self, margin: impl IntoCssDim) -> Self {
         self.mr(margin)
     }
-    pub fn margin_block_start(self, margin: impl IntoDimension) -> Self {
+    pub fn margin_block_start(self, margin: impl IntoCssDim) -> Self {
         self.mt(margin)
     }
-    pub fn margin_block_end(self, margin: impl IntoDimension) -> Self {
+    pub fn margin_block_end(self, margin: impl IntoCssDim) -> Self {
         self.mb(margin)
     }
     pub fn flex_grow(mut self, grow: impl IntoF32Raw) -> Self {
@@ -1353,6 +1405,13 @@ impl Element {
     }
     pub fn flex_shrink(mut self, shrink: impl IntoF32Raw) -> Self {
         self.style.flex_shrink = shrink.into_f32_raw();
+        self
+    }
+
+    /// CSS `box-sizing: border-box`（默认）：`width`/`height` 含 padding + border。
+    /// 与 Tailwind `box-border` 同义；从 ContentBox 切回时显式写出。
+    pub fn border_box(mut self) -> Self {
+        self.style.box_sizing = taffy::style::BoxSizing::BorderBox;
         self
     }
 
@@ -1375,9 +1434,8 @@ impl Element {
     }
 
     /// `flex-basis`（主轴初始尺寸）。
-    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
-        self.style.flex_basis = basis.into_dimension();
-        self
+    pub fn flex_basis(self, basis: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::FlexBasis, basis)
     }
 
     /// `align-self`，与 Tailwind `self-*` 一致；`auto` / 未知关键字清除为继承父级 `align-items`。
@@ -1580,31 +1638,30 @@ impl Element {
         self.text_style.letter_spacing = spacing;
         self
     }
-    pub fn top(mut self, val: impl IntoDimension) -> Self {
-        self.style.inset.top = Self::into_margin_auto(val);
-        self
+    pub fn top(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetT, val)
     }
-    pub fn right(mut self, val: impl IntoDimension) -> Self {
-        self.style.inset.right = Self::into_margin_auto(val);
-        self
+    pub fn right(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetR, val)
     }
-    pub fn bottom(mut self, val: impl IntoDimension) -> Self {
-        self.style.inset.bottom = Self::into_margin_auto(val);
-        self
+    pub fn bottom(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetB, val)
     }
-    pub fn left(mut self, val: impl IntoDimension) -> Self {
-        self.style.inset.left = Self::into_margin_auto(val);
-        self
+    pub fn left(self, val: impl IntoCssDim) -> Self {
+        self.set_css(UnitSlot::InsetL, val)
     }
-    pub fn inset(mut self, val: impl IntoDimension) -> Self {
-        let dim = Self::into_margin_auto(val);
-        self.style.inset = Rect {
-            left: dim,
-            right: dim,
-            top: dim,
-            bottom: dim,
-        };
-        self
+    pub fn inset(self, val: impl IntoCssDim) -> Self {
+        let d = val.into_css_dim();
+        self.set_css(UnitSlot::InsetL, d.clone())
+            .set_css(UnitSlot::InsetR, d.clone())
+            .set_css(UnitSlot::InsetT, d.clone())
+            .set_css(UnitSlot::InsetB, d)
+    }
+    pub fn inset_inline(self, val: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::InsetL, UnitSlot::InsetR, val)
+    }
+    pub fn inset_block(self, val: impl IntoCssRectPair) -> Self {
+        self.apply_rect_pair(UnitSlot::InsetT, UnitSlot::InsetB, val)
     }
     pub fn z_index(mut self, z: i32) -> Self {
         self.style.z_index = z;

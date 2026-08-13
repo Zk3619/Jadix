@@ -1238,6 +1238,230 @@ fn IdentityApiShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn gal_box_model_onion() -> Element {
+    let content = Element::from(
+        r#box()
+            .w("100%")
+            .h("3rem")
+            .bg(parse_color("primary"))
+            .rounded("0.25rem")
+            .items_center()
+            .justify_center()
+            .child(Element::from(
+                label("")
+                    .text("content")
+                    .size(12.0)
+                    .color(parse_text_color("primary-foreground")),
+            )),
+    );
+    let padding = Element::from(
+        r#box()
+            .w("100%")
+            .p("1rem")
+            .bg(parse_color("secondary"))
+            .child(content),
+    );
+    let border_box = Element::from(
+        r#box()
+            .w("100%")
+            .border_style("solid")
+            .border_top(parse_color("destructive"), 8.0)
+            .border_right(parse_color("primary"), 4.0)
+            .border_bottom(parse_color("accent"), 12.0)
+            .border_left(parse_color("chart-1"), 16.0)
+            .child(padding),
+    );
+    Element::from(
+        r#box()
+            .w("22rem")
+            .p("1.25rem")
+            .bg(parse_color("muted"))
+            .rounded("0.5rem")
+            .child(border_box),
+    )
+}
+
+/// WP-2.9 / B15 Gallery：完整 CSS 盒模型（单位 · box-sizing · 分边 border · outline）。
+#[component]
+fn BoxModelShowcase() -> rui::core::tree::Element {
+    let hits = use_signal("gal_wp29_outline_hits", || 0_u32);
+    let outline_box: Element = Element::from(
+        r#box()
+            .w("10rem")
+            .h("3rem")
+            .bg(parse_color("primary"))
+            .rounded("0.375rem")
+            .outline(parse_color("destructive"), 12.0)
+            .items_center()
+            .justify_center()
+            .child(Element::from(
+                label("")
+                    .text("点内部（勿点红描边）")
+                    .size(12.0)
+                    .color(parse_text_color("primary-foreground")),
+            )),
+    )
+    .on_click({
+        let hits = hits;
+        move || hits.update(|n| *n = n.wrapping_add(1))
+    });
+    let onion = gal_box_model_onion();
+
+    ui! {
+        <MyCard title="WP-2.9 / B15) CSS 盒模型">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "手册 docs/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p rui --lib box_model_contract"
+                </Label>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "1 · 洋葱图：margin（外灰）→ 分边 border → padding → content"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start">
+                    { onion }
+                    <VStack gap="0.25rem" min_w="10rem">
+                        <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                            "外层 padding 模拟 margin；border 为 T8/R4/B12/L16 且四边异色（B15）。"
+                        </Label>
+                        <HStack gap="0.5rem" wrap="wrap">
+                            <Label text_size="0.75rem">"■ muted = margin"</Label>
+                            <Label text_size="0.75rem">"■ 彩边 = border"</Label>
+                            <Label text_size="0.75rem">"■ secondary = padding"</Label>
+                            <Label text_size="0.75rem">"■ primary = content"</Label>
+                        </HStack>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "2 · 单位：拖动窗口边缘验收 vw/vh/%（条应变长/变短）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "灰轨 = 卡片 100%。主色条 = 25vw / 25dvw（相对窗口，不是卡片）。拉宽/拉高窗口，视口条应变；% 条跟卡片宽。"
+                </Label>
+                <VStack w="100%" gap="0.4rem">
+                    <Label text_size="0.75rem" font_weight="600">"卡片宽 100%"</Label>
+                    <Rect w="100%" h="0.5rem" bg="border" rounded="0.25rem" />
+                    <Label text_size="0.75rem" font_weight="600">"25vw"</Label>
+                    <Rect w="25vw" h="2rem" bg="primary" rounded="0.375rem" items="center" justify="center">
+                        <Label text_size="0.75rem" text_color="primary-foreground">"25vw"</Label>
+                    </Rect>
+                    <Label text_size="0.75rem" font_weight="600">"25dvw"</Label>
+                    <Rect w="25dvw" h="2rem" bg="accent" rounded="0.375rem" items="center" justify="center">
+                        <Label text_size="0.75rem" text_color="accent-foreground">"25dvw"</Label>
+                    </Rect>
+                    <HStack gap="0.75rem" wrap="wrap" items="end">
+                        <VStack gap="0.25rem">
+                            <Label text_size="0.75rem" font_weight="600">"10vh"</Label>
+                            <Rect w="4.5rem" h="10vh" bg="muted" rounded="0.375rem" items="center" justify="center">
+                                <Label text_size="0.75rem">"10vh"</Label>
+                            </Rect>
+                        </VStack>
+                        <VStack gap="0.25rem">
+                            <Label text_size="0.75rem" font_weight="600">"10dvh"</Label>
+                            <Rect w="4.5rem" h="10dvh" bg="secondary" rounded="0.375rem" items="center" justify="center">
+                                <Label text_size="0.75rem" text_color="secondary-foreground">"10dvh"</Label>
+                            </Rect>
+                        </VStack>
+                        <VStack gap="0.25rem">
+                            <Label text_size="0.75rem" font_weight="600">"padding 1em @ 20px"</Label>
+                            <Rect w="8rem" text_size={20.0} p="1em" bg="secondary" rounded="0.375rem" items="center" justify="center">
+                                <Label text_size="0.75rem" text_color="secondary-foreground">"1em pad"</Label>
+                            </Rect>
+                        </VStack>
+                    </HStack>
+                    <Label text_size="0.75rem" font_weight="600">"calc(100% - 2rem)（相对卡片 content，不是视口）"</Label>
+                    <Rect w="100%" p="0.5rem" bg="muted" rounded="0.375rem">
+                        <Rect w="calc(100% - 2rem)" h="2.5rem" bg="secondary" rounded="0.25rem" items="center" justify="center">
+                            <Label text_size="0.75rem" text_color="secondary-foreground">"100% - 2rem"</Label>
+                        </Rect>
+                    </Rect>
+                </VStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "3 · box-sizing：同 w+padding，box-content 应更宽"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="end">
+                    <VStack gap="0.25rem">
+                        <Label text_size="0.75rem" font_weight="600">"box-border（默认）"</Label>
+                        <Rect class="box-border" w="8rem" px="1rem" py="0.5rem" bg="secondary" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label text_size="0.75rem" text_color="secondary-foreground">"w=8rem + px"</Label>
+                        </Rect>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        <Label text_size="0.75rem" font_weight="600">"box-content"</Label>
+                        <Rect class="box-content" w="8rem" px="1rem" py="0.5rem" bg="accent" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                            <Label text_size="0.75rem" text_color="accent-foreground">"padding 在外侧"</Label>
+                        </Rect>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "4 · B15 分边 border：异宽异色 · 1–4 值简写"
+                </Label>
+                <HStack gap="0.75rem" wrap="wrap" items="end">
+                    <VStack gap="0.25rem">
+                        <Label text_size="0.75rem" font_weight="600">"T8 R4 B12 L16"</Label>
+                        <Rect
+                            w="10rem"
+                            h="4.5rem"
+                            bg="background"
+                            borderStyle="solid"
+                            borderTopWidth={8.0}
+                            borderRightWidth={4.0}
+                            borderBottomWidth={12.0}
+                            borderLeftWidth={16.0}
+                            borderTopColor="destructive"
+                            borderRightColor="primary"
+                            borderBottomColor="accent"
+                            borderLeftColor="chart-1"
+                            items="center"
+                            justify="center"
+                        >
+                            <Label text_size="0.75rem">"分边色+宽"</Label>
+                        </Rect>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        <Label text_size="0.75rem" font_weight="600">"border-width: 4px 12px 8px 20px"</Label>
+                        <Rect
+                            w="10rem"
+                            h="4.5rem"
+                            bg="background"
+                            borderStyle="solid"
+                            borderColor="primary"
+                            borderWidth="4px 12px 8px 20px"
+                            items="center"
+                            justify="center"
+                        >
+                            <Label text_size="0.75rem">"TRBL 简写"</Label>
+                        </Rect>
+                    </VStack>
+                    <VStack gap="0.25rem">
+                        <Label text_size="0.75rem" font_weight="600">"仅左边框 6px"</Label>
+                        <Rect
+                            w="10rem"
+                            h="4.5rem"
+                            bg="muted"
+                            px="0.75rem"
+                            borderStyle="solid"
+                            borderLeftWidth={6.0}
+                            borderLeftColor="destructive"
+                            items="center"
+                            justify="center"
+                        >
+                            <Label text_size="0.75rem">"border-left"</Label>
+                        </Rect>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    { format!("5 · outline 不占命中（点内部 +1，点外侧红描边不加）：{}", hits.get()) }
+                </Label>
+                { outline_box }
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn LogicalShowcase() -> rui::core::tree::Element {
     ui! {
@@ -1248,17 +1472,18 @@ fn LogicalShowcase() -> rui::core::tree::Element {
                     block_size="auto"
                     bg="background"
                     rounded="0.5rem"
-                    px="1rem"
-                    py="0.75rem"
+                    padding_block="0.5rem 1rem"
+                    padding_inline="1rem 1.5rem"
                 >
                     <Label text_size="0.875rem">
-                        "px/py + inline-size + block-size + auto-height"
+                        "padding-block/inline 双值 + inline-size + block-size"
                     </Label>
                 </Rect>
-                <HStack gap="0.5rem" wrap="wrap">
+                <HStack gap="0.5rem" wrap="wrap" column_gap="0.75rem" row_gap="0.5rem">
                     <Rect bg="background" rounded="0.4rem" px="0.75rem" py="0.5rem"><Label>"px/py"</Label></Rect>
                     <Rect bg="background" rounded="0.4rem" pt="0.75rem" pr="1rem" pb="0.25rem" pl="0.5rem"><Label>"pt/pr/pb/pl"</Label></Rect>
                     <Rect bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></Rect>
+                    <Rect bg="background" rounded="0.4rem" margin_inline="0.5rem" padding_block="0.5rem"><Label>"m-inline / p-block"</Label></Rect>
                 </HStack>
             </VStack>
         </MyCard>
@@ -2784,6 +3009,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <StoreResourceShowcase />
                     <RootBareGetShowcase />
                     <IdentityApiShowcase />
+                    <BoxModelShowcase />
                     <ScrollShowcase />
                     <LogicalShowcase />
                     <UtilityClassShowcase />

@@ -328,7 +328,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 承诺面（0.1 起承诺 semver） | 延后 / 实验 |
 |----------------------------|-------------|
-| Theme / `set_theme_mode`、utility `class` 主集（`rui_style_tokens`） | 完整 CSSOM、分边 border、真视口单位等见 [`box_model.md`](box_model.md) Backlog |
+| Theme / `set_theme_mode`、utility `class` 主集（`rui_style_tokens`，含 `box-border`/`box-content`） | 完整 CSSOM、分边 border、真视口单位、局部 `em` 见 [`box_model.md`](box_model.md) / AUTHORITY B15 |
 
 验收归属工程域：WP-2.9、[`color.md`](color.md)、换肤冒烟；**禁止**用 Gallery 控件走查或 verified/stable-candidate 分桶标记。
 

@@ -18,7 +18,7 @@
 //! ## 注意
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 
-use crate::core::tree::{Element, IntoDimension, IntoF32};
+use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
 use taffy::prelude::Dimension;
 
 pub struct BaseComponentBuilder {
@@ -64,9 +64,9 @@ impl BaseComponentBuilder {
         self.auto_text_size_px = Some(Self::text_size_from_edge_px(base));
     }
 
-    pub fn w(mut self, w: impl IntoDimension) -> Self {
-        let dim = w.into_dimension();
-        if let Dimension::Length(px) = dim {
+    pub fn w(mut self, w: impl IntoCssDim) -> Self {
+        let dim = w.into_css_dim();
+        if let Some(Dimension::Length(px)) = dim.as_immediate_dimension() {
             self.custom_w_px = Some(px);
             self.recompute_auto_text_size();
         }
@@ -75,9 +75,9 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn h(mut self, h: impl IntoDimension) -> Self {
-        let dim = h.into_dimension();
-        if let Dimension::Length(px) = dim {
+    pub fn h(mut self, h: impl IntoCssDim) -> Self {
+        let dim = h.into_css_dim();
+        if let Some(Dimension::Length(px)) = dim.as_immediate_dimension() {
             self.custom_h_px = Some(px);
             self.recompute_auto_text_size();
         }
@@ -86,17 +86,17 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn min_w(mut self, w: impl IntoDimension) -> Self {
+    pub fn min_w(mut self, w: impl IntoCssDim) -> Self {
         self.el = self.el.min_w(w);
         self
     }
 
-    pub fn min_h(mut self, h: impl IntoDimension) -> Self {
+    pub fn min_h(mut self, h: impl IntoCssDim) -> Self {
         self.el = self.el.min_h(h);
         self
     }
 
-    pub fn p(mut self, p: impl IntoDimension) -> Self {
+    pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.p(p);
         self
     }
@@ -177,8 +177,40 @@ impl BaseComponentBuilder {
         self.el = self.el.border_color(color);
         self
     }
-    pub fn border_width(mut self, width: f32) -> Self {
+    pub fn border_width(mut self, width: impl IntoBorderWidths) -> Self {
         self.el = self.el.border_width(width);
+        self
+    }
+    pub fn border_top_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_top_width(width);
+        self
+    }
+    pub fn border_right_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_right_width(width);
+        self
+    }
+    pub fn border_bottom_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_bottom_width(width);
+        self
+    }
+    pub fn border_left_width(mut self, width: impl IntoF32) -> Self {
+        self.el = self.el.border_left_width(width);
+        self
+    }
+    pub fn border_top_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_top_color(color);
+        self
+    }
+    pub fn border_right_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_right_color(color);
+        self
+    }
+    pub fn border_bottom_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_bottom_color(color);
+        self
+    }
+    pub fn border_left_color(mut self, color: [f32; 4]) -> Self {
+        self.el = self.el.border_left_color(color);
         self
     }
 
@@ -241,11 +273,11 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn top(mut self, val: impl IntoDimension) -> Self {
+    pub fn top(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.top(val);
         self
     }
-    pub fn right(mut self, val: impl IntoDimension) -> Self {
+    pub fn right(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.right(val);
         self
     }
@@ -265,15 +297,15 @@ impl BaseComponentBuilder {
         self.el = self.el.pointer_events(mode);
         self
     }
-    pub fn bottom(mut self, val: impl IntoDimension) -> Self {
+    pub fn bottom(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.bottom(val);
         self
     }
-    pub fn left(mut self, val: impl IntoDimension) -> Self {
+    pub fn left(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.left(val);
         self
     }
-    pub fn inset(mut self, val: impl IntoDimension) -> Self {
+    pub fn inset(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.inset(val);
         self
     }
@@ -283,51 +315,51 @@ impl BaseComponentBuilder {
     }
 
     // Logical spacing
-    pub fn mx(mut self, val: impl IntoDimension) -> Self {
+    pub fn mx(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.mx(val);
         self
     }
-    pub fn my(mut self, val: impl IntoDimension) -> Self {
+    pub fn my(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.my(val);
         self
     }
-    pub fn px(mut self, val: impl IntoDimension) -> Self {
+    pub fn px(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.px(val);
         self
     }
-    pub fn py(mut self, val: impl IntoDimension) -> Self {
+    pub fn py(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.py(val);
         self
     }
-    pub fn pt(mut self, val: impl IntoDimension) -> Self {
+    pub fn pt(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pt(val);
         self
     }
-    pub fn pr(mut self, val: impl IntoDimension) -> Self {
+    pub fn pr(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pr(val);
         self
     }
-    pub fn pb(mut self, val: impl IntoDimension) -> Self {
+    pub fn pb(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pb(val);
         self
     }
-    pub fn pl(mut self, val: impl IntoDimension) -> Self {
+    pub fn pl(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.pl(val);
         self
     }
-    pub fn mt(mut self, val: impl IntoDimension) -> Self {
+    pub fn mt(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.mt(val);
         self
     }
-    pub fn mr(mut self, val: impl IntoDimension) -> Self {
+    pub fn mr(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.mr(val);
         self
     }
-    pub fn mb(mut self, val: impl IntoDimension) -> Self {
+    pub fn mb(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.mb(val);
         self
     }
-    pub fn ml(mut self, val: impl IntoDimension) -> Self {
+    pub fn ml(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.ml(val);
         self
     }
@@ -422,8 +454,24 @@ impl BaseComponentBuilder {
         self.el = self.el.justify(&s);
         self
     }
-    pub fn gap(mut self, g: impl IntoDimension) -> Self {
+    pub fn gap(mut self, g: impl IntoCssDim) -> Self {
         self.el = self.el.gap(g);
+        self
+    }
+    pub fn gap_x(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.gap_x(g);
+        self
+    }
+    pub fn gap_y(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.gap_y(g);
+        self
+    }
+    pub fn column_gap(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.column_gap(g);
+        self
+    }
+    pub fn row_gap(mut self, g: impl IntoCssDim) -> Self {
+        self.el = self.el.row_gap(g);
         self
     }
 
@@ -442,7 +490,7 @@ impl BaseComponentBuilder {
         self
     }
 
-    pub fn flex_basis(mut self, basis: impl IntoDimension) -> Self {
+    pub fn flex_basis(mut self, basis: impl IntoCssDim) -> Self {
         self.el = self.el.flex_basis(basis);
         self
     }

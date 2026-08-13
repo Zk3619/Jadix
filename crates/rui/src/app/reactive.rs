@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use crate::core::reactivity::{create_effect, dispose_effect, untrack, use_signal, EffectId};
-use crate::core::tree::{Element, LayoutStatus, UnmountHook};
+use crate::core::tree::{Element, IntoCssDim, LayoutStatus, UnmountHook, UnitSlot};
 
 use super::runtime;
 
@@ -166,8 +166,8 @@ pub fn reactive_placeholder(anchor_id: impl Into<String>) -> Element {
 /// inside ScrollArea so a `100%` shell cannot inflate scroll content metrics).
 pub fn reactive_placeholder_sized(
     anchor_id: impl Into<String>,
-    width: impl crate::core::tree::IntoDimension,
-    height: impl crate::core::tree::IntoDimension,
+    width: impl crate::core::tree::IntoCssDim,
+    height: impl crate::core::tree::IntoCssDim,
 ) -> Element {
     let id = anchor_id.into();
     let mut placeholder = Element::new()
@@ -708,21 +708,41 @@ where
 pub fn apply_bound_size(
     el: &mut Element,
     axis: &str,
-    next: taffy::style::Dimension,
+    next: impl IntoCssDim,
 ) -> LayoutStatus {
+    let dim = next.into_css_dim();
     let slot = match axis {
-        "w" | "width" | "inline_size" | "inlineSize" => &mut el.style.size.width,
-        "h" | "height" | "block_size" | "blockSize" => &mut el.style.size.height,
-        "min_w" | "minWidth" | "min_width" => &mut el.style.min_size.width,
-        "min_h" | "minHeight" | "min_height" => &mut el.style.min_size.height,
-        "max_w" | "maxWidth" | "max_width" => &mut el.style.max_size.width,
-        "max_h" | "maxHeight" | "max_height" => &mut el.style.max_size.height,
+        "w" | "width" | "inline_size" | "inlineSize" => UnitSlot::Width,
+        "h" | "height" | "block_size" | "blockSize" => UnitSlot::Height,
+        "min_w" | "minWidth" | "min_width" => UnitSlot::MinWidth,
+        "min_h" | "minHeight" | "min_height" => UnitSlot::MinHeight,
+        "max_w" | "maxWidth" | "max_width" => UnitSlot::MaxWidth,
+        "max_h" | "maxHeight" | "max_height" => UnitSlot::MaxHeight,
         _ => return LayoutStatus::Clean,
     };
-    if *slot == next {
+    let before_specs = el.style.unit_specs.clone();
+    let before_taffy = match slot {
+        UnitSlot::Width => el.style.size.width,
+        UnitSlot::Height => el.style.size.height,
+        UnitSlot::MinWidth => el.style.min_size.width,
+        UnitSlot::MinHeight => el.style.min_size.height,
+        UnitSlot::MaxWidth => el.style.max_size.width,
+        UnitSlot::MaxHeight => el.style.max_size.height,
+        _ => return LayoutStatus::Clean,
+    };
+    el.style.set_css_dim(slot, dim);
+    let after_taffy = match slot {
+        UnitSlot::Width => el.style.size.width,
+        UnitSlot::Height => el.style.size.height,
+        UnitSlot::MinWidth => el.style.min_size.width,
+        UnitSlot::MinHeight => el.style.min_size.height,
+        UnitSlot::MaxWidth => el.style.max_size.width,
+        UnitSlot::MaxHeight => el.style.max_size.height,
+        _ => return LayoutStatus::Clean,
+    };
+    if before_taffy == after_taffy && before_specs == el.style.unit_specs {
         LayoutStatus::Clean
     } else {
-        *slot = next;
         LayoutStatus::LayoutChanged
     }
 }

@@ -10,6 +10,8 @@
 
 use taffy::prelude::*;
 
+use crate::layout::dimension::{CssDim, PercentAxis, UnitCtx};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxShadow {
     pub color: [f32; 4],
@@ -221,6 +223,32 @@ impl LineStyle {
     }
 }
 
+/// Deferred CSS unit slot (vw/vh/em/calc) applied in [`Style::to_taffy_style`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitSlot {
+    Width,
+    Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+    FlexBasis,
+    PadL,
+    PadR,
+    PadT,
+    PadB,
+    MarginL,
+    MarginR,
+    MarginT,
+    MarginB,
+    GapX,
+    GapY,
+    InsetL,
+    InsetR,
+    InsetT,
+    InsetB,
+}
+
 /// 元素布局与部分视觉属性（背景/边框/阴影等由渲染路径消费，不进入 Taffy）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
@@ -252,6 +280,8 @@ pub struct Style {
     pub overflow: taffy::geometry::Point<taffy::style::Overflow>,
     pub position: Position,
     pub inset: Rect<LengthPercentageAuto>,
+    /// Viewport / `em` / `calc` specs resolved at layout against [`UnitCtx`].
+    pub unit_specs: Vec<(UnitSlot, CssDim)>,
     pub z_index: i32,
 
     /// Grid 容器：显式列轨（`grid-template-columns`）。
@@ -270,10 +300,15 @@ pub struct Style {
 
     // Visual properties
     pub bg_color: [f32; 4],
-    /// Layout + paint：非 `None` 且 `border_width > 0` 时写入 Taffy `border`（BorderBox 内容区会扣掉它）。
+    /// Layout + paint：非 `None` 且任一边宽度 > 0 时写入 Taffy `border`。
     pub border_style: LineStyle,
     pub border_color: [f32; 4],
+    /// Uniform shorthand / max of per-side widths (compat for `border_width > 0` checks).
     pub border_width: f32,
+    /// Per-side widths **T R B L**. `None` = all sides use [`Self::border_width`].
+    pub border_width_sides: Option<[f32; 4]>,
+    /// Per-side colors **T R B L**. `None` = all sides use [`Self::border_color`].
+    pub border_color_sides: Option<[[f32; 4]; 4]>,
     /// 仅绘制，不进 Taffy。
     pub outline_style: LineStyle,
     pub outline_color: [f32; 4],
@@ -342,6 +377,7 @@ impl Default for Style {
             },
             position: Position::Relative,
             inset: Rect::auto(),
+            unit_specs: Vec::new(),
             z_index: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
@@ -360,6 +396,8 @@ impl Default for Style {
             border_style: LineStyle::None,
             border_color: [0.0, 0.0, 0.0, 0.0],
             border_width: 0.0,
+            border_width_sides: None,
+            border_color_sides: None,
             outline_style: LineStyle::None,
             outline_color: [0.0, 0.0, 0.0, 0.0],
             outline_width: 0.0,
@@ -412,18 +450,83 @@ impl Style {
     }
 
     pub fn to_taffy_style(&self) -> taffy::style::Style {
-        // Uniform border → Taffy length on all sides when the stroke participates in layout.
-        let border_lp = if self.border_style != LineStyle::None && self.border_width > 0.0 {
-            LengthPercentage::Length(self.border_width)
-        } else {
-            LengthPercentage::Length(0.0)
-        };
+        self.to_taffy_style_with(&UnitCtx::new(0.0, 0.0, CSS_FALLBACK_FONT))
+    }
+
+    pub fn to_taffy_style_with(&self, ctx: &UnitCtx) -> taffy::style::Style {
+        let [bt, br, bb, bl] = self.resolved_border_widths();
         let border = Rect {
-            left: border_lp,
-            right: border_lp,
-            top: border_lp,
-            bottom: border_lp,
+            top: LengthPercentage::Length(bt),
+            right: LengthPercentage::Length(br),
+            bottom: LengthPercentage::Length(bb),
+            left: LengthPercentage::Length(bl),
         };
+        let mut size = self.size;
+        let mut min_size = self.min_size;
+        let mut max_size = self.max_size;
+        let mut flex_basis = self.flex_basis;
+        let mut padding = self.padding;
+        let mut margin = self.margin;
+        let mut gap = self.gap;
+        let mut inset = self.inset;
+        for (slot, dim) in &self.unit_specs {
+            match slot {
+                UnitSlot::Width => size.width = dim.to_dimension_axis(ctx, PercentAxis::Inline),
+                UnitSlot::Height => size.height = dim.to_dimension_axis(ctx, PercentAxis::Block),
+                UnitSlot::MinWidth => {
+                    min_size.width = dim.to_dimension_axis(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MinHeight => {
+                    min_size.height = dim.to_dimension_axis(ctx, PercentAxis::Block)
+                }
+                UnitSlot::MaxWidth => {
+                    max_size.width = dim.to_dimension_axis(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MaxHeight => {
+                    max_size.height = dim.to_dimension_axis(ctx, PercentAxis::Block)
+                }
+                UnitSlot::FlexBasis => {
+                    flex_basis = dim.to_dimension_axis(ctx, PercentAxis::Inline)
+                }
+                // CSS: padding/margin % is always relative to containing-block **width**.
+                UnitSlot::PadL => {
+                    padding.left = dim.to_length_percentage(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::PadR => {
+                    padding.right = dim.to_length_percentage(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::PadT => padding.top = dim.to_length_percentage(ctx, PercentAxis::Inline),
+                UnitSlot::PadB => {
+                    padding.bottom = dim.to_length_percentage(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MarginL => {
+                    margin.left = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MarginR => {
+                    margin.right = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MarginT => {
+                    margin.top = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::MarginB => {
+                    margin.bottom = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::GapX => gap.width = dim.to_length_percentage(ctx, PercentAxis::Inline),
+                UnitSlot::GapY => gap.height = dim.to_length_percentage(ctx, PercentAxis::Block),
+                UnitSlot::InsetL => {
+                    inset.left = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::InsetR => {
+                    inset.right = dim.to_length_percentage_auto(ctx, PercentAxis::Inline)
+                }
+                UnitSlot::InsetT => {
+                    inset.top = dim.to_length_percentage_auto(ctx, PercentAxis::Block)
+                }
+                UnitSlot::InsetB => {
+                    inset.bottom = dim.to_length_percentage_auto(ctx, PercentAxis::Block)
+                }
+            }
+        }
         taffy::style::Style {
             // 默认 BorderBox（Tailwind）。个别文案叶可改 ContentBox 以便自带 padding。
             box_sizing: self.box_sizing,
@@ -436,19 +539,19 @@ impl Style {
             justify_self: self.justify_self,
             align_content: self.align_content,
             justify_items: self.justify_items,
-            size: self.size,
-            min_size: self.min_size,
-            max_size: self.max_size,
+            size,
+            min_size,
+            max_size,
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
-            flex_basis: self.flex_basis,
-            padding: self.padding,
+            flex_basis,
+            padding,
             border,
-            margin: self.margin,
-            gap: self.gap,
+            margin,
+            gap,
             overflow: self.overflow,
             position: self.position,
-            inset: self.inset,
+            inset,
             aspect_ratio: self.aspect_ratio,
             grid_template_columns: self.grid_template_columns.clone(),
             grid_template_rows: self.grid_template_rows.clone(),
@@ -459,5 +562,160 @@ impl Style {
             grid_column: self.grid_column,
             ..Default::default()
         }
+    }
+
+    pub fn has_percent_calc(&self) -> bool {
+        self.unit_specs.iter().any(|(_, d)| d.has_percent())
+    }
+
+    /// `vw`/`vh`/`em`/`calc`（含 `%` in calc）须在布局期按视口 / 字号 / 包含块重烘焙。
+    pub fn has_deferred_units(&self) -> bool {
+        self.unit_specs
+            .iter()
+            .any(|(_, d)| d.needs_layout_context())
+    }
+
+    /// Border widths **T R B L** that participate in layout (0 if `border_style` is none).
+    pub fn resolved_border_widths(&self) -> [f32; 4] {
+        if self.border_style == LineStyle::None {
+            return [0.0; 4];
+        }
+        self.border_width_sides.unwrap_or([self.border_width; 4])
+    }
+
+    pub fn resolved_border_colors(&self) -> [[f32; 4]; 4] {
+        self.border_color_sides.unwrap_or([self.border_color; 4])
+    }
+
+    pub fn border_is_uniform(&self) -> bool {
+        let w = self.resolved_border_widths();
+        let c = self.resolved_border_colors();
+        w[0] == w[1]
+            && w[1] == w[2]
+            && w[2] == w[3]
+            && c[0] == c[1]
+            && c[1] == c[2]
+            && c[2] == c[3]
+    }
+
+    pub fn set_border_side_width(&mut self, side: usize, width: f32) {
+        let mut sides = self.border_width_sides.unwrap_or([self.border_width; 4]);
+        sides[side.min(3)] = width.max(0.0);
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.border_width = sides[0];
+            self.border_width_sides = None;
+        } else {
+            self.border_width_sides = Some(sides);
+            self.border_width = sides.into_iter().fold(0.0_f32, f32::max);
+        }
+    }
+
+    pub fn set_border_side_color(&mut self, side: usize, color: [f32; 4]) {
+        let mut sides = self.border_color_sides.unwrap_or([self.border_color; 4]);
+        sides[side.min(3)] = color;
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.border_color = color;
+            self.border_color_sides = None;
+        } else {
+            self.border_color_sides = Some(sides);
+        }
+    }
+
+    pub fn set_uniform_border_width(&mut self, width: f32) {
+        self.border_width = width.max(0.0);
+        self.border_width_sides = None;
+    }
+
+    pub fn set_border_widths_trbl(&mut self, sides: [f32; 4]) {
+        let sides = sides.map(|v| v.max(0.0));
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.set_uniform_border_width(sides[0]);
+        } else {
+            self.border_width_sides = Some(sides);
+            self.border_width = sides.into_iter().fold(0.0_f32, f32::max);
+        }
+    }
+
+    /// Best-effort content box from specified size (definite Length / % of `ctx.cb_*`).
+    /// Used to resolve descendant `calc(100% - Npx)` before Taffy compute.
+    pub fn estimate_content_box(&self, ctx: &UnitCtx) -> (Option<f32>, Option<f32>) {
+        let taffy = self.to_taffy_style_with(ctx);
+        let [bt, br, bb, bl] = self.resolved_border_widths();
+        let pad_x = lp_used(taffy.padding.left, ctx.cb_w) + lp_used(taffy.padding.right, ctx.cb_w);
+        let pad_y = lp_used(taffy.padding.top, ctx.cb_w) + lp_used(taffy.padding.bottom, ctx.cb_w);
+        let border_box = matches!(self.box_sizing, BoxSizing::BorderBox);
+        let content = |dim: Dimension, cb: Option<f32>, chrome: f32| -> Option<f32> {
+            let used = match dim {
+                Dimension::Length(l) => Some(l),
+                Dimension::Percent(p) => cb.map(|c| p * c),
+                Dimension::Auto => None,
+            }?;
+            if border_box {
+                Some((used - chrome).max(0.0))
+            } else {
+                Some(used.max(0.0))
+            }
+        };
+        (
+            content(taffy.size.width, ctx.cb_w, pad_x + bl + br),
+            content(taffy.size.height, ctx.cb_h, pad_y + bt + bb),
+        )
+    }
+
+    pub fn set_css_dim(&mut self, slot: UnitSlot, dim: CssDim) {
+        self.unit_specs.retain(|(s, _)| *s != slot);
+        if dim.needs_layout_context() {
+            if let Some(preview) = dim.preview_dimension() {
+                self.apply_taffy_slot(slot, preview);
+            }
+            self.unit_specs.push((slot, dim));
+        } else if let Some(immediate) = dim.as_immediate_dimension() {
+            self.apply_taffy_slot(slot, immediate);
+        }
+    }
+
+    fn apply_taffy_slot(&mut self, slot: UnitSlot, dim: Dimension) {
+        let lp = match dim {
+            Dimension::Length(l) => LengthPercentage::Length(l),
+            Dimension::Percent(p) => LengthPercentage::Percent(p),
+            Dimension::Auto => LengthPercentage::Length(0.0),
+        };
+        let lpa = match dim {
+            Dimension::Length(l) => LengthPercentageAuto::Length(l),
+            Dimension::Percent(p) => LengthPercentageAuto::Percent(p),
+            Dimension::Auto => LengthPercentageAuto::Auto,
+        };
+        match slot {
+            UnitSlot::Width => self.size.width = dim,
+            UnitSlot::Height => self.size.height = dim,
+            UnitSlot::MinWidth => self.min_size.width = dim,
+            UnitSlot::MinHeight => self.min_size.height = dim,
+            UnitSlot::MaxWidth => self.max_size.width = dim,
+            UnitSlot::MaxHeight => self.max_size.height = dim,
+            UnitSlot::FlexBasis => self.flex_basis = dim,
+            UnitSlot::PadL => self.padding.left = lp,
+            UnitSlot::PadR => self.padding.right = lp,
+            UnitSlot::PadT => self.padding.top = lp,
+            UnitSlot::PadB => self.padding.bottom = lp,
+            UnitSlot::MarginL => self.margin.left = lpa,
+            UnitSlot::MarginR => self.margin.right = lpa,
+            UnitSlot::MarginT => self.margin.top = lpa,
+            UnitSlot::MarginB => self.margin.bottom = lpa,
+            UnitSlot::GapX => self.gap.width = lp,
+            UnitSlot::GapY => self.gap.height = lp,
+            UnitSlot::InsetL => self.inset.left = lpa,
+            UnitSlot::InsetR => self.inset.right = lpa,
+            UnitSlot::InsetT => self.inset.top = lpa,
+            UnitSlot::InsetB => self.inset.bottom = lpa,
+        }
+    }
+}
+
+const CSS_FALLBACK_FONT: f32 = 16.0;
+
+fn lp_used(lp: LengthPercentage, cb_w: Option<f32>) -> f32 {
+    match lp {
+        LengthPercentage::Length(l) => l,
+        LengthPercentage::Percent(p) => cb_w.map(|c| p * c).unwrap_or(0.0),
     }
 }

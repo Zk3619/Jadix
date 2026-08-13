@@ -27,7 +27,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use super::reactivity::use_signal;
-use super::tree::{Element, IntoDimension, IntoF32Raw, IntoLengthPercentage};
+use super::tree::{Element, IntoCssDim, IntoF32Raw};
 
 /// Focus-id 前缀：引擎用此前缀识别可滚动视口（与组件名无关）。
 pub const SCROLL_VIEWPORT_FOCUS_PREFIX: &str = "scroll:";
@@ -344,12 +344,12 @@ impl ScrollViewportBuilder {
         self
     }
 
-    pub fn w(mut self, width: impl IntoDimension) -> Self {
+    pub fn w(mut self, width: impl IntoCssDim) -> Self {
         self.el = self.el.w(width);
         self
     }
 
-    pub fn h(mut self, height: impl IntoDimension) -> Self {
+    pub fn h(mut self, height: impl IntoCssDim) -> Self {
         self.el = self.el.h(height);
         self
     }
@@ -364,17 +364,17 @@ impl ScrollViewportBuilder {
         self
     }
 
-    pub fn min_w(mut self, w: impl IntoDimension) -> Self {
+    pub fn min_w(mut self, w: impl IntoCssDim) -> Self {
         self.el = self.el.min_w(w);
         self
     }
 
-    pub fn min_h(mut self, h: impl IntoDimension) -> Self {
+    pub fn min_h(mut self, h: impl IntoCssDim) -> Self {
         self.el = self.el.min_h(h);
         self
     }
 
-    pub fn p(mut self, padding: impl IntoLengthPercentage) -> Self {
+    pub fn p(mut self, padding: impl IntoCssDim) -> Self {
         self.el = self.el.p(padding);
         self
     }

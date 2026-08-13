@@ -40,7 +40,7 @@
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_color, Element, IntoDimension, LayoutStatus};
+use crate::core::tree::{parse_color, Element, IntoCssDim, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
@@ -328,7 +328,7 @@ impl SwitchBuilder {
     }
 
     /// 尺寸固定（solid-ui `w-11 h-6`）；保留链式 API，调用为 no-op。
-    pub fn w(self, w: impl IntoDimension) -> Self {
+    pub fn w(self, w: impl IntoCssDim) -> Self {
         let _ = w;
         self
     }

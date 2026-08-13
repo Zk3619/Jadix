@@ -27,7 +27,7 @@ pub use color_space::{
     mix_display_srgb_in_oklab, oklch_to_display_srgba, display_srgba_to_linear_srgba,
 };
 pub use element_style::{
-    parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style,
+    parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style, UnitSlot,
 };
 pub use focus_ring::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,

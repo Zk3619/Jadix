@@ -23,7 +23,7 @@ use crate::components::base::BaseComponentBuilder;
 use crate::components::scrollbar::{scrollbar, ScrollbarBuilder, ScrollbarOrientation};
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::activate_scroll_viewport;
-use crate::core::tree::{parse_color, Element, IntoDimension, IntoF32};
+use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
 use rui_macros::component;
 
 // ── re-export viewport 契约（兼容 `scroll_area::…` 旧路径）──────────────────
@@ -253,32 +253,32 @@ impl ScrollAreaBuilder {
         self
     }
 
-    pub fn w(mut self, width: impl IntoDimension) -> Self {
+    pub fn w(mut self, width: impl IntoCssDim) -> Self {
         self.base = self.base.w(width);
         self
     }
 
-    pub fn h(mut self, height: impl IntoDimension) -> Self {
+    pub fn h(mut self, height: impl IntoCssDim) -> Self {
         self.base = self.base.h(height);
         self
     }
 
-    pub fn max_h(mut self, height: impl IntoDimension) -> Self {
+    pub fn max_h(mut self, height: impl IntoCssDim) -> Self {
         self.base.el = self.base.el.max_h(height);
         self
     }
 
-    pub fn max_w(mut self, width: impl IntoDimension) -> Self {
+    pub fn max_w(mut self, width: impl IntoCssDim) -> Self {
         self.base.el = self.base.el.max_w(width);
         self
     }
 
-    pub fn min_w(mut self, width: impl IntoDimension) -> Self {
+    pub fn min_w(mut self, width: impl IntoCssDim) -> Self {
         self.base = self.base.min_w(width);
         self
     }
 
-    pub fn min_h(mut self, height: impl IntoDimension) -> Self {
+    pub fn min_h(mut self, height: impl IntoCssDim) -> Self {
         self.base.el = self.base.el.min_h(height);
         self
     }
@@ -293,7 +293,7 @@ impl ScrollAreaBuilder {
         self
     }
 
-    pub fn p(mut self, padding: impl IntoDimension) -> Self {
+    pub fn p(mut self, padding: impl IntoCssDim) -> Self {
         self.base = self.base.p(padding);
         self
     }

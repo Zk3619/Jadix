@@ -782,6 +782,24 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::StyleChanged
             }
         }
+        KnownUtility::BoxBorder => {
+            let prev = el.style.box_sizing;
+            *el = std::mem::take(el).border_box();
+            if prev == taffy::style::BoxSizing::BorderBox {
+                LayoutStatus::Clean
+            } else {
+                LayoutStatus::LayoutChanged
+            }
+        }
+        KnownUtility::BoxContent => {
+            let prev = el.style.box_sizing;
+            *el = std::mem::take(el).content_box();
+            if prev == taffy::style::BoxSizing::ContentBox {
+                LayoutStatus::Clean
+            } else {
+                LayoutStatus::LayoutChanged
+            }
+        }
     }
 }
 
@@ -825,6 +843,22 @@ mod tests {
         let mut el = Element::new();
         apply_class_list(&mut el, "opacity-[0.4]");
         assert_eq!(el.style.opacity, 0.4);
+    }
+
+    #[test]
+    fn apply_box_sizing_utilities() {
+        let mut el = Element::new();
+        assert_eq!(el.style.box_sizing, taffy::style::BoxSizing::BorderBox);
+        let impact = apply_class_list(&mut el, "box-content");
+        assert_eq!(impact, LayoutStatus::LayoutChanged);
+        assert_eq!(el.style.box_sizing, taffy::style::BoxSizing::ContentBox);
+
+        let impact = apply_class_list(&mut el, "box-border");
+        assert_eq!(impact, LayoutStatus::LayoutChanged);
+        assert_eq!(el.style.box_sizing, taffy::style::BoxSizing::BorderBox);
+
+        let impact = apply_class_list(&mut el, "box-border");
+        assert_eq!(impact, LayoutStatus::Clean);
     }
 
     #[test]

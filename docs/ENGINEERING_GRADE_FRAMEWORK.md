@@ -178,7 +178,7 @@ crates/
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
 | P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
 | P1 DX | `REGISTERED_*` 全面挂 Owner；scoped `template_id`/`focus_id` | 降低长会话泄漏与撞键；契约见 [`element_identity.md`](element_identity.md)；执行 [`AUTHORITY.md`](AUTHORITY.md) WP-2.4 |
-| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | 默认 BorderBox + 百分比 content-box 已齐；见 [`box_model.md`](box_model.md) · WP-2.9 |
+| P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
 | P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
 

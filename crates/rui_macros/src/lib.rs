@@ -1884,12 +1884,44 @@ fn expand_node(
                             | "items"
                             | "wrap"
                             | "gap"
+                            | "gap_x"
+                            | "gapX"
+                            | "gap_y"
+                            | "gapY"
+                            | "column_gap"
+                            | "columnGap"
+                            | "row_gap"
+                            | "rowGap"
                             | "border_style"
                             | "borderStyle"
                             | "border_color"
                             | "borderColor"
                             | "border_width"
                             | "borderWidth"
+                            | "border_top"
+                            | "borderTop"
+                            | "border_right"
+                            | "borderRight"
+                            | "border_bottom"
+                            | "borderBottom"
+                            | "border_left"
+                            | "borderLeft"
+                            | "border_top_width"
+                            | "borderTopWidth"
+                            | "border_right_width"
+                            | "borderRightWidth"
+                            | "border_bottom_width"
+                            | "borderBottomWidth"
+                            | "border_left_width"
+                            | "borderLeftWidth"
+                            | "border_top_color"
+                            | "borderTopColor"
+                            | "border_right_color"
+                            | "borderRightColor"
+                            | "border_bottom_color"
+                            | "borderBottomColor"
+                            | "border_left_color"
+                            | "borderLeftColor"
                             | "outline_style"
                             | "outlineStyle"
                             | "outline_color"
@@ -2070,7 +2102,7 @@ fn expand_node(
                                         __rui_el,
                                         format!("{}:{}:bind_size_{}#{}", file!(), line!(), #axis, #idx),
                                         move || {
-                                            rui::core::tree::IntoDimension::into_dimension(#value)
+                                            rui::core::tree::IntoCssDim::into_css_dim(#value)
                                         },
                                         |el, dim| {
                                             rui::app::reactive::apply_bound_size(el, #axis, dim)
@@ -2155,10 +2187,28 @@ fn expand_node(
                                 "lineHeight" => "line_height",
                                 "grow" => "flex_grow",
                                 "shrink" => "flex_shrink",
+                                "gapX" => "gap_x",
+                                "gapY" => "gap_y",
+                                "columnGap" | "column_gap" => "column_gap",
+                                "rowGap" | "row_gap" => "row_gap",
                                 "scroll_behavior" | "scrollBehavior" => "scroll_behavior",
                                 "borderStyle" => "border_style",
                                 "borderColor" => "border_color",
                                 "borderWidth" => "border_width",
+                                "borderTop" | "border_top" | "borderTopWidth" => "border_top_width",
+                                "borderRight" | "border_right" | "borderRightWidth" => {
+                                    "border_right_width"
+                                }
+                                "borderBottom" | "border_bottom" | "borderBottomWidth" => {
+                                    "border_bottom_width"
+                                }
+                                "borderLeft" | "border_left" | "borderLeftWidth" => {
+                                    "border_left_width"
+                                }
+                                "borderTopColor" => "border_top_color",
+                                "borderRightColor" => "border_right_color",
+                                "borderBottomColor" => "border_bottom_color",
+                                "borderLeftColor" => "border_left_color",
                                 "outlineStyle" => "outline_style",
                                 "outlineColor" => "outline_color",
                                 "outlineWidth" => "outline_width",
@@ -2183,7 +2233,13 @@ fn expand_node(
                                 "bg" | "border" | "shadow" => {
                                     quote! { rui::core::tree::parse_color(#value) }
                                 }
-                                "border_color" | "outline_color" | "box_shadow_color" => {
+                                "border_color"
+                                | "border_top_color"
+                                | "border_right_color"
+                                | "border_bottom_color"
+                                | "border_left_color"
+                                | "outline_color"
+                                | "box_shadow_color" => {
                                     quote! { rui::core::tree::parse_color(#value) }
                                 }
                                 "text_color" | "text_decoration_color" | "text_shadow_color" => {
@@ -2559,7 +2615,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_w#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2578,7 +2634,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_max_w#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2597,7 +2653,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_min_w#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2619,7 +2675,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_h#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2638,7 +2694,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_max_h#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2657,7 +2713,7 @@ fn expand_node(
                                     __rui_el,
                                     format!("{}:{}:bind_size_min_h#{}", file!(), line!(), #idx),
                                     move || {
-                                        rui::core::tree::IntoDimension::into_dimension(#value)
+                                        rui::core::tree::IntoCssDim::into_css_dim(#value)
                                     },
                                     |el, dim| rui::app::reactive::apply_bound_size(el, #axis, dim),
                                 );
@@ -2722,7 +2778,34 @@ fn expand_node(
                         }
                     }
                     "border_width" | "borderWidth" => {
-                        element = quote! { #element.border_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                        element = quote! { #element.border_width(#value) }
+                    }
+                    "border_top_width" | "borderTopWidth" | "border_top" | "borderTop" => {
+                        element = quote! { #element.border_top_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "border_right_width" | "borderRightWidth" | "border_right" | "borderRight" => {
+                        element = quote! { #element.border_right_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "border_bottom_width"
+                    | "borderBottomWidth"
+                    | "border_bottom"
+                    | "borderBottom" => {
+                        element = quote! { #element.border_bottom_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "border_left_width" | "borderLeftWidth" | "border_left" | "borderLeft" => {
+                        element = quote! { #element.border_left_width(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "border_top_color" | "borderTopColor" => {
+                        element = quote! { #element.border_top_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "border_right_color" | "borderRightColor" => {
+                        element = quote! { #element.border_right_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "border_bottom_color" | "borderBottomColor" => {
+                        element = quote! { #element.border_bottom_color(rui::core::tree::parse_color(#value)) }
+                    }
+                    "border_left_color" | "borderLeftColor" => {
+                        element = quote! { #element.border_left_color(rui::core::tree::parse_color(#value)) }
                     }
                     "outline_style" | "outlineStyle" => {
                         element = quote! { #element.outline_style(#value) }
@@ -2774,6 +2857,12 @@ fn expand_node(
                         element = quote! { #element.text_size(#value) }
                     }
                     "gap" => element = quote! { #element.gap(#value) },
+                    "gap_x" | "gapX" | "column_gap" | "columnGap" => {
+                        element = quote! { #element.column_gap(#value) }
+                    }
+                    "gap_y" | "gapY" | "row_gap" | "rowGap" => {
+                        element = quote! { #element.row_gap(#value) }
+                    }
                     "items" | "align" => element = quote! { #element.items(#value) },
                     "justify" => element = quote! { #element.justify(#value) },
                     "wrap" => element = quote! { #element.wrap(#value) },
@@ -3077,6 +3166,12 @@ fn expand_node(
                     "bottom" => element = quote! { #element.bottom(#value) },
                     "left" => element = quote! { #element.left(#value) },
                     "inset" => element = quote! { #element.inset(#value) },
+                    "inset_inline" | "insetInline" => {
+                        element = quote! { #element.inset_inline(#value) }
+                    }
+                    "inset_block" | "insetBlock" => {
+                        element = quote! { #element.inset_block(#value) }
+                    }
                     "z_index" | "zIndex" => {
                         if let Some(z) = expr_as_i32(value) {
                             element = quote! { #element.z_index(#z) };
