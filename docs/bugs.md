@@ -4,7 +4,9 @@
 
 ## Components
 
-- Toast 打磨（sonner 级体验）
+- 参考 @D:\Projects\Rust\Reader\Reader\src\components\ui\color-picker.tsx 调整 color-picker：1.将颜色类型切换与颜色值输入放在一行，左侧使用 select.rs 选择色值类型，右侧使用 input.rs 负责输入
+2.默认变体不再区分是否支持透明度
+3.参考 https://github.com/xbmlz/solid-color  设计并创建一些多样的颜色选择器
 
 ## Style
 
