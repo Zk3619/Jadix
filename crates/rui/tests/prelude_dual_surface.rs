@@ -44,7 +44,6 @@ fn prelude_picker_tags_and_builders_compile() {
     let _p: Element = color_picker("pre-cp")
         .variant(ColorPickerVariant::Inline)
         .format(ColorFormat::Hex)
-        .show_alpha(true)
         .into();
     let actions = vec![CommandAction::new("x", "Example", || {})];
     let open = use_signal("pre-cmd-open", || false);

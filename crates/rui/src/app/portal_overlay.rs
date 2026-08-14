@@ -586,6 +586,68 @@ mod tests {
         assert_eq!(depth(), 0);
     }
 
+    fn dummy_hit(
+        portal_key: Option<&str>,
+        floating_id: Option<&str>,
+        hoisted: bool,
+    ) -> crate::app::pointer_events::HitPathEntry {
+        crate::app::pointer_events::HitPathEntry {
+            focus_id: None,
+            label_for: None,
+            on_pointer_down: None,
+            on_pointer_up: None,
+            on_click: None,
+            on_context_menu: None,
+            on_double_click: None,
+            hoisted_portal: hoisted,
+            portal_key: portal_key.map(str::to_string),
+            floating_id: floating_id.map(str::to_string),
+            bounds: [0.0; 4],
+        }
+    }
+
+    #[test]
+    fn nested_select_item_path_counts_as_inside_before_unmount() {
+        clear();
+        let pop = Signal::new(true);
+        let menu = Signal::new(true);
+        assert!(portal_sync("dp", pop, OverlayKind::Popover, OverlayMode::Stacked).is_some());
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+
+        let press_on_item = [dummy_hit(Some("panel:sel"), Some("sel"), true)];
+        assert!(
+            hit_path_on_top_exclusive_surface(&press_on_item),
+            "release dismiss must use this pre-click path, not a re-hit after Select closes"
+        );
+
+        menu.set(false);
+        assert!(portal_sync("sel", menu, OverlayKind::Menu, OverlayMode::Stacked).is_none());
+        assert!(
+            pop.peek(),
+            "parent popover stays open when only the nested menu closes"
+        );
+
+        crate::utils::popup::arm_underlay_close();
+        let miss_after_unmount = [dummy_hit(None, None, false)];
+        assert!(
+            !hit_path_on_top_exclusive_surface(&miss_after_unmount),
+            "post-unmount re-hit would look outside — that path must not drive dismiss"
+        );
+        assert!(try_dismiss_outside_press());
+        assert!(!pop.peek());
+        clear();
+    }
+
+    #[test]
+    fn outside_path_is_not_on_exclusive_surface() {
+        clear();
+        let pop = Signal::new(true);
+        assert!(portal_sync("dp", pop, OverlayKind::Popover, OverlayMode::Stacked).is_some());
+        let miss = [dummy_hit(None, None, false)];
+        assert!(!hit_path_on_top_exclusive_surface(&miss));
+        clear();
+    }
+
     #[test]
     fn sibling_menus_remain_exclusive() {
         clear();

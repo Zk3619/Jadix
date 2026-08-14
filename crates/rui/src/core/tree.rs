@@ -979,19 +979,45 @@ impl Element {
         self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
-    pub fn text_overflow(mut self, overflow: TextOverflow) -> Self {
+    /// Apply `text-overflow`: `clip` / `ellipsis` are nowrap + box `overflow: hidden`;
+    /// `newline` restores wrapping (`white-space: normal`) and visible overflow.
+    ///
+    /// Default [`TextOverflow::Clip`] on a new node does **not** run this — wrapping stays
+    /// allowed until clip/ellipsis is set explicitly (or via `truncate`).
+    pub fn apply_text_overflow_mode(&mut self, overflow: TextOverflow) {
+        use crate::style::WhiteSpace;
         self.text_style.overflow = overflow;
-        self.attrs.insert(
-            "text_overflow".to_string(),
-            match overflow {
-                TextOverflow::Clip => "clip".to_string(),
-                TextOverflow::Ellipsis => "ellipsis".to_string(),
-            },
-        );
+        self.attrs
+            .insert("text_overflow".to_string(), overflow.as_str().to_string());
+        match overflow {
+            TextOverflow::Clip | TextOverflow::Ellipsis => {
+                self.text_style.white_space = WhiteSpace::Nowrap;
+                self.attrs
+                    .insert("white_space".to_string(), "nowrap".to_string());
+                self.style.overflow.x = taffy::style::Overflow::Hidden;
+                self.style.overflow.y = taffy::style::Overflow::Hidden;
+            }
+            TextOverflow::Newline => {
+                self.text_style.white_space = WhiteSpace::Normal;
+                self.attrs
+                    .insert("white_space".to_string(), "normal".to_string());
+                self.style.overflow.x = taffy::style::Overflow::Visible;
+                self.style.overflow.y = taffy::style::Overflow::Visible;
+            }
+        }
+    }
+    pub fn text_overflow(mut self, overflow: impl Into<TextOverflow>) -> Self {
+        self.apply_text_overflow_mode(overflow.into());
         self
     }
     pub fn text_overflow_ellipsis(self) -> Self {
         self.text_overflow(TextOverflow::Ellipsis)
+    }
+    pub fn text_overflow_clip(self) -> Self {
+        self.text_overflow(TextOverflow::Clip)
+    }
+    pub fn text_overflow_newline(self) -> Self {
+        self.text_overflow(TextOverflow::Newline)
     }
     /// CSS / Tailwind `whitespace-nowrap`: caption stays one line (ShadCN Button).
     pub fn whitespace_nowrap(mut self) -> Self {
@@ -1738,6 +1764,28 @@ mod p1_builder_tests {
     fn text_direction_builder() {
         let el = Element::new().text("hi").text_direction(TextDirection::Rtl);
         assert_eq!(el.text_style.direction, TextDirection::Rtl);
+    }
+
+    #[test]
+    fn text_overflow_modes_set_whitespace_and_box_overflow() {
+        let clip = Element::new().text("hi").text_overflow("clip");
+        assert_eq!(clip.text_style.overflow, TextOverflow::Clip);
+        assert_eq!(
+            clip.text_style.white_space,
+            crate::style::WhiteSpace::Nowrap
+        );
+        assert_eq!(clip.style.overflow.x, taffy::style::Overflow::Hidden);
+
+        let wrap = Element::new()
+            .text("hi")
+            .text_overflow_ellipsis()
+            .text_overflow_newline();
+        assert_eq!(wrap.text_style.overflow, TextOverflow::Newline);
+        assert_eq!(
+            wrap.text_style.white_space,
+            crate::style::WhiteSpace::Normal
+        );
+        assert_eq!(wrap.style.overflow.x, taffy::style::Overflow::Visible);
     }
 
     #[test]

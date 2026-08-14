@@ -307,8 +307,7 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
         }
         let min_w = place.min_w.max(0.0);
         if min_w > 0.0 {
-            if dimension_length(el.style.min_size.width).is_none_or(|v| (v - min_w).abs() > 0.5)
-            {
+            if dimension_length(el.style.min_size.width).is_none_or(|v| (v - min_w).abs() > 0.5) {
                 el.style.min_size.width = taffy::style::Dimension::Length(min_w);
                 changed = true;
             }
@@ -473,13 +472,12 @@ fn parse_len_vs_trigger(raw: &str, trigger_w: f32) -> f32 {
 /// Must match paint / hit-test: `scroll:` viewports still contribute offset when overflow was
 /// cleared to `Visible`, and the portal layer / `position: fixed` resets accumulation.
 fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(String, [f32; 4])>) {
-    let scroll_acc = if el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
-        || el.style.position_fixed
-    {
-        [0.0_f32, 0.0_f32]
-    } else {
-        scroll_acc
-    };
+    let scroll_acc =
+        if el.template_id.as_deref() == Some(PORTAL_LAYER_ID) || el.style.position_fixed {
+            [0.0_f32, 0.0_f32]
+        } else {
+            scroll_acc
+        };
     if let Some(fid) = &el.focus_id {
         let b = el.layout_bounds;
         out.push((
@@ -585,14 +583,8 @@ fn apply_floating_menus(
                 .map(|s| s.eq_ignore_ascii_case("fixed"))
                 .unwrap_or(false);
             let (x, y, max_h) = if strategy_fixed {
-                let (x, y) = compute_fixed_anchor(
-                    *tb,
-                    viewport,
-                    estimate_w,
-                    estimate_h,
-                    preferred,
-                    gap,
-                );
+                let (x, y) =
+                    compute_fixed_anchor(*tb, viewport, estimate_w, estimate_h, preferred, gap);
                 let max_h = el
                     .attrs
                     .get(ATTR_FLOATING_MAX_H)
@@ -800,12 +792,7 @@ mod tests {
     #[test]
     fn visit_floating_panels_finds_marked() {
         let mut panel = Element::new();
-        mark_floating(
-            &mut panel,
-            "m1",
-            "t1",
-            PopupPlacement::BottomStart,
-        );
+        mark_floating(&mut panel, "m1", "t1", PopupPlacement::BottomStart);
         let nested = Element::new().child(panel);
         let root = Element::new().child(Element::new()).child(nested);
         let mut n = 0usize;
@@ -1281,7 +1268,10 @@ mod tests {
         let menu = &root.children[1];
         let top = inset_length(menu.style.inset.top).unwrap();
         // trigger bottom 556 + gap 8 → 564; not flipped above
-        assert!((top - 564.0).abs() < 0.5, "fixed y must stay below trigger, got {top}");
+        assert!(
+            (top - 564.0).abs() < 0.5,
+            "fixed y must stay below trigger, got {top}"
+        );
         assert!(
             matches!(menu.style.max_size.height, taffy::style::Dimension::Auto),
             "fixed strategy must not clamp max_h to remaining viewport"

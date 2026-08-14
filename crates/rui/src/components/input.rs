@@ -393,6 +393,8 @@ pub struct InputBuilder {
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
     value: Option<Signal<String>>,
+    truncate: bool,
+    text_overflow: Option<crate::style::TextOverflow>,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -407,6 +409,8 @@ pub fn Input(
     password_toggle: bool,
     input_type: Option<String>,
     text_size: Option<f32>,
+    truncate: bool,
+    text_overflow: Option<String>,
     mut on_click: crate::core::tree::Handler,
     mut on_key_down: crate::core::tree::KeyHandler,
     children: Option<Element>,
@@ -416,7 +420,13 @@ pub fn Input(
         .disabled(disabled)
         .invalid(invalid)
         .clearable(clearable)
-        .password_toggle(password_toggle);
+        .password_toggle(password_toggle)
+        .truncate(truncate);
+    if let Some(mode) = crate::style::TextOverflow::resolve_prop(false, text_overflow.as_deref()) {
+        if !truncate {
+            builder = builder.text_overflow(mode);
+        }
+    }
     if let Some(t) = input_type {
         builder = builder.input_type(t);
     }
@@ -478,6 +488,8 @@ pub fn input(id: &str) -> InputBuilder {
         line_height_px: None,
         leading_scale: None,
         value: None,
+        truncate: false,
+        text_overflow: None,
     }
 }
 
@@ -562,6 +574,16 @@ impl InputBuilder {
     /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
+        self
+    }
+    /// Single-line: nowrap + ellipsis instead of wrapping (color value fields, gallery).
+    pub fn truncate(mut self, on: bool) -> Self {
+        self.truncate = on;
+        self
+    }
+    /// `clip` / `ellipsis` / `newline`. Overridden by [`Self::truncate`] `true`.
+    pub fn text_overflow(mut self, mode: impl Into<crate::style::TextOverflow>) -> Self {
+        self.text_overflow = Some(mode.into());
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
@@ -680,6 +702,11 @@ impl From<InputBuilder> for Element {
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
             value: builder.value,
+            text_overflow: if builder.truncate {
+                Some(crate::style::TextOverflow::Ellipsis)
+            } else {
+                builder.text_overflow
+            },
             single_line_container: Some(builder.container),
             multiline: false,
             rows: 1,

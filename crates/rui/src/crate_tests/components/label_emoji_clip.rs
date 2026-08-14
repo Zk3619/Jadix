@@ -51,6 +51,8 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
         weight: None,
         center: Some(false),
         r#for: None,
+        truncate: None,
+        text_overflow: None,
         children: Some(Element::new().text(text)),
         base: Some(Box::new(|mut b: BaseComponentBuilder| {
             b = b.w("100%");

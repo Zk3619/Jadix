@@ -543,8 +543,9 @@ mod clamp_scroll_extent_tests {
 #[cfg(test)]
 mod scroll_item_align_tests {
     use super::{
-        apply_pending_scroll_item_into_view, cancel_scroll_item_into_view, has_pending_scroll_item_align,
-        request_scroll_item_into_view, scroll_offset_to_center_item, ScrollItemAlign,
+        apply_pending_scroll_item_into_view, cancel_scroll_item_into_view,
+        has_pending_scroll_item_align, request_scroll_item_into_view, scroll_offset_to_center_item,
+        ScrollItemAlign,
     };
     use crate::core::reactivity::create_root;
     use crate::core::scroll_viewport::scroll_offset_y_signal_key;
@@ -568,7 +569,11 @@ mod scroll_item_align_tests {
             cancel_scroll_item_into_view("t-year-align");
             request_scroll_item_into_view("t-year-align", 126, 201, ScrollItemAlign::Center);
             assert!(has_pending_scroll_item_align());
-            assert!(!apply_pending_scroll_item_into_view("t-year-align", 0.0, 0.0));
+            assert!(!apply_pending_scroll_item_into_view(
+                "t-year-align",
+                0.0,
+                0.0
+            ));
             assert!(has_pending_scroll_item_align());
             let content_h = 201.0 * 26.0;
             assert!(apply_pending_scroll_item_into_view(

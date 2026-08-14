@@ -167,9 +167,9 @@ pub use scrollbar::{
 pub use select::{
     select, select_content, select_scope, use_select, Select, SelectBuilder, SelectContentOpts,
     SelectCtx, SelectGroup, SelectGroupData, SelectGroupProps, SelectItem, SelectItemAlign,
-    SelectScrollSelected,
-    SelectItemData, SelectItemProps, SelectLabel, SelectLabelProps, SelectProps, SelectSeparator,
-    SelectSeparatorProps, SelectTrigger, SelectTriggerProps, SelectValue, SelectValueProps,
+    SelectItemData, SelectItemProps, SelectLabel, SelectLabelProps, SelectProps,
+    SelectScrollSelected, SelectSeparator, SelectSeparatorProps, SelectTrigger, SelectTriggerProps,
+    SelectValue, SelectValueProps,
 };
 pub use separator::{separator, Separator, SeparatorBuilder, SeparatorProps};
 pub use sheet::{sheet, SheetBuilder, SheetSide};

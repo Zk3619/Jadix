@@ -99,6 +99,8 @@ pub enum KnownUtility<'a> {
     TranslateY(f32),
     /// Single-line ellipsis overflow (`truncate`).
     Truncate,
+    /// CSS `text-overflow`: `clip` | `ellipsis` | `newline` (`text-overflow-*` classes).
+    TextOverflow(&'a str),
     /// Tailwind `whitespace-nowrap` — text leaf stays one line (ShadCN Button).
     WhitespaceNowrap,
     PositionFixed,
@@ -129,9 +131,13 @@ pub enum KnownUtility<'a> {
     /// `animate-none` — clear animation (`rui_animate=none`).
     AnimateNone,
     /// Marker: this element is a `group` / `group/name` for `group-hover:` descendants.
-    GroupMarker { name: Option<&'a str> },
+    GroupMarker {
+        name: Option<&'a str>,
+    },
     /// Marker: this element is a `peer` / `peer/name` for following siblings' `peer-hover:`.
-    PeerMarker { name: Option<&'a str> },
+    PeerMarker {
+        name: Option<&'a str>,
+    },
     /// Tailwind `box-border` → `box-sizing: border-box`（RUI 默认）。
     BoxBorder,
     /// Tailwind `box-content` → `box-sizing: content-box`。
@@ -436,6 +442,14 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     if let Some(rest) = token.strip_prefix("text-") {
+        if let Some(mode) = rest.strip_prefix("overflow-") {
+            match mode {
+                "clip" | "ellipsis" | "newline" | "wrap" => {
+                    return Some(KnownUtility::TextOverflow(mode));
+                }
+                _ => {}
+            }
+        }
         if let Some(px) = text_size_token_to_px(rest) {
             return Some(KnownUtility::TextSize(px));
         }
@@ -609,6 +623,21 @@ mod tests {
         assert!(is_known_utility("translate-x-4"));
         assert!(is_known_utility("translate-y-2"));
         assert!(is_known_utility("truncate"));
+        assert!(is_known_utility("text-overflow-clip"));
+        assert!(is_known_utility("text-overflow-ellipsis"));
+        assert!(is_known_utility("text-overflow-newline"));
+        assert!(matches!(
+            classify_utility("text-overflow-clip"),
+            Some(KnownUtility::TextOverflow("clip"))
+        ));
+        assert!(matches!(
+            classify_utility("text-overflow-ellipsis"),
+            Some(KnownUtility::TextOverflow("ellipsis"))
+        ));
+        assert!(matches!(
+            classify_utility("text-overflow-newline"),
+            Some(KnownUtility::TextOverflow("newline"))
+        ));
         assert!(is_known_utility("whitespace-nowrap"));
         assert!(matches!(
             classify_utility("whitespace-nowrap"),

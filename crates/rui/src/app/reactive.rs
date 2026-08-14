@@ -346,11 +346,7 @@ where
 ///
 /// Use for components whose internal signals (e.g. Select `open`) must rebuild the
 /// subtree. Prefer [`reactive_component`] when the body should only refresh on props.
-pub fn reactive_component_live<P, F>(
-    anchor_id: impl Into<String>,
-    props: P,
-    render: F,
-) -> Element
+pub fn reactive_component_live<P, F>(anchor_id: impl Into<String>, props: P, render: F) -> Element
 where
     P: Clone + PartialEq + 'static,
     F: FnMut(P) -> Element + 'static,

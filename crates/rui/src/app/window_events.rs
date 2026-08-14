@@ -2762,7 +2762,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let x = self.cursor_pos.x as f32 / scale.max(1.0);
                     let y = self.cursor_pos.y as f32 / scale.max(1.0);
                     let capture = super::pointer_capture_id();
-                    let (path, cb_to_run, label_for_focus) = {
+                    let (path, cb_to_run, label_for_focus, on_exclusive, on_trigger) = {
                         let state_borrow = self.state.borrow();
                         let state = match state_borrow.as_ref() {
                             Some(s) if s.window.id() == id => s,
@@ -2827,7 +2827,13 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 )
                             }
                         };
-                        (path, cb_resolved.0, cb_resolved.1)
+                        let on_exclusive =
+                            super::portal_overlay::hit_path_on_top_exclusive_surface(&path);
+                        let on_trigger = crate::utils::popup::path_hits_floating_trigger(
+                            &state.root_element,
+                            &path,
+                        );
+                        (path, cb_resolved.0, cb_resolved.1, on_exclusive, on_trigger)
                     };
                     let detail = self.click_count.max(1);
                     let mut pev =
@@ -2866,22 +2872,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             }
                         }
                     }
-                    // Re-hit after click handlers: open may have mounted a floating panel.
-                    let should_outside_dismiss = {
-                        let state_borrow = self.state.borrow();
-                        match state_borrow.as_ref() {
-                            Some(state) if state.window.id() == id => {
-                                let path =
-                                    super::pointer_events::hit_path(&state.root_element, x, y);
-                                !super::portal_overlay::hit_path_on_top_exclusive_surface(&path)
-                                    && !crate::utils::popup::path_hits_floating_trigger(
-                                        &state.root_element,
-                                        &path,
-                                    )
-                            }
-                            _ => false,
-                        }
-                    };
+                    // Use the pre-click path. Re-hitting after on_click is wrong: opening is
+                    // already gated by `disarm_underlay_close`, and a nested Select item click
+                    // unmounts the Menu so a second hit looks like an outside press on the parent
+                    // DatePicker / ColorPicker popover.
+                    let should_outside_dismiss = !on_exclusive && !on_trigger;
                     if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press()
                     {
                         super::runtime::request_redraw();

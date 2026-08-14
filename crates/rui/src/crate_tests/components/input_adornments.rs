@@ -241,6 +241,8 @@ fn string_bool_props_mount_adornments_like_rsx() {
         password_toggle: Some(parse_bool_like("true")),
         input_type: Some("password".into()),
         text_size: None,
+        truncate: None,
+        text_overflow: None,
         on_click: None,
         on_key_down: None,
         children: None,

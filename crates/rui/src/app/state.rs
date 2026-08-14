@@ -237,6 +237,49 @@ fn draw_packed_textured_runs<'pass>(
     }
 }
 
+fn draw_paint_ops<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    ops: &[crate::layout::layout_tree::PaintOp],
+    lo: usize,
+    hi: usize,
+    pipeline: &'pass RuiPipeline,
+    instance_buffer: &'pass wgpu::Buffer,
+    textured_pipeline: &'pass TexturedQuadPipeline,
+    textured_instance_buffer: &'pass wgpu::Buffer,
+    image_textures: &'pass HashMap<String, super::image_registry::GpuImageTexture>,
+    scaled_tex: &'pass [ScaledTexturedDraw],
+) {
+    use crate::layout::layout_tree::PaintOp;
+    let hi = hi.min(ops.len());
+    let lo = lo.min(hi);
+    for op in &ops[lo..hi] {
+        match *op {
+            PaintOp::Rects { start, count } if count > 0 => {
+                pass.set_pipeline(&pipeline.render_pipeline);
+                pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, instance_buffer.slice(..));
+                pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..pipeline.num_indices, 0, start..(start + count));
+            }
+            PaintOp::Textured { start, count } if count > 0 => {
+                let s = start as usize;
+                let e = s + count as usize;
+                draw_packed_textured_runs(
+                    pass,
+                    textured_pipeline,
+                    textured_instance_buffer,
+                    image_textures,
+                    scaled_tex,
+                    s,
+                    e,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 impl AppState {
     fn cpu_hybrid_text_only() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -1510,6 +1553,9 @@ impl AppState {
             .textured_start
             .min(render_result.textured_draws.len());
         let overlay_chrome_start = overlay_split.chrome_start.min(scaled_input_chrome.len());
+        let overlay_paint_start = overlay_split
+            .paint_op_start
+            .min(render_result.paint_ops.len());
         // Portal overlays span arbitrary screen regions; partial-damage scissors leave
         // stale page chrome and clipped panels (esp. GLES). Always clear the full frame.
         if overlay_inst_start < scaled_instances.len()
@@ -1691,6 +1737,7 @@ impl AppState {
             scaled_tex.len(),
             self.text_nodes.len(),
             scaled_input_chrome.len(),
+            render_result.paint_ops.len(),
         );
         self.ensure_overlay_band_text_renderers(overlay_band_ranges.len());
         let mut overlay_band_underlines: Vec<Vec<InstanceInput>> =
@@ -1938,21 +1985,36 @@ impl AppState {
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
                     );
-                    page_pass.draw_indexed(
-                        0..self.pipeline.num_indices,
-                        0,
-                        0..overlay_inst_start as u32,
-                    );
-                    if overlay_tex_start > 0 {
-                        draw_packed_textured_runs(
+                    if overlay_paint_start > 0 {
+                        draw_paint_ops(
                             &mut page_pass,
+                            &render_result.paint_ops,
+                            0,
+                            overlay_paint_start,
+                            &self.pipeline,
+                            &self.instance_buffer,
                             &self.textured_pipeline,
                             &self.textured_instance_buffer,
                             &self.image_textures,
                             &scaled_tex,
-                            0,
-                            overlay_tex_start,
                         );
+                    } else {
+                        page_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..overlay_inst_start as u32,
+                        );
+                        if overlay_tex_start > 0 {
+                            draw_packed_textured_runs(
+                                &mut page_pass,
+                                &self.textured_pipeline,
+                                &self.textured_instance_buffer,
+                                &self.image_textures,
+                                &scaled_tex,
+                                0,
+                                overlay_tex_start,
+                            );
+                        }
                     }
                     if !underline_instances.is_empty() {
                         page_pass.set_pipeline(&self.pipeline.render_pipeline);
@@ -2060,26 +2122,40 @@ impl AppState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
-            // Page layer: rects under page glyphs (Solid/CSS stacking with portal overlays).
+            // Page layer: tree-order rects + textures (Solid/CSS stacking with portal overlays).
             // Skipped when backdrop blur already composited the page.
-            if allow_primitives && overlay_inst_start > 0 && !use_backdrop_blur {
-                render_pass.draw_indexed(
-                    0..self.pipeline.num_indices,
-                    0,
-                    0..overlay_inst_start as u32,
-                );
-            }
-
-            if allow_primitives && overlay_tex_start > 0 && !use_backdrop_blur {
-                draw_packed_textured_runs(
-                    &mut render_pass,
-                    &self.textured_pipeline,
-                    &self.textured_instance_buffer,
-                    &self.image_textures,
-                    &scaled_tex,
-                    0,
-                    overlay_tex_start,
-                );
+            if allow_primitives && !use_backdrop_blur {
+                if overlay_paint_start > 0 {
+                    draw_paint_ops(
+                        &mut render_pass,
+                        &render_result.paint_ops,
+                        0,
+                        overlay_paint_start,
+                        &self.pipeline,
+                        &self.instance_buffer,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        &scaled_tex,
+                    );
+                } else if overlay_inst_start > 0 {
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        0..overlay_inst_start as u32,
+                    );
+                    if overlay_tex_start > 0 {
+                        draw_packed_textured_runs(
+                            &mut render_pass,
+                            &self.textured_pipeline,
+                            &self.textured_instance_buffer,
+                            &self.image_textures,
+                            &scaled_tex,
+                            0,
+                            overlay_tex_start,
+                        );
+                    }
+                }
             }
 
             if !use_backdrop_blur {
@@ -2193,7 +2269,20 @@ impl AppState {
             // Portal overlay: per-band `rects → text` so stacked panels occlude correctly
             // (still one Clear pass — no GLES LoadOp::Load).
             for (band_i, band) in overlay_band_ranges.iter().enumerate() {
-                if allow_primitives && band.instance.0 < band.instance.1 {
+                if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
+                    draw_paint_ops(
+                        &mut render_pass,
+                        &render_result.paint_ops,
+                        band.paint_ops.0,
+                        band.paint_ops.1,
+                        &self.pipeline,
+                        &self.instance_buffer,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        &scaled_tex,
+                    );
+                } else if allow_primitives && band.instance.0 < band.instance.1 {
                     render_pass.set_pipeline(&self.pipeline.render_pipeline);
                     render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
@@ -2207,18 +2296,17 @@ impl AppState {
                         0,
                         band.instance.0 as u32..band.instance.1 as u32,
                     );
-                }
-
-                if allow_primitives && band.textured.0 < band.textured.1 {
-                    draw_packed_textured_runs(
-                        &mut render_pass,
-                        &self.textured_pipeline,
-                        &self.textured_instance_buffer,
-                        &self.image_textures,
-                        &scaled_tex,
-                        band.textured.0,
-                        band.textured.1,
-                    );
+                    if band.textured.0 < band.textured.1 {
+                        draw_packed_textured_runs(
+                            &mut render_pass,
+                            &self.textured_pipeline,
+                            &self.textured_instance_buffer,
+                            &self.image_textures,
+                            &scaled_tex,
+                            band.textured.0,
+                            band.textured.1,
+                        );
+                    }
                 }
 
                 if allow_primitives && band.chrome.0 < band.chrome.1 {

@@ -202,6 +202,8 @@ pub fn Label(
     center: bool,
     /// 关联控件的 `focus_id` / Checkbox `id`（Solid `for`）。
     r#for: String,
+    truncate: bool,
+    text_overflow: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let mut builder = label(&id).text(text).r#for(r#for);
@@ -216,6 +218,11 @@ pub fn Label(
     }
     if center {
         builder = builder.text_center();
+    }
+    if truncate {
+        builder = builder.truncate(true);
+    } else if let Some(ref mode) = text_overflow {
+        builder = builder.text_overflow(mode.as_str());
     }
     if let Some(c) = children {
         builder = builder.child(c);
@@ -437,8 +444,26 @@ impl LabelBuilder {
         self
     }
 
-    pub fn text_overflow(mut self, overflow: crate::style::TextOverflow) -> Self {
+    pub fn text_overflow_clip(mut self) -> Self {
+        self.inner.el = self.inner.el.text_overflow_clip();
+        self
+    }
+
+    pub fn text_overflow_newline(mut self) -> Self {
+        self.inner.el = self.inner.el.text_overflow_newline();
+        self
+    }
+
+    pub fn text_overflow(mut self, overflow: impl Into<crate::style::TextOverflow>) -> Self {
         self.inner.el = self.inner.el.text_overflow(overflow);
+        self
+    }
+
+    /// Same as `text-overflow: ellipsis` / `truncate=true`.
+    pub fn truncate(mut self, on: bool) -> Self {
+        if on {
+            self.inner.el = self.inner.el.text_overflow_ellipsis();
+        }
         self
     }
 

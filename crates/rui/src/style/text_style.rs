@@ -1,12 +1,61 @@
 //! Text layout / paint style (size, weight, color, decoration, shadow, align).
 //! Separated from [`super::Style`] (box model / Taffy).
 
-/// Text overflow strategy (clip / ellipsis).
+/// Text overflow: CSS `clip` / `ellipsis`, plus `newline` for wrapping.
+///
+/// - [`Self::Clip`]: single line, cut overflow (no `…`).
+/// - [`Self::Ellipsis`]: single line, trailing `…` (`truncate` / `text-overflow: ellipsis`).
+/// - [`Self::Newline`]: soft-wrap onto new lines (`text-overflow: newline`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextOverflow {
     #[default]
     Clip,
     Ellipsis,
+    Newline,
+}
+
+impl TextOverflow {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ellipsis" | "truncate" => Self::Ellipsis,
+            "newline" | "wrap" | "break" => Self::Newline,
+            _ => Self::Clip,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Clip => "clip",
+            Self::Ellipsis => "ellipsis",
+            Self::Newline => "newline",
+        }
+    }
+
+    /// Clip / ellipsis stay one line; newline wraps.
+    pub fn nowrap(self) -> bool {
+        !matches!(self, Self::Newline)
+    }
+
+    /// `truncate=true` wins; otherwise parse `text-overflow` / `text_overflow`.
+    pub fn resolve_prop(truncate: bool, attr: Option<&str>) -> Option<Self> {
+        if truncate {
+            Some(Self::Ellipsis)
+        } else {
+            attr.filter(|s| !s.trim().is_empty()).map(Self::parse)
+        }
+    }
+}
+
+impl From<&str> for TextOverflow {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for TextOverflow {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
 }
 
 /// CSS `white-space` MVP for text leaves (`normal` soft-wraps; `nowrap` stays one line).
@@ -187,7 +236,7 @@ pub struct TextStyle {
     /// Line-height scale relative to font size. `None` = default policy.
     pub line_height_scale: Option<f32>,
     pub align: glyphon::cosmic_text::Align,
-    /// Overflow when the single-line box is too narrow.
+    /// Overflow when the box is too small (`clip` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
     pub white_space: WhiteSpace,
@@ -340,6 +389,20 @@ mod tests {
             .text_overflow_ellipsis();
         assert!(el.text_style.selectable);
         assert_eq!(el.text_style.overflow, TextOverflow::Ellipsis);
+        assert_eq!(el.text_style.white_space, WhiteSpace::Nowrap);
+        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+    }
+
+    #[test]
+    fn text_overflow_parse_clip_ellipsis_newline() {
+        assert_eq!(TextOverflow::parse("clip"), TextOverflow::Clip);
+        assert_eq!(TextOverflow::parse("ellipsis"), TextOverflow::Ellipsis);
+        assert_eq!(TextOverflow::parse("truncate"), TextOverflow::Ellipsis);
+        assert_eq!(TextOverflow::parse("newline"), TextOverflow::Newline);
+        assert_eq!(TextOverflow::parse("wrap"), TextOverflow::Newline);
+        assert!(TextOverflow::Clip.nowrap());
+        assert!(TextOverflow::Ellipsis.nowrap());
+        assert!(!TextOverflow::Newline.nowrap());
     }
 
     fn approx_eq(a: f32, b: f32) {

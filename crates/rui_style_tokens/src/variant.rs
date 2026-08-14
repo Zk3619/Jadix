@@ -228,10 +228,7 @@ mod tests {
     #[test]
     fn group_hover_and_named() {
         let t = parse_class_token("group-hover:bg-accent");
-        assert_eq!(
-            t.variants,
-            vec![VariantSelector::GroupHover { name: None }]
-        );
+        assert_eq!(t.variants, vec![VariantSelector::GroupHover { name: None }]);
         assert_eq!(t.utility, "bg-accent");
         let named = parse_class_token("group-hover/card:opacity-50");
         assert_eq!(

@@ -311,7 +311,10 @@ pub fn SelectValue(placeholder: Option<String>, children: Option<Element>) -> El
         .text_size(14.0)
         .min_w(0.0)
         .flex_grow(1.0)
-        .flex_shrink(1.0);
+        .flex_shrink(1.0)
+        .overflow("hidden")
+        .whitespace_nowrap()
+        .text_overflow_ellipsis();
     // data-placeholder:text-muted-foreground
     text_el = bind_style(text_el, style_id, move || {
         let empty = value.get().is_empty();
@@ -648,7 +651,6 @@ fn count_select_items(el: &Element) -> usize {
     }
     el.children.iter().map(count_select_items).sum()
 }
-
 
 fn take_packed(mut el: Element) -> Vec<Element> {
     if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
@@ -1328,7 +1330,10 @@ mod tests {
         );
         assert_eq!(scroll_offset_to_center_item(0, 32.0, 248.0, 12), 0.0);
         let last = scroll_offset_to_center_item(11, 32.0, 248.0, 12);
-        assert!((last - 136.0).abs() < 0.5, "last month max scroll, got {last}");
+        assert!(
+            (last - 136.0).abs() < 0.5,
+            "last month max scroll, got {last}"
+        );
     }
 
     #[test]

@@ -795,6 +795,7 @@ pub struct OverlayPaintSplit {
     pub textured_start: usize,
     pub text_start: usize,
     pub chrome_start: usize,
+    pub paint_op_start: usize,
     /// Starts of each portal-layer child paint band (z / tree order). Empty → treat the
     /// whole overlay suffix as a single band.
     pub bands: Vec<OverlayPaintBand>,
@@ -808,6 +809,7 @@ pub struct OverlayPaintBand {
     pub textured_start: usize,
     pub text_start: usize,
     pub chrome_start: usize,
+    pub paint_op_start: usize,
     /// Max [`crate::style::Style::backdrop_blur`] on this band's root (logical px).
     pub backdrop_blur: f32,
 }
@@ -819,6 +821,7 @@ pub struct OverlayBandRange {
     pub textured: (usize, usize),
     pub text: (usize, usize),
     pub chrome: (usize, usize),
+    pub paint_ops: (usize, usize),
 }
 
 impl OverlayPaintSplit {
@@ -829,18 +832,21 @@ impl OverlayPaintSplit {
         textured_len: usize,
         text_len: usize,
         chrome_len: usize,
+        paint_op_len: usize,
     ) -> Vec<OverlayBandRange> {
         let starts: Vec<OverlayPaintBand> = if self.bands.is_empty() {
             if self.instance_start < instance_len
                 || self.textured_start < textured_len
                 || self.text_start < text_len
                 || self.chrome_start < chrome_len
+                || self.paint_op_start < paint_op_len
             {
                 vec![OverlayPaintBand {
                     instance_start: self.instance_start.min(instance_len),
                     textured_start: self.textured_start.min(textured_len),
                     text_start: self.text_start.min(text_len),
                     chrome_start: self.chrome_start.min(chrome_len),
+                    paint_op_start: self.paint_op_start.min(paint_op_len),
                     backdrop_blur: 0.0,
                 }]
             } else {
@@ -872,9 +878,79 @@ impl OverlayPaintSplit {
                     next.map(|n| n.chrome_start.min(chrome_len))
                         .unwrap_or(chrome_len),
                 ),
+                paint_ops: (
+                    b.paint_op_start.min(paint_op_len),
+                    next.map(|n| n.paint_op_start.min(paint_op_len))
+                        .unwrap_or(paint_op_len),
+                ),
             });
         }
         out
+    }
+}
+
+/// Tree-order paint: a node's SDF rects, then its `image_texture`, then children.
+/// Keeps slider thumbs / SV knobs above track ramps (textured quads used to draw in a
+/// later pass that covered every sibling rect).
+#[derive(Clone, Copy, Debug)]
+pub enum PaintOp {
+    Rects { start: u32, count: u32 },
+    Textured { start: u32, count: u32 },
+}
+
+#[derive(Default)]
+struct PaintRecorder {
+    ops: Vec<PaintOp>,
+    /// Next push must start a new op even if instance indices are contiguous.
+    /// Prevents page `Rects` from swallowing the first overlay panel fill (page glyphs
+    /// would then paint *on top* of the popover chrome).
+    split_before_next: bool,
+}
+
+impl PaintRecorder {
+    fn split_here(&mut self) {
+        self.split_before_next = true;
+    }
+
+    fn push_rects(&mut self, start: usize, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let start = start as u32;
+        let count = count as u32;
+        if !self.split_before_next {
+            if let Some(PaintOp::Rects { start: s, count: c }) = self.ops.last_mut() {
+                if *s + *c == start {
+                    *c += count;
+                    return;
+                }
+            }
+        }
+        self.split_before_next = false;
+        self.ops.push(PaintOp::Rects { start, count });
+    }
+
+    fn push_textured(&mut self, start: usize, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let start = start as u32;
+        let count = count as u32;
+        if !self.split_before_next {
+            if let Some(PaintOp::Textured { start: s, count: c }) = self.ops.last_mut() {
+                if *s + *c == start {
+                    *c += count;
+                    return;
+                }
+            }
+        }
+        self.split_before_next = false;
+        self.ops.push(PaintOp::Textured { start, count });
+    }
+
+    fn push_self(&mut self, i0: usize, i1: usize, t0: usize, t1: usize) {
+        self.push_rects(i0, i1.saturating_sub(i0));
+        self.push_textured(t0, t1.saturating_sub(t0));
     }
 }
 
@@ -882,6 +958,8 @@ impl OverlayPaintSplit {
 pub struct RenderResult {
     pub instances: Vec<InstanceInput>,
     pub textured_draws: Vec<TexturedDraw>,
+    /// Document-order rect/texture runs (see [`PaintOp`]).
+    pub paint_ops: Vec<PaintOp>,
     pub text_nodes: Vec<TextLayoutInfo>,
     /// Input/Label caret + selection chrome in logical px (drawn after glyphon text).
     pub input_chrome_instances: Vec<InstanceInput>,
@@ -1464,6 +1542,7 @@ impl LayoutTree {
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
         let mut overlay_split = OverlayPaintSplit::default();
+        let mut paint_rec = PaintRecorder::default();
 
         let t_collect_begin = Instant::now();
         self.collect_instances_mut(
@@ -1486,6 +1565,7 @@ impl LayoutTree {
             None,
             &mut None,
             &mut overlay_split,
+            &mut paint_rec,
         );
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
@@ -1493,11 +1573,13 @@ impl LayoutTree {
             overlay_split.textured_start = textured_draws.len();
             overlay_split.text_start = text_nodes.len();
             overlay_split.chrome_start = input_chrome_instances.len();
+            overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
         RenderResult {
             instances,
             textured_draws,
+            paint_ops: paint_rec.ops,
             text_nodes,
             input_chrome_instances,
             overlay_split,
@@ -1639,6 +1721,7 @@ impl LayoutTree {
         let mut scroll_metrics = Vec::new();
         let mut hover_cursor = None;
         let mut overlay_split = OverlayPaintSplit::default();
+        let mut paint_rec = PaintRecorder::default();
 
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
         let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
@@ -1669,6 +1752,7 @@ impl LayoutTree {
             None,
             &mut scroll_cache_slot,
             &mut overlay_split,
+            &mut paint_rec,
         );
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
@@ -1676,11 +1760,13 @@ impl LayoutTree {
             overlay_split.textured_start = textured_draws.len();
             overlay_split.text_start = text_nodes.len();
             overlay_split.chrome_start = input_chrome_instances.len();
+            overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
         RenderResult {
             instances,
             textured_draws,
+            paint_ops: paint_rec.ops,
             text_nodes,
             input_chrome_instances,
             overlay_split,
@@ -1854,6 +1940,7 @@ impl LayoutTree {
         thumb_geometry_override: Option<[f32; 4]>,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
         overlay_split: &mut OverlayPaintSplit,
+        paint_rec: &mut PaintRecorder,
     ) -> [f32; 2] {
         // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
         // Reset clip + scroll accumulation when entering the root portal layer so hoisted
@@ -1870,7 +1957,9 @@ impl LayoutTree {
             overlay_split.textured_start = textured_draws.len();
             overlay_split.text_start = text_nodes.len();
             overlay_split.chrome_start = input_chrome_instances.len();
+            overlay_split.paint_op_start = paint_rec.ops.len();
             overlay_split.marked = true;
+            paint_rec.split_here();
         }
         element.layout_node = Some(node);
         let layout = match self.taffy.layout(node) {
@@ -1966,6 +2055,8 @@ impl LayoutTree {
         };
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
         let rotate_deg = element.style.rotate_deg;
+        let self_inst0 = instances.len();
+        let self_tex0 = textured_draws.len();
 
         // Clipping & Visibility
         let mut clip = parent_clip;
@@ -2376,6 +2467,8 @@ impl LayoutTree {
             );
         }
 
+        paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
+
         // Recurse children
         let mut next_scroll_acc = scroll_acc;
         // `scroll:` viewports always contribute offset (even if overflow was cleared to Visible).
@@ -2412,6 +2505,7 @@ impl LayoutTree {
                                 textured_draws: &Vec<TexturedDraw>,
                                 text_nodes: &Vec<TextLayoutInfo>,
                                 input_chrome_instances: &Vec<InstanceInput>,
+                                paint_ops_len: usize,
                                 band_root: &Element| {
             if is_body_portal_layer {
                 overlay_split.bands.push(OverlayPaintBand {
@@ -2419,6 +2513,7 @@ impl LayoutTree {
                     textured_start: textured_draws.len(),
                     text_start: text_nodes.len(),
                     chrome_start: input_chrome_instances.len(),
+                    paint_op_start: paint_ops_len,
                     backdrop_blur: band_root.style.backdrop_blur.max(0.0),
                 });
             }
@@ -2435,12 +2530,14 @@ impl LayoutTree {
                     );
                     break;
                 }
+                paint_rec.split_here();
                 push_portal_band(
                     overlay_split,
                     instances,
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
+                    paint_rec.ops.len(),
                     child,
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
@@ -2479,6 +2576,7 @@ impl LayoutTree {
                     thumb_ov,
                     scroll_signals_cache,
                     overlay_split,
+                    paint_rec,
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
@@ -2502,12 +2600,14 @@ impl LayoutTree {
                     );
                     continue;
                 }
+                paint_rec.split_here();
                 push_portal_band(
                     overlay_split,
                     instances,
                     textured_draws,
                     text_nodes,
                     input_chrome_instances,
+                    paint_rec.ops.len(),
                     &element.children[i],
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
@@ -2546,6 +2646,7 @@ impl LayoutTree {
                     thumb_ov,
                     scroll_signals_cache,
                     overlay_split,
+                    paint_rec,
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
@@ -3364,6 +3465,15 @@ mod portal_hoist_tests {
             !result.overlay_split.bands.is_empty(),
             "each portal child should open a paint band"
         );
+        let overlay_i0 = result.overlay_split.instance_start as u32;
+        for op in &result.paint_ops[..result.overlay_split.paint_op_start] {
+            if let PaintOp::Rects { start, count } = *op {
+                assert!(
+                    start + count <= overlay_i0,
+                    "page Rects must not swallow overlay panel fills (would paint page glyphs on the popover); op={start}+{count} overlay_i0={overlay_i0}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3416,6 +3526,7 @@ mod portal_hoist_tests {
             result.textured_draws.len(),
             result.text_nodes.len(),
             result.input_chrome_instances.len(),
+            result.paint_ops.len(),
         );
         assert!(ranges.len() >= 2);
         let a = ranges[ranges.len() - 2];
@@ -3435,6 +3546,36 @@ mod portal_hoist_tests {
         assert!(result.text_nodes[b.text.0..b.text.1]
             .iter()
             .any(|t| t.text == "upper-glyph"));
+    }
+
+    #[test]
+    fn paint_ops_texture_then_sibling_rect() {
+        let mut tex = Element::new().w(40.0).h(8.0);
+        tex.image_texture = Some("ramp".into());
+        let thumb = Element::new().w(20.0).h(20.0).bg([1.0, 1.0, 1.0, 1.0]);
+        let mut root = Element::new()
+            .w(200.0)
+            .h(40.0)
+            .relative()
+            .child(tex)
+            .child(thumb);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 200.0, 40.0, [0.0, 0.0]);
+        let kinds: Vec<&'static str> = result
+            .paint_ops
+            .iter()
+            .map(|op| match op {
+                PaintOp::Rects { .. } => "r",
+                PaintOp::Textured { .. } => "t",
+            })
+            .collect();
+        let tex_at = kinds.iter().position(|k| *k == "t");
+        let rect_after = kinds.iter().rposition(|k| *k == "r");
+        assert!(tex_at.is_some() && rect_after.is_some());
+        assert!(
+            tex_at.unwrap() < rect_after.unwrap(),
+            "textured track must paint before sibling thumb rects, ops={kinds:?}"
+        );
     }
 
     #[test]

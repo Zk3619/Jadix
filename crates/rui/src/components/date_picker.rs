@@ -25,9 +25,7 @@
 //! ```
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::{
-    reactive_anchor, reactive_component_live, reactive_placeholder_sized,
-};
+use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
 use crate::components::button::button;
 use crate::components::calendar::{
     calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
@@ -296,26 +294,11 @@ fn time_hms_row(
             .py("0.5rem")
             .max_w("100%")
             .overflow("hidden")
-            .child(time_unit_combobox(
-                &format!("{id}__h"),
-                hour,
-                23,
-                "HH",
-            ))
+            .child(time_unit_combobox(&format!("{id}__h"), hour, 23, "HH"))
             .child(time_colon())
-            .child(time_unit_combobox(
-                &format!("{id}__m"),
-                minute,
-                59,
-                "MM",
-            ))
+            .child(time_unit_combobox(&format!("{id}__m"), minute, 59, "MM"))
             .child(time_colon())
-            .child(time_unit_combobox(
-                &format!("{id}__s"),
-                second,
-                59,
-                "SS",
-            )),
+            .child(time_unit_combobox(&format!("{id}__s"), second, 59, "SS")),
     )
 }
 
@@ -333,10 +316,7 @@ fn sync_datetime_value_from_hms(
         return;
     }
     if let Some((y, mo, d)) = parse_ymd(&val.peek()) {
-        let next = format!(
-            "{y:04}-{mo:02}-{d:02}T{}",
-            format_hms_parts(&hs, &ms, &ss)
-        );
+        let next = format!("{y:04}-{mo:02}-{d:02}T{}", format_hms_parts(&hs, &ms, &ss));
         if val.peek() != next {
             val.set(next);
         }
@@ -658,24 +638,12 @@ fn build_date_picker_view(
             // 不可 untrack（current_effect=None → reactive_anchor 直接 return → 浮层只剩分割线/冒号）。
             isolate_reads(|| {
                 build_date_picker_floating_panel(
-                    &id,
-                    kind,
-                    caption,
-                    oz.panel,
-                    open,
-                    val,
-                    year,
-                    month,
-                    hour,
-                    minute,
-                    second,
+                    &id, kind, caption, oz.panel, open, val, year, month, hour, minute, second,
                 )
             })
         });
     }
-    view = view.child(
-        reactive_placeholder_sized(panel_anchor, 0.0, 0.0).pointer_events_box_none(),
-    );
+    view = view.child(reactive_placeholder_sized(panel_anchor, 0.0, 0.0).pointer_events_box_none());
 
     view
 }
@@ -709,152 +677,142 @@ fn build_date_picker_floating_panel(
         .overflow("hidden");
 
     match kind {
-                DatePickerKind::Date | DatePickerKind::DateTimeLocal => {
-                    let v_sig = val;
-                    let o_sig = open;
-                    let kind_c = kind;
-                    let trig = trigger_focus_id(id);
-                    let h_sig = hour;
-                    let mi_sig = minute;
-                    let s_sig = second;
-                    let cal: Element = calendar(format!("{id}__grid"))
-                        .value_signal(val)
-                        .caption_layout(caption)
-                        .bordered(false)
-                        .on_select(move |iso| {
-                            if kind_c == DatePickerKind::DateTimeLocal {
-                                v_sig.set(format!(
-                                    "{iso}T{}",
-                                    format_hms_parts(&h_sig.peek(), &mi_sig.peek(), &s_sig.peek())
-                                ));
-                            } else {
-                                close_picker(o_sig, trig.clone());
-                            }
-                        })
-                        .into();
-                    panel = panel.child(cal);
-                    if kind == DatePickerKind::DateTimeLocal {
-                        panel = panel.child(
-                            Element::from(
-                                vstack()
-                                    .w("100%")
-                                    .pt("1rem")
-                                    .gap("0.75rem")
-                                    .child(Element::from(separator()))
-                                    .child(time_hms_row(
-                                        &format!("{id}__time"),
-                                        hour,
-                                        minute,
-                                        second,
-                                        false,
-                                    )),
-                            ),
-                        );
+        DatePickerKind::Date | DatePickerKind::DateTimeLocal => {
+            let v_sig = val;
+            let o_sig = open;
+            let kind_c = kind;
+            let trig = trigger_focus_id(id);
+            let h_sig = hour;
+            let mi_sig = minute;
+            let s_sig = second;
+            let cal: Element = calendar(format!("{id}__grid"))
+                .value_signal(val)
+                .caption_layout(caption)
+                .bordered(false)
+                .on_select(move |iso| {
+                    if kind_c == DatePickerKind::DateTimeLocal {
+                        v_sig.set(format!(
+                            "{iso}T{}",
+                            format_hms_parts(&h_sig.peek(), &mi_sig.peek(), &s_sig.peek())
+                        ));
+                    } else {
+                        close_picker(o_sig, trig.clone());
                     }
-                }
-                DatePickerKind::Month => {
-                    let y_sel =
-                        use_signal(format!("{id}__dp_msel_y").as_str(), || y.to_string());
-                    let m_sel =
-                        use_signal(format!("{id}__dp_msel_m").as_str(), || m.to_string());
-                    let ys = y_sel.get();
-                    let ms = m_sel.get();
-                    if let Ok(yy) = ys.parse::<i32>() {
-                        if yy != y {
-                            year.set(yy);
-                        }
-                    }
-                    if let Ok(mm) = ms.parse::<u32>() {
-                        if (1..=12).contains(&mm) && mm != m {
-                            month.set(mm);
-                            val.set(format!("{:04}-{:02}", year.peek(), mm));
-                            close_picker(open, trigger_focus_id(&id));
-                        }
-                    }
-                    let y_now = year.peek();
-                    if y_sel.peek() != y_now.to_string() {
-                        y_sel.set(y_now.to_string());
-                    }
-                    if m_sel.peek() != month.peek().to_string() {
-                        m_sel.set(month.peek().to_string());
-                    }
-                    let header: Element = hstack()
+                })
+                .into();
+            panel = panel.child(cal);
+            if kind == DatePickerKind::DateTimeLocal {
+                panel = panel.child(Element::from(
+                    vstack()
                         .w("100%")
-                        .items_center()
-                        .justify_center()
-                        .gap("0.375rem")
-                        .child(calendar_month_select(format!("{id}:dp_m"), m_sel))
-                        .child(calendar_year_select(format!("{id}:dp_y"), y_sel, y_now))
-                        .into();
-                    panel = panel.child(vstack().gap("1rem").p("0.75rem").child(header));
-                }
-                DatePickerKind::Week => {
-                    let (prev, next) = month_nav_buttons(&id, year, month);
-                    let title = build_text_node(
-                        format_month_year(y, m),
-                        TextNodeConfig {
-                            size_px: 14.0,
-                            weight: 500,
-                            ..Default::default()
-                        },
-                    );
-                    let header: Element = hstack()
-                        .w("100%")
-                        .items_center()
-                        .justify("between")
-                        .gap("0.5rem")
-                        .child(prev)
-                        .child(title)
-                        .child(next)
-                        .into();
-                    // MVP：选周 → 写入该周周一的 YYYY-MM-DD（简化）
-                    let first_wd = weekday(y, m, 1);
-                    let dim = days_in_month(y, m);
-                    let mut week_start = 1u32;
-                    if first_wd != 1 {
-                        // Monday-based: if first isn't Monday, still list weeks from day 1
-                        week_start = 1;
-                    }
-                    let mut week_idx = 0u32;
-                    let mut d = week_start;
-                    let mut weeks = vstack().w("100%").gap("0.25rem");
-                    while d <= dim {
-                        week_idx += 1;
-                        let v_sig = val;
-                        let o_sig = open;
-                        let y_c = y;
-                        let m_c = m;
-                        let day = d;
-                        let trig = trigger_focus_id(&id);
-                        let bid = format!("{id}:w{week_idx}");
-                        let label = format!("W{week_idx} · {y_c:04}-{m_c:02}-{day:02}");
-                        let row: Element = button(&bid)
-                            .variant("ghost")
-                            .size("sm")
-                            .w("100%")
-                            .on_click(move || {
-                                v_sig.set(format!("{y_c:04}-{m_c:02}-{day:02}"));
-                                close_picker(o_sig, trig.clone());
-                            })
-                            .text(label)
-                            .into();
-                        weeks = weeks.child(row);
-                        d = d.saturating_add(7);
-                    }
-                    panel =
-                        panel.child(vstack().gap("1rem").p("0.75rem").child(header).child(weeks));
+                        .pt("1rem")
+                        .gap("0.75rem")
+                        .child(Element::from(separator()))
+                        .child(time_hms_row(
+                            &format!("{id}__time"),
+                            hour,
+                            minute,
+                            second,
+                            false,
+                        )),
+                ));
+            }
+        }
+        DatePickerKind::Month => {
+            let y_sel = use_signal(format!("{id}__dp_msel_y").as_str(), || y.to_string());
+            let m_sel = use_signal(format!("{id}__dp_msel_m").as_str(), || m.to_string());
+            let ys = y_sel.get();
+            let ms = m_sel.get();
+            if let Ok(yy) = ys.parse::<i32>() {
+                if yy != y {
+                    year.set(yy);
                 }
             }
+            if let Ok(mm) = ms.parse::<u32>() {
+                if (1..=12).contains(&mm) && mm != m {
+                    month.set(mm);
+                    val.set(format!("{:04}-{:02}", year.peek(), mm));
+                    close_picker(open, trigger_focus_id(&id));
+                }
+            }
+            let y_now = year.peek();
+            if y_sel.peek() != y_now.to_string() {
+                y_sel.set(y_now.to_string());
+            }
+            if m_sel.peek() != month.peek().to_string() {
+                m_sel.set(month.peek().to_string());
+            }
+            let header: Element = hstack()
+                .w("100%")
+                .items_center()
+                .justify_center()
+                .gap("0.375rem")
+                .child(calendar_month_select(format!("{id}:dp_m"), m_sel))
+                .child(calendar_year_select(format!("{id}:dp_y"), y_sel, y_now))
+                .into();
+            panel = panel.child(vstack().gap("1rem").p("0.75rem").child(header));
+        }
+        DatePickerKind::Week => {
+            let (prev, next) = month_nav_buttons(&id, year, month);
+            let title = build_text_node(
+                format_month_year(y, m),
+                TextNodeConfig {
+                    size_px: 14.0,
+                    weight: 500,
+                    ..Default::default()
+                },
+            );
+            let header: Element = hstack()
+                .w("100%")
+                .items_center()
+                .justify("between")
+                .gap("0.5rem")
+                .child(prev)
+                .child(title)
+                .child(next)
+                .into();
+            // MVP：选周 → 写入该周周一的 YYYY-MM-DD（简化）
+            let first_wd = weekday(y, m, 1);
+            let dim = days_in_month(y, m);
+            let mut week_start = 1u32;
+            if first_wd != 1 {
+                // Monday-based: if first isn't Monday, still list weeks from day 1
+                week_start = 1;
+            }
+            let mut week_idx = 0u32;
+            let mut d = week_start;
+            let mut weeks = vstack().w("100%").gap("0.25rem");
+            while d <= dim {
+                week_idx += 1;
+                let v_sig = val;
+                let o_sig = open;
+                let y_c = y;
+                let m_c = m;
+                let day = d;
+                let trig = trigger_focus_id(&id);
+                let bid = format!("{id}:w{week_idx}");
+                let label = format!("W{week_idx} · {y_c:04}-{m_c:02}-{day:02}");
+                let row: Element = button(&bid)
+                    .variant("ghost")
+                    .size("sm")
+                    .w("100%")
+                    .on_click(move || {
+                        v_sig.set(format!("{y_c:04}-{m_c:02}-{day:02}"));
+                        close_picker(o_sig, trig.clone());
+                    })
+                    .text(label)
+                    .into();
+                weeks = weeks.child(row);
+                d = d.saturating_add(7);
+            }
+            panel = panel.child(vstack().gap("1rem").p("0.75rem").child(header).child(weeks));
+        }
+    }
 
     let trigger_fid = trigger_focus_id(id);
     let mut floating = panel;
     floating = floating.absolute();
-    mark_floating(
-        &mut floating,
-        id,
-        &trigger_fid,
-        PopupPlacement::BottomStart,
-    );
+    mark_floating(&mut floating, id, &trigger_fid, PopupPlacement::BottomStart);
     floating.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
     floating.set_attr(ATTR_FLOATING_MIN_W, "0");
     floating.set_attr(ATTR_FLOATING_STRATEGY, "fixed");

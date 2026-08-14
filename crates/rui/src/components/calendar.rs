@@ -728,9 +728,7 @@ fn build_calendar_day_grid(
             if outside {
                 b = b.text_color(parse_text_color("muted-foreground"));
             }
-            row = row.child(calendar_grid_cell(
-                Element::from(b).w("100%").h("100%"),
-            ));
+            row = row.child(calendar_grid_cell(Element::from(b).w("100%").h("100%")));
         }
         grid = grid.child(row);
     }
@@ -870,7 +868,11 @@ mod tests {
             "hover paint must keep muted, not ghost foreground"
         );
         let inside = find_fid(&grid, "t-cal-out:d0-6").expect("Aug 1 cell");
-        assert_ne!(text_fg(inside), Some(muted), "in-month day stays variant fg");
+        assert_ne!(
+            text_fg(inside),
+            Some(muted),
+            "in-month day stays variant fg"
+        );
     }
 
     #[test]

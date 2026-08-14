@@ -370,6 +370,27 @@ fn point_in_bounds(pos: [f32; 2], b: [f32; 4]) -> bool {
     pos[0] >= b[0] && pos[1] >= b[1] && pos[0] < b[0] + b[2] && pos[1] < b[1] + b[3]
 }
 
+fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflow) -> LayoutStatus {
+    let before = (
+        el.text_style.overflow,
+        el.text_style.white_space,
+        el.style.overflow.x,
+        el.style.overflow.y,
+    );
+    el.apply_text_overflow_mode(mode);
+    let after = (
+        el.text_style.overflow,
+        el.text_style.white_space,
+        el.style.overflow.x,
+        el.style.overflow.y,
+    );
+    if before == after {
+        LayoutStatus::Clean
+    } else {
+        LayoutStatus::LayoutChanged
+    }
+}
+
 fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
     let Some(known) = classify_utility(token) else {
         return LayoutStatus::Clean;
@@ -599,25 +620,10 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::Truncate => {
-            use crate::style::{TextOverflow, WhiteSpace};
-            let mut changed = LayoutStatus::Clean;
-            if el.text_style.overflow != TextOverflow::Ellipsis {
-                el.text_style.overflow = TextOverflow::Ellipsis;
-                changed = LayoutStatus::StyleChanged;
-            }
-            if el.text_style.white_space != WhiteSpace::Nowrap {
-                el.text_style.white_space = WhiteSpace::Nowrap;
-                changed = LayoutStatus::LayoutChanged;
-            }
-            // Match Tailwind `truncate`: overflow hidden + nowrap + ellipsis.
-            let overflow_changed = el.style.overflow.x != taffy::style::Overflow::Hidden
-                || el.style.overflow.y != taffy::style::Overflow::Hidden;
-            if overflow_changed {
-                el.style.overflow.x = taffy::style::Overflow::Hidden;
-                el.style.overflow.y = taffy::style::Overflow::Hidden;
-                changed = LayoutStatus::LayoutChanged;
-            }
-            changed
+            apply_text_overflow_utility(el, crate::style::TextOverflow::Ellipsis)
+        }
+        KnownUtility::TextOverflow(kw) => {
+            apply_text_overflow_utility(el, crate::style::TextOverflow::parse(kw))
         }
         KnownUtility::WhitespaceNowrap => {
             use crate::style::WhiteSpace;
@@ -870,6 +876,17 @@ mod tests {
         let mut el = Element::new().text("long");
         apply_class_list(&mut el, "truncate");
         assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Ellipsis);
+        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+        assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Nowrap);
+
+        apply_class_list(&mut el, "text-overflow-newline");
+        assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Newline);
+        assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Normal);
+        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Visible);
+
+        apply_class_list(&mut el, "text-overflow-clip");
+        assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Clip);
+        assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Nowrap);
         assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
     }
 

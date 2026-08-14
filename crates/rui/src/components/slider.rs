@@ -42,6 +42,7 @@ use winit::keyboard::{Key, NamedKey};
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_FILL: &str = "slider-fill";
+const SLOT_TRACK: &str = "slider-track";
 const SLOT_THUMB: &str = "slider-thumb";
 const SLOT_LEFT: &str = "slider-left";
 const SLOT_RIGHT: &str = "slider-right";
@@ -228,6 +229,13 @@ pub struct SliderBuilder {
     max: f32,
     step: f32,
     disabled: bool,
+    /// When set, the track shows this `image_texture` and omits the primary fill.
+    track_texture: Option<String>,
+    track_texture_fn: Option<Rc<dyn Fn() -> String>>,
+    /// Live thumb fill (color-picker preview). Called from `reactive_sync`.
+    thumb_fill: Option<Rc<dyn Fn() -> [f32; 4]>>,
+    /// Extra work during the existing slider paint sync (no extra tree subscribe).
+    on_sync: Option<Rc<dyn Fn()>>,
     children: Vec<Element>,
 }
 
@@ -295,6 +303,10 @@ pub fn slider(id: impl Into<String>) -> SliderBuilder {
         max: 1.0,
         step: 0.05,
         disabled: false,
+        track_texture: None,
+        track_texture_fn: None,
+        thumb_fill: None,
+        on_sync: None,
         children: Vec::new(),
     }
 }
@@ -327,6 +339,28 @@ impl SliderBuilder {
 
     pub fn disabled(mut self, v: bool) -> Self {
         self.disabled = v;
+        self
+    }
+
+    /// Rainbow / alpha ramps: paint `key` on the track and hide the primary fill.
+    pub fn track_texture(mut self, key: impl Into<String>) -> Self {
+        self.track_texture = Some(key.into());
+        self
+    }
+
+    pub fn track_texture_fn(mut self, f: impl Fn() -> String + 'static) -> Self {
+        self.track_texture_fn = Some(Rc::new(f));
+        self
+    }
+
+    /// Thumb background, refreshed every paint sync (does not subscribe the parent tree).
+    pub fn thumb_fill(mut self, f: impl Fn() -> [f32; 4] + 'static) -> Self {
+        self.thumb_fill = Some(Rc::new(f));
+        self
+    }
+
+    pub fn on_sync(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_sync = Some(Rc::new(f));
         self
     }
 
@@ -370,23 +404,37 @@ impl From<SliderBuilder> for Element {
         let left_g = t0.max(0.0001);
         let right_g = (1.0 - t0).max(0.0001);
 
-        let mut fill: Element = r#box()
-            .h("100%")
-            .w(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
-            .rounded("9999px")
-            .bg(fill_bg())
-            .into();
-        fill.attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_FILL.to_string());
+        let textured = builder
+            .track_texture
+            .clone()
+            .or_else(|| builder.track_texture_fn.as_ref().map(|f| f()));
+        let track_texture_fn = builder.track_texture_fn.clone();
+
+        let fill = if textured.is_none() {
+            let mut fill: Element = r#box()
+                .h("100%")
+                .w(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
+                .rounded("9999px")
+                .bg(fill_bg())
+                .into();
+            fill.attrs
+                .insert(ATTR_SLOT.to_string(), SLOT_FILL.to_string());
+            Some(fill)
+        } else {
+            None
+        };
 
         let (rest_c, rest_blur) = THUMB_SHADOW_REST;
+        let thumb_fill = builder.thumb_fill.clone();
+        let on_sync = builder.on_sync.clone();
+        let thumb0 = thumb_fill.as_ref().map(|f| f()).unwrap_or_else(thumb_bg);
         let mut thumb: Element = r#box()
             .w(THUMB_PX)
             .h(THUMB_PX)
             .min_w(THUMB_PX)
             .min_h(THUMB_PX)
             .rounded("9999px")
-            .bg(thumb_bg())
+            .bg(thumb0)
             .border(thumb_border(), BORDER_W)
             .shadow(rest_c, rest_blur)
             .flex_shrink(0.0)
@@ -416,7 +464,7 @@ impl From<SliderBuilder> for Element {
             .into();
 
         // Track 在下层且不抢命中：指针落在拇指行 / 根上，再 bubble 到根 handler。
-        let track: Element = r#box()
+        let mut track: Element = r#box()
             .absolute(true)
             .left(0.0)
             .right(0.0)
@@ -424,10 +472,23 @@ impl From<SliderBuilder> for Element {
             .h(TRACK_H)
             .rounded("9999px")
             .overflow("hidden")
-            .bg(track_bg())
-            .child(fill)
+            .bg(if textured.is_some() {
+                // Ramp textures punch transparent corners; keep an opaque bed.
+                crate::tokens::popover()
+            } else {
+                track_bg()
+            })
             .pointer_events("none")
             .into();
+        track
+            .attrs
+            .insert(ATTR_SLOT.to_string(), SLOT_TRACK.to_string());
+        if let Some(key) = textured {
+            track.image_texture = Some(key);
+        }
+        if let Some(fill) = fill {
+            track = track.child(fill);
+        }
 
         let mut root: Element = r#box()
             .relative(true)
@@ -526,6 +587,9 @@ impl From<SliderBuilder> for Element {
         let sync_hover = hovered;
         let sync_id = id.clone();
         el = el.reactive_sync(move |root, layout_tree| {
+            if let Some(f) = &on_sync {
+                f();
+            }
             sync_bounds.set(root.layout_bounds);
             let value = sync_value.peek().clamp(sync_min, sync_max);
             let t = norm01(value, sync_min, sync_max);
@@ -534,6 +598,16 @@ impl From<SliderBuilder> for Element {
             let want_frac = t.clamp(0.0, 1.0);
             let mut layout_changed = false;
             let mut paint_changed = false;
+
+            if let Some(tf) = &track_texture_fn {
+                let key = tf();
+                if let Some(track) = find_slot_deep_mut(root, SLOT_TRACK) {
+                    if track.image_texture.as_deref() != Some(key.as_str()) {
+                        track.image_texture = Some(key);
+                        paint_changed = true;
+                    }
+                }
+            }
 
             if let Some(fill) = find_slot_deep_mut(root, SLOT_FILL) {
                 let mismatch = match fill.style.size.width {
@@ -569,6 +643,13 @@ impl From<SliderBuilder> for Element {
             }
 
             if let Some(thumb) = find_slot_deep_mut(root, SLOT_THUMB) {
+                if let Some(fill) = &thumb_fill {
+                    let c = fill();
+                    if thumb.style.bg_color != c {
+                        thumb.style.bg_color = c;
+                        paint_changed = true;
+                    }
+                }
                 let want = if thumb_shadow_elevated(sync_hover.get(), is_slider_dragging()) {
                     1.0
                 } else {
@@ -614,12 +695,17 @@ mod tests {
     use crate::core::tree::LayoutTree;
 
     #[test]
-    fn slider_builds_fill_and_thumb_slots() {
-        let el: Element = slider("vol").default_value(0.4).into();
-        assert!(has_slot(&el, SLOT_FILL));
+    fn track_texture_omits_primary_fill() {
+        let el: Element = slider("tex").track_texture("rui_cp_hue_ramp").into();
+        assert!(!has_slot(&el, SLOT_FILL));
         assert!(has_slot(&el, SLOT_THUMB));
-        assert!(has_slot(&el, SLOT_LEFT));
-        assert!(has_slot(&el, SLOT_RIGHT));
+        let track = &el.children[0];
+        assert_eq!(track.image_texture.as_deref(), Some("rui_cp_hue_ramp"));
+        assert!(
+            track.style.bg_color[3] > 0.5,
+            "textured track must keep an opaque bed, a={}",
+            track.style.bg_color[3]
+        );
     }
 
     #[test]

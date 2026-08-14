@@ -197,6 +197,35 @@ fn InputShowcase() -> rui::core::tree::Element {
                     <Input type="url" clearable=true flex_grow="1" />
                     <Input type="search" clearable="true" flex_grow="1" />
                 </HStack>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "text-overflow：clip 裁切、ellipsis 省略（truncate=true 同 ellipsis）、newline 换行。"
+                </Label>
+                <HStack gap="0.5rem" items="center" w="10rem">
+                    <Input
+                        id="gal-s2-input-trunc"
+                        truncate=true
+                        w="100%"
+                        placeholder="hsla(217, 91%, 60%, 1.00) 很长就会省略"
+                    />
+                </HStack>
+                <HStack gap="0.5rem" items="center" w="10rem">
+                    <Button truncate=true w="100%" variant="outline" size="sm">
+                        "Very long button caption that must not wrap"
+                    </Button>
+                </HStack>
+                <HStack gap="0.5rem" items="start" w="10rem">
+                    <VStack gap="0.25rem" w="100%">
+                        <Label text_overflow="clip" w="100%">
+                            "clip：超长单行会被裁切不会出现省略号"
+                        </Label>
+                        <Label text_overflow="ellipsis" w="100%">
+                            "ellipsis：超长单行末尾显示省略号"
+                        </Label>
+                        <Label text_overflow="newline" w="100%">
+                            "newline：允许软换行到下一行而不是裁切或省略"
+                        </Label>
+                    </VStack>
+                </HStack>
                 <HStack gap="0.5rem" items="center" wrap="wrap" w="100%">
                     <Input
                         placeholder="invalid={signal}"
@@ -285,7 +314,23 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1rem" items="start" wrap="wrap" w="100%">
                     <Calendar id="gal-cal" captionLayout="dropdown" />
-                    <ColorPicker id="gal-color-inline" variant="inline" showAlpha={true} format="hsla" />
+                    <ColorPicker id="gal-color-inline" variant="inline" format="hsla" />
+                </HStack>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground">
+                    "ColorPicker 变体（solid-color：sketch / chrome / github / twitter / material / block / circle / slider / compact）"
+                </Label>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <ColorPicker id="gal-cp-sketch" variant="sketch" value="#f47373" />
+                    <ColorPicker id="gal-cp-chrome" variant="chrome" value="#0693E3" />
+                    <ColorPicker id="gal-cp-github" variant="github" value="#1273DE" />
+                    <ColorPicker id="gal-cp-twitter" variant="twitter" value="#FF6900" />
+                </HStack>
+                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                    <ColorPicker id="gal-cp-material" variant="material" value="#9C27B0" />
+                    <ColorPicker id="gal-cp-block" variant="block" value="#37D67A" />
+                    <ColorPicker id="gal-cp-circle" variant="circle" value="#BA68C8" />
+                    <ColorPicker id="gal-cp-slider" variant="slider" value="#2CCCE4" />
+                    <ColorPicker id="gal-cp-compact" variant="compact" value="#3b82f6" />
                 </HStack>
             </VStack>
         </MyCard>
@@ -1945,6 +1990,19 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                         </SelectContent>
                     </Select>
                     <Label text_size="0.875rem">{ format!("Selected fruit: {}", fruit_val.get()) }</Label>
+                    <Label text_size="0.75rem" color="muted-foreground">
+                        "窄触发器：选中文案省略。"
+                    </Label>
+                    { Element::from(
+                        select("gallery:select_trunc")
+                            .placeholder("A very long placeholder that should ellipsis")
+                            .trigger_width("10rem")
+                            .item(SelectItemData::new(
+                                "long",
+                                "Internationalization-ready extra long option label",
+                            ))
+                            .item(SelectItemData::new("short", "Short")),
+                    ) }
                     <Button
                         variant="outline"
                         size="sm"

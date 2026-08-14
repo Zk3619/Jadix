@@ -402,6 +402,8 @@ pub struct ButtonBuilder {
     text_style: TextNodeConfig,
     /// `Some` → 覆盖变体字色（含 hover 同步）；Calendar outside days 用。
     explicit_text_color: Option<[u8; 4]>,
+    truncate: bool,
+    text_overflow: Option<crate::style::TextOverflow>,
 }
 
 static NEXT_BUTTON_ID: AtomicUsize = AtomicUsize::new(1);
@@ -423,6 +425,8 @@ pub fn Button(
     #[prop(default = "Handler::default()")] mut on_click: crate::core::tree::Handler,
     #[prop(default = "KeyHandler::default()")] mut on_key_down: crate::core::tree::KeyHandler,
     children: Option<Element>,
+    truncate: bool,
+    text_overflow: Option<String>,
 ) -> Element {
     let hover_easing =
         if hover_easing.is_empty() || (hover_easing != "spring" && hover_easing != "cubic") {
@@ -433,7 +437,13 @@ pub fn Button(
     let mut builder = button(&id)
         .variant(variant.as_paint_key())
         .hover_easing(&hover_easing)
-        .disabled(disabled);
+        .disabled(disabled)
+        .truncate(truncate);
+    if !truncate {
+        if let Some(ref mode) = text_overflow {
+            builder = builder.text_overflow(mode.as_str());
+        }
+    }
 
     builder.size = size;
     builder.container = builder.container.gap(size.gap());
@@ -515,6 +525,8 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
             font_family: None,
         },
         explicit_text_color: None,
+        truncate: false,
+        text_overflow: None,
     }
 }
 
@@ -587,6 +599,17 @@ impl ButtonBuilder {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn truncate(mut self, on: bool) -> Self {
+        self.truncate = on;
+        self
+    }
+
+    /// `clip` / `ellipsis` / `newline`. Overridden by [`Self::truncate`] `true`.
+    pub fn text_overflow(mut self, mode: impl Into<crate::style::TextOverflow>) -> Self {
+        self.text_overflow = Some(mode.into());
         self
     }
 
@@ -750,7 +773,23 @@ impl From<ButtonBuilder> for Element {
                 .box_shadow_inset(false);
         }
 
+        let overflow_mode = if builder.truncate {
+            Some(crate::style::TextOverflow::Ellipsis)
+        } else {
+            builder.text_overflow
+        };
+        let caption_shrink = overflow_mode.is_some();
+
         let mut el: Element = container.into();
+        match overflow_mode {
+            Some(crate::style::TextOverflow::Newline) => {
+                el = el.min_w(0.0).flex_shrink(1.0);
+            }
+            Some(_) => {
+                el = el.min_w(0.0).overflow("hidden").flex_shrink(1.0);
+            }
+            None => {}
+        }
         el.template_id = Some(builder.id.clone());
         el.button_hover_paint = Some(ButtonHoverPaint {
             variant: builder.variant.as_paint_key().to_string(),
@@ -798,12 +837,16 @@ impl From<ButtonBuilder> for Element {
                     },
                 )
                 .text_center()
-                .flex_shrink(0.0);
-                // 下划线色：`decoration_color = None` → draw 时 currentColor（见 cascade 注释）。
-                // ShadCN: `whitespace-nowrap` on label text only. Lucide icon glyphs are square
-                // measure leaves — nowrap inflate soft-wrap width and breaks centering in icon buttons.
+                .flex_shrink(if caption_shrink { 1.0 } else { 0.0 });
                 if !is_lucide_glyph {
-                    text_node = text_node.whitespace_nowrap();
+                    match overflow_mode {
+                        Some(mode) => {
+                            text_node = text_node.text_overflow(mode).min_w(0.0);
+                        }
+                        None => {
+                            text_node = text_node.whitespace_nowrap();
+                        }
+                    }
                 }
                 if preserve_binding {
                     if let Some(tid) = child.template_id.take() {
@@ -1206,9 +1249,9 @@ mod chrome_tests {
 
     #[test]
     fn explicit_text_color_overrides_ghost_chrome() {
+        use super::button;
         use crate::core::reactivity::create_root;
         use crate::core::tree::Element;
-        use super::button;
         let muted = parse_text_color("muted-foreground");
         let (_h, el) = create_root(|| -> Element {
             button("t-btn-muted")

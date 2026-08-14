@@ -357,7 +357,11 @@ pub fn ComboboxInput(
         let vis = visible;
 
         // 填满 Combobox 壳宽度（壳默认 16rem / class 指定）；勿再叠一层 w-* 把壳撑破。
-        let mut trigger: Element = input(&id).placeholder(ph.as_str()).w("100%").into();
+        let mut trigger: Element = input(&id)
+            .placeholder(ph.as_str())
+            .w("100%")
+            .truncate(true)
+            .into();
         trigger = trigger
             .accesskit_role("combobox")
             .accesskit_name(ph.as_str());
@@ -1279,7 +1283,10 @@ mod tests {
             .into();
         match plain.style.size.width {
             taffy::style::Dimension::Length(px) => {
-                assert!((px - 16.0 * 16.0).abs() < 0.5, "default shell 16rem, got {px}")
+                assert!(
+                    (px - 16.0 * 16.0).abs() < 0.5,
+                    "default shell 16rem, got {px}"
+                )
             }
             other => panic!("default combobox shell should be 16rem, got {other:?}"),
         }
@@ -1300,42 +1307,24 @@ mod tests {
         let (_owner, (id_h, id_s)) = create_root(|| {
             let id_h = Rc::new(RefCell::new(String::new()));
             let id_s = Rc::new(RefCell::new(String::new()));
-            let _h = combobox_scope(
-                "cb-hms-h",
-                None,
-                None,
-                "HH",
-                false,
-                "",
-                "",
-                {
-                    let id_h = id_h.clone();
-                    move || {
-                        create_effect(move || {
-                            *id_h.borrow_mut() = require_combobox("sibling-h").id.clone();
-                        });
-                        Element::new()
-                    }
-                },
-            );
-            let _s = combobox_scope(
-                "cb-hms-s",
-                None,
-                None,
-                "SS",
-                false,
-                "",
-                "",
-                {
-                    let id_s = id_s.clone();
-                    move || {
-                        create_effect(move || {
-                            *id_s.borrow_mut() = require_combobox("sibling-s").id.clone();
-                        });
-                        Element::new()
-                    }
-                },
-            );
+            let _h = combobox_scope("cb-hms-h", None, None, "HH", false, "", "", {
+                let id_h = id_h.clone();
+                move || {
+                    create_effect(move || {
+                        *id_h.borrow_mut() = require_combobox("sibling-h").id.clone();
+                    });
+                    Element::new()
+                }
+            });
+            let _s = combobox_scope("cb-hms-s", None, None, "SS", false, "", "", {
+                let id_s = id_s.clone();
+                move || {
+                    create_effect(move || {
+                        *id_s.borrow_mut() = require_combobox("sibling-s").id.clone();
+                    });
+                    Element::new()
+                }
+            });
             (id_h, id_s)
         });
         assert_eq!(id_h.borrow().as_str(), "cb-hms-h");
