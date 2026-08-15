@@ -34,8 +34,16 @@ bundled-fonts = ["bundled-lucide", "bundled-cjk", "bundled-cjk-serif", "bundled-
 fonts-cjk = []
 fonts-cjk-serif = []
 fonts-emoji = []
-# Twemoji SVG via resvg (adds significant code size; PNG fallback remains without it).
-emoji-svg = ["dep:resvg"]
+# SVG raster for Image / CSS cursor (resvg). Not in default.
+svg = ["dep:resvg"]
+# Twemoji SVG via the same resvg (PNG fallback remains without it).
+emoji-svg = ["svg"]
+# Extra rasters for Image, CSS cursor, and queue_image_* (PNG/ICO/BMP always on).
+jpeg = ["dep:jpeg-decoder"]
+gif = ["dep:gif"]
+webp = ["dep:image-webp"]
+images = ["jpeg", "gif", "webp"]
+cursor-images = ["images"]
 
 [dependencies]
 winit = { workspace = true }
@@ -69,7 +77,13 @@ fontdb = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 png = "0.18.1"
+jpeg-decoder = { version = "0.3", optional = true, default-features = false }
+gif = { version = "0.13", optional = true, default-features = false }
+image-webp = { version = "0.2", optional = true }
 resvg = { version = "0.45.1", optional = true }
+
+[dev-dependencies]
+jpeg-encoder = "0.6"
 
 [[bench]]
 name = "layout_baseline"

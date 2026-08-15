@@ -1,18 +1,19 @@
 //! # Image
 //!
-//! GPU 纹理矩形：把已上传的纹理键画成一块可布局的矩形（可圆角等）。
+//! GPU 纹理矩形：已上传的纹理键，或 `src`（本地路径 / `data:` URL）解码后上传。
 //!
 //! ## 用法
 //! ```ignore
 //! rui::queue_image_rgba8("demo", width, height, rgba_bytes);
-//! // …
-//! <Image id="demo-img" texture="demo" w="5.5rem" h="5.5rem" rounded="0.375rem" />
+//! <Image texture="demo" w="5.5rem" h="5.5rem" />
+//!
+//! <Image src="assets/photo.jpg" w="8rem" h="8rem" />
+//! <Image src="data:image/svg+xml,..." w="2rem" h="2rem" />
 //! ```
 //!
-//! ## 注意
-//! - 须先 [`crate::queue_image_rgba8`]（或等价上传），且 `texture` 与上传键一致。
-//! - 尺寸 / 圆角等走 `base`；设置 `el.image_texture` 供渲染器取样。
+//! JPEG/GIF/WebP 需 `images`（或分项 feature）；SVG 需 `svg`。PNG/ICO/BMP 默认可用。
 
+use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
 use crate::components::base::BaseComponentBuilder;
 use crate::core::tree::Element;
 use crate::primitives::r#box;
@@ -24,12 +25,21 @@ use rui_macros::component;
 pub fn Image(
     id: String,
     texture: String,
+    src: String,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
     let mut el: Element = r#box().into();
     el.template_id = Some(id);
-    if !texture.is_empty() {
+    if !src.is_empty() {
+        let key = if texture.is_empty() {
+            texture_key_for_src(&src)
+        } else {
+            texture.clone()
+        };
+        queue_image_from_src(&key, &src);
+        el.image_texture = Some(key);
+    } else if !texture.is_empty() {
         el.image_texture = Some(texture);
     }
     if let Some(b) = base_builder {
