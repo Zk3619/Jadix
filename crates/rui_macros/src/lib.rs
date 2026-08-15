@@ -672,6 +672,9 @@ fn expand_node(
                 name_str == "Select" && !el.attributes.iter().any(|(k, _)| k == "options");
             let combobox_is_compound =
                 name_str == "Combobox" && !el.attributes.iter().any(|(k, _)| k == "options");
+            let command_is_compound = name_str == "Command"
+                && !el.children.is_empty()
+                && !el.attributes.iter().any(|(k, _)| k == "actions");
             let radio_group_is_compound =
                 name_str == "RadioGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
             let tabs_is_compound =
@@ -681,6 +684,9 @@ fn expand_node(
                 || name_str == "Popover"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
+                || name_str == "CommandDialog"
+                || name_str == "CommandOverlay"
+                || command_is_compound
                 || name_str == "Tooltip"
                 || name_str == "TooltipContent"
                 || select_is_compound
@@ -743,6 +749,172 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "CommandDialog" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let placeholder_expr = get_attr("placeholder");
+                    let show_close = get_attr("show_close")
+                        .or_else(|| get_attr("showClose"))
+                        .or_else(|| get_attr("showCloseButton"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:CommandDialog#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let placeholder_ts = if let Some(p) = placeholder_expr {
+                        quote! { (#p).to_string() }
+                    } else {
+                        quote! { "Type a command or search...".to_string() }
+                    };
+                    return quote! {
+                        rui::components::command_dialog_scope(
+                            #id_ts,
+                            #open_ts,
+                            #placeholder_ts,
+                            #show_close,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "CommandOverlay" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let placeholder_expr = get_attr("placeholder");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:CommandOverlay#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let placeholder_ts = if let Some(p) = placeholder_expr {
+                        quote! { (#p).to_string() }
+                    } else {
+                        quote! { "Type a command or search...".to_string() }
+                    };
+                    return quote! {
+                        rui::components::command_overlay_scope(
+                            #id_ts,
+                            #open_ts,
+                            #placeholder_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if command_is_compound {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let placeholder_expr = get_attr("placeholder");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Command#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let placeholder_ts = if let Some(p) = placeholder_expr {
+                        quote! { (#p).to_string() }
+                    } else {
+                        quote! { "Type a command or search...".to_string() }
+                    };
+                    return quote! {
+                        rui::components::command_scope(
+                            #id_ts,
+                            #open_ts,
+                            #placeholder_ts,
+                            rui::components::CommandSurface::Inline,
+                            || #child_el,
+                        )
                     };
                 }
 

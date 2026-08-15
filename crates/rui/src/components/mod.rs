@@ -112,7 +112,14 @@ pub use combobox::{
     ComboboxListProps, ComboboxProps, ComboboxSeparator, ComboboxSeparatorProps,
     ComboboxVisibleItem,
 };
-pub use command::{command, Command, CommandAction, CommandBuilder, CommandProps};
+pub use command::{
+    command, command_dialog_scope, command_overlay_scope, command_scope, use_command, Command,
+    CommandAction, CommandBuilder, CommandCtx, CommandEmpty, CommandEmptyProps, CommandGroup,
+    CommandGroupData, CommandGroupProps, CommandInput, CommandInputProps, CommandItem,
+    CommandItemProps, CommandList, CommandListProps, CommandProps, CommandSeparator,
+    CommandSeparatorProps, CommandShortcut, CommandShortcutProps, CommandSurface,
+    CommandVisibleItem,
+};
 pub use context_menu::{context_menu, ContextMenuBuilder, ContextMenuItem};
 pub use date_picker::{
     date_picker, time_picker, DatePicker, DatePickerBuilder, DatePickerKind, DatePickerProps,
