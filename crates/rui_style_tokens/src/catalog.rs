@@ -99,7 +99,7 @@ pub enum KnownUtility<'a> {
     TranslateY(f32),
     /// Single-line ellipsis overflow (`truncate`).
     Truncate,
-    /// CSS `text-overflow`: `clip` | `ellipsis` | `newline` (`text-overflow-*` classes).
+    /// CSS `text-overflow`: `clip` | `hidden` | `ellipsis` | `newline` (`text-overflow-*` classes).
     TextOverflow(&'a str),
     /// Tailwind `whitespace-nowrap` — text leaf stays one line (ShadCN Button).
     WhitespaceNowrap,
@@ -444,7 +444,7 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     if let Some(rest) = token.strip_prefix("text-") {
         if let Some(mode) = rest.strip_prefix("overflow-") {
             match mode {
-                "clip" | "ellipsis" | "newline" | "wrap" => {
+                "clip" | "hidden" | "ellipsis" | "newline" | "wrap" => {
                     return Some(KnownUtility::TextOverflow(mode));
                 }
                 _ => {}
@@ -624,11 +624,16 @@ mod tests {
         assert!(is_known_utility("translate-y-2"));
         assert!(is_known_utility("truncate"));
         assert!(is_known_utility("text-overflow-clip"));
+        assert!(is_known_utility("text-overflow-hidden"));
         assert!(is_known_utility("text-overflow-ellipsis"));
         assert!(is_known_utility("text-overflow-newline"));
         assert!(matches!(
             classify_utility("text-overflow-clip"),
             Some(KnownUtility::TextOverflow("clip"))
+        ));
+        assert!(matches!(
+            classify_utility("text-overflow-hidden"),
+            Some(KnownUtility::TextOverflow("hidden"))
         ));
         assert!(matches!(
             classify_utility("text-overflow-ellipsis"),

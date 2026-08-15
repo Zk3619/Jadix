@@ -198,14 +198,13 @@ fn InputShowcase() -> rui::core::tree::Element {
                     <Input type="search" clearable="true" flex_grow="1" />
                 </HStack>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "text-overflow：clip 裁切、ellipsis 省略（truncate=true 同 ellipsis）、newline 换行。"
+                    "Input / Combobox 默认 text-overflow:hidden（原生 input：裁切，光标或选区可滚出）。clip / ellipsis / newline 用于 Label、Button 等不可编辑文本。"
                 </Label>
                 <HStack gap="0.5rem" items="center" w="10rem">
                     <Input
-                        id="gal-s2-input-trunc"
-                        truncate=true
+                        id="gal-s2-input-hidden"
                         w="100%"
-                        placeholder="hsla(217, 91%, 60%, 1.00) 很长就会省略"
+                        placeholder="hidden：超长裁切，→ 或向后选中可滚出"
                     />
                 </HStack>
                 <HStack gap="0.5rem" items="center" w="10rem">

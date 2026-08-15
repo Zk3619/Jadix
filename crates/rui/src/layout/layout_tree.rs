@@ -1026,6 +1026,37 @@ struct TextMeasureMeta {
     spans: Option<Vec<crate::style::TextSpan>>,
     /// `whitespace-nowrap`: ignore definite avail shrink; min/max content = intrinsic.
     nowrap: bool,
+    /// `text-overflow: clip|hidden|ellipsis`: honor definite/avail width instead of
+    /// growing the leaf to the full line (buttons still use `nowrap` without this).
+    clip_to_box: bool,
+}
+
+fn element_text_clips_to_box(element: &Element) -> bool {
+    match element.text_style.overflow {
+        crate::style::TextOverflow::Hidden | crate::style::TextOverflow::Ellipsis => true,
+        crate::style::TextOverflow::Clip => {
+            element.text_style.white_space == crate::style::WhiteSpace::Nowrap
+                && (element.style.overflow.x != taffy::style::Overflow::Visible
+                    || element.style.overflow.y != taffy::style::Overflow::Visible)
+        }
+        crate::style::TextOverflow::Newline => false,
+    }
+}
+
+fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeasureMeta {
+    TextMeasureMeta {
+        size: element.text_style.size,
+        text,
+        shape_suffix: element.text_shape_suffix.clone(),
+        is_icon,
+        line_height_px: element.text_style.line_height_px,
+        line_height_scale: element.text_style.line_height_scale,
+        weight: element.text_style.weight,
+        letter_spacing: element.text_style.letter_spacing,
+        spans: element.text_spans.clone(),
+        nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
+        clip_to_box: element_text_clips_to_box(element),
+    }
 }
 
 /// 单次 `compute_layout` 内对 `measured_text_leaf_size` ?memo（Taffy 会对同一叶多次探测）.
@@ -1109,7 +1140,7 @@ fn measured_text_leaf_size(
     // Distinguish MinContent vs MaxContent: both used to fall through to `intrinsic_w`,
     // so soft-wrap labels reported min-content == full line and flex parents could not
     // squeeze them (gallery bidi/RTL overflow past the card).
-    let avail_width = if m.nowrap {
+    let avail_width = if m.nowrap && !m.clip_to_box {
         None
     } else {
         match available_space.width {
@@ -1152,7 +1183,13 @@ fn measured_text_leaf_size(
         } else {
             prepared.max_segment_width.min(intrinsic_w).max(1.0)
         };
-        let width = if m.nowrap {
+        let width = if m.clip_to_box {
+            known_dimensions
+                .width
+                .or(avail_width)
+                .unwrap_or(intrinsic_w)
+                .max(1.0)
+        } else if m.nowrap {
             known_dimensions
                 .width
                 .map(|w| w.max(intrinsic_w).max(1.0))
@@ -1182,7 +1219,7 @@ fn measured_text_leaf_size(
         );
         (width, height)
     } else {
-        crate::text::measure_leaf(
+        let (measured_w, height) = crate::text::measure_leaf(
             blob.as_ref(),
             size,
             m.weight,
@@ -1191,7 +1228,17 @@ fn measured_text_leaf_size(
             avail_width,
             m.letter_spacing,
             m.nowrap,
-        )
+        );
+        let width = if m.clip_to_box {
+            known_dimensions
+                .width
+                .or(avail_width)
+                .unwrap_or(measured_w)
+                .max(1.0)
+        } else {
+            measured_w
+        };
+        (width, height)
     };
     // Never raise height from known_dimensions: flex Stretch would inflate text leaves to
     // the ScrollArea/Textarea viewport, so leaf (and soft_h.max(scaled_h)) tracked chrome
@@ -1399,21 +1446,10 @@ impl LayoutTree {
         };
         if let Some(text) = &element.text {
             if element.children.is_empty() {
-                let size = element.text_style.size;
+                let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
                 self.text_measurements.insert(
                     node_id,
-                    TextMeasureMeta {
-                        size,
-                        text: text.clone(),
-                        shape_suffix: element.text_shape_suffix.clone(),
-                        is_icon: element.text_style.font_family.as_deref() == Some("lucide"),
-                        line_height_px: element.text_style.line_height_px,
-                        line_height_scale: element.text_style.line_height_scale,
-                        weight: element.text_style.weight,
-                        letter_spacing: element.text_style.letter_spacing,
-                        spans: element.text_spans.clone(),
-                        nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
-                    },
+                    text_measure_meta(element, text.clone(), is_icon),
                 );
                 return;
             }
@@ -1892,23 +1928,11 @@ impl LayoutTree {
 
         if let Some(text) = &element.text {
             if child_nodes.is_empty() {
-                let size = element.text_style.size;
                 let text_clone = text.clone();
                 let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
                 self.text_measurements.insert(
                     node_id,
-                    TextMeasureMeta {
-                        size,
-                        text: text_clone,
-                        shape_suffix: element.text_shape_suffix.clone(),
-                        is_icon,
-                        line_height_px: element.text_style.line_height_px,
-                        line_height_scale: element.text_style.line_height_scale,
-                        weight: element.text_style.weight,
-                        letter_spacing: element.text_style.letter_spacing,
-                        spans: element.text_spans.clone(),
-                        nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
-                    },
+                    text_measure_meta(element, text_clone, is_icon),
                 );
             }
         }
@@ -2440,29 +2464,42 @@ impl LayoutTree {
                 shape_suffix: element.text_shape_suffix.clone(),
                 spans: element.text_spans.clone(),
                 template_id: element.template_id.clone(),
-                x: render_x,
+                x: render_x - text_style.scroll_x.max(0.0),
                 y: render_y,
                 width: lay_w,
                 height: lay_h,
-                // Ancestor overflow only. Do NOT scissor to the leaf box here: when measure
-                // under-counts soft-wrap lines (common with bidi/emoji), leaf-clip hides the
-                // spilled glyphs instead of letting height/reflow catch up — gallery showed
-                // mid-word Arabic cuts and missing 👍 as "overflow:hidden".
-                clip_bounds: clip,
+                // Clip/hidden/ellipsis nowrap must scissor to the field. Growing the leaf to
+                // intrinsic (button nowrap) used to make `clip == leaf`, so glyphs and
+                // selection painted past the input border.
+                clip_bounds: if text_style.overflow.allows_caret_scroll() {
+                    hidden_input_text_clip(parent_clip, render_rect)
+                } else if element_text_clips_to_box(element) {
+                    Some(intersect_rect(parent_clip, render_rect))
+                } else {
+                    // Ancestor overflow only for wrapping text: leaf scissor hides spilled
+                    // bidi/emoji glyphs when measure under-counts soft-wrap lines.
+                    clip
+                },
                 style: text_style.clone(),
                 prepared,
             });
-            // Selection goes into main instances (under glyphs); caret into chrome (over glyphs).
+            let chrome_clip = if text_style.overflow.allows_caret_scroll() {
+                hidden_input_text_clip(parent_clip, render_rect)
+            } else if element_text_clips_to_box(element) {
+                Some(intersect_rect(parent_clip, render_rect))
+            } else {
+                clip
+            };
             push_input_chrome_instances(
                 instances,
                 input_chrome_instances,
                 text,
                 &text_style,
-                render_x,
+                render_x - text_style.scroll_x.max(0.0),
                 render_y,
                 lay_w,
                 lay_h,
-                clip,
+                chrome_clip,
                 opacity,
             );
         }
@@ -2913,6 +2950,23 @@ fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
     ]
 }
 
+fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {
+    [
+        rect[0] - dx,
+        rect[1] - dy,
+        (rect[2] + dx * 2.0).max(0.0),
+        (rect[3] + dy * 2.0).max(0.0),
+    ]
+}
+
+/// Native `<input>`: clip at the padding box. The text leaf is the content box —
+/// inflate horizontally so the caret and CJK bearings at either end stay visible,
+/// then cap to the ancestor overflow (padded chrome).
+fn hidden_input_text_clip(parent_clip: Option<[f32; 4]>, leaf: [f32; 4]) -> Option<[f32; 4]> {
+    const INK: f32 = 2.0;
+    Some(intersect_rect(parent_clip, inflate_rect(leaf, INK, 0.0)))
+}
+
 fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
     if let Some(c) = clip {
         let x0 = rect[0].max(c[0]);
@@ -3109,12 +3163,21 @@ fn push_input_chrome_instances(
             let prefix_w =
                 prefix_width_logical(line_body, from, style.size, style.weight, line_height);
             let end_w = prefix_width_logical(line_body, to, style.size, style.weight, line_height);
-            let sel_w = (end_w - prefix_w).min(box_w - prefix_w).max(0.0);
+            let pan = style.overflow.allows_caret_scroll();
+            let sel_w = if pan {
+                (end_w - prefix_w).max(0.0)
+            } else {
+                (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
+            };
             if sel_w > 0.0 {
                 push_chrome_rect(
                     selection_out,
                     clip,
-                    x + prefix_w.min(box_w),
+                    if pan {
+                        x + prefix_w
+                    } else {
+                        x + prefix_w.min(box_w)
+                    },
                     line_top_y(line_i),
                     sel_w,
                     sel_h,
@@ -3134,8 +3197,14 @@ fn push_input_chrome_instances(
     let line_body = lines.get(line_i).map(|(_, body)| *body).unwrap_or("");
     let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
     let caret_w = 2.0_f32;
-    let mut caret_x = x + prefix_w.min(box_w);
-    caret_x = caret_x.min(x + box_w - caret_w).max(x);
+    let mut caret_x = if style.overflow.allows_caret_scroll() {
+        x + prefix_w
+    } else {
+        x + prefix_w.min(box_w)
+    };
+    if !style.overflow.allows_caret_scroll() {
+        caret_x = caret_x.min(x + box_w - caret_w).max(x);
+    }
     let c = style.color;
     let color = [
         c[0] as f32 / 255.0,
@@ -3157,7 +3226,7 @@ fn push_input_chrome_instances(
 #[cfg(test)]
 mod prepared_text_attach_tests {
     use super::*;
-    use crate::style::{InputCaretDraw, TextStyle};
+    use crate::style::{InputCaretDraw, TextOverflow, TextStyle};
 
     #[test]
     fn prepared_text_on_text_layout_info_roundtrips() {
@@ -3308,6 +3377,162 @@ mod prepared_text_attach_tests {
         assert!(
             (caret_y - expected_y).abs() < 0.5,
             "caret should be vertically centered on line 1 (y={caret_y}, expected={expected_y})"
+        );
+    }
+
+    #[test]
+    fn hidden_overflow_caret_follows_scroll_not_box_clamp() {
+        let text = "abcdefghijklmnop";
+        let lh = 21.0_f32;
+        let prefix = prefix_width_logical(text, text.len(), 14.0, 400, lh);
+        let box_w = 40.0_f32;
+        assert!(
+            prefix > box_w + 8.0,
+            "fixture must overflow the box (prefix={prefix})"
+        );
+        let scroll_x = (prefix - box_w + 2.0).max(0.0);
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.color = [0, 0, 0, 255];
+        style.overflow = TextOverflow::Hidden;
+        style.scroll_x = scroll_x;
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+
+        let origin = 10.0 - scroll_x;
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        let mut saw = false;
+        for _ in 0..8 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                origin,
+                0.0,
+                box_w,
+                lh,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "hidden-overflow caret missing during blink ON");
+        let caret_x = chrome[0].rect_pos[0];
+        assert!(
+            (caret_x - (origin + prefix)).abs() < 1.5,
+            "caret must sit at content end minus scroll (x={caret_x} expected={})",
+            origin + prefix
+        );
+        assert!(
+            (caret_x - (10.0 + box_w - 2.0)).abs() < 2.0,
+            "scrolled caret should land near the visible right edge, got {caret_x}"
+        );
+    }
+
+    #[test]
+    fn clip_to_box_nowrap_does_not_grow_past_known_width() {
+        let text = "abcdefghijklmnopabcdefghijklmnop";
+        let size = 14.0;
+        let lh = 21.0;
+        let prepared = crate::text::prepare(text, size, 400, lh);
+        let intrinsic = crate::text::intrinsic_width(&prepared);
+        assert!(intrinsic > 80.0, "fixture intrinsic={intrinsic}");
+        let m = TextMeasureMeta {
+            size,
+            text: text.to_string(),
+            shape_suffix: None,
+            is_icon: false,
+            line_height_px: Some(lh),
+            line_height_scale: None,
+            weight: 400,
+            letter_spacing: 0.0,
+            spans: None,
+            nowrap: true,
+            clip_to_box: true,
+        };
+        let known = taffy::geometry::Size {
+            width: Some(64.0),
+            height: None,
+        };
+        let avail = taffy::geometry::Size {
+            width: taffy::style::AvailableSpace::Definite(64.0),
+            height: taffy::style::AvailableSpace::MaxContent,
+        };
+        let out = measured_text_leaf_size(&m, known, avail);
+        assert!(
+            (out.width - 64.0).abs() < 0.5,
+            "clip-to-box leaf must stay at known width, got {}",
+            out.width
+        );
+        assert!(
+            (out.height - lh).abs() < 1.0,
+            "must stay one line h={}",
+            out.height
+        );
+    }
+
+    #[test]
+    fn nowrap_without_clip_to_box_still_grows_to_intrinsic() {
+        let text = "abcdefghijklmnopabcdefghijklmnop";
+        let size = 14.0;
+        let lh = 21.0;
+        let prepared = crate::text::prepare(text, size, 400, lh);
+        let intrinsic = crate::text::intrinsic_width(&prepared);
+        let m = TextMeasureMeta {
+            size,
+            text: text.to_string(),
+            shape_suffix: None,
+            is_icon: false,
+            line_height_px: Some(lh),
+            line_height_scale: None,
+            weight: 400,
+            letter_spacing: 0.0,
+            spans: None,
+            nowrap: true,
+            clip_to_box: false,
+        };
+        let known = taffy::geometry::Size {
+            width: Some(64.0),
+            height: None,
+        };
+        let avail = taffy::geometry::Size {
+            width: taffy::style::AvailableSpace::Definite(64.0),
+            height: taffy::style::AvailableSpace::MaxContent,
+        };
+        let out = measured_text_leaf_size(&m, known, avail);
+        assert!(
+            (out.width - intrinsic).abs() < 0.5,
+            "button nowrap should still grow to intrinsic {intrinsic}, got {}",
+            out.width
+        );
+    }
+
+    #[test]
+    fn hidden_input_clip_inflates_into_padding_inside_chrome() {
+        let leaf = [20.0, 10.0, 80.0, 20.0];
+        let chrome = Some([10.0, 0.0, 120.0, 40.0]);
+        let c = hidden_input_text_clip(chrome, leaf).unwrap();
+        assert!(
+            (c[0] - 18.0).abs() < 0.01 && (c[2] - 84.0).abs() < 0.01,
+            "content box + 2px ink, capped to chrome, got {c:?}"
+        );
+        let tight = Some([20.0, 10.0, 80.0, 20.0]);
+        let inner = hidden_input_text_clip(tight, leaf).unwrap();
+        assert!(
+            (inner[2] - 80.0).abs() < 0.01,
+            "cannot inflate past a content-sized parent clip, got {inner:?}"
         );
     }
 

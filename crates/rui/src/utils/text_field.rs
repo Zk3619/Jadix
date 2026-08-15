@@ -273,6 +273,42 @@ pub fn ensure_caret_visible_scroll_y(
     }
 }
 
+/// Keep `anchor_x` (caret / selection end in content space) inside a single-line viewport.
+///
+/// Returns the clamped `scroll_x` (always a concrete value; caller writes the signal).
+pub fn ensure_caret_visible_scroll_x(
+    anchor_x: f32,
+    content_w: f32,
+    viewport_w: f32,
+    scroll_x: f32,
+) -> f32 {
+    let pad = 2.0_f32;
+    // Extra `pad` so a caret sitting on `content_w` is not flush with the clip edge.
+    let max_sx = (content_w + pad - viewport_w).max(0.0);
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return if scroll_x > 0.5 { 0.0 } else { scroll_x.max(0.0) };
+    }
+    if max_sx < 0.5 {
+        return 0.0;
+    }
+    let mut sx = scroll_x.clamp(0.0, max_sx);
+    // Scroll left to reveal the caret. If it already fits in the first screen,
+    // snap to 0 — otherwise `anchor_x - pad` leaves a leftover offset that clips
+    // the first glyph (native `<input>` shows the line head whenever the caret
+    // can sit in the un-panned viewport).
+    if anchor_x - pad < sx {
+        if anchor_x + pad <= viewport_w {
+            sx = 0.0;
+        } else {
+            sx = (anchor_x - pad).max(0.0);
+        }
+    }
+    if anchor_x + pad > sx + viewport_w {
+        sx = (anchor_x + pad - viewport_w).max(0.0);
+    }
+    sx.clamp(0.0, max_sx)
+}
+
 pub fn focus_id_for_text_edit(id: &str, multiline: bool) -> String {
     if multiline {
         textarea_focus_id(id)
@@ -314,6 +350,9 @@ pub fn input_type_signal_key(id: &str) -> String {
 }
 pub fn input_password_reveal_signal_key(id: &str) -> String {
     format!("__rui_input_pw_reveal_{id}")
+}
+pub fn input_scroll_x_signal_key(id: &str) -> String {
+    format!("__rui_input_scroll_x_{id}")
 }
 
 pub(crate) fn input_text_template_id(id: &str) -> String {
@@ -524,5 +563,22 @@ mod tests {
         let h2 = text_edit_content_height_px("啊\n啊", size, 400, lh, 400.0);
         assert!(h1 >= lh && h1 <= lh + text_edit_ink_pad_px(size) + 1.0);
         assert!(h2 > h1 + lh * 0.9, "h1={h1} h2={h2} lh={lh}");
+    }
+
+    #[test]
+    fn ensure_caret_visible_scroll_x_pans_when_caret_past_fold() {
+        // viewport 40, content 100, caret at 90, scroll 0 → need ~52 (90+2-40)
+        assert!((ensure_caret_visible_scroll_x(90.0, 100.0, 40.0, 0.0) - 52.0).abs() < 0.01);
+        // already showing caret
+        assert!((ensure_caret_visible_scroll_x(90.0, 100.0, 40.0, 52.0) - 52.0).abs() < 0.01);
+        // caret moved back near the head → snap to 0 so the first glyph is not clipped
+        assert_eq!(ensure_caret_visible_scroll_x(5.0, 100.0, 40.0, 52.0), 0.0);
+        assert_eq!(ensure_caret_visible_scroll_x(0.0, 100.0, 40.0, 52.0), 0.0);
+        // content fits
+        assert_eq!(ensure_caret_visible_scroll_x(10.0, 30.0, 40.0, 12.0), 0.0);
+        // caret at content end: pan 2px past text so the 2px caret is inside the viewport
+        let end = ensure_caret_visible_scroll_x(100.0, 100.0, 40.0, 0.0);
+        assert!((end - 62.0).abs() < 0.01, "end caret scroll={end}");
+        assert!(100.0 - end <= 40.0 - 1.5, "caret must sit inside the viewport");
     }
 }

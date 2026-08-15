@@ -24,7 +24,7 @@ use super::emoji_svg;
 use super::font_loader;
 use super::text::RuiTextRenderer;
 use super::text_hit::{
-    best_font_family, is_single_line_text_box, measure_prefix_width, truncate_with_ellipsis,
+    best_font_family, measure_prefix_width, truncate_with_ellipsis,
 };
 use super::twemoji_name;
 use super::InstanceInput;
@@ -567,6 +567,21 @@ fn input_line_height(style: &crate::style::TextStyle, scaled_size: f32, ui_scale
         scaled_size * scale
     };
     lh.max(scaled_size * crate::utils::text_field::text_edit_default_leading_scale())
+}
+
+/// Glyphon wrap/align width for nowrap runs.
+/// Hidden/clip keep the full line (pan + scissor). Static ellipsis already fits `box_w`.
+fn nowrap_buffer_width(
+    overflow: TextOverflow,
+    static_ellipsis: bool,
+    intrinsic: f32,
+    box_w: f32,
+) -> f32 {
+    if overflow == TextOverflow::Ellipsis && static_ellipsis {
+        box_w.max(1.0)
+    } else {
+        intrinsic.max(box_w).max(1.0)
+    }
 }
 
 fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4]> {
@@ -1576,7 +1591,11 @@ pub fn prepare_text_frame(
         } else {
             scaled_h
         };
-        let node_rect = [x, y, scaled_w.max(0.0), visibility_h.max(0.0)];
+        // `info.x` is already `render_x - scroll_x`. Culling against the shifted origin
+        // + viewport-sized leaf misses the clip after a caret pan (selection still paints
+        // → empty gray block). Restore the layout origin for visibility only.
+        let cull_x = x + st.scroll_x.max(0.0) * ui_scale;
+        let node_rect = [cull_x, y, scaled_w.max(0.0), visibility_h.max(0.0)];
         let visible = clip_rect_to_bounds(node_rect, scaled_clip)
             .and_then(|c| clip_rect_to_bounds(c, Some(viewport_clip)))
             .is_some();
@@ -1724,15 +1743,22 @@ pub fn prepare_text_frame(
         // buffer size from the same logical avail width. Full glyph/buffer sharing with
         // the layout-only FontSystem is still deferred (separate FontSystems).
         // `whitespace-nowrap`: shape against intrinsic (or wider box), never soft-wrap mid-label.
+        // Ellipsis captions are already truncated to the box — using intrinsic here would
+        // center a short "Very long…" run inside the full caption width (left-side gap).
         let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
         let layout_w = if let Some(ref prepared) = info.prepared {
             if nowrap {
-                crate::text::intrinsic_width(prepared)
-                    .max(info.width)
-                    .max(1.0)
+                nowrap_buffer_width(
+                    st.overflow,
+                    st.input_caret.is_none(),
+                    crate::text::intrinsic_width(prepared),
+                    info.width,
+                )
             } else {
                 info.width.max(1.0)
             }
+        } else if nowrap {
+            nowrap_buffer_width(st.overflow, st.input_caret.is_none(), info.width, info.width)
         } else {
             info.width.max(1.0)
         };
@@ -1769,10 +1795,27 @@ pub fn prepare_text_frame(
         } else {
             Some(buffer_soft_h)
         };
-        let align = resolve_text_align(st.align, st.direction);
+        // CSS text-overflow: when the nowrap line is wider than the box, keep
+        // inline-start in view (ellipsis/clip at inline-end). Center only applies
+        // to lines that fit — otherwise a truncated caption sits in a huge gap.
+        let source_intrinsic = info
+            .prepared
+            .as_ref()
+            .map(crate::text::intrinsic_width)
+            .unwrap_or(info.width);
+        let align = if st.overflow.start_align_when_line_overflows()
+            && nowrap
+            && source_intrinsic > info.width + 0.5
+        {
+            match st.direction {
+                TextDirection::Rtl => glyphon::cosmic_text::Align::Right,
+                _ => glyphon::cosmic_text::Align::Left,
+            }
+        } else {
+            resolve_text_align(st.align, st.direction)
+        };
         let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
             && st.input_caret.is_none()
-            && is_single_line_text_box(line_height, scaled_h)
         {
             Cow::Owned(truncate_with_ellipsis(
                 unsafe { &mut *text_renderer.font_system },
@@ -3176,6 +3219,49 @@ mod shape_cache_key_tests {
             false,
         );
         assert_ne!(c, d, "rest path keeps 1px Exact sensitivity");
+    }
+}
+
+#[cfg(test)]
+mod hidden_scroll_cull_tests {
+    use super::clip_rect_to_bounds;
+
+    #[test]
+    fn caret_pan_cull_uses_unshifted_origin() {
+        let scroll = 80.0_f32;
+        let field = [10.0, 0.0, 40.0, 20.0];
+        let shifted_x = field[0] - scroll;
+        let shifted = clip_rect_to_bounds([shifted_x, 0.0, field[2], field[3]], Some(field));
+        assert!(
+            shifted.is_none(),
+            "shifted viewport-sized rect must miss the field"
+        );
+        let cull = clip_rect_to_bounds(
+            [shifted_x + scroll, 0.0, field[2], field[3]],
+            Some(field),
+        );
+        assert!(cull.is_some(), "unshifted origin must overlap the field");
+    }
+
+    #[test]
+    fn ellipsis_buffer_uses_box_width_not_intrinsic() {
+        use crate::style::TextOverflow;
+        let intrinsic = 240.0_f32;
+        let box_w = 80.0_f32;
+        let w = super::nowrap_buffer_width(TextOverflow::Ellipsis, true, intrinsic, box_w);
+        assert!((w - box_w).abs() < 0.01, "ellipsis buffer w={w}");
+        let hidden = super::nowrap_buffer_width(TextOverflow::Hidden, true, intrinsic, box_w);
+        assert!(
+            (hidden - intrinsic).abs() < 0.01,
+            "hidden still shapes the full line, got {hidden}"
+        );
+    }
+
+    #[test]
+    fn overflowing_text_overflow_forces_start_align() {
+        assert!(crate::style::TextOverflow::Ellipsis.start_align_when_line_overflows());
+        assert!(crate::style::TextOverflow::Hidden.start_align_when_line_overflows());
+        assert!(!crate::style::TextOverflow::Newline.start_align_when_line_overflows());
     }
 }
 

@@ -1,15 +1,18 @@
 //! Text layout / paint style (size, weight, color, decoration, shadow, align).
 //! Separated from [`super::Style`] (box model / Taffy).
 
-/// Text overflow: CSS `clip` / `ellipsis`, plus `newline` for wrapping.
+/// Text overflow: CSS `clip` / `ellipsis` / `hidden`, plus `newline` for wrapping.
 ///
-/// - [`Self::Clip`]: single line, cut overflow (no `…`).
-/// - [`Self::Ellipsis`]: single line, trailing `…` (`truncate` / `text-overflow: ellipsis`).
-/// - [`Self::Newline`]: soft-wrap onto new lines (`text-overflow: newline`).
+/// - [`Self::Hidden`]: native `<input>` — crop the line; caret / selection may pan.
+///   **Default for Input and Combobox.** Not for static captions.
+/// - [`Self::Clip`]: static single-line crop (no `…`, no pan). Label / Button.
+/// - [`Self::Ellipsis`]: static single-line trailing `…` (`truncate`). Label / Button.
+/// - [`Self::Newline`]: soft-wrap. Label / Textarea.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextOverflow {
     #[default]
     Clip,
+    Hidden,
     Ellipsis,
     Newline,
 }
@@ -17,6 +20,7 @@ pub enum TextOverflow {
 impl TextOverflow {
     pub fn parse(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
+            "hidden" => Self::Hidden,
             "ellipsis" | "truncate" => Self::Ellipsis,
             "newline" | "wrap" | "break" => Self::Newline,
             _ => Self::Clip,
@@ -26,14 +30,31 @@ impl TextOverflow {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Clip => "clip",
+            Self::Hidden => "hidden",
             Self::Ellipsis => "ellipsis",
             Self::Newline => "newline",
         }
     }
 
-    /// Clip / ellipsis stay one line; newline wraps.
+    /// Clip / hidden / ellipsis stay one line; newline wraps.
     pub fn nowrap(self) -> bool {
         !matches!(self, Self::Newline)
+    }
+
+    /// Native single-line field (`<input>` / Combobox trigger): crop + caret pan.
+    pub fn editable_single_line() -> Self {
+        Self::Hidden
+    }
+
+    /// Input-like fields: overflow is clipped, but the caret may pan the line.
+    pub fn allows_caret_scroll(self) -> bool {
+        matches!(self, Self::Hidden)
+    }
+
+    /// CSS `text-overflow` on an overflowing nowrap line: keep inline-start in view
+    /// (`clip` / `ellipsis` / `hidden`). Fitting lines still honor `text-align`.
+    pub fn start_align_when_line_overflows(self) -> bool {
+        matches!(self, Self::Clip | Self::Hidden | Self::Ellipsis)
     }
 
     /// `truncate=true` wins; otherwise parse `text-overflow` / `text_overflow`.
@@ -236,7 +257,7 @@ pub struct TextStyle {
     /// Line-height scale relative to font size. `None` = default policy.
     pub line_height_scale: Option<f32>,
     pub align: glyphon::cosmic_text::Align,
-    /// Overflow when the box is too small (`clip` / `ellipsis` / `newline`).
+    /// Overflow when the box is too small (`clip` / `hidden` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
     pub white_space: WhiteSpace,
@@ -248,6 +269,8 @@ pub struct TextStyle {
     pub letter_spacing: f32,
     /// Optional caret drawn in prepare_text.
     pub input_caret: Option<InputCaretDraw>,
+    /// Horizontal pan (logical px) for [`TextOverflow::Hidden`] single-line fields.
+    pub scroll_x: f32,
 }
 
 impl Default for TextStyle {
@@ -276,6 +299,7 @@ impl Default for TextStyle {
             direction: TextDirection::Auto,
             letter_spacing: 0.0,
             input_caret: None,
+            scroll_x: 0.0,
         }
     }
 }
@@ -396,13 +420,20 @@ mod tests {
     #[test]
     fn text_overflow_parse_clip_ellipsis_newline() {
         assert_eq!(TextOverflow::parse("clip"), TextOverflow::Clip);
+        assert_eq!(TextOverflow::parse("hidden"), TextOverflow::Hidden);
         assert_eq!(TextOverflow::parse("ellipsis"), TextOverflow::Ellipsis);
         assert_eq!(TextOverflow::parse("truncate"), TextOverflow::Ellipsis);
         assert_eq!(TextOverflow::parse("newline"), TextOverflow::Newline);
         assert_eq!(TextOverflow::parse("wrap"), TextOverflow::Newline);
         assert!(TextOverflow::Clip.nowrap());
+        assert!(TextOverflow::Hidden.nowrap());
         assert!(TextOverflow::Ellipsis.nowrap());
         assert!(!TextOverflow::Newline.nowrap());
+        assert_eq!(TextOverflow::editable_single_line(), TextOverflow::Hidden);
+        assert!(TextOverflow::Hidden.allows_caret_scroll());
+        assert!(!TextOverflow::Clip.allows_caret_scroll());
+        assert!(TextOverflow::Ellipsis.start_align_when_line_overflows());
+        assert!(!TextOverflow::Newline.start_align_when_line_overflows());
     }
 
     fn approx_eq(a: f32, b: f32) {

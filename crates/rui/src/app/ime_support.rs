@@ -961,7 +961,8 @@ pub(crate) fn estimate_caret_x_in_field(
                 family,
                 content_w * scale,
             );
-            return pad_left_logical + (prefix_w_phys / scale).min(content_w);
+            return pad_left_logical
+                + ((prefix_w_phys / scale) - text_style.scroll_x.max(0.0)).clamp(0.0, content_w);
         }
     }
     pad_left_logical

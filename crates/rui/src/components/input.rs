@@ -33,6 +33,8 @@
 //! - **必须稳定唯一 `id`**。
 //! - `focus_id` 为 `input:{id}`。
 //! - 显式 `invalid=true` 与类型校验叠加。
+//! - 单行编辑默认 [`crate::style::TextOverflow::Hidden`]（原生 `<input>`：裁切溢出，光标/选区可滚出）。
+//!   `truncate` / `text-overflow: ellipsis|clip|newline` 用于 Label、Button 等不可编辑文本，**不会**作用在 Input 上。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -393,8 +395,6 @@ pub struct InputBuilder {
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
     value: Option<Signal<String>>,
-    truncate: bool,
-    text_overflow: Option<crate::style::TextOverflow>,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -420,13 +420,8 @@ pub fn Input(
         .disabled(disabled)
         .invalid(invalid)
         .clearable(clearable)
-        .password_toggle(password_toggle)
-        .truncate(truncate);
-    if let Some(mode) = crate::style::TextOverflow::resolve_prop(false, text_overflow.as_deref()) {
-        if !truncate {
-            builder = builder.text_overflow(mode);
-        }
-    }
+        .password_toggle(password_toggle);
+    let _ = (truncate, text_overflow);
     if let Some(t) = input_type {
         builder = builder.input_type(t);
     }
@@ -475,7 +470,8 @@ pub fn input(id: &str) -> InputBuilder {
             .rounded("0.375rem")
             .px("0.75rem")
             .py("0.25rem")
-            .items_center(),
+            .items_center()
+            .overflow("hidden"),
         placeholder: String::new(),
         disabled: false,
         invalid: false,
@@ -488,8 +484,6 @@ pub fn input(id: &str) -> InputBuilder {
         line_height_px: None,
         leading_scale: None,
         value: None,
-        truncate: false,
-        text_overflow: None,
     }
 }
 
@@ -576,14 +570,14 @@ impl InputBuilder {
         self.value = Some(s);
         self
     }
-    /// Single-line: nowrap + ellipsis instead of wrapping (color value fields, gallery).
-    pub fn truncate(mut self, on: bool) -> Self {
-        self.truncate = on;
+    /// Ignored: single-line Input always uses [`crate::style::TextOverflow::Hidden`].
+    /// Use [`crate::components::button::ButtonBuilder::truncate`] / Label for ellipsis.
+    pub fn truncate(self, on: bool) -> Self {
+        let _ = on;
         self
     }
-    /// `clip` / `ellipsis` / `newline`. Overridden by [`Self::truncate`] `true`.
-    pub fn text_overflow(mut self, mode: impl Into<crate::style::TextOverflow>) -> Self {
-        self.text_overflow = Some(mode.into());
+    /// Ignored: single-line Input always uses [`crate::style::TextOverflow::Hidden`].
+    pub fn text_overflow(self, _mode: impl Into<crate::style::TextOverflow>) -> Self {
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
@@ -702,11 +696,6 @@ impl From<InputBuilder> for Element {
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
             value: builder.value,
-            text_overflow: if builder.truncate {
-                Some(crate::style::TextOverflow::Ellipsis)
-            } else {
-                builder.text_overflow
-            },
             single_line_container: Some(builder.container),
             multiline: false,
             rows: 1,
@@ -761,9 +750,26 @@ mod tests {
         assert!(!InputType::Password.allows_ime());
         assert!(InputType::Text.allows_ime());
         assert_eq!(filter_password_insert("", "Ab1!你'好\n\u{7f}"), "Ab1!'");
+        assert_eq!(filter_insert_for_type(InputType::Password, "", "pāss字"), "pss");
+    }
+
+    #[test]
+    fn input_always_uses_hidden_overflow_even_if_truncate_requested() {
+        let el: Element = input("t-ov-hidden")
+            .truncate(true)
+            .text_overflow("ellipsis")
+            .into();
+        fn find_text(el: &Element) -> Option<&Element> {
+            if el.text.is_some() {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_text)
+        }
+        let leaf = find_text(&el).expect("input text leaf");
         assert_eq!(
-            filter_insert_for_type(InputType::Password, "", "pāss字"),
-            "pss"
+            leaf.text_style.overflow,
+            crate::style::TextOverflow::Hidden
         );
+        assert!(leaf.text_style.overflow.allows_caret_scroll());
     }
 }

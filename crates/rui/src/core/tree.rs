@@ -979,18 +979,18 @@ impl Element {
         self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
-    /// Apply `text-overflow`: `clip` / `ellipsis` are nowrap + box `overflow: hidden`;
+    /// Apply `text-overflow`: `clip` / `hidden` / `ellipsis` are nowrap + box `overflow: hidden`;
     /// `newline` restores wrapping (`white-space: normal`) and visible overflow.
     ///
     /// Default [`TextOverflow::Clip`] on a new node does **not** run this — wrapping stays
-    /// allowed until clip/ellipsis is set explicitly (or via `truncate`).
+    /// allowed until clip/hidden/ellipsis is set explicitly (or via `truncate`).
     pub fn apply_text_overflow_mode(&mut self, overflow: TextOverflow) {
         use crate::style::WhiteSpace;
         self.text_style.overflow = overflow;
         self.attrs
             .insert("text_overflow".to_string(), overflow.as_str().to_string());
         match overflow {
-            TextOverflow::Clip | TextOverflow::Ellipsis => {
+            TextOverflow::Clip | TextOverflow::Hidden | TextOverflow::Ellipsis => {
                 self.text_style.white_space = WhiteSpace::Nowrap;
                 self.attrs
                     .insert("white_space".to_string(), "nowrap".to_string());
@@ -1015,6 +1015,9 @@ impl Element {
     }
     pub fn text_overflow_clip(self) -> Self {
         self.text_overflow(TextOverflow::Clip)
+    }
+    pub fn text_overflow_hidden(self) -> Self {
+        self.text_overflow(TextOverflow::Hidden)
     }
     pub fn text_overflow_newline(self) -> Self {
         self.text_overflow(TextOverflow::Newline)
@@ -1775,6 +1778,14 @@ mod p1_builder_tests {
             crate::style::WhiteSpace::Nowrap
         );
         assert_eq!(clip.style.overflow.x, taffy::style::Overflow::Hidden);
+
+        let hidden = Element::new().text("hi").text_overflow_hidden();
+        assert_eq!(hidden.text_style.overflow, TextOverflow::Hidden);
+        assert_eq!(
+            hidden.text_style.white_space,
+            crate::style::WhiteSpace::Nowrap
+        );
+        assert_eq!(hidden.style.overflow.x, taffy::style::Overflow::Hidden);
 
         let wrap = Element::new()
             .text("hi")

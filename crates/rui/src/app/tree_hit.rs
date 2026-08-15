@@ -351,6 +351,10 @@ fn find_input_text_leaf_for_rest_acc(
         }
     }
     if let Some(text) = &el.text {
+        // Clear / reveal adornments inherit `input:` — they are not the field leaf.
+        if el.text_style.font_family.as_deref() == Some("lucide") {
+            return None;
+        }
         if let Some(id) = child_text_edit_fid {
             if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
                 || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
@@ -448,7 +452,78 @@ pub(super) fn find_input_text_at(
             }
         }
     }
+    // Padding / empty chrome of the field: children missed (pointer is not on the
+    // text leaf) but the click is still inside this `input:` / `textarea:` box.
+    // Do not steal clear/reveal adornment hits.
+    if let Some(id) = el.focus_id.as_deref() {
+        let rest = id
+            .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
+            .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
+        if let Some(rest) = rest {
+            if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3]
+                && !pointer_on_text_edit_adornment(el, x, y, scroll_acc)
+            {
+                if let Some((bounds, text, style, scroll)) =
+                    find_input_text_leaf_for_rest_acc(el, Some(id), rest, scroll_acc)
+                {
+                    return Some((
+                        rest.to_string(),
+                        bounds,
+                        text,
+                        style,
+                        scroll,
+                        id.to_string(),
+                    ));
+                }
+            }
+        }
+    }
     None
+}
+
+fn is_text_edit_focus_id(id: &str) -> bool {
+    id.starts_with(crate::components::INPUT_FOCUS_PREFIX)
+        || id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX)
+}
+
+/// True when `(x,y)` is on a clear/reveal control inside a text-edit chrome.
+fn pointer_on_text_edit_adornment(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> bool {
+    if pointer_events_blocked(el) {
+        return false;
+    }
+    let b = el.layout_bounds;
+    let vx = b[0] - scroll_acc[0];
+    let vy = b[1] - scroll_acc[1];
+    let mut next_acc = scroll_acc;
+    if el.style.overflow.x != taffy::style::Overflow::Visible {
+        next_acc[0] += el.scroll_offset[0];
+    }
+    if el.style.overflow.y != taffy::style::Overflow::Visible {
+        next_acc[1] += el.scroll_offset[1];
+    }
+    for child in &el.children {
+        if pointer_on_text_edit_adornment(child, x, y, next_acc) {
+            return true;
+        }
+    }
+    // The field chrome itself has `on_click` (focus) and `cursor_text` — not an adornment.
+    if el.focus_id.as_deref().is_some_and(is_text_edit_focus_id) {
+        return false;
+    }
+    let is_adornment = el.on_click.is_some()
+        || el.text_style.font_family.as_deref() == Some("lucide")
+        || matches!(el.cursor, Some(CursorKind::Pointer));
+    is_adornment
+        && claims_own_bounds(el)
+        && x >= vx
+        && x <= vx + b[2]
+        && y >= vy
+        && y <= vy + b[3]
 }
 
 fn is_selectable_static_text(el: &Element) -> bool {
@@ -1078,6 +1153,61 @@ mod textarea_text_hit_tests {
             find_input_text_leaf_for_rest(&root, None, "ta-hit").expect("leaf for drag-select");
         assert_eq!(text.matches('\n').count(), 2);
         assert!(bounds[3] > 50.0, "bounds must span multi-line leaf");
+    }
+
+    fn input_like_tree_with_padding_and_adornment() -> Element {
+        use crate::components::INPUT_FOCUS_PREFIX;
+        use crate::core::tree::CursorKind;
+
+        let mut text = Element::new();
+        text.layout_bounds = [12.0, 4.0, 152.0, 28.0];
+        text.text = Some("hello world".into());
+
+        let mut icon = Element::new();
+        icon.layout_bounds = [176.0, 8.0, 20.0, 20.0];
+        icon.text = Some("x".into());
+        icon.text_style.font_family = Some("lucide".into());
+
+        let mut btn = Element::new().on_click(|| {}).cursor_kind(CursorKind::Pointer);
+        btn.layout_bounds = [176.0, 8.0, 20.0, 20.0];
+        btn = btn.child(icon);
+
+        let mut chrome = Element::new()
+            .on_click(|| {})
+            .cursor_text();
+        chrome.layout_bounds = [0.0, 0.0, 200.0, 36.0];
+        chrome.style.overflow.x = Overflow::Hidden;
+        chrome.style.overflow.y = Overflow::Hidden;
+        chrome.focus_id = Some(format!("{INPUT_FOCUS_PREFIX}pad-hit"));
+        chrome.child(text).child(btn)
+    }
+
+    #[test]
+    fn find_input_text_at_hits_field_padding_not_adornment() {
+        let root = input_like_tree_with_padding_and_adornment();
+        let left = find_input_text_at(&root, None, 6.0, 18.0, [0.0, 0.0])
+            .expect("left padding must resolve to the text leaf");
+        assert_eq!(left.0, "pad-hit");
+        assert_eq!(left.1[0], 12.0, "must return the leaf bounds, not chrome");
+        assert_eq!(left.2, "hello world");
+
+        let right = find_input_text_at(&root, None, 168.0, 18.0, [0.0, 0.0])
+            .expect("right padding between leaf and adornment must resolve to the text leaf");
+        assert_eq!(right.0, "pad-hit");
+        assert_eq!(right.2, "hello world");
+
+        assert!(
+            find_input_text_at(&root, None, 186.0, 18.0, [0.0, 0.0]).is_none(),
+            "clear/reveal adornment must not be treated as field text"
+        );
+    }
+
+    #[test]
+    fn find_input_text_leaf_for_rest_skips_lucide_adornment() {
+        let root = input_like_tree_with_padding_and_adornment();
+        let (_, text, _, _) =
+            find_input_text_leaf_for_rest(&root, None, "pad-hit").expect("field leaf");
+        assert_eq!(text, "hello world");
     }
 }
 

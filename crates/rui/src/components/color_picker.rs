@@ -1454,7 +1454,6 @@ fn format_value_row(
         })
         .disabled(disabled)
         .flex_grow(1.0)
-        .truncate(true)
         .value_signal(out)
         .into();
     hex_in = hex_in.on_key_down({

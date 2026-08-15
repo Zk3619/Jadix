@@ -449,6 +449,11 @@ impl LabelBuilder {
         self
     }
 
+    pub fn text_overflow_hidden(mut self) -> Self {
+        self.inner.el = self.inner.el.text_overflow_hidden();
+        self
+    }
+
     pub fn text_overflow_newline(mut self) -> Self {
         self.inner.el = self.inner.el.text_overflow_newline();
         self

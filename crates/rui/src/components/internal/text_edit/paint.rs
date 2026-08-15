@@ -16,7 +16,10 @@ use crate::style::{
     focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
     focus_ring_style, InputCaretDraw,
 };
-use crate::utils::text_field::{focus_id_for_text_edit, pull_controlled_into_store};
+use crate::utils::text_field::{
+    ensure_caret_visible_scroll_x, focus_id_for_text_edit, input_scroll_x_signal_key,
+    pull_controlled_into_store,
+};
 /// 每帧将 Input/Textarea 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
 pub(crate) fn sync_text_edit_paint_subtree(
     el: &mut Element,
@@ -306,7 +309,53 @@ fn sync_one_text_edit_paint(
         };
 
         if text_el.text_style.input_caret != caret_draw {
-            text_el.text_style.input_caret = caret_draw;
+            text_el.text_style.input_caret = caret_draw.clone();
+            text_style = true;
+        }
+
+        let want_scroll_x = if !desc.multiline && text_el.text_style.overflow.allows_caret_scroll()
+        {
+            let viewport_w = text_el.layout_bounds[2];
+            let lh = crate::utils::text_field::text_edit_line_box_px(
+                desc.text_size_px,
+                desc.line_height_px,
+                desc.leading_scale,
+            );
+            let prepared =
+                crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, lh);
+            let content_w = crate::text::intrinsic_width(&prepared);
+            let sx_sig = use_signal(&input_scroll_x_signal_key(&desc.base_id), || 0.0_f32);
+            let current = sx_sig.peek();
+            let next = if is_focused && !show_placeholder {
+                let raw_anchor = caret_sig.peek().unwrap_or(caret_in_real);
+                let mut anchor_byte = if mask {
+                    map_byte_index_to_masked(&real_display, raw_anchor, &display_text)
+                } else {
+                    raw_anchor.min(display_text.len())
+                };
+                anchor_byte = display_text.floor_char_boundary(anchor_byte.min(display_text.len()));
+                let prefix = crate::text::prepare(
+                    &display_text[..anchor_byte.min(display_text.len())],
+                    desc.text_size_px,
+                    desc.font_weight,
+                    lh,
+                );
+                let anchor_x = crate::text::intrinsic_width(&prefix);
+                ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current)
+            } else if viewport_w < 4.0 {
+                current.max(0.0)
+            } else {
+                current.clamp(0.0, (content_w + 2.0 - viewport_w).max(0.0))
+            };
+            if (next - current).abs() > 0.05 {
+                sx_sig.set(next);
+            }
+            next
+        } else {
+            0.0
+        };
+        if (text_el.text_style.scroll_x - want_scroll_x).abs() > 0.05 {
+            text_el.text_style.scroll_x = want_scroll_x;
             text_style = true;
         }
 
@@ -350,8 +399,23 @@ fn sync_one_text_edit_paint(
         if (cur_h - want_h).abs() > 0.5 {
             text_el.style.size.height = taffy::style::Dimension::Length(want_h);
             text_el.style.min_size.height = taffy::style::Dimension::Length(want_h);
-            text_el.style.flex_shrink = 0.0;
+            if desc.multiline {
+                text_el.style.flex_shrink = 0.0;
+            }
             text_layout = true;
+        }
+        if !desc.multiline && text_el.text_style.overflow.nowrap() {
+            if (text_el.style.flex_shrink - 1.0).abs() > f32::EPSILON {
+                text_el.style.flex_shrink = 1.0;
+                text_layout = true;
+            }
+            match text_el.style.min_size.width {
+                taffy::style::Dimension::Length(v) if v <= 0.5 => {}
+                _ => {
+                    text_el.style.min_size.width = taffy::style::Dimension::Length(0.0);
+                    text_layout = true;
+                }
+            }
         }
     }
 

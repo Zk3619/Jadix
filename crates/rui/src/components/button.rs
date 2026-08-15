@@ -607,7 +607,7 @@ impl ButtonBuilder {
         self
     }
 
-    /// `clip` / `ellipsis` / `newline`. Overridden by [`Self::truncate`] `true`.
+    /// `clip` / `hidden` / `ellipsis` / `newline`. Overridden by [`Self::truncate`] `true`.
     pub fn text_overflow(mut self, mode: impl Into<crate::style::TextOverflow>) -> Self {
         self.text_overflow = Some(mode.into());
         self
@@ -836,8 +836,18 @@ impl From<ButtonBuilder> for Element {
                         ..builder.text_style.clone()
                     },
                 )
-                .text_center()
                 .flex_shrink(if caption_shrink { 1.0 } else { 0.0 });
+                // CSS `text-overflow`: overflowing nowrap is start-aligned (ellipsis at
+                // inline-end). `text-align: center` on the caption would center a short
+                // truncated run in the full button — large left gap. Untruncated buttons
+                // still center via flex `justify-center` + shrink-wrapped caption.
+                if caption_shrink
+                    && !matches!(overflow_mode, Some(crate::style::TextOverflow::Newline))
+                {
+                    text_node = text_node.text_left();
+                } else {
+                    text_node = text_node.text_center();
+                }
                 if !is_lucide_glyph {
                     match overflow_mode {
                         Some(mode) => {

@@ -514,7 +514,7 @@ impl super::App {
         // try_update_element_by_template_id 与本处 borrow_mut 重入。
         let slider_drag_x = x;
 
-        let drag_sel_update: Option<(String, usize, usize)> = if self.left_button_down
+        let drag_sel_update: Option<(String, usize, usize, usize)> = if self.left_button_down
             && self.scrollbar_drag.is_none()
         {
             if let Some(rest) = self.input_drag_rest.as_ref() {
@@ -526,7 +526,11 @@ impl super::App {
                     let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
                     let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
                     let ui_scale = scale.max(1.0);
-                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                    let mx = if style.overflow.allows_caret_scroll() {
+                        x + leaf_scroll[0]
+                    } else {
+                        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
+                    };
                     let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
                     // Hit against the painted leaf text (password may be masked `•`).
                     let ix = crate::renderer::hit_test_input_text_index(
@@ -545,7 +549,7 @@ impl super::App {
                     };
                     let lo = self.input_drag_anchor.min(caret_ix);
                     let hi = self.input_drag_anchor.max(caret_ix);
-                    Some((rest.clone(), lo, hi))
+                    Some((rest.clone(), lo, hi, caret_ix))
                 } else {
                     None
                 }
@@ -567,7 +571,7 @@ impl super::App {
                     );
                     let lo = self.label_drag_anchor.min(ix);
                     let hi = self.label_drag_anchor.max(ix);
-                    Some((key.clone(), lo, hi))
+                    Some((key.clone(), lo, hi, ix))
                 } else {
                     None
                 }
@@ -578,16 +582,16 @@ impl super::App {
             None
         };
 
-        let label_drag_sel_update = drag_sel_update.as_ref().and_then(|(key, lo, hi)| {
+        let label_drag_sel_update = drag_sel_update.as_ref().and_then(|(key, lo, hi, _caret)| {
             if self.label_drag_key.as_deref() == Some(key.as_str()) {
                 Some((key.clone(), *lo, *hi))
             } else {
                 None
             }
         });
-        let input_drag_sel_update = drag_sel_update.and_then(|(key, lo, hi)| {
+        let input_drag_sel_update = drag_sel_update.and_then(|(key, lo, hi, caret)| {
             if self.input_drag_rest.as_deref() == Some(key.as_str()) {
-                Some((key, lo, hi))
+                Some((key, lo, hi, caret))
             } else {
                 None
             }
@@ -746,11 +750,11 @@ impl super::App {
         {
             self.tick_content_scroll_drag(x, y);
         }
-        if let Some((rest, lo, hi)) = input_drag_sel_update {
+        if let Some((rest, lo, hi, caret)) = input_drag_sel_update {
             let sk = crate::components::input::input_selection_signal_key(&rest);
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
             let ck = crate::components::input::input_caret_signal_key(&rest);
-            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
+            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
             // Selection chrome is paint-synced via peek — must request a frame or the
             // highlight never appears until an unrelated redraw.
             if let Some(st) = (*self.state.borrow_mut()).as_mut() {

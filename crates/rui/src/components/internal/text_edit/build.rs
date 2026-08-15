@@ -28,7 +28,6 @@ pub(crate) struct TextEditBuildParams {
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
     pub value: Option<Signal<String>>,
-    pub text_overflow: Option<crate::style::TextOverflow>,
     /// Single-line: preconfigured BoxBuilder (hstack chrome).
     /// Multi-line: ignore; build relative flex_col box inside.
     pub single_line_container: Option<BoxBuilder>,
@@ -51,7 +50,6 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         line_height_px,
         leading_scale,
         value,
-        text_overflow,
         single_line_container,
         multiline,
         rows,
@@ -200,7 +198,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .flex_shrink(0.0)
             .rounded("0.375rem")
     } else {
-        single_line_container.expect("single-line text edit requires single_line_container")
+        single_line_container
+            .expect("single-line text edit requires single_line_container")
+            .overflow("hidden")
     };
     container = container.bg(bg).border(border_c, 1.0);
     if !is_focused && !disabled {
@@ -227,10 +227,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     text_el.text_shape_suffix = None;
     text_el.template_id = Some(input_text_template_id(&field_id));
     text_el = text_el.w("100%").flex_shrink(0.0);
-    if let Some(mode) = text_overflow {
-        if !multiline {
-            text_el = text_el.text_overflow(mode).min_w(0.0).flex_shrink(1.0);
-        }
+    if !multiline {
+        // Native <input> / Combobox: always Hidden (crop + caret pan).
+        // clip / ellipsis / newline belong on Label / Button, not editable fields.
+        text_el = text_el
+            .text_overflow(crate::style::TextOverflow::editable_single_line())
+            .min_w(0.0)
+            .max_w("100%")
+            .flex_shrink(1.0);
     }
     if multiline {
         // Content-driven leaf (field-sizing-content). Do NOT use viewport/chrome height —
@@ -243,7 +247,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             10_000.0,
         );
         text_el = text_el.h(content_h).min_h(content_h);
-    } else if text_overflow != Some(crate::style::TextOverflow::Newline) {
+    } else {
         // Single-line: pin one line box so Input `items_center` centers the row.
         // Extra bottom ink lives in glyphon soft_h, not leaf height (else glyphs sit high).
         text_el = text_el.h(line_box);
@@ -328,6 +332,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .flex_grow(1.0)
             .min_w("0")
             .items_center()
+            // Clip on the padded chrome, not this region: leaf-edge scissor cuts glyph
+            // bearings and the caret when panned to either end.
+            .overflow("visible")
             .child(text_el)
             .into()
     };

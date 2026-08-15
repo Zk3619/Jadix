@@ -356,11 +356,10 @@ pub fn ComboboxInput(
         let input_id = id.clone();
         let vis = visible;
 
-        // 填满 Combobox 壳宽度（壳默认 16rem / class 指定）；勿再叠一层 w-* 把壳撑破。
+        // Combobox trigger is a real Input: Hidden overflow (crop + caret pan), not ellipsis.
         let mut trigger: Element = input(&id)
             .placeholder(ph.as_str())
             .w("100%")
-            .truncate(true)
             .into();
         trigger = trigger
             .accesskit_role("combobox")

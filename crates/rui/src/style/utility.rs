@@ -888,6 +888,11 @@ mod tests {
         assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Clip);
         assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Nowrap);
         assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+
+        apply_class_list(&mut el, "text-overflow-hidden");
+        assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Hidden);
+        assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Nowrap);
+        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
     }
 
     #[test]

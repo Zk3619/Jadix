@@ -20,6 +20,9 @@ thread_local! {
     static MEASURE_CACHE: RefCell<HashMap<MeasureKey, f32>> = RefCell::new(HashMap::new());
 }
 
+/// Wide enough that glyphon will not wrap; used for nowrap / ellipsis intrinsic width.
+const UNBOUNDED_WRAP: f32 = 1.0e6;
+
 fn family_hash(family: glyphon::Family) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     match family {
@@ -77,7 +80,14 @@ pub fn measure_prefix_width(
     let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
     let mut buffer =
         glyphon::Buffer::new(font_system, glyphon::Metrics::new(scaled_size, line_height));
-    buffer.set_size(font_system, Some(max_width), Some(line_height + 2.0));
+    // `Some(box_w)` soft-wraps: CJK/latin then reports `max(line_w) ≈ box_w`, so ellipsis
+    // thought the string already fit. Unbounded width keeps a true single-line advance.
+    let width_opt = if max_width >= UNBOUNDED_WRAP * 0.5 {
+        None
+    } else {
+        Some(max_width.max(1.0))
+    };
+    buffer.set_size(font_system, width_opt, Some(line_height + 2.0));
     buffer.set_text(
         font_system,
         layout.as_ref(),
@@ -128,7 +138,7 @@ pub fn truncate_with_ellipsis(
         line_height,
         weight,
         family,
-        max_width,
+        UNBOUNDED_WRAP,
     );
     if full_w <= max_width {
         return text.to_string();
@@ -140,35 +150,42 @@ pub fn truncate_with_ellipsis(
         line_height,
         weight,
         family,
-        max_width,
+        UNBOUNDED_WRAP,
     );
     if ellipsis_w >= max_width {
         return ELLIPSIS.to_string();
     }
     let budget = max_width - ellipsis_w;
-    let mut lo = 0usize;
-    let mut hi = text.len();
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        let end = text.floor_char_boundary(mid);
-        let prefix = &text[..end];
+    // Binary-search *character* ends. Byte midpoints can land inside a UTF-8 scalar
+    // (`floor_char_boundary` snaps back to `lo`) so `lo` never advances — CJK freeze.
+    let mut ends: Vec<usize> = Vec::new();
+    let mut i = 0usize;
+    while i < text.len() {
+        let ch = text[i..].chars().next().unwrap();
+        i += ch.len_utf8();
+        ends.push(i);
+    }
+    let mut lo_i = 0usize;
+    let mut hi_i = ends.len();
+    while lo_i < hi_i {
+        let mid_i = (lo_i + hi_i).div_ceil(2);
+        let end = ends[mid_i - 1];
         let w = measure_prefix_width(
             font_system,
-            prefix,
+            &text[..end],
             scaled_size,
             line_height,
             weight,
             family,
-            max_width,
+            UNBOUNDED_WRAP,
         );
         if w <= budget {
-            lo = end;
-        } else if end == 0 {
-            break;
+            lo_i = mid_i;
         } else {
-            hi = text.floor_char_boundary(end - 1);
+            hi_i = mid_i.saturating_sub(1);
         }
     }
+    let lo = if lo_i == 0 { 0 } else { ends[lo_i - 1] };
     format!("{}{}", &text[..lo], ELLIPSIS)
 }
 
@@ -276,7 +293,11 @@ pub fn hit_test_input_text_index(
     let y = bounds[1];
     let w = bounds[2];
     let h = bounds[3];
-    let mx = mx.clamp(x, x + w.max(0.0));
+    let mx = if style.overflow.allows_caret_scroll() {
+        mx
+    } else {
+        mx.clamp(x, x + w.max(0.0))
+    };
     let my = my.clamp(y, y + h.max(0.0));
     let scaled_size = style.size * ui_scale;
     let line_height = line_height_for_style(style, ui_scale);
@@ -300,7 +321,23 @@ pub fn hit_test_input_text_index(
         0
     };
     let (line_start, line_body) = lines[line_i];
-    let rel_in_box = (mx - x) * ui_scale;
+    // Padding / chrome just outside the leaf: native `<input>` jumps to that
+    // line's start or end (and lets caret-scroll reveal it). Mapping through
+    // `scroll_x` would land on a mid-glyph at the clip edge instead.
+    if style.overflow.allows_caret_scroll() {
+        if mx < x {
+            return line_start;
+        }
+        if mx > x + w.max(0.0) {
+            return line_start + line_body.len();
+        }
+    }
+    let rel_in_box = (mx - x + style.scroll_x.max(0.0)) * ui_scale;
+    let wrap_limit = if style.overflow.allows_caret_scroll() {
+        UNBOUNDED_WRAP
+    } else {
+        box_w
+    };
     let measured = measure_prefix_width(
         font_system,
         line_body,
@@ -308,9 +345,13 @@ pub fn hit_test_input_text_index(
         line_height,
         font_weight,
         family,
-        box_w,
+        wrap_limit,
     );
-    let content_w = measured.min(box_w);
+    let content_w = if style.overflow.allows_caret_scroll() {
+        measured
+    } else {
+        measured.min(box_w)
+    };
     let offset = match style.align {
         glyphon::cosmic_text::Align::Center => (box_w - content_w) * 0.5,
         glyphon::cosmic_text::Align::Right => box_w - content_w,
@@ -325,7 +366,7 @@ pub fn hit_test_input_text_index(
         line_height,
         font_weight,
         family,
-        box_w,
+        wrap_limit,
     );
     line_start + local
 }
@@ -343,4 +384,84 @@ fn line_height_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
 
 fn scaled_size_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
     style.size * ui_scale
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::TextOverflow;
+
+    fn test_font_system() -> glyphon::FontSystem {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+        fs
+    }
+
+    #[test]
+    fn unconstrained_measure_is_wider_than_wrapped_box() {
+        let mut fs = test_font_system();
+        let family = best_font_family(&fs);
+        let text = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let size = 14.0;
+        let lh = 21.0;
+        let box_w = 40.0;
+        let wrapped = measure_prefix_width(&mut fs, text, size, lh, 400, family, box_w);
+        let free = measure_prefix_width(&mut fs, text, size, lh, 400, family, UNBOUNDED_WRAP);
+        assert!(
+            free > wrapped + 8.0,
+            "nowrap intrinsic must exceed wrapped line width (free={free} wrapped={wrapped})"
+        );
+        let out = truncate_with_ellipsis(&mut fs, text, size, lh, 400, family, box_w);
+        assert!(out.ends_with(ELLIPSIS), "got {out:?}");
+        assert!(out.chars().count() < text.chars().count());
+    }
+
+    #[test]
+    fn ellipsis_terminates_on_multibyte_scalars() {
+        let mut fs = test_font_system();
+        let family = best_font_family(&fs);
+        // 3-byte UTF-8; the old byte-midpoint search snapped `end` back to `lo` and hung.
+        let text = "€€€€€€€€€€";
+        let out = truncate_with_ellipsis(&mut fs, text, 14.0, 21.0, 400, family, 12.0);
+        assert!(out.ends_with(ELLIPSIS), "got {out:?}");
+    }
+
+    #[test]
+    fn ellipsis_truncates_latin_phrase() {
+        let mut fs = test_font_system();
+        let family = best_font_family(&fs);
+        let text = "Very long button caption that must not wrap";
+        let out = truncate_with_ellipsis(&mut fs, text, 14.0, 21.0, 400, family, 80.0);
+        assert!(out.ends_with(ELLIPSIS), "got {out:?}");
+        assert_ne!(out, text);
+    }
+
+    #[test]
+    fn hidden_hit_test_outside_box_reaches_hidden_glyphs() {
+        let mut fs = test_font_system();
+        let text = "abcdefghijklmnop";
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.overflow = TextOverflow::Hidden;
+        style.scroll_x = 40.0;
+        let bounds = [10.0, 0.0, 40.0, 21.0];
+        // Pointer 20px left of the leaf: should hit earlier than the visible start.
+        let left = hit_test_input_text_index(&mut fs, text, -10.0, 10.0, bounds, &style, 1.0);
+        let edge = hit_test_input_text_index(&mut fs, text, 10.0, 10.0, bounds, &style, 1.0);
+        assert_eq!(left, 0, "click in the left padding must go to line start");
+        assert!(
+            left < edge,
+            "drag left of the box must move caret toward the start (left={left} edge={edge})"
+        );
+        let right = hit_test_input_text_index(&mut fs, text, 80.0, 10.0, bounds, &style, 1.0);
+        let right_edge = hit_test_input_text_index(&mut fs, text, 50.0, 10.0, bounds, &style, 1.0);
+        assert_eq!(right, text.len(), "click in the right padding must go to line end");
+        assert!(
+            right >= right_edge,
+            "drag right of the box must move caret toward the end (right={right} edge={right_edge})"
+        );
+    }
 }
