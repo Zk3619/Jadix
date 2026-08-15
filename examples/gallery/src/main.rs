@@ -4,7 +4,7 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 表单 · 浮层 · 数据 · 导航 · 布局 · 文本 · 关于。
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航 · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
@@ -14,9 +14,10 @@ use rui::components::*;
 use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
 use rui::core::reactivity::{batch, use_signal, Signal};
 use rui::core::tree::Element;
-use rui::primitives::{hstack, r#box, vstack, Portal, PortalProps};
+use rui::primitives::{hstack, interactive, r#box, vstack, Portal, PortalProps};
 use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
+use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
 use std::collections::HashSet;
 
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
@@ -162,6 +163,243 @@ fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
                     <Button variant="ghost" hover_easing="spring">"Ghost · spring"</Button>
                     <Button variant="ghost" hover_easing="cubic">"Ghost · cubic"</Button>
                 </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn format_mouse_log(e: &MouseEvent) -> String {
+    format!(
+        "{}  detail={}  button={}  buttons={}  which={}\nclient=({:.1}, {:.1})  offset=({:.1}, {:.1})  page=({:.1}, {:.1})\nscreen=({:.1}, {:.1})  movement=({:.1}, {:.1})\nAlt={} Ctrl={} Shift={} Meta={} Accel={}\nregion={:?}  relatedTarget={:?}  phase={:?}\nstopPropagation={}  preventDefault={}",
+        e.event_type,
+        e.detail,
+        e.button_index(),
+        e.buttons,
+        e.which(),
+        e.client_x(),
+        e.client_y(),
+        e.offset_x(),
+        e.offset_y(),
+        e.page_x,
+        e.page_y,
+        e.screen_x,
+        e.screen_y,
+        e.movement_x,
+        e.movement_y,
+        e.alt_key,
+        e.ctrl_key,
+        e.shift_key,
+        e.meta_key,
+        e.get_modifier_state("Accel"),
+        e.region,
+        e.related_target,
+        e.phase,
+        e.is_consumed(),
+        e.default_prevented(),
+    )
+}
+
+#[component]
+fn MouseEventShowcase() -> Element {
+    let log = use_signal("gal_mouse_log", || {
+        "（在下方色块上移动 / 按下 / 松开）".to_string()
+    });
+    let clicks = use_signal("gal_mouse_clicks", || 0i32);
+    let dbls = use_signal("gal_mouse_dbls", || 0i32);
+    let overs = use_signal("gal_mouse_overs", || 0i32);
+    let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
+
+    let write = {
+        let log = log;
+        move |e: &MouseEvent| log.set(format_mouse_log(e))
+    };
+
+    let playground: Element = {
+        let w_md = write.clone();
+        let w_mu = write.clone();
+        let w_mm = write.clone();
+        let w_ov = write.clone();
+        let w_ot = write.clone();
+        let w_db = write.clone();
+        let clicks = clicks;
+        let dbls = dbls;
+        let overs = overs;
+        interactive(
+            r#box()
+                .w("100%")
+                .h(160.0)
+                .p("0.75rem")
+                .rounded(8.0)
+                .bg(parse_color("muted"))
+                .items("center")
+                .justify("center")
+                .child(
+                    Element::from(
+                        label("gal-mouse-pad-hint")
+                            .text("MouseEvent 命中区（mousedown / up / move / over / out / click / dblclick）")
+                            .size(12.0)
+                            .color(parse_text_color("muted-foreground")),
+                    ),
+                )
+                .into(),
+        )
+        .focus_id("gal-mouse-pad")
+        .on_mousedown(move |e| w_md(e))
+        .on_mouseup(move |e| w_mu(e))
+        .on_mousemove(move |e| w_mm(e))
+        .on_mouseover(move |e| {
+            overs.set(overs.peek() + 1);
+            w_ov(e);
+        })
+        .on_mouseout(move |e| w_ot(e))
+        .on_dblclick(move |e| {
+            dbls.set(dbls.peek() + 1);
+            w_db(e);
+        })
+        .on_click(move || increment_count(clicks))
+        .into()
+    };
+
+    let lca_inner: Element = interactive(
+        r#box()
+            .p("0.75rem")
+            .rounded(8.0)
+            .bg(parse_color("secondary"))
+            .child(Element::from(
+                label("gal-mouse-lca-inner")
+                    .text("目标：必须在此按下并在此松开")
+                    .size(13.0),
+            ))
+            .into(),
+    )
+    .focus_id("gal-mouse-lca-target")
+    .on_click(move || increment_count(lca))
+    .into();
+
+    let lca_outer: Element = r#box()
+        .w("100%")
+        .min_h(120.0)
+        .p("1.25rem")
+        .rounded(8.0)
+        .bg(parse_color("muted"))
+        .items("center")
+        .justify("center")
+        .child(lca_inner)
+        .into();
+
+    let swallow: Element = {
+        let w = write.clone();
+        interactive(
+            r#box()
+                .p("0.75rem")
+                .rounded(8.0)
+                .bg(parse_color("secondary"))
+                .child(Element::from(
+                    label("gal-mouse-swallow")
+                        .text("mousedown stopPropagation（父级不应再收到 down）")
+                        .size(12.0),
+                ))
+                .into(),
+        )
+        .focus_id("gal-mouse-swallow")
+        .on_mousedown(move |e| {
+            e.stop_propagation();
+            w(e);
+        })
+        .into()
+    };
+
+    ui! {
+        <MyCard title="MouseEvent（pointer_events）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对齐 DOM MouseEvent：click / dblclick / mousedown / mouseup / mousemove / mouseover / mouseout。click 落在 mousedown 与 mouseup 的最近公共祖先；在灰色区外按下再拖进目标松开，目标 on_click 不应 +1。"
+                </Label>
+                { playground }
+                <Label w="100%" text_size="0.875rem" leading="normal">
+                    { format!("click={}  dblclick={}  mouseover={}", clicks.get(), dbls.get(), overs.get()) }
+                </Label>
+                <Rect w="100%" p="0.75rem" bg="secondary" rounded="0.5rem">
+                    <Label w="100%" text_size="0.75rem" leading="normal" color="muted-foreground">
+                        { log.get() }
+                    </Label>
+                </Rect>
+                <Label w="100%" font_weight="700" text_size="0.875rem">"click LCA"</Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { format!("目标 click={} — 在灰色空白处按下，拖进蓝色块再松开，计数不应增加", lca.get()) }
+                </Label>
+                { lca_outer }
+                <Label w="100%" font_weight="700" text_size="0.875rem">"stopPropagation"</Label>
+                { swallow }
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn ensure_gallery_custom_cursors() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let size = 32u32;
+        let mut rgba = vec![0u8; (size * size * 4) as usize];
+        let c = 16.0f32;
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f32 + 0.5 - c;
+                let dy = y as f32 + 0.5 - c;
+                let r = (dx * dx + dy * dy).sqrt();
+                let i = ((y * size + x) * 4) as usize;
+                let on_ring = (r - 10.0).abs() < 2.0;
+                let on_dot = r < 2.5;
+                if on_ring || on_dot {
+                    rgba[i] = 239;
+                    rgba[i + 1] = 68;
+                    rgba[i + 2] = 68;
+                    rgba[i + 3] = 255;
+                }
+            }
+        }
+        register_cursor_rgba8("gallery-ring", size, size, rgba);
+    });
+}
+
+#[component]
+fn CursorShowcase() -> Element {
+    ensure_gallery_custom_cursors();
+    let mut grid = hstack().w("100%").gap("0.5rem").wrap("wrap");
+    for kw in CursorKind::ALL_KEYWORDS {
+        grid = grid.child(
+            r#box()
+                .p("0.5rem")
+                .rounded(6.0)
+                .bg(parse_color("muted"))
+                .cursor(*kw)
+                .child(Element::from(
+                    label(format!("gal-cur-{kw}"))
+                        .text(*kw)
+                        .size(11.0)
+                        .color(parse_text_color("foreground")),
+                )),
+        );
+    }
+    let grid: Element = grid.into();
+
+    ui! {
+        <MyCard title="CSS cursor">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对齐 MDN cursor 预定义关键字。自定义光标与 Image 共用解码：PNG/ICO/BMP 默认；JPEG/GIF/WebP 需 images；SVG 需 svg。多 url() 回退；光标位图超 128px 跳过，SVG 缩到上限内。"
+                </Label>
+                <HStack gap="0.5rem" wrap="wrap" items="center">
+                    <Button>"默认 pointer"</Button>
+                    <Button disabled=true>"disabled not-allowed"</Button>
+                    <Button cursor="wait">"cursor=wait"</Button>
+                    <Button class="cursor-help">"class cursor-help"</Button>
+                    <Rect p="0.5rem" rounded="0.375rem" bg="muted" cursor="url(#missing), url(#gallery-ring) 16 16, pointer">
+                        <Label text_size="0.75rem">"url(#gallery-ring) 16 16"</Label>
+                    </Rect>
+                </HStack>
+                { grid }
             </VStack>
         </MyCard>
     }
@@ -2282,12 +2520,18 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                 <Reactive id={PRIMITIVES_SHOWCASE_REACTIVE}>
                     <VStack gap="0.75rem" w="100%">
                         <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                            "GPU Image (queue_image_rgba8 + <Image>). Portal 默认挂到根叠层（body）；也可 mount 到子容器 template_id。focus_trap（utils）限制 Tab。VirtualList：Reactive + visible_item_range（此处 200 行演示）。"
+                            "GPU Image：queue_image_rgba8 + texture，或 src（路径 / data:）。PNG/ICO/BMP 默认；JPEG/GIF/WebP 需 images；SVG 需 svg。Portal 默认同层；focus_trap 限制 Tab。VirtualList：visible_item_range。"
                         </Label>
                         <HStack gap="0.75rem" items="start" wrap="wrap">
                             <VStack gap="0.25rem">
                                 <Label font_weight="700" text_size="0.75rem">"Texture quad"</Label>
                                 <Image texture="demo-checker" w="5.5rem" h="5.5rem" rounded="0.375rem" />
+                                <Image
+                                    src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><circle cx='16' cy='16' r='14' fill='steelblue'/></svg>"
+                                    w="5.5rem"
+                                    h="5.5rem"
+                                    rounded="9999px"
+                                />
                             </VStack>
                             <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
                                 <Label font_weight="700" text_size="0.75rem">"Controls"</Label>
@@ -3187,6 +3431,18 @@ fn gallery_section_body(section: &str) -> Element {
                 </VStack>
             </ScrollArea>
         },
+        "events" => ui! {
+            <ScrollArea id="scroll-events" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"指针事件"</Label>
+                    <Label text_size="0.875rem" color="muted-foreground">
+                        "crates/rui/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"
+                    </Label>
+                    <MouseEventShowcase />
+                    <CursorShowcase />
+                </VStack>
+            </ScrollArea>
+        },
         "overlays" => ui! {
             <ScrollArea id="scroll-overlays" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -3308,6 +3564,7 @@ fn build_gallery_app() -> Element {
                     )),
             ))
             .item(nav_item(sec_side, "basics", "基础"))
+            .item(nav_item(sec_side, "events", "指针事件"))
             .item(nav_item(sec_side, "forms", "表单"))
             .item(nav_item(sec_side, "overlays", "浮层 / 反馈"))
             .item(nav_item(sec_side, "data", "数据"))

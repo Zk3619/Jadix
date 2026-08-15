@@ -5,7 +5,11 @@ edition = "2021"
 
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
-rui = { path = "../../crates/rui", default-features = false, features = ["bundled-lucide"] }
+rui = { path = "../../crates/rui", default-features = false, features = [
+    "bundled-lucide",
+    "images",
+    "svg",
+] }
 winit = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
