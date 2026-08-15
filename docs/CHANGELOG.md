@@ -16,6 +16,8 @@
 
 ### Added
 
+- Command：三种表面——行内 `<Command>`、VS Code 式顶部居中 `<CommandOverlay>`、居中模态 `<CommandDialog>`（复用 Dialog，不改 `dialog.rs`）。Builder `.open_signal` 默认浮层，`.dialog()` 走 Dialog。Overlay/Dialog 宿主为 `0×0` portal 锚点（打开后 reconcile 仍保持 0×0，避免在 HStack 里撑破布局）；TooltipContent 同样用 `0×0` 锚点。
+
 - WP-3.2：Chart **grammar**（`define_chart` + cartesian/polar marks + `ChartTheme`/`MarkStyle`）；`scale_log`/`scale_time`（Rust 专用，非 JS D3）；`.tooltip(true)` / `.crosshair(true)`（钉在 pointer-down）；预设薄封装；path 核光栅；RSX `<Chart>`/`<BarChart>`…；`ChartDatum.series`/`time`。Gallery「数据」含组合图、时间轴、log、radial。
 - Chart 修：path 贴图竖直翻转对齐 TexturedQuad（面积填下方、柱从基线向上）；RSX `h` 只约束绘图区；饼/环近心缝 + 选中外扩描边；`selected_signal` + tooltip overlay 可响应。
 - Chart 点/命中：dot 改为 path 圆画在折线之上（中心对齐顶点）；折线/面积不再按 datum[0] 整组变淡；`HitPathEntry.bounds` 用可视盒（ScrollArea 内饼/环/tooltip 可点）；radial_line 命中加距离上限，不再抢走 radial_bar。

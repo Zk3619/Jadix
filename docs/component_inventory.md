@@ -90,7 +90,7 @@
 | Popover | `popover_panel` / `PopoverBuilder` | **experimental** | **可选** `.id()`；**锚点用 focus_id** | 低层面板；可不进 prelude |
 | Dropdown | `dropdown` / `DropdownBuilder` | **experimental** | 必填实例键；可选 `anchor_focus_id` | 暂仅 Builder |
 | ContextMenu | `context_menu` / `ContextMenuBuilder` | **experimental** | 必填实例键 | |
-| Command | `command` / `Command` / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | WP-3.3：↑↓ 高亮 + Enter 执行 + Esc 关；RSX `<Command>` |
+| Command | `command` / 复合 `Command*` / `CommandOverlay`（顶部居中浮层）/ `CommandDialog`（复用 Dialog） / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | 浮层默认；`.dialog()` 走 Dialog；↑↓ + Enter |
 | （私有）text_edit | `internal::text_edit` | — | 内部 | Input/Textarea chrome；**禁止**产品面 / prelude |
 
 ### 1.4 数据（Gallery `data`）

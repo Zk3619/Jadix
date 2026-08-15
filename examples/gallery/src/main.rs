@@ -2705,23 +2705,89 @@ fn TextareaComboboxShowcase() -> Element {
 #[component]
 fn OverlayFeedbackShowcase() -> Element {
     let cmd_open = use_signal("gal_cmd_open", || false);
+    let cmd_dlg_open = use_signal("gal_cmd_dlg_open", || false);
     let dialog_open = use_signal("gal_dialog_open", || false);
     let dialog_select = use_signal("gal_dialog_select", || "opt-a".to_string());
     let sheet_open = use_signal("gal_sheet_open", || false);
     let progress_val = use_signal("gal_progress", || 0.45f32);
     let open_cmd = cmd_open;
+    let open_cmd_dlg = cmd_dlg_open;
     let open_sheet = sheet_open;
     let bump = progress_val;
 
-    let cmd_el: Element = command("gal-cmd")
-        .open_signal(cmd_open)
-        .action(CommandAction::new("toast", "Show toast", || {
-            toast_push("Hello from Command", 2500);
-        }))
-        .action(CommandAction::new("log", "Log ping", || {
-            log::info!("gallery command: ping");
-        }))
-        .into();
+    let cmd_el: Element = ui! {
+        <CommandOverlay id="gal-cmd" open={cmd_open}>
+            <CommandInput placeholder="Type a command or search..." />
+            <CommandList>
+                <CommandEmpty>"No results found."</CommandEmpty>
+                <CommandGroup heading="Suggestions">
+                    <CommandItem
+                        value="toast"
+                        on_click={move || {
+                            toast_push("Hello from Command", 2500);
+                        }}
+                    >
+                        "Show toast"
+                    </CommandItem>
+                    <CommandItem
+                        value="log"
+                        on_click={move || {
+                            log::info!("gallery command: ping");
+                        }}
+                    >
+                        "Log ping"
+                    </CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
+                <CommandGroup heading="Settings">
+                    <CommandItem value="profile">
+                        "Profile"
+                        <CommandShortcut>"⌘P"</CommandShortcut>
+                    </CommandItem>
+                    <CommandItem value="billing">
+                        "Billing"
+                        <CommandShortcut>"⌘B"</CommandShortcut>
+                    </CommandItem>
+                </CommandGroup>
+            </CommandList>
+        </CommandOverlay>
+    };
+    let cmd_dlg_el: Element = ui! {
+        <CommandDialog id="gal-cmd-dlg" open={cmd_dlg_open}>
+            <CommandInput placeholder="Type a command or search..." />
+            <CommandList>
+                <CommandEmpty>"No results found."</CommandEmpty>
+                <CommandItem
+                    value="dlg-toast"
+                    on_click={move || {
+                        toast_push("Hello from CommandDialog", 2500);
+                    }}
+                >
+                    "Show toast"
+                </CommandItem>
+            </CommandList>
+        </CommandDialog>
+    };
+    let cmd_inline: Element = ui! {
+        <Command id="gal-cmd-inline">
+            <CommandInput placeholder="Type a command or search..." />
+            <CommandList>
+                <CommandEmpty>"No results found."</CommandEmpty>
+                <CommandGroup heading="Suggestions">
+                    <CommandItem value="calendar">"Calendar"</CommandItem>
+                    <CommandItem value="emoji">"Search Emoji"</CommandItem>
+                    <CommandItem value="calc" disabled={true}>"Calculator"</CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
+                <CommandGroup heading="Settings">
+                    <CommandItem value="inline-profile">
+                        "Profile"
+                        <CommandShortcut>"⌘P"</CommandShortcut>
+                    </CommandItem>
+                </CommandGroup>
+            </CommandList>
+        </Command>
+    };
     let dialog_el: Element = {
         let open = dialog_open;
         let nested_select = dialog_select;
@@ -2843,11 +2909,14 @@ fn OverlayFeedbackShowcase() -> Element {
         <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：命令面板、模态 Dialog（含 Cancel/Confirm）、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
+                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
                         "Command"
+                    </Button>
+                    <Button variant="outline" size="sm" on_click={move || open_cmd_dlg.set(true)}>
+                        "Command Dialog"
                     </Button>
                     { dialog_el }
                     <Button variant="outline" size="sm" on_click={move || open_sheet.set(true)}>
@@ -3003,7 +3072,9 @@ fn OverlayFeedbackShowcase() -> Element {
                         bump.set(if v >= 1.0 { 0.0 } else { (v + 0.1).min(1.0) });
                     }}>{ "Bump +10%" }</Button>
                 </VStack>
+                { cmd_inline }
                 { cmd_el }
+                { cmd_dlg_el }
                 { sheet_el }
             </VStack>
         </MyCard>
