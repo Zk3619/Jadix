@@ -28,7 +28,7 @@
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::reactive_view;
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -40,8 +40,8 @@ use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating_with_gap, panel_block_clicks, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W,
+    floating_portal_anchor, mark_floating_with_gap, panel_block_clicks, PopupPlacement,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
 };
 use rui_macros::component;
 
@@ -228,7 +228,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
     let class = opts.class.filter(|s| !s.trim().is_empty());
     let view_id = format!("{id}__tooltip_view");
 
-    reactive_view(view_id, move || {
+    reactive_anchor(view_id.clone(), move || {
         let is_open = open.get();
         let Some(oz) = portal_sync(&id, open, OverlayKind::Tooltip, OverlayMode::Pinned) else {
             return Element::new();
@@ -247,8 +247,10 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "0");
         panel = panel.absolute();
-        panel_block_clicks(panel, oz.panel)
-    })
+        // 0×0 锚点：100% 占位会在 HStack 里盖住 Trigger，hover 永远打不中按钮。
+        floating_portal_anchor(panel_block_clicks(panel, oz.panel))
+    });
+    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
 
 // ---------------------------------------------------------------------------
@@ -343,5 +345,27 @@ mod tests {
             tooltip_side_to_placement("bottom-start"),
             PopupPlacement::BottomStart
         );
+    }
+
+    #[test]
+    fn tooltip_content_anchor_is_zero_sized() {
+        use crate::core::reactivity::create_root;
+        let (_owner, el) = create_root(|| {
+            tooltip_scope("tip-anchor", None, || {
+                tooltip_content(TooltipContentOpts::default(), || Element::new().text("hi"))
+            })
+        });
+        fn find_zero(el: &Element) -> bool {
+            let is_view = el.template_id.as_deref() == Some("tip-anchor__tooltip_view");
+            let dim0 = matches!(
+                el.style.size.width,
+                taffy::style::Dimension::Length(w) if w == 0.0
+            ) && matches!(
+                el.style.size.height,
+                taffy::style::Dimension::Length(h) if h == 0.0
+            );
+            (is_view && dim0) || el.children.iter().any(find_zero)
+        }
+        assert!(find_zero(&el), "TooltipContent must use a 0×0 portal anchor");
     }
 }
