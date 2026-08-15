@@ -96,7 +96,7 @@ impl super::App {
         let pos = lp.pos;
         // Restore cursor to press position for hit-test, then reuse right-click path.
         self.cursor_pos = winit::dpi::PhysicalPosition::new(pos[0] as f64, pos[1] as f64);
-        self.handle_mouse_button(window_id, ElementState::Pressed, MouseButton::Right);
+        self.handle_mouse_button(window_id, ElementState::Pressed, MouseButton::Right, None);
     }
 
     pub(super) fn begin_long_press(&mut self, window_id: WindowId, pos: [f32; 2]) {
@@ -411,13 +411,15 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
                 self.shutdown_renderer();
             }
-            WindowEvent::CursorMoved { position, .. } => self.handle_cursor_moved(id, position),
-            WindowEvent::CursorLeft { .. } => self.handle_cursor_left(id),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handle_cursor_moved(id, position, event_loop)
+            }
+            WindowEvent::CursorLeft { .. } => self.handle_cursor_left(id, event_loop),
             WindowEvent::MouseInput {
                 state: element_state,
                 button,
                 ..
-            } => self.handle_mouse_button(id, element_state, button),
+            } => self.handle_mouse_button(id, element_state, button, Some(event_loop)),
             WindowEvent::MouseWheel { delta, .. } => {
                 self.handle_mouse_wheel(id, delta);
             }
@@ -430,8 +432,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         if self.primary_touch_id.is_none() {
                             self.primary_touch_id = Some(touch.id);
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location);
-                            self.handle_mouse_button(id, ElementState::Pressed, MouseButton::Left);
+                            self.handle_cursor_moved(id, touch.location, event_loop);
+                            self.handle_mouse_button(id, ElementState::Pressed, MouseButton::Left, Some(event_loop));
                         }
                         if self.active_touches.len() >= 2 {
                             // Cancel content pan when a second finger lands (pinch takes over).
@@ -446,7 +448,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             self.update_pinch_scale();
                         } else if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location);
+                            self.handle_cursor_moved(id, touch.location, event_loop);
                         }
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
@@ -456,8 +458,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         }
                         if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location);
-                            self.handle_mouse_button(id, ElementState::Released, MouseButton::Left);
+                            self.handle_cursor_moved(id, touch.location, event_loop);
+                            self.handle_mouse_button(id, ElementState::Released, MouseButton::Left, Some(event_loop));
                             self.primary_touch_id = None;
                             // Promote another finger to primary if still down.
                             if let Some((&nid, &npos)) = self.active_touches.iter().next() {
@@ -589,6 +591,11 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         last_frame_time: std::time::Instant::now(),
         modifiers: ModifiersState::default(),
         left_button_down: false,
+        mouse_buttons: 0,
+        last_client_pos: None,
+        last_mouse_target: None,
+        last_mouse_path: None,
+        click_press_path: None,
         last_click_at: None,
         last_click_pos: [0.0, 0.0],
         click_count: 0,
@@ -624,6 +631,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         ime_os_blur_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
         accesskit_adapter: None,
+        custom_cursors: crate::style::CustomCursorCache::new(),
         #[cfg(debug_assertions)]
         hot_reload: super::hot_reload::HotReloadState::new(event_loop_proxy),
     };

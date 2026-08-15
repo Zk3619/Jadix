@@ -36,6 +36,54 @@ impl InteractiveBuilder {
         self
     }
 
+    pub fn on_mousedown(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mousedown(handler);
+        self
+    }
+
+    pub fn on_mouseup(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseup(handler);
+        self
+    }
+
+    pub fn on_mousemove(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mousemove(handler);
+        self
+    }
+
+    pub fn on_mouseover(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseover(handler);
+        self
+    }
+
+    pub fn on_mouseout(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseout(handler);
+        self
+    }
+
+    pub fn on_dblclick(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_dblclick(handler);
+        self
+    }
+
     pub fn on_hover(mut self, handler: impl FnMut(bool) + 'static) -> Self {
         self.el = self.el.on_hover(handler);
         self
@@ -48,6 +96,16 @@ impl InteractiveBuilder {
 
     pub fn focus_id(mut self, id: impl Into<String>) -> Self {
         self.el = self.el.focus_id(id);
+        self
+    }
+
+    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.cursor(value);
+        self
+    }
+
+    pub fn cursor_kind(mut self, c: crate::core::tree::CursorKind) -> Self {
+        self.el = self.el.cursor_kind(c);
         self
     }
 

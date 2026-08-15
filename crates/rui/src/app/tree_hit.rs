@@ -2,10 +2,9 @@ use std::cell::RefCell;
 
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::CursorIcon;
 
 use crate::core::tree::{
-    pointer_events_targets_children, pointer_events_targets_self, CursorKind, Element,
+    pointer_events_targets_children, pointer_events_targets_self, CursorKind, CursorValue, Element,
 };
 use crate::layout::layout_tree::portal_hit_passthrough;
 
@@ -118,11 +117,11 @@ pub(super) fn pick_cursor(
     x: f32,
     y: f32,
     scroll_acc: [f32; 2],
-) -> Option<CursorKind> {
+) -> Option<CursorValue> {
     pick_cursor_hit(el, x, y, scroll_acc).into_option()
 }
 
-fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerHit<CursorKind> {
+fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerHit<CursorValue> {
     if pointer_events_blocked(el) {
         return LayerHit::Miss;
     }
@@ -154,7 +153,7 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor) {
+            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor.clone()) {
                 LayerHit::Miss => {}
                 hit => return hit,
             }
@@ -163,7 +162,7 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor) {
+            match pick_cursor_hit(child, x, y, next_acc).bubble(el.cursor.clone()) {
                 LayerHit::Miss => {}
                 hit => return hit,
             }
@@ -175,20 +174,19 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
             return LayerHit::Miss;
         }
         // Claiming bounds occludes lower siblings even without a cursor kind.
-        LayerHit::Hit(el.cursor)
+        LayerHit::Hit(el.cursor.clone())
     } else {
         LayerHit::Miss
     }
 }
 
-pub(super) fn cursor_kind_to_winit(c: CursorKind) -> CursorIcon {
-    match c {
-        CursorKind::Default => CursorIcon::Default,
-        CursorKind::Pointer => CursorIcon::Pointer,
-        CursorKind::Text => CursorIcon::Text,
-        CursorKind::NotAllowed => CursorIcon::NotAllowed,
-        CursorKind::NwseResize => CursorIcon::NwseResize,
-    }
+pub(super) fn apply_cursor(
+    window: &winit::window::Window,
+    event_loop: Option<&winit::event_loop::ActiveEventLoop>,
+    cache: &mut crate::style::CustomCursorCache,
+    value: Option<CursorValue>,
+) {
+    crate::style::cursor_image::apply_cursor(window, event_loop, cache, value);
 }
 
 pub(super) fn find_bounds_by_focus_id(
@@ -460,7 +458,10 @@ pub(super) fn find_input_text_at(
             .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
             .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
         if let Some(rest) = rest {
-            if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3]
+            if x >= vx
+                && x <= vx + b[2]
+                && y >= vy
+                && y <= vy + b[3]
                 && !pointer_on_text_edit_adornment(el, x, y, scroll_acc)
             {
                 if let Some((bounds, text, style, scroll)) =
@@ -487,12 +488,7 @@ fn is_text_edit_focus_id(id: &str) -> bool {
 }
 
 /// True when `(x,y)` is on a clear/reveal control inside a text-edit chrome.
-fn pointer_on_text_edit_adornment(
-    el: &Element,
-    x: f32,
-    y: f32,
-    scroll_acc: [f32; 2],
-) -> bool {
+fn pointer_on_text_edit_adornment(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> bool {
     if pointer_events_blocked(el) {
         return false;
     }
@@ -517,13 +513,8 @@ fn pointer_on_text_edit_adornment(
     }
     let is_adornment = el.on_click.is_some()
         || el.text_style.font_family.as_deref() == Some("lucide")
-        || matches!(el.cursor, Some(CursorKind::Pointer));
-    is_adornment
-        && claims_own_bounds(el)
-        && x >= vx
-        && x <= vx + b[2]
-        && y >= vy
-        && y <= vy + b[3]
+        || el.cursor.as_ref().is_some_and(|c| c.kind == CursorKind::Pointer);
+    is_adornment && claims_own_bounds(el) && x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3]
 }
 
 fn is_selectable_static_text(el: &Element) -> bool {
@@ -1168,13 +1159,13 @@ mod textarea_text_hit_tests {
         icon.text = Some("x".into());
         icon.text_style.font_family = Some("lucide".into());
 
-        let mut btn = Element::new().on_click(|| {}).cursor_kind(CursorKind::Pointer);
+        let mut btn = Element::new()
+            .on_click(|| {})
+            .cursor_kind(CursorKind::Pointer);
         btn.layout_bounds = [176.0, 8.0, 20.0, 20.0];
         btn = btn.child(icon);
 
-        let mut chrome = Element::new()
-            .on_click(|| {})
-            .cursor_text();
+        let mut chrome = Element::new().on_click(|| {}).cursor_text();
         chrome.layout_bounds = [0.0, 0.0, 200.0, 36.0];
         chrome.style.overflow.x = Overflow::Hidden;
         chrome.style.overflow.y = Overflow::Hidden;

@@ -1,6 +1,6 @@
-use crate::core::tree::{CursorKind, Element};
+use crate::core::tree::{CursorValue, Element};
 
-pub fn pick_cursor(el: &Element, x: f32, y: f32) -> Option<CursorKind> {
+pub fn pick_cursor(el: &Element, x: f32, y: f32) -> Option<CursorValue> {
     for child in el.children.iter().rev() {
         if let Some(c) = pick_cursor(child, x, y) {
             return Some(c);
@@ -8,7 +8,7 @@ pub fn pick_cursor(el: &Element, x: f32, y: f32) -> Option<CursorKind> {
     }
     let b = el.layout_bounds;
     if x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3] {
-        el.cursor
+        el.cursor.clone()
     } else {
         None
     }

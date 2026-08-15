@@ -1,8 +1,10 @@
 //! Pointer event model: hit path, capture/bubble phases, and pointer capture.
 //!
-//! Existing leaf-only [`super::tree_hit::find_click`] remains for backward compatibility.
-//! New handlers (`on_pointer_down` / `on_context_menu` / `on_double_click`) participate in
-//! capture → target → bubble dispatch via [`dispatch_pointer`].
+//! Aligns with the DOM [`MouseEvent`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent)
+//! surface used by `click` / `dblclick` / `mousedown` / `mouseup` / `mousemove` /
+//! `mouseover` / `mouseout`. Existing leaf-only [`super::tree_hit::find_click`] remains
+//! for Label-`for` resolution. Handlers participate in capture → target → bubble
+//! via [`dispatch_pointer`].
 
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -15,7 +17,7 @@ use crate::layout::layout_tree::portal_hit_passthrough;
 
 use super::tree_hit;
 
-/// DOM-like event phase.
+/// DOM-like event phase ([`Event.eventPhase`](https://developer.mozilla.org/zh-CN/docs/Web/API/Event/eventPhase)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventPhase {
     Capture,
@@ -23,21 +25,79 @@ pub enum EventPhase {
     Bubble,
 }
 
-/// Pointer event delivered to [`Element`] handlers along the hit path.
-#[derive(Debug)]
-pub struct PointerEvent {
-    pub x: f32,
-    pub y: f32,
-    pub button: MouseButton,
-    pub phase: EventPhase,
-    /// Click count (1 = single, 2 = double, …).
-    pub detail: u8,
-    /// 当前正在分发的节点**可视**盒（窗口像素 `[x,y,w,h]`，已扣祖先 scroll）。
-    pub current_bounds: [f32; 4],
-    consumed: Cell<bool>,
+/// DOM `MouseEvent.button` (0 left / 1 middle / 2 right / 3 back / 4 forward).
+pub fn dom_button(button: MouseButton) -> i16 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+        MouseButton::Back => 3,
+        MouseButton::Forward => 4,
+        MouseButton::Other(n) => i16::try_from(n).unwrap_or(0),
+    }
 }
 
-impl PointerEvent {
+/// DOM `MouseEvent.buttons` bit for a winit button (1 left / 2 right / 4 middle / 8 back / 16 forward).
+pub fn buttons_mask_bit(button: MouseButton) -> u16 {
+    match button {
+        MouseButton::Left => 0x01,
+        MouseButton::Right => 0x02,
+        MouseButton::Middle => 0x04,
+        MouseButton::Back => 0x08,
+        MouseButton::Forward => 0x10,
+        MouseButton::Other(_) => 0,
+    }
+}
+
+/// DOM [`MouseEvent`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent).
+///
+/// `x` / `y` are viewport (client) coordinates in logical pixels — the same space as layout.
+/// [`PointerEvent`] is a compatibility alias.
+#[derive(Debug)]
+pub struct MouseEvent {
+    /// [`MouseEvent.clientX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientX) (logical px).
+    pub x: f32,
+    /// [`MouseEvent.clientY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientY) (logical px).
+    pub y: f32,
+    /// winit button that changed (`mousedown` / `mouseup` / `click`). `mousemove` uses the last changed button.
+    pub button: MouseButton,
+    pub phase: EventPhase,
+    /// [`UIEvent.detail`](https://developer.mozilla.org/zh-CN/docs/Web/API/UIEvent/detail) — click count.
+    pub detail: u8,
+    /// 当前正在分发的节点**可视**盒（窗口逻辑像素 `[x,y,w,h]`，已扣祖先 scroll）。
+    pub current_bounds: [f32; 4],
+    /// [`Event.type`](https://developer.mozilla.org/zh-CN/docs/Web/API/Event/type): `click`, `mousedown`, …
+    pub event_type: &'static str,
+    /// [`MouseEvent.buttons`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/buttons) bitmask.
+    pub buttons: u16,
+    pub alt_key: bool,
+    pub ctrl_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+    /// [`MouseEvent.movementX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/movementX)
+    pub movement_x: f32,
+    /// [`MouseEvent.movementY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/movementY)
+    pub movement_y: f32,
+    /// [`MouseEvent.screenX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/screenX) (physical px).
+    pub screen_x: f32,
+    /// [`MouseEvent.screenY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/screenY) (physical px).
+    pub screen_y: f32,
+    /// [`MouseEvent.pageX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/pageX) — same as client in a single window.
+    pub page_x: f32,
+    /// [`MouseEvent.pageY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/pageY)
+    pub page_y: f32,
+    /// [`MouseEvent.region`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/region) (`id` / `region` attr).
+    pub region: Option<String>,
+    /// [`MouseEvent.relatedTarget`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/relatedTarget) (`focus_id`).
+    pub related_target: Option<String>,
+    consumed: Cell<bool>,
+    default_prevented: Cell<bool>,
+}
+
+/// Compatibility alias — same type as [`MouseEvent`].
+pub type PointerEvent = MouseEvent;
+
+impl MouseEvent {
     pub fn new(x: f32, y: f32, button: MouseButton, detail: u8) -> Self {
         Self {
             x,
@@ -46,7 +106,64 @@ impl PointerEvent {
             phase: EventPhase::Target,
             detail,
             current_bounds: [0.0; 4],
+            event_type: "click",
+            buttons: 0,
+            alt_key: false,
+            ctrl_key: false,
+            meta_key: false,
+            shift_key: false,
+            movement_x: 0.0,
+            movement_y: 0.0,
+            screen_x: x,
+            screen_y: y,
+            page_x: x,
+            page_y: y,
+            region: None,
+            related_target: None,
             consumed: Cell::new(false),
+            default_prevented: Cell::new(false),
+        }
+    }
+
+    /// [`MouseEvent.clientX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientX)
+    #[inline]
+    pub fn client_x(&self) -> f32 {
+        self.x
+    }
+    /// [`MouseEvent.clientY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientY)
+    #[inline]
+    pub fn client_y(&self) -> f32 {
+        self.y
+    }
+    /// [`MouseEvent.offsetX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/offsetX) — relative to the current target padding edge.
+    #[inline]
+    pub fn offset_x(&self) -> f32 {
+        self.x - self.current_bounds[0]
+    }
+    /// [`MouseEvent.offsetY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/offsetY)
+    #[inline]
+    pub fn offset_y(&self) -> f32 {
+        self.y - self.current_bounds[1]
+    }
+    /// [`MouseEvent.button`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/button) DOM index.
+    #[inline]
+    pub fn button_index(&self) -> i16 {
+        dom_button(self.button)
+    }
+    /// [`MouseEvent.which`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/which) (1-based; deprecated on the Web).
+    #[inline]
+    pub fn which(&self) -> i16 {
+        self.button_index() + 1
+    }
+    /// [`MouseEvent.getModifierState()`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/getModifierState)
+    pub fn get_modifier_state(&self, key: &str) -> bool {
+        match key {
+            "Alt" | "AltGraph" => self.alt_key,
+            "Control" => self.ctrl_key,
+            "Meta" | "OS" => self.meta_key,
+            "Shift" => self.shift_key,
+            "Accel" => self.ctrl_key || self.meta_key,
+            _ => false,
         }
     }
 
@@ -54,33 +171,158 @@ impl PointerEvent {
         self.consumed.set(true);
     }
 
+    pub fn prevent_default(&self) {
+        self.default_prevented.set(true);
+    }
+
     pub fn is_consumed(&self) -> bool {
         self.consumed.get()
+    }
+
+    pub fn default_prevented(&self) -> bool {
+        self.default_prevented.get()
     }
 }
 
 pub type PointerHandler = Rc<RefCell<dyn FnMut(&PointerEvent)>>;
 
 /// One node on the hit path (root → … → leaf).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct HitPathEntry {
     pub focus_id: Option<String>,
     /// Label `attrs["for"]`（Solid `for`）→ 转发点击到匹配 `focus_id` 的控件。
     pub label_for: Option<String>,
-    pub on_pointer_down: Option<PointerHandler>,
-    pub on_pointer_up: Option<PointerHandler>,
+    pub on_mousedown: Option<PointerHandler>,
+    pub on_mouseup: Option<PointerHandler>,
     pub on_click: Option<Rc<RefCell<dyn FnMut()>>>,
     pub on_context_menu: Option<PointerHandler>,
     pub on_double_click: Option<PointerHandler>,
+    pub on_mousemove: Option<PointerHandler>,
+    pub on_mouseover: Option<PointerHandler>,
+    pub on_mouseout: Option<PointerHandler>,
     /// Element was marked `rui_hoisted_portal` (Solid body overlay surface).
     pub hoisted_portal: bool,
     /// `rui_portal_key` when present (stable portal identity after hoist).
     pub portal_key: Option<String>,
     /// `rui_floating` id when present (Select / Popover / Menu panel).
     pub floating_id: Option<String>,
+    /// Canvas-like [`MouseEvent.region`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/region).
+    pub region: Option<String>,
     /// 该节点可视盒（窗口像素，已扣祖先 `scroll_acc`）。与命中判定同一套坐标，
     /// 供 handler 把指针映射到局部逻辑坐标（Chart / ScrollArea 内控件）。
     pub bounds: [f32; 4],
+}
+
+impl HitPathEntry {
+    pub fn from_element(el: &Element, bounds: [f32; 4]) -> Self {
+        let region = el
+            .attrs
+            .get("region")
+            .or_else(|| el.attrs.get("id"))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Self {
+            focus_id: el.focus_id.clone(),
+            label_for: el
+                .attrs
+                .get(crate::components::label::ATTR_LABEL_FOR)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            on_mousedown: el.on_mousedown.clone(),
+            on_mouseup: el.on_mouseup.clone(),
+            on_click: el.on_click.clone(),
+            on_context_menu: el.on_context_menu.clone(),
+            on_double_click: el.on_double_click.clone(),
+            on_mousemove: el.on_mousemove.clone(),
+            on_mouseover: el.on_mouseover.clone(),
+            on_mouseout: el.on_mouseout.clone(),
+            hoisted_portal: el
+                .attrs
+                .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+                .map(|s| s.as_str())
+                == Some("1"),
+            portal_key: el
+                .attrs
+                .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            floating_id: el
+                .attrs
+                .get(crate::utils::popup::ATTR_FLOATING)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            region,
+            bounds,
+        }
+    }
+
+    pub fn target_key(&self) -> Option<String> {
+        self.focus_id
+            .clone()
+            .or_else(|| self.portal_key.clone())
+            .or_else(|| self.floating_id.clone())
+    }
+}
+
+fn bounds_close(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (*x - *y).abs() < 0.5)
+}
+
+/// Identity for LCA: `focus_id` / portal / floating, then handler `Rc`, then geometry.
+pub fn same_hit_node(a: &HitPathEntry, b: &HitPathEntry) -> bool {
+    match (&a.focus_id, &b.focus_id) {
+        (Some(x), Some(y)) => return x == y,
+        (Some(_), None) | (None, Some(_)) => {}
+        (None, None) => {}
+    }
+    match (&a.portal_key, &b.portal_key) {
+        (Some(x), Some(y)) => return x == y,
+        _ => {}
+    }
+    match (&a.floating_id, &b.floating_id) {
+        (Some(x), Some(y)) => return x == y,
+        _ => {}
+    }
+    if let (Some(ha), Some(hb)) = (&a.on_click, &b.on_click) {
+        if Rc::ptr_eq(ha, hb) {
+            return true;
+        }
+    }
+    if let (Some(ha), Some(hb)) = (&a.on_mousedown, &b.on_mousedown) {
+        if Rc::ptr_eq(ha, hb) {
+            return true;
+        }
+    }
+    bounds_close(a.bounds, b.bounds)
+        && a.label_for == b.label_for
+        && a.region == b.region
+        && a.hoisted_portal == b.hoisted_portal
+        && a.on_click.is_none() == b.on_click.is_none()
+        && a.on_mousedown.is_none() == b.on_mousedown.is_none()
+}
+
+/// DOM-like click target: nearest common ancestor of mousedown and mouseup hit paths.
+///
+/// `mouseup` handlers still use the live pointer path; only `click` / `dblclick` /
+/// legacy `on_click` are truncated to this prefix. A capture-only up path (single
+/// node) is matched against the press path so `set_pointer_capture` still clicks.
+pub fn click_dispatch_path(down: &[HitPathEntry], up: &[HitPathEntry]) -> Vec<HitPathEntry> {
+    let n = down.len().min(up.len());
+    let mut i = 0;
+    while i < n && same_hit_node(&down[i], &up[i]) {
+        i += 1;
+    }
+    if i > 0 {
+        return up[..i].to_vec();
+    }
+    for u in up.iter().rev() {
+        if let Some(idx) = down.iter().position(|d| same_hit_node(d, u)) {
+            let mut path = down[..=idx].to_vec();
+            path[idx] = u.clone();
+            return path;
+        }
+    }
+    Vec::new()
 }
 
 /// Collect the hit path from root to the deepest hit node (inclusive).
@@ -148,37 +390,7 @@ fn hit_path_rec(
 
     // Record this node before descending (root → leaf order).
     let entry_index = out.len();
-    let portal_key = el
-        .attrs
-        .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let floating_id = el
-        .attrs
-        .get(crate::utils::popup::ATTR_FLOATING)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    out.push(HitPathEntry {
-        focus_id: el.focus_id.clone(),
-        label_for: el
-            .attrs
-            .get(crate::components::label::ATTR_LABEL_FOR)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        on_pointer_down: el.on_pointer_down.clone(),
-        on_pointer_up: el.on_pointer_up.clone(),
-        on_click: el.on_click.clone(),
-        on_context_menu: el.on_context_menu.clone(),
-        on_double_click: el.on_double_click.clone(),
-        hoisted_portal: el
-            .attrs
-            .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
-            .map(|s| s.as_str())
-            == Some("1"),
-        portal_key,
-        floating_id,
-        bounds: [vx, vy, b[2], b[3]],
-    });
+    out.push(HitPathEntry::from_element(el, [vx, vy, b[2], b[3]]));
 
     let mut child_hit = false;
     let order = {
@@ -248,7 +460,7 @@ fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Elemen
 
 /// Dispatch pointer event along `path` (capture → target → bubble).
 ///
-/// - `on_pointer_down` / `on_pointer_up` / `on_context_menu` / `on_double_click` participate fully.
+/// - `on_mousedown` / `on_mouseup` / `on_context_menu` / `on_double_click` participate fully.
 /// - Legacy `on_click` fires once at the deepest node that has it on pointer **up**
 ///   (DOM-like click), unless a capture/target handler already called
 ///   [`PointerEvent::stop_propagation`] on that gesture.
@@ -261,6 +473,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     event.phase = EventPhase::Capture;
     for entry in path.iter().take(path.len().saturating_sub(1)) {
         event.current_bounds = entry.bounds;
+        event.region = entry.region.clone();
         fire_handler(entry, event, kind);
         if event.is_consumed() {
             return;
@@ -271,6 +484,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     event.phase = EventPhase::Target;
     let target = &path[path.len() - 1];
     event.current_bounds = target.bounds;
+    event.region = target.region.clone();
     fire_handler(target, event, kind);
     if event.is_consumed() {
         return;
@@ -280,6 +494,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     event.phase = EventPhase::Bubble;
     for entry in path.iter().rev().skip(1) {
         event.current_bounds = entry.bounds;
+        event.region = entry.region.clone();
         fire_handler(entry, event, kind);
         if event.is_consumed() {
             return;
@@ -294,29 +509,39 @@ pub enum PointerKind {
     Click,
     ContextMenu,
     DoubleClick,
+    Move,
+    Over,
+    Out,
+}
+
+fn fire_mouse(handler: &Option<PointerHandler>, event: &PointerEvent) {
+    if let Some(cb) = handler {
+        (*cb.borrow_mut())(event);
+    }
 }
 
 fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
     match kind {
         PointerKind::Down => {
-            if let Some(cb) = &entry.on_pointer_down {
-                (*cb.borrow_mut())(event);
-            }
+            fire_mouse(&entry.on_mousedown, event);
         }
         PointerKind::Up => {
-            if let Some(cb) = &entry.on_pointer_up {
-                (*cb.borrow_mut())(event);
-            }
+            fire_mouse(&entry.on_mouseup, event);
         }
         PointerKind::ContextMenu => {
-            if let Some(cb) = &entry.on_context_menu {
-                (*cb.borrow_mut())(event);
-            }
+            fire_mouse(&entry.on_context_menu, event);
+        }
+        PointerKind::Move => {
+            fire_mouse(&entry.on_mousemove, event);
+        }
+        PointerKind::Over => {
+            fire_mouse(&entry.on_mouseover, event);
+        }
+        PointerKind::Out => {
+            fire_mouse(&entry.on_mouseout, event);
         }
         PointerKind::DoubleClick => {
-            if let Some(cb) = &entry.on_double_click {
-                (*cb.borrow_mut())(event);
-            }
+            fire_mouse(&entry.on_double_click, event);
             // Also fire legacy on_click on target/bubble for convenience when detail>=2
             if event.phase != EventPhase::Capture {
                 if let Some(cb) = &entry.on_click {
@@ -407,14 +632,14 @@ mod tests {
 
         let mut leaf = Element::new();
         leaf.layout_bounds = [0.0, 0.0, 10.0, 10.0];
-        leaf.on_pointer_down = Some(Rc::new(RefCell::new(move |e: &PointerEvent| {
+        leaf.on_mousedown = Some(Rc::new(RefCell::new(move |e: &PointerEvent| {
             f1.set(f1.get() | 1);
             e.stop_propagation();
         })));
 
         let mut root = Element::new();
         root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
-        root.on_pointer_down = Some(Rc::new(RefCell::new(move |_e: &PointerEvent| {
+        root.on_mousedown = Some(Rc::new(RefCell::new(move |_e: &PointerEvent| {
             f2.set(f2.get() | 2);
         })));
         root.children.push(leaf);
@@ -425,7 +650,7 @@ mod tests {
         dispatch_pointer(&path, &mut ev, PointerKind::Down);
         assert_eq!(fired.get() & 1, 1);
         // Root capture still runs before leaf target; bubble must not re-fire root's down
-        // (we only fire on_pointer_down once per phase walk). Capture already ran root.
+        // (we only fire on_mousedown once per phase walk). Capture already ran root.
         assert!(ev.is_consumed());
     }
 
@@ -434,7 +659,7 @@ mod tests {
         let mut leaf = Element::new();
         leaf.layout_bounds = [0.0, 200.0, 80.0, 80.0];
         leaf.focus_id = Some("plot".into());
-        leaf.on_pointer_down = Some(Rc::new(RefCell::new(|_e: &PointerEvent| {})));
+        leaf.on_mousedown = Some(Rc::new(RefCell::new(|_e: &PointerEvent| {})));
 
         let mut viewport = Element::new().overflow("hidden");
         viewport.layout_bounds = [0.0, 0.0, 100.0, 100.0];
@@ -485,21 +710,185 @@ mod tests {
         assert_eq!(found.focus_id.as_deref(), Some("terms"));
 
         let path = [HitPathEntry {
-            focus_id: None,
             label_for: Some("terms".into()),
-            on_pointer_down: None,
-            on_pointer_up: None,
-            on_click: None,
-            on_context_menu: None,
-            on_double_click: None,
-            hoisted_portal: false,
-            portal_key: None,
-            floating_id: None,
-            bounds: [0.0; 4],
+            ..Default::default()
         }];
         let (cb, fid) = resolve_click_from_path(&row, &path);
         assert_eq!(fid.as_deref(), Some("terms"));
         (*cb.expect("forwarded click").borrow_mut())();
         assert_eq!(toggled.get(), 1);
+    }
+
+    #[test]
+    fn mouse_event_exposes_dom_fields() {
+        let mut ev = MouseEvent::new(40.0, 18.0, MouseButton::Left, 1);
+        ev.current_bounds = [10.0, 8.0, 100.0, 32.0];
+        ev.alt_key = true;
+        ev.buttons = 1;
+        ev.screen_x = 80.0;
+        ev.movement_x = 3.0;
+        assert_eq!(ev.client_x(), 40.0);
+        assert_eq!(ev.client_y(), 18.0);
+        assert!((ev.offset_x() - 30.0).abs() < 0.01);
+        assert!((ev.offset_y() - 10.0).abs() < 0.01);
+        assert_eq!(ev.button_index(), 0);
+        assert_eq!(ev.which(), 1);
+        assert!(ev.get_modifier_state("Alt"));
+        assert!(!ev.get_modifier_state("Shift"));
+        assert_eq!(ev.buttons, 1);
+        ev.prevent_default();
+        assert!(ev.default_prevented());
+    }
+
+    #[test]
+    fn mousedown_and_mouseover_dispatch() {
+        let downs = Rc::new(Cell::new(0u8));
+        let overs = Rc::new(Cell::new(0u8));
+        let d = downs.clone();
+        let o = overs.clone();
+
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [0.0, 0.0, 20.0, 20.0];
+        leaf = leaf
+            .on_mousedown(move |e| {
+                assert_eq!(e.event_type, "mousedown");
+                d.set(d.get() + 1);
+            })
+            .on_mouseover(move |e| {
+                assert_eq!(e.related_target.as_deref(), Some("prev"));
+                o.set(o.get() + 1);
+            });
+
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        root.children.push(leaf);
+
+        let path = hit_path(&root, 5.0, 5.0);
+        let mut down = MouseEvent::new(5.0, 5.0, MouseButton::Left, 1);
+        down.event_type = "mousedown";
+        dispatch_pointer(&path, &mut down, PointerKind::Down);
+        assert_eq!(downs.get(), 1);
+
+        let mut over = MouseEvent::new(5.0, 5.0, MouseButton::Left, 0);
+        over.event_type = "mouseover";
+        over.related_target = Some("prev".into());
+        dispatch_pointer(&path, &mut over, PointerKind::Over);
+        assert_eq!(overs.get(), 1);
+    }
+
+    #[test]
+    fn mousedown_is_alias_of_pointer_down_single_fire() {
+        let n = Rc::new(Cell::new(0u8));
+        let a = n.clone();
+        let b = n.clone();
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [0.0, 0.0, 20.0, 20.0];
+        leaf = leaf
+            .on_pointer_down(move |_e| {
+                a.set(a.get() + 1);
+            })
+            .on_mousedown(move |_e| {
+                b.set(b.get() + 10);
+            });
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        root.children.push(leaf);
+        let path = hit_path(&root, 5.0, 5.0);
+        let mut ev = MouseEvent::new(5.0, 5.0, MouseButton::Left, 1);
+        ev.event_type = "mousedown";
+        dispatch_pointer(&path, &mut ev, PointerKind::Down);
+        // Alias: later `on_mousedown` replaces `on_pointer_down`; still one dispatch.
+        assert_eq!(n.get(), 10);
+    }
+
+    fn click_tree() -> (Element, Rc<Cell<u32>>) {
+        let n = Rc::new(Cell::new(0u32));
+        let n2 = n.clone();
+        let mut btn = Element::new();
+        btn.layout_bounds = [50.0, 0.0, 40.0, 40.0];
+        btn.focus_id = Some("btn".into());
+        btn = btn.on_click(move || n2.set(n2.get() + 1));
+
+        let mut pad = Element::new();
+        pad.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        pad.focus_id = Some("pad".into());
+
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        root.focus_id = Some("root".into());
+        root.children.push(pad);
+        root.children.push(btn);
+        (root, n)
+    }
+
+    #[test]
+    fn click_ignores_press_outside_release_inside() {
+        let (root, n) = click_tree();
+        let down = hit_path(&root, 10.0, 10.0);
+        let up = hit_path(&root, 60.0, 10.0);
+        assert_eq!(down.last().unwrap().focus_id.as_deref(), Some("pad"));
+        assert_eq!(up.last().unwrap().focus_id.as_deref(), Some("btn"));
+        let click_path = click_dispatch_path(&down, &up);
+        let (cb, _) = resolve_click_from_path(&root, &click_path);
+        assert!(
+            cb.is_none(),
+            "DOM click target is the LCA; outer press + inner release must not fire the button"
+        );
+        assert_eq!(n.get(), 0);
+    }
+
+    #[test]
+    fn click_fires_when_press_and_release_share_the_button() {
+        let (root, n) = click_tree();
+        let down = hit_path(&root, 60.0, 10.0);
+        let up = hit_path(&root, 70.0, 12.0);
+        let click_path = click_dispatch_path(&down, &up);
+        let (cb, _) = resolve_click_from_path(&root, &click_path);
+        (*cb.expect("button click").borrow_mut())();
+        assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn click_fires_when_release_is_on_child_of_press_target() {
+        let n = Rc::new(Cell::new(0u32));
+        let n2 = n.clone();
+        let mut child = Element::new();
+        child.layout_bounds = [55.0, 5.0, 20.0, 20.0];
+        child.focus_id = Some("label".into());
+
+        let mut btn = Element::new();
+        btn.layout_bounds = [50.0, 0.0, 40.0, 40.0];
+        btn.focus_id = Some("btn".into());
+        btn = btn.on_click(move || n2.set(n2.get() + 1));
+        btn.children.push(child);
+
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        root.focus_id = Some("root".into());
+        root.children.push(btn);
+
+        let down = hit_path(&root, 60.0, 10.0);
+        let up = hit_path(&root, 62.0, 12.0);
+        assert!(down.iter().any(|e| e.focus_id.as_deref() == Some("btn")));
+        let click_path = click_dispatch_path(&down, &up);
+        let (cb, _) = resolve_click_from_path(&root, &click_path);
+        (*cb.expect("ancestor button").borrow_mut())();
+        assert_eq!(n.get(), 1);
+    }
+
+    #[test]
+    fn click_survives_pointer_capture_short_up_path() {
+        let (root, n) = click_tree();
+        let down = hit_path(&root, 60.0, 10.0);
+        let captured = down
+            .iter()
+            .find(|e| e.focus_id.as_deref() == Some("btn"))
+            .cloned()
+            .expect("btn on press path");
+        let up = vec![captured];
+        let click_path = click_dispatch_path(&down, &up);
+        let (cb, _) = resolve_click_from_path(&root, &click_path);
+        (*cb.expect("captured button").borrow_mut())();
+        assert_eq!(n.get(), 1);
     }
 }

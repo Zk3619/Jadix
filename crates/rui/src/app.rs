@@ -118,6 +118,13 @@ struct App {
     last_frame_time: std::time::Instant,
     modifiers: ModifiersState,
     left_button_down: bool,
+    /// DOM `MouseEvent.buttons` bitmask while buttons are held.
+    mouse_buttons: u16,
+    last_client_pos: Option<[f32; 2]>,
+    last_mouse_target: Option<String>,
+    last_mouse_path: Option<Vec<pointer_events::HitPathEntry>>,
+    /// Left-button `mousedown` hit path. `click` / `dblclick` use the LCA with mouseup.
+    click_press_path: Option<Vec<pointer_events::HitPathEntry>>,
     /// Last primary-button click for double-click detection.
     last_click_at: Option<std::time::Instant>,
     last_click_pos: [f32; 2],
@@ -186,6 +193,7 @@ struct App {
     ime_os_blur_at: Option<std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
     accesskit_adapter: Option<accesskit_winit::Adapter>,
+    custom_cursors: crate::style::CustomCursorCache,
     #[cfg(debug_assertions)]
     hot_reload: hot_reload::HotReloadState,
 }

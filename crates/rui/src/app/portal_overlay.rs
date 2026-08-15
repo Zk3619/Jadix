@@ -519,17 +519,9 @@ mod tests {
         assert_eq!(top_stacked_exclusive_id().as_deref(), Some("sel"));
 
         let on_dialog = [crate::app::pointer_events::HitPathEntry {
-            focus_id: None,
-            label_for: None,
-            on_pointer_down: None,
-            on_pointer_up: None,
-            on_click: None,
-            on_context_menu: None,
-            on_double_click: None,
             hoisted_portal: true,
             portal_key: Some("panel:dlg".into()),
-            floating_id: None,
-            bounds: [0.0; 4],
+            ..Default::default()
         }];
         assert!(
             !hit_path_on_top_exclusive_surface(&on_dialog),
@@ -537,17 +529,10 @@ mod tests {
         );
 
         let on_menu = [crate::app::pointer_events::HitPathEntry {
-            focus_id: None,
-            label_for: None,
-            on_pointer_down: None,
-            on_pointer_up: None,
-            on_click: None,
-            on_context_menu: None,
-            on_double_click: None,
             hoisted_portal: true,
             portal_key: Some("panel:sel".into()),
             floating_id: Some("sel".into()),
-            bounds: [0.0; 4],
+            ..Default::default()
         }];
         assert!(hit_path_on_top_exclusive_surface(&on_menu));
     }
@@ -592,17 +577,10 @@ mod tests {
         hoisted: bool,
     ) -> crate::app::pointer_events::HitPathEntry {
         crate::app::pointer_events::HitPathEntry {
-            focus_id: None,
-            label_for: None,
-            on_pointer_down: None,
-            on_pointer_up: None,
-            on_click: None,
-            on_context_menu: None,
-            on_double_click: None,
             hoisted_portal: hoisted,
             portal_key: portal_key.map(str::to_string),
             floating_id: floating_id.map(str::to_string),
-            bounds: [0.0; 4],
+            ..Default::default()
         }
     }
 

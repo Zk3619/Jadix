@@ -8,6 +8,8 @@
 mod animation;
 mod color;
 mod color_space;
+mod cursor;
+pub(crate) mod cursor_image;
 mod element_style;
 mod focus_ring;
 mod tailwind_leading;
@@ -27,6 +29,9 @@ pub use color_space::{
     linearize_display_srgb, linearize_display_srgb_component, mix_display_srgb_in_oklab,
     oklch_to_display_srgba,
 };
+pub use cursor::{CursorKind, CursorUrl, CursorValue};
+pub use cursor_image::register_cursor_rgba8;
+pub(crate) use cursor_image::CustomCursorCache;
 pub use element_style::{
     parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style, UnitSlot,
 };

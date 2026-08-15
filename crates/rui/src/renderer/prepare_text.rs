@@ -23,9 +23,7 @@ use super::emoji_layout;
 use super::emoji_svg;
 use super::font_loader;
 use super::text::RuiTextRenderer;
-use super::text_hit::{
-    best_font_family, measure_prefix_width, truncate_with_ellipsis,
-};
+use super::text_hit::{best_font_family, measure_prefix_width, truncate_with_ellipsis};
 use super::twemoji_name;
 use super::InstanceInput;
 
@@ -1758,7 +1756,12 @@ pub fn prepare_text_frame(
                 info.width.max(1.0)
             }
         } else if nowrap {
-            nowrap_buffer_width(st.overflow, st.input_caret.is_none(), info.width, info.width)
+            nowrap_buffer_width(
+                st.overflow,
+                st.input_caret.is_none(),
+                info.width,
+                info.width,
+            )
         } else {
             info.width.max(1.0)
         };
@@ -1814,21 +1817,20 @@ pub fn prepare_text_frame(
         } else {
             resolve_text_align(st.align, st.direction)
         };
-        let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
-            && st.input_caret.is_none()
-        {
-            Cow::Owned(truncate_with_ellipsis(
-                unsafe { &mut *text_renderer.font_system },
-                info.text.as_str(),
-                scaled_size,
-                line_height,
-                font_weight,
-                family,
-                scaled_w.max(0.0),
-            ))
-        } else {
-            Cow::Borrowed(info.text.as_str())
-        };
+        let display_text: Cow<'_, str> =
+            if st.overflow == TextOverflow::Ellipsis && st.input_caret.is_none() {
+                Cow::Owned(truncate_with_ellipsis(
+                    unsafe { &mut *text_renderer.font_system },
+                    info.text.as_str(),
+                    scaled_size,
+                    line_height,
+                    font_weight,
+                    family,
+                    scaled_w.max(0.0),
+                ))
+            } else {
+                Cow::Borrowed(info.text.as_str())
+            };
         let shape_text: Cow<'_, str> = match info.shape_suffix.as_deref() {
             Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", display_text, s)),
             _ => display_text,
@@ -3236,10 +3238,7 @@ mod hidden_scroll_cull_tests {
             shifted.is_none(),
             "shifted viewport-sized rect must miss the field"
         );
-        let cull = clip_rect_to_bounds(
-            [shifted_x + scroll, 0.0, field[2], field[3]],
-            Some(field),
-        );
+        let cull = clip_rect_to_bounds([shifted_x + scroll, 0.0, field[2], field[3]], Some(field));
         assert!(cull.is_some(), "unshifted origin must overlap the field");
     }
 

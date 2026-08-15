@@ -462,8 +462,8 @@ fn take_hoisted_from_hosts(node: &mut Element, out: &mut HashMap<String, Element
 
 fn portal_root_defaults_to_box_none(el: &Element) -> bool {
     el.on_click.is_none()
-        && el.on_pointer_down.is_none()
-        && el.on_pointer_up.is_none()
+        && el.on_mousedown.is_none()
+        && el.on_mouseup.is_none()
         && el.on_context_menu.is_none()
         && el.on_double_click.is_none()
 }
@@ -966,7 +966,7 @@ pub struct RenderResult {
     /// Index splits: `[0..start)` = page, `[start..)` = portal overlay stack.
     pub overlay_split: OverlayPaintSplit,
     pub scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>, // (rest, bounds, max_scroll, content_size)
-    pub hover_cursor: Option<crate::core::tree::CursorKind>,
+    pub hover_cursor: Option<crate::core::tree::CursorValue>,
     pub prof: LayoutProfileMs,
 }
 
@@ -1447,10 +1447,8 @@ impl LayoutTree {
         if let Some(text) = &element.text {
             if element.children.is_empty() {
                 let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
-                self.text_measurements.insert(
-                    node_id,
-                    text_measure_meta(element, text.clone(), is_icon),
-                );
+                self.text_measurements
+                    .insert(node_id, text_measure_meta(element, text.clone(), is_icon));
                 return;
             }
         }
@@ -1930,10 +1928,8 @@ impl LayoutTree {
             if child_nodes.is_empty() {
                 let text_clone = text.clone();
                 let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
-                self.text_measurements.insert(
-                    node_id,
-                    text_measure_meta(element, text_clone, is_icon),
-                );
+                self.text_measurements
+                    .insert(node_id, text_measure_meta(element, text_clone, is_icon));
             }
         }
 
@@ -1958,7 +1954,7 @@ impl LayoutTree {
         text_nodes: &mut Vec<TextLayoutInfo>,
         input_chrome_instances: &mut Vec<InstanceInput>,
         scroll_metrics: &mut Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
-        hover_cursor: &mut Option<crate::core::tree::CursorKind>,
+        hover_cursor: &mut Option<crate::core::tree::CursorValue>,
         _scroll_only: bool,
         scrollbar_overlay_collect: bool,
         thumb_geometry_override: Option<[f32; 4]>,
@@ -2097,7 +2093,7 @@ impl LayoutTree {
             && mouse_pos[1] >= visible_rect[1]
             && mouse_pos[1] <= visible_rect[1] + visible_rect[3]
         {
-            if let Some(c) = element.cursor {
+            if let Some(c) = element.cursor.clone() {
                 *hover_cursor = Some(c);
             }
         }

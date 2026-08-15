@@ -602,6 +602,11 @@ impl ButtonBuilder {
         self
     }
 
+    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+        self.container = self.container.cursor(value);
+        self
+    }
+
     pub fn truncate(mut self, on: bool) -> Self {
         self.truncate = on;
         self
@@ -879,7 +884,7 @@ impl From<ButtonBuilder> for Element {
         let cubic_cb = use_ui_transition_cubic(&btn_hover_cubic_key(&builder.id), 0.0);
         let hover_easing = builder.hover_easing.clone();
 
-        interactive(el)
+        let mut el: Element = interactive(el)
             .focus_id(builder.id)
             .focusable(!disabled)
             .on_hover(move |h| {
@@ -909,7 +914,15 @@ impl From<ButtonBuilder> for Element {
                     }
                 }
             })
-            .into()
+            .into();
+        if el.cursor.is_none() {
+            el = el.cursor_kind(if disabled {
+                crate::core::tree::CursorKind::NotAllowed
+            } else {
+                crate::core::tree::CursorKind::Pointer
+            });
+        }
+        el
     }
 }
 

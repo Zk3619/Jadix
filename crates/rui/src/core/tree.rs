@@ -9,19 +9,11 @@ pub use crate::layout::dimension::{
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
-    parse_color, parse_text_color, LineStyle, TextDecorationStyle, TextOverflow, TextStyle,
+    parse_color, parse_text_color, CursorKind, CursorValue, LineStyle, TextDecorationStyle,
+    TextOverflow,
+    TextStyle,
 };
 pub use crate::style::{Style, UnitSlot};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CursorKind {
-    Default,
-    Pointer,
-    Text,
-    NotAllowed,
-    /// 对角缩放（Textarea 右下角 grip）。
-    NwseResize,
-}
 
 /// Pointer hit policy for [`Element`] (`rui_pointer_events`), RN-aligned subset.
 ///
@@ -260,20 +252,33 @@ pub struct Element {
     pub layout_bounds: [f32; 4],
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
-    /// Pointer down with capture/bubble ([`crate::app::pointer_events::PointerEvent`]).
-    pub on_pointer_down: Option<
+    /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
+    /// [`Self::on_pointer_down`] is a compatibility alias of this slot.
+    pub on_mousedown: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
-    /// Pointer up with capture/bubble.
-    pub on_pointer_up: Option<
+    /// DOM `mouseup`. [`Self::on_pointer_up`] is a compatibility alias.
+    pub on_mouseup: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
     /// Right-click / context menu.
     pub on_context_menu: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
-    /// Double-click (detail >= 2).
+    /// Double-click (detail >= 2). DOM `dblclick`. [`Self::on_dblclick`] is an alias.
     pub on_double_click: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// DOM `mousemove`.
+    pub on_mousemove: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// DOM `mouseover` (bubbles; [`crate::app::pointer_events::MouseEvent::related_target`] is the node being left).
+    pub on_mouseover: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// DOM `mouseout` (bubbles; [`crate::app::pointer_events::MouseEvent::related_target`] is the node being entered).
+    pub on_mouseout: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
     /// Keyboard on focused node. Return `true` if the event is consumed.
@@ -282,7 +287,7 @@ pub struct Element {
     pub on_unmount: Option<std::rc::Rc<UnmountHook>>,
     pub focus_id: Option<String>,
     pub focusable: bool,
-    pub cursor: Option<CursorKind>,
+    pub cursor: Option<CursorValue>,
     pub scroll_offset: [f32; 2],
     /// True if this node or any descendant is a scroll viewport (`scroll:` focus id).
     /// Used to prune subtrees in the ViewportsOnly scrollbar prepass (see
@@ -520,10 +525,13 @@ impl Element {
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
             on_click: None,
             on_hover: None,
-            on_pointer_down: None,
-            on_pointer_up: None,
+            on_mousedown: None,
+            on_mouseup: None,
             on_context_menu: None,
             on_double_click: None,
+            on_mousemove: None,
+            on_mouseover: None,
+            on_mouseout: None,
             on_key_down: None,
             on_unmount: None,
             focus_id: None,
@@ -582,9 +590,17 @@ impl Element {
     }
 
     pub fn cursor_kind(mut self, c: CursorKind) -> Self {
-        self.cursor = Some(c);
+        self.cursor = Some(c.into());
         self
     }
+
+    /// CSS [`cursor`](https://developer.mozilla.org/zh-CN/docs/Web/CSS/Reference/Properties/cursor)。
+    /// `inherit` / `unset` 清除本节点声明（沿用祖先）。
+    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+        self.cursor = CursorValue::parse_css(value.as_ref());
+        self
+    }
+
     pub fn cursor_text(self) -> Self {
         self.cursor_kind(CursorKind::Text)
     }
@@ -608,20 +624,38 @@ impl Element {
         self
     }
 
-    pub fn on_pointer_down(
+    /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
+    pub fn on_mousedown(
         mut self,
         handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
     ) -> Self {
-        self.on_pointer_down = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self.on_mousedown = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
     }
 
-    pub fn on_pointer_up(
+    /// DOM [`mouseup`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mouseup_event).
+    pub fn on_mouseup(
         mut self,
         handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
     ) -> Self {
-        self.on_pointer_up = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self.on_mouseup = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
+    }
+
+    /// Compatibility alias of [`Self::on_mousedown`].
+    pub fn on_pointer_down(
+        self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mousedown(handler)
+    }
+
+    /// Compatibility alias of [`Self::on_mouseup`].
+    pub fn on_pointer_up(
+        self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mouseup(handler)
     }
 
     pub fn on_context_menu(
@@ -637,6 +671,41 @@ impl Element {
         handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
     ) -> Self {
         self.on_double_click = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    /// DOM `dblclick` — alias of [`Self::on_double_click`].
+    pub fn on_dblclick(
+        self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_double_click(handler)
+    }
+
+    /// DOM [`mousemove`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousemove_event).
+    pub fn on_mousemove(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mousemove = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    /// DOM [`mouseover`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mouseover_event).
+    pub fn on_mouseover(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mouseover = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    /// DOM [`mouseout`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mouseout_event).
+    pub fn on_mouseout(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mouseout = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
     }
 
@@ -1607,7 +1676,7 @@ impl Element {
             list_id.as_ref(),
             index,
         ));
-        self.cursor = Some(CursorKind::Pointer);
+        self.cursor = Some(CursorKind::Grab.into());
         self
     }
 

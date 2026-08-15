@@ -160,7 +160,7 @@ fn wire_switch_captions(
                 );
             }
             if lbl.cursor.is_none() {
-                lbl.cursor = Some(crate::core::tree::CursorKind::Pointer);
+                lbl.cursor = Some(crate::core::tree::CursorKind::Pointer.into());
             }
             lbl
         } else {

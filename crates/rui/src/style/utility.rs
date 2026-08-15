@@ -660,6 +660,10 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             *el = std::mem::take(el).pointer_events_box_none();
             LayoutStatus::Clean
         }
+        KnownUtility::Cursor(kw) => {
+            *el = std::mem::take(el).cursor(kw);
+            LayoutStatus::Clean
+        }
         KnownUtility::AspectRatio(r) => {
             if el.style.aspect_ratio != Some(r) {
                 el.style.aspect_ratio = Some(r);

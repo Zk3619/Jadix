@@ -4,6 +4,7 @@
 
 pub mod core;
 pub mod layout;
+pub mod media;
 pub mod renderer;
 pub mod style;
 
@@ -37,7 +38,7 @@ pub mod reactivity {
     pub use crate::core::resource::{Resource, ResourceState};
 }
 
-pub use core::tree::{CursorKind, PointerEvents};
+pub use core::tree::{CursorKind, CursorValue, PointerEvents};
 pub use rui_macros::*;
 
 /// Default stable anchor id for [`app::reactive::reactive_anchor`] / [`app::reactive::reactive_placeholder`]
@@ -122,14 +123,44 @@ macro_rules! bind_style {
 
 pub fn init() {}
 
-/// 将 RGBA8 贴图排队上传到 GPU，供 [`components::Image`](crate::components::Image) 等通过 `texture_key` 引用。
+/// 将 RGBA8 贴图排队上传到 GPU，供 [`components::Image`](crate::components::Image) 等通过 `texture` 引用。
 pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
+}
+
+/// 解码图像字节并排队上传（PNG/ICO/BMP；JPEG/GIF/WebP/SVG 见 features）。
+pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
+    crate::app::pending_images::queue_image_from_bytes(id, bytes)
+}
+
+/// 从本地路径 / `data:` URL 解码并排队。禁止 `http(s)`。
+pub fn queue_image_from_src(id: impl Into<String>, src: impl AsRef<str>) -> bool {
+    crate::app::pending_images::queue_image_from_src(id, src.as_ref())
+}
+
+pub fn queue_image_from_path(id: impl Into<String>, path: impl AsRef<str>) -> bool {
+    crate::app::pending_images::queue_image_from_path(id, path)
+}
+
+/// 解码图像为 RGBA8（不上传 GPU）。
+pub fn decode_image_bytes(bytes: &[u8]) -> Option<crate::media::DecodedImage> {
+    crate::media::decode_bytes(bytes, crate::media::DecodeOptions::image())
+}
+
+/// 从路径或 `data:` URL 解码为 RGBA8。
+pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedImage> {
+    crate::media::load_src(src.as_ref(), crate::media::DecodeOptions::image())
+}
+
+/// 注册自定义光标 RGBA（`cursor: url(#id)` / `url(cursor:id)`）。
+pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
+    crate::style::register_cursor_rgba8(id, width, height, rgba);
 }
 
 pub use app::damage::{
     full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
 };
+pub use app::pointer_events::{MouseEvent, PointerEvent};
 pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled};
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,

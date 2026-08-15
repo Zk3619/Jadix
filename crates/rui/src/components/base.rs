@@ -297,6 +297,10 @@ impl BaseComponentBuilder {
         self.el = self.el.pointer_events(mode);
         self
     }
+    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.cursor(value);
+        self
+    }
     pub fn bottom(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.bottom(val);
         self

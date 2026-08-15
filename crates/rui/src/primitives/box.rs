@@ -471,6 +471,11 @@ impl BoxBuilder {
         self
     }
 
+    pub fn cursor(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.cursor(value);
+        self
+    }
+
     pub fn top(mut self, val: impl IntoCssDim) -> Self {
         self.el = self.el.top(val);
         self

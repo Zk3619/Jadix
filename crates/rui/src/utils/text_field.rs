@@ -286,7 +286,11 @@ pub fn ensure_caret_visible_scroll_x(
     // Extra `pad` so a caret sitting on `content_w` is not flush with the clip edge.
     let max_sx = (content_w + pad - viewport_w).max(0.0);
     if !viewport_w.is_finite() || viewport_w < 4.0 {
-        return if scroll_x > 0.5 { 0.0 } else { scroll_x.max(0.0) };
+        return if scroll_x > 0.5 {
+            0.0
+        } else {
+            scroll_x.max(0.0)
+        };
     }
     if max_sx < 0.5 {
         return 0.0;
@@ -579,6 +583,9 @@ mod tests {
         // caret at content end: pan 2px past text so the 2px caret is inside the viewport
         let end = ensure_caret_visible_scroll_x(100.0, 100.0, 40.0, 0.0);
         assert!((end - 62.0).abs() < 0.01, "end caret scroll={end}");
-        assert!(100.0 - end <= 40.0 - 1.5, "caret must sit inside the viewport");
+        assert!(
+            100.0 - end <= 40.0 - 1.5,
+            "caret must sit inside the viewport"
+        );
     }
 }

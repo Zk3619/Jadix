@@ -263,7 +263,7 @@ mod tests {
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut el, 300.0, 140.0, [-1.0, -1.0]);
         fn find_pd(el: &Element) -> Option<&Element> {
-            if el.on_pointer_down.is_some() {
+            if el.on_mousedown.is_some() {
                 return Some(el);
             }
             el.children.iter().find_map(find_pd)
@@ -305,7 +305,7 @@ mod tests {
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
         fn find_all_pd(el: &Element, out: &mut Vec<[f32; 4]>) {
-            if el.on_pointer_down.is_some() && el.get_attr("rui_chart").is_some() {
+            if el.on_mousedown.is_some() && el.get_attr("rui_chart").is_some() {
                 out.push(el.layout_bounds);
             }
             for c in &el.children {
@@ -845,7 +845,7 @@ mod tests {
         viewport.children.push(content);
 
         fn find_pd(el: &Element) -> Option<&Element> {
-            if el.on_pointer_down.is_some() && el.get_attr("rui_chart").is_some() {
+            if el.on_mousedown.is_some() && el.get_attr("rui_chart").is_some() {
                 return Some(el);
             }
             el.children.iter().find_map(find_pd)
@@ -867,7 +867,7 @@ mod tests {
         );
         let plot_entry = path
             .iter()
-            .find(|e| e.on_pointer_down.is_some())
+            .find(|e| e.on_mousedown.is_some())
             .expect("plot handler on path");
         assert!(
             (plot_entry.bounds[1] - vy).abs() < 2.0,

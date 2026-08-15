@@ -577,7 +577,7 @@ impl From<SliderBuilder> for Element {
         if disabled {
             el = el.opacity(0.5).cursor_not_allowed();
         } else {
-            el = el.cursor_kind(crate::core::tree::CursorKind::Pointer);
+            el = el.cursor_kind(crate::core::tree::CursorKind::EwResize);
         }
 
         let sync_value = val;
@@ -753,7 +753,7 @@ mod tests {
         let path = hit_path(&root, x, y);
         assert!(!path.is_empty(), "expected hit path");
         assert!(
-            path.iter().any(|e| e.on_pointer_down.is_some()),
+            path.iter().any(|e| e.on_mousedown.is_some()),
             "root handler must be on path"
         );
         let mut pev = PointerEvent::new(x, y, winit::event::MouseButton::Left, 1);

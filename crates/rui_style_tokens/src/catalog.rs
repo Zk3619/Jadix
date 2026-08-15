@@ -130,6 +130,8 @@ pub enum KnownUtility<'a> {
     AnimateSpin,
     /// `animate-none` — clear animation (`rui_animate=none`).
     AnimateNone,
+    /// Tailwind `cursor-*` (CSS `cursor` keywords).
+    Cursor(&'a str),
     /// Marker: this element is a `group` / `group/name` for `group-hover:` descendants.
     GroupMarker {
         name: Option<&'a str>,
@@ -324,6 +326,12 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "box-border" => return Some(KnownUtility::BoxBorder),
         "box-content" => return Some(KnownUtility::BoxContent),
         _ => {}
+    }
+
+    if let Some(rest) = token.strip_prefix("cursor-") {
+        if !rest.is_empty() {
+            return Some(KnownUtility::Cursor(rest));
+        }
     }
 
     if let Some(name) = token.strip_prefix("group/") {
@@ -793,5 +801,22 @@ mod tests {
             classify_utility("animate-none"),
             Some(KnownUtility::AnimateNone)
         ));
+    }
+
+    #[test]
+    fn cursor_utility_classes() {
+        assert!(matches!(
+            classify_utility("cursor-pointer"),
+            Some(KnownUtility::Cursor("pointer"))
+        ));
+        assert!(matches!(
+            classify_utility("cursor-not-allowed"),
+            Some(KnownUtility::Cursor("not-allowed"))
+        ));
+        assert!(matches!(
+            classify_utility("cursor-ew-resize"),
+            Some(KnownUtility::Cursor("ew-resize"))
+        ));
+        assert!(classify_utility("cursor-").is_none());
     }
 }

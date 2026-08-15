@@ -109,7 +109,7 @@ pub(super) struct AppState {
     #[cfg(debug_assertions)]
     last_applied_template_hash: HashMap<String, String>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
-    pub(super) last_hover_cursor: Option<crate::core::tree::CursorKind>,
+    pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
     pub(super) text_backend: TextRendererBackend,
     /// Latest `WindowEvent::Resized` size. `inner_size()` can briefly lag during maximize; merging
     /// avoids a one-frame swapchain smaller than the DWM client area (black letterboxing at edges).

@@ -458,7 +458,11 @@ mod tests {
         );
         let right = hit_test_input_text_index(&mut fs, text, 80.0, 10.0, bounds, &style, 1.0);
         let right_edge = hit_test_input_text_index(&mut fs, text, 50.0, 10.0, bounds, &style, 1.0);
-        assert_eq!(right, text.len(), "click in the right padding must go to line end");
+        assert_eq!(
+            right,
+            text.len(),
+            "click in the right padding must go to line end"
+        );
         assert!(
             right >= right_edge,
             "drag right of the box must move caret toward the end (right={right} edge={right_edge})"

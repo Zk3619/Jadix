@@ -1,7 +1,7 @@
 use winit::{
     event::{ElementState, MouseButton, MouseScrollDelta},
     event_loop::ActiveEventLoop,
-    window::{CursorIcon, WindowId},
+    window::WindowId,
 };
 
 use super::state::ScrollbarUpdateMode;
@@ -444,10 +444,113 @@ impl super::App {
         crate::style::use_scrollbar_visibility_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
     }
 
+    fn update_mouse_buttons(&mut self, button: MouseButton, state: ElementState) {
+        let bit = super::pointer_events::buttons_mask_bit(button);
+        match state {
+            ElementState::Pressed => self.mouse_buttons |= bit,
+            ElementState::Released => self.mouse_buttons &= !bit,
+        }
+    }
+
+    fn movement_delta(&self, x: f32, y: f32) -> [f32; 2] {
+        match self.last_client_pos {
+            Some([lx, ly]) => [x - lx, y - ly],
+            None => [0.0, 0.0],
+        }
+    }
+
+    fn build_mouse_event(
+        &self,
+        x: f32,
+        y: f32,
+        button: MouseButton,
+        detail: u8,
+        event_type: &'static str,
+        related_target: Option<String>,
+    ) -> super::pointer_events::MouseEvent {
+        let [mx, my] = self.movement_delta(x, y);
+        let mut ev = super::pointer_events::MouseEvent::new(x, y, button, detail);
+        ev.event_type = event_type;
+        ev.buttons = self.mouse_buttons;
+        ev.alt_key = self.modifiers.alt_key();
+        ev.ctrl_key = self.modifiers.control_key();
+        ev.meta_key = self.modifiers.super_key();
+        ev.shift_key = self.modifiers.shift_key();
+        ev.movement_x = mx;
+        ev.movement_y = my;
+        ev.screen_x = self.cursor_pos.x as f32;
+        ev.screen_y = self.cursor_pos.y as f32;
+        ev.page_x = x;
+        ev.page_y = y;
+        ev.related_target = related_target;
+        ev
+    }
+
+    fn dispatch_mouse_path(
+        &mut self,
+        path: &[super::pointer_events::HitPathEntry],
+        x: f32,
+        y: f32,
+        button: MouseButton,
+        detail: u8,
+        event_type: &'static str,
+        kind: super::pointer_events::PointerKind,
+        related_target: Option<String>,
+    ) -> super::pointer_events::MouseEvent {
+        let mut ev = self.build_mouse_event(x, y, button, detail, event_type, related_target);
+        super::pointer_events::dispatch_pointer(path, &mut ev, kind);
+        ev
+    }
+
+    fn sync_mouse_enter_leave(
+        &mut self,
+        x: f32,
+        y: f32,
+        path: &[super::pointer_events::HitPathEntry],
+        button: MouseButton,
+    ) {
+        let new_key = path.last().and_then(|e| e.target_key());
+        if self.last_mouse_target.as_deref() != new_key.as_deref() {
+            if let Some(old_path) = self.last_mouse_path.take() {
+                let related = new_key.clone();
+                let _ = self.dispatch_mouse_path(
+                    &old_path,
+                    x,
+                    y,
+                    button,
+                    0,
+                    "mouseout",
+                    super::pointer_events::PointerKind::Out,
+                    related,
+                );
+            }
+            if !path.is_empty() {
+                let related = self.last_mouse_target.clone();
+                let _ = self.dispatch_mouse_path(
+                    path,
+                    x,
+                    y,
+                    button,
+                    0,
+                    "mouseover",
+                    super::pointer_events::PointerKind::Over,
+                    related,
+                );
+            }
+            self.last_mouse_target = new_key;
+        }
+        self.last_mouse_path = if path.is_empty() {
+            None
+        } else {
+            Some(path.to_vec())
+        };
+    }
+
     pub(super) fn handle_cursor_moved(
         &mut self,
         id: WindowId,
         position: winit::dpi::PhysicalPosition<f64>,
+        event_loop: &ActiveEventLoop,
     ) {
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -624,21 +727,31 @@ impl super::App {
         let cursor_pick = super::tree_hit::pick_cursor(&state.root_element, x, y, [0.0, 0.0]);
         let mut to_run = Vec::new();
         super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
+        let mouse_path = super::pointer_events::hit_path(&state.root_element, x, y);
 
         // Always apply: occluders (modal underlay) return None and must reset to Default,
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
-        window.set_cursor(
-            match cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
-                crate::core::tree::CursorKind::Pointer => winit::window::CursorIcon::Pointer,
-                crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                crate::core::tree::CursorKind::NotAllowed => winit::window::CursorIcon::NotAllowed,
-                crate::core::tree::CursorKind::NwseResize => winit::window::CursorIcon::NwseResize,
-                crate::core::tree::CursorKind::Default => winit::window::CursorIcon::Default,
-            },
+        super::tree_hit::apply_cursor(
+            &window,
+            Some(event_loop),
+            &mut self.custom_cursors,
+            cursor_pick.clone(),
         );
 
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
+        self.sync_mouse_enter_leave(x, y, &mouse_path, MouseButton::Left);
+        let _ = self.dispatch_mouse_path(
+            &mouse_path,
+            x,
+            y,
+            MouseButton::Left,
+            0,
+            "mousemove",
+            super::pointer_events::PointerKind::Move,
+            None,
+        );
+        self.last_client_pos = Some([x, y]);
 
         let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
@@ -775,16 +888,30 @@ impl super::App {
             window.request_redraw();
         }
         if self.textarea_resize_drag.is_some() {
-            window.set_cursor(CursorIcon::NwseResize);
+            super::tree_hit::apply_cursor(
+                &window,
+                Some(event_loop),
+                &mut self.custom_cursors,
+                Some(crate::core::tree::CursorKind::NwseResize.into()),
+            );
+        } else if self.drag_reorder.is_some() && self.left_button_down {
+            super::tree_hit::apply_cursor(
+                &window,
+                Some(event_loop),
+                &mut self.custom_cursors,
+                Some(crate::core::tree::CursorKind::Grabbing.into()),
+            );
         } else {
-            match cursor_pick {
-                Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),
-                None => window.set_cursor(CursorIcon::Default),
-            }
+            super::tree_hit::apply_cursor(
+                &window,
+                Some(event_loop),
+                &mut self.custom_cursors,
+                cursor_pick,
+            );
         }
     }
 
-    pub(super) fn handle_cursor_left(&mut self, id: WindowId) {
+    pub(super) fn handle_cursor_left(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -792,6 +919,21 @@ impl super::App {
         };
         let window = state.window.clone();
         drop(state_borrow);
+
+        if let Some(old_path) = self.last_mouse_path.take() {
+            let [x, y] = self.last_client_pos.unwrap_or([0.0, 0.0]);
+            let _ = self.dispatch_mouse_path(
+                &old_path,
+                x,
+                y,
+                MouseButton::Left,
+                0,
+                "mouseout",
+                super::pointer_events::PointerKind::Out,
+                None,
+            );
+            self.last_mouse_target = None;
+        }
 
         let mut changed = false;
         if let Some((prev_rest, prev_axis)) = self.hover_scroll_axis.take() {
@@ -807,9 +949,25 @@ impl super::App {
         if changed {
             window.request_redraw();
         }
+        super::tree_hit::apply_cursor(
+            &window,
+            Some(event_loop),
+            &mut self.custom_cursors,
+            None,
+        );
     }
 
-    pub(super) fn handle_mouse_input(&mut self, id: WindowId, element_state: ElementState) {
+    pub(super) fn handle_mouse_input(
+        &mut self,
+        id: WindowId,
+        element_state: ElementState,
+        event_loop: Option<&ActiveEventLoop>,
+    ) {
+        if element_state == ElementState::Pressed {
+            // Drop a stale press path if this gesture never reaches mousedown dispatch
+            // (scrollbar / resize / reorder early-return).
+            self.click_press_path = None;
+        }
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -1042,7 +1200,12 @@ impl super::App {
                         focus_visible.set(false);
                         self.left_button_down = true;
                         if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                            st.window.set_cursor(winit::window::CursorIcon::NwseResize);
+                            super::tree_hit::apply_cursor(
+                                &st.window,
+                                event_loop,
+                                &mut self.custom_cursors,
+                                Some(crate::core::tree::CursorKind::NwseResize.into()),
+                            );
                             st.window.request_redraw();
                         }
                         return;
@@ -1109,35 +1272,10 @@ impl super::App {
                 if let Some(el) =
                     super::pointer_events::find_by_focus_id(&state.root_element, id.as_str())
                 {
-                    vec![super::pointer_events::HitPathEntry {
-                        focus_id: el.focus_id.clone(),
-                        label_for: el
-                            .attrs
-                            .get(crate::components::label::ATTR_LABEL_FOR)
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                        on_pointer_down: el.on_pointer_down.clone(),
-                        on_pointer_up: el.on_pointer_up.clone(),
-                        on_click: el.on_click.clone(),
-                        on_context_menu: el.on_context_menu.clone(),
-                        on_double_click: el.on_double_click.clone(),
-                        hoisted_portal: el
-                            .attrs
-                            .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
-                            .map(|s| s.as_str())
-                            == Some("1"),
-                        portal_key: el
-                            .attrs
-                            .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                        floating_id: el
-                            .attrs
-                            .get(crate::utils::popup::ATTR_FLOATING)
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                        bounds: el.layout_bounds,
-                    }]
+                    vec![super::pointer_events::HitPathEntry::from_element(
+                        el,
+                        el.layout_bounds,
+                    )]
                 } else {
                     super::pointer_events::hit_path(&state.root_element, x, y)
                 }
@@ -1153,12 +1291,14 @@ impl super::App {
             let mut need_paint_sync_redraw = true;
 
             let detail = self.click_count.max(1);
-            let mut pev = super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
+            let mut pev =
+                self.build_mouse_event(x, y, MouseButton::Left, detail, "mousedown", None);
             super::pointer_events::dispatch_pointer(
                 &path,
                 &mut pev,
                 super::pointer_events::PointerKind::Down,
             );
+            self.click_press_path = Some(path.clone());
             // Slider / other controls that stop_propagation must not also pan the scroll parent.
             if pev.is_consumed() {
                 self.content_scroll_drag = None;
@@ -2083,22 +2223,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     &mut hover_to_run,
                 );
 
-                window.set_cursor(
-                    match hover_cursor_pick.unwrap_or(crate::core::tree::CursorKind::Default) {
-                        crate::core::tree::CursorKind::Pointer => {
-                            winit::window::CursorIcon::Pointer
-                        }
-                        crate::core::tree::CursorKind::Text => winit::window::CursorIcon::Text,
-                        crate::core::tree::CursorKind::NotAllowed => {
-                            winit::window::CursorIcon::NotAllowed
-                        }
-                        crate::core::tree::CursorKind::NwseResize => {
-                            winit::window::CursorIcon::NwseResize
-                        }
-                        crate::core::tree::CursorKind::Default => {
-                            winit::window::CursorIcon::Default
-                        }
-                    },
+                super::tree_hit::apply_cursor(
+                    &window,
+                    Some(event_loop),
+                    &mut self.custom_cursors,
+                    hover_cursor_pick.clone(),
                 );
 
                 let focused =
@@ -2557,10 +2686,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }
-                match hover_cursor_pick {
-                    Some(k) => window.set_cursor(super::tree_hit::cursor_kind_to_winit(k)),
-                    None => window.set_cursor(CursorIcon::Default),
-                }
+                super::tree_hit::apply_cursor(
+                    &window,
+                    Some(event_loop),
+                    &mut self.custom_cursors,
+                    hover_cursor_pick.clone(),
+                );
 
                 // Soft-blur (`ime_os_blur_at`): do not cancel yet — TIP candidate click can
                 // briefly steal winit focus. Hard release runs after the deadline.
@@ -2714,7 +2845,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
         id: WindowId,
         element_state: ElementState,
         button: MouseButton,
+        event_loop: Option<&ActiveEventLoop>,
     ) {
+        self.update_mouse_buttons(button, element_state);
         match button {
             MouseButton::Left => {
                 if element_state == ElementState::Pressed {
@@ -2741,7 +2874,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if element_state == ElementState::Released {
                     self.cancel_long_press();
                 }
-                self.handle_mouse_input(id, element_state);
+                self.handle_mouse_input(id, element_state, event_loop);
                 if element_state == ElementState::Released {
                     // Order matters (matches comment historically intended here):
                     // 1) `on_click` first — opening a Menu/Combobox disarms underlay close
@@ -2766,7 +2899,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let x = self.cursor_pos.x as f32 / scale.max(1.0);
                     let y = self.cursor_pos.y as f32 / scale.max(1.0);
                     let capture = super::pointer_capture_id();
-                    let (path, cb_to_run, label_for_focus, on_exclusive, on_trigger) = {
+                    let (path, click_path, cb_to_run, label_for_focus, on_exclusive, on_trigger) = {
                         let state_borrow = self.state.borrow();
                         let state = match state_borrow.as_ref() {
                             Some(s) if s.window.id() == id => s,
@@ -2776,86 +2909,58 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             if let Some(el) =
                                 super::pointer_events::find_by_focus_id(&state.root_element, cap_id)
                             {
-                                vec![super::pointer_events::HitPathEntry {
-                                    focus_id: el.focus_id.clone(),
-                                    label_for: el
-                                        .attrs
-                                        .get(crate::components::label::ATTR_LABEL_FOR)
-                                        .map(|s| s.trim().to_string())
-                                        .filter(|s| !s.is_empty()),
-                                    on_pointer_down: el.on_pointer_down.clone(),
-                                    on_pointer_up: el.on_pointer_up.clone(),
-                                    on_click: el.on_click.clone(),
-                                    on_context_menu: el.on_context_menu.clone(),
-                                    on_double_click: el.on_double_click.clone(),
-                                    hoisted_portal: el
-                                        .attrs
-                                        .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
-                                        .map(|s| s.as_str())
-                                        == Some("1"),
-                                    portal_key: el
-                                        .attrs
-                                        .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
-                                        .map(|s| s.trim().to_string())
-                                        .filter(|s| !s.is_empty()),
-                                    floating_id: el
-                                        .attrs
-                                        .get(crate::utils::popup::ATTR_FLOATING)
-                                        .map(|s| s.trim().to_string())
-                                        .filter(|s| !s.is_empty()),
-                                    bounds: el.layout_bounds,
-                                }]
+                                vec![super::pointer_events::HitPathEntry::from_element(
+                                    el,
+                                    el.layout_bounds,
+                                )]
                             } else {
                                 super::pointer_events::hit_path(&state.root_element, x, y)
                             }
                         } else {
                             super::pointer_events::hit_path(&state.root_element, x, y)
                         };
-                        let cb_resolved = {
-                            let (from_path, focus_via_label) =
-                                super::pointer_events::resolve_click_from_path(
-                                    &state.root_element,
-                                    &path,
-                                );
-                            if from_path.is_some() {
-                                (from_path, focus_via_label)
-                            } else {
-                                (
-                                    super::pointer_events::resolve_click_with_capture(
-                                        &state.root_element,
-                                        x,
-                                        y,
-                                        capture.as_deref(),
-                                    ),
-                                    None,
-                                )
-                            }
+                        let click_path = match self.click_press_path.take() {
+                            Some(down) => super::pointer_events::click_dispatch_path(&down, &path),
+                            None => Vec::new(),
                         };
+                        let cb_resolved = super::pointer_events::resolve_click_from_path(
+                            &state.root_element,
+                            &click_path,
+                        );
                         let on_exclusive =
                             super::portal_overlay::hit_path_on_top_exclusive_surface(&path);
                         let on_trigger = crate::utils::popup::path_hits_floating_trigger(
                             &state.root_element,
                             &path,
                         );
-                        (path, cb_resolved.0, cb_resolved.1, on_exclusive, on_trigger)
+                        (
+                            path,
+                            click_path,
+                            cb_resolved.0,
+                            cb_resolved.1,
+                            on_exclusive,
+                            on_trigger,
+                        )
                     };
                     let detail = self.click_count.max(1);
                     let mut pev =
-                        super::pointer_events::PointerEvent::new(x, y, MouseButton::Left, detail);
+                        self.build_mouse_event(x, y, MouseButton::Left, detail, "mouseup", None);
                     super::pointer_events::dispatch_pointer(
                         &path,
                         &mut pev,
                         super::pointer_events::PointerKind::Up,
                     );
-                    if detail >= 2 && !pev.is_consumed() {
-                        let mut pev2 = super::pointer_events::PointerEvent::new(
+                    if detail >= 2 && !pev.is_consumed() && !click_path.is_empty() {
+                        let mut pev2 = self.build_mouse_event(
                             x,
                             y,
                             MouseButton::Left,
                             detail,
+                            "dblclick",
+                            None,
                         );
                         super::pointer_events::dispatch_pointer(
-                            &path,
+                            &click_path,
                             &mut pev2,
                             super::pointer_events::PointerKind::DoubleClick,
                         );
@@ -2892,9 +2997,6 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
             }
             MouseButton::Right => {
-                if element_state != ElementState::Pressed {
-                    return;
-                }
                 let (x, y, path) = {
                     let state_borrow = self.state.borrow();
                     let Some(state) = state_borrow.as_ref() else {
@@ -2909,17 +3011,65 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let path = super::pointer_events::hit_path(&state.root_element, x, y);
                     (x, y, path)
                 };
-                let mut pev = super::pointer_events::PointerEvent::new(x, y, MouseButton::Right, 1);
-                super::pointer_events::dispatch_pointer(
-                    &path,
-                    &mut pev,
-                    super::pointer_events::PointerKind::ContextMenu,
-                );
+                if element_state == ElementState::Pressed {
+                    let mut down =
+                        self.build_mouse_event(x, y, MouseButton::Right, 1, "mousedown", None);
+                    super::pointer_events::dispatch_pointer(
+                        &path,
+                        &mut down,
+                        super::pointer_events::PointerKind::Down,
+                    );
+                    if !down.is_consumed() {
+                        let mut pev = self.build_mouse_event(
+                            x,
+                            y,
+                            MouseButton::Right,
+                            1,
+                            "contextmenu",
+                            None,
+                        );
+                        super::pointer_events::dispatch_pointer(
+                            &path,
+                            &mut pev,
+                            super::pointer_events::PointerKind::ContextMenu,
+                        );
+                    }
+                } else {
+                    let mut up =
+                        self.build_mouse_event(x, y, MouseButton::Right, 1, "mouseup", None);
+                    super::pointer_events::dispatch_pointer(
+                        &path,
+                        &mut up,
+                        super::pointer_events::PointerKind::Up,
+                    );
+                }
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
             }
-            _ => {}
+            _ => {
+                let (x, y, path) = {
+                    let state_borrow = self.state.borrow();
+                    let Some(state) = state_borrow.as_ref() else {
+                        return;
+                    };
+                    if state.window.id() != id {
+                        return;
+                    }
+                    let scale = state.window.scale_factor() as f32;
+                    let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                    let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                    let path = super::pointer_events::hit_path(&state.root_element, x, y);
+                    (x, y, path)
+                };
+                let (kind, ty) = if element_state == ElementState::Pressed {
+                    (super::pointer_events::PointerKind::Down, "mousedown")
+                } else {
+                    (super::pointer_events::PointerKind::Up, "mouseup")
+                };
+                let mut ev = self.build_mouse_event(x, y, button, 1, ty, None);
+                super::pointer_events::dispatch_pointer(&path, &mut ev, kind);
+            }
         }
     }
 }

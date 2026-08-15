@@ -357,10 +357,7 @@ pub fn ComboboxInput(
         let vis = visible;
 
         // Combobox trigger is a real Input: Hidden overflow (crop + caret pan), not ellipsis.
-        let mut trigger: Element = input(&id)
-            .placeholder(ph.as_str())
-            .w("100%")
-            .into();
+        let mut trigger: Element = input(&id).placeholder(ph.as_str()).w("100%").into();
         trigger = trigger
             .accesskit_role("combobox")
             .accesskit_name(ph.as_str());

@@ -2195,11 +2195,7 @@ mod tests {
                 sv_id: Some("sv_ptr".into()),
             };
             apply_color_pointer(&drag, 70.0, 240.0);
-            assert!(
-                (sat.peek() - 0.5).abs() < 0.02,
-                "sat={}",
-                sat.peek()
-            );
+            assert!((sat.peek() - 0.5).abs() < 0.02, "sat={}", sat.peek());
             assert!(
                 (val.peek() - 0.5).abs() < 0.02,
                 "val={} (ty must use visual y, not scrolled layout y)",

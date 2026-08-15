@@ -1860,6 +1860,7 @@ fn expand_node(
                                 | "relative"
                                 | "pointer_events"
                                 | "pointerEvents"
+                                | "cursor"
                                 | "top"
                                 | "right"
                                 | "bottom"
@@ -3096,6 +3097,24 @@ fn expand_node(
                     }
                     "text_align" => element = quote! { #element.text_align(#value) },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
+                    "on_mousedown" | "onMouseDown" => {
+                        element = quote! { #element.on_mousedown(#value) }
+                    }
+                    "on_mouseup" | "onMouseUp" => {
+                        element = quote! { #element.on_mouseup(#value) }
+                    }
+                    "on_mousemove" | "onMouseMove" => {
+                        element = quote! { #element.on_mousemove(#value) }
+                    }
+                    "on_mouseover" | "onMouseOver" => {
+                        element = quote! { #element.on_mouseover(#value) }
+                    }
+                    "on_mouseout" | "onMouseOut" => {
+                        element = quote! { #element.on_mouseout(#value) }
+                    }
+                    "on_dblclick" | "onDblClick" | "on_double_click" | "onDoubleClick" => {
+                        element = quote! { #element.on_dblclick(#value) }
+                    },
                     "variant" | "type" => element = quote! { #element.variant(#value) },
                     "show" | "visibility" | "display_mode" => {
                         element = quote! { #element.visibility(#value) }
@@ -3173,6 +3192,7 @@ fn expand_node(
                     "pointer_events" | "pointerEvents" => {
                         element = quote! { #element.pointer_events(#value) }
                     }
+                    "cursor" => element = quote! { #element.cursor(#value) },
                     "top" => element = quote! { #element.top(#value) },
                     "right" => element = quote! { #element.right(#value) },
                     "bottom" => element = quote! { #element.bottom(#value) },

@@ -161,7 +161,7 @@ fn wire_radio_captions(control_id: &str, children: Vec<Element>) -> (Vec<Element
                 );
             }
             if lbl.cursor.is_none() {
-                lbl.cursor = Some(crate::core::tree::CursorKind::Pointer);
+                lbl.cursor = Some(crate::core::tree::CursorKind::Pointer.into());
             }
             lbl
         } else {

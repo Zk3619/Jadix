@@ -728,9 +728,9 @@ pub fn apply_bound_input_disabled(el: &mut Element, disabled: bool) -> LayoutSta
     sync.disabled = disabled;
     el.focusable = !disabled;
     el.cursor = Some(if disabled {
-        crate::core::tree::CursorKind::NotAllowed
+        crate::core::tree::CursorKind::NotAllowed.into()
     } else {
-        crate::core::tree::CursorKind::Text
+        crate::core::tree::CursorKind::Text.into()
     });
     LayoutStatus::StyleChanged
 }
@@ -750,7 +750,10 @@ mod tests {
         assert!(!InputType::Password.allows_ime());
         assert!(InputType::Text.allows_ime());
         assert_eq!(filter_password_insert("", "Ab1!你'好\n\u{7f}"), "Ab1!'");
-        assert_eq!(filter_insert_for_type(InputType::Password, "", "pāss字"), "pss");
+        assert_eq!(
+            filter_insert_for_type(InputType::Password, "", "pāss字"),
+            "pss"
+        );
     }
 
     #[test]
@@ -766,10 +769,7 @@ mod tests {
             el.children.iter().find_map(find_text)
         }
         let leaf = find_text(&el).expect("input text leaf");
-        assert_eq!(
-            leaf.text_style.overflow,
-            crate::style::TextOverflow::Hidden
-        );
+        assert_eq!(leaf.text_style.overflow, crate::style::TextOverflow::Hidden);
         assert!(leaf.text_style.overflow.allows_caret_scroll());
     }
 }

@@ -59,6 +59,7 @@ pub use crate::{
 // 核心类型（双书写面共用）
 // ---------------------------------------------------------------------------
 
+pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::core::reactivity::{create_signal, use_signal, Signal};
 pub use crate::core::tree::Element;
 
