@@ -73,7 +73,7 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, panel_block_clicks,
+    apply_stored_floating_place, disarm_underlay_close, mark_floating, mount_anchored_overlay,
     PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
     ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
@@ -660,12 +660,7 @@ pub fn combobox_content(
             menu = with_class_list(menu, &content_class);
         }
 
-        menu = panel_block_clicks(menu, oz.panel);
-        Element::new()
-            .w(0.0)
-            .h(0.0)
-            .child(menu)
-            .pointer_events_box_none()
+        mount_anchored_overlay(menu, oz.panel)
     });
     if crate::core::reactivity::is_tracking() {
         let open_reset = open;

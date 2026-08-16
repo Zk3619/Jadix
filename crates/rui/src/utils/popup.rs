@@ -2,38 +2,60 @@
 //!
 //! 按 [`docs/COMPONENT_LIBRARY.md`](../../../../docs/COMPONENT_LIBRARY.md)：本模块只做
 //! `mark_floating`、锚点 placement、viewport 钳位、underlay/portal 标记。
+//! **产品挂载只走两条入口**：锚定浮层 [`mount_anchored_overlay`]；视口模态舞台
+//! [`mount_viewport_portal_stage`]（+ 可选 [`mount_modal_layer`]）。禁止组件再手写
+//! 第二套坐标 sync 或嵌套 `rui_portal`。
 //! **禁止**写入某一组件的外观常量（如 Select `8rem`、Combobox `max-h-96`）；
 //! 那些由 `components/*` 通过 attr / style 传入。
 
-use std::cell::Cell;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
+use crate::app::window_scope::{self, WindowScope};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
 use crate::core::tree::Element;
-use crate::layout::layout_tree::PORTAL_LAYER_ID;
+use crate::layout::layout_tree::{
+    ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
+};
 use crate::primitives::overlay::overlay;
 
 thread_local! {
     /// After opening an overlay, ignore underlay closes until the pointer is released.
     /// Prevents the opening press (or a same-cycle re-hit on the new underlay) from
     /// immediately dismissing the popover.
-    static UNDERLAY_CLOSE_ARMED: Cell<bool> = const { Cell::new(true) };
+    ///
+    /// Keyed by [`WindowScope`] so primary Dialog arm state cannot be toggled by
+    /// secondary-window clicks (and vice versa).
+    static UNDERLAY_CLOSE_ARMED: RefCell<HashMap<WindowScope, bool>> = RefCell::new(HashMap::new());
+}
+
+fn armed_map_set(armed: bool) {
+    let scope = window_scope::active();
+    UNDERLAY_CLOSE_ARMED.with(|m| {
+        m.borrow_mut().insert(scope, armed);
+    });
+}
+
+fn armed_map_get() -> bool {
+    let scope = window_scope::active();
+    UNDERLAY_CLOSE_ARMED.with(|m| *m.borrow().get(&scope).unwrap_or(&true))
 }
 
 /// Call when an overlay transitions to open (before/with `open.set(true)`).
 pub fn disarm_underlay_close() {
-    UNDERLAY_CLOSE_ARMED.set(false);
+    armed_map_set(false);
 }
 
 /// Call on primary-button release so the next outside click can dismiss.
 pub fn arm_underlay_close() {
-    UNDERLAY_CLOSE_ARMED.set(true);
+    armed_map_set(true);
 }
 
 /// Whether outside-press / underlay dismiss is currently allowed.
 #[inline]
 pub fn underlay_close_is_armed() -> bool {
-    UNDERLAY_CLOSE_ARMED.get()
+    armed_map_get()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -759,14 +781,14 @@ pub fn swallow_clicks(inner: Element) -> Element {
 pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
     if inner
         .attrs
-        .get(crate::layout::layout_tree::ATTR_PORTAL_KEY)
+        .get(ATTR_PORTAL_KEY)
         .map(|s| s.trim().is_empty())
         .unwrap_or(true)
     {
         let key = floating_id_of(&inner)
             .map(|id| format!("panel:{id}"))
             .unwrap_or_else(|| format!("panel:{z}"));
-        inner.set_attr(crate::layout::layout_tree::ATTR_PORTAL_KEY, key);
+        inner.set_attr(ATTR_PORTAL_KEY, key);
     }
     portal_panel(swallow_clicks(inner), z)
 }
@@ -777,11 +799,47 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
 /// sit in a `relative` trigger wrapper inside a `ScrollArea`, or pre-hoist `left/top` (viewport
 /// space) is applied against a scrolled containing block → placement jumps and children paint
 /// at mixed coordinates.
+///
+/// Prefer [`mount_anchored_overlay`] (this + [`panel_block_clicks`]) at call sites.
 pub fn floating_portal_anchor(panel: Element) -> Element {
     Element::new()
         .w(0.0)
         .h(0.0)
         .child(panel)
+        .pointer_events_box_none()
+}
+
+/// 锚定浮层单一路径：已 [`mark_floating`] 的面板 → 吞点击 + portal + 0×0 布局锚。
+///
+/// Select / Combobox / DatePicker / ColorPicker / Tooltip / 有锚点的 Popover /
+/// Dropdown / ContextMenu / Menubar 必须走这里，禁止 `portal_panel` 当 flex 兄弟。
+pub fn mount_anchored_overlay(panel: Element, panel_z: i32) -> Element {
+    floating_portal_anchor(panel_block_clicks(panel, panel_z))
+}
+
+/// 视口固定 portal 舞台（Dialog / Sheet / CommandOverlay）。
+///
+/// 舞台内面板只用 [`swallow_clicks`]，**禁止**再包 [`panel_block_clicks`]（会嵌套
+/// `rui_portal`，把面板 hoist 出舞台）。
+pub fn mount_viewport_portal_stage(mut stage: Element, panel_z: i32) -> Element {
+    stage = stage.fixed();
+    stage.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+    if stage
+        .attrs
+        .get(ATTR_PORTAL_KEY)
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        stage.set_attr(ATTR_PORTAL_KEY, format!("panel:{panel_z}"));
+    }
+    portal_panel(stage, panel_z).pointer_events_box_none()
+}
+
+/// 模态层：underlay + 已 [`mount_viewport_portal_stage`] 的舞台。
+pub fn mount_modal_layer(underlay: Element, stage: Element) -> Element {
+    Element::new()
+        .child(underlay)
+        .child(stage)
         .pointer_events_box_none()
 }
 
@@ -1292,5 +1350,91 @@ mod tests {
             cb.borrow_mut()();
         }
         assert!(!open.peek(), "armed underlay closes");
+    }
+
+    #[test]
+    fn underlay_close_arm_is_per_window_scope() {
+        use crate::app::window_scope::{enter, WindowScope};
+        let _p = enter(WindowScope::Primary);
+        disarm_underlay_close();
+        assert!(!underlay_close_is_armed());
+        drop(_p);
+
+        let _s = enter(WindowScope::Secondary(7));
+        assert!(
+            underlay_close_is_armed(),
+            "secondary scope must not inherit primary disarm"
+        );
+        disarm_underlay_close();
+        drop(_s);
+
+        let _p2 = enter(WindowScope::Primary);
+        assert!(
+            !underlay_close_is_armed(),
+            "primary disarm must survive secondary session"
+        );
+        arm_underlay_close();
+    }
+
+    fn is_zero_len(d: taffy::style::Dimension) -> bool {
+        matches!(d, taffy::style::Dimension::Length(n) if n.abs() < f32::EPSILON)
+    }
+
+    fn find_anchored_overlay(el: &Element) -> bool {
+        let child_is_portal_floating = el.children.iter().any(|c| {
+            c.attrs.get("rui_portal").map(String::as_str) == Some("1")
+                && floating_id_of(c).is_some()
+        });
+        (is_zero_len(el.style.size.width)
+            && is_zero_len(el.style.size.height)
+            && child_is_portal_floating)
+            || el.children.iter().any(find_anchored_overlay)
+    }
+
+    fn has_portal_mark(el: &Element) -> bool {
+        el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+            || el.children.iter().any(has_portal_mark)
+    }
+
+    fn portal_nests_portal(el: &Element) -> bool {
+        let self_p = el.attrs.get("rui_portal").map(String::as_str) == Some("1");
+        if self_p && el.children.iter().any(has_portal_mark) {
+            return true;
+        }
+        el.children.iter().any(portal_nests_portal)
+    }
+
+    #[test]
+    fn mount_anchored_overlay_is_zero_anchor_with_portal_panel() {
+        let mut panel = Element::new().text("menu");
+        mark_floating(&mut panel, "sel", "trig", PopupPlacement::BottomStart);
+        let root = mount_anchored_overlay(panel, 1001);
+        assert!(
+            find_anchored_overlay(&root),
+            "anchored overlay must be 0×0 host + rui_portal + rui_floating"
+        );
+        assert!(!portal_nests_portal(&root), "must not nest rui_portal");
+    }
+
+    #[test]
+    fn mount_viewport_stage_does_not_nest_portal() {
+        let inner = swallow_clicks(Element::new().text("dialog"));
+        let stage = Element::new().w("100%").h("100%").child(inner);
+        let root = mount_modal_layer(
+            underlay_close_on_click(Signal::new(true), 1000),
+            mount_viewport_portal_stage(stage, 1001),
+        );
+        assert!(!portal_nests_portal(&root));
+        let mut n = 0usize;
+        fn count(el: &Element, n: &mut usize) {
+            if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
+                *n += 1;
+            }
+            for c in &el.children {
+                count(c, n);
+            }
+        }
+        count(&root, &mut n);
+        assert_eq!(n, 2, "underlay + stage each portal once");
     }
 }

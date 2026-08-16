@@ -21,7 +21,7 @@
 | 5 | Tab / Shift+Tab 遍历可聚焦控件 | 焦点环可见；顺序合理 | ☑ 2026-08-09 | ☐ | ☐ |
 | 6 | Combobox：方向键 + Enter | 选项可选中并关闭 | ☑ 2026-08-09 | ☐ | ☐ |
 | 7 | Escape 关闭最上层浮层（Gallery → 浮层 → Dialog → 打开 Select） | 仅关闭顶层（先关下拉，再 Esc 才关 Dialog） | ☑ 2026-08-09 | ☐ | ☐ |
-| 8 | 打开次窗并关闭（Gallery → 浮层 → Secondary window） | 主窗仍存活；无 panic | ☑ 2026-08-10 | ☐ | ☐ |
+| 8 | 打开次窗并关闭（Gallery → 浮层 → Secondary window，或 **导航 → Router 外壳 → Open secondary**） | 主窗仍存活；次窗 Input/Select/Dialog 可点；Esc 不关主窗浮层；Bridge 计数两边同步 | ☑ 2026-08-10 | ☐ | ☐ |
 | 9 | 读屏：聚焦 Input（见 [a11y_smoke.md](a11y_smoke.md)） | 读出名称/值；Button 可激活 | ☑ 2026-08-10 | ☐ | ☐ |
 
 **签署说明（2026-08-10）**：开发机 **Win**（Kingdom / Win 10.0.26200）#1–#9 已签；#3 为中文 IME（日/韩未测，可选）；macOS / Linux 列仍开放。

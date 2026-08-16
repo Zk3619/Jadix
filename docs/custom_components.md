@@ -1,8 +1,9 @@
 # Creating Custom Components in RUI
 
-> 分层与选型见权威规范 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（含 **§3 双书写面**）；无头细则见 [headless.md](headless.md)。
+> 分层与选型见权威规范 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)（含 **§2.3 作者面**、**§3 双书写面**）；无头细则见 [headless.md](headless.md)。  
+> **W3 实证 / WP-3.14**：复合控件难写，主因曾是框架默认值。现 `#[component]` 默认实例 Owner；Builder 根与跟踪纪律见下文配方。诊断：[COMPONENT_LIBRARY.md §2.3](COMPONENT_LIBRARY.md)。
 
-RUI uses a layered architecture that makes it easy to build reusable, high-performance components using functional patterns and procedural macros.
+RUI 用分层 + `#[component]` 组合原语。`#[component]` **每实例自动** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14）。纯 Builder 复合根（自己 `provide_context` / 浮层）仍须显式调用同一 helper。浮层子树用 `isolate_reads`，不要用 `untrack`。
 
 ## Two equivalent ways to write UI
 
@@ -65,8 +66,9 @@ fn counter_row(count_label: Element, on_inc: impl Fn() + 'static) -> Element {
 ### How it Works
 
 1.  **Props Generation**: The macro automatically generates a `MyButtonProps` struct containing the arguments of your function.
-2.  **Element Implementation**: It implements `From<MyButtonProps> for Element`, allowing you to use `<MyButton />` inside other `ui!` macros.
-3.  **Destructuring**: Inside the function body, the props are automatically destructured for easy access.
+2.  **Instance Owner**: The body runs inside [`component_root`](../crates/rui/src/core/reactivity.rs) (WP-3.14). Sibling instances do not share `provide_context`.
+3.  **Element Implementation**: It implements `From<MyButtonProps> for Element`, allowing you to use `<MyButton />` inside other `ui!` macros.
+4.  **Destructuring**: Inside the function body, the props are automatically destructured for easy access.
 
 ## Advanced Component Patterns
 
@@ -96,11 +98,12 @@ ui! {
 
 ### Reactivity with Signals
 
-Use `use_signal` to manage internal component state. Signals are scoped to the component instance and persist across re-renders.
+`use_signal("key", …)` **不是**按组件实例自动隔离的：字符串键落在运行时全局表（与 Owner 正交）。多实例优先受控 Signal、`use_scoped_signal`、或带实例前缀的键。`#[component]` 只保证 **Context / 子 effect** 挂在该实例 Owner 上。
 
 ```rust
 #[component]
 pub fn Counter() -> Element {
+    // 单实例演示可以；第二份 <Counter/> 会撞 "counter_state"。
     let count = use_signal("counter_state", || 0);
     
     ui! {
@@ -122,6 +125,59 @@ pub fn Counter() -> Element {
 3. 否则使用稳定唯一键，例如 `format!("counter:{id}", id = props.instance_id)`，或与 `reactive!` 的显式 anchor id 同步。
 
 **不要**给每个子控件都发明一个 `id`「以防万一」。身份轴拆分见 [COMPONENT_LIBRARY.md §4.2](COMPONENT_LIBRARY.md)。热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。
+
+### 复合控件配方（WP-3.14）
+
+#### `#[component]`（默认实例 Owner）
+
+```rust
+use rui::prelude::*;
+use rui::core::reactivity::{create_context, provide_context, use_context, Context};
+use std::sync::OnceLock;
+
+fn menu_ctx() -> Context<String> {
+    static CTX: OnceLock<Context<String>> = OnceLock::new();
+    *CTX.get_or_init(create_context)
+}
+
+#[component]
+pub fn Slot(label: String) -> Element {
+    // 无需 with_child_owner：宏已包 component_root。
+    provide_context(menu_ctx(), label.clone());
+    ui! { <Text>{label}</Text> }
+}
+```
+
+两个 `<Slot/>` 兄弟互不覆盖 Context。库测：`component_macro_sibling_context_isolated_without_manual_owner`。
+
+#### Builder 根（必须显式）
+
+```rust
+use rui::prelude::*;
+
+fn my_combobox(id: &str, body: impl FnOnce() -> Element) -> Element {
+    component_root(|| {
+        provide_context(menu_ctx(), id.to_string());
+        body()
+    })
+}
+```
+
+`with_child_owner` 是 `component_root` 的别名。库测：`component_root_sibling_context_isolated`。
+
+#### 四条红线
+
+| 要做 | 不要做 | 失败外观 |
+|------|--------|----------|
+| `#[component]` 即可；Builder 根包 [`component_root`](../crates/rui/src/core/reactivity.rs) | Builder 上同父级连续 `provide_context` 且不包根 | 三个 Combobox 共用最后一个菜单 |
+| 浮层 / `reactive_anchor` 子树用 [`isolate_reads`](../crates/rui/src/core/reactivity.rs) | 用 [`untrack`](../crates/rui/src/core/reactivity.rs) 包整棵面板 | 锚点不注册，浮层空壳（只剩分割线） |
+| 浮层走 `mount_anchored_overlay` / `mount_viewport_portal_stage` + portal Esc 栈 | 再抄一套 0×0 portal / 滚动锚 / 嵌套 `rui_portal` | 滚动错位、叠层 Esc 穿透；**WP-3.4 ☑** 后视为回归 |
+| 每实例自己的选中/开合 Signal（或调用方受控 Signal） | `use_signal("chart_pin")` 这类全局键 | 多图/多选器串状态 |
+
+`untrack`：**关掉** `current_effect`，`reactive_anchor` 直接 return。  
+`isolate_reads`：**保持** tracking，只丢弃这次收集的 deps。契约测：`untrack_skips_anchor_but_isolate_reads_registers`。
+
+完整诊断表：[COMPONENT_LIBRARY.md §2.3](COMPONENT_LIBRARY.md)。
 
 #### Derived values: `create_memo`
 

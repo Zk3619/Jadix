@@ -21,7 +21,7 @@
 | `toggle` 布尔状态 | 仍在 `components/{toggle,checkbox,switch}` | C-WP-1.2 下沉到 `primitives/` 或 `utils/toggle_state` |
 | `popup` 开合契约 | 几何在 `utils/popup`；开合多内嵌各组件 | C-WP-1.1 固化唯一路径 |
 
-用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态壳在 `components/dialog.rs`。
+用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。`#[component]` 默认实例 Owner（WP-3.14）；纯 Builder 复合根用 `component_root`。浮层子树用 `isolate_reads`。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态壳在 `components/dialog.rs`。
 
 ## 受控与非受控
 

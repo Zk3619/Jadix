@@ -305,6 +305,8 @@ pub fn ui(input: TokenStream) -> TokenStream {
 /// `#[component(reactive)]` wraps the body in [`reactive_component`] (requires `id: String`).
 ///
 /// Field-level Solid alignment:
+/// - Each invocation runs under [`component_root`] / instance Owner (WP-3.14). Sibling
+///   `provide_context` calls do not overwrite each other.
 /// - `Signal` / closure / `Element` props are **excluded** from the PartialEq snapshot (static
 ///   props only trigger subtree refresh).
 /// - The component effect uses [`isolate_reads`] so naked `signal.get()` in the body does **not**
@@ -471,38 +473,42 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let fn_body = if reactive {
         quote! {
-            #(#field_unwrapping)*
-            #crate_path::app::reactive::stash_component_children(&id, children);
-            #[derive(Clone, PartialEq)]
-            struct #snapshot_name #impl_generics #where_clause {
-                #(#snapshot_fields),*
-            }
-            let __snapshot = #snapshot_name {
-                #(#snapshot_inits),*
-            };
-            #crate_path::app::reactive::reactive_component(
-                format!("{id}__component"),
-                __snapshot,
-                move |__snap| {
-                    #(#snapshot_assigns)*
-                    let children = #crate_path::app::reactive::take_component_children(&id);
-                    #merge_base_stmt
-                    let mut __el = { #body };
-                    if let Some(base_fn) = base.take() {
-                        let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
-                        __el = base_fn(builder).el;
-                    }
-                    __el
-                },
-            )
+            #crate_path::core::reactivity::component_root(|| {
+                #(#field_unwrapping)*
+                #crate_path::app::reactive::stash_component_children(&id, children);
+                #[derive(Clone, PartialEq)]
+                struct #snapshot_name #impl_generics #where_clause {
+                    #(#snapshot_fields),*
+                }
+                let __snapshot = #snapshot_name {
+                    #(#snapshot_inits),*
+                };
+                #crate_path::app::reactive::reactive_component(
+                    format!("{id}__component"),
+                    __snapshot,
+                    move |__snap| {
+                        #(#snapshot_assigns)*
+                        let children = #crate_path::app::reactive::take_component_children(&id);
+                        #merge_base_stmt
+                        let mut __el = { #body };
+                        if let Some(base_fn) = base.take() {
+                            let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                            __el = base_fn(builder).el;
+                        }
+                        __el
+                    },
+                )
+            })
         }
     } else {
         quote! {
-            #(#field_unwrapping)*
-            #merge_base_stmt
-            let mut __el = { #body };
-            #post_apply_base_stmt
-            __el
+            #crate_path::core::reactivity::component_root(|| {
+                #(#field_unwrapping)*
+                #merge_base_stmt
+                let mut __el = { #body };
+                #post_apply_base_stmt
+                __el
+            })
         }
     };
 
@@ -970,8 +976,8 @@ fn expand_node(
                     let class_expr = get_attr("class");
                     let content_class_expr =
                         get_attr("content_class").or_else(|| get_attr("contentClass"));
-                    let scroll_selected_expr = get_attr("scroll_selected")
-                        .or_else(|| get_attr("scrollSelected"));
+                    let scroll_selected_expr =
+                        get_attr("scroll_selected").or_else(|| get_attr("scrollSelected"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -3273,9 +3279,7 @@ fn expand_node(
                     "on_mousedown" | "onMouseDown" => {
                         element = quote! { #element.on_mousedown(#value) }
                     }
-                    "on_mouseup" | "onMouseUp" => {
-                        element = quote! { #element.on_mouseup(#value) }
-                    }
+                    "on_mouseup" | "onMouseUp" => element = quote! { #element.on_mouseup(#value) },
                     "on_mousemove" | "onMouseMove" => {
                         element = quote! { #element.on_mousemove(#value) }
                     }
@@ -3287,7 +3291,7 @@ fn expand_node(
                     }
                     "on_dblclick" | "onDblClick" | "on_double_click" | "onDoubleClick" => {
                         element = quote! { #element.on_dblclick(#value) }
-                    },
+                    }
                     "variant" | "type" => element = quote! { #element.variant(#value) },
                     "show" | "visibility" | "display_mode" => {
                         element = quote! { #element.visibility(#value) }

@@ -16,6 +16,8 @@
 
 ### Added
 
+- WP-3.14：`#[component]` 默认 [`component_root`]（实例 Owner）；Builder 同 helper（`with_child_owner` 别名）；`untrack` vs `isolate_reads` 锚点契约测升格 `component_authoring`；手册 [`custom_components.md`](custom_components.md)。
+
 - Command：三种表面——行内 `<Command>`、VS Code 式顶部居中 `<CommandOverlay>`、居中模态 `<CommandDialog>`（复用 Dialog，不改 `dialog.rs`）。Builder `.open_signal` 默认浮层，`.dialog()` 走 Dialog。Overlay/Dialog 宿主为 `0×0` portal 锚点（打开后 reconcile 仍保持 0×0，避免在 HStack 里撑破布局）；TooltipContent 同样用 `0×0` 锚点。
 
 - WP-3.2：Chart **grammar**（`define_chart` + cartesian/polar marks + `ChartTheme`/`MarkStyle`）；`scale_log`/`scale_time`（Rust 专用，非 JS D3）；`.tooltip(true)` / `.crosshair(true)`（钉在 pointer-down）；预设薄封装；path 核光栅；RSX `<Chart>`/`<BarChart>`…；`ChartDatum.series`/`time`。Gallery「数据」含组合图、时间轴、log、radial。

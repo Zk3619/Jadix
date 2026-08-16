@@ -35,12 +35,12 @@
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
 | Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
-| 外壳 | Router + 次窗 **wired MVP**；托盘 `system-tray` **stub**（`tray.md`） |
+| 外壳 | Router 历史 Gallery 可演示（WP-3.5 ☑）；次窗 wired；托盘 `system-tray` **stub**（`tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**Wave 2 已退出**（2026-08-13；2.1–2.9 ☑）。macOS / Linux 冒烟仍 ☐。**进入 Wave 3**（3.1 ☑；焦点 3.2 / 3.4 / 3.11 Svg / 3.12 Canvas；3.13 / B16 / B17 不挡退出）。W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（**CV 已退出**）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**Wave 2 已退出**（2026-08-13；2.1–2.9 ☑）。macOS / Linux 冒烟仍 ☐。**进入 Wave 3**（3.1–3.5 / 3.14 ☑；焦点 **3.11 Svg / 3.12 Canvas**；3.13 / B16 / B17 不挡退出）。W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（**CV 已退出**）。
 
 ---
 
@@ -263,7 +263,7 @@ flowchart TB
 | **路径** | `components/date_picker.rs`、`color_picker.rs`、Time 相关 |
 | **任务** | 方向键改值；Enter 确认；Escape 关闭；ISO / 本地显示格式文档化 |
 | **验收** | Gallery 可纯键盘完成一次选日期/颜色 |
-| **状态** | ☐ 交互+键盘 MVP 已落地（Calendar / Date·Time / Color HSV / Command roving）；Gallery「表单」可键盘走查；AUTHORITY 签署待手工 |
+| **状态** | ☑ 2026-08-17（勾选源 AUTHORITY WP-3.3）；作者面债不在本包 → WP-3.14 |
 
 ### WP-3.4 浮层与 Command / Menubar a11y 打磨
 
@@ -272,7 +272,7 @@ flowchart TB
 | **路径** | `utils/popup.rs`、`command.rs`、`menubar.rs`、`combobox.rs`、`components/dialog.rs` |
 | **任务** | 与 WP-1.2/1.3 对齐：焦点陷阱、类型即搜（Command）、菜单 Role；Dialog 走共享壳 |
 | **验收** | smoke #6–#7 + Command 打开关闭单测或手工清单项 |
-| **状态** | ☐ popup/Esc/Dialog 壳已有；产品化打磨未关门 |
+| **状态** | ☑ 2026-08-17（勾选源 AUTHORITY WP-3.4）；`mount_anchored_overlay` / 视口舞台；Esc 顶层测仍绿 |
 
 ### WP-3.5 Router + 次窗协作
 
@@ -281,7 +281,7 @@ flowchart TB
 | **路径** | `app/router.rs`、`app/navigator.rs`、`app/multi_window.rs`、`docs/multi_window.md` |
 | **任务** | 侧栏路由 + 历史后退/前进示例；次窗焦点不破坏主窗；文档补协作图 |
 | **验收** | 示例或 gallery「外壳」页：两页历史可回退 |
-| **状态** | ☐ Router/次窗 **wired MVP**（含历史单测 / 多窗文档）；Gallery 外壳演示页未完成 |
+| **状态** | ☑ 2026-08-17（勾选源 AUTHORITY WP-3.5）；完整次窗输入 + per-window overlay + Gallery 验证树 |
 
 ### WP-3.6 系统托盘原生接线（可选 feature）
 

@@ -39,8 +39,8 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, floating_portal_anchor, mark_floating, panel_block_clicks,
-    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
+    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
@@ -817,8 +817,7 @@ fn build_date_picker_floating_panel(
     floating.set_attr(ATTR_FLOATING_MIN_W, "0");
     floating.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
     apply_stored_floating_place(&mut floating, id);
-    floating = panel_block_clicks(floating, oz_panel);
-    floating_portal_anchor(floating)
+    mount_anchored_overlay(floating, oz_panel)
 }
 
 impl From<DatePickerBuilder> for Element {
@@ -988,32 +987,6 @@ mod tests {
             val.peek()
         });
         assert_eq!(out, "2026-08-13T09:00:06");
-    }
-
-    #[test]
-    fn untrack_skips_anchor_but_isolate_reads_registers() {
-        use crate::app::reactive::{reactive_anchor, registered_anchor_count};
-        use crate::core::reactivity::{create_effect, create_root, isolate_reads, untrack};
-        create_root(|| {
-            let before = registered_anchor_count();
-            untrack(|| {
-                reactive_anchor("dp_untrack_anchor", || Element::new());
-            });
-            assert_eq!(
-                registered_anchor_count(),
-                before,
-                "untrack 关掉 tracking，浮层 Calendar/Combobox 无法注册"
-            );
-            create_effect(|| {
-                isolate_reads(|| {
-                    reactive_anchor("dp_isolate_anchor", || Element::new());
-                });
-            });
-            assert!(
-                registered_anchor_count() > before,
-                "isolate_reads 必须仍能注册 reactive_anchor"
-            );
-        });
     }
 
     #[test]

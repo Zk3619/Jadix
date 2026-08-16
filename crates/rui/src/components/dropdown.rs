@@ -18,7 +18,7 @@ use crate::app::reactive::reactive_view;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
-use crate::utils::popup::{mark_floating, portal_panel, PopupPlacement};
+use crate::utils::popup::{mark_floating, mount_anchored_overlay, PopupPlacement};
 
 pub struct DropdownBuilder {
     id: String,
@@ -80,13 +80,16 @@ impl From<DropdownBuilder> for Element {
         reactive_view(view_id, move || {
             let _ = open.get();
             let trigger_el = trigger();
-            let mut menu_el = menu();
+            let mut root: Element = vstack().child(trigger_el).into();
             if let Some(z) = portal_sync(&id, open, OverlayKind::Menu, OverlayMode::Stacked) {
-                mark_floating(&mut menu_el, &id, &anchor, placement);
-                menu_el = menu_el.absolute();
-                menu_el = portal_panel(menu_el, z.panel);
+                if open.peek() {
+                    let mut menu_el = menu();
+                    mark_floating(&mut menu_el, &id, &anchor, placement);
+                    menu_el = menu_el.absolute();
+                    root = root.child(mount_anchored_overlay(menu_el, z.panel));
+                }
             }
-            vstack().child(trigger_el).child(menu_el).into()
+            root
         })
     }
 }

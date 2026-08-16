@@ -3,7 +3,7 @@
 > **文档地位**：细粒度响应式编程模型与实现口径的**领域规范**。衡量「组件挂载一次 + Signal 局部更新」的**机制覆盖度**与工程卫生，**不是** solid-main / Leptos / Floem 整仓或 API 表面对齐度。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区（ADR-1）；**执行勾选**以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为准。冻结细则 [`REACTIVITY_PLAN.md`](REACTIVITY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/core/{reactivity,store,resource}.rs`、`crates/rui/src/app/{reactive,resource,error_boundary,state}.rs`、`rui_macros`；对照 [`Reference/SolidJS`](../Reference/SolidJS)、[`Reference/leptos-main`](../Reference/leptos-main)（`reactive_graph` / `reactive_stores` / `tachys`）、[`Reference/floem-main`](../Reference/floem-main)（`floem_reactive`）、[`Reference/dioxus`](../Reference/dioxus)（`dioxus-signals` + 组件 VNode）。  
-> **日期**：2026-08-13（四框架机制对照 + 完整细粒度不变量；**战略：超过 Floem、逼近 Solid 机制**）  
+> **日期**：2026-08-13（四框架机制对照 + 完整细粒度不变量；**战略：超过 Floem、逼近 Solid 机制**）；**2026-08-17** G11 closed（WP-3.14）  
 
 交叉：[`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md)（开发者手册）· [`element_identity.md`](element_identity.md) · [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) · [`REFERENCE_COMPARISON.md`](REFERENCE_COMPARISON.md) · [`gap_analysis.md`](gap_analysis.md) §5（历史镜像）
 
@@ -19,6 +19,7 @@
 | 细粒度要追到哪？ | **超过 Floem 纯度**（列表项级 Owner 是决胜点）→ **逼近 Solid 机制**（For + Index + Store 路径 + effect 分相）。记分牌 §5.9。 |
 | 「完整细粒度」指什么？ | run-once + 动态订阅 + Owner dispose + `bind_*` + 结构岛 + **项级 For** + **真 Index** + **字段级 Store** + **渲染绑 / 用户 effect 分相**。见 §5.7。 |
 | 响应式还要不要做？ | **要，且升为主线加深**：G6（For/Index）、G4（Store 路径）、G10（effect 分相）、G8（宏漏绑）。卫生门禁 WP-2.4 / 2.5 / 2.7 已关。 |
+| 自定义组件难写 = 细粒度没做完？ | **否（主因）**。W3 实证是 **G11**（已关：默认 Owner + isolate 契约测）。浮层单一路径 **WP-3.4 ☑**。I-7 项级 For 关了也不会让 DatePicker 好写。见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.3。 |
 | 对标谁？ | **标尺** → SolidJS；**原生近邻（要超过）** → Floem；**图协议可借鉴** → Leptos `reactive_graph`；**反例** → Dioxus。 |
 | 不把谁当细粒度标杆？ | Dioxus 主路径（组件级 VNode diff）、Iced TEA、egui 即时模式、Slint 属性链、Xilem view-diff。 |
 
@@ -133,7 +134,7 @@ Win-first 0.1 / 升 Beta **仍不**以本战略为硬门禁（原生+发布优�
 | Memo（惰性 + depth flush） | **done** | `create_memo` | 对齐 Leptos Memo / Floem Memo |
 | Effect | **done** | `create_effect`；重跑前 dispose 子 Owner | **未拆类型**：渲染绑走 `bind_*`（UpdaterEffect 形），用户副作用同调度；不强制拆 RenderEffect |
 | Owner / Root / on_cleanup / on_mount | **done** | `create_root` · `OwnerHandle` | Floem 名 `Scope`；职责同构 |
-| Context | **done** | `provide_context` / `use_context`；复合控件实例根用 `with_child_owner`（`#[component]` 不自动开 scope） | 对齐 Solid 组件执行域；省略则同父级多次 provide 会覆盖 |
+| Context | **done（`#[component]` 默认实例 Owner）** | `provide_context` / `use_context`；[`component_root`](../crates/rui/src/core/reactivity.rs)（`with_child_owner` 为其别名）。**宏自动包**；纯 Builder 复合根仍须显式调用 | 对齐 Solid 组件执行域。G11 **closed（WP-3.14）** |
 | batch / untrack / isolate_reads | **done** | 同名 API | Floem 有 batch；Leptos 普通 Effect 靠 tick 合并 |
 | Store select + produce | **done (MVP)** | `core/store.rs`；**无** proxy；`produce` 切片契约测 ☑ WP-2.5 | Leptos `reactive_stores`：改兄字段不重跑弟 getter（R-WP-3） |
 | Resource + Suspense | **done (MVP)** | `app/resource.rs` | **勿**抄 SSR 水合 Resource |
@@ -326,8 +327,11 @@ RUI `for_each` ≠ Solid `<Index>`：只是用下标当 `template_id`，项仍�
 | G8 | 宏自动降级漏绑面（Switch 糖、gallery 扩面） | **P1**（否则超 Floem 只写在纸上） | R-WP-7 |
 | G9 | 信号图可观测 / 最小泄漏诊断（非完整 DevTools） | P2 | R-WP-8 |
 | G10 | Effect 未分相：用户 `create_effect` 与 `bind_*` 同一同步 flush | **P1**（逼近 Solid） | WP-R.9：Computed → bind → 用户 effect |
+| G11 | **组件实例 Owner 非默认** + `untrack` 空锚点 | **closed（WP-3.14 ☑ 2026-08-17）** | `#[component]` → `component_root`；Builder helper 同名；测 `component_authoring`；勿并入 WP-R.5 |
 
 **不做（巩固期）**：重写响应式内核（Check 三态 / 换 `reactive_graph`）；引入 VDOM；对齐 Leptos 0.8 / Solid **API 表面**；Web Suspense / SSR；DevTools UI；`mergeProps` / `children()`。
+
+G11 **不**进入 §5.9 记分牌（已关仍不改 For/Index/Store 宣称）。禁止用 I-7 项级 For 冒充「自定义组件已经好写」——浮层收口 **WP-3.4 ☑**。
 
 ---
 

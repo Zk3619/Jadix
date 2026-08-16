@@ -8,8 +8,11 @@
 //! Modal 之间仍可叠层。
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::core::reactivity::Signal;
+
+use super::window_scope::{self, WindowScope};
 
 const OVERLAY_Z_BASE: i32 = 1000;
 const OVERLAY_Z_STEP: i32 = 10;
@@ -50,7 +53,15 @@ struct OverlayLayer {
 }
 
 thread_local! {
-    static OVERLAY_STACK: RefCell<Vec<OverlayLayer>> = const { RefCell::new(Vec::new()) };
+    static OVERLAY_STACKS: RefCell<HashMap<WindowScope, Vec<OverlayLayer>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn with_stack_mut<R>(f: impl FnOnce(&mut Vec<OverlayLayer>) -> R) -> R {
+    OVERLAY_STACKS.with(|cell| {
+        let mut map = cell.borrow_mut();
+        f(map.entry(window_scope::active()).or_default())
+    })
 }
 
 fn z_for_index(i: usize) -> OverlayZ {
@@ -134,9 +145,8 @@ pub fn portal_sync(
         OverlayMode::Stacked => {
             // Close conflicting layers *after* releasing the stack borrow — same rule as
             // [`try_close_top`]: `open.set` may rebuild and re-enter [`portal_sync`].
-            let (z, to_close) = OVERLAY_STACK.with(|cell| {
-                let mut stack = cell.borrow_mut();
-                let mut to_close = prune_closed(&mut stack);
+            let (z, to_close) = with_stack_mut(|stack| {
+                let mut to_close = prune_closed(stack);
                 if open.peek() {
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
                         stack[pos].open = open;
@@ -193,9 +203,8 @@ pub fn portal_sync(
 
 /// Top Stacked overlay panel z-index (`OverlayZ::panel`), if any.
 pub fn top_stacked_panel_z() -> Option<i32> {
-    let (z, to_close) = OVERLAY_STACK.with(|cell| {
-        let mut stack = cell.borrow_mut();
-        let to_close = prune_closed(&mut stack);
+    let (z, to_close) = with_stack_mut(|stack| {
+        let to_close = prune_closed(stack);
         let z = if stack.is_empty() {
             None
         } else {
@@ -211,12 +220,11 @@ pub fn top_stacked_panel_z() -> Option<i32> {
 
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
 ///
-/// `open.set` 必须在释放 `OVERLAY_STACK` 借用之后调用，否则 reactive rebuild →
+/// `open.set` 必须在释放 overlay 栈借用之后调用，否则 reactive rebuild →
 /// [`portal_sync`] 会 `RefCell already borrowed`。
 pub fn try_close_top() -> bool {
-    let (to_close_top, pruned) = OVERLAY_STACK.with(|cell| {
-        let mut stack = cell.borrow_mut();
-        let pruned = prune_closed(&mut stack);
+    let (to_close_top, pruned) = with_stack_mut(|stack| {
+        let pruned = prune_closed(stack);
         let top = stack.pop().map(|top| top.open);
         (top, pruned)
     });
@@ -250,9 +258,8 @@ pub fn try_dismiss_outside_press() -> bool {
     if !crate::utils::popup::underlay_close_is_armed() {
         return false;
     }
-    let (to_close, pruned) = OVERLAY_STACK.with(|cell| {
-        let mut stack = cell.borrow_mut();
-        let pruned = prune_closed(&mut stack);
+    let (to_close, pruned) = with_stack_mut(|stack| {
+        let pruned = prune_closed(stack);
         let Some(top) = stack.last() else {
             return (None, pruned);
         };
@@ -286,8 +293,7 @@ pub fn hit_path_on_hoisted_portal(path: &[super::pointer_events::HitPathEntry]) 
 
 /// Id of the top Stacked Menu / Popover / Tooltip (exclusive dismissable surface), if any.
 pub fn top_stacked_exclusive_id() -> Option<String> {
-    OVERLAY_STACK.with(|cell| {
-        let stack = cell.borrow();
+    with_stack_mut(|stack| {
         stack.iter().rev().find_map(|l| {
             if !l.open.peek() {
                 return None;
@@ -318,10 +324,16 @@ pub fn hit_path_on_top_exclusive_surface(path: &[super::pointer_events::HitPathE
     })
 }
 
-/// Drop portal stack entries (call on app shutdown so Signal handles do not linger).
+/// Drop portal stack entries for the **current** window scope (tests / that window).
 pub fn clear_overlay_stack() {
-    OVERLAY_STACK.with(|cell| cell.borrow_mut().clear());
+    with_stack_mut(|stack| stack.clear());
     crate::utils::popup::arm_underlay_close();
+}
+
+pub(crate) fn drop_overlay_stack(scope: WindowScope) {
+    OVERLAY_STACKS.with(|cell| {
+        cell.borrow_mut().remove(&scope);
+    });
 }
 
 #[cfg(test)]
@@ -330,12 +342,12 @@ mod tests {
     use crate::core::reactivity::Signal;
 
     fn clear() {
-        OVERLAY_STACK.with(|c| c.borrow_mut().clear());
+        with_stack_mut(|s| s.clear());
         crate::utils::popup::arm_underlay_close();
     }
 
     fn depth() -> usize {
-        OVERLAY_STACK.with(|c| c.borrow().len())
+        with_stack_mut(|s| s.len())
     }
 
     #[test]
@@ -651,14 +663,26 @@ mod tests {
     }
 
     #[test]
-    fn opening_modal_dismisses_exclusive_surfaces() {
+    fn overlay_stacks_are_isolated_by_window_scope() {
+        use crate::app::window_scope::{enter, WindowScope};
         clear();
-        let menu = Signal::new(true);
-        let modal = Signal::new(true);
-        assert!(portal_sync("menu", menu, OverlayKind::Menu, OverlayMode::Stacked).is_some());
-        assert!(portal_sync("modal", modal, OverlayKind::Modal, OverlayMode::Stacked).is_some());
-        assert!(!menu.peek());
-        assert!(modal.peek());
+        let primary = Signal::new(true);
+        assert!(portal_sync("p", primary, OverlayKind::Menu, OverlayMode::Stacked).is_some());
         assert_eq!(depth(), 1);
+
+        let _g = enter(WindowScope::Secondary(9));
+        clear();
+        let secondary = Signal::new(true);
+        assert!(portal_sync("s", secondary, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert_eq!(depth(), 1);
+        drop(_g);
+
+        assert_eq!(depth(), 1);
+        assert!(primary.peek());
+        assert!(try_close_top());
+        assert!(!primary.peek());
+        assert_eq!(depth(), 0);
+        assert!(secondary.peek());
+        clear();
     }
 }

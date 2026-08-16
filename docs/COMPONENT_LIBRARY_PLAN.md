@@ -202,7 +202,7 @@ flowchart TB
 | **路径** | `utils/popup.rs`、`app/portal_overlay`、`components/dialog.rs`、Popover / Select / Dropdown / Tooltip / ContextMenu / Sheet |
 | **任务** | ① 文档化必用 API：`mark_floating`、underlay、Esc 栈、Dialog 壳；② 禁止新组件自写第二套坐标 sync；③ 存量审计：列出未走统一引擎的调用点并改或开 issue |
 | **验收** | 审计表关闭或仅剩标注实验；Escape 顶层单测或 smoke 条目 |
-| **状态** | ☐（**前置：CV 通过**）placement / Dialog 壳已存在；契约审计与冒烟未关门 |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.4）；审计表见规范 §4.4 |
 | **对齐** | 总计划 WP-1.2、WP-3.4 |
 
 ### C-WP-1.2 Toggle / 布尔控件 headless 抽取
@@ -276,7 +276,7 @@ flowchart TB
 | **路径** | `docs/custom_components.md` |
 | **任务** | 与规范 §2–§3 对齐：优先组合 primitives + tokens；**同时示范** `ui!` 与 Builder；示例 Alert/Card |
 | **验收** | 指南无「只能写标签」暗示；链到规范 §3 |
-| **状态** | ☐ |
+| **状态** | ☐ 正文并入 AUTHORITY **WP-3.14.3**（W3 实证 cookbook）；本表不单独勾选 |
 
 ### C-WP-2.5 双书写面 API 等价审计
 
@@ -324,7 +324,7 @@ flowchart TB
 | **路径** | date/color/time picker、Command、Combobox |
 | **任务** | 方向键 / Enter / Escape；Gallery 可纯键盘走通 |
 | **验收** | 总计划 WP-3.3 / WP-3.4 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（勾选源 AUTHORITY WP-3.3）；作者面 → WP-3.14 |
 
 ### C-WP-3.3 组件 golden 五场景
 

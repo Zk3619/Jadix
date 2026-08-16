@@ -6,9 +6,11 @@ use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::reactive_view;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
-use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::r#box::{r#box, vstack};
 use crate::tokens;
-use crate::utils::popup::{panel_block_clicks, portal_panel, underlay_close_on_click};
+use crate::utils::popup::{
+    mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SheetSide {
@@ -99,13 +101,47 @@ impl From<SheetBuilder> for Element {
                 }
             }
 
-            let mut root: Element = hstack()
+            panel = swallow_clicks(panel);
+
+            let stage: Element = r#box()
+                .inset(0.0)
                 .w("100%")
                 .h("100%")
-                .child(underlay_close_on_click(open, oz.underlay))
+                .child(panel)
                 .into();
-            root = root.child(portal_panel(panel_block_clicks(panel, oz.panel), oz.panel));
-            root
+            mount_modal_layer(
+                underlay_close_on_click(open, oz.underlay),
+                mount_viewport_portal_stage(stage, oz.panel),
+            )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::popup::{panel_block_clicks, portal_panel};
+
+    fn has_portal_mark(el: &Element) -> bool {
+        el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+            || el.children.iter().any(has_portal_mark)
+    }
+
+    fn portal_nests_portal(el: &Element) -> bool {
+        let self_p = el.attrs.get("rui_portal").map(String::as_str) == Some("1");
+        if self_p && el.children.iter().any(has_portal_mark) {
+            return true;
+        }
+        el.children.iter().any(portal_nests_portal)
+    }
+
+    #[test]
+    fn nested_portal_panel_is_the_old_sheet_bug() {
+        let panel = panel_block_clicks(Element::new().text("sheet"), 1001);
+        let stage = portal_panel(Element::new().child(panel), 1001);
+        assert!(
+            portal_nests_portal(&stage),
+            "portal stage wrapping a panel_block_clicks child nests rui_portal"
+        );
     }
 }

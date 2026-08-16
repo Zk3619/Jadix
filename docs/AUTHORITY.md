@@ -69,6 +69,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 | 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid | `REACTIVITY.md`（§0.1 / §5.7 / **§5.9 记分牌**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
 | `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
+| 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
@@ -375,23 +376,24 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **目标**：Gallery 可作名片；关键键盘完整；外壳可演示；**引入 `<svg>` / `<canvas>` 与 2D·3D 能力**（规范 [`drawing.md`](drawing.md)）。  
 **3.4 / 3.7 / 3.8 仅 CV 通过后开工（CV 已 ☑）。**  
-**当前焦点（进入 W3）**：3.2 · 3.3 · 3.4 · 3.5 · **3.11 · 3.12**；3.13 可交错；B16 / B17 不挡本波。
+**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.14 已签）**：**3.11 · 3.12**；3.13 可交错；3.7 / 3.8 可消费默认 Owner；B16 / B17 不挡本波。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
 | **WP-3.1** | Gallery 八分区 | C-WP-3.1 | ☑ 侧栏；「每稳定面一入口」随 CV 复核 |
 | **WP-3.2** | Path → Chart 加深（含 Pie）；与 3.11 **共用 path 核** | — | ☑ 2026-08-13 path 光栅 + 预设；grammar：`define_chart` + cartesian/polar + log/time + tooltip/crosshair |
-| **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☐ |
-| **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☐ **前置 CV ☑** |
-| **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☐ wired MVP 有；演示页无 |
+| **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☑ 2026-08-17；Calendar 抽出；Date/Time/Color 键盘+ISO；Command ↑↓/Enter；作者面 → **3.14 ☑** |
+| **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☑ 2026-08-17；`mount_anchored_overlay` / `mount_viewport_portal_stage`；禁第二套 portal |
+| **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☑ 2026-08-17；导航区外壳卡；次窗键不进主窗 |
 | **WP-3.6** | 系统托盘原生接线（feature） | — | ☐ 挡发布则可标 stub |
-| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☐ **前置 CV ☑** |
-| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.5 | ☐ **前置 CV ☑**；仅 `verified` |
-| **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ |
+| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☐ **前置 CV ☑**；建议 3.14 默认 Owner 已落地 |
+| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☐ **前置 CV ☑**；仅 `verified`；指南正文在 **3.14.3** |
+| **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ 前置 3.14 ☑；浮层路径 3.4 ☑ |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
 | **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☐ 规范 [`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
 | **WP-3.12** | **`<canvas>` 标签 + 画布自定义绘制**（paint / 2D context MVP） | — | ☐ [`drawing.md`](drawing.md) §4 |
 | **WP-3.13** | **2D / 3D 能力层**（2D 合成纪律；`<scene3d>` 实验 feature；原 B6 矩阵并入） | — | ☐ [`drawing.md`](drawing.md) §5；**3D 不挡 W3 退出** |
+| **WP-3.14** | **复合控件作者面**（默认实例 Owner；`untrack`/`isolate_reads` 纪律；cookbook） | C-WP-2.4 部分 | ☑ 2026-08-17；`#[component]`→`component_root`；测 `component_authoring`；诊断 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.3 |
 
 #### WP-3.11 / 3.12 / 3.13 验收（可判定 · 进入 W3 前已写清）
 
@@ -404,7 +406,78 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **签署**：3.11/3.12 A 绿即可勾；3.13 2D 建议随 3.12；3D 可标 experimental。细则 [`drawing.md`](drawing.md)。
 
-**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2）；Router 历史可演示；托盘接线或 README 标 stub；**3.11 或 3.12 至少一项 MVP**（公开自绘面起步）。
+WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](keyboard_nav.md)。
+
+#### WP-3.14 复合控件作者面（进入 3.4 / 再扩复合控件前）
+
+**诊断（W3 实证）**：WP-3.2 / 3.3 的心智负担**主要不是**日历算术或 HSV，而是框架**未把「组件实例」做成默认值**，复合控件作者必须同时做对 Owner、跟踪、浮层、身份四件事。展开 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.3。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.14.1** | `#[component]` **默认**实例 `component_root`（Solid 式执行域）；纯 Builder 根同一 helper | ☑ |
+| **3.14.2** | 跟踪纪律可测：`isolate_reads` 注册 anchor，`untrack` 不注册；测升格 `crate_tests/reactive/component_authoring.rs` | ☑ |
+| **3.14.3** | 手册 [`custom_components.md`](custom_components.md) 复合控件配方（Owner / 跟踪 / 浮层 / 实例信号） | ☑ |
+| **3.14.4** | 与 **WP-3.4** 分界：本包未改 Dialog / placement 产品化 | ☑ |
+
+**禁区**：换 VDOM；让 `#[component]` 默认整树 `get()` 重跑；把 Owner 默认做成 opt-in 而文档继续假装「组件即实例」。
+
+#### WP-3.14 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 宏默认 Owner** | 库测：`#[component]` 内两次 `provide_context` 的兄弟实例互不覆盖（对位 TimePicker 三 Combobox） | passed；**无需**在组件体手写 `with_child_owner` | 仍须手写才隔离；或破坏既有 Select/Combobox 测 |
+| **A′ Builder helper** | 库测：非宏根调用同一 helper 亦隔离 | passed；rustdoc 有一句 | 只宏有、Builder 无 |
+| **A″ 跟踪契约** | `cargo test -p rui --lib` 含 isolate vs untrack 注册 anchor | `untrack` 不注册、`isolate_reads` 注册 | 测只活在 `date_picker.rs` 且无公共说明 |
+| **B 手册** | 打开 `custom_components.md` | 含四条红线 + 反例（`untrack` 空浮层、省略 Owner 串菜单） | 仍只有 Hello Button |
+
+**签署规则**：A+A′+A″ 绿且手册 3.14.3 即可勾 WP-3.14（**已签 2026-08-17**）。**不挡** 3.11/3.12。
+
+WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crates/rui/src/core/reactivity.rs)；Builder 同 helper（`with_child_owner` 为别名）；库测 `crate_tests/reactive/component_authoring.rs`（宏兄弟 Context、Builder 根、untrack vs isolate_reads）；手册配方 [`custom_components.md`](custom_components.md)。未改 Dialog。
+
+#### WP-3.4 浮层单一路径
+
+**目标**：关闭「每控件自研 portal / 第二套坐标 sync」。几何仍只在 `utils/popup`；Esc 仍只在 `portal_overlay`。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.4.1** | 锚定浮层入口 [`mount_anchored_overlay`](../crates/rui/src/utils/popup.rs)（`mark_floating` + `panel_block_clicks` + 0×0 锚） | ☑ |
+| **3.4.2** | 视口模态入口 [`mount_viewport_portal_stage`](../crates/rui/src/utils/popup.rs) + [`mount_modal_layer`](../crates/rui/src/utils/popup.rs)；舞台内只 `swallow_clicks` | ☑ |
+| **3.4.3** | 存量迁入：Select / Combobox / Date / Color / Tooltip / 有锚 Popover / Dropdown / ContextMenu / Menubar；Dialog / Sheet / CommandOverlay 走视口舞台 | ☑ |
+| **3.4.4** | Esc 顶层单测保持；Dropdown 关闭不占布局；Sheet 不嵌套 `rui_portal` | ☑ |
+
+**标注例外（不是第二套 placement）**：无锚点 Popover（仅 portal 面板）；NavigationMenu `viewport` 槽（仍 `mark_floating`）；Toast pinned host；CommandOverlay chrome 为 top-1/3（舞台 helper 与 Dialog 相同）。焦点陷阱产品化仍归 **C-WP-1.3**（Tab 已约束在顶层 Stacked，见 [`keyboard_nav.md`](keyboard_nav.md)）。
+
+#### WP-3.4 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A helper** | `cargo test -p rui --lib mount_anchored_overlay_is_zero_anchor`；`mount_viewport_stage_does_not_nest_portal` | passed | 调用点继续 `portal_panel` 当 flex 兄弟 |
+| **A′ 存量** | `nested_portal_panel_is_the_old_sheet_bug`；`mount_viewport_stage_does_not_nest_portal`；Command overlay hoist 测仍绿 | passed | 视口舞台内再 `panel_block_clicks` |
+| **B Esc** | `push_two_esc_closes_top_only`；`three_layers_esc_closes_top_only_each_time` | passed | Esc 关错层 |
+| **C smoke** | [`desktop_smoke.md`](desktop_smoke.md) #6 Combobox、#7 Escape 顶层 | Win 已 ☑ 2026-08-09 | 新组件再发明 0×0 配方 |
+
+**签署规则**：A+A′+B 绿即可勾 WP-3.4（**已签 2026-08-17**）。禁区：第二套 `left/top` sync；`panel_block_clicks` 再包 `portal_panel`；用 `untrack` 包浮层体（仍归 3.14 纪律）。
+
+#### WP-3.5 Router + 次窗 Gallery 演示
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.5.1** | Gallery **导航**区外壳卡：Inbox / Settings + Back / Forward（[`Router`](../crates/rui/src/app/router.rs)） | ☑ |
+| **3.5.2** | 次窗独立树（不共用主窗 Router / Navigator id）；打开/关闭不拆主窗 | ☑ |
+| **3.5.3** | 次窗 Keyboard / IME 不写入主窗焦点与 Esc 栈 | ☑ |
+| **3.5.4** | [`multi_window.md`](multi_window.md) 主↔次协作图 | ☑ |
+
+#### WP-3.5 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 历史** | `cargo test -p rui --lib router_two_hops_back_reaches_start` | passed | 只能 navigate 不能 back |
+| **A′ Gallery** | `cargo test -p gallery navigation_section_mounts_shell_router_view` | 导航区有 `gal_shell_router__router_view` | 仍只有 Navigator 卡 |
+| **B 手工** | Gallery → 导航 → Inbox→Settings→Back；Open secondary 后主窗 Dialog/输入仍在 | 两页可回退；关次窗主窗存活（smoke #8） | 次窗按键关掉主窗浮层或打字进主窗 |
+
+**签署规则**：A+A′ 绿即可勾 WP-3.5（**已签 2026-08-17**）。次窗完整 pointer / per-window overlay / `shared_slot` 见 [`multi_window.md`](multi_window.md)（2026-08-17 已接）。
+
+**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线或 README 标 stub；**3.11 或 3.12 至少一项 MVP**。Toggle/API 归一仍是 **3.7 / 3.8**，故不可宣称「复合控件 API 已全部好写」。
 
 ### 5.6 Wave 4 — 发布与质量矩阵
 
@@ -483,7 +556,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | 0 | D0（本文）；并行起草 WP-4.1 CHANGELOG 骨架 |
 | 1–2 | **CV**（走查 + 最小测网 + 身份审计）∥ 启动 WP-2.4；macOS/Linux 冒烟可并行 |
 | 3–4 | WP-2.4 / 2.5 / 2.6 / 2.7 / **2.9**（盒模型）；CV 收尾 |
-| 5–6 | **W3**：3.4 / 3.7 / 3.8 + **3.11 Svg / 3.12 Canvas**；并行 3.2 Path·Chart / 3.3 / 3.5；3.13 2D 可跟 3.12 |
+| 5–6 | **W3**：**3.4 / 3.5 ☑**；**3.11 Svg / 3.12 Canvas**；3.7/3.8；3.13 2D 可跟 3.12；3.2/3.3/3.14 已签 |
 | 7 | WP-4.2–4.6；冻结承诺面 |
 | 8 | publish + 升 Beta |
 
@@ -512,10 +585,11 @@ cargo check -p gallery
 | C-WP-1.2 | WP-3.7 |
 | C-WP-1.3 | WP-1.2 |
 | C-WP-1.4 | WP-1.3（桥）+ CV / 2.8（组件身份） |
-| C-WP-2.1～2.5 | WP-3.8 |
+| C-WP-2.1～2.3 / 2.5 | WP-3.8 |
+| C-WP-2.4 | WP-3.14.3（自定义组件指南） |
 | C-WP-2.6 | WP-2.8 |
 | C-WP-3.1 | WP-3.1 |
-| C-WP-3.2 | WP-3.3 |
+| C-WP-3.2 | WP-3.3 ☑ |
 | C-WP-3.3 / V.4 | WP-2.6 |
 | C-WP-3.4 | WP-3.9 |
 | C-WP-4.1 / 4.2 / 4.3 | WP-4.1 / 4.4 / 4.2–4.3 |
@@ -535,7 +609,8 @@ cargo check -p gallery
 3. 稳定面变更必须有测或 smoke 条目；新 props 默认双入口（标签 + Builder）。  
 4. 新浮层不接受长期第二套 placement。  
 5. 身份：新 API 默认不把用户 `id` 设为必填；空串不得写入 `focus_id`/`template_id`。  
-6. 对照代码只读 `Reference/`，禁止无 ADR 把 Leptos/Floem/EUI 内核粘进 `crates/rui`。
+6. 对照代码只读 `Reference/`，禁止无 ADR 把 Leptos/Floem/EUI 内核粘进 `crates/rui`。  
+7. **复合控件**：新开合/Context/浮层必须走已有 Owner helper + `mount_anchored_overlay` / `mount_viewport_portal_stage`；禁止在产品 PR 里再发明 `untrack` 包整棵面板、全局信号键或第二套 0×0 portal。Owner 纪律归 **WP-3.14 ☑**；浮层路径归 **WP-3.4 ☑**。
 
 ---
 

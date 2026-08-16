@@ -10,8 +10,7 @@ pub use crate::layout::dimension::{
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
     parse_color, parse_text_color, CursorKind, CursorValue, LineStyle, TextDecorationStyle,
-    TextOverflow,
-    TextStyle,
+    TextOverflow, TextStyle,
 };
 pub use crate::style::{Style, UnitSlot};
 

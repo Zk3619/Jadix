@@ -4,11 +4,11 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航 · 布局 · 文本 · 关于。
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航（含 Router 外壳） · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
-use rui::app::open_secondary_window;
+use rui::app::{open_secondary_window, run_on_ui_thread, shared_slot, Router};
 use rui::component;
 use rui::components::*;
 use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
@@ -26,6 +26,8 @@ const TEXT_ALIGN_WP21_VIRT: &str = "gal-wp21-virt";
 const PRIMITIVES_VIRT: &str = "gal-virt-demo";
 const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
+const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
+const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";
 const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
 const GAL_GRID_LIST_ID: &str = "gal-grid-sort";
@@ -2508,6 +2510,146 @@ fn NavigatorShowcase() -> Element {
     }
 }
 
+fn gallery_shell_router(id: &'static str) -> Router {
+    let mut router = Router::new(id, "inbox");
+    router.register("inbox", || {
+        ui! { <Label text_size="0.875rem">"Inbox pane"</Label> }
+    });
+    router.register("settings", || {
+        ui! { <Label text_size="0.875rem">"Settings pane"</Label> }
+    });
+    router
+}
+
+fn gallery_secondary_shell_root() -> Element {
+    let count = shared_slot(GAL_SHELL_BRIDGE, || 0u32);
+    let fruit = use_signal("gal_sec_fruit", || "apple".to_string());
+    let dialog_open = use_signal("gal_sec_dialog_open", || false);
+    // Root must be a full-window box so hoisted Dialog underlay fills the secondary surface
+    // (ScrollArea-as-root clips / sizes the portal layer incorrectly).
+    ui! {
+        <VStack w="100%" h="100%" bg="background">
+            <ScrollArea id="gal-sec-scroll" flex_grow="1" h="100%" overflow_y="auto" overflow_x="auto">
+                <VStack w="100%" p="1.5rem" gap="0.75rem">
+                    <Label font_weight="700" text_size="1.125rem">"Secondary shell"</Label>
+                    <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                        "独立树：点击/输入/Esc 只打本窗。Dialog 黑半透明遮罩；Esc 不关主窗浮层。Bridge 共享 gal_shell_bridge_count。"
+                    </Label>
+                    <HStack gap="0.5rem" wrap="wrap" items="center">
+                        <Label font_weight="600">{ format!("Bridge: {}", count.get()) }</Label>
+                        <Button size="sm" on_click={move || count.set(count.peek() + 1)}>
+                            "Inc"
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            on_click={move || {
+                                run_on_ui_thread(|| {
+                                    let slot = shared_slot(GAL_SHELL_BRIDGE, || 0u32);
+                                    slot.set(slot.peek() + 1);
+                                });
+                            }}
+                        >
+                            "Inc via run_on_ui_thread"
+                        </Button>
+                    </HStack>
+                    <Input id="gal-sec-input" placeholder="Type in secondary (focus isolated)" w="100%" />
+                    <Select id="gal-sec-select" value={fruit} placeholder="Fruit" class="w-full">
+                        <SelectTrigger class="w-full">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent max_h="10rem">
+                            <SelectItem value="apple">"Apple"</SelectItem>
+                            <SelectItem value="pear">"Pear"</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Dialog id="gal-sec-dialog" open={dialog_open}>
+                        <DialogTrigger>
+                            <Button variant="outline" size="sm">"Open dialog"</Button>
+                        </DialogTrigger>
+                        <DialogContent overlay_color="#000000" overlay_opacity={0.55}>
+                            <DialogHeader>
+                                <DialogTitle>"Secondary dialog"</DialogTitle>
+                                <DialogDescription>
+                                    "Esc 应只关本窗 Dialog，主窗浮层保持。应看到黑色半透明遮罩。"
+                                </DialogDescription>
+                            </DialogHeader>
+                            <DialogFooter>
+                                <Button size="sm" on_click={move || dialog_open.set(false)}>"Close"</Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
+                </VStack>
+            </ScrollArea>
+        </VStack>
+    }
+}
+
+#[component]
+fn RouterShowcase() -> Element {
+    let router = gallery_shell_router(GAL_SHELL_ROUTER_ID);
+    let r_inbox = router.clone();
+    let r_settings = router.clone();
+    let r_back = router.clone();
+    let r_fwd = router.clone();
+    let route = router.current_signal();
+    let bridge = shared_slot(GAL_SHELL_BRIDGE, || 0u32);
+
+    ui! {
+        <MyCard title="Router + 次窗（外壳）">
+            <VStack w="100%" gap="0.5rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "命名路由 + back/forward。与 Navigator（转场栈）分工：Router 管去哪一页。次窗用独立树，勿与主窗共享 Router / Navigator id。"
+                </Label>
+                <Label text_size="0.75rem">{ format!("Shared bridge: {}", bridge.get()) }</Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                    <Button size="sm" variant="outline" on_click={move || r_inbox.navigate("inbox")}>
+                        "Inbox"
+                    </Button>
+                    <Button size="sm" variant="outline" on_click={move || r_settings.navigate("settings")}>
+                        "Settings"
+                    </Button>
+                    <Button size="sm" variant="ghost" on_click={move || { let _ = r_back.back(); }}>
+                        "Back"
+                    </Button>
+                    <Button size="sm" variant="ghost" on_click={move || { let _ = r_fwd.forward(); }}>
+                        "Forward"
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        on_click={move || {
+                            match open_secondary_window(
+                                "RUI Gallery — Shell",
+                                gallery_secondary_shell_root,
+                            ) {
+                                Ok(()) => {
+                                    toast_push("Secondary shell opened", 2000);
+                                }
+                                Err(e) => {
+                                    log::warn!("open_secondary_window: {e}");
+                                    toast_push(format!("次窗失败: {e}"), 3000);
+                                }
+                            }
+                        }}
+                    >
+                        "Open secondary"
+                    </Button>
+                </HStack>
+                <Rect w="100%" p="0.75rem" class="rounded-md" bg="muted">
+                    <VStack gap="0.25rem">
+                        <Label font_weight="600">{ format!("Route: {}", route.get()) }</Label>
+                        { router.view() }
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            "两页历史：Inbox → Settings → Back 应回到 Inbox。"
+                        </Label>
+                    </VStack>
+                </Rect>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn PrimitivesShowcase() -> rui::core::tree::Element {
     let overlay_open = use_signal("prim_overlay_open", || false);
@@ -2711,6 +2853,10 @@ fn gallery_feedback_toast(title: impl Into<String>, description: impl Into<Strin
         .show();
 }
 
+fn gallery_goto_section(key: &str) {
+    use_signal("gal_nav_section", || "basics".to_string()).set(key.to_string());
+}
+
 #[component]
 fn OverlayFeedbackShowcase() -> Element {
     let cmd_open = use_signal("gal_cmd_open", || false);
@@ -2781,21 +2927,55 @@ fn OverlayFeedbackShowcase() -> Element {
                     >
                         "Show toast"
                     </CommandItem>
-                    <CommandItem value="calendar">"Calendar"</CommandItem>
-                    <CommandItem value="emoji">"Search Emoji"</CommandItem>
+                    <CommandItem
+                        value="calendar"
+                        on_click={move || {
+                            gallery_goto_section("forms");
+                            gallery_feedback_toast(
+                                "Calendar",
+                                "已跳到「表单」：Date / Time / Color / Calendar。",
+                            );
+                        }}
+                    >
+                        "Calendar"
+                    </CommandItem>
+                    <CommandItem
+                        value="emoji"
+                        on_click={move || {
+                            gallery_goto_section("text");
+                            gallery_feedback_toast("Search Emoji", "已跳到「文本」分区。");
+                        }}
+                    >
+                        "Search Emoji"
+                    </CommandItem>
                     <CommandItem value="calc" disabled={true}>"Calculator"</CommandItem>
                 </CommandGroup>
                 <CommandSeparator />
                 <CommandGroup heading="Settings">
-                    <CommandItem value="profile">
+                    <CommandItem
+                        value="profile"
+                        on_click={move || {
+                            gallery_feedback_toast("Profile", "CommandDialog 演示项。");
+                        }}
+                    >
                         "Profile"
                         <CommandShortcut>"⌘P"</CommandShortcut>
                     </CommandItem>
-                    <CommandItem value="billing">
+                    <CommandItem
+                        value="billing"
+                        on_click={move || {
+                            gallery_feedback_toast("Billing", "CommandDialog 演示项。");
+                        }}
+                    >
                         "Billing"
                         <CommandShortcut>"⌘B"</CommandShortcut>
                     </CommandItem>
-                    <CommandItem value="settings">
+                    <CommandItem
+                        value="settings"
+                        on_click={move || {
+                            gallery_feedback_toast("Settings", "CommandDialog 演示项。");
+                        }}
+                    >
                         "Settings"
                         <CommandShortcut>"⌘S"</CommandShortcut>
                     </CommandItem>
@@ -3095,18 +3275,7 @@ fn OverlayFeedbackShowcase() -> Element {
                         variant="secondary"
                         size="sm"
                         on_click={move || {
-                            match open_secondary_window("RUI Gallery — Secondary", || {
-                                ui! {
-                                    <VStack w="100%" h="100%" p="1.5rem" gap="0.75rem" bg="background">
-                                        <Label font_weight="700" text_size="1.125rem">
-                                            "Secondary window"
-                                        </Label>
-                                        <Label text_size="0.875rem" color="muted-foreground">
-                                            "desktop_smoke #8：关闭本窗后主窗应仍存活、无 panic。"
-                                        </Label>
-                                    </VStack>
-                                }
-                            }) {
+                            match open_secondary_window("RUI Gallery — Secondary", gallery_secondary_shell_root) {
                                 Ok(()) => {
                                     toast_push("Secondary window opened", 2000);
                                 }
@@ -3596,6 +3765,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <NavbarNavigationMenuShowcase />
                     <MenubarStepperShowcase />
                     <NavigatorShowcase />
+                    <RouterShowcase />
                     <SelectPopoverTabShowcase />
                 </VStack>
             </ScrollArea>
@@ -4170,5 +4340,20 @@ mod mount_tests {
                 }
             });
         });
+    }
+
+    #[test]
+    fn navigation_section_mounts_shell_router_view() {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
+        fn find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
+            el.template_id.as_deref() == Some(want)
+                || el.children.iter().any(|c| find_tid(c, want))
+        }
+        assert!(
+            find_tid(&tree, "gal_shell_router__router_view"),
+            "WP-3.5: navigation section must mount Router.view() placeholder"
+        );
+        rui::app::reactive::reset_registered_anchors();
     }
 }

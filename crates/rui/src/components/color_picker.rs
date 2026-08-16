@@ -44,8 +44,8 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::popup::{
-    apply_stored_floating_place, floating_portal_anchor, mark_floating, panel_block_clicks,
-    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
+    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
 };
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -1868,8 +1868,8 @@ fn build_color_picker_view(
             panel.set_attr(ATTR_FLOATING_W, variant.panel_width());
             panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
             apply_stored_floating_place(&mut panel, &id);
-            panel = panel_block_clicks(panel, oz.panel);
-            view = view.child(floating_portal_anchor(panel));
+            panel = mount_anchored_overlay(panel, oz.panel);
+            view = view.child(panel);
         }
     }
     with_trigger_preview_sync(view, id, rgba, fmt_sig)

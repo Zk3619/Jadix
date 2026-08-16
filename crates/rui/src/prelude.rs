@@ -60,7 +60,9 @@ pub use crate::{
 // ---------------------------------------------------------------------------
 
 pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
-pub use crate::core::reactivity::{create_signal, use_signal, Signal};
+pub use crate::core::reactivity::{
+    component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
+};
 pub use crate::core::tree::Element;
 
 // ---------------------------------------------------------------------------

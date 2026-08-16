@@ -22,9 +22,25 @@ impl super::App {
     /// `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409).
     fn shutdown_renderer(&mut self) {
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
+
+        // 1) Pull secondary UI/GPU state out of the map *before* disposing owners, so
+        //    OwnerHandle Drop → effect cleanup cannot re-enter `secondaries` (RefCell panic)
+        //    and leave the process wedged with a live HWND (Windows file lock on gallery.exe).
+        let mut secs = std::mem::take(&mut *self.secondaries.borrow_mut());
+        for (id, mut sec) in secs.drain() {
+            if let Some(token) = super::window_scope::forget_secondary(id) {
+                super::portal_overlay::drop_overlay_stack(
+                    super::window_scope::WindowScope::Secondary(token),
+                );
+            }
+            sec.hide_window();
+            drop(sec.take_owner());
+            drop(sec);
+        }
+        // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
+        drop(self.window_registry.drain_secondaries());
+
         let Some(state) = self.state.borrow_mut().take() else {
-            // Still drop secondary GPU surfaces if primary was already cleared.
-            self.secondaries.clear();
             return;
         };
         // End the `borrow_mut` guard before `state` drops. Dropping `AppState` runs
@@ -32,14 +48,25 @@ impl super::App {
         // by effect closures until `clear_effects` runs.
         crate::app::runtime::clear_app_runtime();
         self.accesskit_adapter = None;
-        // Drop secondaries while primary device/window are still alive (shared device clones).
-        self.secondaries.clear();
         // Clear shared FontSystem pointer before dropping primary text_renderer.
         crate::text::clear_shared_font_system();
         crate::text::shutdown_layout_text();
         // Drop effect closures before GPU/UI state so they cannot rebuild into a dead cell.
         crate::core::reactivity::clear_effects();
         drop(state);
+        self.pointer_window = None;
+    }
+
+    fn drop_secondary(&mut self, id: WindowId) {
+        if let Some(token) = super::window_scope::forget_secondary(id) {
+            super::portal_overlay::drop_overlay_stack(super::window_scope::WindowScope::Secondary(
+                token,
+            ));
+        }
+        self.secondaries.borrow_mut().remove(&id);
+        if self.pointer_window == Some(id) {
+            self.pointer_window = None;
+        }
     }
 
     fn touch_pinch_distance(
@@ -96,7 +123,17 @@ impl super::App {
         let pos = lp.pos;
         // Restore cursor to press position for hit-test, then reuse right-click path.
         self.cursor_pos = winit::dpi::PhysicalPosition::new(pos[0] as f64, pos[1] as f64);
-        self.handle_mouse_button(window_id, ElementState::Pressed, MouseButton::Right, None);
+        if self.is_secondary_window(window_id) {
+            self.handle_secondary_mouse_button(
+                window_id,
+                ElementState::Pressed,
+                MouseButton::Right,
+            );
+        } else {
+            self.with_primary_input(window_id, |app| {
+                app.handle_mouse_button(window_id, ElementState::Pressed, MouseButton::Right, None);
+            });
+        }
     }
 
     pub(super) fn begin_long_press(&mut self, window_id: WindowId, pos: [f32; 2]) {
@@ -153,18 +190,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
             super::RuiUserEvent::UiWake => {
                 super::ui_bridge::drain_ui_tasks();
-                if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                    state.window.request_redraw();
-                }
+                crate::app::runtime::request_redraw_all();
             }
-            super::RuiUserEvent::OpenWindow { title, mut builder } => {
+            super::RuiUserEvent::OpenWindow { title, builder } => {
                 let attrs = super::multi_window::default_window_attributes_with_title(title);
                 let Ok(window) = event_loop.create_window(attrs) else {
                     log::warn!("multi-window: create_window failed");
                     return;
                 };
                 let window = Arc::new(window);
-                let root = (builder.0)();
+                let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
 
                 let secondary = {
                     let state_borrow = self.state.borrow();
@@ -178,7 +213,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         Arc::clone(&primary.queue),
                         &primary.instance,
                         &primary.config,
-                        root,
+                        placeholder,
                     ) {
                         Ok(s) => s,
                         Err(e) => {
@@ -190,7 +225,30 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
                 let id = window.id();
                 self.window_registry.insert_secondary_slot(window.clone());
-                self.secondaries.insert(id, secondary);
+                self.secondaries.borrow_mut().insert(id, secondary);
+
+                let builder_rc = std::rc::Rc::new(std::cell::RefCell::new(builder.0));
+                let secondaries = self.secondaries.clone();
+                let token = super::window_scope::token_for_secondary(id);
+                let (owner, _) = crate::core::reactivity::create_root(move || {
+                    // Stamp the owner tree so nested Dialog/Select effects keep Secondary
+                    // scope on re-run (without this, portal_sync / reconcile hit the primary).
+                    crate::core::reactivity::bind_current_owner_window_key_scope(token);
+                    let builder_rc = builder_rc.clone();
+                    let secondaries = secondaries.clone();
+                    crate::core::reactivity::create_effect(move || {
+                        let _scope = super::window_scope::enter_secondary_id(id);
+                        let new_root = (builder_rc.borrow_mut())();
+                        if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
+                            sec.replace_root(new_root);
+                            sec.window.request_redraw();
+                        }
+                    });
+                });
+                if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                    sec.attach_owner(owner);
+                }
+
                 window.set_visible(true);
                 window.request_redraw();
             }
@@ -321,6 +379,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             let state_ref = self.state.clone();
             crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
                 std::rc::Rc::downgrade(&state_ref),
+                std::rc::Rc::downgrade(&self.secondaries),
             ));
             crate::app::reactive::reset_registered_anchors();
 
@@ -389,8 +448,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         .as_ref()
                         .is_some_and(|s| s.window.id() == id);
                 if !is_primary {
-                    // Secondary close: drop GPU/UI state + slot; keep primary app running.
-                    self.secondaries.remove(&id);
+                    self.drop_secondary(id);
                     if let Some(slot) = self.window_registry.remove_secondary(id) {
                         slot.window.set_visible(false);
                     }
@@ -405,23 +463,47 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         .as_ref()
                         .is_some_and(|s| s.window.id() == id);
                 if !is_primary {
-                    self.secondaries.remove(&id);
+                    self.drop_secondary(id);
                     let _ = self.window_registry.remove_secondary(id);
                     return;
                 }
                 self.shutdown_renderer();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.handle_cursor_moved(id, position, event_loop)
+                if self.is_secondary_window(id) {
+                    self.handle_secondary_cursor_moved(id, position, event_loop);
+                } else {
+                    self.with_primary_input(id, |app| {
+                        app.handle_cursor_moved(id, position, event_loop)
+                    });
+                }
             }
-            WindowEvent::CursorLeft { .. } => self.handle_cursor_left(id, event_loop),
+            WindowEvent::CursorLeft { .. } => {
+                if self.is_secondary_window(id) {
+                    self.handle_secondary_cursor_left(id, event_loop);
+                } else {
+                    self.with_primary_input(id, |app| app.handle_cursor_left(id, event_loop));
+                }
+            }
             WindowEvent::MouseInput {
                 state: element_state,
                 button,
                 ..
-            } => self.handle_mouse_button(id, element_state, button, Some(event_loop)),
+            } => {
+                if self.is_secondary_window(id) {
+                    self.handle_secondary_mouse_button(id, element_state, button);
+                } else {
+                    self.with_primary_input(id, |app| {
+                        app.handle_mouse_button(id, element_state, button, Some(event_loop))
+                    });
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
-                self.handle_mouse_wheel(id, delta);
+                if self.is_secondary_window(id) {
+                    self.handle_secondary_mouse_wheel(id, delta);
+                } else {
+                    self.with_primary_input(id, |app| app.handle_mouse_wheel(id, delta));
+                }
             }
             // Primary finger → pointer paths; second finger enables pinch scale.
             // Pinch scale is stored on App + signal `__rui_pinch_scale` (no scroll zoom yet).
@@ -432,8 +514,28 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         if self.primary_touch_id.is_none() {
                             self.primary_touch_id = Some(touch.id);
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location, event_loop);
-                            self.handle_mouse_button(id, ElementState::Pressed, MouseButton::Left, Some(event_loop));
+                            if self.is_secondary_window(id) {
+                                self.handle_secondary_cursor_moved(
+                                    id,
+                                    touch.location,
+                                    event_loop,
+                                );
+                                self.handle_secondary_mouse_button(
+                                    id,
+                                    ElementState::Pressed,
+                                    MouseButton::Left,
+                                );
+                            } else {
+                                self.with_primary_input(id, |app| {
+                                    app.handle_cursor_moved(id, touch.location, event_loop);
+                                    app.handle_mouse_button(
+                                        id,
+                                        ElementState::Pressed,
+                                        MouseButton::Left,
+                                        Some(event_loop),
+                                    );
+                                });
+                            }
                         }
                         if self.active_touches.len() >= 2 {
                             // Cancel content pan when a second finger lands (pinch takes over).
@@ -448,7 +550,17 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             self.update_pinch_scale();
                         } else if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location, event_loop);
+                            if self.is_secondary_window(id) {
+                                self.handle_secondary_cursor_moved(
+                                    id,
+                                    touch.location,
+                                    event_loop,
+                                );
+                            } else {
+                                self.with_primary_input(id, |app| {
+                                    app.handle_cursor_moved(id, touch.location, event_loop);
+                                });
+                            }
                         }
                     }
                     TouchPhase::Ended | TouchPhase::Cancelled => {
@@ -458,8 +570,28 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         }
                         if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
-                            self.handle_cursor_moved(id, touch.location, event_loop);
-                            self.handle_mouse_button(id, ElementState::Released, MouseButton::Left, Some(event_loop));
+                            if self.is_secondary_window(id) {
+                                self.handle_secondary_cursor_moved(
+                                    id,
+                                    touch.location,
+                                    event_loop,
+                                );
+                                self.handle_secondary_mouse_button(
+                                    id,
+                                    ElementState::Released,
+                                    MouseButton::Left,
+                                );
+                            } else {
+                                self.with_primary_input(id, |app| {
+                                    app.handle_cursor_moved(id, touch.location, event_loop);
+                                    app.handle_mouse_button(
+                                        id,
+                                        ElementState::Released,
+                                        MouseButton::Left,
+                                        Some(event_loop),
+                                    );
+                                });
+                            }
                             self.primary_touch_id = None;
                             // Promote another finger to primary if still down.
                             if let Some((&nid, &npos)) = self.active_touches.iter().next() {
@@ -479,15 +611,26 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 self.modifiers = modifiers.state();
             }
             WindowEvent::Ime(ime) => {
-                self.handle_ime_event(ime);
+                // Secondary IME not fully wired to its HWND yet; must not compose into primary.
+                if self.is_secondary_window(id) {
+                    return;
+                }
+                self.with_primary_input(id, |app| app.handle_ime_event(ime));
             }
             WindowEvent::Focused(focused) => {
                 let is_primary = (*self.state.borrow())
                     .as_ref()
                     .is_some_and(|state| state.window.id() == id);
                 if !is_primary {
-                    // ignore secondary focus for IME ownership
+                    if focused {
+                        self.bind_pointer_window(id);
+                        super::window_scope::force_secondary_id(id);
+                    }
                 } else if focused {
+                    self.bind_pointer_window(id);
+                    // Must not use enter_primary() guard here — its Drop would restore a
+                    // stuck secondary SIGNAL_KEY_SCOPE and freeze primary input routing.
+                    super::window_scope::force_primary();
                     self.os_window_focused = true;
                     self.ime_os_blur_at = None;
                 } else {
@@ -500,7 +643,13 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                let _ = self.handle_keyboard_input(event);
+                if self.is_secondary_window(id) {
+                    self.handle_secondary_keyboard(id, event);
+                } else {
+                    self.with_primary_input(id, |app| {
+                        let _ = app.handle_keyboard_input(event);
+                    });
+                }
             }
             WindowEvent::Occluded(occluded) if !occluded => {
                 if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -514,7 +663,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             WindowEvent::Resized(physical_size)
                 if physical_size.width > 0 && physical_size.height > 0 =>
             {
-                if let Some(sec) = self.secondaries.get_mut(&id) {
+                if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
                     sec.resize(physical_size);
                     sec.window.request_redraw();
                 } else if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -527,7 +676,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                if let Some(sec) = self.secondaries.get_mut(&id) {
+                if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
                     sec.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
                     sec.window.request_redraw();
                 } else if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -543,7 +692,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 if !paths.is_empty() {
                     super::fire_file_drop(paths);
                 }
-                if self.secondaries.contains_key(&id) {
+                if self.secondaries.borrow().contains_key(&id) {
                     self.handle_secondary_redraw(id);
                 } else {
                     self.handle_redraw_requested(id, event_loop);
@@ -607,8 +756,9 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         pinch_prev_dist: None,
         pinch_scale: 1.0,
         long_press: None,
+        pointer_window: None,
         window_registry: super::multi_window::WindowRegistry::new(),
-        secondaries: std::collections::HashMap::new(),
+        secondaries: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         drag_reorder: None,
         input_drag_rest: None,
         input_drag_anchor: 0,

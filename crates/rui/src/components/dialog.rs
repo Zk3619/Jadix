@@ -52,7 +52,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY};
+use crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP;
 use crate::primitives::interactive::interactive;
 use crate::primitives::overlay::overlay;
 use crate::primitives::r#box::{r#box, vstack};
@@ -60,7 +60,7 @@ use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::popup::{portal_panel, swallow_clicks};
+use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 
@@ -287,7 +287,12 @@ fn dialog_shell_frame(
 
     // Swallow clicks only — `panel_block_clicks` would nest a second `rui_portal` under stage.
     let mut panel: Element = if hug_content {
-        vstack().w("32rem").max_w("90dvw").flex_shrink(0.0).child(inner).into()
+        vstack()
+            .w("32rem")
+            .max_w("90dvw")
+            .flex_shrink(0.0)
+            .child(inner)
+            .into()
     } else {
         vstack().w("100%").min_h("0").child(inner).into()
     };
@@ -306,16 +311,9 @@ fn dialog_shell_frame(
         .justify_center()
         .child(panel)
         .into();
-    stage = stage.fixed();
-    stage.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
-    stage.set_attr(ATTR_PORTAL_KEY, format!("panel:{}", zs.panel));
-    stage = portal_panel(stage, zs.panel);
-    stage = stage.pointer_events_box_none();
+    stage = mount_viewport_portal_stage(stage, zs.panel);
 
-    Element::new()
-        .child(overlay_el)
-        .child(stage)
-        .pointer_events_box_none()
+    mount_modal_layer(overlay_el, stage)
 }
 
 // ---------------------------------------------------------------------------

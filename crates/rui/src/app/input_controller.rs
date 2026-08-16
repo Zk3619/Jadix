@@ -184,8 +184,20 @@ impl super::App {
     }
 
     pub(super) fn handle_keyboard_input(&mut self, event: KeyEvent) -> bool {
+        self.handle_keyboard_input_ex(event, true)
+    }
+
+    /// Signal-scoped text-field keys only — no primary tree walk / primary redraw.
+    pub(super) fn handle_keyboard_text_signals(&mut self, event: KeyEvent) -> bool {
+        self.handle_keyboard_input_ex(event, false)
+    }
+
+    fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
+                if !allow_primary_tree {
+                    return false;
+                }
                 let mut ids = crate::utils::focus_trap_ring_ids();
                 // Explicit focus trap wins; else Tab prefers top stacked overlay panel.
                 if ids.is_empty() {
@@ -241,7 +253,8 @@ impl super::App {
                 );
                 let fid = focused.get();
 
-                if event.state == ElementState::Pressed
+                if allow_primary_tree
+                    && event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
                 {
                     let closed = crate::app::portal_overlay::try_close_top()
@@ -254,7 +267,7 @@ impl super::App {
                     }
                 }
 
-                if super::window_keys::try_dispatch_window_key(&event) {
+                if allow_primary_tree && super::window_keys::try_dispatch_window_key(&event) {
                     if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                         st.window.request_redraw();
                     }
@@ -266,36 +279,43 @@ impl super::App {
                 // must run even while editing — otherwise ↑↓/Enter move the caret (or no-op)
                 // and never reach the list. Do **not** fall through to Space/Enter→click
                 // (that would swallow Space in the field).
-                let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
-                    super::tree_hit::focused_key_handlers(&st.root_element, &fid)
-                });
-                if let Some(handlers) = key_handlers {
-                    let handled = if editing {
-                        super::tree_hit::run_focused_keydown_only(&handlers, &event)
-                    } else {
-                        super::tree_hit::run_focused_key_handlers(&handlers, &event)
-                    };
-                    if handled {
-                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                            st.window.request_redraw();
-                        }
-                        return true;
-                    }
-                }
-
-                if !editing
-                    && clipboard_shortcut_modifiers(&self.modifiers)
-                    && edit_shortcut_letter(&event) == Some('c')
-                {
-                    if let Some(st) = (*self.state.borrow()).as_ref() {
-                        if crate::components::label::try_copy_label_selection(&st.root_element) {
-                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                st.window.request_redraw();
+                if allow_primary_tree {
+                    let key_handlers = (*self.state.borrow())
+                        .as_ref()
+                        .and_then(|st| super::tree_hit::focused_key_handlers(&st.root_element, &fid));
+                    if let Some(handlers) = key_handlers {
+                        let handled = if editing {
+                            super::tree_hit::run_focused_keydown_only(&handlers, &event)
+                        } else {
+                            super::tree_hit::run_focused_key_handlers(&handlers, &event)
+                        };
+                        if handled {
+                            if allow_primary_tree {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
                             }
                             return true;
                         }
                     }
+
+                    if !editing
+                        && clipboard_shortcut_modifiers(&self.modifiers)
+                        && edit_shortcut_letter(&event) == Some('c')
+                    {
+                        if let Some(st) = (*self.state.borrow()).as_ref() {
+                            if crate::components::label::try_copy_label_selection(&st.root_element) {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                } else if !editing {
+                    return false;
                 }
+
 
                 let edit_target = fid
                     .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
@@ -401,8 +421,10 @@ impl super::App {
                                 }
                             }
                             if handled {
-                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                    st.window.request_redraw();
+                                if allow_primary_tree {
+                                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                        st.window.request_redraw();
+                                    }
                                 }
                                 return true;
                             }
@@ -579,8 +601,10 @@ impl super::App {
                             _ => {}
                         }
                         if nav_handled {
-                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                st.window.request_redraw();
+                            if allow_primary_tree {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
                             }
                             return true;
                         }
@@ -593,8 +617,10 @@ impl super::App {
                                     rest
                                 );
                             }
-                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                st.window.request_redraw();
+                            if allow_primary_tree {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
                             }
                             return true;
                         }
@@ -636,8 +662,10 @@ impl super::App {
                             if ime_support::ime_diag_enabled() {
                                 log::info!("RUI_IME_DIAG drop text during end-drain rest={}", rest);
                             }
-                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                st.window.request_redraw();
+                            if allow_primary_tree {
+                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                    st.window.request_redraw();
+                                }
                             }
                             return true;
                         }
@@ -708,11 +736,14 @@ impl super::App {
                             }
                         }
                     }
-                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                        st.window.request_redraw();
+                    if allow_primary_tree {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                            st.window.request_redraw();
+                        }
                     }
+                    return true;
                 }
-                return true;
+                return allow_primary_tree;
             }
         }
         false

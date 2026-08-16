@@ -1939,10 +1939,7 @@ mod tests {
                 .description("Hover the stack to expand.")
                 .duration(5000)
                 .show();
-            Element::new()
-                .w(800.0)
-                .h(600.0)
-                .child(paint_toast_host())
+            Element::new().w(800.0).h(600.0).child(paint_toast_host())
         });
         let _ = hoist_portal_subtrees(&mut root);
         let mut tree = LayoutTree::new();
@@ -2019,7 +2016,9 @@ mod tests {
         toast_pending().set(vec![]);
         let (_owner, _) = crate::core::reactivity::create_root(|| {
             let cmd = Signal::new(true);
-            assert!(portal_sync("gal-cmd", cmd, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+            assert!(
+                portal_sync("gal-cmd", cmd, OverlayKind::Modal, OverlayMode::Stacked).is_some()
+            );
             let first = toast_push("Hello from Command", 2500);
             cmd.set(false);
             let _ = portal_sync("gal-cmd", cmd, OverlayKind::Modal, OverlayMode::Stacked);
@@ -2030,7 +2029,10 @@ mod tests {
             );
             let second = toast_push("Copy", 1500);
             let painted = paint_toast_host();
-            assert!(host_has_toast_portal(&painted), "follow-up toasts must keep painting");
+            assert!(
+                host_has_toast_portal(&painted),
+                "follow-up toasts must keep painting"
+            );
             assert!(toast_queue().get().iter().any(|t| t.id == first));
             assert!(toast_queue().get().iter().any(|t| t.id == second));
             clear_overlay_stack();

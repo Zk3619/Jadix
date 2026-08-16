@@ -52,6 +52,27 @@ thread_local! {
 
 pub(crate) const REACTIVE_PLACEHOLDER_HASH: &str = "__rui_reactive_placeholder_v1";
 
+/// Registry keys must not collide across windows when component ids match.
+fn window_scoped_registry_key(id: &str) -> String {
+    let scope = crate::core::reactivity::signal_key_scope();
+    if scope == 0 {
+        id.to_string()
+    } else {
+        format!("{id}__w{scope}")
+    }
+}
+
+fn restore_window_scope(
+    scope: super::window_scope::WindowScope,
+    window: Option<winit::window::WindowId>,
+) -> super::window_scope::WindowScopeGuard {
+    if let Some(id) = window {
+        super::window_scope::enter_secondary_id(id)
+    } else {
+        super::window_scope::enter(scope)
+    }
+}
+
 enum AnchorHook {
     /// Registration happened before its placeholder was created.
     Pending(Rc<UnmountHook>),
@@ -138,14 +159,16 @@ pub fn reset_registered_anchors() {
 
 /// Stash RSX `children` for a reactive component between `From`/function calls.
 pub fn stash_component_children(id: &str, children: Option<Element>) {
+    let key = window_scoped_registry_key(id);
     COMPONENT_CHILDREN.with(|store| {
-        store.borrow_mut().insert(id.to_string(), children);
+        store.borrow_mut().insert(key, children);
     });
 }
 
 /// Take stashed children inside a reactive component render pass.
 pub fn take_component_children(id: &str) -> Option<Element> {
-    COMPONENT_CHILDREN.with(|store| store.borrow_mut().remove(id).flatten())
+    let key = window_scoped_registry_key(id);
+    COMPONENT_CHILDREN.with(|store| store.borrow_mut().remove(&key).flatten())
 }
 
 fn mounted_anchor_hook(id: &str) -> Option<Rc<UnmountHook>> {
@@ -170,16 +193,17 @@ pub fn reactive_placeholder_sized(
     height: impl crate::core::tree::IntoCssDim,
 ) -> Element {
     let id = anchor_id.into();
+    let registry_key = window_scoped_registry_key(&id);
     let mut placeholder = Element::new()
-        .template_id(id.clone())
+        .template_id(id)
         .template_hash(REACTIVE_PLACEHOLDER_HASH)
         .w(width)
         .h(height);
 
-    if let Some(hook) = mounted_anchor_hook(&id) {
+    if let Some(hook) = mounted_anchor_hook(&registry_key) {
         placeholder = placeholder.on_unmount_hook(Rc::clone(&hook));
         REGISTERED_ANCHORS.with(|registry| {
-            if let Some(registration) = registry.borrow_mut().get_mut(&id) {
+            if let Some(registration) = registry.borrow_mut().get_mut(&registry_key) {
                 registration.hook = AnchorHook::Mounted(Rc::downgrade(&hook));
             }
         });
@@ -200,13 +224,14 @@ where
     }
 
     let id = anchor_id.into();
+    let registry_key = window_scoped_registry_key(&id);
     let already_registered =
-        REGISTERED_ANCHORS.with(|registry| registry.borrow().contains_key(&id));
+        REGISTERED_ANCHORS.with(|registry| registry.borrow().contains_key(&registry_key));
     if already_registered {
         return;
     }
 
-    let hook_id = id.clone();
+    let hook_id = registry_key.clone();
     let hook = UnmountHook::new(move || {
         let effect_id = REGISTERED_ANCHORS.with(|registry| {
             registry
@@ -220,7 +245,7 @@ where
     });
     REGISTERED_ANCHORS.with(|registry| {
         registry.borrow_mut().insert(
-            id.clone(),
+            registry_key.clone(),
             AnchorRegistration {
                 effect_id: None,
                 hook: AnchorHook::Pending(Rc::clone(&hook)),
@@ -229,7 +254,7 @@ where
     });
 
     // Owner dispose also drops the registration (in addition to element unmount).
-    let cleanup_id = id.clone();
+    let cleanup_id = registry_key.clone();
     crate::core::reactivity::on_cleanup(move || {
         let removed = REGISTERED_ANCHORS.with(|registry| registry.borrow_mut().remove(&cleanup_id));
         if let Some(registration) = removed {
@@ -243,10 +268,14 @@ where
     });
 
     let effect_anchor_id = id.clone();
+    let effect_registry_key = registry_key.clone();
+    let effect_scope = super::window_scope::active();
+    let effect_window = super::window_scope::active_window_id();
     let effect_id = create_effect(move || {
+        let _scope = restore_window_scope(effect_scope, effect_window);
         let mut fragment = f();
         fragment.template_id = Some(effect_anchor_id.clone());
-        if let Some(hook) = mounted_anchor_hook(&effect_anchor_id) {
+        if let Some(hook) = mounted_anchor_hook(&effect_registry_key) {
             fragment = fragment.on_unmount_hook(hook);
         }
         if runtime::try_reconcile_subtree(&effect_anchor_id, fragment).is_some() {
@@ -254,7 +283,7 @@ where
         }
     });
     REGISTERED_ANCHORS.with(|registry| {
-        if let Some(registration) = registry.borrow_mut().get_mut(&id) {
+        if let Some(registration) = registry.borrow_mut().get_mut(&registry_key) {
             registration.effect_id = Some(effect_id);
         }
     });
@@ -285,18 +314,19 @@ where
     F: FnMut(P) -> Element + 'static,
 {
     let id = anchor_id.into();
-    let gen_key = format!("{id}__component_gen");
+    let registry_key = window_scoped_registry_key(&id);
+    let gen_key = format!("{registry_key}__component_gen");
     let generation = use_signal(gen_key.as_str(), || 0u32);
 
     let props_cell = COMPONENT_PROPS.with(|store| {
         let mut store = store.borrow_mut();
-        if let Some(cell) = store.get(&id) {
+        if let Some(cell) = store.get(&registry_key) {
             Rc::clone(cell)
         } else {
             let cell = Rc::new(RefCell::new(Box::new(props.clone()) as Box<dyn Any>));
-            store.insert(id.clone(), Rc::clone(&cell));
+            store.insert(registry_key.clone(), Rc::clone(&cell));
             // Owner dispose must drop props/children stash (not only unmount / reset).
-            let cleanup_id = id.clone();
+            let cleanup_id = registry_key.clone();
             crate::core::reactivity::on_cleanup(move || {
                 COMPONENT_PROPS.with(|s| {
                     s.borrow_mut().remove(&cleanup_id);
@@ -370,17 +400,18 @@ where
     F: FnMut(P) -> Element + 'static,
 {
     let id = anchor_id.into();
-    let gen_key = format!("{id}__component_gen");
+    let registry_key = window_scoped_registry_key(&id);
+    let gen_key = format!("{registry_key}__component_gen");
     let generation = use_signal(gen_key.as_str(), || 0u32);
 
     let props_cell = COMPONENT_PROPS.with(|store| {
         let mut store = store.borrow_mut();
-        if let Some(cell) = store.get(&id) {
+        if let Some(cell) = store.get(&registry_key) {
             Rc::clone(cell)
         } else {
             let cell = Rc::new(RefCell::new(Box::new(props.clone()) as Box<dyn Any>));
-            store.insert(id.clone(), Rc::clone(&cell));
-            let cleanup_id = id.clone();
+            store.insert(registry_key.clone(), Rc::clone(&cell));
+            let cleanup_id = registry_key.clone();
             crate::core::reactivity::on_cleanup(move || {
                 COMPONENT_PROPS.with(|s| {
                     s.borrow_mut().remove(&cleanup_id);
@@ -539,6 +570,7 @@ where
     A: Fn(&mut Element, T) -> LayoutStatus + 'static,
 {
     let bind_key = bind_key.into();
+    let registry_key = window_scoped_registry_key(&bind_key);
     if el.template_id.is_none() {
         el.template_id = Some(bind_key.clone());
     }
@@ -557,14 +589,14 @@ where
     let existing_hook = REGISTERED_BINDINGS.with(|registry| {
         registry
             .borrow()
-            .get(&bind_key)
+            .get(&registry_key)
             .and_then(|registration| registration.hook.upgrade())
     });
     if let Some(hook) = existing_hook {
         return chain_unmount_hook(el, hook);
     }
 
-    let hook_key = bind_key.clone();
+    let hook_key = registry_key.clone();
     let hook = UnmountHook::new(move || {
         let effect_id = REGISTERED_BINDINGS.with(|registry| {
             registry
@@ -578,7 +610,7 @@ where
     });
     REGISTERED_BINDINGS.with(|registry| {
         registry.borrow_mut().insert(
-            bind_key.clone(),
+            registry_key.clone(),
             BindingRegistration {
                 effect_id: None,
                 hook: Rc::downgrade(&hook),
@@ -588,7 +620,7 @@ where
 
     // Owner dispose also drops the registration (unmount alone is not enough for headless /
     // create_root cycles — WP-2.4 / R-WP-1).
-    let cleanup_key = bind_key.clone();
+    let cleanup_key = registry_key.clone();
     crate::core::reactivity::on_cleanup(move || {
         let removed =
             REGISTERED_BINDINGS.with(|registry| registry.borrow_mut().remove(&cleanup_key));
@@ -603,7 +635,10 @@ where
     });
 
     let effect_node_id = node_id;
+    let effect_scope = super::window_scope::active();
+    let effect_window = super::window_scope::active_window_id();
     let effect_id = create_effect(move || {
+        let _scope = restore_window_scope(effect_scope, effect_window);
         let next = compute();
         if let Some(status) =
             runtime::try_update_element_by_template_id(&effect_node_id, |mounted| {
@@ -616,7 +651,7 @@ where
         }
     });
     REGISTERED_BINDINGS.with(|registry| {
-        if let Some(registration) = registry.borrow_mut().get_mut(&bind_key) {
+        if let Some(registration) = registry.borrow_mut().get_mut(&registry_key) {
             registration.effect_id = Some(effect_id);
         }
     });
@@ -979,5 +1014,48 @@ mod intrinsic_width_tests {
             tid
         });
         assert_eq!(tid, "sw-test");
+    }
+
+    #[test]
+    fn reactive_anchor_registers_independently_per_window_scope() {
+        use crate::core::reactivity::{
+            bind_current_owner_window_key_scope, create_effect, create_root, create_signal,
+        };
+        use crate::app::window_scope::{enter, WindowScope};
+
+        reset_registered_anchors();
+        let before = registered_anchor_count();
+
+        let (_o1, _) = create_root(|| {
+            let _g = enter(WindowScope::Primary);
+            bind_current_owner_window_key_scope(0);
+            let open = create_signal(false);
+            create_effect(move || {
+                let _g = enter(WindowScope::Primary);
+                reactive_anchor("shared_dialog_view", move || {
+                    let _ = open.get();
+                    Element::new().text("primary")
+                });
+            });
+        });
+        assert_eq!(registered_anchor_count(), before + 1);
+
+        let (_o2, _) = create_root(|| {
+            bind_current_owner_window_key_scope(7);
+            let open = create_signal(false);
+            create_effect(move || {
+                let _g = enter(WindowScope::Secondary(7));
+                reactive_anchor("shared_dialog_view", move || {
+                    let _ = open.get();
+                    Element::new().text("secondary")
+                });
+            });
+        });
+        assert_eq!(
+            registered_anchor_count(),
+            before + 2,
+            "same anchor id must register once per window scope"
+        );
+        reset_registered_anchors();
     }
 }

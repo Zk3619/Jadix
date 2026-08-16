@@ -40,8 +40,8 @@ use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::popup::{
-    floating_portal_anchor, mark_floating_with_gap, panel_block_clicks, PopupPlacement,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
+    mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_MIN_W,
 };
 use rui_macros::component;
 
@@ -247,8 +247,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "0");
         panel = panel.absolute();
-        // 0×0 锚点：100% 占位会在 HStack 里盖住 Trigger，hover 永远打不中按钮。
-        floating_portal_anchor(panel_block_clicks(panel, oz.panel))
+        mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
@@ -366,6 +365,9 @@ mod tests {
             );
             (is_view && dim0) || el.children.iter().any(find_zero)
         }
-        assert!(find_zero(&el), "TooltipContent must use a 0×0 portal anchor");
+        assert!(
+            find_zero(&el),
+            "TooltipContent must use a 0×0 portal anchor"
+        );
     }
 }

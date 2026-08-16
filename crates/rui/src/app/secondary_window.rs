@@ -3,12 +3,14 @@
 //! Shares the primary [`super::state::AppState`]'s `Device` / `Queue` / `Instance`,
 //! and hosts an independent surface, layout tree, and root element.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::core::reactivity::OwnerHandle;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
 use crate::renderer::{prepare_text_frame, scale_instances, RuiPipeline, RuiTextRenderer};
 
@@ -42,10 +44,23 @@ pub(super) struct SecondaryWindowState {
     instance_buffer: wgpu::Buffer,
     instance_buffer_capacity: usize,
     num_instances: u32,
-    layout_tree: LayoutTree,
-    text_renderer: RuiTextRenderer,
-    root_element: Element,
+    pub(super) layout_tree: LayoutTree,
+    pub(super) text_renderer: RuiTextRenderer,
+    /// Band 0 portal overlay glyphs (Dialog / Select menu / etc.).
+    overlay_text_renderer: RuiTextRenderer,
+    /// Extra stacked portal bands (band_i >= 1).
+    overlay_band_text_renderers: Vec<RuiTextRenderer>,
+    pub(super) root_element: Element,
     pub(super) layout_status: LayoutStatus,
+    pub(super) template_paths: HashMap<String, Vec<usize>>,
+    pub(super) pending_layout_dirty: Vec<taffy::prelude::NodeId>,
+    pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
+    pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
+    pub(super) scroll_metrics_cache: HashMap<String, ([f32; 4], [f32; 2], [f32; 2])>,
+    pub(super) damage_rect: Option<[f32; 4]>,
+    pub(super) ime_allowed_latched: bool,
+    /// Drops first (declared last) so secondary effects dispose before GPU teardown.
+    owner: Option<OwnerHandle>,
 }
 
 impl SecondaryWindowState {
@@ -75,12 +90,15 @@ impl SecondaryWindowState {
         surface.configure(&device, &config);
 
         let pipeline = RuiPipeline::new(&device, &config);
-        let text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
+        let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
             // Headless / tests without primary shared FS: own a FontSystem.
             RuiTextRenderer::new(&device, &queue, &config)
         };
+        let overlay_font = text_renderer.font_system_mut() as *mut glyphon::FontSystem;
+        let overlay_text_renderer =
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, overlay_font);
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
 
@@ -112,8 +130,18 @@ impl SecondaryWindowState {
             num_instances,
             layout_tree,
             text_renderer,
+            overlay_text_renderer,
+            overlay_band_text_renderers: Vec::new(),
             root_element,
             layout_status: LayoutStatus::StructureChanged,
+            template_paths: HashMap::new(),
+            pending_layout_dirty: Vec::new(),
+            last_hover_cursor: None,
+            last_render_scroll_metrics: Vec::new(),
+            scroll_metrics_cache: HashMap::new(),
+            damage_rect: None,
+            ime_allowed_latched: false,
+            owner: None,
         })
     }
 
@@ -190,6 +218,15 @@ impl SecondaryWindowState {
 
         let scaled_instances = scale_instances(&render_result.instances, scale);
         self.num_instances = render_result.instances.len() as u32;
+        let overlay_inst_start = render_result
+            .overlay_split
+            .instance_start
+            .min(scaled_instances.len());
+        let scaled_input_chrome = scale_instances(&render_result.input_chrome_instances, scale);
+        let overlay_chrome_start = render_result
+            .overlay_split
+            .chrome_start
+            .min(scaled_input_chrome.len());
 
         if scaled_instances.len() > self.instance_buffer_capacity {
             self.instance_buffer =
@@ -199,7 +236,7 @@ impl SecondaryWindowState {
                         contents: bytemuck::cast_slice(&scaled_instances),
                         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                     });
-            self.instance_buffer_capacity = scaled_instances.len();
+            self.instance_buffer_capacity = scaled_instances.len().max(1);
         } else {
             self.queue.write_buffer(
                 &self.instance_buffer,
@@ -208,23 +245,79 @@ impl SecondaryWindowState {
             );
         }
         self.layout_status = LayoutStatus::Clean;
+        self.last_render_scroll_metrics = render_result.scroll_metrics.clone();
+        self.scroll_metrics_cache = render_result
+            .scroll_metrics
+            .iter()
+            .map(|(rest, b, max, content)| (rest.clone(), (*b, *max, *content)))
+            .collect();
 
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
 
         let empty_keys = std::collections::HashSet::new();
         let empty_rects = std::collections::HashMap::new();
+        let overlay_text_start = render_result
+            .overlay_split
+            .text_start
+            .min(render_result.text_nodes.len());
+        let page_text = &render_result.text_nodes[..overlay_text_start];
         let prep = prepare_text_frame(
             &mut self.text_renderer,
             &self.device,
             &self.queue,
             &self.config,
-            &render_result.text_nodes,
+            page_text,
             scale,
             false,
             &empty_keys,
             &empty_rects,
         );
+
+        // Portal overlay glyphs (Dialog / Select menu) — same band model as AppState.
+        let overlay_band_ranges = render_result.overlay_split.band_ranges(
+            scaled_instances.len(),
+            0,
+            render_result.text_nodes.len(),
+            scaled_input_chrome.len(),
+            0,
+        );
+        self.ensure_overlay_band_text_renderers(overlay_band_ranges.len());
+        let mut overlay_band_underlines: Vec<Vec<_>> =
+            Vec::with_capacity(overlay_band_ranges.len());
+        let mut overlay_needs_warmup = false;
+        for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+            let text_slice = &render_result.text_nodes[band.text.0..band.text.1];
+            let overlay_prep = if band_i == 0 {
+                prepare_text_frame(
+                    &mut self.overlay_text_renderer,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    text_slice,
+                    scale,
+                    false,
+                    &empty_keys,
+                    &empty_rects,
+                )
+            } else {
+                prepare_text_frame(
+                    &mut self.overlay_band_text_renderers[band_i - 1],
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    text_slice,
+                    scale,
+                    false,
+                    &empty_keys,
+                    &empty_rects,
+                )
+            };
+            if overlay_prep.needs_warmup {
+                overlay_needs_warmup = true;
+            }
+            overlay_band_underlines.push(overlay_prep.underline_instances);
+        }
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -266,8 +359,13 @@ impl SecondaryWindowState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
-            if self.num_instances > 0 {
-                render_pass.draw_indexed(0..self.pipeline.num_indices, 0, 0..self.num_instances);
+            // Page chrome first.
+            if overlay_inst_start > 0 {
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..overlay_inst_start as u32,
+                );
             }
 
             if !prep.underline_instances.is_empty() {
@@ -286,13 +384,137 @@ impl SecondaryWindowState {
                 );
             }
 
+            // Page input caret / selection chrome (before page glyphs).
+            if overlay_chrome_start > 0 {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                let chrome_slice = &scaled_input_chrome[..overlay_chrome_start];
+                let chrome_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Secondary Input Chrome Buffer"),
+                            contents: bytemuck::cast_slice(chrome_slice),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..chrome_slice.len() as u32,
+                );
+            }
+
+            if !prep.caret_instances.is_empty() {
+                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                let caret_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Secondary Caret Buffer"),
+                            contents: bytemuck::cast_slice(&prep.caret_instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+                render_pass.set_vertex_buffer(1, caret_buffer.slice(..));
+                render_pass.set_index_buffer(
+                    self.pipeline.index_buffer.slice(..),
+                    wgpu::IndexFormat::Uint16,
+                );
+                render_pass.draw_indexed(
+                    0..self.pipeline.num_indices,
+                    0,
+                    0..prep.caret_instances.len() as u32,
+                );
+            }
+
             self.text_renderer.render(&mut render_pass);
+
+            // Portal overlay: per-band `rects → text` so panels occlude lower glyphs.
+            for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+                if band.instance.0 < band.instance.1 {
+                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        band.instance.0 as u32..band.instance.1 as u32,
+                    );
+                }
+
+                if band.chrome.0 < band.chrome.1 {
+                    render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                    let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                    let chrome_buffer =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Secondary Overlay Input Chrome Buffer"),
+                                contents: bytemuck::cast_slice(chrome_slice),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+                    render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                    render_pass.set_index_buffer(
+                        self.pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(
+                        0..self.pipeline.num_indices,
+                        0,
+                        0..chrome_slice.len() as u32,
+                    );
+                }
+
+                if let Some(ul) = overlay_band_underlines.get(band_i) {
+                    if !ul.is_empty() {
+                        render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                        render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                        let underline_buffer =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Secondary Overlay Underline Buffer"),
+                                    contents: bytemuck::cast_slice(ul),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                        render_pass.set_index_buffer(
+                            self.pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        render_pass.draw_indexed(
+                            0..self.pipeline.num_indices,
+                            0,
+                            0..ul.len() as u32,
+                        );
+                    }
+                }
+
+                if band.text.0 < band.text.1 {
+                    if band_i == 0 {
+                        self.overlay_text_renderer.render(&mut render_pass);
+                    } else {
+                        self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
+                    }
+                }
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        if prep.culled_skip_prepare || prep.needs_warmup {
+        if prep.culled_skip_prepare || prep.needs_warmup || overlay_needs_warmup {
             self.window.request_redraw();
         }
         if crate::text::take_fit_needs_relayout() {
@@ -300,4 +522,83 @@ impl SecondaryWindowState {
         }
         Ok(())
     }
+
+    fn ensure_overlay_band_text_renderers(&mut self, band_count: usize) {
+        let extra_needed = band_count.saturating_sub(1);
+        while self.overlay_band_text_renderers.len() < extra_needed {
+            let font_ptr = self.text_renderer.font_system_mut() as *mut glyphon::FontSystem;
+            self.overlay_band_text_renderers
+                .push(RuiTextRenderer::new_sharing_font_system(
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    font_ptr,
+                ));
+        }
+    }
+
+    pub(super) fn attach_owner(&mut self, owner: OwnerHandle) {
+        self.owner = Some(owner);
+    }
+
+    /// Drop the reactive owner before GPU teardown (avoids effects re-entering `secondaries`).
+    pub(super) fn take_owner(&mut self) -> Option<OwnerHandle> {
+        self.owner.take()
+    }
+
+    pub(super) fn hide_window(&self) {
+        self.window.set_visible(false);
+    }
+
+    pub(super) fn replace_root(&mut self, root: Element) {
+        self.root_element = root;
+        self.layout_status = LayoutStatus::StructureChanged;
+        self.template_paths.clear();
+        self.pending_layout_dirty.clear();
+    }
+
+    pub(super) fn reconcile_subtree(
+        &mut self,
+        anchor_id: &str,
+        new_fragment: Element,
+    ) -> LayoutStatus {
+        let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
+        let status = if let Some(old) = find_template_mut(&mut self.root_element, &want) {
+            *old = new_fragment;
+            LayoutStatus::StructureChanged
+        } else {
+            drop(new_fragment);
+            LayoutStatus::StructureChanged
+        };
+        self.layout_status = self.layout_status.merge(status);
+        status
+    }
+
+    pub(super) fn update_element_by_template_id<F>(&mut self, template_id: &str, patch: F) -> LayoutStatus
+    where
+        F: FnOnce(&mut Element) -> LayoutStatus,
+    {
+        let want = template_id.replace('\\', "/").to_ascii_lowercase();
+        if let Some(el) = find_template_mut(&mut self.root_element, &want) {
+            let status = patch(el);
+            self.layout_status = self.layout_status.merge(status);
+            status
+        } else {
+            LayoutStatus::Clean
+        }
+    }
+}
+
+fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&'a mut Element> {
+    if let Some(tid) = el.template_id.as_deref() {
+        if tid.replace('\\', "/").to_ascii_lowercase() == want_normalized {
+            return Some(el);
+        }
+    }
+    for child in &mut el.children {
+        if let Some(hit) = find_template_mut(child, want_normalized) {
+            return Some(hit);
+        }
+    }
+    None
 }

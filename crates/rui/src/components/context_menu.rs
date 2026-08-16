@@ -12,7 +12,7 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::tokens;
-use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
+use crate::utils::popup::{mark_floating, mount_anchored_overlay, PopupPlacement};
 use crate::utils::roving::{roving_edge, roving_move};
 use winit::keyboard::{Key, NamedKey};
 
@@ -180,7 +180,7 @@ impl ContextMenuBuilder {
             panel = panel.accesskit_role("menu");
             mark_floating(&mut panel, &id, &trigger_fid, placement);
             panel = panel.absolute();
-            panel_block_clicks(panel, oz.panel)
+            mount_anchored_overlay(panel, oz.panel)
         });
 
         vstack().child(trigger).child(menu).into()

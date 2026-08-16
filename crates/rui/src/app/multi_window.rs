@@ -6,8 +6,10 @@
 //! [`WindowRegistry`], and host an independent UI tree via
 //! [`super::secondary_window::SecondaryWindowState`].
 //!
-//! Status: **wired MVP** — secondary windows create/show/close with layout + render
-//! (shared primary device/queue); input routing beyond redraw/resize is still primary-first.
+//! Status: secondary windows create/show/close with layout + render
+//! (shared primary device/queue). Each window has a dedicated input channel
+//! ([`crate::app::secondary_input`]) that hit-tests only that window's tree.
+//! Cross-window state uses [`shared_slot`] / [`super::ui_bridge::run_on_ui_thread`].
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -84,6 +86,25 @@ impl WindowRegistry {
     pub fn is_secondary(&self, id: WindowId) -> bool {
         self.primary != Some(id) && self.slots.contains_key(&id)
     }
+
+    /// Hide and remove every non-primary window slot (call on app shutdown).
+    pub fn drain_secondaries(&mut self) -> Vec<WindowSlot> {
+        let primary = self.primary;
+        let ids: Vec<WindowId> = self
+            .slots
+            .keys()
+            .copied()
+            .filter(|id| primary != Some(*id))
+            .collect();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(slot) = self.slots.remove(&id) {
+                slot.window.set_visible(false);
+                out.push(slot);
+            }
+        }
+        out
+    }
 }
 
 /// Shared window attributes for primary bootstrap and secondary windows.
@@ -136,6 +157,18 @@ pub fn open_secondary_window(
         .map_err(|e| format!("multi-window: failed to queue OpenWindow: {e}"))
 }
 
+/// Named UI-thread slot shared across windows (and with workers via [`super::ui_bridge::run_on_ui_thread`]).
+///
+/// Keys are process-global. Capture the returned [`Signal`](crate::core::reactivity::Signal) in a
+/// secondary builder, or call this with the same `key` from both trees. `Signal` is `Copy` but
+/// not `Send` — hop threads with `run_on_ui_thread(move || slot.set(v))`.
+pub fn shared_slot<T: Clone + PartialEq + 'static>(
+    key: &'static str,
+    init: impl FnOnce() -> T,
+) -> crate::core::reactivity::Signal<T> {
+    crate::core::reactivity::use_signal(key, init)
+}
+
 /// Convenience: open a secondary window with an empty full-size root (tests / placeholders).
 pub fn open_secondary_window_title_only(title: impl Into<String>) -> Result<(), String> {
     open_secondary_window(title, || Element::new().w("100%").h("100%"))
@@ -170,11 +203,8 @@ mod tests {
     }
 
     #[test]
-    fn window_registry_remove_secondary_on_empty() {
-        let reg = WindowRegistry::new();
-        assert!(reg.is_empty());
-        assert_eq!(reg.len(), 0);
-        // remove_secondary is a no-op until real WindowIds are inserted by the event loop.
-        assert!(reg.primary_id().is_none());
+    fn window_registry_drain_secondaries_on_empty() {
+        let mut reg = WindowRegistry::new();
+        assert!(reg.drain_secondaries().is_empty());
     }
 }

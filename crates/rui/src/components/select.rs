@@ -27,7 +27,7 @@
 //! `<SelectContent scrollSelected>`，取值 `none`（默认）| `start` | `center`。
 //!
 //! ## 浮层契约
-//! 菜单经 [`mark_floating`] + [`panel_block_clicks`] 提升到根 portal；
+//! 菜单经 [`mark_floating`] + [`mount_anchored_overlay`] 提升到根 portal；
 //! 几何由 [`sync_floating_placement`] 写入。**禁止**自管 left/top 信号。
 
 use std::collections::HashMap;
@@ -51,9 +51,9 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, floating_portal_anchor, mark_floating,
-    panel_block_clicks, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    apply_stored_floating_place, disarm_underlay_close, mark_floating, mount_anchored_overlay,
+    PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
+    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -498,9 +498,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             menu = with_class_list(menu, &content_class);
         }
 
-        menu = panel_block_clicks(menu, oz.panel);
-        // 占位锚点：不占布局；菜单已 portal 到根。
-        floating_portal_anchor(menu)
+        mount_anchored_overlay(menu, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }

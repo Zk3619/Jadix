@@ -28,6 +28,74 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 thread_local! {
     static RUNTIME: RefCell<Rc<Runtime>> = RefCell::new(Runtime::new());
+    /// Non-zero while a secondary window is the active input/render scope.
+    /// Remaps a small set of process-global `__rui_*` keys so focus / IME stay per-window.
+    static SIGNAL_KEY_SCOPE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Keys that must not be shared between the primary window and secondaries.
+const WINDOW_LOCAL_SIGNAL_KEYS: &[&str] = &[
+    "__rui_button_focus_id",
+    "__rui_focus_visible",
+    "__rui_ime_active",
+];
+
+/// Set the active window signal-key suffix (`0` = primary / tests). Returns the previous value.
+pub(crate) fn set_signal_key_scope(scope: u64) -> u64 {
+    SIGNAL_KEY_SCOPE.replace(scope)
+}
+
+/// Current window signal-key suffix (`0` = primary).
+pub(crate) fn signal_key_scope() -> u64 {
+    SIGNAL_KEY_SCOPE.get()
+}
+
+/// Stamp the current owner (and future children inherit) with a secondary-window token.
+pub fn bind_current_owner_window_key_scope(scope: u64) {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let Some(id) = *rt.current_owner.borrow() else {
+            return;
+        };
+        let mut owners = rt.owners.borrow_mut();
+        if let Some(node) = owners.get_mut(&id) {
+            node.window_key_scope = scope;
+        }
+    });
+}
+
+fn owner_window_key_scope(rt: &Runtime, owner: OwnerId) -> u64 {
+    rt.owners
+        .borrow()
+        .get(&owner)
+        .map(|n| n.window_key_scope)
+        .unwrap_or(0)
+}
+
+struct OwnerWindowScopeGuard {
+    prev: u64,
+}
+
+impl Drop for OwnerWindowScopeGuard {
+    fn drop(&mut self) {
+        SIGNAL_KEY_SCOPE.set(self.prev);
+    }
+}
+
+fn enter_owner_window_scope(rt: &Runtime, owner: OwnerId) -> OwnerWindowScopeGuard {
+    let scope = owner_window_key_scope(rt, owner);
+    OwnerWindowScopeGuard {
+        prev: SIGNAL_KEY_SCOPE.replace(scope),
+    }
+}
+
+fn remap_window_local_signal_key(id_str: &str) -> std::borrow::Cow<'_, str> {
+    let scope = SIGNAL_KEY_SCOPE.get();
+    if scope == 0 || !WINDOW_LOCAL_SIGNAL_KEYS.iter().any(|k| *k == id_str) {
+        std::borrow::Cow::Borrowed(id_str)
+    } else {
+        std::borrow::Cow::Owned(format!("{id_str}__w{scope}"))
+    }
 }
 
 /// `true` while the reactivity thread-local is still usable (not in TLS destructor).
@@ -68,6 +136,9 @@ struct OwnerNode {
     contexts: HashMap<ContextId, Rc<dyn Any>>,
     /// Local-id → (SignalId, TypeId) for [`use_scoped_signal`].
     scoped_signals: HashMap<String, (SignalId, TypeId)>,
+    /// Non-zero = secondary window signal-key token (see [`crate::app::window_scope`]).
+    /// Inherited by child owners so nested effects keep the window without an enter guard.
+    window_key_scope: u64,
 }
 
 struct EffectState {
@@ -254,6 +325,7 @@ fn ensure_owner(rt: &Runtime) -> OwnerId {
             cleanups: Vec::new(),
             contexts: HashMap::new(),
             scoped_signals: HashMap::new(),
+            window_key_scope: 0,
         },
     );
     *rt.root_owner.borrow_mut() = Some(id);
@@ -263,13 +335,12 @@ fn ensure_owner(rt: &Runtime) -> OwnerId {
 
 fn create_child_owner(rt: &Runtime, parent: OwnerId) -> OwnerId {
     let id = OwnerId(NEXT_OWNER_ID.fetch_add(1, Ordering::Relaxed));
-    let path = {
+    let (path, window_key_scope) = {
         let owners = rt.owners.borrow();
-        let parent_path = owners
-            .get(&parent)
-            .map(|n| n.path.as_str())
-            .unwrap_or("root");
-        format!("{parent_path}/{}", id.0)
+        let parent_node = owners.get(&parent);
+        let parent_path = parent_node.map(|n| n.path.as_str()).unwrap_or("root");
+        let window_key_scope = parent_node.map(|n| n.window_key_scope).unwrap_or(0);
+        (format!("{parent_path}/{}", id.0), window_key_scope)
     };
     rt.owners.borrow_mut().insert(
         id,
@@ -283,6 +354,7 @@ fn create_child_owner(rt: &Runtime, parent: OwnerId) -> OwnerId {
             cleanups: Vec::new(),
             contexts: HashMap::new(),
             scoped_signals: HashMap::new(),
+            window_key_scope,
         },
     );
     if let Some(parent_node) = rt.owners.borrow_mut().get_mut(&parent) {
@@ -465,6 +537,7 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
     let prev_owner = *rt.current_owner.borrow();
     *rt.current_effect.borrow_mut() = Some(effect_id);
     *rt.current_owner.borrow_mut() = Some(owner);
+    let _window_scope = enter_owner_window_scope(rt, owner);
 
     (*effect_fn.borrow_mut())();
 
@@ -589,6 +662,7 @@ fn run_memo(rt: &Runtime, memo_id: MemoId) -> bool {
     *rt.current_owner.borrow_mut() = Some(owner);
     // Memo compute should not attach to an outer effect.
     *rt.current_effect.borrow_mut() = None;
+    let _window_scope = enter_owner_window_scope(rt, owner);
 
     let changed = (*compute.borrow_mut())();
 
@@ -1194,6 +1268,7 @@ where
                 cleanups: Vec::new(),
                 contexts: HashMap::new(),
                 scoped_signals: HashMap::new(),
+                window_key_scope: 0,
             },
         );
         let prev_owner = *rt.current_owner.borrow();
@@ -1348,16 +1423,17 @@ impl Drop for OwnerRestore {
     }
 }
 
-/// Run `f` under a **component-instance owner**, then restore the previous current owner.
+/// Run `f` as a **component-instance root** (Solid-style owner), then restore the previous owner.
 ///
-/// RUI `#[component]` / Builder `From` 只是普通函数调用，**不会**像 Solid 那样每实例自动开
-/// rendering scope。因此带 [`provide_context`] 的复合控件（Combobox / Select / RadioGroup）
-/// 必须在实例根调用本函数：Trigger、下拉 `reactive_anchor`/`create_effect`、Item 的
-/// `use_context` 都挂在这棵子树上，下拉属于该实例，而不是父级 DatePicker 浮层。
+/// [`macro@crate::component`] wraps each invocation in this automatically (WP-3.14).
+/// Builder-only composite roots (Select / Combobox / RadioGroup) must still call it at the
+/// instance root: Trigger, dropdown `reactive_anchor` / `create_effect`, and Item `use_context`
+/// hang on this subtree so the menu belongs to that instance, not a parent DatePicker overlay.
 ///
-/// 子 owner 留在树上，随父级 dispose。若省略，同父级上多次 `provide_context` 会覆盖同一
-/// [`Context`] id，表现为三个 TimePicker Combobox 共用最后一个的菜单。
-pub fn with_child_owner<F, R>(f: F) -> R
+/// Nested calls are cheap extra owners (correct isolation). Child owners stay on the tree and
+/// dispose with the parent. If omitted on a **Builder** root, sibling `provide_context` calls
+/// overwrite the same [`Context`] id (three TimePicker Comboboxes sharing the last menu).
+pub fn component_root<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
@@ -1369,6 +1445,14 @@ where
     });
     let _restore = OwnerRestore(prev);
     f()
+}
+
+/// Alias of [`component_root`]. Prefer [`component_root`] at new Builder call sites.
+pub fn with_child_owner<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    component_root(f)
 }
 
 pub fn use_context<T: Clone + 'static>(ctx: Context<T>) -> Option<T> {
@@ -1400,6 +1484,10 @@ pub fn use_context<T: Clone + 'static>(ctx: Context<T>) -> Option<T> {
 // Tracking helpers
 // ---------------------------------------------------------------------------
 
+/// Run `f` with `current_effect` / `current_memo` cleared ([`is_tracking`] is false).
+///
+/// Do **not** wrap a subtree that must call [`crate::app::reactive::reactive_anchor`]:
+/// registration bails out when tracking is off. Use [`isolate_reads`] instead.
 pub fn untrack<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -1430,10 +1518,13 @@ impl Drop for BatchGuard {
     fn drop(&mut self) {
         RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
-            let mut depth = rt.batch_depth.borrow_mut();
-            debug_assert!(*depth > 0, "batch_depth underflow");
-            *depth -= 1;
-            if *depth == 0 {
+            let should_flush = {
+                let mut depth = rt.batch_depth.borrow_mut();
+                debug_assert!(*depth > 0, "batch_depth underflow");
+                *depth -= 1;
+                *depth == 0
+            };
+            if should_flush {
                 flush_pending(&rt);
             }
         });
@@ -1456,10 +1547,15 @@ pub fn create_signal<T: 'static>(initial_value: T) -> Signal<T> {
 }
 
 pub fn use_signal<T: 'static>(id_str: &str, init: impl FnOnce() -> T) -> Signal<T> {
-    RUNTIME.with(|rt_rc| rt_rc.borrow().use_signal(id_str, init))
+    let remapped = remap_window_local_signal_key(id_str);
+    RUNTIME.with(|rt_rc| rt_rc.borrow().use_signal(remapped.as_ref(), init))
 }
 
-/// Run `f` while tracking stays on (`is_tracking()` true) but collected `get()` deps are discarded.
+/// Run `f` while tracking stays on ([`is_tracking`] is true) but collected `get()` deps are discarded.
+///
+/// Use this around a floating-panel / `reactive_anchor` subtree so child widgets can still
+/// **register** anchors. [`untrack`] clears `current_effect`, so `reactive_anchor` returns
+/// immediately (empty overlay). Contract test: `untrack_skips_anchor_but_isolate_reads_registers`.
 pub fn isolate_reads<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
@@ -1993,6 +2089,24 @@ mod tests {
             b.set(2);
         });
         assert_eq!(*runs.borrow(), 2);
+    }
+
+    #[test]
+    fn batch_end_flush_can_set_another_signal() {
+        // Gallery `batch { mark_invalid.set }` / Command activate: effects flushed at
+        // batch-end often `set` other signals. BatchGuard must not hold `batch_depth`
+        // mutably across that flush (`RefCell already mutably borrowed` at notify).
+        let src = Signal::new(0_i32);
+        let derived = Signal::new(0_i32);
+        create_effect(move || {
+            let v = src.get();
+            derived.set(v + 1);
+        });
+        assert_eq!(derived.peek(), 1);
+        batch(|| {
+            src.set(10);
+        });
+        assert_eq!(derived.peek(), 11);
     }
 
     #[test]

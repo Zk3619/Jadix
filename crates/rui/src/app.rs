@@ -63,6 +63,7 @@ pub mod router;
 pub mod runtime;
 pub(crate) mod scroll_support;
 mod secondary_window;
+mod secondary_input;
 mod state;
 #[cfg(test)]
 pub(crate) use state::{
@@ -73,11 +74,14 @@ pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
 pub mod ui_bridge;
+pub(crate) mod window_scope;
 mod window_events;
 pub mod window_keys;
 
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
-pub use multi_window::{open_secondary_window, open_secondary_window_title_only};
+pub use multi_window::{
+    open_secondary_window, open_secondary_window_title_only, shared_slot,
+};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
@@ -144,11 +148,16 @@ struct App {
     pinch_scale: f32,
     /// Long-press → ContextMenu path while primary button/touch is held.
     long_press: Option<LongPressTrack>,
+    /// Last window that received pointer events (reset hover/click path on switch).
+    pointer_window: Option<winit::window::WindowId>,
     /// Primary + secondary window slots (wired MVP).
     window_registry: multi_window::WindowRegistry,
     /// Secondary windows with independent UI trees / swapchains.
-    secondaries:
-        std::collections::HashMap<winit::window::WindowId, secondary_window::SecondaryWindowState>,
+    secondaries: std::rc::Rc<
+        std::cell::RefCell<
+            std::collections::HashMap<winit::window::WindowId, secondary_window::SecondaryWindowState>,
+        >,
+    >,
     drag_reorder: Option<DragReorderState>,
     /// ??????? input `rest`?`input:{rest}` ?? id??
     input_drag_rest: Option<String>,

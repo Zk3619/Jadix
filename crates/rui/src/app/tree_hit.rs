@@ -513,7 +513,10 @@ fn pointer_on_text_edit_adornment(el: &Element, x: f32, y: f32, scroll_acc: [f32
     }
     let is_adornment = el.on_click.is_some()
         || el.text_style.font_family.as_deref() == Some("lucide")
-        || el.cursor.as_ref().is_some_and(|c| c.kind == CursorKind::Pointer);
+        || el
+            .cursor
+            .as_ref()
+            .is_some_and(|c| c.kind == CursorKind::Pointer);
     is_adornment && claims_own_bounds(el) && x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3]
 }
 

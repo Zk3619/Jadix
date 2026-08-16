@@ -7,8 +7,8 @@
 //! 三种表面：
 //! - **行内** [`Command`]：嵌在 Card 等布局里。
 //! - **Dialog** [`CommandDialog`]：组合 Dialog（居中模态，`show_close=false`），不改 `dialog.rs`。
-//! - **纯浮层** [`command_overlay_scope`] / `<CommandOverlay>`：ShadCN CommandDialog 式视口 **top-1/3** 居中，
-//!   透明点击关闭层 + 模态栈面板（无 Dialog 壳；点击空白 / Esc 关闭）。
+//! - **纯浮层** [`command_overlay_scope`] / `<CommandOverlay>`：ShadCN CommandDialog 式视口 **top-1/3** 居中；
+//!   舞台走 [`mount_viewport_portal_stage`](crate::utils::popup::mount_viewport_portal_stage)（非 Dialog 居中 chrome）。
 //!
 //! 行为对照 cmdk：**类型即搜**，↑↓ 高亮，Enter 执行；浮层 / Dialog 下 Esc 关闭。
 //!
@@ -77,8 +77,7 @@ use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode, OverlayZ
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
 use crate::components::input::{
-    input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key,
-    lucide_named,
+    input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -88,16 +87,14 @@ use crate::core::reactivity::{
     Signal,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
-use crate::layout::layout_tree::{
-    LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY,
-};
+use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::popup::{
-    portal_panel, swallow_clicks, underlay_close_on_click,
+    mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
 };
 use crate::utils::roving::roving_move;
 use crate::utils::text_field::input_focus_id;
@@ -228,11 +225,7 @@ fn push_activate(id: &str, f: Rc<dyn Fn()>) {
 }
 
 fn take_activate(id: &str, ix: usize) -> Option<Rc<dyn Fn()>> {
-    COMMAND_ACTIVATES.with(|m| {
-        m.borrow()
-            .get(id)
-            .and_then(|v| v.get(ix).cloned())
-    })
+    COMMAND_ACTIVATES.with(|m| m.borrow().get(id).and_then(|v| v.get(ix).cloned()))
 }
 
 fn is_palette(surface: CommandSurface) -> bool {
@@ -242,11 +235,14 @@ fn is_palette(surface: CommandSurface) -> bool {
 fn reset_command_session(id: &str) {
     let filter_id = format!("{id}__filter");
     use_signal(input_value_signal_key(&filter_id).as_str(), String::new).set(String::new());
-    use_signal(input_caret_signal_key(&filter_id).as_str(), || None::<usize>).set(None);
     use_signal(
-        input_selection_signal_key(&filter_id).as_str(),
-        || None::<(usize, usize)>,
+        input_caret_signal_key(&filter_id).as_str(),
+        || None::<usize>,
     )
+    .set(None);
+    use_signal(input_selection_signal_key(&filter_id).as_str(), || {
+        None::<(usize, usize)>
+    })
     .set(None);
     use_signal(format!("{id}__cmd_active").as_str(), || 0usize).set(0);
 }
@@ -364,11 +360,7 @@ fn command_paint(
     });
     // DialogContent 会给返回根写 `min_h:0` + `flex_grow:1`。固有高度放在内层，避免被压成 0。
     if surface == CommandSurface::Dialog {
-        vstack()
-            .w("100%")
-            .flex_shrink(0.0)
-            .child(painted)
-            .into()
+        vstack().w("100%").flex_shrink(0.0).child(painted).into()
     } else {
         painted
     }
@@ -566,16 +558,9 @@ fn command_overlay_frame(open: Signal<bool>, oz: OverlayZ, inner: Element) -> El
         .pt("33.333dvh")
         .child(row)
         .into();
-    stage = stage.fixed();
-    stage.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
-    stage.set_attr(ATTR_PORTAL_KEY, format!("panel:{}", oz.panel));
-    stage = portal_panel(stage, oz.panel);
-    stage = stage.pointer_events_box_none();
+    stage = mount_viewport_portal_stage(stage, oz.panel);
 
-    Element::new()
-        .child(underlay_close_on_click(open, oz.underlay))
-        .child(stage)
-        .pointer_events_box_none()
+    mount_modal_layer(underlay_close_on_click(open, oz.underlay), stage)
 }
 
 // ---------------------------------------------------------------------------
@@ -963,11 +948,7 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
         .border_color(tokens::border())
         .overflow("hidden");
 
-    let hairline: Element = hstack()
-        .w("100%")
-        .px("0.75rem")
-        .child(separator())
-        .into();
+    let hairline: Element = hstack().w("100%").px("0.75rem").child(separator()).into();
 
     vstack()
         .w("100%")
@@ -975,14 +956,7 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
         .pt("0.5rem")
         .pb("0.5rem")
         .gap("0.5rem")
-        .child(
-            Element::from(
-                hstack()
-                    .w("100%")
-                    .px("0.5rem")
-                    .child(shell),
-            ),
-        )
+        .child(Element::from(hstack().w("100%").px("0.5rem").child(shell)))
         .child(hairline)
         .into()
 }
@@ -1160,9 +1134,9 @@ pub fn CommandItem(
     let active = ctx.active;
     let dismissible = ctx.surface.dismissible();
 
-    let mut inner_kids = children.map(take_packed).unwrap_or_else(|| {
-        vec![Element::new().text(label_text.clone())]
-    });
+    let mut inner_kids = children
+        .map(take_packed)
+        .unwrap_or_else(|| vec![Element::new().text(label_text.clone())]);
     let show_check = checked && !inner_kids.iter().any(has_shortcut_slot);
     if show_check {
         let g = crate::utils::lucide_glyph("check").unwrap_or_else(|| "✓".into());
@@ -1428,10 +1402,7 @@ mod tests {
         });
 
         let lifted = hoist_portal_subtrees(&mut root);
-        assert!(
-            lifted >= 2,
-            "underlay + stage must hoist; lifted={lifted}"
-        );
+        assert!(lifted >= 2, "underlay + stage must hoist; lifted={lifted}");
 
         let mut tree = LayoutTree::new();
         let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
@@ -1449,8 +1420,7 @@ mod tests {
             panel.layout_bounds
         );
         assert!(
-            (panel.layout_bounds[2] - 512.0).abs() < 8.0
-                || panel.layout_bounds[2] > 400.0,
+            (panel.layout_bounds[2] - 512.0).abs() < 8.0 || panel.layout_bounds[2] > 400.0,
             "palette width is max-w-lg (32rem), got {}",
             panel.layout_bounds[2]
         );
@@ -1481,10 +1451,11 @@ mod tests {
         });
         let _ = hoist_portal_subtrees(&mut root);
         assert!(
-            find_portal_layer(&root)
-                .children
-                .iter()
-                .any(|c| c.attrs.get(ATTR_PORTAL_KEY).map(String::as_str) == Some("underlay:1000")),
+            find_portal_layer(&root).children.iter().any(|c| c
+                .attrs
+                .get(ATTR_PORTAL_KEY)
+                .map(String::as_str)
+                == Some("underlay:1000")),
             "precondition: command underlay is hoisted"
         );
 
@@ -1768,13 +1739,19 @@ mod tests {
 
     #[test]
     fn command_filter_lets_editing_keys_through() {
-        assert!(!command_filter_consumes_key(&Key::Named(NamedKey::Backspace)));
+        assert!(!command_filter_consumes_key(&Key::Named(
+            NamedKey::Backspace
+        )));
         assert!(!command_filter_consumes_key(&Key::Named(NamedKey::Delete)));
-        assert!(!command_filter_consumes_key(&Key::Named(NamedKey::ArrowLeft)));
+        assert!(!command_filter_consumes_key(&Key::Named(
+            NamedKey::ArrowLeft
+        )));
         assert!(!command_filter_consumes_key(&Key::Named(NamedKey::Home)));
         assert!(!command_filter_consumes_key(&Key::Named(NamedKey::End)));
         assert!(!command_filter_consumes_key(&Key::Character("a".into())));
-        assert!(command_filter_consumes_key(&Key::Named(NamedKey::ArrowDown)));
+        assert!(command_filter_consumes_key(&Key::Named(
+            NamedKey::ArrowDown
+        )));
         assert!(command_filter_consumes_key(&Key::Named(NamedKey::Enter)));
         assert!(command_filter_consumes_key(&Key::Named(NamedKey::Escape)));
     }
@@ -1804,6 +1781,77 @@ mod tests {
         for c in &el.children {
             walk_cmd(c, f);
         }
+    }
+
+    fn find_cmd_item(root: &Element) -> &Element {
+        let mut found = None;
+        walk_cmd(root, &mut |el| {
+            if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+                found = Some(el);
+            }
+        });
+        found.expect("command-item")
+    }
+
+    #[test]
+    fn command_dialog_item_click_runs_on_click_then_closes() {
+        use crate::core::reactivity::use_signal;
+        use std::cell::Cell;
+        let ran = Rc::new(Cell::new(false));
+        let (_owner, (root, open)) = create_root({
+            let ran = ran.clone();
+            move || {
+                let open = use_signal("cmd-cal-dlg-open", || true);
+                let ran = ran.clone();
+                let root = command_paint(
+                    "cmd-cal-dlg".into(),
+                    open,
+                    "search".into(),
+                    CommandSurface::Dialog,
+                    Rc::new(move || {
+                        let ran = ran.clone();
+                        let item = CommandItem(CommandItemProps {
+                            value: Some("calendar".into()),
+                            disabled: None,
+                            checked: None,
+                            on_click: Some(Handler::new(move |_| ran.set(true))),
+                            children: Some(Element::new().text("Calendar")),
+                            base: None,
+                        });
+                        let mut grp_kids = Element::new();
+                        grp_kids.set_attr("rui_fragment", "1");
+                        let group = CommandGroup(CommandGroupProps {
+                            heading: Some("Suggestions".into()),
+                            children: Some(grp_kids.children(vec![item])),
+                            base: None,
+                        });
+                        let mut list_kids = Element::new();
+                        list_kids.set_attr("rui_fragment", "1");
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![
+                            CommandInput(CommandInputProps {
+                                placeholder: None,
+                                children: None,
+                                base: None,
+                            }),
+                            CommandList(CommandListProps {
+                                children: Some(list_kids.children(vec![group])),
+                                base: None,
+                            }),
+                        ])
+                    }),
+                );
+                (root, open)
+            }
+        });
+        find_cmd_item(&root)
+            .on_click
+            .as_ref()
+            .expect("item click")
+            .borrow_mut()();
+        assert!(ran.get(), "Calendar on_click must run before dismiss");
+        assert!(!open.peek(), "dismissible CommandDialog closes after activate");
     }
 
     #[test]

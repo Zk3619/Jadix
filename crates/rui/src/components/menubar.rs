@@ -13,7 +13,7 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
-use crate::utils::popup::{mark_floating, panel_block_clicks, PopupPlacement};
+use crate::utils::popup::{mark_floating, mount_anchored_overlay, PopupPlacement};
 use crate::utils::roving::{focus_by_id, focus_roving_key, roving_move, FocusRovingAxis};
 use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
@@ -273,7 +273,7 @@ impl From<MenubarBuilder> for Element {
                             .into();
                         panel = panel.accesskit_role("menu");
                         mark_floating(&mut panel, &sid, &trigger_id, PopupPlacement::BottomStart);
-                        panel = panel_block_clicks(panel, oz.panel);
+                        panel = mount_anchored_overlay(panel, oz.panel);
                         root = root.child(panel);
                     }
                 }

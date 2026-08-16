@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
@@ -71,9 +71,10 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 
 现状缺口（须按计划下沉，见实施计划 C-WP）：
 
-- **浮层**：几何已统一在 `utils/popup`；开合状态仍大量内嵌各组件——允许过渡，禁止第二套 placement。  
+- **浮层**：几何与挂载已收口：`utils/popup` 的 `mark_floating` + **`mount_anchored_overlay`** / **`mount_viewport_portal_stage`**；Esc 栈 `portal_overlay`。开合状态仍可内嵌各组件——禁止第二套 placement 或嵌套 `rui_portal`。 
 - **Toggle**：仍在 `components/toggle`（及 Checkbox/Switch）；**尚未**抽出独立 `primitives/toggle` 或 `utils/toggle_state`——**允许过渡，不允许永久扩散**。  
-- **Tabs / Toggle**：`primitives/mod.rs` 注释已写明暂在 `components/`。
+- **Tabs / Toggle**：`primitives/mod.rs` 注释已写明暂在 `components/`。  
+- **作者面**：`#[component]` **默认** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14 ☑）；纯 Builder 复合根仍须显式调用。`untrack` 仍会跳过 `reactive_anchor`——用 `isolate_reads`（§2.3）。
 
 ### 2.2 与 Web 对标的正确映射
 
@@ -87,6 +88,37 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | react-bits 式动效 | 未来 **B17**（文字 / 背景 / 动画 UI 目录） | 不替代稳定面控件；不搬 CSS `@keyframes` 运行时；见 [`drawing.md`](drawing.md) §6.2 |
 
 **不采用**：npm-shadcn「复制粘贴组件文件」为默认 DX。Rust crate 的正确模型是**库内分层 + 稳定公开 API + token 覆盖**；用户要完全异形皮肤时，用 `#[component]` 组合原语（见 [`custom_components.md`](custom_components.md)）。
+
+### 2.3 复合控件作者面（W3 实证 · 2026-08-17）
+
+WP-3.2（Chart）与 WP-3.3（Calendar / Date·Time·Color / Command）落地后的事实：
+
+**自定义 / 复合组件「改一处炸一片」的心智负担，主要来自框架默认值与组合原语不完整，而不是选器领域逻辑本身。**  
+日历算术、HSV、ISO 字符串是普通产品复杂度；作者真正反复踩的是：**实例 ≠ Owner、跟踪原语静默破坏锚点、浮层每控件自研、身份四轴仍漏进每个 experimental 控件。**
+
+| 负担来源 | 性质 | W3 证据 | 关闭包 |
+|----------|------|---------|--------|
+| `#[component]` 默认实例 Owner；Builder 根须 [`component_root`](../crates/rui/src/core/reactivity.rs) | **3.14.1 ☑**；Builder 省略仍串 Context | TimePicker 三 Combobox 须 Builder 根 `component_root`（库内已手写）；`#[component]` 不再要求 | **WP-3.14 ☑** |
+| `untrack` vs `isolate_reads` | **语义纪律**（可测） | 浮层体用 `untrack` → 空壳；须 `isolate_reads`。测：`untrack_skips_anchor_but_isolate_reads_registers` | **WP-3.14.2 ☑** |
+| 开合 / portal / 滚动锚 / 叠层 | **3.4.1–3.4.3 ☑** | 锚定走 `mount_anchored_overlay`；模态走视口舞台；Esc 只关顶层 | **WP-3.4 ☑** |
+| 实例信号 / 必填 `id` | **身份债未迁完** | Chart 未传 `selected_signal` 曾共用 `chart_pin`；Calendar 等仍「必填实例键」 | WP-2.8 已开收敛；余下随 3.14 cookbook + 3.8 |
+| Toggle / 受控 API / 双书写缺口 | **产品面未归一** | 与 3.2/3.3 正交，但每个新控件都复制一遍 | **WP-3.7 / 3.8** |
+| 图表 grammar、命中、tooltip 几何 | **产品复杂度**（部分实现 Bug） | path 贴图翻转、径向命中、选中描边——修在 Chart，不升格为「换渲染器」 | 已随 3.2；禁区见 [`drawing.md`](drawing.md) |
+| 键盘映射、ISO 格式 | **本包产品工作** | WP-3.3 已签 | ☑ |
+
+**因此**：`#[component]` 已是实例域；再扩 Form / planned 复合控件时，Builder 根走 `component_root`，浮层走 §4.4 helper。禁止把下一次心智爆炸解释成「作者没读懂 Solid」。
+
+**禁止（作者面）**
+
+| 禁止 | 原因 |
+|------|------|
+| 新复合控件再手抄一套 portal / Esc / 0×0 锚配方 | 第二套浮层；**WP-3.4 ☑** 后视为回归 |
+| 用 `untrack` 包住整棵要注册 anchor 的子树 | 空浮层；用 `isolate_reads` |
+| 省略实例 Owner 却 `provide_context` | 兄弟实例串状态；`#[component]` 已默认包；**Builder 根**仍须 `component_root` |
+| 用全局 `use_signal("chart_pin")` 充当每图状态 | 多实例撞键 |
+| 文档继续只示范无状态 `<Button>` | 与 W3 实证不符；手册必须含反例 |
+
+分层仍以 §2.1 为准：外观在 `components/`，几何在 `utils/popup`，执行域在 Owner。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。
 
 ---
 
@@ -266,9 +298,29 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 ### 4.4 浮层
 
-- 统一：`utils/popup` 的 `mark_floating` / placement / underlay；`app::portal_overlay` Esc 栈。  
-- Escape **只关顶层**；点击外部关闭与受控 `open` 信号单一写入点。  
-- 打开时焦点陷阱（`utils::sync_focus_trap` / `activate_focus_trap`）与关闭后焦点归还须可测或可冒烟。
+必用 API（新组件不得绕开）：
+
+| 形态 | 必用 | 禁止 |
+|------|------|------|
+| 锚定（Select / Combobox / Date / Color / Tooltip / 有锚 Popover / Dropdown / Menu） | `portal_sync` + `mark_floating` + [`mount_anchored_overlay`](../crates/rui/src/utils/popup.rs) | `portal_panel` 当 flex 兄弟；手写第二套 `left/top`；关着仍把菜单留在布局里 |
+| 视口模态（Dialog / Sheet / CommandOverlay） | `portal_sync(Modal)` + [`mount_viewport_portal_stage`](../crates/rui/src/utils/popup.rs)（+ underlay）；舞台内只 [`swallow_clicks`](../crates/rui/src/utils/popup.rs) | `panel_block_clicks` 再包 `portal_panel`（嵌套 hoist） |
+| Esc | `portal_overlay` LIFO；只关顶层 | 每控件自写全局 Esc |
+
+- Escape **只关顶层**（库测 `push_two_esc_closes_top_only` / `three_layers_esc_closes_top_only_each_time`）；点击外部关闭与受控 `open` 信号单一写入点。  
+- Tab：有顶层 Stacked 时在该层面板循环（[`keyboard_nav.md`](keyboard_nav.md)）；显式 `sync_focus_trap` 仍属 **C-WP-1.3**。  
+- 打开时焦点陷阱与关闭后焦点归还须可测或可冒烟。
+
+**存量审计（WP-3.4 ☑）**
+
+| 组件 | 路径 | 备注 |
+|------|------|------|
+| Select / Combobox / DatePicker / ColorPicker / Tooltip | 锚定 helper | 浮层体 `isolate_reads`，勿 `untrack` |
+| Popover | 有锚 → helper；无锚 → `panel_block_clicks` | 无锚不是第二套 placement |
+| Dropdown / ContextMenu / Menubar | 锚定 helper | Dropdown 关闭不挂菜单 |
+| NavigationMenu | `mark_floating` + `panel_block_clicks`；非 viewport 外包 0×0 锚 | `viewport` 槽为产品 in-flow，标例外 |
+| Dialog / Sheet / CommandOverlay | 视口舞台 | CommandOverlay chrome 为 top-1/3 |
+| CommandDialog | 复用 Dialog 壳 | — |
+| Toast | pinned `portal_panel` | 通知宿主，非锚定 placement |
 
 ### 4.5 无障碍最低集
 
@@ -302,7 +354,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
 | **数据** | VirtualList、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
 | **绘制**（W3 可选新分区） | Svg / Canvas / Scene3d / 未来 B16 fx · B17 bits | 先 `experimental`；规范 [`drawing.md`](drawing.md)；未落地前 Chart 仍挂「数据」 |
-| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar | Tabs=`verified`；其余=`experimental` |
+| **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar；Gallery 另演示 `app::Router` / Navigator / 完整次窗（输入 + Dialog + `shared_slot`） | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
 | **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 选区随 Label；inline=`experimental`；块级 md **缺失**（密度项） |
 
@@ -354,6 +406,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 ### 6.1 每个新组件 / 行为破坏性改动的 PR 检查表
 
 - [ ] 分层：新状态机是否应在 `utils`/`primitives` 而非仅组件内复制  
+- [ ] **作者面**：`#[component]` 已默认 Owner；Builder 复合根是否 `component_root`；浮层子树是否 `isolate_reads` 而非 `untrack`；浮层是否走 `mount_anchored_overlay` / 视口舞台（§2.3 / §4.4）  
 - [ ] 受控 / 非受控单一写入点  
 - [ ] **身份**：未把 `id` 当作万金油；区分实例键 / `focus_id` / `template_id`（[`element_identity.md`](element_identity.md) + §4.2）；空串不写入 focus/template；展示型不强制用户起 id  
 - [ ] Theme token，无硬编码色  
@@ -389,7 +442,7 @@ cargo check -p gallery
 AUTHORITY.md                       ← ★执行源（CV / 组件 WP 并入统一计划）
 ENGINEERING_GRADE_FRAMEWORK.md     ← 总纲领（ADR-6 / ADR-9）
 REACTIVITY.md                      ← 细粒度领域规范（受控 Signal / 三档更新）
-COMPONENT_LIBRARY.md               ← 本文件（组件领域规范；§3 prelude + 双书写面）
+COMPONENT_LIBRARY.md               ← 本文件（组件领域规范；§2.3 作者面；§3 prelude + 双书写面）
 component_inventory.md             ← §5 分桶附录（verified/broken + id 策略 + EUI 密度）
 element_identity.md                ← 跨层身份契约（id / focus / template / a11y）
 crates/rui/src/prelude.rs          ← `use rui::prelude::*`（标签+Builder，不含低层 popup）
@@ -398,7 +451,7 @@ headless.md / custom_components.md / keyboard_nav.md / color.md / a11y_smoke.md 
 gap_analysis.md §6                 ← 历史 EUI 密度摘要（真源转 inventory §3）
 ```
 
-争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。受控 Signal / 细粒度更新争议以 [`REACTIVITY.md`](REACTIVITY.md) 为准。排期以 [`AUTHORITY.md`](AUTHORITY.md) 为准。
+争议处理：先 ADR，再改本规范；禁止静默改变「默认交付面 = shadcn 样式组件」或「双书写面互相兼容」。受控 Signal / 细粒度更新争议以 [`REACTIVITY.md`](REACTIVITY.md) 为准。**自定义组件难写**以本文件 **§2.3** 为准。排期以 [`AUTHORITY.md`](AUTHORITY.md) 为准。
 
 ---
 

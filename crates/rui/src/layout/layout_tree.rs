@@ -1974,7 +1974,10 @@ impl LayoutTree {
         let escape_overflow_clip = is_body_portal_layer
             || element.style.position_fixed
             || element.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
-            || element.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(|s| s.as_str())
+            || element
+                .attrs
+                .get(ATTR_ESCAPE_OVERFLOW_CLIP)
+                .map(|s| s.as_str())
                 == Some("1");
         let (parent_clip, scroll_acc) = if escape_overflow_clip {
             (None, [0.0_f32, 0.0_f32])

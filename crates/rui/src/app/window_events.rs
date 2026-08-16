@@ -8,6 +8,93 @@ use super::state::ScrollbarUpdateMode;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 
 impl super::App {
+    pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
+        if self.pointer_window == Some(id) {
+            return;
+        }
+        let prev = self.pointer_window;
+        self.pointer_window = Some(id);
+        self.last_mouse_path = None;
+        self.last_mouse_target = None;
+        self.click_press_path = None;
+        self.scrollbar_drag = None;
+        self.content_scroll_drag = None;
+        self.textarea_resize_drag = None;
+        self.input_drag_rest = None;
+        self.label_drag_key = None;
+        self.drag_reorder = None;
+        self.left_button_down = false;
+        self.mouse_buttons = 0;
+        self.hover_scroll_rest = None;
+        self.hover_scroll_axis = None;
+        self.long_press = None;
+
+        // Leaving the primary for a secondary: clear primary hover immediately so a later
+        // primary redraw (animation / shared signals) cannot re-hit-test with secondary
+        // client coords still sitting in `cursor_pos`.
+        if let Some(prev_id) = prev {
+            if !self.is_secondary_window(prev_id) && self.is_secondary_window(id) {
+                self.clear_primary_hovers_out_of_window();
+            }
+        }
+    }
+
+    /// Force primary-tree hover leave (`x/y` outside any element). Safe when `state` is free.
+    fn clear_primary_hovers_out_of_window(&mut self) {
+        let Ok(mut borrow) = self.state.try_borrow_mut() else {
+            // Caller holds `state`; primary redraw will clear via pointer_window check.
+            if let Ok(borrow) = self.state.try_borrow() {
+                if let Some(st) = borrow.as_ref() {
+                    st.window.request_redraw();
+                }
+            }
+            return;
+        };
+        let Some(state) = borrow.as_mut() else {
+            return;
+        };
+        let mut hover_to_run = Vec::new();
+        super::tree_hit::update_hovers(
+            &state.root_element,
+            -1.0,
+            -1.0,
+            [0.0, 0.0],
+            &mut hover_to_run,
+        );
+        state.window.request_redraw();
+        drop(borrow);
+        for (cb, is_hover) in hover_to_run {
+            (*cb.borrow_mut())(is_hover);
+        }
+    }
+
+    /// Primary-only input wrapper (sets primary window scope). Secondary events must use
+    /// [`Self::handle_secondary_*`] — they never borrow or swap the primary UI tree.
+    pub(super) fn with_primary_input<R>(
+        &mut self,
+        id: WindowId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if self.is_secondary_window(id) {
+            return None;
+        }
+        // Always accept primary-window events and re-bind pointer ownership. Do **not**
+        // drop them while `pointer_window` is a secondary — that permanently freezes the
+        // primary after the first secondary hover/click (Windows focus handoff).
+        self.bind_pointer_window(id);
+        // Commit primary scope for the rest of the event-loop turn. A restore-on-drop
+        // guard would reinstate a prior secondary token and leave portal/focus routing
+        // stuck on the secondary after every primary click.
+        super::window_scope::force_primary();
+        Some(f(self))
+    }
+
+    /// Live secondary UI slot (preferred) or registry secondary flag.
+    pub(super) fn is_secondary_window(&self, id: WindowId) -> bool {
+        self.secondaries.borrow().contains_key(&id)
+            || self.window_registry.is_secondary(id)
+    }
+
     /// Complete deferred OS-blur IME release once `ime_os_blur_at` elapses.
     fn flush_ime_os_blur_if_due(&mut self, window: &winit::window::Window) {
         let Some(at) = self.ime_os_blur_at else {
@@ -28,7 +115,7 @@ impl super::App {
     }
 
     /// Whether a pointer hit should keep the current Input/Textarea focus.
-    fn pointer_keeps_text_edit_focus(
+    pub(super) fn pointer_keeps_text_edit_focus(
         root: &crate::core::tree::Element,
         focused: &str,
         path: &[super::pointer_events::HitPathEntry],
@@ -72,7 +159,9 @@ impl super::App {
     }
 
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId) {
-        let Some(sec) = self.secondaries.get_mut(&id) else {
+        super::window_scope::force_secondary_id(id);
+        let mut secs = self.secondaries.borrow_mut();
+        let Some(sec) = secs.get_mut(&id) else {
             return;
         };
         let inner = sec.window.inner_size();
@@ -444,7 +533,7 @@ impl super::App {
         crate::style::use_scrollbar_visibility_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
     }
 
-    fn update_mouse_buttons(&mut self, button: MouseButton, state: ElementState) {
+    pub(super) fn update_mouse_buttons(&mut self, button: MouseButton, state: ElementState) {
         let bit = super::pointer_events::buttons_mask_bit(button);
         match state {
             ElementState::Pressed => self.mouse_buttons |= bit,
@@ -459,7 +548,7 @@ impl super::App {
         }
     }
 
-    fn build_mouse_event(
+    pub(super) fn build_mouse_event(
         &self,
         x: f32,
         y: f32,
@@ -486,7 +575,7 @@ impl super::App {
         ev
     }
 
-    fn dispatch_mouse_path(
+    pub(super) fn dispatch_mouse_path(
         &mut self,
         path: &[super::pointer_events::HitPathEntry],
         x: f32,
@@ -502,7 +591,7 @@ impl super::App {
         ev
     }
 
-    fn sync_mouse_enter_leave(
+    pub(super) fn sync_mouse_enter_leave(
         &mut self,
         x: f32,
         y: f32,
@@ -949,12 +1038,7 @@ impl super::App {
         if changed {
             window.request_redraw();
         }
-        super::tree_hit::apply_cursor(
-            &window,
-            Some(event_loop),
-            &mut self.custom_cursors,
-            None,
-        );
+        super::tree_hit::apply_cursor(&window, Some(event_loop), &mut self.custom_cursors, None);
     }
 
     pub(super) fn handle_mouse_input(
@@ -1676,6 +1760,7 @@ impl super::App {
     }
 
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
+        let _scope = super::window_scope::enter_primary();
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -2063,8 +2148,18 @@ impl super::App {
         };
         let state = re_borrow.as_mut().unwrap();
 
-        let hx = self.cursor_pos.x as f32 / state.window.scale_factor() as f32;
-        let hy = self.cursor_pos.y as f32 / state.window.scale_factor() as f32;
+        // `cursor_pos` is shared across windows (last physical move). Primary redraw must
+        // never hit-test with another window's client coords — that re-hovers Command/etc.
+        // (secondary Input Y → "Show toast", Select Y → "Calendar").
+        let pointer_on_primary = self.pointer_window == Some(state.window.id());
+        let (hx, hy) = if pointer_on_primary {
+            (
+                self.cursor_pos.x as f32 / state.window.scale_factor() as f32,
+                self.cursor_pos.y as f32 / state.window.scale_factor() as f32,
+            )
+        } else {
+            (-1.0, -1.0)
+        };
 
         // Idle frames use ViewportsOnly so `update_scrollbar_elements` only syncs `scroll:` offsets
         // (plus subtree pruning via `Element::contains_scroll_viewport`). Full pass is needed while
@@ -2223,12 +2318,16 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     &mut hover_to_run,
                 );
 
-                super::tree_hit::apply_cursor(
-                    &window,
-                    Some(event_loop),
-                    &mut self.custom_cursors,
-                    hover_cursor_pick.clone(),
-                );
+                // Never reset the OS cursor from a primary redraw while the pointer lives on
+                // another window — that would wipe secondary I-beam / Pointer mid-hover.
+                if pointer_on_primary {
+                    super::tree_hit::apply_cursor(
+                        &window,
+                        Some(event_loop),
+                        &mut self.custom_cursors,
+                        hover_cursor_pick.clone(),
+                    );
+                }
 
                 let focused =
                     crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);

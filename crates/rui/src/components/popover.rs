@@ -17,7 +17,7 @@ use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::utils::popup::{
-    mark_floating, panel_block_clicks, PopupPlacement, ATTR_FLOATING_STRATEGY,
+    mark_floating, mount_anchored_overlay, panel_block_clicks, PopupPlacement, ATTR_FLOATING_STRATEGY,
 };
 
 pub struct PopoverBuilder {
@@ -119,7 +119,11 @@ impl From<PopoverBuilder> for Element {
                 inner = inner.absolute();
             }
             let z = z_override.unwrap_or(oz.panel);
-            panel_block_clicks(inner, z)
+            if anchor_focus_id.is_some() {
+                mount_anchored_overlay(inner, z)
+            } else {
+                panel_block_clicks(inner, z)
+            }
         })
     }
 }
