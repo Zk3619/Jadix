@@ -52,7 +52,7 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::Element;
-use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY};
 use crate::primitives::interactive::interactive;
 use crate::primitives::overlay::overlay;
 use crate::primitives::r#box::{r#box, vstack};
@@ -243,7 +243,7 @@ fn dialog_overlay(open: Signal<bool>, underlay_z: i32, opts: &ShellOverlayOpts) 
     b.into()
 }
 
-fn apply_dialog_shell_surface(mut panel: Element) -> Element {
+fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element {
     panel = panel
         .bg(tokens::background())
         .rounded("0.5rem")
@@ -251,12 +251,26 @@ fn apply_dialog_shell_surface(mut panel: Element) -> Element {
         .border_width(1.0)
         .border_color(tokens::border())
         .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
-        .p("1.5rem")
-        .max_w("85dvw")
-        .w("100%")
-        .max_h("85dvh")
-        .overflow_y("hidden")
-        .overflow_x("hidden");
+        .max_h("85dvh");
+    if hug_content {
+        // CommandDialog：`p-0` + 按内容撑开。`overflow:hidden` 会把列表压成 0，
+        // `w:100%` 会让面板宽过侧栏，左圆角被主栏 ScrollArea 裁成竖边。
+        panel = panel
+            .p(0.0)
+            .w("32rem")
+            .max_w("90dvw")
+            .flex_shrink(0.0)
+            .overflow_x("visible")
+            .overflow_y("visible");
+        panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+    } else {
+        panel = panel
+            .p("1.5rem")
+            .max_w("85dvw")
+            .w("100%")
+            .overflow_y("hidden")
+            .overflow_x("hidden");
+    }
     panel
 }
 
@@ -267,12 +281,17 @@ fn dialog_shell_frame(
     inner: Element,
     overlay_opts: &ShellOverlayOpts,
     chrome_close: Option<Element>,
+    hug_content: bool,
 ) -> Element {
     let overlay_el = dialog_overlay(open, zs.underlay, overlay_opts);
 
     // Swallow clicks only — `panel_block_clicks` would nest a second `rui_portal` under stage.
-    let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
-    panel = apply_dialog_shell_surface(panel);
+    let mut panel: Element = if hug_content {
+        vstack().w("32rem").max_w("90dvw").flex_shrink(0.0).child(inner).into()
+    } else {
+        vstack().w("100%").min_h("0").child(inner).into()
+    };
+    panel = apply_dialog_shell_surface(panel, hug_content);
     panel = swallow_clicks(panel.relative());
     if let Some(mut close) = chrome_close {
         close = close.absolute().top("1rem").right("1rem").z_index(1);
@@ -280,7 +299,6 @@ fn dialog_shell_frame(
     }
 
     let mut stage: Element = r#box()
-        .absolute(true)
         .inset(0.0)
         .w("100%")
         .h("100%")
@@ -288,6 +306,8 @@ fn dialog_shell_frame(
         .justify_center()
         .child(panel)
         .into();
+    stage = stage.fixed();
+    stage.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
     stage.set_attr(ATTR_PORTAL_KEY, format!("panel:{}", zs.panel));
     stage = portal_panel(stage, zs.panel);
     stage = stage.pointer_events_box_none();
@@ -341,6 +361,8 @@ pub struct DialogContentOpts {
     pub close_on_overlay_click: bool,
     /// 遮罩 backdrop 模糊半径（逻辑 px）；`0` / `None` → 关闭。
     pub overlay_blur: Option<f32>,
+    /// CommandDialog：按内容撑开、`p-0`、不裁剪列表；默认 Dialog 保持滚动裁剪。
+    pub hug_content: bool,
 }
 
 impl Default for DialogContentOpts {
@@ -351,6 +373,7 @@ impl Default for DialogContentOpts {
             overlay_opacity: None,
             close_on_overlay_click: true,
             overlay_blur: None,
+            hug_content: false,
         }
     }
 }
@@ -369,6 +392,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         opts.overlay_blur.unwrap_or(0.0),
     );
     let show_close = opts.show_close;
+    let hug_content = opts.hug_content;
 
     reactive_view(view_id, move || {
         let is_open = open.get();
@@ -380,7 +404,11 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         }
 
         let mut inner = body();
-        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem");
+        inner = if hug_content {
+            inner.w("100%").flex_shrink(0.0)
+        } else {
+            inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem")
+        };
         // Chrome close is absolute on the panel shell only — never inject padding
         // into Header / Body / Footer (those parts own their own layout).
         let chrome_close = if show_close {
@@ -398,7 +426,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         } else {
             None
         };
-        dialog_shell_frame(open, &zs, inner, &overlay, chrome_close)
+        dialog_shell_frame(open, &zs, inner, &overlay, chrome_close, hug_content)
     })
 }
 

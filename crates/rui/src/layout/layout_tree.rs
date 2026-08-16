@@ -44,6 +44,9 @@ pub const ATTR_PORTAL_SLOT: &str = "rui_portal_slot";
 /// Remembers `rui_portal_mount` on a hoisted node so remount can target the same host.
 const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
 
+/// Opt out of ancestor overflow clip (Command / Dialog stages that must paint over the sidebar).
+pub const ATTR_ESCAPE_OVERFLOW_CLIP: &str = "rui_escape_overflow_clip";
+
 /// Portal stacking shells must not steal pointer / wheel hits from content underneath.
 ///
 /// True when the node opts into [`PointerEvents::BoxNone`], or is the root
@@ -1965,8 +1968,15 @@ impl LayoutTree {
         // Solid `<Portal>` → document.body: content is outside cropping / scrolled layouts.
         // Reset clip + scroll accumulation when entering the root portal layer so hoisted
         // overlays never inherit ScrollArea (or other overflow) clips from page ancestors.
+        // `position: fixed` / `rui_escape_overflow_clip` / already-hoisted portals: same
+        // (Command overlay left edge was flush-cut by the gallery sidebar ScrollArea).
         let is_body_portal_layer = element.template_id.as_deref() == Some(PORTAL_LAYER_ID);
-        let (parent_clip, scroll_acc) = if is_body_portal_layer {
+        let escape_overflow_clip = is_body_portal_layer
+            || element.style.position_fixed
+            || element.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1")
+            || element.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(|s| s.as_str())
+                == Some("1");
+        let (parent_clip, scroll_acc) = if escape_overflow_clip {
             (None, [0.0_f32, 0.0_f32])
         } else {
             (parent_clip, scroll_acc)

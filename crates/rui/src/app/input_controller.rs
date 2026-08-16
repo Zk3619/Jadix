@@ -261,27 +261,34 @@ impl super::App {
                     return true;
                 }
 
-                if text_edit_rest(&fid).is_none() {
-                    if clipboard_shortcut_modifiers(&self.modifiers)
-                        && edit_shortcut_letter(&event) == Some('c')
-                    {
-                        if let Some(st) = (*self.state.borrow()).as_ref() {
-                            if crate::components::label::try_copy_label_selection(&st.root_element)
-                            {
-                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                    st.window.request_redraw();
-                                }
-                                return true;
-                            }
+                let editing = text_edit_rest(&fid).is_some();
+                // Command / Combobox attach `on_key_down` on the focused Input. That handler
+                // must run even while editing — otherwise ↑↓/Enter move the caret (or no-op)
+                // and never reach the list. Do **not** fall through to Space/Enter→click
+                // (that would swallow Space in the field).
+                let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
+                    super::tree_hit::focused_key_handlers(&st.root_element, &fid)
+                });
+                if let Some(handlers) = key_handlers {
+                    let handled = if editing {
+                        super::tree_hit::run_focused_keydown_only(&handlers, &event)
+                    } else {
+                        super::tree_hit::run_focused_key_handlers(&handlers, &event)
+                    };
+                    if handled {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                            st.window.request_redraw();
                         }
+                        return true;
                     }
-                    // Clone handlers under borrow, then drop before running them. Handlers may
-                    // `signal.set` → reactive reconcile → `AppState::borrow_mut`.
-                    let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
-                        super::tree_hit::focused_key_handlers(&st.root_element, &fid)
-                    });
-                    if let Some(handlers) = key_handlers {
-                        if super::tree_hit::run_focused_key_handlers(&handlers, &event) {
+                }
+
+                if !editing
+                    && clipboard_shortcut_modifiers(&self.modifiers)
+                    && edit_shortcut_letter(&event) == Some('c')
+                {
+                    if let Some(st) = (*self.state.borrow()).as_ref() {
+                        if crate::components::label::try_copy_label_selection(&st.root_element) {
                             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                 st.window.request_redraw();
                             }

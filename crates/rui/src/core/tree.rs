@@ -136,6 +136,8 @@ pub struct TextEditPaintSync {
     pub resizable: bool,
     pub resize_min_h: f32,
     pub resize_max_h: f32,
+    /// Command 过滤框等：无边框/阴影/焦点环，视觉壳由外层提供。
+    pub plain_chrome: bool,
 }
 
 /// 兼容旧名：与 [`TextEditPaintSync`] 相同。

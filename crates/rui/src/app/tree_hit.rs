@@ -846,10 +846,8 @@ pub(super) fn focused_key_handlers(el: &Element, focus_id: &str) -> Option<Focus
 
 /// Routes a key through previously extracted [`FocusedKeyHandlers`].
 pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &KeyEvent) -> bool {
-    if let Some(cb) = &handlers.on_key_down {
-        if cb.borrow_mut()(event.clone()) {
-            return true;
-        }
+    if run_focused_keydown_only(handlers, event) {
+        return true;
     }
     if event.state != ElementState::Pressed || event.repeat {
         return false;
@@ -863,6 +861,15 @@ pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &Ke
             cb.borrow_mut()();
             return true;
         }
+    }
+    false
+}
+
+/// Run `on_key_down` only (no Space/Enter → click). Used while a text field is focused so
+/// Command/Combobox can steal arrows/Enter without eating typed Space.
+pub(super) fn run_focused_keydown_only(handlers: &FocusedKeyHandlers, event: &KeyEvent) -> bool {
+    if let Some(cb) = &handlers.on_key_down {
+        return cb.borrow_mut()(event.clone());
     }
     false
 }

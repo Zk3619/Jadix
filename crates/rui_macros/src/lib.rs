@@ -1272,6 +1272,7 @@ fn expand_node(
                                 overlay_opacity: #overlay_opacity,
                                 close_on_overlay_click: #close_on_overlay,
                                 overlay_blur: #overlay_blur,
+                                hug_content: false,
                             },
                             move || #child_el,
                         )

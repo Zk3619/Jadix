@@ -2702,6 +2702,15 @@ fn TextareaComboboxShowcase() -> Element {
     }
 }
 
+/// 浮层页默认通知：与「Toast」按钮同一 Toaster 根、stack 布局、入场动画。
+fn gallery_feedback_toast(title: impl Into<String>, description: impl Into<String>) {
+    toast_set_layout("stack");
+    toast(title)
+        .description(description)
+        .duration(5000)
+        .show();
+}
+
 #[component]
 fn OverlayFeedbackShowcase() -> Element {
     let cmd_open = use_signal("gal_cmd_open", || false);
@@ -2724,7 +2733,10 @@ fn OverlayFeedbackShowcase() -> Element {
                     <CommandItem
                         value="toast"
                         on_click={move || {
-                            toast_push("Hello from Command", 2500);
+                            gallery_feedback_toast(
+                                "Hello from Command",
+                                "Hover the stack to expand.",
+                            );
                         }}
                     >
                         "Show toast"
@@ -2757,14 +2769,61 @@ fn OverlayFeedbackShowcase() -> Element {
             <CommandInput placeholder="Type a command or search..." />
             <CommandList>
                 <CommandEmpty>"No results found."</CommandEmpty>
-                <CommandItem
-                    value="dlg-toast"
-                    on_click={move || {
-                        toast_push("Hello from CommandDialog", 2500);
-                    }}
-                >
-                    "Show toast"
-                </CommandItem>
+                <CommandGroup heading="Suggestions">
+                    <CommandItem
+                        value="dlg-toast"
+                        on_click={move || {
+                            gallery_feedback_toast(
+                                "Hello from CommandDialog",
+                                "Hover the stack to expand.",
+                            );
+                        }}
+                    >
+                        "Show toast"
+                    </CommandItem>
+                    <CommandItem value="calendar">"Calendar"</CommandItem>
+                    <CommandItem value="emoji">"Search Emoji"</CommandItem>
+                    <CommandItem value="calc" disabled={true}>"Calculator"</CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
+                <CommandGroup heading="Settings">
+                    <CommandItem value="profile">
+                        "Profile"
+                        <CommandShortcut>"⌘P"</CommandShortcut>
+                    </CommandItem>
+                    <CommandItem value="billing">
+                        "Billing"
+                        <CommandShortcut>"⌘B"</CommandShortcut>
+                    </CommandItem>
+                    <CommandItem value="settings">
+                        "Settings"
+                        <CommandShortcut>"⌘S"</CommandShortcut>
+                    </CommandItem>
+                </CommandGroup>
+                <CommandSeparator />
+                <CommandGroup heading="File">
+                    <CommandItem value="new-file">
+                        "New File"
+                        <CommandShortcut>"⌘N"</CommandShortcut>
+                    </CommandItem>
+                    <CommandItem value="open">
+                        "Open..."
+                        <CommandShortcut>"⌘O"</CommandShortcut>
+                    </CommandItem>
+                    <CommandItem
+                        value="save"
+                        on_click={move || {
+                            toast("Saved")
+                                .description("Changes applied.")
+                                .variant("success")
+                                .duration(2500)
+                                .show();
+                        }}
+                    >
+                        "Save"
+                        <CommandShortcut>"⌘S"</CommandShortcut>
+                    </CommandItem>
+                </CommandGroup>
             </CommandList>
         </CommandDialog>
     };
@@ -2923,11 +2982,10 @@ fn OverlayFeedbackShowcase() -> Element {
                         "Sheet"
                     </Button>
                     <Button variant="default" size="sm" on_click={move || {
-                        toast_set_layout("stack");
-                        toast("Toast from Gallery")
-                            .description("Hover the stack to expand.")
-                            .duration(5000)
-                            .show();
+                        gallery_feedback_toast(
+                            "Toast from Gallery",
+                            "Hover the stack to expand.",
+                        );
                     }}>
                         "Toast"
                     </Button>
@@ -3660,15 +3718,28 @@ fn build_gallery_app() -> Element {
         move |key| rui::core::reactivity::isolate_reads(|| gallery_section_body(key.as_str())),
     );
 
-    ui! {
-        <HStack w="100%" h="100%" bg="background" gap="0" relative=true>
+    let chrome: Element = ui! {
+        <HStack w="100%" h="100%" bg="background" gap="0">
             { side }
             <VStack h="100%" min_w="0" grow="1">
                 { body }
             </VStack>
-            <Toaster variant="stack" overflow="displace" limit={3} position="top-right" />
         </HStack>
-    }
+    };
+    // 窗口根：侧栏/正文 + Toaster 锚点。通知舞台 hoist 到 `__rui_portal_layer`（与 Dialog 同层）。
+    // 不要 `ui! { <Toaster/> }` 包一层——会盖掉宿主 template_id（与 CommandOverlay 相同）。
+    let toast_host: Element = toaster()
+        .variant("stack")
+        .overflow("displace")
+        .limit(3)
+        .position("top-right")
+        .into();
+    Element::new()
+        .w("100%")
+        .h("100%")
+        .relative()
+        .child(chrome)
+        .child(toast_host)
 }
 
 fn main() {

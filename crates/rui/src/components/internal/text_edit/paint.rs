@@ -95,7 +95,9 @@ fn sync_one_text_edit_paint(
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;
     }
 
-    let mut border_c = if invalid {
+    let mut border_c = if desc.plain_chrome {
+        [0.0, 0.0, 0.0, 0.0]
+    } else if invalid {
         parse_color("destructive")
     } else if is_focused {
         focus_ring_border_color()
@@ -166,7 +168,23 @@ fn sync_one_text_edit_paint(
         el.style.bg_color = bg;
         container_style = true;
     }
-    if is_focused {
+    if desc.plain_chrome {
+        if el.style.border_width != 0.0 {
+            el.style.border_width = 0.0;
+            container_layout = true;
+        }
+        let shadow_on = el.style.shadow_blur > 0.01
+            || el.style.shadow_spread.abs() > 0.01
+            || el.style.shadow_color[3] > 0.001;
+        if shadow_on {
+            el.style.shadow_color = [0.0, 0.0, 0.0, 0.0];
+            el.style.shadow_blur = 0.0;
+            el.style.shadow_spread = 0.0;
+            el.style.shadow_offset = [0.0, 0.0];
+            el.style.shadow_inset = false;
+            container_layout = true;
+        }
+    } else if is_focused {
         if !focus_ring_shadow_matches_color(el, true, ring_color) {
             let (blur, spread) = focus_ring_params(focus_ring_style());
             let geom_same = (el.style.shadow_blur - blur).abs() <= 0.01

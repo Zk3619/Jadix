@@ -25,16 +25,18 @@
 //! ```
 //!
 //! ## 注意
-//! - 宿主必须是 **绝对铺满** 的 overlay，勿参与 flex 分栏（见 gallery 回归）。
+//! - 宿主锚点 0×0（不进 flex 分栏）；舞台提升到窗口根 portal 层（与 Dialog / Command 同层）。
+//!   `ui! { <Toaster/> }` 会盖掉根 `template_id`，因此锚点必须是子节点。
 //! - 队列项 id 仅内部递增；关闭：关闭钮，或朝靠近边缘方向拖拽松手（四角两边、中位垂直反向）。
 //! - 点击通知本体**不会**关闭；悬停时暂停自动消失计时。
 //! - `position`：`top-left` / `top-center` / `top-right` / `bottom-left` / `bottom-center` / `bottom-right`。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::reactive_view;
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
+use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
@@ -686,6 +688,8 @@ const TOAST_OVERFLOW_KEY: &str = "__rui_toast_overflow";
 const TOAST_LIMIT_KEY: &str = "__rui_toast_limit";
 
 const DEFAULT_LIMIT: usize = 3;
+/// 高于 portal 栈里的 Modal（Command / Dialog 从 1000 起）。
+const TOAST_PORTAL_Z: i32 = 50_000;
 const TOAST_WIDTH: &str = "22rem";
 /// 卡片估计高度（标题+描述）；堆叠绝对定位用。
 const CARD_H: f32 = 68.0;
@@ -1758,41 +1762,69 @@ impl From<ToasterBuilder> for Element {
     }
 }
 
-fn mount_toast_host() -> Element {
+const TOAST_HOST_VIEW: &str = "__rui_toast_host_view";
+
+/// 反应根必须是**非 portal** 外壳。若把 `rui_portal` 当 `__rui_toast_host_view` 根，
+/// hoist 后身份落到 portal 层；Command Modal 关闭再调和会找不到壳，后续通知全部不上屏。
+fn toast_host_idle() -> Element {
+    Element::new().w(0.0).h(0.0).pointer_events_none()
+}
+
+/// 铺满视口的舞台（提升到窗口根 portal 层）；卡片在其内按 `position` 锚点摆放。
+fn toast_viewport_stage(panel: Element) -> Element {
+    let mut stage: Element = Element::new()
+        .absolute()
+        .inset(0.0)
+        .w("100%")
+        .h("100%")
+        .pointer_events_box_none()
+        .child(panel);
+    stage.set_attr(ATTR_PORTAL_KEY, "toast-host");
+    portal_panel(stage, TOAST_PORTAL_Z)
+}
+
+pub(crate) fn paint_toast_host() -> Element {
     let open = use_signal(TOAST_HOST_OPEN, || true);
-    let host = reactive_view("__rui_toast_host_view", move || {
-        let _ = tick_toast_lifecycle();
-        let q = toast_queue().get();
-        let _ = open.get();
-        let _ = toast_pending().get(); // 等待队列变化时重绘（角标/状态）
-        let layout = ToastLayout::parse(&layout_signal().get());
-        let position = position_signal().get();
-        let expanded = expanded_signal().get() || is_toast_dragging();
-        let _ = overflow_signal().get();
-        let _ = limit_signal().get();
-        let Some(oz) = portal_sync(
-            "toast-host",
-            open,
-            OverlayKind::Tooltip,
-            OverlayMode::Pinned,
-        ) else {
-            return Element::new();
-        };
-        if q.is_empty() && toast_pending().peek().is_empty() {
-            if expanded_signal().peek() {
-                expanded_signal().set(false);
-            }
-            set_stack_timers_paused(false);
-            return Element::new();
+    let _ = tick_toast_lifecycle();
+    let q = toast_queue().get();
+    let _ = open.get();
+    let _ = toast_pending().get(); // 等待队列变化时重绘（角标/状态）
+    let layout = ToastLayout::parse(&layout_signal().get());
+    let position = position_signal().get();
+    let expanded = expanded_signal().get() || is_toast_dragging();
+    let _ = overflow_signal().get();
+    let _ = limit_signal().get();
+    // 与 Tooltip 相同：Pinned 登记，不进 Modal 栈。关 Command 不得把队列藏起来。
+    let _ = portal_sync(
+        "toast-host",
+        open,
+        OverlayKind::Tooltip,
+        OverlayMode::Pinned,
+    );
+    if q.is_empty() && toast_pending().peek().is_empty() {
+        if expanded_signal().peek() {
+            expanded_signal().set(false);
         }
-        if q.is_empty() {
-            sync_pending_when_visible_empty(&q);
-            return Element::new();
-        }
-        let panel = render_queue(layout, position.as_str(), &q, expanded);
-        portal_panel(panel, oz.panel)
-    });
-    host.absolute().inset(0.0).w("100%").h("100%")
+        set_stack_timers_paused(false);
+        return toast_host_idle();
+    }
+    if q.is_empty() {
+        sync_pending_when_visible_empty(&q);
+        return toast_host_idle();
+    }
+    let panel = render_queue(layout, position.as_str(), &q, expanded);
+    toast_host_idle().child(toast_viewport_stage(panel))
+}
+
+fn mount_toast_host() -> Element {
+    reactive_anchor(TOAST_HOST_VIEW, paint_toast_host);
+    // 锚点必须是子节点：`ui! { <Toaster/> }` 会用 file:line:column 盖掉根 template_id。
+    // 0×0 外壳不占 flex；真正的舞台 hoist 到窗口根 `__rui_portal_layer`。
+    Element::new()
+        .w(0.0)
+        .h(0.0)
+        .pointer_events_box_none()
+        .child(reactive_placeholder_sized(TOAST_HOST_VIEW, 0.0, 0.0).pointer_events_box_none())
 }
 
 /// RSX `<Toaster variant="stack" overflow="displace" limit={3} position="top-right" />`。
@@ -1839,6 +1871,170 @@ mod tests {
         toast_queue().set(q);
         toast_pending().set(p);
         promote_pending();
+    }
+
+    #[test]
+    fn toast_portal_sits_above_stacked_modals() {
+        assert!(TOAST_PORTAL_Z > 1000 + 10 * 20);
+    }
+
+    fn host_has_toast_portal(el: &Element) -> bool {
+        fn walk(el: &Element) -> bool {
+            if el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+                && el.attrs.get(ATTR_PORTAL_KEY).map(String::as_str) == Some("toast-host")
+            {
+                return true;
+            }
+            el.children.iter().any(walk)
+        }
+        el.attrs.get("rui_portal").map(String::as_str) != Some("1") && walk(el)
+    }
+
+    fn find_tid(el: &Element, id: &str) -> bool {
+        el.template_id.as_deref() == Some(id) || el.children.iter().any(|c| find_tid(c, id))
+    }
+
+    #[test]
+    fn toast_host_root_is_a_box_none_shell_not_the_portal() {
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, el) = crate::core::reactivity::create_root(paint_toast_host);
+        assert_ne!(
+            el.attrs.get("rui_portal").map(String::as_str),
+            Some("1"),
+            "reactive toast root must stay in-tree so Command close can still find it"
+        );
+    }
+
+    #[test]
+    fn toaster_anchor_survives_ui_root_template_stamp() {
+        crate::app::reactive::reset_registered_anchors();
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, stamped) = crate::core::reactivity::create_root(|| {
+            let host: Element = toaster().into();
+            host.template_id("examples/gallery/src/main.rs:3729:9")
+        });
+        assert_eq!(
+            stamped.template_id.as_deref(),
+            Some("examples/gallery/src/main.rs:3729:9"),
+            "ui! stamps the wrapper"
+        );
+        assert!(
+            find_tid(&stamped, TOAST_HOST_VIEW),
+            "toast reactive placeholder must remain a descendant after ui! root stamp"
+        );
+        crate::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn toast_stage_hoists_to_window_portal_layer() {
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+        };
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, mut root) = crate::core::reactivity::create_root(|| {
+            let _ = toast("Toast from Gallery")
+                .description("Hover the stack to expand.")
+                .duration(5000)
+                .show();
+            Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(paint_toast_host())
+        });
+        let _ = hoist_portal_subtrees(&mut root);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+        let layer = root
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("window portal layer");
+        let stage = layer
+            .children
+            .iter()
+            .find(|c| {
+                c.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+                    && c.attrs.get(ATTR_PORTAL_KEY).map(String::as_str) == Some("toast-host")
+            })
+            .expect("toast stage on window root");
+        assert!(
+            stage.layout_bounds[2] > 700.0 && stage.layout_bounds[3] > 500.0,
+            "toast stage must fill the window portal layer, got {:?}",
+            stage.layout_bounds
+        );
+    }
+
+    #[test]
+    fn toast_builder_and_push_share_the_same_host_portal() {
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, first) = crate::core::reactivity::create_root(|| {
+            let _ = toast("Toast from Gallery")
+                .description("Hover the stack to expand.")
+                .duration(5000)
+                .show();
+            paint_toast_host()
+        });
+        assert!(host_has_toast_portal(&first));
+        let (_owner, from_command) = crate::core::reactivity::create_root(|| {
+            let _ = toast("Hello from Command")
+                .description("Hover the stack to expand.")
+                .duration(5000)
+                .show();
+            paint_toast_host()
+        });
+        assert!(
+            host_has_toast_portal(&from_command),
+            "command-triggered toasts must reuse the Toaster portal, not a second root"
+        );
+        let q = toast_queue().get();
+        assert!(q.iter().any(|t| t.title == "Toast from Gallery"));
+        assert!(q.iter().any(|t| t.title == "Hello from Command"));
+    }
+
+    #[test]
+    fn toast_host_lifts_cards_as_child_portal() {
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, el) = crate::core::reactivity::create_root(|| {
+            let _ = toast_push("Hello from Command", 2500);
+            paint_toast_host()
+        });
+        assert!(
+            host_has_toast_portal(&el),
+            "toast cards must hoist from a child portal, not replace the host root"
+        );
+    }
+
+    #[test]
+    fn toast_still_paints_after_command_modal_closes() {
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+        };
+        clear_overlay_stack();
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let cmd = Signal::new(true);
+            assert!(portal_sync("gal-cmd", cmd, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+            let first = toast_push("Hello from Command", 2500);
+            cmd.set(false);
+            let _ = portal_sync("gal-cmd", cmd, OverlayKind::Modal, OverlayMode::Stacked);
+            let painted = paint_toast_host();
+            assert!(
+                host_has_toast_portal(&painted),
+                "first command toast must still paint after the modal leaves the overlay stack"
+            );
+            let second = toast_push("Copy", 1500);
+            let painted = paint_toast_host();
+            assert!(host_has_toast_portal(&painted), "follow-up toasts must keep painting");
+            assert!(toast_queue().get().iter().any(|t| t.id == first));
+            assert!(toast_queue().get().iter().any(|t| t.id == second));
+            clear_overlay_stack();
+        });
     }
 
     #[test]

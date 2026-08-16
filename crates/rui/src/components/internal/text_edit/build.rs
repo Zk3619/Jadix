@@ -521,6 +521,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resizable,
         resize_min_h,
         resize_max_h,
+        plain_chrome: false,
     };
 
     let id_for_click = fid.clone();

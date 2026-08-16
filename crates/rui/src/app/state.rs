@@ -1278,6 +1278,11 @@ impl AppState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        crate::components::command::sync_command_item_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
         crate::components::switch::sync_switch_checked_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
