@@ -11,15 +11,16 @@
 //!
 //! ## 注意
 //! Space/Enter 经焦点路径触发 `on_click` 切换；受控用 `pressed` / `pressed_signal`。
-//! **身份（WP-2.8）**：`id` 可空 → [`resolve_instance_id`]；非受控 `pressed` 用
-//! [`use_scoped_signal`]（Owner 作用域，试点）。
+//! **身份（WP-2.8 / 3.7）**：`id` 可空 → [`resolve_instance_id`]；布尔状态走
+//! [`crate::utils::toggle_state::resolve_bool_signal`]（受控 XOR Owner 作用域非受控）。
 
-use crate::core::reactivity::{use_scoped_signal, use_signal, Signal};
+use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::hstack;
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_TOGGLE};
 use rui_macros::component;
 
 pub struct ToggleBuilder {
@@ -115,11 +116,12 @@ fn size_pad(size: &str) -> (&'static str, &'static str, f32) {
 impl From<ToggleBuilder> for Element {
     fn from(builder: ToggleBuilder) -> Self {
         let instance = resolve_instance_id(builder.id, "toggle");
-        let default_pressed = builder.default_pressed;
-        let sig = builder.pressed.unwrap_or_else(|| {
-            // WP-2.8 pilot: Owner-scoped pressed (not global `{id}__toggle`).
-            use_scoped_signal(&instance, move || default_pressed)
-        });
+        let sig = resolve_bool_signal(
+            builder.pressed,
+            &instance,
+            SLOT_TOGGLE,
+            builder.default_pressed,
+        );
         let pressed = sig.peek();
         let disabled = builder.disabled;
         let outline = builder.variant == "outline";
@@ -172,19 +174,11 @@ impl From<ToggleBuilder> for Element {
             row = row.child(c);
         }
 
-        let sig_click = sig;
-        let focus_id = instance.clone();
         let mut out: Element = interactive(row)
             .focus_id(instance.clone())
             .focusable(!disabled)
             .focus_ring(!disabled)
-            .on_click(move || {
-                if disabled {
-                    return;
-                }
-                use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
-                sig_click.set(!sig_click.peek());
-            })
+            .on_click(bool_on_click(sig, disabled, instance.clone()))
             .into();
         if disabled {
             out = out.cursor_not_allowed();
@@ -199,7 +193,8 @@ impl From<ToggleBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::reactivity::create_root;
+    use crate::core::reactivity::{create_root, use_scoped_signal, use_signal};
+    use crate::utils::toggle_state::bool_slot_key;
 
     #[test]
     fn toggle_empty_id_never_writes_empty_focus_or_template() {
@@ -212,9 +207,10 @@ mod tests {
 
     #[test]
     fn toggle_uncontrolled_uses_scoped_signal_per_owner() {
+        let key = bool_slot_key("same_local", SLOT_TOGGLE);
         let (h1, a) = create_root(|| {
             let _el: Element = toggle("same_local").default_pressed(false).into();
-            let sig = use_scoped_signal("same_local", || false);
+            let sig = use_scoped_signal(&key, || false);
             sig.set(true);
             sig.peek()
         });
@@ -222,7 +218,7 @@ mod tests {
 
         let (h2, b) = create_root(|| {
             let _el: Element = toggle("same_local").default_pressed(false).into();
-            let sig = use_scoped_signal("same_local", || false);
+            let sig = use_scoped_signal(&key, || false);
             // Fresh owner → independent slot (still default false).
             sig.peek()
         });

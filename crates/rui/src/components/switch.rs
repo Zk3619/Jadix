@@ -34,19 +34,20 @@
 //! ```
 //!
 //! ## 注意
-//! - 未传 `checked` 时用内部信号 `{id}__switch`；多实例非受控请保证 `id` 唯一（或依赖自动 id）。
+//! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__switch`）；多实例请保证 `id` 唯一或依赖自动 id。
 //! - 状态用 `peek` + 每帧 style sync；拇指位移 / 轨道色走 [`use_ui_transition_cubic`](~150ms)。
 //! - 可聚焦；Space / Enter 切换与按钮同路径；内嵌文案 / Label `for` 点击转发到本控件。
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, Element, IntoCssDim, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{lerp_display_srgb_linear, use_ui_transition_cubic};
+use crate::utils::resolve_instance_id;
+use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_SWITCH};
 use rui_macros::component;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 const ATTR_THUMB: &str = "data-slot";
 const SLOT_THUMB: &str = "switch-thumb";
@@ -58,22 +59,6 @@ const THUMB_PX: f32 = 20.0;
 /// 轨道内边距 2px ×2 + 拇指 20 → 行程 20（对标 `data-[checked]:translate-x-5`）。
 const THUMB_TRAVEL: f32 = 20.0;
 const TRACK_PAD: f32 = 2.0;
-
-static NEXT_SWITCH_ID: AtomicUsize = AtomicUsize::new(1);
-
-fn auto_switch_id() -> String {
-    let n = NEXT_SWITCH_ID.fetch_add(1, Ordering::Relaxed);
-    format!("__rui_switch_rt_{n}")
-}
-
-fn resolve_switch_id(id: impl Into<String>) -> String {
-    let id = id.into();
-    if id.trim().is_empty() {
-        auto_switch_id()
-    } else {
-        id
-    }
-}
 
 fn track_off_bg() -> [f32; 4] {
     parse_color("input")
@@ -290,7 +275,7 @@ pub fn Switch(
 
 pub fn switch(id: impl Into<String>) -> SwitchBuilder {
     SwitchBuilder {
-        id: resolve_switch_id(id),
+        id: id.into(),
         checked: None,
         default_checked: false,
         disabled: false,
@@ -335,11 +320,8 @@ impl SwitchBuilder {
 
 impl From<SwitchBuilder> for Element {
     fn from(builder: SwitchBuilder) -> Self {
-        let id = resolve_switch_id(builder.id);
-        let scope = format!("{id}__switch");
-        let sig = builder
-            .checked
-            .unwrap_or_else(|| use_signal(scope.as_str(), || builder.default_checked));
+        let id = resolve_instance_id(builder.id, "switch");
+        let sig = resolve_bool_signal(builder.checked, &id, SLOT_SWITCH, builder.default_checked);
         let disabled = builder.disabled;
         let captions_raw = unpack_switch_children(builder.children);
         let has_caption = !captions_raw.is_empty();
@@ -370,19 +352,11 @@ impl From<SwitchBuilder> for Element {
             .into();
         track.switch_checked_sync = Some(sig);
 
-        let sig_a = sig;
-        let focus_id = id.clone();
         let mut track: Element = interactive(track)
             .focus_id(id.clone())
             .focusable(!disabled)
             .focus_ring(!disabled)
-            .on_click(move || {
-                if !disabled {
-                    use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
-                    // peek：避免在点击回调里 get() 误挂订阅 / 触发多余 rebuild
-                    sig_a.set(!sig_a.peek());
-                }
-            })
+            .on_click(bool_on_click(sig, disabled, id.clone()))
             .into();
         if disabled {
             if !has_caption {

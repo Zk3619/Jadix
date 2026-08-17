@@ -9,7 +9,7 @@
 //!   [`crate::app::portal_overlay`]。
 //!
 //! 拖拽、浮层几何、虚拟列表、内嵌文本等能力在 [`crate::utils`] / [`crate::app`]；
-//! Tabs / Toggle 等在 [`crate::components`]。
+//! 布尔开关状态在 [`crate::utils::toggle_state`]（WP-3.7）；Tabs / Toggle 外观在 [`crate::components`]。
 
 pub mod r#box;
 pub mod interactive;

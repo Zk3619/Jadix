@@ -29,21 +29,22 @@
 //! ```
 //!
 //! ## 注意
-//! - 未传 `checked` 时用内部信号 `{id}__checkbox`；多实例非受控请保证 `id` 唯一（或依赖自动 id）。
+//! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__checkbox`）；多实例请保证 `id` 唯一或依赖自动 id。
 //! - 状态用 `peek` + 每帧 style sync；Indicator 始终保留勾选字形，未选中仅字色透明。
 //! - 可聚焦；Space / Enter 切换与按钮同路径；内嵌文案 / Label `for` 点击转发到本控件。
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::Signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::hstack;
 use crate::style::{is_dark_theme, LineStyle};
 use crate::utils::lucide_glyph;
+use crate::utils::resolve_instance_id;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_CHECKBOX};
 use rui_macros::component;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 const ATTR_INVALID: &str = "data-invalid";
 const ATTR_INDICATOR: &str = "data-slot";
@@ -53,22 +54,6 @@ const BOX_PX: f32 = 16.0;
 const CHECK_PX: f32 = 12.0;
 /// 未选边框略粗于 1px，小尺寸上更易辨认（仍接近 solid-ui `border`）。
 const BORDER_W: f32 = 1.5;
-
-static NEXT_CHECKBOX_ID: AtomicUsize = AtomicUsize::new(1);
-
-fn auto_checkbox_id() -> String {
-    let n = NEXT_CHECKBOX_ID.fetch_add(1, Ordering::Relaxed);
-    format!("__rui_checkbox_rt_{n}")
-}
-
-fn resolve_checkbox_id(id: impl Into<String>) -> String {
-    let id = id.into();
-    if id.trim().is_empty() {
-        auto_checkbox_id()
-    } else {
-        id
-    }
-}
 
 fn unchecked_bg() -> [f32; 4] {
     // solid-ui / shadcn：浅底；dark 略用 input 透明叠底
@@ -305,7 +290,7 @@ pub fn Checkbox(
 
 pub fn checkbox(id: impl Into<String>) -> CheckboxBuilder {
     CheckboxBuilder {
-        id: resolve_checkbox_id(id),
+        id: id.into(),
         checked: None,
         default_checked: false,
         disabled: false,
@@ -350,11 +335,8 @@ impl CheckboxBuilder {
 
 impl From<CheckboxBuilder> for Element {
     fn from(builder: CheckboxBuilder) -> Self {
-        let id = resolve_checkbox_id(builder.id);
-        let scope = format!("{id}__checkbox");
-        let sig = builder
-            .checked
-            .unwrap_or_else(|| use_signal(scope.as_str(), || builder.default_checked));
+        let id = resolve_instance_id(builder.id, "checkbox");
+        let sig = resolve_bool_signal(builder.checked, &id, SLOT_CHECKBOX, builder.default_checked);
         let on = sig.peek();
         let disabled = builder.disabled;
         let invalid = builder.invalid;
@@ -390,19 +372,11 @@ impl From<CheckboxBuilder> for Element {
                 .insert(ATTR_INVALID.to_string(), "true".to_string());
         }
 
-        let sig_a = sig;
-        let focus_id = id.clone();
         let mut control: Element = interactive(control)
             .focus_id(id.clone())
             .focusable(!disabled)
             .focus_ring(!disabled)
-            .on_click(move || {
-                if !disabled {
-                    use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
-                    // peek：避免在点击回调里 get() 误挂订阅 / 触发多余 rebuild
-                    sig_a.set(!sig_a.peek());
-                }
-            })
+            .on_click(bool_on_click(sig, disabled, id.clone()))
             .into();
         if disabled {
             // 有文案时透明度挂在组合根，避免控制面再叠一层半透明。

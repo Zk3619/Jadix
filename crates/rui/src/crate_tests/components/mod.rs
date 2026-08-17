@@ -8,6 +8,7 @@ mod label_emoji_clip;
 mod textarea_empty_scroll;
 mod textarea_gallery_diag;
 mod textarea_multiline;
+mod toggle_state;
 
 #[cfg(test)]
 mod glyphon_newline_diag {
