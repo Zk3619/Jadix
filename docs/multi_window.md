@@ -13,6 +13,7 @@
 - **Owner 窗作用域**：次窗 `create_root` 会 `bind_current_owner_window_key_scope`；嵌套 effect 重跑时恢复 token。
 - **Reactive 注册表**：`reactive_anchor` / `bind_*` 的进程级注册键按 window scope 加后缀，避免次窗与主窗同 id 时静默复用主窗 effect（表现为双窗同时响应 / 次窗点不动）。
 - **窗作用域提交**：输入 / Focus / redraw 使用 `force_primary` / `force_secondary_id`（提交式），避免 `enter_*` guard 在 Drop 时把 `SIGNAL_KEY_SCOPE` 还原回次窗，导致主窗卡死或事件串窗。
+- **无障碍 / IME**：次窗在 `set_visible` 前创建独立 AccessKit adapter；读屏 Action 按 `window_id` 打进该窗树。次窗 IME 事件在次窗 scope 组字，光标区绑到次窗 HWND（不再丢弃）。
 - **协作**：主↔次正规通道是 [`shared_slot`](../crates/rui/src/app/multi_window.rs) + [`run_on_ui_thread`](../crates/rui/src/app/ui_bridge.rs)。
 - Gallery：**导航**「Router + 次窗」与浮层页 **Secondary window** 打开同一验证树（Input / Select / Dialog / 共享计数）。
 
@@ -37,7 +38,7 @@ run_on_ui_thread(|| {
 1. **创建**：UI 线程 `open_secondary_window` → 事件循环 `create_window` → `insert_secondary_slot`。
 2. **构建**：在次窗 `WindowScope` 下 `create_root` + `create_effect` 建独立 reactive tree。
 3. **关闭**：用户关窗 → `drop_secondary`（丢掉 Owner / overlay 栈）+ `remove_secondary`；**不可**移除 primary。关**主窗**时 `shutdown_renderer` 会先隐藏并销毁全部次窗 HWND / 释放 Owner，再拆主窗 GPU，避免 Windows 上 `gallery.exe` 残留占锁。
-4. **焦点协作**：次窗获焦时主窗走 `Focused(false)` 延迟释放 IME（TIP 候选）。次窗键事件在次窗 scope 内处理，不改主窗 focus 信号。
+4. **焦点协作**：次窗获焦时主窗走 `Focused(false)` 延迟释放 IME（TIP 候选）；主窗不会拆掉次窗已接管的 Imm 会话。次窗键 / IME 事件在次窗 scope 内处理，不改主窗 focus 信号。
 
 ## 与 Router / Navigator
 
@@ -77,6 +78,6 @@ run_on_ui_thread(|| {
 
 ## 后续（非阻塞）
 
-- [ ] 次窗 AccessKit adapter（读屏）
-- [ ] 次窗 IME 绑到次窗 HWND（目前次窗 IME 事件丢弃，避免打进主窗）
+- [x] 次窗 AccessKit adapter（读屏）
+- [x] 次窗 IME 绑到次窗 HWND（组字 / 候选窗跟次窗 Input，不打进主窗）
 - [x] 次窗独立 glyphon overlay 文本带（复杂 Dialog 与主窗同一套 hoist 已可用）
