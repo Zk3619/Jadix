@@ -1,5 +1,6 @@
 use winit::event::{ElementState, Ime, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
+use winit::window::WindowId;
 
 use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
 use crate::utils::clipboard::{
@@ -27,7 +28,7 @@ fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
 }
 
 impl super::App {
-    pub(super) fn handle_ime_event(&mut self, ime: Ime) {
+    pub(super) fn handle_ime_event(&mut self, ime: Ime, window_id: WindowId) {
         let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
         let ime_active =
             crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
@@ -41,13 +42,7 @@ impl super::App {
                 if password_focus {
                     // Password must stay ASCII-only; refuse OS IME association.
                     ime_active.set(false);
-                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                        ime_support::set_ime_allowed_latched(
-                            &st.window,
-                            false,
-                            &mut self.ime_allowed_latched,
-                        );
-                    }
+                    self.refuse_ime_on_window(window_id);
                     if ime_support::ime_diag_enabled() {
                         log::info!("RUI_IME_DIAG Enabled ignored (password) fid={}", fid);
                     }
@@ -166,7 +161,33 @@ impl super::App {
                 }
             }
         }
-        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+        self.request_ime_redraw(window_id);
+    }
+
+    fn refuse_ime_on_window(&mut self, window_id: WindowId) {
+        if self.is_secondary_window(window_id) {
+            if let Some(sec) = self.secondaries.borrow_mut().get_mut(&window_id) {
+                ime_support::set_ime_allowed_latched(
+                    &sec.window,
+                    false,
+                    &mut sec.ime_allowed_latched,
+                );
+            }
+        } else if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+            ime_support::set_ime_allowed_latched(
+                &st.window,
+                false,
+                &mut self.ime_allowed_latched,
+            );
+        }
+    }
+
+    fn request_ime_redraw(&mut self, window_id: WindowId) {
+        if self.is_secondary_window(window_id) {
+            if let Some(sec) = self.secondaries.borrow().get(&window_id) {
+                sec.window.request_redraw();
+            }
+        } else if let Some(st) = (*self.state.borrow_mut()).as_mut() {
             st.window.request_redraw();
         }
     }

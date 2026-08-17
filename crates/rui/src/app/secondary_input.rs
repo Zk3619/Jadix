@@ -24,14 +24,93 @@ impl super::App {
         super::window_scope::force_secondary_id(id);
         self.cursor_pos = position;
 
+        let scale = {
+            let secs = self.secondaries.borrow();
+            secs.get(&id)
+                .map(|s| s.window.scale_factor() as f32)
+                .unwrap_or(1.0)
+        };
+        let x = position.x as f32 / scale.max(1.0);
+        let y = position.y as f32 / scale.max(1.0);
+
+        let drag_sel_update: Option<(String, usize, usize, usize, bool)> =
+            if self.left_button_down {
+                let mut secs = self.secondaries.borrow_mut();
+                let Some(sec) = secs.get_mut(&id) else {
+                    return;
+                };
+                let ui_scale = scale.max(1.0);
+                if let Some(rest) = self.input_drag_rest.as_ref() {
+                    if let Some((bounds, display_el, style, leaf_scroll)) =
+                        super::tree_hit::find_input_text_leaf_for_rest(
+                            &sec.root_element,
+                            None,
+                            rest,
+                        )
+                    {
+                        let vk = crate::components::input::input_value_signal_key(rest);
+                        let pk = crate::components::input::input_preedit_signal_key(rest);
+                        let committed = use_signal(&vk, String::new).get();
+                        let pre = use_signal(&pk, String::new).get();
+                        let mx = if style.overflow.allows_caret_scroll() {
+                            x + leaf_scroll[0]
+                        } else {
+                            (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
+                        };
+                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                        let ix = crate::renderer::hit_test_input_text_index(
+                            sec.text_renderer.font_system_mut(),
+                            &display_el,
+                            mx,
+                            my,
+                            bounds,
+                            &style,
+                            ui_scale,
+                        );
+                        let caret_ix = if committed.is_empty() && pre.is_empty() {
+                            0
+                        } else {
+                            crate::components::input::caret_index_from_display_hit(rest, ix)
+                        };
+                        let lo = self.input_drag_anchor.min(caret_ix);
+                        let hi = self.input_drag_anchor.max(caret_ix);
+                        Some((rest.clone(), lo, hi, caret_ix, true))
+                    } else {
+                        None
+                    }
+                } else if let Some(key) = self.label_drag_key.as_ref() {
+                    if let Some((bounds, display_el, style, leaf_scroll)) =
+                        super::tree_hit::find_selectable_text_leaf_for_key(&sec.root_element, key)
+                    {
+                        let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                        let ix = crate::renderer::hit_test_input_text_index(
+                            sec.text_renderer.font_system_mut(),
+                            &display_el,
+                            mx,
+                            my,
+                            bounds,
+                            &style,
+                            ui_scale,
+                        );
+                        let lo = self.label_drag_anchor.min(ix);
+                        let hi = self.label_drag_anchor.max(ix);
+                        Some((key.clone(), lo, hi, ix, false))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
         let (x, y, path, cursor_pick, hover_cbs, window) = {
             let mut secs = self.secondaries.borrow_mut();
             let Some(sec) = secs.get_mut(&id) else {
                 return;
             };
-            let scale = sec.window.scale_factor() as f32;
-            let x = position.x as f32 / scale.max(1.0);
-            let y = position.y as f32 / scale.max(1.0);
             let path = super::pointer_events::hit_path(&sec.root_element, x, y);
             let cursor_pick =
                 super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]);
@@ -59,7 +138,27 @@ impl super::App {
             super::pointer_events::PointerKind::Move,
         );
         self.last_client_pos = Some([x, y]);
-        if let Some(sec) = self.secondaries.borrow().get(&id) {
+
+        let mut need_redraw = false;
+        if let Some((key, lo, hi, caret, is_input)) = drag_sel_update {
+            if is_input {
+                if self.input_drag_rest.as_deref() == Some(key.as_str()) {
+                    let sk = crate::components::input::input_selection_signal_key(&key);
+                    use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+                    let ck = crate::components::input::input_caret_signal_key(&key);
+                    use_signal(&ck, || None::<usize>).set(Some(caret));
+                    need_redraw = true;
+                }
+            } else if self.label_drag_key.as_deref() == Some(key.as_str()) {
+                let sk = crate::components::label::label_selection_signal_key(&key);
+                use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+                need_redraw = true;
+            }
+        }
+
+        if need_redraw {
+            window.request_redraw();
+        } else if let Some(sec) = self.secondaries.borrow().get(&id) {
             sec.window.request_redraw();
         }
     }
@@ -137,7 +236,7 @@ impl super::App {
                     self.last_click_at = Some(now);
                     self.last_click_pos = [px, py];
 
-                    let (path, input_drag) = {
+                    let (path, input_drag, label_drag) = {
                         let mut secs = self.secondaries.borrow_mut();
                         let sec = secs.get_mut(&id).unwrap();
                         let path = super::pointer_events::hit_path(&sec.root_element, x, y);
@@ -170,7 +269,30 @@ impl super::App {
                             };
                             (rest, caret_ix, focus_id)
                         });
-                        (path, input_drag)
+                        let label_drag = if input_drag.is_none() {
+                            super::tree_hit::find_selectable_text_at(
+                                &sec.root_element,
+                                x,
+                                y,
+                                [0.0, 0.0],
+                            )
+                            .map(|(key, bounds, display_el, style, leaf_scroll)| {
+                                let ui_scale = scale.max(1.0);
+                                let ix = crate::renderer::hit_test_input_text_index(
+                                    sec.text_renderer.font_system_mut(),
+                                    &display_el,
+                                    x + leaf_scroll[0],
+                                    y + leaf_scroll[1],
+                                    bounds,
+                                    &style,
+                                    ui_scale,
+                                );
+                                (key, ix)
+                            })
+                        } else {
+                            None
+                        };
+                        (path, input_drag, label_drag)
                     };
 
                     self.click_press_path = Some(path.clone());
@@ -194,6 +316,15 @@ impl super::App {
                             .set(Some((caret_ix, caret_ix)));
                         self.input_drag_rest = Some(rest);
                         self.input_drag_anchor = caret_ix;
+                        self.label_drag_key = None;
+                        self.left_button_down = true;
+                    } else if let Some((key, caret_ix)) = label_drag {
+                        let sk = crate::components::label::label_selection_signal_key(&key);
+                        use_signal(&sk, || None::<(usize, usize)>)
+                            .set(Some((caret_ix, caret_ix)));
+                        self.label_drag_key = Some(key);
+                        self.label_drag_anchor = caret_ix;
+                        self.input_drag_rest = None;
                         self.left_button_down = true;
                     } else if let Some(fid) = path.iter().rev().find_map(|e| e.focus_id.clone()) {
                         use_signal("__rui_button_focus_id", String::new).set(fid);
@@ -295,7 +426,24 @@ impl super::App {
                         let _ = super::portal_overlay::try_dismiss_outside_press();
                     }
                     crate::utils::popup::arm_underlay_close();
-                    self.input_drag_rest = None;
+                    if let Some(rest) = self.input_drag_rest.take() {
+                        let sk = crate::components::input::input_selection_signal_key(&rest);
+                        let sel = use_signal(&sk, || None::<(usize, usize)>).get();
+                        if let Some((a, b)) = sel {
+                            if a == b {
+                                use_signal(&sk, || None::<(usize, usize)>).set(None);
+                            }
+                        }
+                    }
+                    if let Some(key) = self.label_drag_key.take() {
+                        let sk = crate::components::label::label_selection_signal_key(&key);
+                        let sel = use_signal(&sk, || None::<(usize, usize)>).get();
+                        if let Some((a, b)) = sel {
+                            if a == b {
+                                use_signal(&sk, || None::<(usize, usize)>).set(None);
+                            }
+                        }
+                    }
                     self.left_button_down = false;
                 }
             }

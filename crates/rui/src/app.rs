@@ -202,6 +202,11 @@ struct App {
     ime_os_blur_at: Option<std::time::Instant>,
     event_loop_proxy: EventLoopProxy<RuiUserEvent>,
     accesskit_adapter: Option<accesskit_winit::Adapter>,
+    /// Per-secondary-window AccessKit adapters (created before `set_visible`).
+    secondary_accesskit:
+        std::collections::HashMap<winit::window::WindowId, accesskit_winit::Adapter>,
+    /// Window whose HWND currently owns OS IME drive (`LAST_IME_FOCUS_ID` / Imm).
+    ime_owner_window: Option<winit::window::WindowId>,
     custom_cursors: crate::style::CustomCursorCache,
     #[cfg(debug_assertions)]
     hot_reload: hot_reload::HotReloadState,

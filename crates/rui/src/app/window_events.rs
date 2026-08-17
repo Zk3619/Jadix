@@ -108,10 +108,17 @@ impl super::App {
             return;
         }
         self.ime_os_blur_at = None;
+        let wid = window.id();
+        if self.ime_owner_window.is_some() && self.ime_owner_window != Some(wid) {
+            return;
+        }
         log::warn!("RUI_IME_DIAG os blur hard-release (stop system IME drive)");
         super::ime_support::on_os_focus_lost(window);
         super::ime_support::sync_ime_focus_owner(window, None);
         super::ime_support::set_ime_allowed_latched(window, false, &mut self.ime_allowed_latched);
+        if self.ime_owner_window == Some(wid) {
+            self.ime_owner_window = None;
+        }
     }
 
     /// Whether a pointer hit should keep the current Input/Textarea focus.
@@ -158,31 +165,262 @@ impl super::App {
         false
     }
 
-    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId) {
+    pub(super) fn handle_secondary_redraw(
+        &mut self,
+        id: WindowId,
+        event_loop: &ActiveEventLoop,
+    ) {
         super::window_scope::force_secondary_id(id);
-        let mut secs = self.secondaries.borrow_mut();
-        let Some(sec) = secs.get_mut(&id) else {
-            return;
+        let suspended = self.is_suspended;
+        let (has_caret, render_ok, a11y_update) = {
+            let owner_slot = &mut self.ime_owner_window;
+            let mut secs = self.secondaries.borrow_mut();
+            let Some(sec) = secs.get_mut(&id) else {
+                return;
+            };
+            let inner = sec.window.inner_size();
+            if suspended || inner.width == 0 || inner.height == 0 {
+                if !suspended && (inner.width == 0 || inner.height == 0) {
+                    sec.window.request_redraw();
+                }
+                return;
+            }
+            let render_ok = match sec.render() {
+                Ok(()) => true,
+                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                    sec.recover_surface();
+                    sec.window.request_redraw();
+                    false
+                }
+                Err(wgpu::SurfaceError::OutOfMemory) => {
+                    log::error!("secondary window: GPU out of memory");
+                    false
+                }
+                Err(wgpu::SurfaceError::Timeout) => {
+                    sec.window.request_redraw();
+                    false
+                }
+            };
+            let has_caret = render_ok && sec.has_input_caret;
+            let a11y_update = if render_ok {
+                if let Some(at) = sec.ime_os_blur_at {
+                    if sec.os_focused {
+                        sec.ime_os_blur_at = None;
+                    } else if std::time::Instant::now() >= at {
+                        sec.ime_os_blur_at = None;
+                        if owner_slot.is_none() || *owner_slot == Some(id) {
+                            log::warn!("RUI_IME_DIAG os blur hard-release (secondary)");
+                            super::ime_support::on_os_focus_lost(&sec.window);
+                            super::ime_support::sync_ime_focus_owner(&sec.window, None);
+                            super::ime_support::set_ime_allowed_latched(
+                                &sec.window,
+                                false,
+                                &mut sec.ime_allowed_latched,
+                            );
+                            *owner_slot = None;
+                        }
+                    }
+                }
+                Self::drive_ime_on_painted_window(
+                    &sec.window,
+                    id,
+                    &sec.root_element,
+                    &sec.text_nodes,
+                    Some(sec.text_renderer.font_system_mut()),
+                    sec.os_focused,
+                    sec.ime_os_blur_at.is_some(),
+                    &mut sec.ime_allowed_latched,
+                    owner_slot,
+                );
+                let focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).get();
+                let fid = if focused.is_empty() {
+                    None
+                } else {
+                    Some(focused.as_str())
+                };
+                Some(crate::a11y::tree_update_from_elements(
+                    &sec.root_element,
+                    fid,
+                ))
+            } else {
+                None
+            };
+            (has_caret, render_ok, a11y_update)
         };
-        let inner = sec.window.inner_size();
-        if self.is_suspended || inner.width == 0 || inner.height == 0 {
-            if !self.is_suspended && (inner.width == 0 || inner.height == 0) {
-                sec.window.request_redraw();
-            }
-            return;
+
+        if has_caret {
+            let wake = crate::renderer::caret_blink_next_toggle_at();
+            self.caret_wake_at = Some(wake);
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
         }
-        match sec.render() {
-            Ok(()) => {}
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                sec.recover_surface();
-                sec.window.request_redraw();
+
+        if let Some(update) = a11y_update {
+            if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
+                adapter.update_if_active(|| update);
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("secondary window: GPU out of memory");
+        }
+
+        // Re-apply cursor after render when the pointer owns this window — primary redraw
+        // (shared signals / animations) must not leave a stale default on secondary hover.
+        if render_ok && self.pointer_window == Some(id) {
+            let scale = {
+                let secs = self.secondaries.borrow();
+                secs.get(&id)
+                    .map(|s| s.window.scale_factor() as f32)
+                    .unwrap_or(1.0)
+            };
+            let x = self.cursor_pos.x as f32 / scale.max(1.0);
+            let y = self.cursor_pos.y as f32 / scale.max(1.0);
+            let (cursor_pick, window) = {
+                let secs = self.secondaries.borrow();
+                let Some(sec) = secs.get(&id) else {
+                    return;
+                };
+                (
+                    super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]),
+                    sec.window.clone(),
+                )
+            };
+            super::tree_hit::apply_cursor(
+                &window,
+                Some(event_loop),
+                &mut self.custom_cursors,
+                cursor_pick,
+            );
+        }
+    }
+
+    /// Bind / release OS IME on `window` from this frame's painted text-edit focus.
+    fn drive_ime_on_painted_window(
+        window: &winit::window::Window,
+        window_id: WindowId,
+        root: &crate::core::tree::Element,
+        text_nodes: &[crate::core::tree::TextLayoutInfo],
+        font_system: Option<&mut glyphon::FontSystem>,
+        os_focused: bool,
+        ime_os_blur_pending: bool,
+        ime_allowed_latched: &mut bool,
+        ime_owner_window: &mut Option<WindowId>,
+    ) {
+        let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new);
+        let fid = focused.get();
+        let ui_scale = window.scale_factor() as f32;
+        let (win_w, win_h) = {
+            let s = window.inner_size();
+            let scale = ui_scale.max(0.001);
+            (s.width as f32 / scale, s.height as f32 / scale)
+        };
+        let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
+            let painted = super::ime_support::painted_text_edit_visual_bounds(text_nodes, &fid);
+            let focus_fallback =
+                super::tree_hit::find_bounds_by_focus_id(root, &fid, [0.0, 0.0]);
+            match (painted, focus_fallback) {
+                (Some(visual), fb) => {
+                    let scroll_acc = fb.map(|(_, sa)| sa).unwrap_or([0.0, 0.0]);
+                    Some((visual, scroll_acc, fid.clone(), "painted"))
+                }
+                (None, Some((b, sa))) => {
+                    let visual = [b[0] - sa[0], b[1] - sa[1], b[2], b[3]];
+                    Some((visual, sa, fid.clone(), "focus_bounds"))
+                }
+                (None, None) => None,
             }
-            Err(wgpu::SurfaceError::Timeout) => {
-                sec.window.request_redraw();
+        } else {
+            None
+        };
+
+        if let Some((visual, scroll_acc, fid_clone, source)) = ime_data {
+            if os_focused {
+                let allow_ime = super::ime_support::text_edit_rest(&fid_clone)
+                    .map(|rest| {
+                        let key = crate::components::input::input_type_signal_key(rest);
+                        let raw = crate::core::reactivity::use_signal(&key, || {
+                            crate::components::input::InputType::Text
+                                .as_str()
+                                .to_string()
+                        })
+                        .peek();
+                        crate::components::input::InputType::parse(&raw).allows_ime()
+                    })
+                    .unwrap_or(true);
+                super::ime_support::sync_ime_focus_owner(window, Some(&fid_clone));
+                super::ime_support::set_ime_allowed_latched(window, allow_ime, ime_allowed_latched);
+                *ime_owner_window = Some(window_id);
+                if allow_ime {
+                    let pad_zero = source == "painted";
+                    let (caret_x_in_field, compose_x_in_field, line_h) =
+                        Self::estimate_ime_caret_geom_in(
+                            root,
+                            font_system,
+                            &fid_clone,
+                            visual,
+                            ui_scale,
+                            if pad_zero { Some(0.0) } else { None },
+                        );
+                    let caret_visual_y = super::ime_support::clamp_ime_anchor_y(
+                        visual[1] + (visual[3] - line_h).max(0.0) * 0.5,
+                        line_h,
+                        win_h,
+                    );
+                    let compose_visual_x =
+                        (visual[0] + compose_x_in_field).clamp(0.0, (win_w - 1.0).max(0.0));
+                    let caret_w = 2.0_f32.max(1.0 / ui_scale.max(0.001));
+                    let composing = {
+                        let rest = super::ime_support::text_edit_rest(&fid_clone);
+                        rest.map(|r| {
+                            let pk = crate::components::input::input_preedit_signal_key(r);
+                            let pre =
+                                crate::core::reactivity::use_signal(&pk, String::new).peek();
+                            let active = crate::core::reactivity::use_signal(
+                                crate::components::IME_ACTIVE_SIGNAL,
+                                || false,
+                            )
+                            .peek();
+                            active && !pre.is_empty()
+                        })
+                        .unwrap_or(false)
+                    };
+                    let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
+                        [visual[0], caret_visual_y, visual[2], line_h],
+                        compose_x_in_field,
+                        ui_scale,
+                    );
+                    super::ime_support::apply_ime_cursor_area(
+                        window,
+                        compose_visual_x,
+                        caret_visual_y,
+                        caret_w,
+                        line_h,
+                        ui_scale,
+                        scroll_acc,
+                        composing,
+                    );
+                    super::ime_support::record_ime_cursor(super::ime_support::ImeCursorSnapshot {
+                        focus_id: fid_clone,
+                        physical_x: px,
+                        physical_y: py,
+                        physical_w: pw,
+                        physical_h: ph,
+                        ui_scale,
+                        visual_x: visual[0],
+                        visual_y: caret_visual_y,
+                        caret_x_in_field,
+                        source,
+                        scroll_acc_y: scroll_acc[1],
+                    });
+                }
+            } else if ime_os_blur_pending {
+                // Soft blur: TIP candidate may have stolen winit focus briefly.
+            } else if *ime_owner_window == Some(window_id) || ime_owner_window.is_none() {
+                super::ime_support::sync_ime_focus_owner(window, None);
+                super::ime_support::set_ime_allowed_latched(window, false, ime_allowed_latched);
+                *ime_owner_window = None;
             }
+        } else if *ime_owner_window == Some(window_id) {
+            super::ime_support::sync_ime_focus_owner(window, None);
+            super::ime_support::set_ime_allowed_latched(window, false, ime_allowed_latched);
+            *ime_owner_window = None;
         }
     }
 
@@ -229,12 +467,30 @@ impl super::App {
         ui_scale: f32,
         pad_override: Option<f32>,
     ) -> (f32, f32, f32) {
+        let mut rb = self.state.borrow_mut();
+        let Some(st) = rb.as_mut() else {
+            return (8.0, 8.0, 20.0);
+        };
+        Self::estimate_ime_caret_geom_in(
+            &st.root_element,
+            Some(st.text_renderer.font_system_mut()),
+            focus_id,
+            visual,
+            ui_scale,
+            pad_override,
+        )
+    }
+
+    fn estimate_ime_caret_geom_in(
+        root: &crate::core::tree::Element,
+        mut font_system: Option<&mut glyphon::FontSystem>,
+        focus_id: &str,
+        visual: [f32; 4],
+        ui_scale: f32,
+        pad_override: Option<f32>,
+    ) -> (f32, f32, f32) {
         let pad = pad_override.unwrap_or_else(|| {
-            let rb = self.state.borrow();
-            let Some(st) = rb.as_ref() else {
-                return 8.0;
-            };
-            super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+            super::tree_hit::find_element_by_focus_id(root, focus_id)
                 .map(|e| {
                     let [_, br, _, bl] = e.style.resolved_border_widths();
                     // CSS % padding resolves against the containing block width. For a
@@ -249,11 +505,6 @@ impl super::App {
                 })
                 .unwrap_or(8.0)
         });
-
-        let mut rb = self.state.borrow_mut();
-        let Some(st) = rb.as_mut() else {
-            return (pad, pad, 20.0);
-        };
 
         let rest = super::ime_support::text_edit_rest(focus_id).unwrap_or("");
         let vk = crate::components::input::input_value_signal_key(rest);
@@ -295,10 +546,10 @@ impl super::App {
         }
 
         let text_style =
-            super::tree_hit::find_input_text_leaf_for_rest(&st.root_element, None, rest)
+            super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
                 .map(|(_, _, style, _)| style)
                 .or_else(|| {
-                    super::tree_hit::find_element_by_focus_id(&st.root_element, focus_id)
+                    super::tree_hit::find_element_by_focus_id(root, focus_id)
                         .and_then(first_text_style)
                 })
                 .unwrap_or_default();
@@ -311,7 +562,7 @@ impl super::App {
         .max(1.0);
 
         let caret_x = super::ime_support::estimate_caret_x_in_field(
-            Some(st.text_renderer.font_system_mut()),
+            font_system.as_deref_mut(),
             caret_prefix,
             &text_style,
             visual,
@@ -322,7 +573,7 @@ impl super::App {
             caret_x
         } else {
             super::ime_support::estimate_caret_x_in_field(
-                Some(st.text_renderer.font_system_mut()),
+                font_system.as_deref_mut(),
                 compose_prefix,
                 &text_style,
                 visual,
@@ -2785,12 +3036,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }
-                super::tree_hit::apply_cursor(
-                    &window,
-                    Some(event_loop),
-                    &mut self.custom_cursors,
-                    hover_cursor_pick.clone(),
-                );
+                if pointer_on_primary {
+                    super::tree_hit::apply_cursor(
+                        &window,
+                        Some(event_loop),
+                        &mut self.custom_cursors,
+                        hover_cursor_pick,
+                    );
+                }
 
                 // Soft-blur (`ime_os_blur_at`): do not cancel yet — TIP candidate click can
                 // briefly steal winit focus. Hard release runs after the deadline.
@@ -2886,23 +3139,28 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 },
                             );
                         }
+                        self.ime_owner_window = Some(window.id());
                     } else if self.ime_os_blur_at.is_some() {
                         // Soft blur: Win IME path already refuses foreign-app HWND moves.
-                    } else {
+                    } else if self.ime_owner_window == Some(window.id())
+                        || self.ime_owner_window.is_none()
+                    {
                         super::ime_support::sync_ime_focus_owner(&window, None);
                         super::ime_support::set_ime_allowed_latched(
                             &window,
                             false,
                             &mut self.ime_allowed_latched,
                         );
+                        self.ime_owner_window = None;
                     }
-                } else {
+                } else if self.ime_owner_window == Some(window.id()) {
                     super::ime_support::sync_ime_focus_owner(&window, None);
                     super::ime_support::set_ime_allowed_latched(
                         &window,
                         false,
                         &mut self.ime_allowed_latched,
                     );
+                    self.ime_owner_window = None;
                 }
 
                 // Caret blink: wake ~once per phase (~520ms), not every frame.
@@ -2910,7 +3168,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let wake = crate::renderer::caret_blink_next_toggle_at();
                     self.caret_wake_at = Some(wake);
                     event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
-                } else {
+                } else if !self.secondaries.borrow().values().any(|s| s.has_input_caret) {
                     self.caret_wake_at = None;
                 }
 

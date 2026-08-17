@@ -376,7 +376,7 @@ mod win_ime {
     static CARET_H: AtomicI32 = AtomicI32::new(16);
     /// Composition-string origin (client px) for `IMR_QUERYCHARPOSITION`.
     static COMPOSE_ORIGIN_X: AtomicI32 = AtomicI32::new(0);
-    static SUBCLASS_INSTALLED: AtomicBool = AtomicBool::new(false);
+    static SUBCLASSED_HWNDS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
     static LAST_SCROLL_ACC_X: AtomicI32 = AtomicI32::new(0);
     static LAST_SCROLL_ACC_Y: AtomicI32 = AtomicI32::new(0);
     static HAS_SCROLL_ACC: AtomicBool = AtomicBool::new(false);
@@ -816,16 +816,20 @@ mod win_ime {
     }
 
     fn ensure_subclass(hwnd: HWND) {
-        if SUBCLASS_INSTALLED.swap(true, Ordering::AcqRel) {
+        let raw = hwnd as isize;
+        let Ok(mut installed) = SUBCLASSED_HWNDS.lock() else {
+            return;
+        };
+        if installed.iter().any(|&h| h == raw) {
             return;
         }
         unsafe {
             let ok = SetWindowSubclass(hwnd, Some(ime_subclass_proc), SUBCLASS_ID, 0);
             if ok == 0 {
-                SUBCLASS_INSTALLED.store(false, Ordering::Release);
                 log::warn!("RUI_IME_DIAG SetWindowSubclass failed");
             } else {
-                log::info!("RUI_IME_DIAG installed WM_IME_REQUEST subclass");
+                installed.push(raw);
+                log::info!("RUI_IME_DIAG installed WM_IME_REQUEST subclass hwnd={raw}");
             }
         }
     }

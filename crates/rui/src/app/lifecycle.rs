@@ -37,6 +37,8 @@ impl super::App {
             drop(sec.take_owner());
             drop(sec);
         }
+        self.secondary_accesskit.clear();
+        self.ime_owner_window = None;
         // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
         drop(self.window_registry.drain_secondaries());
 
@@ -64,6 +66,10 @@ impl super::App {
             ));
         }
         self.secondaries.borrow_mut().remove(&id);
+        self.secondary_accesskit.remove(&id);
+        if self.ime_owner_window == Some(id) {
+            self.ime_owner_window = None;
+        }
         if self.pointer_window == Some(id) {
             self.pointer_window = None;
         }
@@ -249,21 +255,65 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     sec.attach_owner(owner);
                 }
 
+                let adapter = Adapter::with_mixed_handlers(
+                    event_loop,
+                    &window,
+                    AccessKitBootstrap,
+                    self.event_loop_proxy.clone(),
+                );
+                self.secondary_accesskit.insert(id, adapter);
+
                 window.set_visible(true);
                 window.request_redraw();
             }
             super::RuiUserEvent::AccessKit(ev) => {
                 use accesskit_winit::WindowEvent as AkWindowEvent;
+                let wid = ev.window_id;
+                let is_secondary = self.is_secondary_window(wid);
                 match ev.window_event {
                     AkWindowEvent::ActionRequested(req) => {
-                        if let Some(state) = (*self.state.borrow_mut()).as_mut() {
-                            if crate::a11y::dispatch_accesskit_action(&state.root_element, &req) {
-                                state.window.request_redraw();
+                        if is_secondary {
+                            super::window_scope::force_secondary_id(wid);
+                            if let Some(sec) = self.secondaries.borrow_mut().get_mut(&wid) {
+                                if crate::a11y::dispatch_accesskit_action(&sec.root_element, &req)
+                                {
+                                    sec.window.request_redraw();
+                                }
+                            }
+                        } else {
+                            super::window_scope::force_primary();
+                            if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                                if crate::a11y::dispatch_accesskit_action(&state.root_element, &req)
+                                {
+                                    state.window.request_redraw();
+                                }
                             }
                         }
                     }
                     AkWindowEvent::InitialTreeRequested => {
-                        if let Some(adapter) = &mut self.accesskit_adapter {
+                        if is_secondary {
+                            super::window_scope::force_secondary_id(wid);
+                            if let Some(adapter) = self.secondary_accesskit.get_mut(&wid) {
+                                if let Some(sec) = self.secondaries.borrow().get(&wid) {
+                                    let focused = crate::core::reactivity::use_signal(
+                                        "__rui_button_focus_id",
+                                        String::new,
+                                    )
+                                    .get();
+                                    let fid = if focused.is_empty() {
+                                        None
+                                    } else {
+                                        Some(focused.as_str())
+                                    };
+                                    let update = crate::a11y::tree_update_from_elements(
+                                        &sec.root_element,
+                                        fid,
+                                    );
+                                    adapter.update_if_active(|| update);
+                                }
+                            }
+                        } else if let Some(adapter) = &mut self.accesskit_adapter {
+                            super::window_scope::force_primary();
                             if let Some(state) = (*self.state.borrow()).as_ref() {
                                 let update = state.accesskit_tree_update();
                                 adapter.update_if_active(|| update);
@@ -272,7 +322,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     }
                     AkWindowEvent::AccessibilityDeactivated => {
                         // No visual change; do not pump redraw.
-                        log::debug!("accesskit: accessibility deactivated");
+                        log::debug!("accesskit: accessibility deactivated window={wid:?}");
                     }
                 }
             }
@@ -311,6 +361,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 self.caret_wake_at = None;
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();
+                }
+                for sec in self.secondaries.borrow().values() {
+                    if sec.has_input_caret {
+                        sec.window.request_redraw();
+                    }
                 }
             } else {
                 next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
@@ -353,6 +408,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 }
             } else {
                 next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
+        for sec in self.secondaries.borrow().values() {
+            if let Some(at) = sec.ime_os_blur_at {
+                if at <= now {
+                    sec.window.request_redraw();
+                } else {
+                    next_wake = Some(next_wake.map_or(at, |t| t.min(at)));
+                }
             }
         }
 
@@ -439,6 +504,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 if st.window.id() == id {
                     adapter.process_event(&st.window, &event);
                 }
+            }
+        }
+        if let Some(win) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
+            if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
+                adapter.process_event(&win, &event);
             }
         }
         match event {
@@ -611,11 +681,12 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 self.modifiers = modifiers.state();
             }
             WindowEvent::Ime(ime) => {
-                // Secondary IME not fully wired to its HWND yet; must not compose into primary.
                 if self.is_secondary_window(id) {
-                    return;
+                    super::window_scope::force_secondary_id(id);
+                    self.handle_ime_event(ime, id);
+                } else {
+                    self.with_primary_input(id, |app| app.handle_ime_event(ime, id));
                 }
-                self.with_primary_input(id, |app| app.handle_ime_event(ime));
             }
             WindowEvent::Focused(focused) => {
                 let is_primary = (*self.state.borrow())
@@ -625,6 +696,18 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     if focused {
                         self.bind_pointer_window(id);
                         super::window_scope::force_secondary_id(id);
+                        if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                            sec.os_focused = true;
+                            sec.ime_os_blur_at = None;
+                            sec.window.request_redraw();
+                        }
+                    } else if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+                        // Same TIP-candidate soft-blur as primary: do not drop IME immediately.
+                        sec.os_focused = false;
+                        let at =
+                            std::time::Instant::now() + std::time::Duration::from_millis(200);
+                        sec.ime_os_blur_at = Some(at);
+                        event_loop.set_control_flow(ControlFlow::WaitUntil(at));
                     }
                 } else if focused {
                     self.bind_pointer_window(id);
@@ -693,7 +776,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     super::fire_file_drop(paths);
                 }
                 if self.secondaries.borrow().contains_key(&id) {
-                    self.handle_secondary_redraw(id);
+                    self.handle_secondary_redraw(id, event_loop);
                 } else {
                     self.handle_redraw_requested(id, event_loop);
                 }
@@ -781,6 +864,8 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         ime_os_blur_at: None,
         event_loop_proxy: event_loop_proxy.clone(),
         accesskit_adapter: None,
+        secondary_accesskit: std::collections::HashMap::new(),
+        ime_owner_window: None,
         custom_cursors: crate::style::CustomCursorCache::new(),
         #[cfg(debug_assertions)]
         hot_reload: super::hot_reload::HotReloadState::new(event_loop_proxy),

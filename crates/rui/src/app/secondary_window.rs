@@ -59,6 +59,14 @@ pub(super) struct SecondaryWindowState {
     pub(super) scroll_metrics_cache: HashMap<String, ([f32; 4], [f32; 2], [f32; 2])>,
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) ime_allowed_latched: bool,
+    /// Latest `WindowEvent::Focused` for this secondary (IME HWND drive / soft-blur).
+    pub(super) os_focused: bool,
+    /// Soft-blur deadline so TIP candidate chrome can briefly steal winit focus.
+    pub(super) ime_os_blur_at: Option<std::time::Instant>,
+    /// Last layout `text_nodes` (IME painted caret bounds).
+    pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
+    /// Last frame painted an Input/Textarea caret — drives blink wake in [`super::window_events`].
+    pub(super) has_input_caret: bool,
     /// Drops first (declared last) so secondary effects dispose before GPU teardown.
     owner: Option<OwnerHandle>,
 }
@@ -141,6 +149,10 @@ impl SecondaryWindowState {
             scroll_metrics_cache: HashMap::new(),
             damage_rect: None,
             ime_allowed_latched: false,
+            os_focused: false,
+            ime_os_blur_at: None,
+            text_nodes: Vec::new(),
+            has_input_caret: false,
             owner: None,
         })
     }
@@ -191,6 +203,23 @@ impl SecondaryWindowState {
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
+        // Same chrome pass as primary [`AppState::render`]: Input/Textarea ring + caret are
+        // peek-synced here (build uses `peek`, so focus does not rebuild the tree).
+        crate::style::sync_focus_ring_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
+        crate::components::label::sync_label_selection_paint_subtree(
+            &mut self.root_element,
+            &mut sync_impact,
+        );
+
         let use_full = self.layout_tree.root_node.is_none()
             || matches!(
                 self.layout_status,
@@ -198,7 +227,7 @@ impl SecondaryWindowState {
             )
             || sync_impact != LayoutStatus::Clean;
 
-        let render_result = if use_full {
+        let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
                 logical_w,
@@ -215,6 +244,31 @@ impl SecondaryWindowState {
                 true,
             )
         };
+
+        // Same anchored placement pass as primary [`AppState::render`]: dropdown / popover
+        // panels need trigger bounds from the first layout before left/top are written.
+        if crate::utils::popup::sync_floating_placement(
+            &mut self.root_element,
+            logical_w,
+            logical_h,
+        ) {
+            crate::utils::popup::visit_floating_panels(&self.root_element, |el| {
+                self.layout_tree.mark_element_layout_dirty(el);
+            });
+            render_result = self.layout_tree.build_and_layout_fast(
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                [0.0, 0.0],
+                false,
+                true,
+            );
+        }
+
+        self.has_input_caret = render_result
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some());
 
         let scaled_instances = scale_instances(&render_result.instances, scale);
         self.num_instances = render_result.instances.len() as u32;
@@ -520,6 +574,7 @@ impl SecondaryWindowState {
         if crate::text::take_fit_needs_relayout() {
             self.window.request_redraw();
         }
+        self.text_nodes = render_result.text_nodes;
         Ok(())
     }
 
