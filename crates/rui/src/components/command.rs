@@ -1851,7 +1851,10 @@ mod tests {
             .expect("item click")
             .borrow_mut()();
         assert!(ran.get(), "Calendar on_click must run before dismiss");
-        assert!(!open.peek(), "dismissible CommandDialog closes after activate");
+        assert!(
+            !open.peek(),
+            "dismissible CommandDialog closes after activate"
+        );
     }
 
     #[test]

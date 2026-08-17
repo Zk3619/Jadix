@@ -1018,10 +1018,10 @@ mod intrinsic_width_tests {
 
     #[test]
     fn reactive_anchor_registers_independently_per_window_scope() {
+        use crate::app::window_scope::{enter, WindowScope};
         use crate::core::reactivity::{
             bind_current_owner_window_key_scope, create_effect, create_root, create_signal,
         };
-        use crate::app::window_scope::{enter, WindowScope};
 
         reset_registered_anchors();
         let before = registered_anchor_count();

@@ -26,7 +26,7 @@ cargo package -p rui --allow-dirty
 | （default） | 开空集 | 精简：无 resvg、无大字体嵌入 |
 | `runtime-logging` | 关 | `env_logger` |
 | `tracing` | 关 | 热路径 span |
-| `system-tray` | 关 | 托盘 stub 门闸（见 `docs/tray.md`） |
+| `system-tray` | 关 | 原生托盘（`tray-icon`）；见 [`tray.md`](tray.md) |
 | `backend-dx12` | 关 | Windows D3D12 |
 | `bundled-*` / `fonts-*` | 关 | 字体策略 |
 | `emoji-svg` | 关 | resvg Twemoji |

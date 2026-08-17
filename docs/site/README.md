@@ -11,6 +11,7 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4
 | Authority + unified plan | 唯一入口与执行计划 | [AUTHORITY.md](../AUTHORITY.md) |
 | Engineering-grade charter | 工程级门槛与 ADR | [ENGINEERING_GRADE_FRAMEWORK.md](../ENGINEERING_GRADE_FRAMEWORK.md) |
 | Component library | 组件库领域规范 | [COMPONENT_LIBRARY.md](../COMPONENT_LIBRARY.md) |
+| Variant / size / controlled API | 稳定面词汇与双书写审计 | [component_variants.md](../component_variants.md) |
 | Reactivity | 细粒度响应式规范 | [REACTIVITY.md](../REACTIVITY.md) |
 | Vision | 愿景与分层初衷 | [PROJECT.md](../PROJECT.md) |
 | Custom components | 自定义组件 | [custom_components.md](../custom_components.md) |
@@ -19,6 +20,21 @@ Markdown-only 静态大纲；后续可换成 mdBook / VitePress（巩固期 WP-4
 | Color tokens | 颜色与混色 | [color.md](../color.md) |
 | Box model | 类 CSS 盒模型 | [box_model.md](../box_model.md) |
 | Drawing (Svg/Canvas/3D) | 公开自绘面 | [drawing.md](../drawing.md) |
+
+### Dual writing · 双书写（Button / Input）
+
+```rust
+use rui::prelude::*;
+
+ui! { <Button variant="outline">"保存"</Button> }
+let _: Element = button("save").variant("outline").text("保存").into();
+
+let name = use_signal("name", || String::new());
+ui! { <Input id="name" value={name} /> }
+let _: Element = input("name").value_signal(name).into();
+```
+
+完整词汇与审计表：[component_variants.md](../component_variants.md)。
 
 ## Desktop shell · 桌面外壳
 

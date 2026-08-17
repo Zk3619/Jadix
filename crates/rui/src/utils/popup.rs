@@ -15,9 +15,7 @@ use crate::app::window_scope::{self, WindowScope};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
 use crate::core::tree::Element;
-use crate::layout::layout_tree::{
-    ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY, PORTAL_LAYER_ID,
-};
+use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY, PORTAL_LAYER_ID};
 use crate::primitives::overlay::overlay;
 
 thread_local! {

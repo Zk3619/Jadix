@@ -8,9 +8,9 @@ use syn::{Expr, Ident, Token, braced};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
-/// 同 Input：省略 `id` 的 `<Checkbox>` 避免非受控信号键 `{id}__checkbox` 撞车。
+/// 同 Input：省略 `id` 的 `<Checkbox>` 仍生成唯一实例键（focus / Label `for`）；非受控布尔态走 Owner 作用域（WP-3.7）。
 static CHECKBOX_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
-/// 同 Checkbox：省略 `id` 的 `<Switch>` 避免非受控信号键 `{id}__switch` 撞车。
+/// 同 Checkbox：省略 `id` 的 `<Switch>` 生成唯一实例键。
 static SWITCH_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 fn expr_as_u16(value: &Expr) -> Option<u16> {

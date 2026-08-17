@@ -16,6 +16,8 @@ Both are first-class and must stay interchangeable ([COMPONENT_LIBRARY.md §3](C
 
 You can nest either form inside the other (`ui!` children may be `{ Element::from(button(…)) }`; builders may `.child(ui! { … })`). Prefer whichever fits the call site; do not treat tags as the only “modern” API.
 
+稳定面 `variant` / `size` / 受控 `*_signal` 命名见 [component_variants.md](component_variants.md)（WP-3.8）。
+
 ## The `#[component]` Macro
 
 The primary way to define a **reusable** component is the `#[component]` attribute macro. The function body may return a tree built with **`ui!` and/or Builders**—both are valid.
@@ -121,7 +123,7 @@ pub fn Counter() -> Element {
 `use_signal("name", ...)` 的字符串键在**同一组件多实例**时会碰撞。优先：
 
 1. **受控**：状态放在调用方 `Signal`，组件可不依赖全局 `id`。  
-2. **Owner 作用域**：[`use_scoped_signal`](../crates/rui/src/core/reactivity.rs)，减少手写全局 id。  
+2. **Owner 作用域**：[`use_scoped_signal`](../crates/rui/src/core/reactivity.rs)；布尔 on/off 用 [`resolve_bool_signal`](../crates/rui/src/utils/toggle_state.rs)（WP-3.7），不要再手写 `{id}__checkbox`。  
 3. 否则使用稳定唯一键，例如 `format!("counter:{id}", id = props.instance_id)`，或与 `reactive!` 的显式 anchor id 同步。
 
 **不要**给每个子控件都发明一个 `id`「以防万一」。身份轴拆分见 [COMPONENT_LIBRARY.md §4.2](COMPONENT_LIBRARY.md)。热重载约定见 [reactivity_and_hot_reload.md](reactivity_and_hot_reload.md)。

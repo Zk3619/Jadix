@@ -40,7 +40,7 @@ use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::{parse_color, parse_text_color, use_spring, use_ui_transition_spring};
+use crate::style::{parse_text_color, use_spring, use_ui_transition_spring};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::portal_panel;
@@ -1122,15 +1122,15 @@ fn tone_colors(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static
             Some("circle-x"),
         ),
         ToastTone::Success => (
-            parse_color("green-600"),
-            [255, 255, 255, 255],
-            parse_color("green-700"),
+            tokens::chart(2),
+            tokens::primary_foreground_text(),
+            tokens::chart(2),
             Some("circle-check"),
         ),
         ToastTone::Warning => (
-            parse_color("amber-500"),
-            [23, 23, 23, 255],
-            parse_color("amber-600"),
+            tokens::chart(4),
+            tokens::foreground_text(),
+            tokens::chart(4),
             Some("triangle-alert"),
         ),
     }
@@ -1139,10 +1139,10 @@ fn tone_colors(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static
 /// 四边均匀阴影（offset 0,0）；blur 略收，避免堆叠时下方偏重。
 fn tone_box_shadow(tone: ToastTone) -> &'static str {
     match tone {
-        ToastTone::Default => "0 0 8px -1px #00000024",
-        ToastTone::Destructive | ToastTone::Error => "0 0 8px -1px #ef444440",
-        ToastTone::Success => "0 0 8px -1px #16a34a45",
-        ToastTone::Warning => "0 0 8px -1px #f59e0b45",
+        ToastTone::Default => "0 0 8px -1px foreground",
+        ToastTone::Destructive | ToastTone::Error => "0 0 8px -1px destructive",
+        ToastTone::Success => "0 0 8px -1px chart-2",
+        ToastTone::Warning => "0 0 8px -1px chart-4",
     }
 }
 
@@ -1152,10 +1152,10 @@ fn tone_box_shadow_stacked(tone: ToastTone, behind: bool) -> &'static str {
         return tone_box_shadow(tone);
     }
     match tone {
-        ToastTone::Default => "0 0 5px -1px #00000014",
-        ToastTone::Destructive | ToastTone::Error => "0 0 5px -1px #ef444428",
-        ToastTone::Success => "0 0 5px -1px #16a34a28",
-        ToastTone::Warning => "0 0 5px -1px #f59e0b28",
+        ToastTone::Default => "0 0 5px -1px foreground",
+        ToastTone::Destructive | ToastTone::Error => "0 0 5px -1px destructive",
+        ToastTone::Success => "0 0 5px -1px chart-2",
+        ToastTone::Warning => "0 0 5px -1px chart-4",
     }
 }
 
@@ -2077,6 +2077,17 @@ mod tests {
         assert_eq!(ToastLayout::parse("list"), ToastLayout::List);
         assert_eq!(ToastLayout::parse("sonner"), ToastLayout::Stack);
         assert_eq!(ToastLayout::parse(""), ToastLayout::Stack);
+    }
+
+    #[test]
+    fn toast_tone_unknown_falls_back_and_success_uses_chart_token() {
+        assert_eq!(ToastTone::parse("nope"), ToastTone::Default);
+        let (bg, _, border, icon) = tone_colors(ToastTone::Success);
+        assert_eq!(bg, tokens::chart(2));
+        assert_eq!(border, tokens::chart(2));
+        assert_eq!(icon, Some("circle-check"));
+        let (wbg, _, _, _) = tone_colors(ToastTone::Warning);
+        assert_eq!(wbg, tokens::chart(4));
     }
 
     #[test]

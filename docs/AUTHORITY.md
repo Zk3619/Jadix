@@ -46,6 +46,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │
 ├─ 数据表（随代码改，不另开计划）
 │   component_inventory.md           分桶 + id 策略 + planned
+│   component_variants.md            variant/size/受控命名（WP-3.8）
 │
 ├─ 操作手册（验收步骤，不是第二套 WP）
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
@@ -376,7 +377,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **目标**：Gallery 可作名片；关键键盘完整；外壳可演示；**引入 `<svg>` / `<canvas>` 与 2D·3D 能力**（规范 [`drawing.md`](drawing.md)）。  
 **3.4 / 3.7 / 3.8 仅 CV 通过后开工（CV 已 ☑）。**  
-**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.14 已签）**：**3.11 · 3.12**；3.13 可交错；3.7 / 3.8 可消费默认 Owner；B16 / B17 不挡本波。
+**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 / 3.14 已签）**：**3.11 · 3.12**；3.13 可交错；B16 / B17 不挡本波。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
@@ -385,9 +386,9 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-3.3** | Date/Time/Color + Command 键盘 | C-WP-3.2 | ☑ 2026-08-17；Calendar 抽出；Date/Time/Color 键盘+ISO；Command ↑↓/Enter；作者面 → **3.14 ☑** |
 | **WP-3.4** | 浮层单一路径（popup / Dialog 壳 / Esc） | C-WP-1.1；总计划 3.4 | ☑ 2026-08-17；`mount_anchored_overlay` / `mount_viewport_portal_stage`；禁第二套 portal |
 | **WP-3.5** | Router + 次窗 Gallery 演示 | — | ☑ 2026-08-17；导航区外壳卡；次窗键不进主窗 |
-| **WP-3.6** | 系统托盘原生接线（feature） | — | ☐ 挡发布则可标 stub |
-| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☐ **前置 CV ☑**；建议 3.14 默认 Owner 已落地 |
-| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☐ **前置 CV ☑**；仅 `verified`；指南正文在 **3.14.3** |
+| **WP-3.6** | 系统托盘原生接线（feature） | — | ☑ 2026-08-17；`tray-icon` + `request_exit`；默认 feature 仍关 |
+| **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☑ 2026-08-17；`utils/toggle_state`；前置 CV ☑ · 3.14 Owner ☑ |
+| **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☑ 2026-08-17；[`component_variants.md`](component_variants.md)；仅 `verified` |
 | **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ 前置 3.14 ☑；浮层路径 3.4 ☑ |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
 | **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☐ 规范 [`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
@@ -477,7 +478,77 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 **签署规则**：A+A′ 绿即可勾 WP-3.5（**已签 2026-08-17**）。次窗完整 pointer / per-window overlay / `shared_slot` 见 [`multi_window.md`](multi_window.md)（2026-08-17 已接）。
 
-**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线或 README 标 stub；**3.11 或 3.12 至少一项 MVP**。Toggle/API 归一仍是 **3.7 / 3.8**，故不可宣称「复合控件 API 已全部好写」。
+#### WP-3.6 系统托盘原生接线（可选 feature）
+
+**目标**：默认构建仍精简；`features = ["system-tray"]` 下托盘可见、菜单点击回 UI 线程、Quit 退出。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.6.1** | [`tray-icon`](https://crates.io/crates/tray-icon) 0.21（`default-features = false`）；feature `system-tray = ["dep:tray-icon"]` | ☑ |
+| **3.6.2** | 菜单点击经 [`run_on_ui_thread`](../crates/rui/src/app/ui_bridge.rs) 再调 `on_click` | ☑ |
+| **3.6.3** | [`request_exit`](../crates/rui/src/app/ui_bridge.rs) → `RuiUserEvent::Exit`（与关主窗同路径） | ☑ |
+| **3.6.4** | 无 feature 时 stub 行为不变；Gallery **导航**卡 + `cargo run -p gallery --features system-tray` | ☑ |
+
+#### WP-3.6 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A stub（权威）** | `cargo test -p rui --lib tray` | passed（build/show/hide、dispatch `on_click`、Drop 注销） | 无 feature 时 `build` panic 或回调不跑 |
+| **A′ native 编译** | `cargo test -p rui --lib --features system-tray tray` | passed（含 `default_icon_from_rgba_is_valid`）；`system_tray_native()==true` | feature 开仍走空 stub 且无 warn 路径 |
+| **A″ Gallery** | `cargo test -p gallery navigation_section_mounts_shell_router_view` | 导航区有 `gal_shell_tray_show` | 无托盘卡 |
+| **B 手工** | `cargo run -p gallery --features system-tray` → 导航 → Show tray | 托盘图标可见；Ping 出 toast；Quit 退出进程 | 菜单点击改 Signal 不 hop UI 线程 |
+
+**签署规则**：A+A′+A″ 绿即可勾 WP-3.6（**已签 2026-08-17**）。禁区：默认 feature 拉取 gtk/`tray-icon`；在 `on_click` 里把 `Signal` 标 `Send`。
+
+#### WP-3.7 Toggle / Checkbox / Switch 共享状态原语
+
+**目标**：布尔受控/非受控单一写入 + `disabled` 不激活；样式层只消费状态 + token。禁止三控件再各写一套全局 `{id}__…`。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.7.1** | [`utils/toggle_state`](../crates/rui/src/utils/toggle_state.rs)：`resolve_bool_signal` + `bool_on_click` / `write_bool_toggle` | ☑ |
+| **3.7.2** | Toggle / Checkbox / Switch 迁入；非受控 [`use_scoped_signal`](../crates/rui/src/core/reactivity.rs)（槽 `{id}__toggle\|checkbox\|switch`） | ☑ |
+| **3.7.3** | 三控件共享测：受控写入、disabled 不写、跨 Owner 隔离 | ☑ |
+| **3.7.4** | 规范 §2.1 缺口关闭（`headless.md` / inventory 信号键） | ☑ |
+
+**禁区**：把勾选字形 / Switch 拇指动画抽进 utils；Slider / Radio 顺手下沉（非本包）；换 VDOM。
+
+#### WP-3.7 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 原语（权威）** | `cargo test -p rui --lib toggle_state` | 原语测 + 三控件共享测全绿（受控 click、disabled、Owner 隔离） | 任一 `FAILED`；Checkbox 仍 `use_signal("{id}__checkbox")` |
+| **A′ 回归** | `cargo test -p rui --lib` 含 `cv_checkbox` / `cv_switch` / `toggle_empty_id` | layout + 受控 sync / click 仍绿；空 id 不写 `Some("")` | `FAILED` |
+| **B 规范** | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.1；[`headless.md`](headless.md) | 不再写「尚未抽出 toggle_state」 | 缺口段仍允许永久扩散 |
+
+**签署规则**：A+A′ 绿且 B 缺口关闭即可勾 WP-3.7（**已签 2026-08-17**）。外观变体归一 **WP-3.8 ☑**。
+
+#### WP-3.8 variant / size / token / 受控 API + 双书写审计
+
+**目标**：verified 控件像同一套设计系统；未知 variant 回退 default；token 无魔法色；受控单一写入；RSX ↔ Builder 可审计。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.8.1** | 词汇表 [`component_variants.md`](component_variants.md)；Button 标杆；Scrollbar/Toast/Label 差异登记 | ☑ |
+| **3.8.2** | Token：Toast success/warning → `chart-*`；焦点环 theme `ring`；[`color.md`](color.md) 换肤冒烟 | ☑ |
+| **3.8.3** | 受控命名 `value_signal` / `checked_signal` / `open_signal`；Button variant + Input 外部 set 测 | ☑ |
+| **3.8.4** | 双书写审计表；Input RSX `value`；site README Button/Input 双片段 | ☑ |
+
+**禁区**：把 experimental Toggle/ColorPicker 强行并进 Button 词汇；Scrollbar `variant` 解析成 `outline`。
+
+#### WP-3.8 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 词汇** | `cargo test -p rui --lib unknown_variant` | Button 未知 variant/size → default | `FAILED` |
+| **A′ 受控** | `cargo test -p rui --lib apply_bound_button_variant`；`input_value_signal_seeds_store`；`external_set_pulls_into_store` | 外部 set → chrome/store | `FAILED` |
+| **A″ token** | `cargo test -p rui --lib toast_tone_unknown` | success = `chart-2`；未知 tone → default | 仍 `green-600` |
+| **A‴ 双书写** | `cargo test -p rui --test prelude_dual_surface` | Button + Input 标签/Builder 编译 | Input RSX 无 `value` |
+| **B 文档** | 打开 `component_variants.md` + site README | 一页表 + 标杆双片段 | 缺口未登记 |
+
+**签署规则**：A+A′+A″+A‴ 绿且 B 表在即可勾 WP-3.8（**已签 2026-08-17**）。experimental 不强制。
+
+**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；**3.11 或 3.12 至少一项 MVP**。Form 仍是 **3.9**，不可宣称「表单校验已齐」。
 
 ### 5.6 Wave 4 — 发布与质量矩阵
 
@@ -556,7 +627,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | 0 | D0（本文）；并行起草 WP-4.1 CHANGELOG 骨架 |
 | 1–2 | **CV**（走查 + 最小测网 + 身份审计）∥ 启动 WP-2.4；macOS/Linux 冒烟可并行 |
 | 3–4 | WP-2.4 / 2.5 / 2.6 / 2.7 / **2.9**（盒模型）；CV 收尾 |
-| 5–6 | **W3**：**3.4 / 3.5 ☑**；**3.11 Svg / 3.12 Canvas**；3.7/3.8；3.13 2D 可跟 3.12；3.2/3.3/3.14 已签 |
+| 5–6 | **W3**：**3.4 / 3.5 / 3.6 / 3.7 / 3.8 ☑**；**3.11 Svg / 3.12 Canvas**；3.13 2D 可跟 3.12；3.2/3.3/3.14 已签 |
 | 7 | WP-4.2–4.6；冻结承诺面 |
 | 8 | publish + 升 Beta |
 

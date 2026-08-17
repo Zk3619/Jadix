@@ -13,10 +13,12 @@
 | `create_resource` / `Resource` / `suspense` | `app/resource.rs` | 桌面语义；无 SSR |
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
+| `tray_icon` / `TrayIcon` / `request_exit` / `system_tray_native` | `app/tray.rs` · `ui_bridge.rs` | WP-3.6；默认 stub；`system-tray` 才有原生副作用 |
 
 ### Added
 
-- WP-3.14：`#[component]` 默认 [`component_root`]（实例 Owner）；Builder 同 helper（`with_child_owner` 别名）；`untrack` vs `isolate_reads` 锚点契约测升格 `component_authoring`；手册 [`custom_components.md`](custom_components.md)。
+- WP-3.6：可选 feature `system-tray` 接入 `tray-icon`；菜单点击经 `run_on_ui_thread`；[`request_exit`](../crates/rui/src/app/ui_bridge.rs) 退出事件循环；默认仍 stub。手册 [`tray.md`](tray.md)。
+- WP-3.8：稳定面 [`component_variants.md`](component_variants.md)（Button 词汇 + 差异表 + 受控命名 + 双书写审计）；未知 variant/size → default；Input RSX `value`；Toast success/warning 走 `chart-*` token。
 
 - Command：三种表面——行内 `<Command>`、VS Code 式顶部居中 `<CommandOverlay>`、居中模态 `<CommandDialog>`（复用 Dialog，不改 `dialog.rs`）。Builder `.open_signal` 默认浮层，`.dialog()` 走 Dialog。Overlay/Dialog 宿主为 `0×0` portal 锚点（打开后 reconcile 仍保持 0×0，避免在 HStack 里撑破布局）；TooltipContent 同样用 `0×0` 锚点。
 

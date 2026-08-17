@@ -35,7 +35,9 @@ use crate::core::tree::{parse_color, parse_text_color, Element};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
-use crate::utils::popup::{floating_portal_anchor, mark_floating, panel_block_clicks, PopupPlacement};
+use crate::utils::popup::{
+    floating_portal_anchor, mark_floating, panel_block_clicks, PopupPlacement,
+};
 use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use winit::event::{ElementState, KeyEvent};

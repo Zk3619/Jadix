@@ -3,9 +3,9 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）  
 
-交叉文档：[`component_inventory.md`](component_inventory.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
+交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
 ---
 
@@ -18,7 +18,7 @@
 |----|------|------|----------|
 | 产品面 | shadcn：`variant` / `size` / token 色 / 焦点环 | `components/` | **是**（prelude / Gallery / 文档索引） |
 | 书写面 | A: `ui!` 标签 · B: `*Builder` 链式 | 宏展开 ≡ Builder → `Element` | **双轨兼容**（见 §3） |
-| 行为面 | radix：开合、roving、trap、受控 Signal | `primitives/` + `utils/{popup,roving,focus_trap,keyboard}` | 高级 / 自定义组件 |
+| 行为面 | radix：开合、roving、trap、受控 Signal、布尔态 | `primitives/` + `utils/{popup,roving,focus_trap,keyboard,toggle_state}` | 高级 / 自定义组件 |
 | 语义面 | 设计令牌 + Theme light/dark | `style/theme.rs` + `tokens/` + `rui_style_tokens` | 换肤与 chrome 同源 |
 
 ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写面兼容）— **接受，不可再分叉**。
@@ -50,8 +50,8 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
             │  组合
      ┌──────┼──────────────────┐
      ▼      ▼                  ▼
- primitives/  tokens/     utils/popup·roving·focus_trap·keyboard·text_field
- (布局叶子)   (语义色)     (浮层几何 / 键盘 / 文本编辑共享)
+ primitives/  tokens/     utils/popup·roving·focus_trap·keyboard·text_field·toggle_state
+ (布局叶子)   (语义色)     (浮层几何 / 键盘 / 文本编辑 / 布尔态)
      │
      ▼
  style/theme + color_space(OKLCH) + utility 变体 + focus_ring
@@ -64,7 +64,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs` | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入 | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`** | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入、**布尔受控/非受控** | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**Dialog 壳在 `dialog.rs`，非 internal** |
@@ -72,8 +72,8 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 现状缺口（须按计划下沉，见实施计划 C-WP）：
 
 - **浮层**：几何与挂载已收口：`utils/popup` 的 `mark_floating` + **`mount_anchored_overlay`** / **`mount_viewport_portal_stage`**；Esc 栈 `portal_overlay`。开合状态仍可内嵌各组件——禁止第二套 placement 或嵌套 `rui_portal`。 
-- **Toggle**：仍在 `components/toggle`（及 Checkbox/Switch）；**尚未**抽出独立 `primitives/toggle` 或 `utils/toggle_state`——**允许过渡，不允许永久扩散**。  
-- **Tabs / Toggle**：`primitives/mod.rs` 注释已写明暂在 `components/`。  
+- **Toggle 布尔态**：[`utils/toggle_state`](../crates/rui/src/utils/toggle_state.rs)（WP-3.7 ☑）；Toggle / Checkbox / Switch 只消费状态 + token。外观仍在 `components/`。  
+- **Tabs / Toggle 外观**：`primitives/mod.rs` 已指向 `components/`；布尔原语不在 primitives。  
 - **作者面**：`#[component]` **默认** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14 ☑）；纯 Builder 复合根仍须显式调用。`untrack` 仍会跳过 `reactive_anchor`——用 `isolate_reads`（§2.3）。
 
 ### 2.2 与 Web 对标的正确映射
@@ -102,7 +102,8 @@ WP-3.2（Chart）与 WP-3.3（Calendar / Date·Time·Color / Command）落地后
 | `untrack` vs `isolate_reads` | **语义纪律**（可测） | 浮层体用 `untrack` → 空壳；须 `isolate_reads`。测：`untrack_skips_anchor_but_isolate_reads_registers` | **WP-3.14.2 ☑** |
 | 开合 / portal / 滚动锚 / 叠层 | **3.4.1–3.4.3 ☑** | 锚定走 `mount_anchored_overlay`；模态走视口舞台；Esc 只关顶层 | **WP-3.4 ☑** |
 | 实例信号 / 必填 `id` | **身份债未迁完** | Chart 未传 `selected_signal` 曾共用 `chart_pin`；Calendar 等仍「必填实例键」 | WP-2.8 已开收敛；余下随 3.14 cookbook + 3.8 |
-| Toggle / 受控 API / 双书写缺口 | **产品面未归一** | 与 3.2/3.3 正交，但每个新控件都复制一遍 | **WP-3.7 / 3.8** |
+| Toggle / Checkbox / Switch 布尔态 | **3.7 ☑** 共享 [`toggle_state`](../crates/rui/src/utils/toggle_state.rs) | 受控 XOR Owner 作用域；disabled 不写入 | **WP-3.7 ☑** |
+| variant / size / token / 受控 API 面 / 双书写 | **3.8 ☑** 词汇表 + 审计 | 仅 verified；未知 variant → default | **WP-3.8 ☑** |
 | 图表 grammar、命中、tooltip 几何 | **产品复杂度**（部分实现 Bug） | path 贴图翻转、径向命中、选中描边——修在 Chart，不升格为「换渲染器」 | 已随 3.2；禁区见 [`drawing.md`](drawing.md) |
 | 键盘映射、ISO 格式 | **本包产品工作** | WP-3.3 已签 | ☑ |
 
@@ -255,7 +256,7 @@ let _: Element = vstack()
 - `Button`：空 id → `btn-N`（进程内递增）  
 - `Input`：空 id → `__rui_input_rt_N`（兜底，避免多框共用 value 信号）  
 - `Navbar` / `bar_chart` / `line_chart` / `area_chart` / `pie_chart` / `define_chart`：**无必填 id**（WP-2.8）；空 → 不写 `template_id`  
-- `Progress` / `Toggle`：空 → `resolve_instance_id`；Toggle 非受控 → `use_scoped_signal`  
+- `Progress` / `Toggle` / `Checkbox` / `Switch`：空 → `resolve_instance_id`；布尔非受控 → [`resolve_bool_signal`](../crates/rui/src/utils/toggle_state.rs)（Owner 作用域，WP-3.7）  
 - RSX 宏：部分省略 id 的标签会生成唯一名或 Default 空串（以宏为准）
 
 | 可以 | 不可以指望 |
@@ -280,7 +281,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 规则 | 要求 |
 |------|------|
-| 非受控 | 内部信号键必须落入**唯一命名空间**（显式 id、宏生成 id、或 Owner 作用域） |
+| 非受控 | 内部信号键必须落入**唯一命名空间**（显式 id、宏生成 id、或 Owner 作用域）；布尔控件走 [`resolve_bool_signal`](../crates/rui/src/utils/toggle_state.rs) |
 | 受控 | 调用方持有 `Signal<T>`；组件**不得**再为同一语义状态建第二份 signal |
 | 禁用 | `disabled` 统一关闭指针与键盘激活，并参与 `disabled:` utility 变体 |
 | `focus_id` 前缀 | `input:`、`tabstrip:`、`scroll:` 等；AccessKit 依赖前缀；新增前缀须改 bridge + 本文或 `keyboard_nav.md` |
@@ -289,8 +290,8 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 约定 | 要求 |
 |------|------|
-| `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `destructive` / `link`…） |
-| `size` | `xs` / `sm` / `default` / `lg` / `icon*` 等；与 Button 已实现对齐者优先复用 |
+| `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `destructive` / `link`…）；**冻结表** [`component_variants.md`](component_variants.md) |
+| `size` | `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
 | 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
 | `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](color.md) |
 | 焦点环 | 默认走 `style/focus_ring` + theme `ring`；`focus-visible` 行为与冒烟表一致 |
@@ -377,7 +378,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
-| | VirtualMasonry、托盘、多窗协作细节、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
+| | VirtualMasonry、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
 **CV 分桶快照（2026-08-12，WP-CV.1 / CV.3）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**（CV.3 签署）；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 

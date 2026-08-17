@@ -284,6 +284,21 @@ fn apply_bound_button_variant_updates_chrome_in_place() {
 }
 
 #[test]
+fn apply_bound_unknown_button_variant_falls_back_to_default() {
+    use crate::components::{apply_bound_button_variant, button};
+    let mut el: Element = button("bind-btn-unknown")
+        .variant("ghost")
+        .text("Go")
+        .into();
+    let status = apply_bound_button_variant(&mut el, "not-a-variant");
+    assert_eq!(status, LayoutStatus::StyleChanged);
+    assert_eq!(
+        el.button_hover_paint.as_ref().map(|d| d.variant.as_str()),
+        Some("default")
+    );
+}
+
+#[test]
 fn apply_bound_icon_name_swaps_lucide_glyph() {
     use crate::utils::{apply_bound_icon_name, build_icon_text_node, lucide_glyph};
     let check = lucide_glyph("check").expect("lucide check");

@@ -103,12 +103,7 @@ impl From<SheetBuilder> for Element {
 
             panel = swallow_clicks(panel);
 
-            let stage: Element = r#box()
-                .inset(0.0)
-                .w("100%")
-                .h("100%")
-                .child(panel)
-                .into();
+            let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
             mount_modal_layer(
                 underlay_close_on_click(open, oz.underlay),
                 mount_viewport_portal_stage(stage, oz.panel),

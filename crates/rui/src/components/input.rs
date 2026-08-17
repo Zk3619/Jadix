@@ -409,6 +409,7 @@ pub fn Input(
     password_toggle: bool,
     input_type: Option<String>,
     text_size: Option<f32>,
+    value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
     mut on_click: crate::core::tree::Handler,
@@ -428,6 +429,10 @@ pub fn Input(
 
     if let Some(s) = text_size {
         builder = builder.text_size(s);
+    }
+
+    if let Some(sig) = value {
+        builder = builder.value_signal(sig);
     }
 
     if let Some(c) = children {
@@ -771,5 +776,19 @@ mod tests {
         let leaf = find_text(&el).expect("input text leaf");
         assert_eq!(leaf.text_style.overflow, crate::style::TextOverflow::Hidden);
         assert!(leaf.text_style.overflow.allows_caret_scroll());
+    }
+
+    #[test]
+    fn input_value_signal_seeds_store() {
+        let sig = use_signal("__rui_wp38_input_val", || "hello".to_string());
+        let _el: Element = input("wp38-in").value_signal(sig).into();
+        assert_eq!(
+            use_signal(&input_value_signal_key("wp38-in"), String::new).peek(),
+            "hello"
+        );
+        sig.set("world".into());
+        let pulled =
+            crate::utils::text_field::pull_controlled_into_store("wp38-in", "hello", false);
+        assert_eq!(pulled.as_deref(), Some("world"));
     }
 }

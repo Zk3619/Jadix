@@ -212,7 +212,8 @@ flowchart TB
 | **路径** | 新建 `primitives/toggle.rs` 或 `utils/toggle_state.rs`；Checkbox / Switch / Toggle |
 | **任务** | ① 受控/非受控单一写入；② disabled；③ 样式组件只消费状态 + token |
 | **验收** | 三控件共享测例；规范 §2.1「禁止扩散」满足 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.7）；`utils/toggle_state.rs` |
+| **对齐** | 总计划 WP-3.7 |
 
 ### C-WP-1.3 Roving + focus_trap 产品化
 
@@ -249,7 +250,7 @@ flowchart TB
 | **路径** | Button（标杆）、Toggle、ToggleGroup、Alert 类、Badge 若有 |
 | **任务** | ① 冻结公共 variant 名；② size 阶梯与 Button 对齐或显式差异表；③ 未知 variant 回退 default 并可测 |
 | **验收** | 规范或 `docs/component_variants.md` 一页表；Gallery 基础区展示矩阵 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8） |
 
 ### C-WP-2.2 Token 唯一真源
 
@@ -258,7 +259,7 @@ flowchart TB
 | **路径** | `style/theme.rs`、`tokens/colors.rs`、各组件 chrome 函数 |
 | **任务** | ① 组件内禁止魔法色；② dark 切换后 Gallery 抽查 Button/Input/Dialog；③ focus ring 用 theme.ring |
 | **验收** | 换肤冒烟条目；代码审无大量裸 OKLCH（theme 外） |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8）；Toast 去魔法绿/琥珀；焦点环 theme `ring`；[`color.md`](color.md) 换肤冒烟 |
 
 ### C-WP-2.3 受控 API 一致性
 
@@ -267,7 +268,7 @@ flowchart TB
 | **路径** | Input、Checkbox、Switch、Select、Tabs、Dialog(open) |
 | **任务** | ① 文档：`*_signal` / `open_signal` 命名；② 禁止双源；③ 绑定更新走 `apply_bound_*` 或等价 paint sync |
 | **验收** | 库测覆盖「外部 set → chrome 更新」至少 Button variant + Input 一类 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8）；`apply_bound_button_variant` + Input `pull_controlled_into_store` |
 
 ### C-WP-2.4 自定义组件指南校准
 
@@ -285,7 +286,7 @@ flowchart TB
 | **路径** | 稳定面组件；规范 §3；`ui!` 宏展开 vs `*Builder` |
 | **任务** | ① 审计稳定面：RSX props 与 Builder 方法一一对应表；② 缺口补 Builder 或文档「仅糖」例外；③ 库测或 doctest：互嵌 |
 | **验收** | 审计表关闭；Button/Input 双写法示例进文档站或 README |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（AUTHORITY WP-3.8）；表在 [`component_variants.md`](component_variants.md)；Input RSX `value`；site README 标杆片段 |
 | **对齐** | ADR-9 |
 
 ### C-WP-2.6 身份 API 收敛（减少强制 `id`）

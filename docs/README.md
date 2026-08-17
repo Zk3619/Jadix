@@ -6,7 +6,7 @@
 |------|------|
 | 执行源 | [AUTHORITY.md](AUTHORITY.md) |
 | 工程门槛 / ADR | [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) |
-| 组件规范 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) · [component_inventory.md](component_inventory.md) |
+| 组件规范 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) · [component_inventory.md](component_inventory.md) · [component_variants.md](component_variants.md) |
 | 响应式规范 | [REACTIVITY.md](REACTIVITY.md) |
 | 身份契约 | [element_identity.md](element_identity.md) |
 | 盒模型 | [box_model.md](box_model.md)（WP-2.9 ☑） |

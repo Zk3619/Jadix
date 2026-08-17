@@ -35,12 +35,12 @@
 | CI | 三平台 test + `clippy -D warnings` + `RUI_FORCE_SOFTWARE` offscreen |
 | Golden | 仅 `offscreen_clear_blue_8x8` + `stage8_pattern`（**缺组件场景矩阵**；目标 ≥5） |
 | Gallery | 侧栏八分区已落地（WP-3.1 ☑）：基础 / 表单 / 浮层·反馈 / 数据 / 导航 / 布局 / 文本 / 关于 |
-| 外壳 | Router 历史 Gallery 可演示（WP-3.5 ☑）；次窗 wired；托盘 `system-tray` **stub**（`tray.md`） |
+| 外壳 | Router 历史 Gallery 可演示（WP-3.5 ☑）；次窗 wired；托盘 `system-tray` 可选接线（WP-3.6 ☑；默认 stub，见 `tray.md`） |
 | 发布 | `PUBLISH.md` 齐；**无 CHANGELOG**；**未实发 crates.io**；文档站 stub |
 | 冒烟 | `desktop_smoke.md`：**Win #1–#9 已签**（2026-08-10；#3 中文，日/韩未测）；**macOS / Linux 未签** |
 | 开放 P0 | macOS/Linux 冒烟列、crates.io、文档站正文、CHANGELOG/SemVer 面 |
 
-**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**Wave 2 已退出**（2026-08-13；2.1–2.9 ☑）。macOS / Linux 冒烟仍 ☐。**进入 Wave 3**（3.1–3.5 / 3.14 ☑；焦点 **3.11 Svg / 3.12 Canvas**；3.13 / B16 / B17 不挡退出）。W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（**CV 已退出**）。
+**进度摘要（诚实口径）**：**Wave 1 开发机（Win）已退出**（2026-08-10）。**Wave 2 已退出**（2026-08-13；2.1–2.9 ☑）。macOS / Linux 冒烟仍 ☐。**进入 Wave 3**（3.1–3.6 / 3.14 ☑；焦点 **3.11 Svg / 3.12 Canvas**；3.13 / B16 / B17 不挡退出）。W4 未开工。组件专项 / CV 见 [AUTHORITY.md](AUTHORITY.md) Wave CV（**CV 已退出**）。
 
 ---
 
@@ -290,7 +290,7 @@ flowchart TB
 | **路径** | `app/tray.rs`、feature `system-tray`、[tray.md](tray.md) |
 | **任务** | 接入 `tray-icon`（+ 可选 `muda`）；Quit 经 `run_on_ui_thread`；默认 feature 仍关 |
 | **验收** | `features = ["system-tray"]` 下托盘可见、Quit 退出；无 feature 时 stub 行为不变 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-17（勾选源 AUTHORITY WP-3.6） |
 | **优先级** | P1；若挡发布可降为 Beta 后，但须在 README 标明「stub」 |
 
 ### WP-3.7 VirtualMasonry（条件项）

@@ -12,6 +12,16 @@ fn prelude_builder_surface_compiles() {
 }
 
 #[test]
+fn prelude_input_controlled_tag_and_builder() {
+    let sig = use_signal("prelude-in-val", || "hi".to_string());
+    let _b: Element = input("prelude-in-b").value_signal(sig).into();
+    let el = ui! {
+        <Input id="prelude-in-t" value={sig} placeholder="typed" />
+    };
+    let _: Element = el;
+}
+
+#[test]
 fn prelude_tag_surface_compiles() {
     let el = ui! {
         <Button id="prelude-tag-btn" variant="outline">"Tag"</Button>

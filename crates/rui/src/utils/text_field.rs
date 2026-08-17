@@ -468,6 +468,22 @@ mod tests {
     }
 
     #[test]
+    fn external_set_pulls_into_store_when_unfocused() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_pull", || "seed".to_string());
+            bind_controlled_value("tf_pull", ext);
+            ext.set("hello".into());
+            let next = pull_controlled_into_store("tf_pull", "seed", false);
+            assert_eq!(next.as_deref(), Some("hello"));
+            assert_eq!(
+                use_signal(&input_value_signal_key("tf_pull"), String::new).peek(),
+                "hello"
+            );
+            assert!(pull_controlled_into_store("tf_pull", "hello", true).is_none());
+        });
+    }
+
+    #[test]
     fn caret_after_newline_maps_to_next_line_start() {
         assert_eq!(caret_line_and_local("a\n", 2), (1, 0));
         assert_eq!(caret_line_and_local("a\nb", 2), (1, 0));

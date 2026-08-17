@@ -18,7 +18,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 | 代码体量 | `crates/` ≈ **5.3 万行** / **182** 个 `.rs`；`components/` **45** 个模块（含 `mod.rs` 共 46 文件） | API 稳定面文档化；破坏性变更可追踪 |
 | 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / **ErrorBoundary** / **`switch_reactive`** / `on_mount` | 热路径无全局表泄漏；`REGISTERED_*` 挂 Owner；Store produce 契约完整 |
 | 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty`；**公开 Svg/Canvas 叶仍 ☐**（[`drawing.md`](drawing.md)） | 细粒度 damage 默认路径；测宽≡绘制；W3 自绘面起步 |
-| 桌面可用 | IME 光标区代码路径；焦点环 / roving / focus_trap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **stub** | 三平台真窗口冒烟签署；读屏主路径可演示 |
+| 桌面可用 | IME 光标区代码路径；焦点环 / roving / focus_trap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **可选 feature 已接线**（默认 stub） | 三平台真窗口冒烟签署；读屏主路径可演示 |
 | 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（clear + stage8 + **5 组件场景**） | 真窗冒烟或等价；glyph 级 golden 可加深 |
 | 发布 | `PUBLISH.md`；文档站 stub；**无 CHANGELOG / 未 crates.io** | `cargo add rui` 可用；文档站有 Getting Started |
 
@@ -145,7 +145,7 @@ crates/
 | 文本 | prepare/layout + 缓存；inline + **块级** markdown MVP；变宽绕排 MVP；RTL/letter-spacing；FontSystem 共享 |
 | 原生 | IME 光标区（库测 + 诊断钩子）；焦点环 token；roving；focus_trap；AccessKit Role/Action/live（lifecycle 接线） |
 | 组件 | 浮层引擎、Dialog 模态壳（`components/dialog.rs`）、表单、表格、树、虚拟列表、Command/Menubar、Date/Color、Chart Bar/Line MVP、Carousel、Gallery 八分区 |
-| 外壳 | **Router**（历史 back/forward 有测）/ **次窗 wired MVP** / 托盘 stub / 剪贴板助手 |
+| 外壳 | **Router**（历史 back/forward 有测）/ **次窗 wired MVP** / 托盘 `system-tray` 可选接线 / 剪贴板助手 |
 | 工程 | 三平台 CI；`RUI_FORCE_SOFTWARE` offscreen（2 golden）；tracing feature；layout bench；`PUBLISH.md`；库测分布在 `crate_tests/` + 模块内测 |
 
 ### 4.2 Solid 对齐口径（编程模型，非整仓）
@@ -182,7 +182,7 @@ crates/
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
 | P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
-| P2 | DevTools、backdrop-blur 缓存、托盘原生接线、移动/鸿蒙一等公民 | 明确延后或条件项 |
+| P2 | DevTools、backdrop-blur 缓存、移动/鸿蒙一等公民 | 明确延后或条件项 |
 
 ---
 

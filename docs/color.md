@@ -66,6 +66,21 @@
 
 ---
 
+## 换肤冒烟（WP-3.8）
+
+Gallery 切 **dark** 后抽查：
+
+| 控件 | 期望 |
+|------|------|
+| Button default / outline / destructive | chrome 来自 Theme token，无残浅色硬编码 |
+| Input 焦点环 | theme `ring` |
+| Dialog 面板 / 遮罩 | `card`/`background` 语义色 |
+| Toast success / warning | `chart-2` / `chart-4`（随主题变），不是固定 `green-600` |
+
+库测不替代本条；签署以 [`component_variants.md`](component_variants.md) §3 为准。
+
+---
+
 ## 相关代码
 
 | 模块 | 说明 |

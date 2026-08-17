@@ -17,7 +17,8 @@ use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::utils::popup::{
-    mark_floating, mount_anchored_overlay, panel_block_clicks, PopupPlacement, ATTR_FLOATING_STRATEGY,
+    mark_floating, mount_anchored_overlay, panel_block_clicks, PopupPlacement,
+    ATTR_FLOATING_STRATEGY,
 };
 
 pub struct PopoverBuilder {

@@ -27,6 +27,7 @@
 **WP-CV.3（2026-08-12）**：§2 稳定面文档已手工复核修错；**无未分类 P0**，`broken` = 无（不降级）。  
 **WP-CV.4（2026-08-12）**：稳定面 id 分类见 §2.1；空串 I-1 已修。  
 **WP-2.8（2026-08-13）**：展示型 `navbar`/`chart`/`progress` 去必填；Toggle `use_scoped_signal`；Gallery 减噪。  
+**WP-3.7（2026-08-17）**：Toggle / Checkbox / Switch 共用 `utils/toggle_state`；非受控 Owner 作用域。  
 **WP-2.9（2026-08-13）**：盒模型 utility `box-border`/`box-content`；测宽叶审计见 [`box_model.md`](box_model.md) 附录 A（Tabs=ContentBox；Button/Input 等拆叶）。  
 **禁止**：把 `planned` 写进 prelude / Gallery 假装可 import；把 Theme/utility 当控件走 CV 改桶。
 
@@ -55,7 +56,7 @@
 | Label | `label` / `Label` / `LabelBuilder`；`text` re-export | **verified** | **展示型不要求**（RSX 仍常传/`宏生成`；空串勿写 focus） | CV.1 可见性走查；选区键见 `label_selection_signal_key` |
 | Separator | `separator` / `Separator` | **verified** | **展示型不要求** | CV.1 可见性走查；无用户 id API |
 | Card | `Card` / `CardHeader` / `CardTitle` / `CardDescription` / `CardAction` / `CardContent` / `CardFooter` | **verified** | **展示型不要求** | CV.1 可见性走查；复合分区对齐 solid-ui / shadcn；无用户 id API |
-| Toggle | `toggle` / `Toggle` | **experimental** | 必填实例键（非受控） | 不在 §5.2.1；Gallery 表单区演示 |
+| Toggle | `toggle` / `Toggle` | **experimental** | 可空；空 → `resolve_instance_id`；非受控 Owner 作用域 | WP-3.7 与 Checkbox/Switch 共用 `toggle_state`；不在 §5.2.1 |
 | ToggleGroup | `toggle_group` / `ToggleGroup` | **experimental** | 必填实例键 | reactive sync lib；≈ EUI `segmented` |
 | Progress | `progress` / `Progress` | **experimental** | 可选 / 展示偏多 | 不在 §5.2.1 |
 | Image | `Image` | **experimental** | 可选（测试选择器） | 不在 §5.2.1 |
@@ -66,8 +67,8 @@
 |----------|------------------|----|---------|-------------|
 | Input | `input` / `Input` / `InputBuilder` | **verified** | 多实例 **必填实例键**；空 → **仅内部自动** `__rui_input_rt_N` | smoke#2/#3/#4/#9；input_* lib |
 | Textarea | `textarea` / `Textarea` | **verified** | 同 Input | CV.1 主交互走查；textarea_* lib |
-| Checkbox | `checkbox` / `Checkbox` | **verified** | 非受控 **必填实例键**；受控可选 | CV.1 + CV.2 layout/行为测 |
-| Switch | `switch` / `Switch` | **verified** | 同上 | CV.1 + CV.2 layout/行为测 |
+| Checkbox | `checkbox` / `Checkbox` | **verified** | 非受控建议唯一 `id`（Owner 作用域）；受控可选；空 → auto | CV.1 + CV.2；WP-3.7 `toggle_state` |
+| Switch | `switch` / `Switch` | **verified** | 同上 | CV.1 + CV.2；WP-3.7 `toggle_state` |
 | RadioGroup | `radio_group` / `RadioGroup` | **verified** | 必填 `group_id` | CV.1 走查；reactive sync lib |
 | Slider | `slider` / `Slider` | **verified** | 必填实例键 | CV.1 走查；reactive sync lib |
 | Form | `form_provider` / `form_field` / `form_validate` / … | **experimental** | provider **必填实例键**（错误 map 命名空间） | **非独立产品组件**；Context 校验 helpers；降出 §5.2.1；加深见 WP-3.9 |
@@ -237,7 +238,8 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | Separator / Card | **无用户 id** | n/a | 无 | 无 | — | 展示型目标态 |
 | Input | 首位可空 | **auto** `__rui_input_rt_N` | `input:{id}`；tid 派生 | value/caret/… | — | 已合规 |
 | Textarea | 首位可空 | **auto** `__rui_textarea_rt_N` | `textarea:{id}` | 同 Input + h 信号 | 内 scroll | 已合规 |
-| Checkbox / Switch / Slider | 首位可空 | **auto** `__rui_*_rt_N` | 裸 id | `{id}__checkbox` 等 | — | 已合规 |
+| Checkbox / Switch | 首位可空 | **auto** `__rui_*_rt_N` | 裸 id | Owner 作用域 `{id}__checkbox` / `{id}__switch`（WP-3.7） | — | 已合规 |
+| Slider | 首位可空 | **auto** `__rui_*_rt_N` | 裸 id | `{id}__slider` 等全局键 | — | 已合规 |
 | RadioGroup | 首位 `group_id` | **auto** `__rui_radio_rt_N` | 项 `{g}:{v}` | `{id}__radio` | — | I-1 ☑（CV.4 修） |
 | Select | 必填位（可空） | **auto** `__rui_select_rt_N` | `{id}:trigger` | `__select_*` | floating → trigger | I-1/I-3 ☑（CV.4 修） |
 | Combobox | 必填位（可空） | **auto** `__rui_combo_rt_N`（scope 统一） | `input:{id}` | `__combo_*` | floating → `input:{id}` | 锚点与 Input 同 id（CV.4 修） |
@@ -263,6 +265,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 - **稳定面 id 策略已分类**（本表 + §1 各行「id 策略」列）。  
 - **I-1 空串 `Some("")`**：稳定面已修（`resolve_instance_id` / Label 不写 tid）；桥侧防御测保留。  
 - **WP-2.8 ☑**：展示型 `navbar`/`chart`/`progress` 去必填；Toggle `use_scoped_signal`；Gallery 减噪。显式同 id 多实例仍属调用方契约（I-3）。  
+- **WP-3.7 ☑**：Toggle / Checkbox / Switch 非受控改为 Owner 作用域 `toggle_state`（不再用全局 `{id}__checkbox`）。  
 - **experimental**：升格前须对齐本表；Progress 空 id 已走 `resolve_instance_id`。
 
 ---

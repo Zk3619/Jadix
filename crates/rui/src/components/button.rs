@@ -235,7 +235,7 @@ pub(crate) fn button_chrome_for_variant(
 }
 
 // ─── ShadCN-UI Button Variants ───────────────────────────────────────────────
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ButtonVariant {
     #[default]
     Default,
@@ -287,7 +287,7 @@ impl ButtonVariant {
 }
 
 // ─── ShadCN-UI Button Sizes ─────────────────────────────────────────────────
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ButtonSize {
     #[default]
     Default,
@@ -1146,8 +1146,9 @@ fn sync_button_focus_ring_shadow(
 /// Solid-style in-place bind for `<Button variant={sig.get()}>`.
 ///
 /// Updates [`ButtonHoverPaint::variant`] and rest-state chrome without rebuilding the button tree.
+/// Unknown names fall back to `default`（WP-3.8 词汇表）。
 pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
-    let variant = variant.as_ref();
+    let variant = ButtonVariant::from(variant.as_ref()).as_paint_key();
     let Some(desc) = el.button_hover_paint.as_mut() else {
         return LayoutStatus::Clean;
     };
@@ -1306,5 +1307,20 @@ mod chrome_tests {
         assert_eq!(hex(rest), hex(color_mix_over_background(destructive, 0.1)));
         assert_eq!(hex(hover), hex(color_mix_over_background(destructive, 0.2)));
         assert!(luminance(hover) < luminance(rest));
+    }
+
+    #[test]
+    fn unknown_variant_and_size_fall_back_to_default() {
+        assert_eq!(
+            "not-a-variant".parse::<super::ButtonVariant>().unwrap(),
+            super::ButtonVariant::Default
+        );
+        assert_eq!(
+            "xxl".parse::<super::ButtonSize>().unwrap(),
+            super::ButtonSize::Default
+        );
+        let (unknown, ..) = button_chrome_for_variant("nope", 0.0);
+        let (default, ..) = button_chrome_for_variant("default", 0.0);
+        assert_eq!(hex(unknown), hex(default));
     }
 }
