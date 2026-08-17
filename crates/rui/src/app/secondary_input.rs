@@ -33,78 +33,74 @@ impl super::App {
         let x = position.x as f32 / scale.max(1.0);
         let y = position.y as f32 / scale.max(1.0);
 
-        let drag_sel_update: Option<(String, usize, usize, usize, bool)> =
-            if self.left_button_down {
-                let mut secs = self.secondaries.borrow_mut();
-                let Some(sec) = secs.get_mut(&id) else {
-                    return;
-                };
-                let ui_scale = scale.max(1.0);
-                if let Some(rest) = self.input_drag_rest.as_ref() {
-                    if let Some((bounds, display_el, style, leaf_scroll)) =
-                        super::tree_hit::find_input_text_leaf_for_rest(
-                            &sec.root_element,
-                            None,
-                            rest,
-                        )
-                    {
-                        let vk = crate::components::input::input_value_signal_key(rest);
-                        let pk = crate::components::input::input_preedit_signal_key(rest);
-                        let committed = use_signal(&vk, String::new).get();
-                        let pre = use_signal(&pk, String::new).get();
-                        let mx = if style.overflow.allows_caret_scroll() {
-                            x + leaf_scroll[0]
-                        } else {
-                            (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
-                        };
-                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                        let ix = crate::renderer::hit_test_input_text_index(
-                            sec.text_renderer.font_system_mut(),
-                            &display_el,
-                            mx,
-                            my,
-                            bounds,
-                            &style,
-                            ui_scale,
-                        );
-                        let caret_ix = if committed.is_empty() && pre.is_empty() {
-                            0
-                        } else {
-                            crate::components::input::caret_index_from_display_hit(rest, ix)
-                        };
-                        let lo = self.input_drag_anchor.min(caret_ix);
-                        let hi = self.input_drag_anchor.max(caret_ix);
-                        Some((rest.clone(), lo, hi, caret_ix, true))
+        let drag_sel_update: Option<(String, usize, usize, usize, bool)> = if self.left_button_down
+        {
+            let mut secs = self.secondaries.borrow_mut();
+            let Some(sec) = secs.get_mut(&id) else {
+                return;
+            };
+            let ui_scale = scale.max(1.0);
+            if let Some(rest) = self.input_drag_rest.as_ref() {
+                if let Some((bounds, display_el, style, leaf_scroll)) =
+                    super::tree_hit::find_input_text_leaf_for_rest(&sec.root_element, None, rest)
+                {
+                    let vk = crate::components::input::input_value_signal_key(rest);
+                    let pk = crate::components::input::input_preedit_signal_key(rest);
+                    let committed = use_signal(&vk, String::new).get();
+                    let pre = use_signal(&pk, String::new).get();
+                    let mx = if style.overflow.allows_caret_scroll() {
+                        x + leaf_scroll[0]
                     } else {
-                        None
-                    }
-                } else if let Some(key) = self.label_drag_key.as_ref() {
-                    if let Some((bounds, display_el, style, leaf_scroll)) =
-                        super::tree_hit::find_selectable_text_leaf_for_key(&sec.root_element, key)
-                    {
-                        let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
-                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                        let ix = crate::renderer::hit_test_input_text_index(
-                            sec.text_renderer.font_system_mut(),
-                            &display_el,
-                            mx,
-                            my,
-                            bounds,
-                            &style,
-                            ui_scale,
-                        );
-                        let lo = self.label_drag_anchor.min(ix);
-                        let hi = self.label_drag_anchor.max(ix);
-                        Some((key.clone(), lo, hi, ix, false))
+                        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
+                    };
+                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    let ix = crate::renderer::hit_test_input_text_index(
+                        sec.text_renderer.font_system_mut(),
+                        &display_el,
+                        mx,
+                        my,
+                        bounds,
+                        &style,
+                        ui_scale,
+                    );
+                    let caret_ix = if committed.is_empty() && pre.is_empty() {
+                        0
                     } else {
-                        None
-                    }
+                        crate::components::input::caret_index_from_display_hit(rest, ix)
+                    };
+                    let lo = self.input_drag_anchor.min(caret_ix);
+                    let hi = self.input_drag_anchor.max(caret_ix);
+                    Some((rest.clone(), lo, hi, caret_ix, true))
+                } else {
+                    None
+                }
+            } else if let Some(key) = self.label_drag_key.as_ref() {
+                if let Some((bounds, display_el, style, leaf_scroll)) =
+                    super::tree_hit::find_selectable_text_leaf_for_key(&sec.root_element, key)
+                {
+                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                    let ix = crate::renderer::hit_test_input_text_index(
+                        sec.text_renderer.font_system_mut(),
+                        &display_el,
+                        mx,
+                        my,
+                        bounds,
+                        &style,
+                        ui_scale,
+                    );
+                    let lo = self.label_drag_anchor.min(ix);
+                    let hi = self.label_drag_anchor.max(ix);
+                    Some((key.clone(), lo, hi, ix, false))
                 } else {
                     None
                 }
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         let (x, y, path, cursor_pick, hover_cbs, window) = {
             let mut secs = self.secondaries.borrow_mut();
@@ -112,8 +108,7 @@ impl super::App {
                 return;
             };
             let path = super::pointer_events::hit_path(&sec.root_element, x, y);
-            let cursor_pick =
-                super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]);
+            let cursor_pick = super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]);
             let mut hover_cbs = Vec::new();
             super::tree_hit::update_hovers(&sec.root_element, x, y, [0.0, 0.0], &mut hover_cbs);
             let window = sec.window.clone();
@@ -247,36 +242,8 @@ impl super::App {
                             y,
                             [0.0, 0.0],
                         )
-                        .map(|(rest, bounds, display_el, style, leaf_scroll, focus_id)| {
-                            let ui_scale = scale.max(1.0);
-                            let ix = crate::renderer::hit_test_input_text_index(
-                                sec.text_renderer.font_system_mut(),
-                                &display_el,
-                                x + leaf_scroll[0],
-                                y + leaf_scroll[1],
-                                bounds,
-                                &style,
-                                ui_scale,
-                            );
-                            let vk = crate::components::input::input_value_signal_key(&rest);
-                            let pk = crate::components::input::input_preedit_signal_key(&rest);
-                            let committed = use_signal(&vk, String::new).get();
-                            let pre = use_signal(&pk, String::new).get();
-                            let caret_ix = if committed.is_empty() && pre.is_empty() {
-                                0
-                            } else {
-                                crate::components::input::caret_index_from_display_hit(&rest, ix)
-                            };
-                            (rest, caret_ix, focus_id)
-                        });
-                        let label_drag = if input_drag.is_none() {
-                            super::tree_hit::find_selectable_text_at(
-                                &sec.root_element,
-                                x,
-                                y,
-                                [0.0, 0.0],
-                            )
-                            .map(|(key, bounds, display_el, style, leaf_scroll)| {
+                        .map(
+                            |(rest, bounds, display_el, style, leaf_scroll, focus_id)| {
                                 let ui_scale = scale.max(1.0);
                                 let ix = crate::renderer::hit_test_input_text_index(
                                     sec.text_renderer.font_system_mut(),
@@ -287,8 +254,42 @@ impl super::App {
                                     &style,
                                     ui_scale,
                                 );
-                                (key, ix)
-                            })
+                                let vk = crate::components::input::input_value_signal_key(&rest);
+                                let pk = crate::components::input::input_preedit_signal_key(&rest);
+                                let committed = use_signal(&vk, String::new).get();
+                                let pre = use_signal(&pk, String::new).get();
+                                let caret_ix = if committed.is_empty() && pre.is_empty() {
+                                    0
+                                } else {
+                                    crate::components::input::caret_index_from_display_hit(
+                                        &rest, ix,
+                                    )
+                                };
+                                (rest, caret_ix, focus_id)
+                            },
+                        );
+                        let label_drag = if input_drag.is_none() {
+                            super::tree_hit::find_selectable_text_at(
+                                &sec.root_element,
+                                x,
+                                y,
+                                [0.0, 0.0],
+                            )
+                            .map(
+                                |(key, bounds, display_el, style, leaf_scroll)| {
+                                    let ui_scale = scale.max(1.0);
+                                    let ix = crate::renderer::hit_test_input_text_index(
+                                        sec.text_renderer.font_system_mut(),
+                                        &display_el,
+                                        x + leaf_scroll[0],
+                                        y + leaf_scroll[1],
+                                        bounds,
+                                        &style,
+                                        ui_scale,
+                                    );
+                                    (key, ix)
+                                },
+                            )
                         } else {
                             None
                         };
@@ -312,16 +313,14 @@ impl super::App {
                         let ck = crate::components::input::input_caret_signal_key(&rest);
                         let sk = crate::components::input::input_selection_signal_key(&rest);
                         use_signal(&ck, || None::<usize>).set(Some(caret_ix));
-                        use_signal(&sk, || None::<(usize, usize)>)
-                            .set(Some((caret_ix, caret_ix)));
+                        use_signal(&sk, || None::<(usize, usize)>).set(Some((caret_ix, caret_ix)));
                         self.input_drag_rest = Some(rest);
                         self.input_drag_anchor = caret_ix;
                         self.label_drag_key = None;
                         self.left_button_down = true;
                     } else if let Some((key, caret_ix)) = label_drag {
                         let sk = crate::components::label::label_selection_signal_key(&key);
-                        use_signal(&sk, || None::<(usize, usize)>)
-                            .set(Some((caret_ix, caret_ix)));
+                        use_signal(&sk, || None::<(usize, usize)>).set(Some((caret_ix, caret_ix)));
                         self.label_drag_key = Some(key);
                         self.label_drag_anchor = caret_ix;
                         self.input_drag_rest = None;
@@ -384,9 +383,7 @@ impl super::App {
                         };
                         let path = super::pointer_events::hit_path(&sec.root_element, x, y);
                         let click_path = match self.click_press_path.take() {
-                            Some(down) => {
-                                super::pointer_events::click_dispatch_path(&down, &path)
-                            }
+                            Some(down) => super::pointer_events::click_dispatch_path(&down, &path),
                             None => Vec::new(),
                         };
                         let (cb, label_for) = super::pointer_events::resolve_click_from_path(
@@ -473,11 +470,7 @@ impl super::App {
         }
     }
 
-    pub(super) fn handle_secondary_mouse_wheel(
-        &mut self,
-        id: WindowId,
-        delta: MouseScrollDelta,
-    ) {
+    pub(super) fn handle_secondary_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
         let lines = super::scroll_support::get_system_scroll_lines();

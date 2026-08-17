@@ -16,8 +16,8 @@ default = []
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
 tracing = ["dep:tracing"]
-# Stub gate for future native tray (see docs/tray.md). Compiles either way.
-system-tray = []
+# Native system tray via tray-icon + muda. Off by default (see docs/tray.md).
+system-tray = ["dep:tray-icon"]
 # Add the D3D12 backend (~520 KiB: wgpu-hal dx12 + DXC + gpu-allocator). Off by default:
 # the GL backend renders the same UI and its driver commits ~80 MB less on Windows.
 # Enable when you need WARP software fallback or D3D12-specific behaviour.
@@ -81,6 +81,8 @@ jpeg-decoder = { version = "0.3", optional = true, default-features = false }
 gif = { version = "0.13", optional = true, default-features = false }
 image-webp = { version = "0.2", optional = true }
 resvg = { version = "0.45.1", optional = true }
+# default-features off: skip Linux libxdo. gtk still required on Linux if this feature is on.
+tray-icon = { version = "0.21", optional = true, default-features = false }
 
 [dev-dependencies]
 jpeg-encoder = "0.6"

@@ -4,11 +4,14 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航（含 Router 外壳） · 布局 · 文本 · 关于。
-//! 运行：`cargo run -p gallery`
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航（含 Router / 托盘外壳） · 布局 · 文本 · 关于。
+//! 运行：`cargo run -p gallery`；托盘原生：`cargo run -p gallery --features system-tray`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
-use rui::app::{open_secondary_window, run_on_ui_thread, shared_slot, Router};
+use rui::app::{
+    open_secondary_window, request_exit, run_on_ui_thread, shared_slot, system_tray_native,
+    tray_icon, Router, TrayMenuItem,
+};
 use rui::component;
 use rui::components::*;
 use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
@@ -18,6 +21,7 @@ use rui::primitives::{hstack, interactive, r#box, vstack, Portal, PortalProps};
 use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
 use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
@@ -28,6 +32,7 @@ const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
 const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
 const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";
+const GAL_SHELL_TRAY_SHOW: &str = "gal_shell_tray_show";
 const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
 const GAL_GRID_LIST_ID: &str = "gal-grid-sort";
@@ -2650,6 +2655,88 @@ fn RouterShowcase() -> Element {
     }
 }
 
+thread_local! {
+    static GAL_TRAY: RefCell<Option<rui::app::TrayIcon>> = const { RefCell::new(None) };
+}
+
+fn TrayShowcase() -> Element {
+    let hint = if system_tray_native() {
+        "feature system-tray 已开：Show tray 后任务栏出现图标；右键 Ping（toast）/ Quit（request_exit）。句柄须保持存活。"
+    } else {
+        "当前为 stub。原生接线：cargo run -p gallery --features system-tray"
+    };
+    ui! {
+        <MyCard title="系统托盘（外壳）">
+            <VStack w="100%" gap="0.5rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { hint }
+                </Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                    <Button
+                        id="gal_shell_tray_show"
+                        size="sm"
+                        variant="secondary"
+                        on_click={move || {
+                            GAL_TRAY.with(|slot| {
+                                let mut g = slot.borrow_mut();
+                                if g.is_none() {
+                                    let tray = tray_icon()
+                                        .tooltip("RUI Gallery")
+                                        .menu_item(
+                                            TrayMenuItem::new("ping", "Ping").on_click(|| {
+                                                toast_push("Tray ping", 2000);
+                                            }),
+                                        )
+                                        .menu_item(
+                                            TrayMenuItem::new("quit", "Quit").on_click(|| {
+                                                GAL_TRAY.with(|slot| {
+                                                    drop(slot.borrow_mut().take());
+                                                });
+                                                request_exit();
+                                            }),
+                                        )
+                                        .build();
+                                    tray.show();
+                                    *g = Some(tray);
+                                    if system_tray_native() {
+                                        toast_push("Tray shown", 2000);
+                                    } else {
+                                        toast_push(
+                                            "Stub: rebuild with --features system-tray",
+                                            3000,
+                                        );
+                                    }
+                                } else if let Some(tray) = g.as_ref() {
+                                    tray.show();
+                                    toast_push("Tray shown", 2000);
+                                }
+                            });
+                        }}
+                    >
+                        "Show tray"
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            GAL_TRAY.with(|slot| {
+                                if let Some(tray) = slot.borrow().as_ref() {
+                                    tray.hide();
+                                    toast_push("Tray hidden", 2000);
+                                } else {
+                                    toast_push("No tray yet", 2000);
+                                }
+                            });
+                        }}
+                    >
+                        "Hide tray"
+                    </Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn PrimitivesShowcase() -> rui::core::tree::Element {
     let overlay_open = use_signal("prim_overlay_open", || false);
@@ -2847,10 +2934,7 @@ fn TextareaComboboxShowcase() -> Element {
 /// 浮层页默认通知：与「Toast」按钮同一 Toaster 根、stack 布局、入场动画。
 fn gallery_feedback_toast(title: impl Into<String>, description: impl Into<String>) {
     toast_set_layout("stack");
-    toast(title)
-        .description(description)
-        .duration(5000)
-        .show();
+    toast(title).description(description).duration(5000).show();
 }
 
 fn gallery_goto_section(key: &str) {
@@ -3766,6 +3850,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <MenubarStepperShowcase />
                     <NavigatorShowcase />
                     <RouterShowcase />
+                    { TrayShowcase() }
                     <SelectPopoverTabShowcase />
                 </VStack>
             </ScrollArea>
@@ -4319,41 +4404,61 @@ mod mount_tests {
         });
     }
 
+    fn run_on_large_stack<F>(f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn gallery test thread")
+            .join()
+            .expect("gallery test thread");
+    }
+
     #[test]
     fn headless_layout_all_sections_does_not_overflow() {
-        rui::app::reactive::reset_registered_anchors();
-        let (_handle, _) = create_root(|| {
-            create_effect(|| {
-                for key in [
-                    "basics",
-                    "forms",
-                    "overlays",
-                    "data",
-                    "navigation",
-                    "layout",
-                    "text",
-                    "about",
-                ] {
-                    let mut tree = gallery_section_body(key);
-                    let mut layout = rui::core::tree::LayoutTree::new();
-                    let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
-                }
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    for key in [
+                        "basics",
+                        "forms",
+                        "overlays",
+                        "data",
+                        "navigation",
+                        "layout",
+                        "text",
+                        "about",
+                    ] {
+                        let mut tree = gallery_section_body(key);
+                        let mut layout = rui::core::tree::LayoutTree::new();
+                        let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
+                    }
+                });
             });
         });
     }
 
+    fn find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
+        el.template_id.as_deref() == Some(want) || el.children.iter().any(|c| find_tid(c, want))
+    }
+
     #[test]
     fn navigation_section_mounts_shell_router_view() {
-        rui::app::reactive::reset_registered_anchors();
-        let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
-        fn find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
-            el.template_id.as_deref() == Some(want)
-                || el.children.iter().any(|c| find_tid(c, want))
-        }
-        assert!(
-            find_tid(&tree, "gal_shell_router__router_view"),
-            "WP-3.5: navigation section must mount Router.view() placeholder"
-        );
-        rui::app::reactive::reset_registered_anchors();
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
+            assert!(
+                find_tid(&tree, "gal_shell_router__router_view"),
+                "WP-3.5: navigation section must mount Router.view() placeholder"
+            );
+            assert!(
+                find_tid(&tree, GAL_SHELL_TRAY_SHOW),
+                "WP-3.6: navigation section must mount tray Show button"
+            );
+            rui::app::reactive::reset_registered_anchors();
+        });
     }
 }

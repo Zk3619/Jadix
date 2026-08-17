@@ -629,7 +629,11 @@ impl SecondaryWindowState {
         status
     }
 
-    pub(super) fn update_element_by_template_id<F>(&mut self, template_id: &str, patch: F) -> LayoutStatus
+    pub(super) fn update_element_by_template_id<F>(
+        &mut self,
+        template_id: &str,
+        patch: F,
+    ) -> LayoutStatus
     where
         F: FnOnce(&mut Element) -> LayoutStatus,
     {

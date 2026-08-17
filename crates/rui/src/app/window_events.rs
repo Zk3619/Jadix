@@ -91,8 +91,7 @@ impl super::App {
 
     /// Live secondary UI slot (preferred) or registry secondary flag.
     pub(super) fn is_secondary_window(&self, id: WindowId) -> bool {
-        self.secondaries.borrow().contains_key(&id)
-            || self.window_registry.is_secondary(id)
+        self.secondaries.borrow().contains_key(&id) || self.window_registry.is_secondary(id)
     }
 
     /// Complete deferred OS-blur IME release once `ime_os_blur_at` elapses.
@@ -165,11 +164,7 @@ impl super::App {
         false
     }
 
-    pub(super) fn handle_secondary_redraw(
-        &mut self,
-        id: WindowId,
-        event_loop: &ActiveEventLoop,
-    ) {
+    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         super::window_scope::force_secondary_id(id);
         let suspended = self.is_suspended;
         let (has_caret, render_ok, a11y_update) = {
@@ -313,8 +308,7 @@ impl super::App {
         };
         let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
             let painted = super::ime_support::painted_text_edit_visual_bounds(text_nodes, &fid);
-            let focus_fallback =
-                super::tree_hit::find_bounds_by_focus_id(root, &fid, [0.0, 0.0]);
+            let focus_fallback = super::tree_hit::find_bounds_by_focus_id(root, &fid, [0.0, 0.0]);
             match (painted, focus_fallback) {
                 (Some(visual), fb) => {
                     let scroll_acc = fb.map(|(_, sa)| sa).unwrap_or([0.0, 0.0]);
@@ -370,8 +364,7 @@ impl super::App {
                         let rest = super::ime_support::text_edit_rest(&fid_clone);
                         rest.map(|r| {
                             let pk = crate::components::input::input_preedit_signal_key(r);
-                            let pre =
-                                crate::core::reactivity::use_signal(&pk, String::new).peek();
+                            let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
                             let active = crate::core::reactivity::use_signal(
                                 crate::components::IME_ACTIVE_SIGNAL,
                                 || false,
@@ -545,14 +538,12 @@ impl super::App {
             None
         }
 
-        let text_style =
-            super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
-                .map(|(_, _, style, _)| style)
-                .or_else(|| {
-                    super::tree_hit::find_element_by_focus_id(root, focus_id)
-                        .and_then(first_text_style)
-                })
-                .unwrap_or_default();
+        let text_style = super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
+            .map(|(_, _, style, _)| style)
+            .or_else(|| {
+                super::tree_hit::find_element_by_focus_id(root, focus_id).and_then(first_text_style)
+            })
+            .unwrap_or_default();
 
         let line_h = crate::utils::text_field::text_edit_line_box_px(
             text_style.size,
@@ -3168,7 +3159,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let wake = crate::renderer::caret_blink_next_toggle_at();
                     self.caret_wake_at = Some(wake);
                     event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
-                } else if !self.secondaries.borrow().values().any(|s| s.has_input_caret) {
+                } else if !self
+                    .secondaries
+                    .borrow()
+                    .values()
+                    .any(|s| s.has_input_caret)
+                {
                     self.caret_wake_at = None;
                 }
 

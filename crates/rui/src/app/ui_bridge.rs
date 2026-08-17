@@ -36,6 +36,18 @@ pub fn run_on_ui_thread(f: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// Ask the event loop to shut down (same path as closing the primary window).
+///
+/// Tray **Quit** should call this from `on_click` after the native hop via
+/// [`run_on_ui_thread`]. No-ops with a warn if [`install_proxy`] has not run yet.
+pub fn request_exit() {
+    if let Some(proxy) = PROXY.get() {
+        let _ = proxy.send_event(RuiUserEvent::Exit);
+    } else {
+        log::warn!("rui: request_exit ignored (event loop not started)");
+    }
+}
+
 /// Drain and run all pending UI callbacks (called from the event loop).
 pub(crate) fn drain_ui_tasks() {
     let tasks: Vec<Box<dyn FnOnce() + Send>> = {
@@ -79,5 +91,10 @@ mod tests {
         });
         drain_ui_tasks();
         assert!(*flag.lock().unwrap());
+    }
+
+    #[test]
+    fn request_exit_without_proxy_does_not_panic() {
+        request_exit();
     }
 }

@@ -174,11 +174,7 @@ impl super::App {
                 );
             }
         } else if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-            ime_support::set_ime_allowed_latched(
-                &st.window,
-                false,
-                &mut self.ime_allowed_latched,
-            );
+            ime_support::set_ime_allowed_latched(&st.window, false, &mut self.ime_allowed_latched);
         }
     }
 
@@ -301,9 +297,9 @@ impl super::App {
                 // and never reach the list. Do **not** fall through to Space/Enter→click
                 // (that would swallow Space in the field).
                 if allow_primary_tree {
-                    let key_handlers = (*self.state.borrow())
-                        .as_ref()
-                        .and_then(|st| super::tree_hit::focused_key_handlers(&st.root_element, &fid));
+                    let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
+                        super::tree_hit::focused_key_handlers(&st.root_element, &fid)
+                    });
                     if let Some(handlers) = key_handlers {
                         let handled = if editing {
                             super::tree_hit::run_focused_keydown_only(&handlers, &event)
@@ -325,7 +321,8 @@ impl super::App {
                         && edit_shortcut_letter(&event) == Some('c')
                     {
                         if let Some(st) = (*self.state.borrow()).as_ref() {
-                            if crate::components::label::try_copy_label_selection(&st.root_element) {
+                            if crate::components::label::try_copy_label_selection(&st.root_element)
+                            {
                                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                     st.window.request_redraw();
                                 }
@@ -336,7 +333,6 @@ impl super::App {
                 } else if !editing {
                     return false;
                 }
-
 
                 let edit_target = fid
                     .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)

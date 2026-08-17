@@ -17,6 +17,8 @@ pub(super) enum RuiUserEvent {
         builder: SecondaryUiBuilder,
     },
     AccessKit(accesskit_winit::Event),
+    /// Request a clean event-loop exit (tray Quit / [`ui_bridge::request_exit`]).
+    Exit,
 }
 
 impl std::fmt::Debug for RuiUserEvent {
@@ -31,6 +33,7 @@ impl std::fmt::Debug for RuiUserEvent {
                 .field("builder", &"SecondaryUiBuilder(..)")
                 .finish(),
             Self::AccessKit(ev) => f.debug_tuple("AccessKit").field(ev).finish(),
+            Self::Exit => f.write_str("Exit"),
         }
     }
 }
@@ -62,8 +65,8 @@ pub mod resource;
 pub mod router;
 pub mod runtime;
 pub(crate) mod scroll_support;
-mod secondary_window;
 mod secondary_input;
+mod secondary_window;
 mod state;
 #[cfg(test)]
 pub(crate) use state::{
@@ -74,18 +77,16 @@ pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
 pub mod ui_bridge;
-pub(crate) mod window_scope;
 mod window_events;
 pub mod window_keys;
+pub(crate) mod window_scope;
 
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
-pub use multi_window::{
-    open_secondary_window, open_secondary_window_title_only, shared_slot,
-};
+pub use multi_window::{open_secondary_window, open_secondary_window_title_only, shared_slot};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
-pub use tray::{tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
-pub use ui_bridge::{run_on_ui_thread, spawn_blocking};
+pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
+pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 
 use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;
@@ -155,7 +156,10 @@ struct App {
     /// Secondary windows with independent UI trees / swapchains.
     secondaries: std::rc::Rc<
         std::cell::RefCell<
-            std::collections::HashMap<winit::window::WindowId, secondary_window::SecondaryWindowState>,
+            std::collections::HashMap<
+                winit::window::WindowId,
+                secondary_window::SecondaryWindowState,
+            >,
         >,
     >,
     drag_reorder: Option<DragReorderState>,

@@ -22,6 +22,7 @@ impl super::App {
     /// `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409).
     fn shutdown_renderer(&mut self) {
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
+        super::tray::dispose_trays_for_shutdown();
 
         // 1) Pull secondary UI/GPU state out of the map *before* disposing owners, so
         //    OwnerHandle Drop → effect cleanup cannot re-enter `secondaries` (RefCell panic)
@@ -266,6 +267,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 window.set_visible(true);
                 window.request_redraw();
             }
+            super::RuiUserEvent::Exit => {
+                self.shutdown_renderer();
+                event_loop.exit();
+            }
             super::RuiUserEvent::AccessKit(ev) => {
                 use accesskit_winit::WindowEvent as AkWindowEvent;
                 let wid = ev.window_id;
@@ -275,8 +280,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         if is_secondary {
                             super::window_scope::force_secondary_id(wid);
                             if let Some(sec) = self.secondaries.borrow_mut().get_mut(&wid) {
-                                if crate::a11y::dispatch_accesskit_action(&sec.root_element, &req)
-                                {
+                                if crate::a11y::dispatch_accesskit_action(&sec.root_element, &req) {
                                     sec.window.request_redraw();
                                 }
                             }
@@ -585,11 +589,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                             self.primary_touch_id = Some(touch.id);
                             self.cursor_pos = touch.location;
                             if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(
-                                    id,
-                                    touch.location,
-                                    event_loop,
-                                );
+                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
                                 self.handle_secondary_mouse_button(
                                     id,
                                     ElementState::Pressed,
@@ -621,11 +621,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         } else if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
                             if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(
-                                    id,
-                                    touch.location,
-                                    event_loop,
-                                );
+                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
                             } else {
                                 self.with_primary_input(id, |app| {
                                     app.handle_cursor_moved(id, touch.location, event_loop);
@@ -641,11 +637,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         if self.primary_touch_id == Some(touch.id) {
                             self.cursor_pos = touch.location;
                             if self.is_secondary_window(id) {
-                                self.handle_secondary_cursor_moved(
-                                    id,
-                                    touch.location,
-                                    event_loop,
-                                );
+                                self.handle_secondary_cursor_moved(id, touch.location, event_loop);
                                 self.handle_secondary_mouse_button(
                                     id,
                                     ElementState::Released,
@@ -704,8 +696,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                     } else if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
                         // Same TIP-candidate soft-blur as primary: do not drop IME immediately.
                         sec.os_focused = false;
-                        let at =
-                            std::time::Instant::now() + std::time::Duration::from_millis(200);
+                        let at = std::time::Instant::now() + std::time::Duration::from_millis(200);
                         sec.ime_os_blur_at = Some(at);
                         event_loop.set_control_flow(ControlFlow::WaitUntil(at));
                     }
