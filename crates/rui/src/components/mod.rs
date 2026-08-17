@@ -73,6 +73,7 @@ pub mod toggle_group;
 pub mod tooltip;
 pub mod tree_view;
 pub mod virtual_list;
+pub mod virtual_masonry;
 
 pub use base::BaseComponentBuilder;
 pub use button::{
@@ -133,8 +134,8 @@ pub use dialog::{
 };
 pub use dropdown::{dropdown, DropdownBuilder};
 pub use form::{
-    clear_all_errors, clear_field_error, form_errors_signal, form_field, form_provider,
-    form_validate, set_field_error, FormState,
+    clear_all_errors, clear_field_error, field_error, field_invalid, form_errors_signal,
+    form_field, form_provider, form_validate, set_field_error, use_form, FormState,
 };
 pub use image::{Image, ImageProps};
 pub use input::{
@@ -208,3 +209,4 @@ pub use tooltip::{
 };
 pub use tree_view::{tree_view, TreeNode, TreeViewBuilder};
 pub use virtual_list::{virtual_list, VirtualListBuilder};
+pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

@@ -13,6 +13,7 @@ pub mod text_field;
 pub mod text_node;
 pub mod toggle_state;
 pub mod virtual_list;
+pub mod virtual_masonry;
 
 pub use file_dialog::{
     file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
@@ -50,3 +51,7 @@ pub use toggle_state::{
     SLOT_SWITCH, SLOT_TOGGLE,
 };
 pub use virtual_list::{item_height_for_text, visible_item_range};
+pub use virtual_masonry::{
+    height_from_cache, masonry_column_width, pack_masonry, visible_masonry_indices,
+    MasonryItemFrame, MasonryLayout,
+};

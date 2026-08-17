@@ -71,7 +71,7 @@
 | Switch | `switch` / `Switch` | **verified** | 同上 | CV.1 + CV.2；WP-3.7 `toggle_state` |
 | RadioGroup | `radio_group` / `RadioGroup` | **verified** | 必填 `group_id` | CV.1 走查；reactive sync lib |
 | Slider | `slider` / `Slider` | **verified** | 必填实例键 | CV.1 走查；reactive sync lib |
-| Form | `form_provider` / `form_field` / `form_validate` / … | **experimental** | provider **必填实例键**（错误 map 命名空间） | **非独立产品组件**；Context 校验 helpers；降出 §5.2.1；加深见 WP-3.9 |
+| Form | `form_provider` / `form_field` / `form_validate` / `use_form` | **experimental** | provider **必填实例键**（错误 map 命名空间） | **非独立产品组件**；WP-3.9 ☑：错误文案与 Input invalid 环同源；降出 §5.2.1 |
 | Select | `select` / `Select` / `SelectItem` / `SelectGroup` | **verified** | 必填实例键；**锚点用 focus_id**；默认 `match_trigger`；可 `menu_width`/`menu_height`/`min_height`/`max_height`；`scroll_selected`=`none\|start\|center`（默认 none） | CV.1 完整交互走查；smoke#7；`mark_floating`+sync；项左对齐可覆盖；打开时可滚到选中项 |
 | Combobox | `combobox` / `ComboboxBuilder` | **verified** | 必填实例键；浮层锚点 | CV.1 完整交互走查；smoke#6 |
 | DatePicker | `date_picker` / `DatePicker` | **experimental** | 必填实例键 | WP-3.3：浮层内嵌 [`Calendar`]；ISO `YYYY-MM-DD` / `YYYY-MM-DDTHH:MM:SS`；`datetime-local` 日历下 `Separator` + 时分秒 Combobox；年月下拉复用 [`Select`]；Enter/Esc；本地化未承诺 |
@@ -100,6 +100,7 @@
 |----------|------------------|----|---------|-------------|
 | Table | `table` / `TableBuilder` / `TableColumn` | **experimental** | 必填实例键；列 `id` 排序键 | 基础 columns+data；分组/筛选取消稳定承诺 |
 | VirtualList | `virtual_list` / `VirtualListBuilder` | **experimental** | 必填实例键 | 测宽依赖；Table/Tree 底座 |
+| VirtualMasonry | `virtual_masonry` / `VirtualMasonryBuilder` | **experimental** | 必填实例键 | **WP-3.10 ☑**：变高瀑布流虚拟化；`item_height` + 测宽缓存；不进 §5.2.1 |
 | TreeView | `tree_view` / `TreeViewBuilder` / `TreeNode` | **experimental** | 必填实例键；节点 id | 大数据实验 |
 | Chart | `define_chart` + marks（cartesian `bar_y`/`line_y`/`area_y`/`dot`/`rule_*`；polar `pie`/`radial_bar`/`radial_line`/`radial_area`/`radial_dot`；`custom_mark`）+ `ChartTheme`/`MarkStyle`；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `bar_chart`/`line_chart`/`area_chart`/`pie_chart`；RSX `Chart`/`BarChart`…；`ChartDatum`（`series`/`time`） | **experimental** | **展示型不要求**（WP-2.8：无必填 id） | WP-3.2 grammar（对照 TanStack，不搬 D3）；path 核光栅；禁区/可加深见 `drawing.md` §8 |
 | Carousel | `carousel` / `CarouselBuilder` | **experimental** | 必填实例键 | |
@@ -214,13 +215,13 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | Textarea / Checkbox / Switch / RadioGroup / Slider | verified | CV.2 Checkbox/Switch ☑；Radio CV.4 auto ☑ |
 | Tabs / Toast / Tooltip | verified | Tabs CV.2+CV.4 ☑；Tooltip CV.4 auto ☑ |
 
-**Form**：已降出组件稳定面 → `experimental`（Context helpers；`form_provider` / `form_field` / `form_validate`）。加深见 WP-3.9，不挡 CV.1。
+**Form**：已降出组件稳定面 → `experimental`（Context helpers；`form_provider` / `form_field` / `form_validate` / `use_form`）。**WP-3.9 ☑**：错误文案与 Input invalid 环同源；不挡 CV.1、不升 `verified`。
 
 **样式承诺面**（Theme / utility）：见 §1.8；**不在本表**，不走 CV 改桶。
 
 **broken**：无（WP-CV.3 签署时确认）。若后续发现阻断项 → 标 `broken` 或降出稳定面，**不得**假装 verified、**不得**进 C1。
 
-**显式不在组件稳定候选**（即使 Gallery 有演示）：**Form** / Toggle / ToggleGroup / Progress / Image / Sheet / Popover / Dropdown / ContextMenu / Command / 一切 Date·Time·Color / Table / VirtualList / TreeView / Chart / Carousel / Stepper / Menubar / Navbar / NavigationMenu / Sidebar / ScrollViewport / Resizable / 块级 markdown / FileDialog / **Theme / utility**。  
+**显式不在组件稳定候选**（即使 Gallery 有演示）：**Form** / Toggle / ToggleGroup / Progress / Image / Sheet / Popover / Dropdown / ContextMenu / Command / 一切 Date·Time·Color / Table / VirtualList / **VirtualMasonry** / TreeView / Chart / Carousel / Stepper / Menubar / Navbar / NavigationMenu / Sidebar / ScrollViewport / Resizable / 块级 markdown / FileDialog / **Theme / utility**。  
 **全部 `planned`（§1.9）亦不在稳定候选**——落地后先 `experimental`，再经 CV 决定是否升 §5.2.1。
 
 ---
@@ -287,11 +288,11 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 | markdown | inline MVP；**块级缺** | 落后 |
 | segmented | 无独立模块；用 **ToggleGroup** | 可接受等价 |
 | card / image / panel | Card / Image；panel≈布局原语 | 齐 |
-| **virtualmasonry** | **缺失** | 密度空洞；总计划 P2，不进本波 |
+| **virtualmasonry** | **有（experimental）** | WP-3.10 ☑ 密度空洞关闭；升格见 B5 |
 | heart_switch / neumorphic / tilt_card / layout_debug | 不跟 | 非目标 |
 | mousearea | ≈ `interactive` 原语 | 非组件清单项 |
 
-**计数标尺（约）**：EUI 公开控件头 ≈ 40；RUI `components/` 产品模块 ≈ 43（含复合 Dialog 子 API）。密度已接近；差距在 **信任度（测网/golden/身份审计）** 与个别空洞（pie / 块级 md / virtualmasonry），不在「再抄一套 EUI API」。
+**计数标尺（约）**：EUI 公开控件头 ≈ 40；RUI `components/` 产品模块 ≈ 44（含复合 Dialog 子 API）。密度已接近；差距在 **信任度（测网/golden/身份审计）** 与个别空洞（块级 md），不在「再抄一套 EUI API」。
 
 ---
 
@@ -325,7 +326,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`。
+`button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

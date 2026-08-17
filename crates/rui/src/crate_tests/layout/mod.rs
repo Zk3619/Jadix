@@ -14,3 +14,4 @@ mod sidebar_shell_width;
 mod subtree_promote;
 mod svg_scene;
 mod virtual_list_scroll;
+mod virtual_masonry_scroll;

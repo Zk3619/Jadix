@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
@@ -104,6 +104,7 @@ WP-3.2（Chart）与 WP-3.3（Calendar / Date·Time·Color / Command）落地后
 | 实例信号 / 必填 `id` | **身份债未迁完** | Chart 未传 `selected_signal` 曾共用 `chart_pin`；Calendar 等仍「必填实例键」 | WP-2.8 已开收敛；余下随 3.14 cookbook + 3.8 |
 | Toggle / Checkbox / Switch 布尔态 | **3.7 ☑** 共享 [`toggle_state`](../crates/rui/src/utils/toggle_state.rs) | 受控 XOR Owner 作用域；disabled 不写入 | **WP-3.7 ☑** |
 | variant / size / token / 受控 API 面 / 双书写 | **3.8 ☑** 词汇表 + 审计 | 仅 verified；未知 variant → default | **WP-3.8 ☑** |
+| Form helpers 校验路径 | **3.9 ☑** 错误文案 ≡ Input invalid 环 | `form_provider` + `form_field`；点击回调 clone [`FormState`](../crates/rui/src/components/form.rs)，勿在事件里 `use_form()` | **WP-3.9 ☑**（仍 `experimental`） |
 | 图表 grammar、命中、tooltip 几何 | **产品复杂度**（部分实现 Bug） | path 贴图翻转、径向命中、选中描边——修在 Chart，不升格为「换渲染器」 | 已随 3.2；禁区见 [`drawing.md`](drawing.md) |
 | 键盘映射、ISO 格式 | **本包产品工作** | WP-3.3 已签 | ☑ |
 
@@ -351,9 +352,9 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | 分区 | 组件（`components/` 模块） | 分桶摘要（详见 inventory） |
 |------|----------------------------|----------------------------|
 | **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；其余=`experimental`（越出 §5.2.1） |
-| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1）；Calendar/Date/Time/Color/File=`experimental` |
+| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1；**WP-3.9 ☑** 错误文案与 Input invalid 环同源）；Calendar/Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
-| **数据** | VirtualList、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
+| **数据** | VirtualList、**VirtualMasonry**、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺）；VirtualMasonry **WP-3.10 ☑** |
 | **绘制** | Svg（`primitives/svg`）；Canvas（`primitives/canvas`）；Scene3d（`primitives/scene3d`，feature）；B16 / B17 仍规划 | Svg=`experimental`（WP-3.11 ☑）；Canvas=`experimental`（WP-3.12 ☑）；Scene3d=`experimental`（WP-3.13 ☑，默认 feature 关）；B16/B17 未落地；Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar；Gallery 另演示 `app::Router` / Navigator / 完整次窗（输入 + Dialog + `shared_slot`） | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
@@ -378,7 +379,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
-| | VirtualMasonry、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
+| | VirtualMasonry（**WP-3.10 ☑** experimental MVP）、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
 
 **CV 分桶快照（2026-08-12，WP-CV.1 / CV.3）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**（CV.3 签署）；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 

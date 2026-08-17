@@ -517,6 +517,65 @@ fn InputShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn wp39_form_demo() -> Element {
+    form_provider("gal-wp39", || {
+        let st = use_form().expect("form_provider");
+        let st_submit = st.clone();
+        let st_clear = st.clone();
+        let field = form_field(
+            "email",
+            "邮箱",
+            Element::from(input("gal-wp39-email").placeholder("you@example.com")),
+        );
+        let submit: Element = button("gal-wp39-submit")
+            .text("提交")
+            .on_click(move || {
+                let _ = st_submit.validate(|| {
+                    let key = input_value_signal_key("gal-wp39-email");
+                    let v = use_signal(&key, String::new).peek();
+                    if v.trim().is_empty() {
+                        st_submit.set_field_error("email", "必填");
+                    } else if !v.contains('@') {
+                        st_submit.set_field_error("email", "需包含 @");
+                    }
+                });
+            })
+            .into();
+        let clear: Element = button("gal-wp39-clear")
+            .variant("outline")
+            .text("清除错误")
+            .on_click(move || st_clear.clear_all())
+            .into();
+        vstack()
+            .w("100%")
+            .gap("0.5rem")
+            .child(field)
+            .child(
+                hstack()
+                    .gap("0.5rem")
+                    .wrap("wrap")
+                    .items("center")
+                    .child(submit)
+                    .child(clear),
+            )
+            .into()
+    })
+}
+
+#[component]
+fn FormValidateShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="Form 校验（WP-3.9）">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "form_provider + form_field：错误文案与 Input invalid 环同源。空提交 →「必填」+ 红环；清除错误 → 文案与环一起消失。"
+                </Label>
+                { wp39_form_demo() }
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
     ui! {
@@ -3822,6 +3881,43 @@ fn DataChartShowcase() -> Element {
     }
 }
 
+const GAL_WP310_MASONRY: &str = "gal-wp310-masonry";
+
+#[component]
+fn VirtualMasonryShowcase() -> Element {
+    let masonry: Element = virtual_masonry(GAL_WP310_MASONRY)
+        .item_count(1000)
+        .columns(3)
+        .gap(8.0)
+        .height(280.0)
+        .overscan_viewports(1.0)
+        .scrollbar_visibility("always")
+        .item_height(|i, _| 48.0 + (i % 7) as f32 * 16.0)
+        .render_item(|i, w, h| {
+            let token = ["primary", "secondary", "accent", "muted"][i % 4];
+            Element::from(
+                r#box()
+                    .w(w)
+                    .h(h)
+                    .rounded(8.0)
+                    .bg(parse_color(token))
+                    .p("0.35rem")
+                    .text(format!("{i:04}")),
+            )
+        })
+        .into();
+    ui! {
+        <MyCard title="VirtualMasonry（WP-3.10）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "1000 张变高卡片、3 列最短列优先；只挂视口+overscan。滚动应只换可见格，不掉帧。experimental，不进稳定面。"
+                </Label>
+                { masonry }
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn NavbarNavigationMenuShowcase() -> Element {
     let picked = use_signal("gal_navmenu_picked", || "—".to_string());
@@ -3966,6 +4062,7 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"表单"</Label>
                     <InputShowcase />
+                    <FormValidateShowcase />
                     <PickerPlaceholdersShowcase />
                     <TextareaComboboxShowcase />
                     <ToggleControlsShowcase />
@@ -4013,6 +4110,7 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"数据"</Label>
                     <DataChartShowcase />
+                    <VirtualMasonryShowcase />
                 </VStack>
             </ScrollArea>
         },
@@ -4288,6 +4386,48 @@ mod mount_tests {
                 assert!(
                     lucide >= 2,
                     "focused password input must collect visible lucide adornments; got {lucide}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_section_mounts_wp39_submit() {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let tree = rui::core::reactivity::isolate_reads(|| {
+                    FormValidateShowcase(FormValidateShowcaseProps::default())
+                });
+                fn find_id(el: &rui::core::tree::Element, tid: &str) -> bool {
+                    el.template_id.as_deref() == Some(tid)
+                        || el.children.iter().any(|c| find_id(c, tid))
+                }
+                assert!(
+                    find_id(&tree, "gal-wp39-submit"),
+                    "WP-3.9 card must mount submit (gal-wp39-submit)"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn data_section_mounts_wp310_masonry() {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let tree = rui::core::reactivity::isolate_reads(|| {
+                    VirtualMasonryShowcase(VirtualMasonryShowcaseProps::default())
+                });
+                fn find_id(el: &rui::core::tree::Element, tid: &str) -> bool {
+                    el.template_id.as_deref() == Some(tid)
+                        || el.children.iter().any(|c| find_id(c, tid))
+                }
+                assert!(
+                    find_id(&tree, GAL_WP310_MASONRY),
+                    "WP-3.10 card must mount masonry (gal-wp310-masonry)"
                 );
             });
         });

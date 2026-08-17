@@ -258,7 +258,7 @@
 |----------|----------|----------|
 | `piechart` | 无（仅 bar/line MVP） | 缺 |
 | 块级 `markdown` | 仅 inline MVP | 缺 |
-| `virtualmasonry` | 缺失 | 缺（P2；卡可信行高） |
+| `virtualmasonry` | **有（experimental，WP-3.10 ☑）** | 齐密度；升格见 AUTHORITY B5 |
 | `segmented` | 无独立模块；用 ToggleGroup | 等价可接受 |
 
 其余 EUI 控件头（button/input/tabs/dialog/toast/datepicker/…）RUI 已有对位；差距在**信任度（CV 分桶）**而非再扩表面积。

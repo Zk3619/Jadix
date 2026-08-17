@@ -55,7 +55,7 @@ flowchart TB
 
 - 阶段清单 P0/P1/P2 已关；开放面转为巩固期：**真窗冒烟签署、组件 golden≥5、crates.io、文档站、稳定面 CV**。
 - Solid：`ErrorBoundary` / `switch_reactive` / `on_mount` **已落地**（旧「缺」作废）；部分 reconcile / Index；`mergeProps` 等可长期空缺。
-- 组件：约 **45** 公开模块（见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5）；相对 EUI 仍缺 VirtualMasonry、图表深度等。
+- 组件：约 **45** 公开模块（见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5）；相对 EUI 仍缺块级 markdown 等。 VirtualMasonry **WP-3.10 ☑**（experimental）。
 - MVP 已有、工程未闭环：IME 代码路径、焦点环、focus_trap、Router/次窗、块级 md MVP、2 个 offscreen golden、Gallery 八分区。
 
 原则（历史）：**先堵原生与文本坑，再铺产品组件，最后发布**。现执行节奏见巩固期计划。
@@ -130,7 +130,7 @@ flowchart TB
 - **B. 导航与命令**：Sheet、Menubar、Command、Navbar/Sidebar（确认框并入 Dialog，已无独立 AlertDialog）
 - **C. 反馈与流程**：Progress、Stepper、Segmented、Carousel
 - **D. 绘制 → 图表**：路径原语 → Bar/Line/Pie
-- **E. VirtualMasonry**（依赖阶段八行高）
+- **E. VirtualMasonry**（依赖阶段八行高）→ **WP-3.10 ☑** experimental
 - **F. Gallery**：每组件一页 examples
 
 **验收**：占位三者可交互；Command + Menubar 可演示；至少 1 种图表；gallery 可本地跑。

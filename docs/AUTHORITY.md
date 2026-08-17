@@ -231,7 +231,7 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 
 分桶真源：[`component_inventory.md`](component_inventory.md) §2（控件）。  
 **当前 `verified`（控件）**：Button、Label、Separator、Card、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Dialog、Toast、Tooltip、Tabs、ScrollArea、Scrollbar。  
-**Form**：降出 §5.2.1（Context helpers → `experimental`）；加深见 WP-3.9。  
+**Form**：降出 §5.2.1（Context helpers → `experimental`）；**WP-3.9 ☑** 校验路径已加深，仍不升稳定面。  
 **CV.2 核心矩阵**（2026-08-12）：Button/Input/Dialog/Tabs/Checkbox/Switch — `cv_*` layout + Checkbox/Switch 行为测；见 `crate_tests/components/cv_stable_layout.rs`。  
 **CV.3**（2026-08-12）：稳定面 inventory 文档手工验证修错后签署；无未分类 P0，不降级。  
 **CV.4**（2026-08-12）：稳定面 id 分类表 → inventory §2.1；空串 I-1 修 → `utils/instance_id::resolve_instance_id`；API 去必填 / Gallery 减噪 → **WP-2.8 ☑**。  
@@ -377,7 +377,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **目标**：Gallery 可作名片；关键键盘完整；外壳可演示；**引入 `<svg>` / `<canvas>` 与 2D·3D 能力**（规范 [`drawing.md`](drawing.md)）。  
 **3.4 / 3.7 / 3.8 仅 CV 通过后开工（CV 已 ☑）。**  
-**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 / 3.11 / 3.12 / 3.13 / 3.14 已签）**：**3.9**；B16 / B17 不挡本波。
+**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 / 3.9 / 3.10 / 3.11 / 3.12 / 3.13 / 3.14 已签）**：W3 产品面可收；B16 / B17 不挡本波。 Wave 4 见 §5.6。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
@@ -389,8 +389,8 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-3.6** | 系统托盘原生接线（feature） | — | ☑ 2026-08-17；`tray-icon` + `request_exit`；默认 feature 仍关 |
 | **WP-3.7** | Toggle/Checkbox/Switch 共享状态原语 | C-WP-1.2 | ☑ 2026-08-17；`utils/toggle_state`；前置 CV ☑ · 3.14 Owner ☑ |
 | **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☑ 2026-08-17；[`component_variants.md`](component_variants.md)；仅 `verified` |
-| **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ 前置 3.14 ☑；浮层路径 3.4 ☑ |
-| **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
+| **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☑ 2026-08-18；错误文案与 Input invalid 环同源；Gallery「表单」卡 |
+| **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☑ 2026-08-18；变高瀑布流虚拟化；Gallery「数据」卡；仍 experimental |
 | **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
 | **WP-3.12** | **`<canvas>` 标签 + 画布自定义绘制**（paint / 2D context MVP） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §4 |
 | **WP-3.13** | **2D / 3D 能力层**（2D 合成纪律；`<scene3d>` 实验 feature；原 B6 矩阵并入） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §5；3D feature 默认关 |
@@ -554,7 +554,52 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 **签署规则**：A+A′+A″+A‴ 绿且 B 表在即可勾 WP-3.8（**已签 2026-08-17**）。experimental 不强制。
 
-**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；**3.11 Svg ☑ · 3.12 Canvas ☑**。Form 仍是 **3.9**，不可宣称「表单校验已齐」。
+#### WP-3.9 Form 校验路径
+
+**目标**：`form_provider` 错误 map 与 Input/Textarea **invalid 环同源**；提交校验不重建整表。Form **仍是 experimental Context helpers**，不升 `verified` 产品组件。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.9.1** | [`FormState`](../crates/rui/src/components/form.rs)：`set_field_error` / `clear_*` / `validate`；点击回调 `clone` [`use_form`](../crates/rui/src/components/form.rs)，不靠事件里的 `current_owner` | ☑ |
+| **3.9.2** | [`form_field`](../crates/rui/src/components/form.rs)：错误文案（token `destructive`）+ `bind_prop` 写 `input_paint_sync.invalid` | ☑ |
+| **3.9.3** | [`form_provider`](../crates/rui/src/components/form.rs) 包 [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14）；两表单错误 map 隔离 | ☑ |
+| **3.9.4** | Gallery「表单」卡；手册一句 | ☑ |
+
+**禁区**：把 Form 升成 §5.2.1 产品组件；根裸 `get()` 整表重建；校验时走第二套 portal。
+
+#### WP-3.9 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 库测（权威）** | `cargo test -p rui --lib form_` | `form_validate_sets_and_clears_errors` + `form_field_error_text_matches_input_invalid` + `form_state_clear_field_drops_invalid` 绿 | 文案有、环仍 valid；或两 `form_provider` 串 map |
+| **A′ Gallery 卡** | `cargo test -p gallery forms_section_mounts_wp39_submit` | 卡上有 `gal-wp39-submit` | 无提交钮 |
+| **B 手工** | `cargo run -p gallery` → 表单 →「Form 校验」 | 空提交出「必填」+ 红环；清除错误后两者一起消失 | 只有文案或只有环 |
+
+**签署规则**：A+A′ 绿即可勾 WP-3.9（**已签 2026-08-18**）。B 抽查。Form 仍 `experimental`。
+
+#### WP-3.10 VirtualMasonry
+
+**目标**：变高卡片瀑布流虚拟化；行高来自 `item_height` / 测宽缓存（WP-2.1）；千级项只挂视口+overscan。对照 EUI `virtualMasonry`，**不搬**命令式 DSL。仍 `experimental`，不进 §5.2.1。B5「产品化」仍是升格 backlog。
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **3.10.1** | [`utils/virtual_masonry`](../crates/rui/src/utils/virtual_masonry.rs)：最短列优先 `pack_masonry` + `visible_masonry_indices` + `height_from_cache` | ☑ |
+| **3.10.2** | [`virtual_masonry`](../crates/rui/src/components/virtual_masonry.rs)：`scroll_area` + 绝对定位可见格；keyed 复用 `{id}__cell_{i}` | ☑ |
+| **3.10.3** | Gallery「数据」千级卡；库测窗口/缓存 | ☑ |
+
+**禁区**：升 `verified`；为百万级改第二套滚动核；搬 EUI compose DSL。
+
+#### WP-3.10 验收（可判定）
+
+| 层级 | 命令 / 操作 | 通过标准 | 失败标准 |
+|------|-------------|----------|----------|
+| **A 库测（权威）** | `cargo test -p rui --lib masonry` | pack 最短列 + cache 回流 + `thousand_items_only_mount_visible_window` + 静默滚动换窗 绿 | 1000 项全挂；或滚动后首格仍在 |
+| **A′ Gallery 卡** | `cargo test -p gallery data_section_mounts_wp310_masonry` | 卡上有 `gal-wp310-masonry` | 无滚动根 |
+| **B 手工** | `cargo run -p gallery` → 数据 →「VirtualMasonry」 | 3 列变高卡片；滚动只换可见格 | 空白、卡死、或一次挂 1000 张 |
+
+**签署规则**：A+A′ 绿即可勾 WP-3.10（**已签 2026-08-18**）。B 抽查。仍 `experimental`。
+
+**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；Form 校验路径（**3.9 ☑**）；VirtualMasonry（**3.10 ☑**，experimental）；**3.11 Svg ☑ · 3.12 Canvas ☑**。不可宣称「表单产品组件已进稳定面」（Form 仍是 experimental helpers）。不可宣称 VirtualMasonry 已进稳定面。
 
 ### 5.6 Wave 4 — 发布与质量矩阵
 
@@ -610,7 +655,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | B2 | `mergeProps` / `splitProps` / `children()` | 反应性 |
 | B3 | backdrop-blur 离屏缓存 | 工程 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
-| B5 | VirtualMasonry 产品化 | 工程 WP-3.10 / 组件 CB2 |
+| B5 | VirtualMasonry 产品化（升格 / 密度打磨） | 工程 WP-3.10 MVP ☑ 2026-08-18；升 `verified` 仍 backlog |
 | B6 | 完整 3D/矩阵变换 | **并入 WP-3.13**（2026-08-13）；不再单列挡 W3 |
 | B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；依赖 3.11–3.13；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；动画原语 + glyphon；背景/3D 跟 3.12/3.13；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
