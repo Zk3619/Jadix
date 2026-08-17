@@ -223,6 +223,14 @@ pub fn filter_password_insert(_existing: &str, insert: &str) -> String {
         .collect()
 }
 
+/// 去掉 Cc 控制符（Esc `U+001B`、NUL、TAB、CR、DEL…）。保留 `\n`（Textarea / 粘贴多行）。
+pub fn strip_control_insert(insert: &str) -> String {
+    insert
+        .chars()
+        .filter(|&c| c == '\n' || !c.is_control())
+        .collect()
+}
+
 /// 按字段 `type` 过滤插入文本。
 pub fn filter_insert_for_type(ty: InputType, existing: &str, insert: &str) -> String {
     match ty {
@@ -231,7 +239,7 @@ pub fn filter_insert_for_type(ty: InputType, existing: &str, insert: &str) -> St
         InputType::Email => filter_email_insert(existing, insert),
         InputType::Url => filter_url_insert(existing, insert),
         InputType::Password => filter_password_insert(existing, insert),
-        InputType::Text | InputType::Search => insert.to_string(),
+        InputType::Text | InputType::Search => strip_control_insert(insert),
     }
 }
 
@@ -758,6 +766,26 @@ mod tests {
         assert_eq!(
             filter_insert_for_type(InputType::Password, "", "pāss字"),
             "pss"
+        );
+    }
+
+    #[test]
+    fn text_type_strips_escape_and_other_controls() {
+        assert_eq!(
+            filter_insert_for_type(InputType::Text, "", "a\u{1b}b\0c\u{7f}"),
+            "abc"
+        );
+        assert_eq!(
+            filter_insert_for_type(InputType::Search, "", "hi\u{1b}"),
+            "hi"
+        );
+        assert_eq!(
+            filter_insert_for_type(InputType::Text, "", "骄傲\u{1b}3"),
+            "骄傲3"
+        );
+        assert_eq!(
+            filter_insert_for_type(InputType::Text, "", "line\nkeep"),
+            "line\nkeep"
         );
     }
 

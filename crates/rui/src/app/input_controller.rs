@@ -2,7 +2,9 @@ use winit::event::{ElementState, Ime, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
-use crate::components::input::{filter_insert_for_type, input_type_signal_key, InputType};
+use crate::components::input::{
+    filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
+};
 use crate::utils::clipboard::{
     edit_shortcut_letter, get_text as clipboard_get_text, sanitize_pasted_line,
     set_text as clipboard_set_text, shortcut_modifiers as clipboard_shortcut_modifiers,
@@ -25,6 +27,16 @@ fn input_type_for(rest: &str) -> InputType {
 /// 按字段 `type` 过滤将要插入的文本；空串表示全部被拒。
 fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
     filter_insert_for_type(input_type_for(rest), existing, text)
+}
+
+/// Windows 等平台给 Esc / F 键等 Named 键附带 `event.text`（Esc → U+001B）。
+/// 只有 Space / Enter 的 Named 键才允许走字符插入（空格、Textarea 换行）。
+pub(crate) fn named_key_blocks_text_insert(key: &Key) -> bool {
+    match key {
+        Key::Named(NamedKey::Space | NamedKey::Enter) => false,
+        Key::Named(_) => true,
+        _ => false,
+    }
 }
 
 impl super::App {
@@ -674,6 +686,8 @@ impl super::App {
                                 }
                             }
                         }
+                    } else if named_key_blocks_text_insert(&event.logical_key) {
+                        // Esc 等 Named 键：不要把 `event.text`（U+001B）写进字段。
                     } else if let Some(t) = event.text.as_ref() {
                         if ime_support::ime_end_drain_active() {
                             if ime_support::ime_diag_enabled() {
@@ -703,7 +717,7 @@ impl super::App {
                                 let mut insert_at = lo.min(s.len());
                                 insert_at = s.floor_char_boundary(insert_at);
                                 let text = if multiline {
-                                    insert.to_string()
+                                    strip_control_insert(insert)
                                 } else {
                                     filter_typed_insert(rest, &s, insert)
                                 };
@@ -718,7 +732,7 @@ impl super::App {
                                 insert_at = insert_at.min(s.len());
                                 insert_at = s.floor_char_boundary(insert_at);
                                 let text = if multiline {
-                                    insert.to_string()
+                                    strip_control_insert(insert)
                                 } else {
                                     filter_typed_insert(rest, &s, insert)
                                 };
@@ -764,5 +778,24 @@ impl super::App {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_and_function_keys_do_not_insert_text() {
+        assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::Escape)));
+        assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::F1)));
+        assert!(named_key_blocks_text_insert(&Key::Named(NamedKey::Tab)));
+        assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Space)));
+        assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Enter)));
+        assert!(!named_key_blocks_text_insert(&Key::Character("a".into())));
+        // Character(U+001B) 仍可能出现；由 strip_control_insert 丢掉，不在 Named 守卫里。
+        assert!(!named_key_blocks_text_insert(&Key::Character(
+            "\u{1b}".into()
+        )));
     }
 }

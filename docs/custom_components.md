@@ -181,6 +181,40 @@ fn my_combobox(id: &str, body: impl FnOnce() -> Element) -> Element {
 
 完整诊断表：[COMPONENT_LIBRARY.md §2.3](COMPONENT_LIBRARY.md)。
 
+#### Form 校验（WP-3.9）
+
+`form_provider` / `form_field` 是 **experimental Context helpers**，不是独立产品组件。错误文案与 Input/Textarea invalid 环同源。
+
+```rust
+use rui::prelude::*;
+
+fn email_form() -> Element {
+    form_provider("signup", || {
+        let st = use_form().expect("form_provider");
+        let st_submit = st.clone();
+        let field = form_field(
+            "email",
+            "邮箱",
+            Element::from(input("signup-email")),
+        );
+        let submit: Element = button("signup-submit")
+            .text("提交")
+            .on_click(move || {
+                let _ = st_submit.validate(|| {
+                    let v = use_signal(&input_value_signal_key("signup-email"), String::new).peek();
+                    if v.trim().is_empty() {
+                        st_submit.set_field_error("email", "必填");
+                    }
+                });
+            })
+            .into();
+        vstack().child(field).child(submit).into()
+    })
+}
+```
+
+**不要**在 `on_click` 里再调 `use_form()`（事件里没有 `current_owner`）。构建时 `clone` [`FormState`](../crates/rui/src/components/form.rs)，校验用 `peek` 读 Input 值，不要根裸 `get()` 整表重建。
+
 #### Derived values: `create_memo`
 
 对依赖多个 `Signal` 的昂贵派生逻辑，使用 `rui::core::reactivity::create_memo`（返回 `rui::core::reactivity::Memo`）缓存结果；订阅方只依赖 memo 的输出信号，避免在根 `create_effect` 上拉入过多依赖。
