@@ -1,4 +1,5 @@
 mod box_model_contract;
+mod canvas_scene;
 mod headless_smoke;
 mod mark_dirty;
 mod path_batch;
@@ -11,4 +12,5 @@ mod scrollbar_thumb_overlay;
 mod showcase_collapse;
 mod sidebar_shell_width;
 mod subtree_promote;
+mod svg_scene;
 mod virtual_list_scroll;

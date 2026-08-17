@@ -377,7 +377,7 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 
 **目标**：Gallery 可作名片；关键键盘完整；外壳可演示；**引入 `<svg>` / `<canvas>` 与 2D·3D 能力**（规范 [`drawing.md`](drawing.md)）。  
 **3.4 / 3.7 / 3.8 仅 CV 通过后开工（CV 已 ☑）。**  
-**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 / 3.14 已签）**：**3.11 · 3.12**；3.13 可交错；B16 / B17 不挡本波。
+**当前焦点（3.2 / 3.3 / 3.4 / 3.5 / 3.6 / 3.7 / 3.8 / 3.11 / 3.12 / 3.13 / 3.14 已签）**：**3.9**；B16 / B17 不挡本波。
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
@@ -391,21 +391,27 @@ WP-2.9 任务要点（已签）：`.border_box()` + `box-border`/`box-content`�
 | **WP-3.8** | variant/size/token/受控 API 归一 + 双书写审计 | C-WP-2.1–2.3、2.5 | ☑ 2026-08-17；[`component_variants.md`](component_variants.md)；仅 `verified` |
 | **WP-3.9** | Form 校验路径 | C-WP-3.4 | ☐ 前置 3.14 ☑；浮层路径 3.4 ☑ |
 | **WP-3.10** | VirtualMasonry | 总计划 3.7 | ☐ **P2**；依赖 2.1（已满足）但不挡 Beta |
-| **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☐ 规范 [`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
-| **WP-3.12** | **`<canvas>` 标签 + 画布自定义绘制**（paint / 2D context MVP） | — | ☐ [`drawing.md`](drawing.md) §4 |
-| **WP-3.13** | **2D / 3D 能力层**（2D 合成纪律；`<scene3d>` 实验 feature；原 B6 矩阵并入） | — | ☐ [`drawing.md`](drawing.md) §5；**3D 不挡 W3 退出** |
+| **WP-3.11** | **`<svg>` 标签 + 矢量绘制**（场景图；描边/填充） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §3；emoji-svg ≠ 公开 Svg |
+| **WP-3.12** | **`<canvas>` 标签 + 画布自定义绘制**（paint / 2D context MVP） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §4 |
+| **WP-3.13** | **2D / 3D 能力层**（2D 合成纪律；`<scene3d>` 实验 feature；原 B6 矩阵并入） | — | ☑ 2026-08-18；[`drawing.md`](drawing.md) §5；3D feature 默认关 |
 | **WP-3.14** | **复合控件作者面**（默认实例 Owner；`untrack`/`isolate_reads` 纪律；cookbook） | C-WP-2.4 部分 | ☑ 2026-08-17；`#[component]`→`component_root`；测 `component_authoring`；诊断 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2.3 |
 
 #### WP-3.11 / 3.12 / 3.13 验收（可判定 · 进入 W3 前已写清）
 
 | ID | A 库测 / API | B Gallery（建议） | 失败 |
 |----|----------------|-------------------|------|
-| **3.11 Svg MVP** | `ui!`+Builder 各建一叶；`viewBox`+至少 `circle`/`path`；叶 `layout_bounds` 正确 | 「数据」或新「绘制」区：圆+path 可见描边/填充 | 仅 attr stub 无像素；与 Chart 第二套 path 格式 |
+| **3.11 Svg MVP** | `ui!`+Builder 各建一叶；`viewBox`+至少 `circle`/`path`；叶 `layout_bounds` 正确 | 「绘制」区：圆+path 可见描边/填充 | 仅 attr stub 无像素；与 Chart 第二套 path 格式 |
 | **3.12 Canvas MVP** | `paint` 回调可 `fill_rect`/`stroke`；resize → LayoutChanged；回调内 `peek` 不抬根 dep | 拖线或时钟自绘 | 每帧重建整棵 UI；订根 effect |
 | **3.13 2D** | 变换/clip 有测或与 3.12 同页 | 可见 rotate/clip | 换 Skia 主线 |
 | **3.13 3D MVP** | feature 关闭时默认构建绿；开启时一 mesh/立方 | 可选演示页 | 默认 feature 塞 glTF 全家桶 |
 
-**签署**：3.11/3.12 A 绿即可勾；3.13 2D 建议随 3.12；3D 可标 experimental。细则 [`drawing.md`](drawing.md)。
+**签署**：3.11/3.12 A 绿即可勾；3.13 2D 建议随 3.12；3D 可标 experimental。细则 [`drawing.md`](drawing.md)。**已签 2026-08-18**（2D 库测+Gallery；3D feature 默认关）。
+
+WP-3.11 任务要点（已签）：`primitives/svg` 叶 + 场景图 flatten；`ui!` `<svg>`/`<circle>`/`<path>` 与 `svg()`/`circle()`/`svg_path()` 双入口；viewBox 跟叶（`rui_path_fit_leaf`）；同一 `PathCommand` 核光栅；Gallery「绘制」。emoji-svg **不算**本包。
+
+WP-3.12 任务要点（已签）：`primitives/canvas` 叶 + `paint` / `Canvas2D` MVP（clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip / save·restore）；CPU pixmap → `rui_canvas:`；paint 包 `untrack`（peek 不订根）；`ui!` `<canvas>` 与 `canvas()` 双入口；Gallery「绘制」拖线。不搬 WHATWG Canvas2D 全家桶。**交互（同日）**：path 按段描边；dirty 缓存（滚动不重跑 paint）；指针按住才标 dirty。
+
+WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。为 B16 [canvas-ui](https://github.com/DavidHDev/canvas-ui) / B17 [react-bits](https://github.com/DavidHDev/react-bits) 留离屏贴图 + 3D pass 底座。
 
 WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](keyboard_nav.md)。
 
@@ -548,7 +554,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 **签署规则**：A+A′+A″+A‴ 绿且 B 表在即可勾 WP-3.8（**已签 2026-08-17**）。experimental 不强制。
 
-**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；**3.11 或 3.12 至少一项 MVP**。Form 仍是 **3.9**，不可宣称「表单校验已齐」。
+**W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；**3.11 Svg ☑ · 3.12 Canvas ☑**。Form 仍是 **3.9**，不可宣称「表单校验已齐」。
 
 ### 5.6 Wave 4 — 发布与质量矩阵
 
@@ -627,7 +633,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | 0 | D0（本文）；并行起草 WP-4.1 CHANGELOG 骨架 |
 | 1–2 | **CV**（走查 + 最小测网 + 身份审计）∥ 启动 WP-2.4；macOS/Linux 冒烟可并行 |
 | 3–4 | WP-2.4 / 2.5 / 2.6 / 2.7 / **2.9**（盒模型）；CV 收尾 |
-| 5–6 | **W3**：**3.4 / 3.5 / 3.6 / 3.7 / 3.8 ☑**；**3.11 Svg / 3.12 Canvas**；3.13 2D 可跟 3.12；3.2/3.3/3.14 已签 |
+| 5–6 | **W3**：**3.4 / 3.5 / 3.6 / 3.7 / 3.8 ☑**；**3.11 Svg / 3.12 Canvas / 3.13 ☑**（3D feature 默认关，不挡退出）；3.2/3.3/3.14 已签 |
 | 7 | WP-4.2–4.6；冻结承诺面 |
 | 8 | publish + 升 Beta |
 

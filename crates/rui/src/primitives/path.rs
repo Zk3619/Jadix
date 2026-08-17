@@ -2,7 +2,7 @@
 //!
 //! 折线 / 多边形 / 扇区 → [`PathCommand`]；编码为 `rui_path_d`（SVG 子集 `M/L/Z`）。
 //! 产品绘制：**CPU 覆盖率光栅 → RGBA 贴图**（抗锯齿填充 + 连续描边）；tessellate 四边形仅作回退。
-//! 不另开 Skia/Vello。Chart 与未来 `<svg>` 禁止第二套折线格式。
+//! 不另开 Skia/Vello。Chart / `<svg>` / `<canvas>` 禁止第二套折线格式。
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -31,7 +31,10 @@ pub const ATTR_PATH_POINTS: &str = "rui_path_points";
 ///
 /// - 轴 span `< 2`：归一化，缩放到叶对应边（宽常为 `1`）。
 /// - 轴 span `>= 2`：视为逻辑 px，绘制尺寸取 `min(叶边, span)`，**不**跟被撑高的叶走。
+/// - [`ATTR_PATH_FIT_LEAF`]`=1`：两端都跟叶（公开 `<svg>`，HTML viewBox 拉伸）。
 pub const ATTR_PATH_VIEWBOX: &str = "rui_path_viewbox";
+/// 为 `1` 时 viewBox 两端都映射到叶尺寸（WP-3.11 Svg）；Chart 不写此 attr。
+pub const ATTR_PATH_FIT_LEAF: &str = "rui_path_fit_leaf";
 /// 可选标记点（viewBox / 局部坐标，`x,y;x,y`），光栅时画实心圆。
 pub const ATTR_PATH_MARKERS: &str = "rui_path_markers";
 /// 多层 scene 键（Chart 等）；布局期按叶宽光栅，避免 `image_texture` 低分拉伸 + `d` 默认描边叠画。
@@ -618,12 +621,26 @@ pub fn tessellate_path(cmds: &[PathCommand], style: &PathStyle) -> Vec<PathQuad>
 }
 
 pub fn parse_path_viewbox(s: &str) -> Option<[f32; 4]> {
-    let mut it = s.split_whitespace().filter_map(|t| t.parse::<f32>().ok());
+    let normalized = s.replace(',', " ");
+    let mut it = normalized
+        .split_whitespace()
+        .filter_map(|t| t.parse::<f32>().ok());
     Some([it.next()?, it.next()?, it.next()?, it.next()?])
 }
 
+fn fit_viewbox_to_leaf(attrs: &HashMap<String, String>) -> bool {
+    matches!(
+        attrs.get(ATTR_PATH_FIT_LEAF).map(|s| s.trim()),
+        Some("1" | "true" | "yes")
+    )
+}
+
 /// viewBox：**高**在 span≥2 时锁定像素轴（防滚动列撑高）；**宽**始终跟叶，避免 Chart 320 逻辑宽被锁死后横向拉伸发虚。
+/// [`ATTR_PATH_FIT_LEAF`]：两端都跟叶（公开 Svg）。
 pub fn path_target_leaf_size(attrs: &HashMap<String, String>, leaf: [f32; 2]) -> [f32; 2] {
+    if fit_viewbox_to_leaf(attrs) {
+        return [leaf[0].max(1.0), leaf[1].max(1.0)];
+    }
     let Some(vb) = attrs
         .get(ATTR_PATH_VIEWBOX)
         .and_then(|s| parse_path_viewbox(s))
@@ -842,14 +859,6 @@ fn dist_to_segment(p: Point2, a: Point2, b: Point2) -> f32 {
     (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
 }
 
-fn dist_to_polyline(p: Point2, pts: &[Point2]) -> f32 {
-    let mut d = f32::MAX;
-    for w in pts.windows(2) {
-        d = d.min(dist_to_segment(p, w[0], w[1]));
-    }
-    d
-}
-
 fn scale_points(pts: &[Point2], vb: [f32; 4], leaf: [f32; 2]) -> Vec<Point2> {
     let sx = if vb[2].abs() > 1e-6 {
         leaf[0] / vb[2]
@@ -888,7 +897,7 @@ fn hash_style(h: &mut DefaultHasher, style: &PathStyle) {
     style.stroke_width.to_bits().hash(h);
 }
 
-fn src_over_premul(buf: &mut [f32], i: usize, r: f32, g: f32, b: f32, a: f32) {
+pub(crate) fn src_over_premul(buf: &mut [f32], i: usize, r: f32, g: f32, b: f32, a: f32) {
     if a <= 0.0 {
         return;
     }
@@ -900,6 +909,21 @@ fn src_over_premul(buf: &mut [f32], i: usize, r: f32, g: f32, b: f32, a: f32) {
     buf[i + 3] = a + buf[i + 3] * inv;
 }
 
+#[inline]
+fn pixel_in_clip(x: usize, y: usize, clip: Option<[f32; 4]>) -> bool {
+    match clip {
+        None => true,
+        Some(c) => {
+            if c[2] <= 0.0 || c[3] <= 0.0 {
+                return false;
+            }
+            let xf = x as f32 + 0.5;
+            let yf = y as f32 + 0.5;
+            xf >= c[0] && yf >= c[1] && xf < c[0] + c[2] && yf < c[1] + c[3]
+        }
+    }
+}
+
 fn paint_layer_premul(
     buf: &mut [f32],
     width: u32,
@@ -909,6 +933,7 @@ fn paint_layer_premul(
     markers: &[Point2],
     marker_radius: f32,
     ssaa: u32,
+    clip: Option<[f32; 4]>,
 ) {
     let paths = subpaths(cmds);
     let w = width as usize;
@@ -938,6 +963,9 @@ fn paint_layer_premul(
             let y1 = (max_y.ceil() as usize + 1).min(h);
             for y in y0..y1 {
                 for x in x0..x1 {
+                    if !pixel_in_clip(x, y, clip) {
+                        continue;
+                    }
                     let mut cover = 0.0;
                     for sy in 0..ssaa {
                         for sx in 0..ssaa {
@@ -969,36 +997,39 @@ fn paint_layer_premul(
                 if style.fill.is_some() && has_open && *closed {
                     continue;
                 }
-                let mut min_x = f32::MAX;
-                let mut min_y = f32::MAX;
-                let mut max_x = f32::MIN;
-                let mut max_y = f32::MIN;
-                for &(x, y) in pts.iter() {
-                    min_x = min_x.min(x);
-                    min_y = min_y.min(y);
-                    max_x = max_x.max(x);
-                    max_y = max_y.max(y);
-                }
+                // Per-segment capsule: O(Σ bbox) instead of O(polyline AABB × points).
+                // Long canvas scribbles / Chart lines were interactive-unusable on the old scan.
                 let pad = hw + 1.5;
-                let x0 = (min_x - pad).floor().max(0.0) as usize;
-                let y0 = (min_y - pad).floor().max(0.0) as usize;
-                let x1 = ((max_x + pad).ceil() as usize + 1).min(w);
-                let y1 = ((max_y + pad).ceil() as usize + 1).min(h);
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        let p = (x as f32 + 0.5, y as f32 + 0.5);
-                        let d = dist_to_polyline(p, pts);
-                        let cover = (hw + 0.5 - d).clamp(0.0, 1.0);
-                        if cover > 0.0 {
-                            let i = (y * w + x) * 4;
-                            src_over_premul(
-                                buf,
-                                i,
-                                stroke[0],
-                                stroke[1],
-                                stroke[2],
-                                stroke[3] * cover,
-                            );
+                for seg in pts.windows(2) {
+                    let a = seg[0];
+                    let b = seg[1];
+                    let min_x = a.0.min(b.0);
+                    let min_y = a.1.min(b.1);
+                    let max_x = a.0.max(b.0);
+                    let max_y = a.1.max(b.1);
+                    let x0 = (min_x - pad).floor().max(0.0) as usize;
+                    let y0 = (min_y - pad).floor().max(0.0) as usize;
+                    let x1 = ((max_x + pad).ceil() as usize + 1).min(w);
+                    let y1 = ((max_y + pad).ceil() as usize + 1).min(h);
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            if !pixel_in_clip(x, y, clip) {
+                                continue;
+                            }
+                            let p = (x as f32 + 0.5, y as f32 + 0.5);
+                            let d = dist_to_segment(p, a, b);
+                            let cover = (hw + 0.5 - d).clamp(0.0, 1.0);
+                            if cover > 0.0 {
+                                let i = (y * w + x) * 4;
+                                src_over_premul(
+                                    buf,
+                                    i,
+                                    stroke[0],
+                                    stroke[1],
+                                    stroke[2],
+                                    stroke[3] * cover,
+                                );
+                            }
                         }
                     }
                 }
@@ -1016,6 +1047,9 @@ fn paint_layer_premul(
             let y1 = ((m.1 + r + 1.5).ceil() as usize + 1).min(h);
             for y in y0..y1 {
                 for x in x0..x1 {
+                    if !pixel_in_clip(x, y, clip) {
+                        continue;
+                    }
                     let mut cover = 0.0;
                     for sy in 0..ssaa {
                         for sx in 0..ssaa {
@@ -1036,7 +1070,7 @@ fn paint_layer_premul(
     }
 }
 
-fn premul_to_straight_rgba(buf: &[f32], width: u32, height: u32) -> Vec<u8> {
+pub(crate) fn premul_to_straight_rgba(buf: &[f32], width: u32, height: u32) -> Vec<u8> {
     let n = (width as usize) * (height as usize);
     let mut out = vec![0u8; n * 4];
     for i in 0..n {
@@ -1100,9 +1134,22 @@ pub fn rasterize_layers_rgba(
         } else {
             0.0
         };
-        paint_layer_premul(&mut buf, w, h, cmds, style, m, mr, ssaa);
+        paint_layer_premul(&mut buf, w, h, cmds, style, m, mr, ssaa, None);
     }
     premul_to_straight_rgba(&buf, w, h)
+}
+
+/// 把一层 path 画进已有 premul 缓冲（WP-3.12 Canvas 与 path 核共用）。
+pub(crate) fn paint_path_premul(
+    buf: &mut [f32],
+    width: u32,
+    height: u32,
+    cmds: &[PathCommand],
+    style: &PathStyle,
+    clip: Option<[f32; 4]>,
+    ssaa: u32,
+) {
+    paint_layer_premul(buf, width, height, cmds, style, &[], 0.0, ssaa, clip);
 }
 
 /// 光栅并排队 GPU 贴图；相同内容复用 `rui_path:{hash}`。
@@ -1365,6 +1412,25 @@ mod tests {
     }
 
     #[test]
+    fn viewbox_commas_parse_like_spaces() {
+        let a = parse_path_viewbox("0 0 100 80").unwrap();
+        let b = parse_path_viewbox("0,0,100,80").unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fit_leaf_viewbox_follows_both_axes() {
+        let mut el = Element::new();
+        el.set_attr(ATTR_PATH_VIEWBOX, "0 0 100 100");
+        el.set_attr(ATTR_PATH_FIT_LEAF, "1");
+        let target = path_target_leaf_size(&el.attrs, [160.0, 120.0]);
+        assert!(
+            (target[0] - 160.0).abs() < 0.5 && (target[1] - 120.0).abs() < 0.5,
+            "svg fit-leaf must follow the leaf, got {target:?}"
+        );
+    }
+
+    #[test]
     fn pixel_viewbox_height_locks_target_not_stretched_leaf() {
         let el = attach_path(
             Element::new().w(200.0).h(400.0),
@@ -1439,6 +1505,36 @@ mod tests {
             alpha(56, 22) > 80,
             "second segment should be covered, a={}",
             alpha(56, 22)
+        );
+    }
+
+    #[test]
+    fn stroke_long_scribble_stays_under_interactive_budget() {
+        let pts: Vec<Point2> = (0..400)
+            .map(|i| {
+                let t = i as f32;
+                (4.0 + t * 0.75, 100.0 + (t * 0.11).sin() * 70.0)
+            })
+            .collect();
+        let cmds = polyline(&pts);
+        let t0 = std::time::Instant::now();
+        let rgba = rasterize_path_rgba(
+            &cmds,
+            &PathStyle::stroke([0.1, 0.1, 0.1, 1.0], 2.5),
+            &[],
+            320,
+            200,
+            1,
+        );
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(rgba.len(), 320 * 200 * 4);
+        assert!(
+            ms < 40.0,
+            "per-segment stroke of 400 pts on 320x200 should stay interactive, took {ms:.1}ms"
+        );
+        assert!(
+            rgba.chunks(4).any(|p| p[3] > 40),
+            "scribble should leave visible stroke coverage"
         );
     }
 

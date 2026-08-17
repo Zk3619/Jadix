@@ -20,6 +20,9 @@ pub(crate) mod text_prepare_debug;
 pub mod textured_pipeline;
 pub mod twemoji_name;
 
+#[cfg(feature = "scene3d")]
+pub mod scene3d;
+
 pub use backdrop_blur::BackdropBlurPipeline;
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
 pub use prepare_text::prepare_text_frame;

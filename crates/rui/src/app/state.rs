@@ -73,6 +73,8 @@ pub(super) struct AppState {
     pub(super) size: winit::dpi::PhysicalSize<u32>,
     pub(super) pipeline: RuiPipeline,
     textured_pipeline: TexturedQuadPipeline,
+    #[cfg(feature = "scene3d")]
+    scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
     backdrop_blur: BackdropBlurPipeline,
     /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
     present_retain: PresentRetainPipeline,
@@ -636,6 +638,8 @@ impl AppState {
             size,
             pipeline,
             textured_pipeline,
+            #[cfg(feature = "scene3d")]
+            scene3d: None,
             backdrop_blur,
             present_retain,
             image_textures: std::collections::HashMap::new(),
@@ -1630,6 +1634,21 @@ impl AppState {
             );
             self.image_textures.insert(id, gpu);
         }
+        #[cfg(feature = "scene3d")]
+        {
+            let gpu = self
+                .scene3d
+                .get_or_insert_with(|| crate::renderer::scene3d::Scene3dGpu::new(&self.device));
+            if gpu.flush(
+                &self.device,
+                &self.queue,
+                &self.textured_pipeline,
+                &mut self.image_textures,
+            ) {
+                // Collect already ran under `&mut self`; do not go through `runtime::request_redraw`.
+                self.window.request_redraw();
+            }
+        }
         let scaled_tex = scale_textured_draws(&render_result.textured_draws, ui_scale);
         let tex_insts: Vec<TexturedInstanceInput> =
             scaled_tex.iter().map(|d| d.to_instance()).collect();
@@ -1822,6 +1841,9 @@ impl AppState {
             }
             hasher.write(bytemuck::cast_slice(&underline_instances));
             hasher.write(bytemuck::cast_slice(&caret_instances));
+            // Canvas / scene3d reuse a stable texture_key while pixels change every frame.
+            // Without this, last_gpu_frame_fp matches and present is skipped (frozen cube / laggy ink).
+            super::pending_images::dynamic_texture_epoch().hash(&mut hasher);
             // Text glyphs live in the atlas, not in rect instances — include content so
             // StyleChanged counters (same box, new string) still present.
             self.text_nodes.len().hash(&mut hasher);

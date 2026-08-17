@@ -4,7 +4,7 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 导航（含 Router / 托盘外壳） · 布局 · 文本 · 关于。
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘外壳） · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`；托盘原生：`cargo run -p gallery --features system-tray`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
@@ -16,13 +16,17 @@ use rui::component;
 use rui::components::*;
 use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
 use rui::core::reactivity::{batch, use_signal, Signal};
-use rui::core::tree::Element;
-use rui::primitives::{hstack, interactive, r#box, vstack, Portal, PortalProps};
+use rui::core::tree::{Element, LayoutStatus};
+use rui::primitives::{
+    canvas, circle, hstack, interactive, polyline, r#box, scene3d, svg, svg_path, vstack, Canvas2D,
+    CanvasSize, Portal, PortalProps,
+};
 use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
 use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::rc::Rc;
 
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
 const PRIMITIVES_SHOWCASE_REACTIVE: &str = "examples/gallery/PrimitivesShowcase:controls";
@@ -3393,6 +3397,163 @@ fn OverlayFeedbackShowcase() -> Element {
 }
 
 #[component]
+fn DrawingSvgShowcase() -> Element {
+    let builder_el: Element = svg()
+        .view_box("0 0 100 100")
+        .w(160.0)
+        .h(160.0)
+        .child(
+            circle()
+                .cx(50.0)
+                .cy(42.0)
+                .r(28.0)
+                .fill("chart-1")
+                .stroke("foreground")
+                .stroke_width(4.0),
+        )
+        .child(
+            svg_path()
+                .d("M18 82 L50 94 L82 82")
+                .fill("none")
+                .stroke("destructive")
+                .stroke_width(4.0),
+        )
+        .into();
+
+    ui! {
+        <MyCard title="Svg · 矢量场景图（WP-3.11）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "公开 <svg> 叶：圆 fill=chart-1 + stroke=foreground；path 仅描边 destructive。Light 下 primary≡foreground，演示不用 primary 以免看不出描边。子形状不占 taffy。emoji-svg ≠ 本页。"
+                </Label>
+                <Label font_weight="600" text_size="0.875rem">{ "ui! 标签" }</Label>
+                <svg viewBox="0 0 100 100" w="10rem" h="10rem">
+                    <circle cx="50" cy="42" r="28" fill="chart-1" stroke="foreground" stroke_width="4" />
+                    <path d="M18 82 L50 94 L82 82" fill="none" stroke="destructive" stroke_width="4" />
+                </svg>
+                <Label font_weight="600" text_size="0.875rem">{ "Builder" }</Label>
+                { builder_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn DrawingCanvasShowcase() -> Element {
+    // RefCell not Signal: `Signal::update` clones the whole stroke list every move.
+    let strokes = Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()));
+    let drawing = Rc::new(Cell::new(false));
+
+    let builder_el: Element = canvas()
+        .w(320.0)
+        .h(200.0)
+        .cursor("crosshair")
+        .paint({
+            let strokes = Rc::clone(&strokes);
+            move |ctx, _size| {
+                ctx.clear("secondary");
+                ctx.set_stroke("foreground");
+                ctx.set_line_width(2.5);
+                for line in strokes.borrow().iter() {
+                    if line.len() >= 2 {
+                        ctx.stroke_path(&polyline(line));
+                    }
+                }
+                LayoutStatus::Clean
+            }
+        })
+        .on_mousedown({
+            let strokes = Rc::clone(&strokes);
+            let drawing = Rc::clone(&drawing);
+            move |e| {
+                drawing.set(true);
+                let p = (e.offset_x(), e.offset_y());
+                strokes.borrow_mut().push(vec![p]);
+            }
+        })
+        .on_mousemove({
+            let strokes = Rc::clone(&strokes);
+            let drawing = Rc::clone(&drawing);
+            move |e| {
+                if !drawing.get() {
+                    return;
+                }
+                if e.buttons & 1 == 0 {
+                    drawing.set(false);
+                    return;
+                }
+                let p = (e.offset_x(), e.offset_y());
+                let mut v = strokes.borrow_mut();
+                if let Some(last) = v.last_mut() {
+                    if last
+                        .last()
+                        .is_some_and(|q| (q.0 - p.0).hypot(q.1 - p.1) < 0.75)
+                    {
+                        return;
+                    }
+                    last.push(p);
+                }
+            }
+        })
+        .on_mouseup({
+            let drawing = Rc::clone(&drawing);
+            move |_| {
+                drawing.set(false);
+            }
+        })
+        .into();
+
+    ui! {
+        <MyCard title="Canvas · 自定义绘制（WP-3.12）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "公开 <canvas> 叶：paint 回调 + Canvas2D MVP。path 走同一 PathCommand 核。paint 内 peek，不订根 effect。Light 下演示 fill=chart-1 / stroke=foreground。右半 clip + 斜线 rotate（WP-3.13 2D）。"
+                </Label>
+                <Label font_weight="600" text_size="0.875rem">{ "ui! 标签：fill_rect + clip + rotate" }</Label>
+                <canvas w={200.0} h={72.0} paint={move |ctx: &mut dyn Canvas2D, size: CanvasSize| {
+                    ctx.clear("secondary");
+                    ctx.set_fill("chart-1");
+                    ctx.fill_rect(10.0, 10.0, size.w - 20.0, size.h - 20.0);
+                    ctx.save();
+                    ctx.clip_rect(size.w * 0.5, 8.0, size.w * 0.5 - 10.0, size.h - 16.0);
+                    ctx.set_fill("chart-2");
+                    ctx.fill_rect(10.0, 10.0, size.w - 20.0, size.h - 20.0);
+                    ctx.restore();
+                    ctx.set_stroke("foreground");
+                    ctx.set_line_width(3.0);
+                    ctx.stroke_rect(10.0, 10.0, size.w - 20.0, size.h - 20.0);
+                    ctx.save();
+                    ctx.translate(size.w * 0.5, size.h * 0.5);
+                    ctx.rotate(-25.0);
+                    ctx.set_stroke("destructive");
+                    ctx.set_line_width(2.0);
+                    ctx.stroke_path(&polyline(&[(-36.0, 0.0), (36.0, 0.0)]));
+                    ctx.restore();
+                    LayoutStatus::Clean
+                }} />
+                <Label font_weight="600" text_size="0.875rem">{ "Builder：指针拖线（mousedown / mousemove）" }</Label>
+                { builder_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn DrawingScene3dShowcase() -> Element {
+    let cube: Element = scene3d().w(220.0).h(160.0).into();
+    ui! {
+        <MyCard title="Scene3d · 透视立方（WP-3.13）">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d"
+                </Label>
+                { cube }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 fn DataChartShowcase() -> Element {
     let table_sel = use_signal("gal_dt_sel", || None::<usize>);
     let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
@@ -3834,6 +3995,19 @@ fn gallery_section_body(section: &str) -> Element {
                 </VStack>
             </ScrollArea>
         },
+        "draw" => ui! {
+            <ScrollArea id="scroll-draw" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+                <VStack w="100%" gap="1rem" p="1.5rem">
+                    <Label text_size="1.25rem" font_weight="700">"绘制"</Label>
+                    <Label text_size="0.875rem" color="muted-foreground">
+                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature。"
+                    </Label>
+                    <DrawingSvgShowcase />
+                    <DrawingCanvasShowcase />
+                    <DrawingScene3dShowcase />
+                </VStack>
+            </ScrollArea>
+        },
         "data" => ui! {
             <ScrollArea id="scroll-data" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -3952,6 +4126,7 @@ fn build_gallery_app() -> Element {
             .item(nav_item(sec_side, "forms", "表单"))
             .item(nav_item(sec_side, "overlays", "浮层 / 反馈"))
             .item(nav_item(sec_side, "data", "数据"))
+            .item(nav_item(sec_side, "draw", "绘制"))
             .item(nav_item(sec_side, "navigation", "导航"))
             .item(nav_item(sec_side, "layout", "布局"))
             .item(nav_item(sec_side, "text", "文本"))

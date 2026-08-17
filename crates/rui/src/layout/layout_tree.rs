@@ -2270,16 +2270,44 @@ impl LayoutTree {
             }
         }
 
-        // WP-3.2 / 3.11 path kernel: CPU coverage raster → texture; tessellate fallback.
-        // 绘制尺寸跟 viewBox 像素轴，不跟可能被滚动列撑高的叶高。
+        // WP-3.2 / 3.11 / 3.12: CPU coverage raster → texture; tessellate fallback.
+        // Canvas paint 与 path/svg 互斥：先 canvas 贴图，再 path scene，最后 tessellate。
         // Chart 多层 scene / 单层 `d` 已在此出图时，勿再画 `image_texture`（否则低分拉伸 + 默认黑描边叠一层）。
         let mut path_tex_drawn = false;
         if visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
-            if let Some((tex_key, dw, dh)) = crate::primitives::path::path_raster_from_element_attrs(
-                &element.attrs,
-                vis_w,
-                vis_h,
-            ) {
+            if let Some((tex_key, dw, dh)) =
+                crate::primitives::canvas::canvas_raster_from_element_attrs(
+                    &element.attrs,
+                    vis_w,
+                    vis_h,
+                )
+            {
+                if let Some(draw) =
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                {
+                    textured_draws.push(draw);
+                    path_tex_drawn = true;
+                }
+            } else if let Some((tex_key, dw, dh)) =
+                crate::primitives::scene3d::scene3d_tex_from_element_attrs(
+                    &element.attrs,
+                    vis_w,
+                    vis_h,
+                )
+            {
+                if let Some(draw) =
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                {
+                    textured_draws.push(draw);
+                    path_tex_drawn = true;
+                }
+            } else if let Some((tex_key, dw, dh)) =
+                crate::primitives::path::path_raster_from_element_attrs(
+                    &element.attrs,
+                    vis_w,
+                    vis_h,
+                )
+            {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {

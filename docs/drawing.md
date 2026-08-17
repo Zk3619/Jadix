@@ -2,7 +2,7 @@
 
 > **文档地位**：绘制原语与公开标签的**领域规范**（「是什么 / 禁区」）。  
 > **执行勾选**：[`AUTHORITY.md`](AUTHORITY.md) **WP-3.2 / WP-3.11 / WP-3.12 / WP-3.13**；未来创意库 **B16**（canvas-ui）· **B17**（react-bits）。  
-> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）  
+> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**  
 > **对照**：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（包住子树的 shader/paint）· [react-bits](https://github.com/DavidHDev/react-bits)（文字动效 / 背景 / 动画 UI）；**禁止**搬 HTML-in-canvas / Chrome flag / DOM 纹理 / CSS-in-JS 运行时。
 
 交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](component_inventory.md) · [`damage.md`](damage.md) · [`box_model.md`](box_model.md) · Chart → WP-3.2
@@ -30,10 +30,11 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 |------|------|------|
 | 矩形 / 圆角 / 阴影 / 渐变 SDF | wgpu 主路径 | — |
 | `primitives/path` | `PathCommand` + `rui_path_d`（M/L/Z）+ **CPU 覆盖率光栅 → RGBA 贴图**（tessellate 四边形仅回退） | 曲线（C/Q）；GPU 三角网（仍非主路径） |
-| Chart | **grammar**：`define_chart` + cartesian / **polar 族** / `custom_mark` + `ChartTheme`；**compact scales**（linear / band / point / **log** / **time**）；tooltip · crosshair；预设薄封装；**同一 path 核** | 公开 `<svg>` 叶（归 3.11）；JS D3 运行时（禁） |
+| Chart | **grammar**：`define_chart` + cartesian / **polar 族** / `custom_mark` + `ChartTheme`；**compact scales**（linear / band / point / **log** / **time**）；tooltip · crosshair；预设薄封装；**同一 path 核** | JS D3 运行时（禁）；组合图可画在 Svg 叶上 |
 | emoji SVG | `emoji-svg` feature：`resvg`/`usvg` **光栅成贴图** | **不是**公开 `<svg>` 场景图 |
-| 用户 `<canvas>` / paint 回调 | **无** | WP-3.12 |
-| 3D mesh / camera | **无**（仅 2D rotate/scale MVP） | WP-3.13 / 原 B6 |
+| 用户 `<svg>` 场景图 | **WP-3.11 ☑** `primitives/svg`：叶 + viewBox + circle/path/rect/line/polyline/g；同一 path 核 | 完整 SVG 1.1 / SMIL |
+| 用户 `<canvas>` / paint 回调 | **WP-3.12 ☑** `primitives/canvas`：叶 + `Canvas2D` MVP；同一 path 核；dirty 缓存 + 按段描边 | 完整 Canvas2D；图源 Image 贴图 |
+| 3D mesh / camera | **WP-3.13 ☑** `<scene3d>` 实验 feature（默认关）；透视立方；同一 wgpu | glTF 全家桶 |
 
 ---
 
@@ -78,7 +79,8 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 与 Chart | WP-3.2 grammar（`define_chart` + marks）与预设 **应消费同一 path 核**，禁止第二套折线格式 |
 | 不做 | 完整 SVG 1.1 / SMIL / 外链 `<image>` 全家桶；浏览器 CSS 选中 SVG 子元素 |
 
-**验收（MVP）**：Gallery 一页：圆 + path 描边/填充；`ui!` 与 Builder 各一例；离屏或 layout 测证明叶尺寸正确。
+**验收（MVP）**：Gallery「绘制」：圆 + path 描边/填充；`ui!` 与 Builder 各一例；离屏或 layout 测证明叶尺寸正确。  
+**落地（2026-08-18）**：`primitives/svg`；子形状 flatten 进叶；`rui_path_fit_leaf` 让 viewBox 跟叶；与 Chart 共用 `PathCommand` / `register_path_scene`。
 
 ---
 
@@ -95,7 +97,8 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 与 Svg | Canvas 可 **调用同一 `PathCommand` 核**；不要两套 path 代数 |
 | 不做 | 抄齐 WHATWG Canvas2D（阴影滤镜/globalComposite 全家）；WebGLRenderingContext 别名（3D 走 §5） |
 
-**验收（MVP）**：Gallery：指针拖线或时钟自绘；paint 内 `peek` Signal 不订根 effect；resize 走 `LayoutChanged`。
+**验收（MVP）**：Gallery：指针拖线或时钟自绘；paint 内 `peek` Signal 不订根 effect；resize 走 `LayoutChanged`。  
+**落地（2026-08-18）**：`primitives/canvas`；`<canvas>` / `canvas().paint`；`Canvas2D`（clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip / save·restore / `request_frame`）；CPU pixmap → `rui_canvas:`；paint 包在 `untrack` 内。**交互**：path 核按段描边；静态叶 dirty 缓存（滚动不重光栅）；指针按住才标 dirty。
 
 ---
 
@@ -109,7 +112,13 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 
 **禁区**：以 three.js / HTML-in-canvas 为运行时；默认 feature 塞进 glTF 解析与大 atlas。
 
-**验收（2D）**：变换 + clip 有测或 Gallery。**验收（3D MVP）**：一旋转立方或 GLB；无 feature 时编译过、文档标明 opt-in。
+**验收（2D）**：变换 + clip 有测或 Gallery。**验收（3D MVP）**：一旋转立方或 GLB；无 feature 时编译过、文档标明 opt-in。  
+**落地（2026-08-18）**：
+
+- **2D 能力层**：Canvas 变换栈 / clip AABB / save·restore；Svg 场景 Affine；控件 `rotate`/`scale`。**不是**第三套标签。B16 wrap 将复用离屏贴图 + 本层 clip。
+- **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`。
+
+对照后续：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（B16 包住子树）· [react-bits](https://github.com/DavidHDev/react-bits)（B17 文字/背景/动画 UI）依赖本层，本包不搬 HTML-in-canvas / CSS-in-JS。
 
 ---
 

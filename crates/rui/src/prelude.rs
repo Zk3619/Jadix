@@ -15,7 +15,8 @@
 //! |------|------|
 //! | `utils::popup::*`、`mark_floating` / placement | 低层能力；按需 `use rui::utils::popup` |
 //! | `popover_panel` | 低层面板；可用 `components::popover` |
-//! | `overlay` / `path` | 原语能力层，非默认产品面 |
+//! | `overlay` | 原语能力层，非默认产品面 |
+//! | `path` 核（`PathCommand` / tessellate） | 原语能力层；公开面是 [`svg`] / Chart |
 //! | `BaseComponentBuilder`、`apply_bound_*`、信号键 helpers | 进阶 / 内部契约 |
 //! | `planned` 组件（Badge…） | 尚未 `pub use` |
 //!
@@ -63,15 +64,16 @@ pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
-pub use crate::core::tree::Element;
+pub use crate::core::tree::{Element, LayoutStatus};
 
 // ---------------------------------------------------------------------------
 // 布局 / 叶子原语（Builder 面常用）
 // ---------------------------------------------------------------------------
 
 pub use crate::primitives::{
-    gstack, hstack, icon, interactive, r#box, text, vstack, BoxBuilder, InteractiveBuilder, Portal,
-    PortalProps, TextBuilder,
+    canvas, circle, gstack, hstack, icon, interactive, r#box, scene3d, svg, svg_path, svg_rect,
+    text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder,
+    InteractiveBuilder, PathBuilder, Portal, PortalProps, Scene3dBuilder, SvgBuilder, TextBuilder,
 };
 
 // ---------------------------------------------------------------------------

@@ -127,3 +127,57 @@ fn prelude_builder_embeds_ui() {
         .into();
     assert!(!el.children.is_empty());
 }
+
+#[test]
+fn prelude_svg_tag_and_builder_compile() {
+    let _b: Element = svg()
+        .view_box("0 0 100 100")
+        .w(80.0)
+        .h(80.0)
+        .child(circle().cx(50.0).cy(50.0).r(20.0).fill("primary"))
+        .child(
+            svg_path()
+                .d("M10 80 L90 80")
+                .stroke("foreground")
+                .fill("none"),
+        )
+        .into();
+    let el = ui! {
+        <svg viewBox="0 0 100 100" w="5rem" h="5rem">
+            <circle cx="50" cy="50" r="20" fill="primary" />
+            <path d="M10 80 L90 80" stroke="foreground" fill="none" />
+        </svg>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_canvas_tag_and_builder_compile() {
+    let _b: Element = canvas()
+        .w(64.0)
+        .h(32.0)
+        .paint(|ctx, size| {
+            ctx.set_fill("primary");
+            ctx.fill_rect(0.0, 0.0, size.w, size.h);
+            LayoutStatus::Clean
+        })
+        .into();
+    let el = ui! {
+        <canvas w={64.0} h={32.0} paint={move |ctx: &mut dyn Canvas2D, size: CanvasSize| {
+            ctx.clear("secondary");
+            ctx.set_stroke("foreground");
+            ctx.stroke_rect(2.0, 2.0, size.w - 4.0, size.h - 4.0);
+            LayoutStatus::Clean
+        }} />
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_scene3d_tag_and_builder_compile() {
+    let _b: Element = scene3d().w(80.0).h(60.0).into();
+    let el = ui! {
+        <scene3d w={80.0} h={60.0} />
+    };
+    let _: Element = el;
+}

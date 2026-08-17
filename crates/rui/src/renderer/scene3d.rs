@@ -1,0 +1,401 @@
+//! WP-3.13：同一 wgpu device 上的透视立方 → `rui_scene3d:` 贴图。
+//!
+//! 仅 `scene3d` feature。无 glTF / 无 three.js。采样走 [`TexturedQuadPipeline`]。
+
+use std::collections::HashMap;
+
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
+
+use crate::app::image_registry::GpuImageTexture;
+use crate::primitives::scene3d::take_scene3d_jobs;
+use crate::renderer::TexturedQuadPipeline;
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+struct CubeVert {
+    pos: [f32; 3],
+    color: [f32; 3],
+}
+
+impl CubeVert {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<CubeVert>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
+        }
+    }
+}
+
+pub struct Scene3dGpu {
+    pipeline: wgpu::RenderPipeline,
+    uniform_buf: wgpu::Buffer,
+    uniform_bg: wgpu::BindGroup,
+    vertex_buf: wgpu::Buffer,
+    vertex_count: u32,
+    depth: Option<(u32, u32, wgpu::Texture)>,
+    /// 与 `image_textures` 同步的尺寸，避免每帧重建离屏目标。
+    target_size: HashMap<String, (u32, u32)>,
+}
+
+impl Scene3dGpu {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rui-scene3d-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scene3d.wgsl").into()),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rui-scene3d-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rui-scene3d-pl"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rui-scene3d-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[CubeVert::desc()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rui-scene3d-mvp"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rui-scene3d-ubg"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let verts = cube_vertices();
+        let vertex_count = verts.len() as u32;
+        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("rui-scene3d-cube"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        Self {
+            pipeline,
+            uniform_buf,
+            uniform_bg,
+            vertex_buf,
+            vertex_count,
+            depth: None,
+            target_size: HashMap::new(),
+        }
+    }
+
+    /// Returns `true` if any cube was drawn (caller should `window.request_redraw` to keep spinning).
+    pub fn flush(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textured: &TexturedQuadPipeline,
+        images: &mut HashMap<String, GpuImageTexture>,
+    ) -> bool {
+        let mut last: HashMap<String, crate::primitives::scene3d::Scene3dJob> = HashMap::new();
+        for job in take_scene3d_jobs() {
+            last.insert(job.key.clone(), job);
+        }
+        let any = !last.is_empty();
+        for job in last.into_values() {
+            self.render_job(device, queue, textured, images, job);
+        }
+        if any {
+            crate::app::pending_images::bump_dynamic_texture_epoch();
+        }
+        any
+    }
+
+    fn render_job(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textured: &TexturedQuadPipeline,
+        images: &mut HashMap<String, GpuImageTexture>,
+        job: crate::primitives::scene3d::Scene3dJob,
+    ) {
+        let w = job.width.max(2);
+        let h = job.height.max(2);
+        let stale = match self.target_size.get(&job.key) {
+            Some(&(cw, ch)) => cw != w || ch != h,
+            None => true,
+        };
+        if stale {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("rui-scene3d-color"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let bind_group = textured.create_texture_bind_group(device, &view);
+            images.insert(
+                job.key.clone(),
+                GpuImageTexture {
+                    _texture: texture,
+                    bind_group,
+                },
+            );
+            self.target_size.insert(job.key.clone(), (w, h));
+        }
+
+        let Some(gpu_img) = images.get(&job.key) else {
+            return;
+        };
+        let color_view = gpu_img
+            ._texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.ensure_depth(device, w, h);
+        let depth_view = self
+            .depth
+            .as_ref()
+            .expect("scene3d depth")
+            .2
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let aspect = w as f32 / h as f32;
+        let mvp = mul4(
+            perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 20.0),
+            mul4(
+                translation(0.0, 0.0, -2.35),
+                mul4(rotate_y(job.yaw), rotate_x(job.pitch)),
+            ),
+        );
+        queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&mvp));
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rui-scene3d-enc"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rui-scene3d-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.12,
+                            g: 0.13,
+                            b: 0.16,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
+            pass.draw(0..self.vertex_count, 0..1);
+        }
+        queue.submit(Some(encoder.finish()));
+    }
+
+    fn ensure_depth(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        let reuse = self
+            .depth
+            .as_ref()
+            .is_some_and(|(dw, dh, _)| *dw == w && *dh == h);
+        if reuse {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rui-scene3d-depth"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.depth = Some((w, h, texture));
+    }
+}
+
+fn cube_vertices() -> Vec<CubeVert> {
+    let s = 0.55;
+    let mut out = Vec::with_capacity(36);
+    let mut face = |quad: [[f32; 3]; 4], color: [f32; 3]| {
+        let [a, b, c, d] = quad;
+        for p in [a, b, c, a, c, d] {
+            out.push(CubeVert { pos: p, color });
+        }
+    };
+    // +Z
+    face(
+        [[-s, -s, s], [s, -s, s], [s, s, s], [-s, s, s]],
+        [0.35, 0.62, 0.96],
+    );
+    // -Z
+    face(
+        [[s, -s, -s], [-s, -s, -s], [-s, s, -s], [s, s, -s]],
+        [0.64, 0.42, 0.90],
+    );
+    // +X
+    face(
+        [[s, -s, s], [s, -s, -s], [s, s, -s], [s, s, s]],
+        [0.94, 0.35, 0.38],
+    );
+    // -X
+    face(
+        [[-s, -s, -s], [-s, -s, s], [-s, s, s], [-s, s, -s]],
+        [0.96, 0.62, 0.28],
+    );
+    // +Y
+    face(
+        [[-s, s, s], [s, s, s], [s, s, -s], [-s, s, -s]],
+        [0.30, 0.78, 0.55],
+    );
+    // -Y
+    face(
+        [[-s, -s, -s], [s, -s, -s], [s, -s, s], [-s, -s, s]],
+        [0.92, 0.78, 0.28],
+    );
+    out
+}
+
+fn identity() -> [f32; 16] {
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
+fn mul4(a: [f32; 16], b: [f32; 16]) -> [f32; 16] {
+    let mut r = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            r[col * 4 + row] = (0..4).map(|k| a[k * 4 + row] * b[col * 4 + k]).sum();
+        }
+    }
+    r
+}
+
+fn perspective(fovy: f32, aspect: f32, n: f32, f: f32) -> [f32; 16] {
+    let t = (fovy * 0.5).tan();
+    let mut m = [0.0f32; 16];
+    m[0] = 1.0 / (aspect.max(0.01) * t);
+    m[5] = 1.0 / t;
+    m[10] = (f + n) / (n - f);
+    m[11] = -1.0;
+    m[14] = (2.0 * f * n) / (n - f);
+    m
+}
+
+fn translation(x: f32, y: f32, z: f32) -> [f32; 16] {
+    let mut m = identity();
+    m[12] = x;
+    m[13] = y;
+    m[14] = z;
+    m
+}
+
+fn rotate_y(a: f32) -> [f32; 16] {
+    let (s, c) = a.sin_cos();
+    let mut m = identity();
+    m[0] = c;
+    m[2] = -s;
+    m[8] = s;
+    m[10] = c;
+    m
+}
+
+fn rotate_x(a: f32) -> [f32; 16] {
+    let (s, c) = a.sin_cos();
+    let mut m = identity();
+    m[5] = c;
+    m[6] = s;
+    m[9] = -s;
+    m[10] = c;
+    m
+}

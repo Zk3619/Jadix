@@ -61,16 +61,21 @@ impl AppRuntime {
         match window_scope::tree_home_for(window_scope::active()) {
             TreeHome::AppState => {
                 if let Some(state_rc) = self.state.upgrade() {
-                    if let Some(state) = state_rc.borrow().as_ref() {
-                        state.window.request_redraw();
+                    // Layout/collect already holds `borrow_mut`; skip rather than panic.
+                    if let Ok(opt) = state_rc.try_borrow() {
+                        if let Some(state) = opt.as_ref() {
+                            state.window.request_redraw();
+                        }
                     }
                 }
             }
             TreeHome::SecondarySlot => {
                 if let Some(id) = Self::secondary_slot_id() {
                     if let Some(secs) = self.secondaries.upgrade() {
-                        if let Some(sec) = secs.borrow().get(&id) {
-                            sec.window.request_redraw();
+                        if let Ok(secs) = secs.try_borrow() {
+                            if let Some(sec) = secs.get(&id) {
+                                sec.window.request_redraw();
+                            }
                         }
                     }
                 }
@@ -80,13 +85,17 @@ impl AppRuntime {
 
     pub fn request_redraw_all(&self) {
         if let Some(state_rc) = self.state.upgrade() {
-            if let Some(state) = state_rc.borrow().as_ref() {
-                state.window.request_redraw();
+            if let Ok(opt) = state_rc.try_borrow() {
+                if let Some(state) = opt.as_ref() {
+                    state.window.request_redraw();
+                }
             }
         }
         if let Some(secs) = self.secondaries.upgrade() {
-            for sec in secs.borrow().values() {
-                sec.window.request_redraw();
+            if let Ok(secs) = secs.try_borrow() {
+                for sec in secs.values() {
+                    sec.window.request_redraw();
+                }
             }
         }
     }
@@ -165,4 +174,37 @@ where
             .as_ref()
             .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
     })
+}
+
+/// Install a dummy runtime whose `AppState` cell is already `borrow_mut`, then run `f`.
+/// Used to lock the "layout collect must not `runtime::request_redraw`" seam.
+#[cfg(test)]
+pub(crate) fn call_while_app_state_mutably_borrowed(f: impl FnOnce()) {
+    use std::rc::Rc;
+    let state: Rc<RefCell<Option<super::state::AppState>>> = Rc::new(RefCell::new(None));
+    let secondaries: Rc<RefCell<HashMap<WindowId, SecondaryWindowState>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    set_app_runtime(AppRuntime::new(
+        Rc::downgrade(&state),
+        Rc::downgrade(&secondaries),
+    ));
+    let _guard = state.borrow_mut();
+    let _secs = secondaries.borrow_mut();
+    f();
+    drop(_secs);
+    drop(_guard);
+    clear_app_runtime();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_redraw_while_state_mutably_borrowed_does_not_panic() {
+        call_while_app_state_mutably_borrowed(|| {
+            request_redraw();
+            request_redraw_all();
+        });
+    }
 }

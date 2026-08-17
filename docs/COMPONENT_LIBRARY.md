@@ -354,7 +354,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1）；Calendar/Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
 | **数据** | VirtualList、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺） |
-| **绘制**（W3 可选新分区） | Svg / Canvas / Scene3d / 未来 B16 fx · B17 bits | 先 `experimental`；规范 [`drawing.md`](drawing.md)；未落地前 Chart 仍挂「数据」 |
+| **绘制** | Svg（`primitives/svg`）；Canvas（`primitives/canvas`）；Scene3d（`primitives/scene3d`，feature）；B16 / B17 仍规划 | Svg=`experimental`（WP-3.11 ☑）；Canvas=`experimental`（WP-3.12 ☑）；Scene3d=`experimental`（WP-3.13 ☑，默认 feature 关）；B16/B17 未落地；Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar；Gallery 另演示 `app::Router` / Navigator / 完整次窗（输入 + Dialog + `shared_slot`） | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
 | **文本** | Label 选区、markdown inline / 块级 md（`text/`） | 选区随 Label；inline=`experimental`；块级 md **缺失**（密度项） |
@@ -367,7 +367,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | P2 | HoverCard、Empty、Kbd、ButtonGroup、InputOTP、InputGroup | 浮层 / 表单 / 基础 |
 | 等价不单列 | Drawer→Sheet、Sonner→Toast、NativeSelect→Select、Field→Form 等 | — |
 
-**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`。`planned` 未落地前**禁止**写入 prelude 或假装已导出。
+**不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`/`svg`/`canvas`/`scene3d`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`。`planned` 未落地前**禁止**写入 prelude 或假装已导出。
 
 ### 5.2 发布承诺面（SemVer 口径草案）
 
@@ -430,7 +430,7 @@ cargo check -p gallery
 
 ### 6.3 Gallery 契约
 
-- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · 导航 · 布局 · 文本 · 关于；**W3 可增「绘制」**（Svg/Canvas，见 [`drawing.md`](drawing.md)），未落地前 Chart 仍在「数据」。  
+- 侧栏分区与 §5.1 一致：基础 · 表单 · 浮层/反馈 · 数据 · **绘制** · 导航 · 布局 · 文本 · 关于；Svg / Canvas / Scene3d 已在「绘制」（WP-3.11 / 3.12 / 3.13）；Chart 仍在「数据」。Scene3d 演示需 `--features scene3d`。  
 - **每公开稳定面组件至少一处可运行示例**。  
 - 变体矩阵优先展示在「基础 / 表单」（Button variants/sizes 已是标杆）。  
 - 「关于」或基础区宜保留 **Builder 写法** 对照示例，避免用户以为只能写标签。

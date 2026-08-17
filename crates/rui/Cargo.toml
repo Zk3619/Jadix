@@ -44,6 +44,8 @@ gif = ["dep:gif"]
 webp = ["dep:image-webp"]
 images = ["jpeg", "gif", "webp"]
 cursor-images = ["images"]
+# WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
+scene3d = []
 
 [dependencies]
 winit = { workspace = true }

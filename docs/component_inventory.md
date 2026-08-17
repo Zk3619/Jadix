@@ -192,9 +192,9 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 规划名 | 建议 Gallery | 优先级 | id 策略 | 笔记 |
 |--------|--------------|--------|---------|------|
-| **Svg**（`<svg>` / `svg()`） | 数据 / 新「绘制」区 | P1（W3） | 展示型不要求 | 矢量场景图；与 WP-3.2 path 核合一 |
-| **Canvas**（`<canvas>` / `canvas().paint`） | 绘制 | P1（W3） | 展示型不要求；paint 内 peek | 自定义 2D 绘制；非 DOM Canvas2D |
-| **Scene3d**（`<scene3d>`） | 绘制（可选） | P2 | 展示型不要求 | feature 门；默认构建须绿 |
+| **Svg**（`<svg>` / `svg()`） | 绘制 | **experimental**（WP-3.11 ☑） | 展示型不要求 | 矢量场景图；`primitives/svg`；与 WP-3.2 path 核合一；emoji-svg ≠ 本包 |
+| **Canvas**（`<canvas>` / `canvas().paint`） | 绘制 | **experimental**（WP-3.12 ☑） | 展示型不要求；paint 内 peek | 自定义 2D 绘制；`primitives/canvas`；非 DOM Canvas2D；同一 path 核 |
+| **Scene3d**（`<scene3d>` / `scene3d()`） | 绘制（可选） | **experimental**（WP-3.13 ☑） | 展示型不要求 | feature `scene3d` 默认关；透视立方；无 glTF |
 | **canvas-ui 式 fx**（Liquid/Glass/…） | 绘制 / 实验分区 | P2 · B16 | 包住子树；命中仍走底层 Element | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**不搬** HTML-in-canvas |
 | **react-bits 式 bits**（BlurText / 背景 / …） | 绘制 / 动效实验区 | P2 · B17 | 展示型不要求；动效内 peek | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；glyphon 字形动效 + Canvas 背景；**不搬**每字 DOM span / CSS 运行时 |
 

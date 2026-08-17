@@ -151,7 +151,7 @@ impl super::App {
             }
         }
 
-        if need_redraw {
+        if need_redraw || crate::primitives::canvas::take_canvas_wants_redraw() {
             window.request_redraw();
         } else if let Some(sec) = self.secondaries.borrow().get(&id) {
             sec.window.request_redraw();

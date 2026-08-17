@@ -5,6 +5,9 @@
 //! - **[`overlay`]**：全屏模态遮罩（色 / 透明度 / backdrop 模糊 / 点击关闭）。
 //! - **[`text`] / [`icon`]**：纯文本与图标叶子。
 //! - **[`path`]**：折线/多边形/扇区（WP-3.2 / 3.11 共用核；CPU 覆盖率光栅贴图，tessellate 回退）。
+//! - **[`svg`]**：公开 `<svg>` 叶（场景图；描边/填充；子形状不占 taffy）。
+//! - **[`canvas`]**：公开 `<canvas>` 叶（paint / 2D context MVP；同一 path 核）。
+//! - **[`scene3d`]**：公开 `<scene3d>` 叶（WP-3.13 实验 feature；默认关）。
 //! - **[`Portal`]**：树外挂载（Solid `<Portal>`）；定位 / Esc 栈仍在 [`crate::utils::popup`] /
 //!   [`crate::app::portal_overlay`]。
 //!
@@ -12,12 +15,16 @@
 //! 布尔开关状态在 [`crate::utils::toggle_state`]（WP-3.7）；Tabs / Toggle 外观在 [`crate::components`]。
 
 pub mod r#box;
+pub mod canvas;
 pub mod interactive;
 pub mod overlay;
 pub mod path;
 pub mod portal;
+pub mod scene3d;
+pub mod svg;
 pub mod text;
 
+pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
 pub use interactive::{interactive, InteractiveBuilder};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
@@ -25,10 +32,16 @@ pub use path::{
     encode_path_d, encode_points, ensure_raster_texture, filled_circle,
     path_quads_from_element_attrs, path_raster_from_element_attrs, path_target_leaf_size, pie_ring,
     pie_sector, polygon, polyline, rasterize_layers_rgba, rasterize_path_rgba, tessellate_path,
-    PathCommand, PathQuad, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_FILL, ATTR_PATH_KIND,
-    ATTR_PATH_MARKERS, ATTR_PATH_POINTS, ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH,
+    PathCommand, PathQuad, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF,
+    ATTR_PATH_KIND, ATTR_PATH_MARKERS, ATTR_PATH_POINTS, ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH,
     ATTR_PATH_VIEWBOX,
 };
 pub use portal::{Portal, PortalProps};
 pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
+pub use scene3d::{scene3d, Scene3dBuilder, ATTR_SCENE3D};
+pub use svg::{
+    circle, g, line, path as svg_path, polyline as svg_polyline, rect as svg_rect, svg,
+    CircleBuilder, GroupBuilder, LineBuilder, PathBuilder, PolylineBuilder, RectBuilder,
+    SvgBuilder, SvgShapeBuilder, ATTR_SVG_KIND,
+};
 pub use text::{icon, text, TextBuilder};

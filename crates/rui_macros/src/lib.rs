@@ -61,6 +61,28 @@ fn expr_as_bool_compat(value: &Expr) -> Option<bool> {
     }
 }
 
+fn is_svg_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "svg"
+            | "Svg"
+            | "circle"
+            | "Circle"
+            | "path"
+            | "Path"
+            | "rect"
+            | "line"
+            | "Line"
+            | "polyline"
+            | "Polyline"
+            | "g"
+    )
+}
+
+fn is_canvas_tag(name: &str) -> bool {
+    matches!(name, "canvas" | "Canvas")
+}
+
 fn is_boolish_attr(name: &str) -> bool {
     matches!(
         name,
@@ -1878,6 +1900,13 @@ fn expand_node(
                     "Box",
                     "Text",
                     "Interactive",
+                    "Svg",
+                    "Circle",
+                    "Path",
+                    "Line",
+                    "Polyline",
+                    "Canvas",
+                    "Scene3d",
                 ]
                 .contains(&name_str.as_str());
 
@@ -2672,6 +2701,15 @@ fn expand_node(
                         quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
                     }
                     "Text" => quote! { rui::primitives::text("") },
+                    "svg" | "Svg" => quote! { rui::primitives::svg() },
+                    "circle" | "Circle" => quote! { rui::primitives::svg::circle() },
+                    "path" | "Path" => quote! { rui::primitives::svg::path() },
+                    "rect" => quote! { rui::primitives::svg::rect() },
+                    "line" | "Line" => quote! { rui::primitives::svg::line() },
+                    "polyline" | "Polyline" => quote! { rui::primitives::svg::polyline() },
+                    "g" => quote! { rui::primitives::svg::g() },
+                    "canvas" | "Canvas" => quote! { rui::primitives::canvas() },
+                    "scene3d" | "Scene3d" => quote! { rui::primitives::scene3d() },
                     _ => quote! { rui::core::tree::Element::new() },
                 }
             };
@@ -2793,6 +2831,83 @@ fn expand_node(
                 }
                 if matches!(attr_str.as_str(), "scroll_id" | "scrollId") {
                     element = quote! { #element.scroll_id(#value) };
+                    continue;
+                }
+                if is_svg_tag(&name_str) {
+                    match attr_str.as_str() {
+                        "viewBox" | "view_box" => {
+                            element = quote! { #element.view_box(#value) };
+                            continue;
+                        }
+                        "cx" => {
+                            element = quote! { #element.cx(#value) };
+                            continue;
+                        }
+                        "cy" => {
+                            element = quote! { #element.cy(#value) };
+                            continue;
+                        }
+                        "r" => {
+                            element = quote! { #element.r(#value) };
+                            continue;
+                        }
+                        "d" => {
+                            element = quote! { #element.d(#value) };
+                            continue;
+                        }
+                        "x" => {
+                            element = quote! { #element.x(#value) };
+                            continue;
+                        }
+                        "y" => {
+                            element = quote! { #element.y(#value) };
+                            continue;
+                        }
+                        "x1" => {
+                            element = quote! { #element.x1(#value) };
+                            continue;
+                        }
+                        "y1" => {
+                            element = quote! { #element.y1(#value) };
+                            continue;
+                        }
+                        "x2" => {
+                            element = quote! { #element.x2(#value) };
+                            continue;
+                        }
+                        "y2" => {
+                            element = quote! { #element.y2(#value) };
+                            continue;
+                        }
+                        "points" => {
+                            element = quote! { #element.points(#value) };
+                            continue;
+                        }
+                        "fill" => {
+                            element = quote! { #element.fill(#value) };
+                            continue;
+                        }
+                        "stroke" => {
+                            element = quote! { #element.stroke(#value) };
+                            continue;
+                        }
+                        "stroke_width" | "strokeWidth" => {
+                            element = quote! { #element.stroke_width(#value) };
+                            continue;
+                        }
+                        "transform" => {
+                            element = quote! { #element.transform(#value) };
+                            continue;
+                        }
+                        "opacity" => {
+                            element = quote! { #element.opacity(#value) };
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                if is_canvas_tag(&name_str) && attr_str.as_str() == "paint" {
+                    element = quote! { #element.paint(#value) };
                     continue;
                 }
                 match attr_str.as_str() {

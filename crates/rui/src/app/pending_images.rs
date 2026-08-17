@@ -1,12 +1,24 @@
 //! 在任意线程将 RGBA 贴图加入队列，由 [`super::state::AppState::render`] 首帧上传至 GPU。
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::media::{decode_bytes, load_src, DecodeOptions};
 
 static PENDING: Mutex<Vec<(String, Vec<u8>, u32, u32)>> = Mutex::new(Vec::new());
 static QUEUED_SRC: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+/// 动态贴图内容世代：同一 `texture_key` 像素变了（canvas 重绘 / scene3d 旋转）
+/// 也必须让 present 指纹变化，否则 `last_gpu_frame_fp` 会跳过 swapchain。
+static DYNAMIC_TEX_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn bump_dynamic_texture_epoch() {
+    DYNAMIC_TEX_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn dynamic_texture_epoch() -> u64 {
+    DYNAMIC_TEX_EPOCH.load(Ordering::Relaxed)
+}
 
 /// 排队上传一张 RGBA8 贴图（`width * height * 4` 字节）。同一 `id` 重复排队时仅保留最后一次。
 pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
@@ -14,6 +26,7 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     let mut g = PENDING.lock().unwrap();
     g.retain(|(k, _, _, _)| k != &id);
     g.push((id, rgba, width, height));
+    bump_dynamic_texture_epoch();
 }
 
 /// 解码任意支持的图像字节并排队上传（上限见 [`DecodeOptions::image`]）。
@@ -57,4 +70,19 @@ pub fn texture_key_for_src(src: &str) -> String {
 pub(crate) fn take_pending() -> Vec<(String, Vec<u8>, u32, u32)> {
     let mut g = PENDING.lock().unwrap();
     std::mem::take(&mut *g)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queue_rgba_bumps_dynamic_texture_epoch() {
+        let before = dynamic_texture_epoch();
+        queue_image_rgba8("rui-test-tex-epoch", 1, 1, vec![0, 0, 0, 255]);
+        assert!(
+            dynamic_texture_epoch() > before,
+            "same texture key with new pixels must change present fingerprint"
+        );
+    }
 }

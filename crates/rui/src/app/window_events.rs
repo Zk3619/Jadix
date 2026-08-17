@@ -1072,8 +1072,15 @@ impl super::App {
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
         self.sync_mouse_enter_leave(x, y, &mouse_path, MouseButton::Left);
-        let _ = self.dispatch_mouse_path(
-            &mouse_path,
+        // Canvas ink: keep dispatching to the press target so the stroke follows the pointer
+        // even if hit-test leaves the leaf (fast flicks / 1px miss).
+        let canvas_press_path = (self.mouse_buttons & 1 != 0)
+            .then(|| self.click_press_path.clone())
+            .flatten()
+            .filter(|p| p.iter().any(|e| e.canvas_paint.is_some()));
+        let move_path = canvas_press_path.as_deref().unwrap_or(&mouse_path);
+        self.dispatch_mouse_path(
+            move_path,
             x,
             y,
             MouseButton::Left,
@@ -1087,7 +1094,11 @@ impl super::App {
         let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
         let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
-        if slider_dragging || toast_dragging || color_dragging {
+        if slider_dragging
+            || toast_dragging
+            || color_dragging
+            || crate::primitives::canvas::take_canvas_wants_redraw()
+        {
             window.request_redraw();
         }
 

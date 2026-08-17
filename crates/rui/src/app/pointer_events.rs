@@ -208,6 +208,8 @@ pub struct HitPathEntry {
     pub floating_id: Option<String>,
     /// Canvas-like [`MouseEvent.region`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/region).
     pub region: Option<String>,
+    /// WP-3.12 paint id hex（`rui_canvas_paint`）；按下/拖线时标 dirty。
+    pub canvas_paint: Option<String>,
     /// 该节点可视盒（窗口像素，已扣祖先 `scroll_acc`）。与命中判定同一套坐标，
     /// 供 handler 把指针映射到局部逻辑坐标（Chart / ScrollArea 内控件）。
     pub bounds: [f32; 4],
@@ -252,6 +254,11 @@ impl HitPathEntry {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             region,
+            canvas_paint: el
+                .attrs
+                .get(crate::primitives::canvas::ATTR_CANVAS_PAINT)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             bounds,
         }
     }
@@ -521,6 +528,13 @@ fn fire_mouse(handler: &Option<PointerHandler>, event: &PointerEvent) {
 }
 
 fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
+    let canvas_drag = matches!(kind, PointerKind::Down | PointerKind::Up)
+        || (kind == PointerKind::Move && event.buttons != 0);
+    if canvas_drag {
+        if let Some(hex) = entry.canvas_paint.as_deref() {
+            crate::primitives::canvas::mark_canvas_dirty_hex(hex);
+        }
+    }
     match kind {
         PointerKind::Down => {
             fire_mouse(&entry.on_mousedown, event);

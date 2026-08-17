@@ -214,7 +214,7 @@ flowchart TB
 | **路径** | 新 `primitives/svg` 或 `components/svg`；renderer 消费 `PathCommand`；`rui_macros` `<svg>`/`<path>`/`<circle>` |
 | **任务** | ① Element 叶 + `viewBox`；② 子形状场景图（不各占 taffy）；③ 描边/填充像素；④ `ui!` + Builder 双入口；⑤ Gallery |
 | **验收** | AUTHORITY 3.11 A 表；emoji-svg **不算**本包完成 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18 Svg 叶 + viewBox + circle/path（+ rect/line/polyline/g）；同一 path 核；Gallery「绘制」 |
 
 ### WP-3.12 `<canvas>` 标签 + 自定义绘制
 
@@ -224,7 +224,7 @@ flowchart TB
 | **路径** | `primitives/canvas` 或 `components/canvas`；paint trait；离屏纹理上传 |
 | **任务** | ① 叶 + 尺寸；② `paint`/`Canvas2D` MVP（clear/fill/stroke/transform/clip）；③ dirty → StyleChanged；④ peek 不订根；⑤ Gallery 自绘例 |
 | **验收** | AUTHORITY 3.12 A 表 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18 Canvas 叶 + paint/`Canvas2D` MVP；同一 path 核；Gallery「绘制」拖线 |
 
 ### WP-3.13 2D / 3D 能力层
 
@@ -234,7 +234,7 @@ flowchart TB
 | **路径** | 2D 合成纪律（与 3.11/3.12 共享）；`scene3d` feature；矩阵/perspective |
 | **任务** | ① 文档化 2D 变换/clip；② `<scene3d>` 实验 + 默认 feature 关闭仍能构建；③ 一 mesh/立方或 GLB opt-in |
 | **验收** | 2D 建议随 3.12；3D **不挡** W3 退出 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18：2D 变换/clip 库测 + Gallery rotate/clip；`<scene3d>` feature 默认关；开启时透视旋转立方 |
 
 ### B16 canvas-ui 式创意组件库（W3 后 / Backlog）
 
