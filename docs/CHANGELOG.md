@@ -18,11 +18,13 @@
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
 | `tray_icon` / `TrayIcon` / `request_exit` / `system_tray_native` | `app/tray.rs` · `ui_bridge.rs` | WP-3.6；默认 stub；`system-tray` 才有原生副作用 |
+| `WindowOptions` / `run_with` / `open_secondary_window_with` / `start_window_drag` / `close_window` | `app/window_chrome.rs` · `multi_window.rs` | 无边框 / 透明 / 系统模糊（Win11 Acrylic）；Gallery 导航卡 |
 | `virtual_masonry` / `VirtualMasonryBuilder` | `components/virtual_masonry.rs` · `utils/virtual_masonry.rs` | WP-3.10；变高瀑布流虚拟化；`item_height` + 测宽缓存；未进 SemVer |
 
 ### Added
 
 - WP-3.6：可选 feature `system-tray` 接入 `tray-icon`；菜单点击经 `run_on_ui_thread`；[`request_exit`](../crates/rui/src/app/ui_bridge.rs) 退出事件循环；默认仍 stub。手册 [`tray.md`](tray.md)。
+- 窗口 chrome：[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)（`frameless` / `transparent` / `blur`）+ [`open_secondary_window_with`](../crates/rui/src/app/multi_window.rs) / [`run_with`](../crates/rui/src/app.rs)；自定义标题栏 [`start_window_drag`](../crates/rui/src/app/window_chrome.rs)。手册 [`multi_window.md`](multi_window.md)。
 - WP-3.8：稳定面 [`component_variants.md`](component_variants.md)（Button 词汇 + 差异表 + 受控命名 + 双书写审计）；未知 variant/size → default；Input RSX `value`；Toast success/warning 走 `chart-*` token。
 - WP-3.9：Form helpers 校验路径（仍 `experimental`）：`FormState::set_field_error` / `clear_*` / `validate`；`form_field` 错误文案与 Input invalid 环同源；Gallery「表单」卡。点击回调须 clone `FormState`，勿在事件里 `use_form()`。
 - WP-3.10：VirtualMasonry（仍 `experimental`）：最短列优先装箱 + 视口虚拟化；行高 `item_height(index, col_w)` / `height_from_cache`；Gallery「数据」千级卡。

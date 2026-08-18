@@ -12,11 +12,8 @@
 
 - 跨平台文件读写深化（选择器已有 `utils/file_dialog`）
 - 网络能力
-- 无边框窗口
-- 透明 / 模糊窗口
-- 托盘 → **WP-3.6 ☑**（默认 stub；`system-tray` 原生接线，见 [`tray.md`](tray.md)）
-- svg / canvas 标签等公开自绘能力 → **已升格**：规范 [`drawing.md`](drawing.md)；执行 [AUTHORITY.md](AUTHORITY.md) WP-3.11 / 3.12 / 3.13；创意库 **B16** canvas-ui（包住子树）· **B17** [react-bits](https://github.com/DavidHDev/react-bits)（文字/背景/动画 UI）
-- 多窗口
+- ~~无边框窗口~~（`WindowOptions::frameless` + 自定义标题栏 `start_window_drag`）
+- ~~透明 / 模糊窗口~~（`transparent` / `blur`；Win11 Acrylic）
 
 ## Bugs
 

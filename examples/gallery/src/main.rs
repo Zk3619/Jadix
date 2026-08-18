@@ -4,13 +4,14 @@
 
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘外壳） · 布局 · 文本 · 关于。
+//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`；托盘原生：`cargo run -p gallery --features system-tray`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
 use rui::app::{
-    open_secondary_window, request_exit, run_on_ui_thread, shared_slot, system_tray_native,
-    tray_icon, Router, TrayMenuItem,
+    close_window, open_secondary_window, open_secondary_window_with, request_exit,
+    run_on_ui_thread, set_window_minimized, shared_slot, start_window_drag, system_tray_native,
+    toggle_window_maximized, tray_icon, Router, TrayMenuItem, WindowOptions,
 };
 use rui::component;
 use rui::components::*;
@@ -41,6 +42,12 @@ const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
 const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";
 #[cfg(test)]
 const GAL_SHELL_TRAY_SHOW: &str = "gal_shell_tray_show";
+#[cfg(test)]
+const GAL_SHELL_FRAMELESS: &str = "gal_shell_frameless";
+#[cfg(test)]
+const GAL_SHELL_TRANSPARENT: &str = "gal_shell_transparent";
+#[cfg(test)]
+const GAL_SHELL_BLUR: &str = "gal_shell_blur";
 const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
 const GAL_GRID_LIST_ID: &str = "gal-grid-sort";
@@ -2829,6 +2836,168 @@ fn TrayShowcase() -> Element {
     }
 }
 
+fn gallery_chrome_fill(alpha: f32) -> String {
+    let c = parse_color("background");
+    let a = (alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+        a
+    )
+}
+
+fn gallery_custom_title_bar(title: &'static str) -> Element {
+    let fill = gallery_chrome_fill(0.62);
+    let mut drag: Element = ui! {
+        <HStack flex_grow="1" h="100%" items="center" cursor="move">
+            <Label font_weight="600" text_size="0.875rem">{ title }</Label>
+        </HStack>
+    };
+    drag = drag.on_mousedown(move |_e| start_window_drag());
+    ui! {
+        <HStack w="100%" h="2.5rem" items="center" px="0.5rem" gap="0.25rem" bg={fill.as_str()}>
+            { drag }
+            <Button size="icon-xs" variant="ghost" on_click={move || set_window_minimized(true)}>
+                <Icon name="minus" size="0.75rem" />
+            </Button>
+            <Button size="icon-xs" variant="ghost" on_click={move || toggle_window_maximized()}>
+                <Icon name="square" size="0.75rem" />
+            </Button>
+            <Button size="icon-xs" variant="ghost" on_click={move || close_window()}>
+                <Icon name="x" size="0.75rem" />
+            </Button>
+        </HStack>
+    }
+}
+
+fn gallery_open_chrome(options: WindowOptions, root: fn() -> Element, ok: &str) {
+    match open_secondary_window_with(options, root) {
+        Ok(()) => {
+            toast_push(ok, 2000);
+        }
+        Err(e) => {
+            log::warn!("open_secondary_window_with: {e}");
+            toast_push(format!("窗口失败: {e}"), 3000);
+        }
+    }
+}
+
+fn gallery_frameless_root() -> Element {
+    ui! {
+        <VStack w="100%" h="100%" bg="background">
+            { gallery_custom_title_bar("Frameless") }
+            <VStack flex_grow="1" p="1rem" gap="0.5rem">
+                <Label font_weight="700">"无边框窗口"</Label>
+                <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                    "OS 标题栏已关。拖标题栏移动；按钮最小化 / 最大化 / 关闭。关闭只关本窗。"
+                </Label>
+            </VStack>
+        </VStack>
+    }
+}
+
+fn gallery_transparent_root() -> Element {
+    let card = gallery_chrome_fill(0.88);
+    ui! {
+        <VStack w="100%" h="100%" bg="transparent">
+            { gallery_custom_title_bar("Transparent") }
+            <VStack flex_grow="1" p="1rem" items="center" justify="center">
+                <VStack w="18rem" p="1rem" gap="0.5rem" rounded="0.75rem" bg={card.as_str()}>
+                    <Label font_weight="700">"透明窗口"</Label>
+                    <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                        "根为 transparent，卡片半透明。应能透过空隙看到桌面。"
+                    </Label>
+                </VStack>
+            </VStack>
+        </VStack>
+    }
+}
+
+fn gallery_blur_root() -> Element {
+    let fill = gallery_chrome_fill(0.58);
+    ui! {
+        <VStack w="100%" h="100%" bg={fill.as_str()}>
+            { gallery_custom_title_bar("Acrylic / blur") }
+            <VStack flex_grow="1" p="1rem" gap="0.5rem">
+                <Label font_weight="700">"透明 + 系统模糊"</Label>
+                <Label text_size="0.875rem" color="muted-foreground" leading="normal">
+                    "Win11 Acrylic；macOS vibrancy；Wayland kwin blur。半透明填色才能看到材质。GL 上看不到时可设 RUI_GPU_BACKEND=dx12。"
+                </Label>
+            </VStack>
+        </VStack>
+    }
+}
+
+fn WindowChromeShowcase() -> Element {
+    ui! {
+        <MyCard title="无边框 / 透明 / 模糊（外壳）">
+            <VStack w="100%" gap="0.5rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "次窗演示 WindowOptions：decorations(false)、transparent、blur。自定义标题栏 mousedown 调 start_window_drag。"
+                </Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="center">
+                    <Button
+                        id="gal_shell_frameless"
+                        size="sm"
+                        variant="secondary"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Frameless")
+                                    .size(420.0, 280.0)
+                                    .frameless(),
+                                gallery_frameless_root,
+                                "Frameless opened",
+                            );
+                        }}
+                    >
+                        "Open frameless"
+                    </Button>
+                    <Button
+                        id="gal_shell_transparent"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Transparent")
+                                    .size(440.0, 300.0)
+                                    .frameless()
+                                    .transparent(true),
+                                gallery_transparent_root,
+                                "Transparent opened",
+                            );
+                        }}
+                    >
+                        "Open transparent"
+                    </Button>
+                    <Button
+                        id="gal_shell_blur"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            gallery_open_chrome(
+                                WindowOptions::new()
+                                    .title("RUI Gallery — Blur")
+                                    .size(460.0, 300.0)
+                                    .frameless()
+                                    .transparent(true)
+                                    .blur(true),
+                                gallery_blur_root,
+                                "Blur opened",
+                            );
+                        }}
+                    >
+                        "Open blur"
+                    </Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn PrimitivesShowcase() -> rui::core::tree::Element {
     let overlay_open = use_signal("prim_overlay_open", || false);
@@ -4171,6 +4340,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <NavigatorShowcase />
                     <RouterShowcase />
                     { TrayShowcase() }
+                    { WindowChromeShowcase() }
                     <SelectPopoverTabShowcase />
                 </VStack>
             </ScrollArea>
@@ -4859,6 +5029,18 @@ mod mount_tests {
             assert!(
                 find_tid(&tree, GAL_SHELL_TRAY_SHOW),
                 "WP-3.6: navigation section must mount tray Show button"
+            );
+            assert!(
+                find_tid(&tree, GAL_SHELL_FRAMELESS),
+                "navigation section must mount frameless window button"
+            );
+            assert!(
+                find_tid(&tree, GAL_SHELL_TRANSPARENT),
+                "navigation section must mount transparent window button"
+            );
+            assert!(
+                find_tid(&tree, GAL_SHELL_BLUR),
+                "navigation section must mount blur window button"
             );
             rui::app::reactive::reset_registered_anchors();
         });

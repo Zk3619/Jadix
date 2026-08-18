@@ -81,3 +81,31 @@ run_on_ui_thread(|| {
 - [x] 次窗 AccessKit adapter（读屏）
 - [x] 次窗 IME 绑到次窗 HWND（组字 / 候选窗跟次窗 Input，不打进主窗）
 - [x] 次窗独立 glyphon overlay 文本带（复杂 Dialog 与主窗同一套 hoist 已可用）
+- [x] 无边框 / 透明 / 系统模糊（[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)）
+
+## 无边框 · 透明 · 模糊
+
+创建时用 [`WindowOptions`](../crates/rui/src/app/window_chrome.rs)：`decorations(false)` 去掉 OS 标题栏；`transparent(true)` 让未填满的像素透出桌面；`blur(true)` 开系统 backdrop（Windows 11 Acrylic、macOS vibrancy、Wayland kwin）。`blur` 会同时打开 compositor alpha。
+
+```rust,ignore
+use rui::app::{
+    close_window, open_secondary_window_with, start_window_drag, WindowOptions,
+};
+
+open_secondary_window_with(
+    WindowOptions::new()
+        .title("Glass")
+        .size(420.0, 280.0)
+        .frameless()
+        .transparent(true)
+        .blur(true),
+    || {
+        // 根不要用不透明 `bg="background"`，否则看不到材质。
+        ui! { /* 自定义标题栏：mousedown → start_window_drag()；关闭 → close_window() */ }
+    },
+)?;
+```
+
+主窗：[`run_with`](../crates/rui/src/app.rs) 传入同一套 options。运行时：[`start_window_drag`](../crates/rui/src/app/window_chrome.rs)（必须在 **mousedown**）、[`toggle_window_maximized`](../crates/rui/src/app/window_chrome.rs) / [`set_window_minimized`](../crates/rui/src/app/window_chrome.rs)、[`close_window`](../crates/rui/src/app/window_chrome.rs)（次窗只关自己，主窗走 `request_exit`）。
+
+Gallery：**导航 → 无边框 / 透明 / 模糊**。GL 上玻璃效果不明显时可设 `RUI_GPU_BACKEND=dx12`。

@@ -40,7 +40,7 @@ let _: Element = input("name").value_signal(name).into();
 
 | EN | 中文 | Link |
 |----|------|------|
-| Multi-window | 多窗口 | [multi_window.md](../multi_window.md) |
+| Multi-window | 多窗口 / 无边框 / 透明模糊 | [multi_window.md](../multi_window.md) |
 | System tray | 系统托盘 | [tray.md](../tray.md) |
 | Desktop smoke | 真窗口冒烟 | [desktop_smoke.md](../desktop_smoke.md) |
 | IME | 输入法 | [ime.md](../ime.md) |
