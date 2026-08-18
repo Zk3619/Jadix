@@ -89,6 +89,59 @@ fn keyed_reconcile_insert_remove_is_structure_changed() {
 }
 
 #[test]
+fn keyed_reconcile_insert_head_middle_tail() {
+    let cases: [(&str, Vec<(&str, &str)>); 3] = [
+        ("head", vec![("k:a", "a"), ("k:b", "b")]),
+        ("tail", vec![("k:b", "b"), ("k:c", "c")]),
+        ("middle", vec![("k:a", "a"), ("k:b", "b"), ("k:c", "c")]),
+    ];
+
+    for (label, new_children) in cases {
+        let mut old_root = Element::new().template_id("root");
+        old_root.children = vec![child("k:b", "b")];
+
+        let mut new_root = Element::new().template_id("root");
+        new_root.children = new_children
+            .into_iter()
+            .map(|(id, text)| child(id, text))
+            .collect();
+
+        let status = reconcile_elements(&mut new_root, &mut old_root);
+        assert_eq!(
+            status,
+            LayoutStatus::StructureChanged,
+            "insert at {label} must structure-change"
+        );
+    }
+}
+
+#[test]
+fn keyed_reconcile_delete_reports_structure_changed() {
+    let mut old_root = Element::new().template_id("root");
+    old_root.children = vec![child("k:a", "a"), child("k:b", "b"), child("k:c", "c")];
+
+    let mut new_root = Element::new().template_id("root");
+    new_root.children = vec![child("k:a", "a"), child("k:c", "c")];
+
+    let status = reconcile_elements(&mut new_root, &mut old_root);
+    assert_eq!(status, LayoutStatus::StructureChanged);
+}
+
+#[test]
+fn keyed_reconcile_three_item_reorder_is_not_structure_changed() {
+    let mut old_root = Element::new().template_id("root");
+    old_root.children = vec![child("k:a", "a"), child("k:b", "b"), child("k:c", "c")];
+
+    let mut new_root = Element::new().template_id("root");
+    new_root.children = vec![child("k:c", "c"), child("k:a", "a"), child("k:b", "b")];
+
+    let status = reconcile_elements(&mut new_root, &mut old_root);
+    assert_ne!(status, LayoutStatus::StructureChanged);
+    assert_eq!(new_root.children[0].text.as_deref(), Some("c"));
+    assert_eq!(new_root.children[2].text.as_deref(), Some("b"));
+}
+
+#[test]
 fn show_toggle_changes_structure() {
     let mut old_root = Element::new().template_id("root");
     old_root.children = vec![show(true, || child("toggle:block", "shown"))];

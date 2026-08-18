@@ -32,7 +32,10 @@ use std::rc::Rc;
 const PRIMITIVES_SHOWCASE_REACTIVE: &str = "examples/gallery/PrimitivesShowcase:controls";
 const TEXT_ALIGN_WP21_VIRT: &str = "gal-wp21-virt";
 const PRIMITIVES_VIRT: &str = "gal-virt-demo";
+/// WP-R.6: stable structure-island `template_id` (hot reload / reconcile slot).
+/// Do not switch to `file:line:col` — that moves when the source is edited.
 const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
+/// WP-R.6: second gallery example of an explicit reactive slot (Navigator body).
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
 const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
 const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";
@@ -118,6 +121,19 @@ fn ReactiveStatusBadge(
                 color="foreground"
             />
             <Label text_size="0.875rem">{ label.get() }</Label>
+        </HStack>
+    }
+}
+
+/// WP-R.7：`format!(…, signal.get())` 走自动 bind_text；`#[component(reactive)]` 体不因 count 重跑。
+#[component(reactive)]
+fn ReactiveCountChip(
+    id: String,
+    count: rui::core::reactivity::Signal<i32>,
+) -> rui::core::tree::Element {
+    ui! {
+        <HStack gap="0.5rem" items="center" p="0.5rem" class="rounded" bg="muted">
+            <Label text_size="0.875rem">{ format!("count {}", count.get()) }</Label>
         </HStack>
     }
 }
@@ -421,6 +437,7 @@ fn InputShowcase() -> rui::core::tree::Element {
     let mark_invalid = use_signal("gal_input_mark_invalid", || false);
     let badge_ok = use_signal("gal_status_badge_ok", || true);
     let badge_label = use_signal("gal_status_badge_label", || "Ready".to_string());
+    let chip_count = use_signal("gal_status_chip_count", || 0_i32);
 
     ui! {
         <MyCard title="2) Input (ShadCN-style)">
@@ -511,6 +528,17 @@ fn InputShowcase() -> rui::core::tree::Element {
                     >
                         "Toggle badge"
                     </Button>
+                    <ReactiveCountChip id="gal-count-chip" count={chip_count} />
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        on_click={move || chip_count.set(chip_count.peek() + 1)}
+                    >
+                        "Bump count"
+                    </Button>
+                    <Show when={badge_ok.get()}>
+                        <Label text_size="0.75rem" color="muted-foreground">"online"</Label>
+                    </Show>
                 </HStack>
             </VStack>
         </MyCard>
@@ -4386,6 +4414,45 @@ mod mount_tests {
                 assert!(
                     lucide >= 2,
                     "focused password input must collect visible lucide adornments; got {lucide}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_section_mounts_wp_r7_reactive_chips() {
+        rui::app::reactive::reset_registered_anchors();
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let tree = rui::core::reactivity::isolate_reads(|| {
+                    InputShowcase(InputShowcaseProps::default())
+                });
+                fn find_id(el: &rui::core::tree::Element, tid: &str) -> bool {
+                    el.template_id.as_deref() == Some(tid)
+                        || el.children.iter().any(|c| find_id(c, tid))
+                }
+                fn find_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
+                    el.template_id
+                        .as_deref()
+                        .is_some_and(|id| id.contains(needle))
+                        || el.children.iter().any(|c| find_contains(c, needle))
+                }
+                assert!(
+                    find_id(&tree, "gal-status-badge__component"),
+                    "WP-R.7 ReactiveStatusBadge placeholder"
+                );
+                assert!(
+                    find_id(&tree, "gal-count-chip__component"),
+                    "WP-R.7 ReactiveCountChip placeholder"
+                );
+                assert!(
+                    find_contains(&tree, ":bind#") || find_contains(&tree, ":bind_icon_name#"),
+                    "InputShowcase under isolate_reads must keep auto bind leaves"
+                );
+                assert!(
+                    find_contains(&tree, ":Show#"),
+                    "<Show when={{badge_ok.get()}}> must lower under isolate_reads"
                 );
             });
         });

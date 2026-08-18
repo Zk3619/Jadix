@@ -1,6 +1,9 @@
 mod bind_text;
 mod component_authoring;
 mod components_sync;
+mod effect_phase;
+mod for_index;
+mod props_helpers;
 mod registry_owner;
 mod root_bare_get;
 mod show_for;
