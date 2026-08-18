@@ -2,7 +2,9 @@
 //!
 //! Part of [`crate::a11y`]; Adapter lifecycle remains in `app`.
 
-use accesskit::{Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
+use accesskit::{
+    Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+};
 use std::hash::{Hash, Hasher};
 
 use crate::components::label::ATTR_LABEL_FOR;

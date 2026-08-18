@@ -41,16 +41,16 @@ impl HotReloadState {
             let listener = match TcpListener::bind(&addr) {
                 Ok(v) => v,
                 Err(err) => {
-                    log::warn!("hot-reload listener bind failed on {}: {}", addr, err);
+                    super::hmr_log::error(&format!("bind failed on {addr}: {err}"));
                     return;
                 }
             };
-            log::warn!("hot-reload listener started at {}", addr);
+            super::hmr_log::ready(&addr);
             for conn in listener.incoming() {
                 let stream = match conn {
                     Ok(v) => v,
                     Err(err) => {
-                        log::warn!("hot-reload listener accept failed: {}", err);
+                        super::hmr_log::error(&format!("accept failed: {err}"));
                         continue;
                     }
                 };
@@ -196,7 +196,10 @@ fn ingest_template_patch(
         batch.last_patch_file = patch.file.clone();
     }
     if patch.templates.is_empty() {
-        batch.force_reload = true;
+        // CLI sends `templates: []` when nothing in the file changed (poll after
+        // a successful patch, or a no-op save). That is not a structural rebuild
+        // request — `app_builder()` only emits `reactive_view` placeholders and
+        // blanks Gallery's section body until the user re-enters the page.
         return;
     }
     for tpl in patch.templates {
@@ -235,10 +238,8 @@ pub(super) fn has_any_template_id(
 
 #[cfg(debug_assertions)]
 fn has_any_template_id_inner(el: &crate::core::tree::Element, expected_ids: &[String]) -> bool {
-    if let Some(id) = el.template_id.as_ref() {
-        if expected_ids.iter().any(|v| template_id_matches(v, id)) {
-            return true;
-        }
+    if element_matches_any_template_id(el, expected_ids) {
+        return true;
     }
     for child in &el.children {
         if has_any_template_id_inner(child, expected_ids) {
@@ -248,27 +249,91 @@ fn has_any_template_id_inner(el: &crate::core::tree::Element, expected_ids: &[St
     false
 }
 
-/// `hot_reload_inject` 与单元测试（含 `cargo test --release`）会用到。
+#[cfg(debug_assertions)]
+fn element_matches_any_template_id(
+    el: &crate::core::tree::Element,
+    expected_ids: &[String],
+) -> bool {
+    let mut ids = Vec::new();
+    collect_element_template_keys(el, &mut ids);
+    expected_ids.iter().any(|want| {
+        ids.iter()
+            .any(|have| template_id_rank(want, have).is_some())
+    })
+}
+
+#[cfg(any(debug_assertions, test))]
+fn collect_element_template_keys(el: &crate::core::tree::Element, out: &mut Vec<String>) {
+    if let Some(id) = el.template_id.as_ref() {
+        out.push(id.clone());
+    }
+    if let Some(id) = el.get_attr(crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID) {
+        out.push(id.clone());
+    }
+}
+
+/// Same `ui!` call-site (`file:line` / `file:line:column`) after path-suffix normalize.
+/// Does **not** treat column as a sequence index — that made every same-indent `ui!`
+/// in a file collide, so DFS applied the patch to the first one.
 #[cfg(any(debug_assertions, test))]
 pub(super) fn template_id_matches(incoming: &str, runtime: &str) -> bool {
+    matches!(template_id_rank(incoming, runtime), Some(score) if score >= STRICT_MATCH_SCORE)
+}
+
+/// Rank a CLI / runtime `template_id` pair. `None` = not the same slot.
+///
+/// - exact normalized string → 10000
+/// - same path suffix + same line (+ same column when both present) → 9000
+/// - same path suffix + same column + line drifted by at most [`LINE_SHIFT_MAX`] → 5000−dist
+#[cfg(any(debug_assertions, test))]
+pub(super) fn template_id_rank(incoming: &str, runtime: &str) -> Option<i32> {
     let a = normalize_template_id(incoming);
     let b = normalize_template_id(runtime);
     if a == b {
-        return true;
+        return Some(EXACT_MATCH_SCORE);
     }
-    let (ap, al, ai) = split_template_id_triple(&a);
-    let (bp, bl, bi) = split_template_id_triple(&b);
+    let pa = parse_template_id_parts(&a);
+    let pb = parse_template_id_parts(&b);
+    if pa.line == 0 || pb.line == 0 {
+        return None;
+    }
+    if !path_suffix_component_match(&pa.path, &pb.path) {
+        return None;
+    }
+    let col_ok = pa.column == 0 || pb.column == 0 || pa.column == pb.column;
+    if pa.line == pb.line && col_ok {
+        return Some(STRICT_MATCH_SCORE);
+    }
+    if pa.column != 0 && pa.column == pb.column {
+        let dist = (pa.line as isize - pb.line as isize).abs();
+        if dist > 0 && dist <= LINE_SHIFT_MAX {
+            return Some(LINE_SHIFT_BASE_SCORE - dist as i32);
+        }
+    }
+    None
+}
 
-    // If indices match, it's a very strong signal.
-    if ai != usize::MAX && ai == bi && path_suffix_component_match(&ap, &bp) {
-        return true;
-    }
+#[cfg(any(debug_assertions, test))]
+const EXACT_MATCH_SCORE: i32 = 10_000;
+#[cfg(any(debug_assertions, test))]
+const STRICT_MATCH_SCORE: i32 = 9_000;
+#[cfg(any(debug_assertions, test))]
+const LINE_SHIFT_BASE_SCORE: i32 = 5_000;
+#[cfg(any(debug_assertions, test))]
+const LINE_SHIFT_MAX: isize = 20;
 
-    // Fallback to line matching if indices aren't available or don't match (legacy/compatibility)
-    if al != 0 && al == bl && path_suffix_component_match(&ap, &bp) {
-        return true;
-    }
-    false
+#[cfg(any(debug_assertions, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ParsedTemplateId {
+    pub path: String,
+    pub line: usize,
+    /// 0 = absent (`file:line` legacy / opaque ids).
+    pub column: usize,
+}
+
+#[cfg(any(debug_assertions, test))]
+pub(super) fn parse_template_id(id: &str) -> ParsedTemplateId {
+    parse_template_id_parts(&normalize_template_id(id))
 }
 
 #[cfg(any(debug_assertions, test))]
@@ -276,11 +341,12 @@ fn normalize_template_id(id: &str) -> String {
     id.replace('\\', "/").to_ascii_lowercase()
 }
 
+/// `file:line:column` from `ui!` / CLI. Last two numeric segments are line and column —
+/// never a source-order block index (that lives on `TemplateFragment.index`).
 #[cfg(any(debug_assertions, test))]
-fn split_template_id_triple(id: &str) -> (String, usize, usize) {
+fn parse_template_id_parts(id: &str) -> ParsedTemplateId {
     let mut parts: Vec<String> = id.split(':').map(|s| s.to_string()).collect();
     // Windows paths: `d:/projects/.../main.rs:188` splits as ["d", "/projects/.../main.rs", "188"].
-    // Or with a trailing index: `d:/.../main.rs:55:Show#0` → four segments before merge.
     if parts.len() >= 3 {
         let head = &parts[0];
         if head.len() == 1
@@ -295,15 +361,103 @@ fn split_template_id_triple(id: &str) -> (String, usize, usize) {
         }
     }
     if parts.len() >= 3 {
-        let p = parts[..parts.len() - 2].join(":");
-        let l = parts[parts.len() - 2].parse().unwrap_or(0);
-        let i = parts[parts.len() - 1].parse().unwrap_or(usize::MAX);
-        (p, l, i)
-    } else if parts.len() == 2 {
-        (parts[0].clone(), parts[1].parse().unwrap_or(0), usize::MAX)
-    } else {
-        (id.to_string(), 0, usize::MAX)
+        if let (Ok(line), Ok(column)) = (
+            parts[parts.len() - 2].parse::<usize>(),
+            parts[parts.len() - 1].parse::<usize>(),
+        ) {
+            if line > 0 {
+                return ParsedTemplateId {
+                    path: parts[..parts.len() - 2].join(":"),
+                    line,
+                    column,
+                };
+            }
+        }
     }
+    if parts.len() >= 2 {
+        if let Ok(line) = parts[parts.len() - 1].parse::<usize>() {
+            if line > 0 {
+                return ParsedTemplateId {
+                    path: parts[..parts.len() - 1].join(":"),
+                    line,
+                    column: 0,
+                };
+            }
+        }
+    }
+    ParsedTemplateId {
+        path: id.to_string(),
+        line: 0,
+        column: 0,
+    }
+}
+
+/// Child-index path to the unique best `template_id` for a hot-reload patch.
+/// Line-shift candidates that tie are rejected (do not guess).
+#[cfg(any(debug_assertions, test))]
+pub(super) fn find_best_template_path(
+    root: &crate::core::tree::Element,
+    incoming_id: &str,
+) -> Option<Vec<usize>> {
+    let mut best_path: Option<Vec<usize>> = None;
+    let mut best_score = i32::MIN;
+    let mut best_count = 0u32;
+    score_template_paths(
+        root,
+        incoming_id,
+        &mut Vec::new(),
+        &mut best_path,
+        &mut best_score,
+        &mut best_count,
+    );
+    if best_count == 0 {
+        return None;
+    }
+    if best_count > 1 && best_score < STRICT_MATCH_SCORE {
+        return None;
+    }
+    best_path
+}
+
+#[cfg(any(debug_assertions, test))]
+fn score_template_paths(
+    el: &crate::core::tree::Element,
+    incoming_id: &str,
+    path: &mut Vec<usize>,
+    best_path: &mut Option<Vec<usize>>,
+    best_score: &mut i32,
+    best_count: &mut u32,
+) {
+    let mut keys = Vec::new();
+    collect_element_template_keys(el, &mut keys);
+    for id in &keys {
+        if let Some(score) = template_id_rank(incoming_id, id) {
+            if score > *best_score {
+                *best_score = score;
+                *best_path = Some(path.clone());
+                *best_count = 1;
+            } else if score == *best_score {
+                *best_count += 1;
+            }
+        }
+    }
+    for (i, child) in el.children.iter().enumerate() {
+        path.push(i);
+        score_template_paths(child, incoming_id, path, best_path, best_score, best_count);
+        path.pop();
+    }
+}
+
+#[cfg(any(debug_assertions, test))]
+pub(super) fn follow_template_path_mut<'a>(
+    root: &'a mut crate::core::tree::Element,
+    path: &[usize],
+) -> Option<&'a mut crate::core::tree::Element> {
+    let mut cursor = root;
+    for &index in path {
+        cursor = cursor.children.get_mut(index)?;
+    }
+    Some(cursor)
 }
 
 #[cfg(any(debug_assertions, test))]
@@ -332,10 +486,9 @@ fn path_suffix_component_match(a: &str, b: &str) -> bool {
 }
 
 #[cfg(debug_assertions)]
+#[allow(dead_code)]
 pub(super) fn collect_template_ids(root: &crate::core::tree::Element, out: &mut Vec<String>) {
-    if let Some(id) = root.template_id.as_ref() {
-        out.push(id.clone());
-    }
+    collect_element_template_keys(root, out);
     for child in &root.children {
         collect_template_ids(child, out);
     }
@@ -381,7 +534,78 @@ mod tests {
     }
 
     #[test]
-    fn ingest_template_patch_empty_templates_forces_full_rebuild() {
+    fn template_id_match_does_not_treat_column_as_block_index() {
+        // Same indent, different ui! blocks must not collide.
+        assert!(!template_id_matches(
+            "examples/gallery/src/main.rs:188:9",
+            "examples/gallery/src/main.rs:400:9",
+        ));
+        assert!(template_id_matches(
+            "d:/projects/rui/examples/gallery/src/main.rs:400:9",
+            "examples/gallery/src/main.rs:400:9",
+        ));
+    }
+
+    #[test]
+    fn template_id_rank_picks_nearby_line_shift_same_column() {
+        let near = super::template_id_rank(
+            "d:/projects/rui/examples/gallery/src/main.rs:402:9",
+            "examples/gallery/src/main.rs:400:9",
+        );
+        let far = super::template_id_rank(
+            "d:/projects/rui/examples/gallery/src/main.rs:402:9",
+            "examples/gallery/src/main.rs:188:9",
+        );
+        assert!(near.is_some_and(|s| s < 9_000));
+        assert!(far.is_none());
+    }
+
+    #[test]
+    fn find_best_template_path_prefers_matching_line_not_first_same_column() {
+        use crate::core::tree::Element;
+        let root = Element::new().children(vec![
+            Element::new()
+                .template_id("examples/gallery/src/main.rs:188:9")
+                .text("first"),
+            Element::new()
+                .template_id("examples/gallery/src/main.rs:400:9")
+                .text("second"),
+        ]);
+        let path = super::find_best_template_path(
+            &root,
+            "d:/projects/rui/examples/gallery/src/main.rs:400:9",
+        )
+        .expect("second block");
+        assert_eq!(path, vec![1]);
+        let shifted = super::find_best_template_path(
+            &root,
+            "d:/projects/rui/examples/gallery/src/main.rs:401:9",
+        )
+        .expect("line-shifted second block");
+        assert_eq!(shifted, vec![1]);
+    }
+
+    #[test]
+    fn find_best_template_path_uses_preserved_source_id_on_reactive_island() {
+        use crate::core::tree::Element;
+        let mut island = Element::new()
+            .template_id("examples/gallery/App:section_body")
+            .text("导航");
+        island.set_attr(
+            crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
+            "examples/gallery/src/main.rs:4334:21",
+        );
+        let root = Element::new().children(vec![island]);
+        let path = super::find_best_template_path(
+            &root,
+            "d:/projects/rui/examples/gallery/src/main.rs:4334:21",
+        )
+        .expect("source template id on island");
+        assert_eq!(path, vec![0]);
+    }
+
+    #[test]
+    fn ingest_template_patch_empty_templates_is_noop() {
         let mut batch = HotReloadBatch::default();
         let mut by_template_id = std::collections::HashMap::new();
         ingest_template_patch(
@@ -392,7 +616,10 @@ mod tests {
             },
             &mut by_template_id,
         );
-        assert!(batch.force_reload);
+        assert!(
+            !batch.force_reload,
+            "empty templates must not rebuild from app_builder placeholders"
+        );
         assert_eq!(batch.last_patch_file, "examples/gallery/src/main.rs");
         assert!(by_template_id.is_empty());
     }

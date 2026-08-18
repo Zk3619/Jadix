@@ -39,13 +39,15 @@ impl AppRuntime {
     pub fn try_reconcile_subtree(
         &self,
         anchor_id: &str,
-        new_fragment: Element,
+        #[allow(unused_mut)] mut new_fragment: Element,
     ) -> Option<crate::core::tree::LayoutStatus> {
         match window_scope::tree_home_for(window_scope::active()) {
             TreeHome::AppState => {
                 let state_rc = self.state.upgrade()?;
                 let mut opt = state_rc.borrow_mut();
                 let state = opt.as_mut()?;
+                #[cfg(debug_assertions)]
+                state.apply_hot_reload_overrides_to_fragment(&mut new_fragment);
                 Some(state.reconcile_subtree(anchor_id, new_fragment))
             }
             TreeHome::SecondarySlot => {

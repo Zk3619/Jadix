@@ -406,4 +406,21 @@ mod tests {
         let star = icon_glyph_char("star").unwrap();
         assert_eq!(v, vec!["Prefix".to_string(), star]);
     }
+
+    #[test]
+    fn scroll_area_label_text_size_is_element_index_two() {
+        let body = r#"<ScrollArea id="scroll-navigation"><VStack><Label text_size="1.25rem" font_weight="700">"导航"</Label></VStack></ScrollArea>"#;
+        let attrs = extract_style_attributes_tree_order(body);
+        let size = attrs
+            .iter()
+            .find(|a| a.name == "text_size")
+            .expect("text_size");
+        assert_eq!(size.element_index, 2);
+        assert_eq!(size.value, "1.25rem");
+        let weight = attrs
+            .iter()
+            .find(|a| a.name == "font_weight")
+            .expect("font_weight");
+        assert_eq!(weight.element_index, 2);
+    }
 }

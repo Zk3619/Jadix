@@ -984,7 +984,14 @@ impl AppState {
                     new_all_keyed,
                     old_all_keyed
                 );
-                status = LayoutStatus::StructureChanged;
+                // Do not drop the whole child list. Gallery's live root is
+                // `[chrome, toast_host, __rui_portal_layer]` while `app_builder()`
+                // only emits `[chrome, toast_host]`. Wiping here replaces the
+                // filled `switch_reactive` island with an empty placeholder.
+                status = Self::merge_layout_status(
+                    status,
+                    Self::reconcile_children_by_identity(new_el, old_el, dirty),
+                );
             }
             status
         } else {
@@ -1115,6 +1122,41 @@ impl AppState {
         status
     }
 
+    /// Length-mismatch fallback: pair children that share `template_id` (so a
+    /// `reactive_view` placeholder can still promote a mounted island) and keep
+    /// unmatched new nodes. Unkeyed children are not positionally paired — that
+    /// would attach the wrong subtree when a list grows or shrinks.
+    fn reconcile_children_by_identity(
+        new_el: &mut Element,
+        old_el: &mut Element,
+        dirty: &mut Vec<taffy::prelude::NodeId>,
+    ) -> crate::core::tree::LayoutStatus {
+        use crate::core::tree::LayoutStatus;
+
+        let mut status = LayoutStatus::StructureChanged;
+        let mut old_by_id: std::collections::HashMap<String, Element> =
+            std::collections::HashMap::new();
+        for old_child in std::mem::take(&mut old_el.children) {
+            if let Some(id) = old_child.template_id.clone() {
+                old_by_id.insert(id, old_child);
+            }
+        }
+
+        let mut next_children = Vec::with_capacity(new_el.children.len());
+        for mut new_child in std::mem::take(&mut new_el.children) {
+            if let Some(id) = new_child.template_id.clone() {
+                if let Some(mut old_child) = old_by_id.remove(&id) {
+                    let child_status =
+                        Self::reconcile_elements(&mut new_child, &mut old_child, dirty);
+                    status = Self::merge_layout_status(status, child_status);
+                }
+            }
+            next_children.push(new_child);
+        }
+        new_el.children = next_children;
+        status
+    }
+
     pub(super) fn update_scroll_offset_in_place(&mut self, target_id: &str, offset: [f32; 2]) {
         fn recurse(el: &mut Element, target: &str, offset: [f32; 2], prefix: &str) {
             if let Some(fid) = el.focus_id.as_deref() {
@@ -1137,7 +1179,6 @@ impl AppState {
     #[cfg(debug_assertions)]
     pub(super) fn inject_hot_reload_partial(
         &mut self,
-        new_root: Element,
         templates: &[crate::app::hot_reload::TemplateFragment],
     ) -> bool {
         if templates.is_empty() {
@@ -1169,11 +1210,33 @@ impl AppState {
                 .insert(tpl.id.clone(), tpl.hash.clone());
         }
         if !any_applied {
-            // 与上次已应用 hash 相同：不触发 fallback rebuild_ui（避免无意义整树重建）。
             return true;
         }
-        self.rebuild_ui(new_root);
+        // Always persist overrides, even when the patched `ui!` is not mounted
+        // (Gallery `switch_reactive` only builds the current section). Entering
+        // that page later replays via `apply_hot_reload_overrides_to_fragment`.
+        let incoming_ids: Vec<String> = templates.iter().map(|t| t.id.clone()).collect();
+        let live = crate::app::hot_reload::has_any_template_id(&self.root_element, &incoming_ids);
+        hot_reload_inject::apply_templates_to_tree(
+            &mut self.root_element,
+            &self.hot_reload_overrides,
+        );
+        if live {
+            self.layout_status = Self::merge_layout_status(
+                self.layout_status,
+                crate::core::tree::LayoutStatus::LayoutChanged,
+            );
+            self.mark_full_redraw();
+        }
         true
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn apply_hot_reload_overrides_to_fragment(&self, fragment: &mut Element) {
+        if self.hot_reload_overrides.is_empty() {
+            return;
+        }
+        hot_reload_inject::apply_templates_to_tree(fragment, &self.hot_reload_overrides);
     }
 
     /// 开发态：按路径重载内置 WGSL（当前仅 `rounded_rect.wgsl` 会作用于主渲染管线）。
@@ -3071,35 +3134,46 @@ mod hot_reload_inject {
         template_id: &str,
         text_literals: &[String],
     ) -> bool {
+        let Some(target) = find_template_target_mut(root, template_id) else {
+            return false;
+        };
+        inject_text_literals(target, text_literals)
+    }
+
+    fn inject_text_literals(target: &mut Element, text_literals: &[String]) -> bool {
         if text_literals.is_empty() {
             return false;
         }
-        if let Some(target) = find_by_template_id_mut(root, template_id) {
-            let total = count_text_nodes(target);
-            if total != text_literals.len() {
-                // Prevent cross-node corruption when extractor/node order differs.
-                return false;
-            }
-            for (idx, text) in text_literals.iter().enumerate() {
-                let _ = replace_text_at_index(target, idx, text);
-            }
-            return true;
+        let total = count_text_nodes(target);
+        if total != text_literals.len() {
+            // Prevent cross-node corruption when extractor/node order differs.
+            return false;
         }
-        false
+        for (idx, text) in text_literals.iter().enumerate() {
+            let _ = replace_text_at_index(target, idx, text);
+        }
+        true
     }
 
+    #[allow(dead_code)]
     pub(super) fn inject_style_attrs_by_id(
         root: &mut Element,
         template_id: &str,
         attrs: &[crate::app::hot_reload::StyleAttr],
     ) -> bool {
+        let Some(template_root) = find_template_target_mut(root, template_id) else {
+            return false;
+        };
+        inject_style_attrs(template_root, attrs)
+    }
+
+    fn inject_style_attrs(
+        template_root: &mut Element,
+        attrs: &[crate::app::hot_reload::StyleAttr],
+    ) -> bool {
         if attrs.is_empty() {
             return false;
         }
-        let Some(template_root) = find_by_template_id_and_index_mut(root, template_id, usize::MAX)
-        else {
-            return false;
-        };
         let mut changed = false;
 
         // First, group attributes by element index because we don't want to re-traverse for every single attribute
@@ -3124,17 +3198,22 @@ mod hot_reload_inject {
                         }
                         "color" => {
                             target.text_style.color = crate::core::tree::parse_text_color(v);
+                            target.attrs.insert("text_color".into(), "1".into());
                             changed = true;
                         }
                         "text_size" | "font_size" => {
                             if let Some(px) = parse_length_px(v) {
                                 target.text_style.size = px;
+                                // Marker so cascade_inheritable_text_style does not
+                                // overwrite the injected size from a parent.
+                                target.attrs.insert("text_size".into(), "1".into());
                                 changed = true;
                             }
                         }
                         "font_weight" | "text_weight" => {
                             if let Ok(w) = v.parse::<u16>() {
                                 target.text_style.weight = w.clamp(100, 900);
+                                target.attrs.insert("font_weight".into(), "1".into());
                                 changed = true;
                             }
                         }
@@ -3274,11 +3353,46 @@ mod hot_reload_inject {
         changed
     }
 
+    /// Runtime wrappers the CLI RSX DFS never counts (`<ScrollArea>` body is just
+    /// `<VStack>…`, but `From<ScrollAreaBuilder>` inserts a `scroll:` viewport and
+    /// `__rui_*_scrollbar_*` chrome). Walking those as real elements shifted
+    /// `element_index` so `text_size` landed on VStack instead of Label.
+    fn hot_reload_style_omit(el: &Element) -> bool {
+        if let Some(fid) = el.focus_id.as_deref() {
+            if fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+                || fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+            {
+                return true;
+            }
+        }
+        el.template_id.as_deref().is_some_and(|id| {
+            id.starts_with("__rui_v_scrollbar_") || id.starts_with("__rui_h_scrollbar_")
+        })
+    }
+
+    fn hot_reload_style_transparent(el: &Element) -> bool {
+        el.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        })
+    }
+
     fn find_element_at_index_inner<'a>(
         el: &'a mut Element,
         target_idx: usize,
         current_idx: &mut usize,
     ) -> Option<&'a mut Element> {
+        if hot_reload_style_omit(el) {
+            return None;
+        }
+        if hot_reload_style_transparent(el) {
+            for child in &mut el.children {
+                if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
+                    return Some(found);
+                }
+            }
+            return None;
+        }
+
         let self_idx = *current_idx;
         if self_idx == target_idx {
             return Some(el);
@@ -3286,8 +3400,23 @@ mod hot_reload_inject {
         *current_idx += 1;
 
         for child in &mut el.children {
-            // Stop at nested template boundaries
+            if hot_reload_style_omit(child) {
+                continue;
+            }
+            if hot_reload_style_transparent(child) {
+                if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
+                    return Some(found);
+                }
+                continue;
+            }
             if child.template_id.is_some() {
+                // Count the nested `ui!` root as one leaf (CLI DFS counts `<Foo/>` as
+                // an element) but do not walk into it.
+                let child_idx = *current_idx;
+                if child_idx == target_idx {
+                    return Some(child);
+                }
+                *current_idx += 1;
                 continue;
             }
             if let Some(found) = find_element_at_index_inner(child, target_idx, current_idx) {
@@ -3343,114 +3472,58 @@ mod hot_reload_inject {
         None
     }
 
+    #[allow(dead_code)]
     pub(super) fn find_by_template_id_mut<'a>(
         el: &'a mut Element,
         id: &str,
     ) -> Option<&'a mut Element> {
-        if let Some(current_id) = el.template_id.as_deref() {
-            if crate::app::hot_reload::template_id_matches(id, current_id) {
-                return Some(el);
-            }
-        }
-        for child in &mut el.children {
-            if let Some(found) = find_by_template_id_mut(child, id) {
-                return Some(found);
-            }
-        }
-        None
+        find_template_target_mut(el, id)
     }
 
+    #[allow(dead_code)]
     pub(super) fn find_by_template_id_and_index_mut<'a>(
         el: &'a mut Element,
         id: &str,
-        index: usize,
+        _index: usize,
     ) -> Option<&'a mut Element> {
-        if let Some(current_id) = el.template_id.as_deref() {
-            if crate::app::hot_reload::template_id_matches(id, current_id) {
-                return Some(el);
-            }
-            // If line doesn't match but file AND index matches (e.g. line shift)
-            if matches_file_and_index(id, current_id, index) {
-                return Some(el);
-            }
-        }
-        for child in &mut el.children {
-            if let Some(found) = find_by_template_id_and_index_mut(child, id, index) {
-                return Some(found);
-            }
-        }
-        None
+        find_template_target_mut(el, id)
     }
 
-    fn matches_file_and_index(incoming_id: &str, runtime_id: &str, incoming_index: usize) -> bool {
-        // If incoming doesn't have index in its ID string yet (older CLI compatibility)
-        // or if we want to be extra safe with the dedicated index field.
-        let (ip, il, ii) = split_id_triple(incoming_id);
-        let (rp, rl, ri) = split_id_triple(runtime_id);
-
-        if !path_component_match_fuzzy(&ip, &rp) {
-            return false;
-        }
-
-        // Match by index if available in both, otherwise fall back to fuzzy line matching
-        if ii != usize::MAX && ri != usize::MAX {
-            return ii == ri;
-        }
-
-        // If only incoming has index (from the new CLI field)
-        if incoming_index != usize::MAX && ri != usize::MAX {
-            return incoming_index == ri;
-        }
-
-        // Last resort: if file matches and line is very close (e.g. within 10 lines)
-        if il != 0 && rl != 0 {
-            let diff = (il as isize - rl as isize).abs();
-            if diff < 20 {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    fn split_id_triple(id: &str) -> (String, usize, usize) {
-        let parts: Vec<&str> = id.split(':').collect();
-        if parts.len() >= 3 {
-            let p = parts[..parts.len() - 2].join(":");
-            let l = parts[parts.len() - 2].parse().unwrap_or(0);
-            let i = parts[parts.len() - 1].parse().unwrap_or(usize::MAX);
-            (p, l, i)
-        } else if parts.len() == 2 {
-            (
-                parts[0].to_string(),
-                parts[1].parse().unwrap_or(0),
-                usize::MAX,
-            )
-        } else {
-            (id.to_string(), 0, usize::MAX)
-        }
+    fn find_template_target_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
+        let path = crate::app::hot_reload::find_best_template_path(el, id)?;
+        crate::app::hot_reload::follow_template_path_mut(el, &path)
     }
 
     fn path_component_match_fuzzy(a: &str, b: &str) -> bool {
-        let a = a.replace('\\', "/").to_ascii_lowercase();
-        let b = b.replace('\\', "/").to_ascii_lowercase();
-        if a == b {
+        let a = crate::app::hot_reload::parse_template_id(a);
+        let b = crate::app::hot_reload::parse_template_id(b);
+        let ap = a.path;
+        let bp = b.path;
+        if ap == bp {
             return true;
         }
-        a.ends_with(&b) || b.ends_with(&a)
+        ap.ends_with(&bp) || bp.ends_with(&ap)
     }
 
+    #[allow(dead_code)]
     pub(super) fn inject_text_replacements_by_id(
         root: &mut Element,
         template_id: &str,
         replacements: &[crate::app::hot_reload::TextReplacement],
     ) -> bool {
+        let Some(target) = find_template_target_mut(root, template_id) else {
+            return false;
+        };
+        inject_text_replacements(target, replacements)
+    }
+
+    fn inject_text_replacements(
+        target: &mut Element,
+        replacements: &[crate::app::hot_reload::TextReplacement],
+    ) -> bool {
         if replacements.is_empty() {
             return false;
         }
-        let Some(target) = find_by_template_id_and_index_mut(root, template_id, usize::MAX) else {
-            return false;
-        };
         let mut changed = false;
         for rep in replacements {
             // Prefer exact text-based replacement when unique. This is more stable
@@ -3578,14 +3651,11 @@ mod hot_reload_inject {
         incoming: &[crate::app::hot_reload::TemplateFragment],
     ) {
         for tpl in incoming {
-            // Find existing override by exact ID OR by (file + index)
-            let (file_name, _line, _idx) = split_id_triple(&tpl.id);
             if let Some(existing) = store.iter_mut().find(|v| {
-                if v.id == tpl.id {
+                if v.id == tpl.id || crate::app::hot_reload::template_id_matches(&v.id, &tpl.id) {
                     return true;
                 }
-                let (ef, _el, _ei) = split_id_triple(&v.id);
-                path_component_match_fuzzy(&ef, &file_name) && v.index == tpl.index
+                path_component_match_fuzzy(&v.id, &tpl.id) && v.index == tpl.index
             }) {
                 *existing = tpl.clone();
             } else {
@@ -3599,26 +3669,27 @@ mod hot_reload_inject {
         templates: &[crate::app::hot_reload::TemplateFragment],
     ) {
         for tpl in templates {
-            if let Some(target) = find_by_template_id_and_index_mut(root, &tpl.id, tpl.index) {
-                if target
-                    .template_hash
-                    .as_deref()
-                    .is_some_and(|h| h == tpl.hash.as_str())
-                {
-                    // 与 CLI 同 hash：树来自刚编译的 ui!，勿再按索引覆盖（易与 `{expr}` 槽位错位）。
-                    continue;
-                }
+            let Some(target) = find_template_target_mut(root, &tpl.id) else {
+                continue;
+            };
+            if target
+                .template_hash
+                .as_deref()
+                .is_some_and(|h| h == tpl.hash.as_str())
+            {
+                // 与 CLI 同 hash：树来自刚编译的 ui!，勿再按索引覆盖（易与 `{expr}` 槽位错位）。
+                continue;
             }
-            let _ = inject_style_attrs_by_id(root, &tpl.id, &tpl.style_attrs);
+            let _ = inject_style_attrs(target, &tpl.style_attrs);
             // 从 ui!() 回调得到的新树是编译期字符串；热更的增量 replacement 的 `from` 是「上一版热更」
             // 的 literal，与当前树中的字往往对不上，单靠 replacement 会在 resize/信号重绘时失效。
             // 持久化里带有完整 `text_literals` 快照时，按 DFS 一次性写回（与 inject_hot_reload_partial 一致）。
             let mut text_ok = false;
             if !tpl.text_literals.is_empty() {
-                text_ok = inject_text_literals_by_id(root, &tpl.id, &tpl.text_literals);
+                text_ok = inject_text_literals(target, &tpl.text_literals);
             }
             if !text_ok {
-                let _ = inject_text_replacements_by_id(root, &tpl.id, &tpl.text_replacements);
+                let _ = inject_text_replacements(target, &tpl.text_replacements);
             }
         }
     }
@@ -3627,7 +3698,11 @@ mod hot_reload_inject {
         previous: &[crate::app::hot_reload::TemplateFragment],
         current: &crate::app::hot_reload::TemplateFragment,
     ) -> Vec<crate::app::hot_reload::TextReplacement> {
-        let Some(prev) = previous.iter().find(|v| v.id == current.id) else {
+        let Some(prev) = previous.iter().find(|v| {
+            v.id == current.id
+                || crate::app::hot_reload::template_id_matches(&v.id, &current.id)
+                || (v.index == current.index && path_component_match_fuzzy(&v.id, &current.id))
+        }) else {
             return Vec::new();
         };
         let n = prev.text_literals.len().min(current.text_literals.len());
@@ -3671,6 +3746,266 @@ mod hot_reload_inject {
             n += count_text_nodes(child);
         }
         n
+    }
+
+    #[cfg(test)]
+    mod inject_match_tests {
+        use super::*;
+        use crate::core::tree::Element;
+
+        fn tpl(
+            id: &str,
+            hash: &str,
+            literals: &[&str],
+        ) -> crate::app::hot_reload::TemplateFragment {
+            crate::app::hot_reload::TemplateFragment {
+                id: id.to_string(),
+                hash: hash.to_string(),
+                len: 1,
+                index: 0,
+                text_literals: literals.iter().map(|s| (*s).to_string()).collect(),
+                text_replacements: vec![],
+                style_attrs: vec![],
+            }
+        }
+
+        #[test]
+        fn apply_hits_matching_line_not_first_same_column() {
+            let mut root = Element::new().children(vec![
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:188:9")
+                    .template_hash("old-a")
+                    .text("first"),
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:400:9")
+                    .template_hash("old-b")
+                    .text("second"),
+            ]);
+            apply_templates_to_tree(
+                &mut root,
+                &[tpl(
+                    "d:/projects/rui/examples/gallery/src/main.rs:400:9",
+                    "new-b",
+                    &["second-new"],
+                )],
+            );
+            assert_eq!(root.children[0].text.as_deref(), Some("first"));
+            assert_eq!(root.children[1].text.as_deref(), Some("second-new"));
+        }
+
+        #[test]
+        fn apply_follows_small_line_shift_to_same_column_block() {
+            let mut root = Element::new().children(vec![
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:188:9")
+                    .template_hash("old-a")
+                    .text("first"),
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:400:9")
+                    .template_hash("old-b")
+                    .text("second"),
+            ]);
+            apply_templates_to_tree(
+                &mut root,
+                &[tpl(
+                    "d:/projects/rui/examples/gallery/src/main.rs:402:9",
+                    "new-b",
+                    &["second-new"],
+                )],
+            );
+            assert_eq!(root.children[0].text.as_deref(), Some("first"));
+            assert_eq!(root.children[1].text.as_deref(), Some("second-new"));
+        }
+
+        #[test]
+        fn apply_updates_label_inside_switch_reactive_island() {
+            // Gallery overwrites the page `ui!` template_id with `App:section_body`.
+            // Hot reload must still find the island via the preserved source id.
+            let mut island = Element::new()
+                .template_id("examples/gallery/App:section_body")
+                .template_hash("old-nav")
+                .children(vec![
+                    Element::new().children(vec![Element::new().text("导航")])
+                ]);
+            island.set_attr(
+                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
+                "examples/gallery/src/main.rs:4334:21",
+            );
+            let mut root = Element::new().children(vec![
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:100:9")
+                    .text("chrome"),
+                island,
+            ]);
+            apply_templates_to_tree(
+                &mut root,
+                &[tpl(
+                    "d:/projects/rui/examples/gallery/src/main.rs:4334:21",
+                    "new-nav",
+                    &["导航改"],
+                )],
+            );
+            assert_eq!(root.children[0].text.as_deref(), Some("chrome"));
+            assert_eq!(
+                root.children[1].children[0].children[0].text.as_deref(),
+                Some("导航改")
+            );
+            assert_eq!(
+                root.children[1].template_id.as_deref(),
+                Some("examples/gallery/App:section_body"),
+                "island identity must stay stable after inject"
+            );
+        }
+
+        #[test]
+        fn apply_twice_keeps_island_children_and_updates_text() {
+            let mut island = Element::new()
+                .template_id("examples/gallery/App:section_body")
+                .template_hash("old-nav")
+                .children(vec![
+                    Element::new().children(vec![Element::new().text("导航")])
+                ]);
+            island.set_attr(
+                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
+                "examples/gallery/src/main.rs:4334:21",
+            );
+            let nested = Element::new()
+                .template_id("examples/gallery/src/main.rs:4179:5")
+                .text("navbar");
+            island.children[0].children.push(nested);
+            let mut root = Element::new().children(vec![island]);
+
+            apply_templates_to_tree(
+                &mut root,
+                &[tpl(
+                    "examples/gallery/src/main.rs:4334:21",
+                    "nav-1",
+                    &["导航改"],
+                )],
+            );
+            apply_templates_to_tree(
+                &mut root,
+                &[tpl(
+                    "examples/gallery/src/main.rs:4334:21",
+                    "nav-2",
+                    &["导航再改"],
+                )],
+            );
+            assert_eq!(
+                root.children[0].children[0].children[0].text.as_deref(),
+                Some("导航再改")
+            );
+            assert_eq!(
+                root.children[0].children[0].children.len(),
+                2,
+                "second inject must not drop nested showcase children"
+            );
+            assert_eq!(
+                root.children[0].children[0].children[1].text.as_deref(),
+                Some("navbar")
+            );
+        }
+
+        #[test]
+        fn apply_style_skips_scroll_viewport_and_scrollbar_chrome() {
+            // CLI RSX DFS: 0 ScrollArea, 1 VStack, 2 Label (text_size).
+            // Runtime `From<ScrollAreaBuilder>` wraps the body in a `scroll:` viewport
+            // and appends scrollbar siblings — those must not consume element_index.
+            let label = Element::new()
+                .text("导航")
+                .text_size(1.25 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX);
+            let vstack = Element::new().children(vec![label]);
+            let viewport = Element::new()
+                .focus_id("scroll:scroll-navigation")
+                .children(vec![vstack]);
+            let vbar = Element::new()
+                .template_id("__rui_v_scrollbar_scroll-navigation")
+                .focus_id("scrollbar-track:scroll-navigation:y");
+            let hbar = Element::new()
+                .template_id("__rui_h_scrollbar_scroll-navigation")
+                .focus_id("scrollbar-track:scroll-navigation:x");
+            let mut island = Element::new()
+                .template_id("examples/gallery/App:section_body")
+                .template_hash("old-nav")
+                .children(vec![viewport, vbar, hbar]);
+            island.set_attr(
+                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
+                "examples/gallery/src/main.rs:4334:21",
+            );
+            let mut root = Element::new().children(vec![island]);
+
+            let mut patch = tpl(
+                "examples/gallery/src/main.rs:4334:21",
+                "new-nav-size",
+                &["导航"],
+            );
+            patch.style_attrs = vec![crate::app::hot_reload::StyleAttr {
+                element_index: 2,
+                name: "text_size".into(),
+                value: "2rem".into(),
+            }];
+            apply_templates_to_tree(&mut root, &[patch]);
+
+            let vstack = &root.children[0].children[0].children[0];
+            let label = &vstack.children[0];
+            let expected = 2.0 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX;
+            assert_eq!(
+                label.text_style.size, expected,
+                "text_size must land on Label (CLI index 2), not the viewport/VStack wrapper"
+            );
+            assert_eq!(
+                vstack.text_style.size,
+                crate::style::TextStyle::default().size,
+                "VStack must not receive the Label style patch"
+            );
+            assert_eq!(
+                label.attrs.get("text_size").map(String::as_str),
+                Some("1"),
+                "explicit size marker so cascade does not overwrite"
+            );
+        }
+
+        #[test]
+        fn deferred_override_applies_when_island_later_mounts() {
+            // CLI only sends the changed `ui!`. If that page is not mounted, the
+            // live tree has no match — the patch must still apply when the
+            // `switch_reactive` island is created later from compile-time source.
+            let patch = tpl(
+                "d:/projects/rui/examples/gallery/src/main.rs:4334:21",
+                "hmr-nav-new",
+                &["导航改"],
+            );
+
+            let mut live = Element::new().children(vec![Element::new()
+                .template_id("examples/gallery/src/main.rs:100:9")
+                .template_hash("chrome")
+                .text("chrome")]);
+            apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
+            assert_eq!(
+                live.children[0].text.as_deref(),
+                Some("chrome"),
+                "unrelated mounted template must stay untouched"
+            );
+
+            let mut island = Element::new()
+                .template_id("examples/gallery/App:section_body")
+                .template_hash("compile-time-old")
+                .children(vec![Element::new()
+                    .focus_id("scroll:scroll-navigation")
+                    .children(vec![
+                        Element::new().children(vec![Element::new().text("导航")])
+                    ])]);
+            island.set_attr(
+                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
+                "examples/gallery/src/main.rs:4334:21",
+            );
+            apply_templates_to_tree(&mut island, std::slice::from_ref(&patch));
+            assert_eq!(
+                island.children[0].children[0].children[0].text.as_deref(),
+                Some("导航改"),
+                "entering the page must replay the stored hot-reload literals"
+            );
+        }
     }
 } // mod hot_reload_inject
 

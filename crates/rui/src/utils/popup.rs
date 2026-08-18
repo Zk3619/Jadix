@@ -1223,7 +1223,8 @@ mod tests {
         root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
 
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
-        let top = inset_length(root.children[1].style.inset.top).expect("expected Length top inset");
+        let top =
+            inset_length(root.children[1].style.inset.top).expect("expected Length top inset");
         // visual trigger y=120, h=32, gap 8 → y=160 (not unscrolled 480+32+8=520)
         assert!(
             (top - 160.0).abs() < 0.5,

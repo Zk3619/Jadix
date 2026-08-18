@@ -2034,69 +2034,39 @@ impl super::App {
                 let template_match = has_templates
                     && super::hot_reload::has_any_template_id(&state.root_element, &ids);
 
-                if !hot_reload.asset_paths.is_empty() {
-                    log::warn!(
-                        "hot-reload asset paths={} reloaded={}",
-                        hot_reload.asset_paths.len(),
-                        assets_reloaded
-                    );
-                }
-
-                if has_templates {
-                    if !hot_reload.last_patch_file.is_empty() {
-                        log::warn!(
-                            "hot-reload merged from file={} unique_templates={}",
-                            hot_reload.last_patch_file,
-                            merged.len()
-                        );
-                    }
-                    if let Some(first) = merged.first() {
-                        log::warn!(
-                            "hot-reload first template id={} hash={} len={}",
-                            first.id,
-                            first.hash,
-                            first.len
-                        );
-                    }
-                    let replacement_count: usize =
-                        merged.iter().map(|t| t.text_replacements.len()).sum();
-                    let style_count: usize = merged.iter().map(|t| t.style_attrs.len()).sum();
-                    log::warn!(
-                        "hot-reload payload replacements={} styles={}",
-                        replacement_count,
-                        style_count
-                    );
-                    let literals_count: usize = merged.iter().map(|t| t.text_literals.len()).sum();
-                    log::warn!("hot-reload payload text_literals={}", literals_count);
-                }
-
                 let mut requested_redraw = assets_reloaded;
+                let file = super::hmr_log::display_path(&hot_reload.last_patch_file);
 
                 if hot_reload.force_reload {
                     let new_root = (self.app_builder.borrow_mut())();
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
-                } else if template_match {
-                    let new_root = (self.app_builder.borrow_mut())();
-                    let injected = state.inject_hot_reload_partial(new_root, merged);
-                    log::warn!("hot-reload injected={}", injected);
-                    if !injected {
-                        let new_root = (self.app_builder.borrow_mut())();
-                        state.rebuild_ui(new_root);
-                    }
-                    requested_redraw = true;
+                    super::hmr_log::update("full reload");
                 } else if has_templates {
-                    log::warn!("hot-reload patch skipped: no template id matched current UI tree");
-                    let mut existing_ids = Vec::new();
-                    super::hot_reload::collect_template_ids(&state.root_element, &mut existing_ids);
-                    if !existing_ids.is_empty() {
-                        let preview = existing_ids
-                            .into_iter()
-                            .take(5)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        log::warn!("hot-reload existing template ids (preview): {}", preview);
+                    // Store even when the patched `ui!` is not in the live tree
+                    // (unvisited Gallery section). Skip used to drop the patch,
+                    // so entering the page later still rendered compile-time text.
+                    let _injected = state.inject_hot_reload_partial(merged);
+                    let n = merged.len();
+                    let unit = if n == 1 { "template" } else { "templates" };
+                    let detail = if file.is_empty() {
+                        format!("{n} {unit}")
+                    } else {
+                        format!("{file} ({n} {unit})")
+                    };
+                    if template_match {
+                        requested_redraw = true;
+                        super::hmr_log::update(&detail);
+                    } else {
+                        super::hmr_log::update(&format!("{detail}, deferred"));
                     }
+                } else if assets_reloaded {
+                    let asset = hot_reload
+                        .asset_paths
+                        .first()
+                        .map(|p| super::hmr_log::display_path(p))
+                        .unwrap_or_else(|| "asset".into());
+                    super::hmr_log::update(&format!("{asset} (asset)"));
                 }
 
                 if requested_redraw {

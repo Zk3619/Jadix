@@ -1,6 +1,6 @@
 use crate::app::reactive::{
     for_keyed, for_reactive, reactive_component, show, show_reactive, show_scoped,
-    REACTIVE_PLACEHOLDER_HASH,
+    ATTR_SOURCE_TEMPLATE_ID, REACTIVE_PLACEHOLDER_HASH,
 };
 use crate::app::reactive::{reactive_placeholder, reactive_view, reset_registered_anchors};
 use crate::app::test_support::{is_bootstrap_root, reconcile_elements, BOOTSTRAP_ROOT_ATTR};
@@ -352,6 +352,54 @@ fn bootstrap_root_attr_marks_private_startup_shell() {
 
     let user_root = Element::new().w("100%").h("100%");
     assert!(!is_bootstrap_root(&user_root));
+}
+
+#[test]
+fn placeholder_promoted_when_root_gains_portal_sibling() {
+    // Gallery live root is `[chrome, unkeyed toast, __rui_portal_layer]`.
+    // `app_builder()` / force_reload only emits `[chrome, toast]`. Length
+    // mismatch used to skip nested placeholder promotion and blank the page.
+    let island_id = "examples/gallery/App:section_body";
+    let mut filled = Element::new()
+        .template_id(island_id)
+        .template_hash("nav-hash");
+    filled.set_attr(
+        ATTR_SOURCE_TEMPLATE_ID,
+        "examples/gallery/src/main.rs:4334:21",
+    );
+    filled.children = vec![Element::new().text("导航")];
+
+    let mut chrome = Element::new().template_id("examples/gallery/src/main.rs:4467:21");
+    chrome.children = vec![filled];
+
+    let mut old_root = Element::new();
+    old_root.children = vec![
+        chrome,
+        Element::new(),
+        Element::new().template_id("__rui_portal_layer"),
+    ];
+
+    let mut new_chrome = Element::new().template_id("examples/gallery/src/main.rs:4467:21");
+    new_chrome.children = vec![Element::new()
+        .template_id(island_id)
+        .template_hash(REACTIVE_PLACEHOLDER_HASH)];
+    let mut new_root = Element::new();
+    new_root.children = vec![new_chrome, Element::new()];
+
+    let status = reconcile_elements(&mut new_root, &mut old_root);
+    assert_eq!(status, LayoutStatus::StructureChanged);
+    assert_eq!(
+        new_root.children[0].children[0].children[0].text.as_deref(),
+        Some("导航"),
+        "filled section island must survive a portal-sibling length mismatch"
+    );
+    assert_eq!(
+        new_root.children[0].children[0]
+            .get_attr(ATTR_SOURCE_TEMPLATE_ID)
+            .map(String::as_str),
+        Some("examples/gallery/src/main.rs:4334:21"),
+        "source ui! id must remain so a second hot-reload patch can match"
+    );
 }
 
 #[test]

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+mod hmr_log;
 mod rsx_text_order;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
@@ -19,6 +20,24 @@ const POLL_DEBOUNCE_MS: u64 = 2500;
 const POLL_RECENT_MS: u64 = 1200;
 /// notify 路径为空时的兜底扫描窗口（略大于一次保存的抖动）。
 const NOTIFY_EMPTY_FALLBACK_MS: u64 = 800;
+
+fn display_watch_path(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn hmr_update_detail(first: &Path, root: &Path, templates: usize, wgsl: usize) -> String {
+    let file = display_watch_path(first, root);
+    match (templates, wgsl) {
+        (1, 0) => format!("{file} (1 template)"),
+        (n, 0) => format!("{file} ({n} templates)"),
+        (0, 1) => format!("{file} (1 asset)"),
+        (0, w) => format!("{file} ({w} assets)"),
+        (n, w) => format!("{file} ({n} templates, {w} assets)"),
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let watch_path = std::env::args()
@@ -38,11 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     watcher.watch(&watch_path, RecursiveMode::Recursive)?;
 
-    println!(
-        "[rui-hot-reload-cli] watching {} -> {}",
-        watch_path.display(),
-        addr
-    );
+    hmr_log::watching(&format!("{} -> {}", watch_path.display(), addr));
 
     event_loop(rx, &addr, &watch_path);
     Ok(())
@@ -57,7 +72,6 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Ok(event)) => {
-                let kind = event.kind;
                 let mut changed: Vec<PathBuf> = event
                     .paths
                     .iter()
@@ -94,25 +108,29 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                     &mut template_cache,
                     &mut last_wire_payload,
                 ) {
-                    Ok(Some((template_count, wgsl_count))) => {
-                        println!(
-                            "[rui-hot-reload-cli] reload: {:?}, files={}, templates={}, wgsl={}, first={}",
-                            kind,
-                            changed.len(),
-                            template_count,
-                            wgsl_count,
-                            changed[0].display()
-                        );
+                    Ok(SendOutcome::Sent { templates, wgsl }) => {
+                        hmr_log::update(&hmr_update_detail(
+                            &changed[0],
+                            watch_path,
+                            templates,
+                            wgsl,
+                        ));
                         last_sent = now;
                     }
-                    Ok(None) => {}
+                    Ok(SendOutcome::Empty | SendOutcome::Duplicate) => {
+                        // Editor/FS often emits a burst of notify events for one
+                        // save. The first send already patched; later parses find
+                        // no template diff. Stay quiet (Vite does not log these)
+                        // and refresh debounce so the burst does not re-parse.
+                        last_sent = now;
+                    }
                     Err(err) => {
-                        eprintln!("[rui-hot-reload-cli] send error: {err}");
+                        hmr_log::error(&format!("send failed: {err}"));
                     }
                 }
             }
             Ok(Err(err)) => {
-                eprintln!("[rui-hot-reload-cli] watch error: {err}");
+                hmr_log::error(&format!("watch failed: {err}"));
             }
             Err(RecvTimeoutError::Timeout) => {
                 // Fallback polling: some editors/filesystems may miss notify events.
@@ -134,22 +152,21 @@ fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path
                     &mut template_cache,
                     &mut last_wire_payload,
                 ) {
-                    Ok(Some((template_count, wgsl_count))) => {
-                        println!(
-                            "[rui-hot-reload-cli] poll reload: files={}, templates={}, wgsl={}, first={}",
-                            changed.len(),
-                            template_count,
-                            wgsl_count,
-                            changed[0].display()
-                        );
+                    Ok(SendOutcome::Sent { templates, wgsl }) => {
+                        hmr_log::update(&hmr_update_detail(
+                            &changed[0],
+                            watch_path,
+                            templates,
+                            wgsl,
+                        ));
                         last_poll_sent = Instant::now();
                         last_sent = Instant::now();
                     }
-                    Ok(None) => {
+                    Ok(SendOutcome::Empty | SendOutcome::Duplicate) => {
                         last_poll_sent = Instant::now();
                     }
                     Err(err) => {
-                        eprintln!("[rui-hot-reload-cli] poll send error: {err}");
+                        hmr_log::error(&format!("poll send failed: {err}"));
                     }
                 }
             }
@@ -324,11 +341,10 @@ fn build_template_patch_msg(
 
             template_cache.insert(key.clone(), extracted);
             all_templates.extend(patched);
-        } else if let Some(cached) = template_cache.get(&key) {
-            // Editor atomic-save may briefly expose an empty/partial file.
-            // Reuse last good parse result to avoid dropping hot-reload updates.
-            all_templates.extend(cached.clone());
         }
+        // Empty/partial parse: keep the cache and send nothing. Re-broadcasting
+        // every cached `ui!` block used to apply unrelated pages onto the live
+        // island (line-shift) or, with `templates: []`, force a full rebuild.
     }
     OutgoingTemplatePatch {
         kind: "template_patch",
@@ -337,13 +353,19 @@ fn build_template_patch_msg(
     }
 }
 
+enum SendOutcome {
+    Sent { templates: usize, wgsl: usize },
+    Duplicate,
+    Empty,
+}
+
 fn send_dev_batch(
     addr: &str,
     rust_files: &[PathBuf],
     wgsl_files: &[PathBuf],
     template_cache: &mut HashMap<String, Vec<TemplateFragment>>,
     last_wire_payload: &mut Option<String>,
-) -> std::io::Result<Option<(usize, usize)>> {
+) -> std::io::Result<SendOutcome> {
     let mut wire_chunks: Vec<String> = Vec::new();
     let mut wgsl_n = 0usize;
     if !wgsl_files.is_empty() {
@@ -363,15 +385,17 @@ fn send_dev_batch(
     let template_count = if !rust_files.is_empty() {
         let msg = build_template_patch_msg(rust_files, template_cache);
         let n = msg.templates.len();
-        let payload =
-            serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
-        wire_chunks.push(payload);
+        if n > 0 {
+            let payload =
+                serde_json::to_string(&msg).unwrap_or_else(|_| "{\"kind\":\"reload\"}".into());
+            wire_chunks.push(payload);
+        }
         n
     } else {
         0
     };
     if wire_chunks.is_empty() {
-        return Ok(Some((0, 0)));
+        return Ok(SendOutcome::Empty);
     }
     let mut wire_fingerprint = String::new();
     for chunk in &wire_chunks {
@@ -379,7 +403,7 @@ fn send_dev_batch(
         wire_fingerprint.push('\n');
     }
     if last_wire_payload.as_ref() == Some(&wire_fingerprint) {
-        return Ok(None);
+        return Ok(SendOutcome::Duplicate);
     }
     *last_wire_payload = Some(wire_fingerprint);
 
@@ -389,7 +413,10 @@ fn send_dev_batch(
         stream.write_all(b"\n")?;
     }
     stream.flush()?;
-    Ok(Some((template_count, wgsl_n)))
+    Ok(SendOutcome::Sent {
+        templates: template_count,
+        wgsl: wgsl_n,
+    })
 }
 
 #[derive(Serialize)]
@@ -486,7 +513,10 @@ fn extract_ui_templates(source: &str) -> Vec<UiTemplateBlock> {
         }
         if bytes[i] == b'u' && bytes[i + 1] == b'i' && bytes[i + 2] == b'!' {
             let macro_line = line_no;
-            let macro_column = i - line_start + 1;
+            let macro_column = source
+                .get(line_start..i)
+                .map(|s| s.chars().count() + 1)
+                .unwrap_or(1);
             let mut j = i + 3;
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
@@ -542,16 +572,25 @@ fn extract_ui_templates(source: &str) -> Vec<UiTemplateBlock> {
 }
 
 fn normalize_path_for_id(path: &Path) -> String {
-    let normalized = if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(rel) = path.strip_prefix(cwd) {
-            rel.to_path_buf()
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        path.to_path_buf()
+    let path_s = path.to_string_lossy().replace('\\', "/");
+    let Ok(cwd) = std::env::current_dir() else {
+        return path_s;
     };
-    normalized.to_string_lossy().replace('\\', "/")
+    let cwd_s = cwd.to_string_lossy().replace('\\', "/");
+    strip_prefix_ci(&path_s, cwd_s.trim_end_matches('/'))
+        .map(|rest| rest.trim_start_matches('/').to_string())
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(path_s)
+}
+
+fn strip_prefix_ci<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let path_l = path.to_ascii_lowercase();
+    let prefix_l = prefix.to_ascii_lowercase();
+    let rest_l = path_l.strip_prefix(&prefix_l)?;
+    if !rest_l.is_empty() && !rest_l.starts_with('/') {
+        return None;
+    }
+    Some(&path[prefix.len().min(path.len())..])
 }
 
 fn collect_templates_for_file(file: &Path, key: &str) -> Vec<TemplateFragment> {
@@ -608,5 +647,46 @@ fn apply_text_replacements_single(prev: &[TemplateFragment], cur: &mut TemplateF
 fn apply_text_replacements(prev: &[TemplateFragment], next: &mut [TemplateFragment]) {
     for cur in next.iter_mut() {
         apply_text_replacements_single(prev, cur);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn strip_prefix_ci_ignores_drive_letter_case() {
+        assert_eq!(
+            strip_prefix_ci(
+                "d:/projects/rui/examples/gallery/src/main.rs",
+                "D:/projects/rui"
+            ),
+            Some("/examples/gallery/src/main.rs")
+        );
+        assert_eq!(
+            strip_prefix_ci("d:/projects/rui-extra/src/main.rs", "d:/projects/rui"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_ui_templates_records_char_column() {
+        let src = "    ui! { \"hi\" }\n";
+        let blocks = extract_ui_templates(src);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].line, 1);
+        assert_eq!(blocks[0].column, 5);
+        assert!(blocks[0].body.contains("hi"));
+    }
+
+    #[test]
+    fn normalize_path_for_id_uses_forward_slashes() {
+        let p = Path::new("examples")
+            .join("gallery")
+            .join("src")
+            .join("main.rs");
+        let key = normalize_path_for_id(&p);
+        assert!(!key.contains('\\'));
     }
 }

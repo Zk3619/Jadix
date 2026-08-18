@@ -438,7 +438,9 @@ impl From<ScrollAreaBuilder> for Element {
                     taffy::style::LengthPercentage::length((v + delta).max(0.0))
                 }
                 crate::layout::DimKind::Percent(v) => taffy::style::LengthPercentage::percent(v),
-                crate::layout::DimKind::Auto => taffy::style::LengthPercentage::length(delta.max(0.0)),
+                crate::layout::DimKind::Auto => {
+                    taffy::style::LengthPercentage::length(delta.max(0.0))
+                }
             };
         };
 

@@ -53,6 +53,9 @@ thread_local! {
 }
 
 pub(crate) const REACTIVE_PLACEHOLDER_HASH: &str = "__rui_reactive_placeholder_v1";
+/// Compile-time `ui!` `file:line:column`, preserved when [`reactive_anchor`] overwrites
+/// `template_id` with a stable island id (e.g. Gallery `App:section_body`).
+pub(crate) const ATTR_SOURCE_TEMPLATE_ID: &str = "rui_ui_template_id";
 
 /// Registry keys must not collide across windows when component ids match.
 pub(crate) fn window_scoped_registry_key(id: &str) -> String {
@@ -277,6 +280,11 @@ where
     let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
         let mut fragment = f();
+        if let Some(orig) = fragment.template_id.as_ref() {
+            if orig != &effect_anchor_id {
+                fragment.set_attr(ATTR_SOURCE_TEMPLATE_ID, orig.clone());
+            }
+        }
         fragment.template_id = Some(effect_anchor_id.clone());
         if let Some(hook) = mounted_anchor_hook(&effect_registry_key) {
             fragment = fragment.on_unmount_hook(hook);
