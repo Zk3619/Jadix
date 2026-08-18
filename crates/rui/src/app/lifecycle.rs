@@ -200,17 +200,63 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 crate::app::runtime::request_redraw_all();
             }
             super::RuiUserEvent::OpenWindow { options, builder } => {
-                let attrs = options.to_window_attributes();
-                let Ok(window) = event_loop.create_window(attrs) else {
+                let wants_glass = options.compositor_alpha();
+                let mut composition = wants_glass;
+                let Ok(created) =
+                    event_loop.create_window(options.window_attributes(composition))
+                else {
                     log::warn!("multi-window: create_window failed");
                     return;
                 };
-                super::window_chrome::apply_created_window(&window, &options);
-                let window = Arc::new(window);
+                let mut window = Arc::new(created);
+                super::window_chrome::apply_created_window(&window, &options, composition);
                 let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
-                let compositor_alpha = options.compositor_alpha();
 
-                let secondary = {
+                let secondary = if wants_glass {
+                    if let Some(gpu) = super::glass_gpu::try_acquire(&window) {
+                        super::secondary_window::SecondaryWindowState::from_compositor(
+                            window.clone(),
+                            gpu,
+                            placeholder,
+                            options.clone(),
+                        )
+                    } else {
+                        log::warn!(
+                            "glass: no PreMultiplied swapchain; falling back to the primary GPU"
+                        );
+                        composition = false;
+                        drop(window);
+                        let Ok(created) =
+                            event_loop.create_window(options.window_attributes(false))
+                        else {
+                            log::warn!("multi-window: create_window failed");
+                            return;
+                        };
+                        window = Arc::new(created);
+                        super::window_chrome::apply_created_window(&window, &options, false);
+                        let state_borrow = self.state.borrow();
+                        let Some(primary) = state_borrow.as_ref() else {
+                            log::warn!("multi-window: OpenWindow before primary AppState ready");
+                            return;
+                        };
+                        match super::secondary_window::SecondaryWindowState::new(
+                            window.clone(),
+                            Arc::clone(&primary.device),
+                            Arc::clone(&primary.queue),
+                            &primary.instance,
+                            &primary.adapter,
+                            &primary.config,
+                            placeholder,
+                            options.clone(),
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                log::warn!("multi-window: secondary init failed: {e}");
+                                return;
+                            }
+                        }
+                    }
+                } else {
                     let state_borrow = self.state.borrow();
                     let Some(primary) = state_borrow.as_ref() else {
                         log::warn!("multi-window: OpenWindow before primary AppState ready");
@@ -224,7 +270,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         &primary.adapter,
                         &primary.config,
                         placeholder,
-                        compositor_alpha,
+                        options.clone(),
                     ) {
                         Ok(s) => s,
                         Err(e) => {
@@ -269,6 +315,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 self.secondary_accesskit.insert(id, adapter);
 
                 window.set_visible(true);
+                super::window_chrome::apply_created_window(&window, &options, composition);
                 window.request_redraw();
             }
             super::RuiUserEvent::CloseWindow { id } => {
@@ -455,7 +502,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         if self.state.borrow().is_none() {
             let attrs = self.window_options.to_window_attributes();
             let window = event_loop.create_window(attrs).unwrap();
-            super::window_chrome::apply_created_window(&window, &self.window_options);
+            super::window_chrome::apply_created_window(
+                &window,
+                &self.window_options,
+                self.window_options.compositor_alpha(),
+            );
             let window = Arc::new(window);
 
             // Initialize GPU/runtime state with a private bootstrap root. The user app tree must be
@@ -464,7 +515,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             // referenced by the tracked tree.
             let state = pollster::block_on(super::state::AppState::new_bootstrap(
                 window.clone(),
-                self.window_options.compositor_alpha(),
+                self.window_options.clone(),
             ));
             *self.state.borrow_mut() = Some(state);
             self.window_registry.insert_primary(window.clone());
@@ -509,6 +560,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             );
             crate::debug_stack::crumb("lifecycle: after accesskit");
             window.set_visible(true);
+            let composition = self
+                .state
+                .borrow()
+                .as_ref()
+                .is_some_and(|s| s.composition_swapchain);
+            super::window_chrome::apply_created_window(
+                &window,
+                &self.window_options,
+                composition,
+            );
             self.accesskit_adapter = Some(adapter);
         }
 

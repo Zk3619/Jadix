@@ -108,4 +108,4 @@ open_secondary_window_with(
 
 主窗：[`run_with`](../crates/rui/src/app.rs) 传入同一套 options。运行时：[`start_window_drag`](../crates/rui/src/app/window_chrome.rs)（必须在 **mousedown**）、[`toggle_window_maximized`](../crates/rui/src/app/window_chrome.rs) / [`set_window_minimized`](../crates/rui/src/app/window_chrome.rs)、[`close_window`](../crates/rui/src/app/window_chrome.rs)（次窗只关自己，主窗走 `request_exit`）。
 
-Gallery：**导航 → 无边框 / 透明 / 模糊**。GL 上玻璃效果不明显时可设 `RUI_GPU_BACKEND=dx12`。
+Gallery：**导航 → 无边框 / 透明 / 模糊**。Windows 上透明/模糊次窗走独立 Vulkan 预乘 alpha 交换链（`WS_EX_NOREDIRECTIONBITMAP`）；主窗默认仍用 GL 省内存。

@@ -73,6 +73,7 @@ pub mod resource;
 pub mod router;
 pub mod runtime;
 pub(crate) mod scroll_support;
+mod glass_gpu;
 mod secondary_input;
 mod secondary_window;
 mod state;

@@ -58,6 +58,7 @@ pub struct TexturedQuadPipeline {
     pub num_indices: u32,
     pub globals_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
+    premultiply: f32,
 }
 
 impl TexturedQuadPipeline {
@@ -67,12 +68,14 @@ impl TexturedQuadPipeline {
             source: wgpu::ShaderSource::Wgsl(include_str!("textured_rect.wgsl").into()),
         });
 
+        let premultiply = super::pipeline::compositor_premultiply(config.alpha_mode);
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Textured Globals"),
-            contents: bytemuck::cast_slice(&[Globals {
-                resolution: [config.width as f32, config.height as f32],
-                _padding: [0.0; 2],
-            }]),
+            contents: bytemuck::cast_slice(&[Globals::new(
+                config.width as f32,
+                config.height as f32,
+                premultiply,
+            )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -194,14 +197,12 @@ impl TexturedQuadPipeline {
             num_indices: indices.len() as u32,
             globals_buffer,
             sampler,
+            premultiply,
         }
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
-        let globals = Globals {
-            resolution: [width as f32, height as f32],
-            _padding: [0.0; 2],
-        };
+        let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
     }
 

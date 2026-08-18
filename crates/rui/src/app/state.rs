@@ -180,6 +180,10 @@ pub(super) struct AppState {
     last_scroll_offset_fp: u64,
     /// Swapchain uses compositor alpha (transparent / blur windows).
     compositor_alpha: bool,
+    /// True when the swapchain uses Pre/Post-multiplied compositor alpha.
+    pub(super) composition_swapchain: bool,
+    /// Creation chrome; re-applied after surface configure (Windows DWM punch-through).
+    chrome: super::window_chrome::WindowOptions,
 }
 
 /// `queue.write_buffer` 在 submit 时先于 render pass 执行；同一 buffer 多次写 offset 0
@@ -386,16 +390,28 @@ impl AppState {
     /// Backends to try, in order. `RUI_GPU_BACKEND` (`gl` / `dx12` / `vulkan` / `metal`)
     /// moves one to the front; the rest stay as fallbacks so an unsupported pick
     /// degrades instead of aborting.
-    fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
+    fn backend_candidates(compositor_alpha: bool) -> Vec<(wgpu::Backends, &'static str)> {
         let mut order: Vec<(wgpu::Backends, &'static str)> = if cfg!(target_os = "macos") {
             vec![(wgpu::Backends::METAL, "metal")]
         } else if cfg!(windows) {
-            // Prefer GL by default: smallest resident memory for a 2D UI.
-            // Override with RUI_GPU_BACKEND=dx12|vulkan when lower CPU overhead matters more.
+            if compositor_alpha {
+                // GL/DX12 cannot composite per-pixel alpha on wgpu 22; Vulkan can.
+                vec![
+                    (wgpu::Backends::VULKAN, "vulkan"),
+                    (wgpu::Backends::GL, "gl"),
+                    (wgpu::Backends::DX12, "dx12"),
+                ]
+            } else {
+                vec![
+                    (wgpu::Backends::GL, "gl"),
+                    (wgpu::Backends::DX12, "dx12"),
+                    (wgpu::Backends::VULKAN, "vulkan"),
+                ]
+            }
+        } else if compositor_alpha {
             vec![
-                (wgpu::Backends::GL, "gl"),
-                (wgpu::Backends::DX12, "dx12"),
                 (wgpu::Backends::VULKAN, "vulkan"),
+                (wgpu::Backends::GL, "gl"),
             ]
         } else {
             vec![
@@ -427,8 +443,9 @@ impl AppState {
     async fn acquire_adapter(
         window: &Arc<Window>,
         force_software: bool,
+        compositor_alpha: bool,
     ) -> (wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter) {
-        let candidates = Self::backend_candidates();
+        let candidates = Self::backend_candidates(compositor_alpha);
         if !force_software {
             for (backends, name) in &candidates {
                 let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -497,7 +514,11 @@ impl AppState {
         el.get_attr(Self::BOOTSTRAP_ROOT_ATTR).map(|s| s.as_str()) == Some("1")
     }
 
-    pub(super) async fn new_bootstrap(window: Arc<Window>, compositor_alpha: bool) -> Self {
+    pub(super) async fn new_bootstrap(
+        window: Arc<Window>,
+        chrome: super::window_chrome::WindowOptions,
+    ) -> Self {
+        let compositor_alpha = chrome.compositor_alpha();
         let mut root_element = Element::new().w("100%").h("100%");
         root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
         let size = window.inner_size();
@@ -509,7 +530,8 @@ impl AppState {
         // user-mode drivers commit ~80 MB of private heaps at device creation, while
         // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
         // not need what DX12 buys, so GL leads and the others stay as fallbacks.
-        let (instance, surface, adapter) = Self::acquire_adapter(&window, force_software).await;
+        let (instance, surface, adapter) =
+            Self::acquire_adapter(&window, force_software, compositor_alpha).await;
         let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             TextRendererBackend::CpuTextHybrid
         } else {
@@ -574,6 +596,10 @@ impl AppState {
             .unwrap_or(surface_caps.present_modes[0]);
         let alpha_mode =
             crate::renderer::pick_composite_alpha(&surface_caps.alpha_modes, compositor_alpha);
+        let composition_swapchain = matches!(
+            alpha_mode,
+            wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::PostMultiplied
+        );
         log::info!("surface present_mode: {present_mode:?} alpha_mode: {alpha_mode:?}");
 
         let config = wgpu::SurfaceConfiguration {
@@ -587,6 +613,7 @@ impl AppState {
             desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
+        super::window_chrome::apply_created_window(&window, &chrome, composition_swapchain);
 
         let pipeline = RuiPipeline::new(&device, &config);
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
@@ -719,6 +746,8 @@ impl AppState {
             last_gpu_frame_fp: 0,
             last_scroll_offset_fp: 0,
             compositor_alpha,
+            composition_swapchain,
+            chrome,
         }
     }
 
@@ -1204,6 +1233,11 @@ impl AppState {
         // / redraw causes visible flicker; use `recover_surface` after `SurfaceError::Lost` instead.
         if dims_changed {
             self.surface.configure(&self.device, &self.config);
+            super::window_chrome::apply_created_window(
+                &self.window,
+                &self.chrome,
+                self.composition_swapchain,
+            );
             self.pipeline
                 .update_resolution(&self.queue, self.config.width, self.config.height);
             self.textured_pipeline.update_resolution(
@@ -1220,6 +1254,11 @@ impl AppState {
     /// `Outdated` without a size change.
     pub(super) fn recover_surface(&mut self) {
         self.surface.configure(&self.device, &self.config);
+        super::window_chrome::apply_created_window(
+            &self.window,
+            &self.chrome,
+            self.composition_swapchain,
+        );
         self.mark_full_redraw();
     }
 

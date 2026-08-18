@@ -13,7 +13,7 @@ struct InstanceInput {
 
 struct Globals {
     resolution: vec2<f32>,
-    _pad: vec2<f32>,
+    premultiply: f32,
 };
 
 @group(0) @binding(0)
@@ -45,6 +45,10 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, tex_sampler, in.uv);
-    return c * in.tint;
+    let c = textureSample(tex, tex_sampler, in.uv) * in.tint;
+    var rgb = c.rgb;
+    if (globals.premultiply > 0.5) {
+        rgb = rgb * c.a;
+    }
+    return vec4<f32>(rgb, c.a);
 }

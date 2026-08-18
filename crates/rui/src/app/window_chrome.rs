@@ -101,7 +101,24 @@ impl WindowOptions {
         self.transparent || self.blur
     }
 
+    /// Win11: extend DWM glass into the client so Acrylic/Mica fills the window.
+    pub(crate) fn windows_extends_dwm_frame(&self) -> bool {
+        self.blur
+    }
+
+    /// Win11: punch clear pixels through to the desktop (no system material).
+    pub(crate) fn windows_punch_through_desktop(&self) -> bool {
+        self.transparent && !self.blur
+    }
+
     pub fn to_window_attributes(&self) -> WindowAttributes {
+        self.window_attributes(self.compositor_alpha())
+    }
+
+    /// `composition_swapchain`: Windows `WS_EX_NOREDIRECTIONBITMAP` so a Vulkan/DXGI
+    /// premultiplied swapchain can composite over the desktop. Must stay **off** for the
+    /// shared GL path — WGL cannot present into a DirectComposition visual.
+    pub(crate) fn window_attributes(&self, composition_swapchain: bool) -> WindowAttributes {
         let mut attrs = Window::default_attributes()
             .with_title(&self.title)
             .with_visible(false)
@@ -126,20 +143,22 @@ impl WindowOptions {
 
         #[cfg(target_os = "windows")]
         {
-            use winit::platform::windows::{
-                BackdropType, CornerPreference, WindowAttributesExtWindows,
-            };
+            use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
             if !self.decorations {
                 attrs = attrs
                     .with_undecorated_shadow(true)
                     .with_corner_preference(CornerPreference::Round);
             }
-            if self.blur {
+            if self.windows_extends_dwm_frame() {
                 attrs = attrs.with_system_backdrop(backdrop_type(self.backdrop));
-            } else if self.transparent {
-                attrs = attrs.with_system_backdrop(BackdropType::None);
+            }
+            if composition_swapchain {
+                attrs = attrs.with_no_redirection_bitmap(true);
             }
         }
+
+        #[cfg(not(target_os = "windows"))]
+        let _ = composition_swapchain;
 
         attrs
     }
@@ -158,43 +177,116 @@ fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType
 }
 
 /// Platform follow-up after `create_window` (DWM client-area glass, runtime blur).
-pub(crate) fn apply_created_window(window: &Window, options: &WindowOptions) {
-    if options.blur {
+///
+/// Idempotent: call again after the GPU surface is configured / resized / shown.
+///
+/// `composition_swapchain` is set when the window presents a premultiplied Vulkan/DXGI
+/// swapchain (`WS_EX_NOREDIRECTIONBITMAP`). In that case DWM empty-region blur-behind
+/// is skipped — it targets the redirection bitmap we just disabled.
+pub(crate) fn apply_created_window(
+    window: &Window,
+    options: &WindowOptions,
+    composition_swapchain: bool,
+) {
+    #[cfg(not(target_os = "windows"))]
+    if options.windows_extends_dwm_frame() {
         window.set_blur(true);
     }
     #[cfg(target_os = "windows")]
-    {
-        use winit::platform::windows::WindowExtWindows;
-        if options.blur {
-            window.set_system_backdrop(backdrop_type(options.backdrop));
+    apply_windows_glass(window, options, composition_swapchain);
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_glass(
+    window: &Window,
+    options: &WindowOptions,
+    composition_swapchain: bool,
+) {
+    use winit::platform::windows::WindowExtWindows;
+
+    let Some(hwnd) = win32_hwnd(window) else {
+        return;
+    };
+    if options.windows_extends_dwm_frame() {
+        set_use_host_backdrop_brush(hwnd, false);
+        window.set_system_backdrop(backdrop_type(options.backdrop));
+        extend_dwm_frame(hwnd, true);
+        if !composition_swapchain {
+            enable_dwm_punch_through(hwnd);
         }
-        if options.compositor_alpha() {
-            extend_dwm_frame(window);
-        }
+    } else if options.windows_punch_through_desktop() && !composition_swapchain {
+        set_use_host_backdrop_brush(hwnd, true);
+        window.set_system_backdrop(winit::platform::windows::BackdropType::Auto);
+        extend_dwm_frame(hwnd, false);
+        enable_dwm_punch_through(hwnd);
     }
 }
 
 #[cfg(target_os = "windows")]
-fn extend_dwm_frame(window: &Window) {
-    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
-    use windows_sys::Win32::UI::Controls::MARGINS;
+fn win32_hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
+    let handle = window.window_handle().ok()?;
     let RawWindowHandle::Win32(h) = handle.as_raw() else {
-        return;
+        return None;
     };
-    let hwnd = h.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    Some(h.hwnd.get() as windows_sys::Win32::Foundation::HWND)
+}
+
+#[cfg(target_os = "windows")]
+fn extend_dwm_frame(hwnd: windows_sys::Win32::Foundation::HWND, into_client: bool) {
+    use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
+    use windows_sys::Win32::UI::Controls::MARGINS;
+
+    let m = if into_client { -1 } else { 0 };
     let margins = MARGINS {
-        cxLeftWidth: -1,
-        cxRightWidth: -1,
-        cyTopHeight: -1,
-        cyBottomHeight: -1,
+        cxLeftWidth: m,
+        cxRightWidth: m,
+        cyTopHeight: m,
+        cyBottomHeight: m,
     };
     unsafe {
         let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+    }
+}
+
+/// Empty blur region: DWM treats the window as glass so unpainted / alpha-0 pixels
+/// composite over the desktop (or the system backdrop). Same trick winit uses for
+/// `with_transparent(true)` — re-applied after WGL/DXGI surface creation, which
+/// otherwise drops the region.
+#[cfg(target_os = "windows")]
+fn enable_dwm_punch_through(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::Foundation::TRUE;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+    };
+    use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
+
+    let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
+    let bb = DWM_BLURBEHIND {
+        dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+        fEnable: TRUE,
+        hRgnBlur: region,
+        fTransitionOnMaximized: 0,
+    };
+    unsafe {
+        let _ = DwmEnableBlurBehindWindow(hwnd, &bb);
+        let _ = DeleteObject(region);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_use_host_backdrop_brush(hwnd: windows_sys::Win32::Foundation::HWND, enable: bool) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_HOSTBACKDROPBRUSH};
+
+    let value: i32 = if enable { 1 } else { 0 };
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_HOSTBACKDROPBRUSH as u32,
+            &value as *const i32 as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
     }
 }
 
@@ -287,5 +379,20 @@ mod tests {
         assert!(o.compositor_alpha());
         assert!(o.to_window_attributes().transparent);
         assert!(!o.to_window_attributes().blur);
+        assert!(o.windows_punch_through_desktop());
+        assert!(!o.windows_extends_dwm_frame());
+    }
+
+    #[test]
+    fn blur_extends_dwm_frame_transparent_does_not() {
+        let blur = WindowOptions::new().transparent(true).blur(true);
+        assert!(blur.windows_extends_dwm_frame());
+        assert!(!blur.windows_punch_through_desktop());
+        let clear = WindowOptions::new().transparent(true);
+        assert!(!clear.windows_extends_dwm_frame());
+        assert!(clear.windows_punch_through_desktop());
+        let opaque = WindowOptions::new();
+        assert!(!opaque.windows_extends_dwm_frame());
+        assert!(!opaque.windows_punch_through_desktop());
     }
 }

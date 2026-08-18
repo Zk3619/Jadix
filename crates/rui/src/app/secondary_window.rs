@@ -35,6 +35,9 @@ unsafe impl Send for SecondaryUiBuilder {}
 pub(super) struct SecondaryWindowState {
     // Drop order: reverse of declaration — surface before device / window.
     pub(super) window: Arc<Window>,
+    /// Owned when this window uses a compositor-alpha GPU (Vulkan sidecar).
+    _glass_instance: Option<wgpu::Instance>,
+    _glass_adapter: Option<wgpu::Adapter>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
@@ -71,6 +74,10 @@ pub(super) struct SecondaryWindowState {
     pub(super) has_input_caret: bool,
     /// Swapchain uses compositor alpha (transparent / blur).
     compositor_alpha: bool,
+    /// True when presenting a premultiplied composition swapchain (not shared GL).
+    composition_swapchain: bool,
+    /// Creation chrome; re-applied after surface configure (DWM punch-through).
+    chrome: super::window_chrome::WindowOptions,
     /// Drops first (declared last) so secondary effects dispose before GPU teardown.
     owner: Option<OwnerHandle>,
 }
@@ -84,8 +91,9 @@ impl SecondaryWindowState {
         adapter: &wgpu::Adapter,
         primary_config: &wgpu::SurfaceConfiguration,
         mut root_element: Element,
-        compositor_alpha: bool,
+        chrome: super::window_chrome::WindowOptions,
     ) -> Result<Self, String> {
+        let compositor_alpha = chrome.compositor_alpha();
         let size = window.inner_size();
         let surface = instance
             .create_surface(window.clone())
@@ -105,6 +113,7 @@ impl SecondaryWindowState {
             desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
+        super::window_chrome::apply_created_window(&window, &chrome, false);
 
         let pipeline = RuiPipeline::new(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
@@ -136,6 +145,8 @@ impl SecondaryWindowState {
 
         Ok(Self {
             window,
+            _glass_instance: None,
+            _glass_adapter: None,
             device,
             queue,
             surface,
@@ -163,8 +174,92 @@ impl SecondaryWindowState {
             text_nodes: Vec::new(),
             has_input_caret: false,
             compositor_alpha,
+            composition_swapchain: false,
+            chrome,
             owner: None,
         })
+    }
+
+    pub(super) fn from_compositor(
+        window: Arc<Window>,
+        gpu: super::glass_gpu::CompositorGpu,
+        mut root_element: Element,
+        chrome: super::window_chrome::WindowOptions,
+    ) -> Self {
+        let compositor_alpha = true;
+        let super::glass_gpu::CompositorGpu {
+            instance,
+            adapter,
+            device,
+            queue,
+            surface,
+            config,
+        } = gpu;
+        super::window_chrome::apply_created_window(&window, &chrome, true);
+
+        let pipeline = RuiPipeline::new(&device, &config);
+        let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
+        } else {
+            RuiTextRenderer::new(&device, &queue, &config)
+        };
+        let overlay_font = text_renderer.font_system_mut() as *mut glyphon::FontSystem;
+        let overlay_text_renderer =
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, overlay_font);
+
+        let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
+
+        let mut layout_tree = LayoutTree::new();
+        let scale = window.scale_factor() as f32;
+        let logical_w = config.width as f32 / scale.max(1.0);
+        let logical_h = config.height as f32 / scale.max(1.0);
+        let render_result =
+            layout_tree.build_and_layout(&mut root_element, logical_w, logical_h, [0.0, 0.0]);
+        let scaled_instances = scale_instances(&render_result.instances, scale);
+        let num_instances = render_result.instances.len() as u32;
+        let size = PhysicalSize::new(config.width, config.height);
+
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Secondary Instance Buffer"),
+            contents: bytemuck::cast_slice(&scaled_instances),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        Self {
+            window,
+            _glass_instance: Some(instance),
+            _glass_adapter: Some(adapter),
+            device,
+            queue,
+            surface,
+            config,
+            size,
+            pipeline,
+            instance_buffer,
+            instance_buffer_capacity: scaled_instances.len().max(1),
+            num_instances,
+            layout_tree,
+            text_renderer,
+            overlay_text_renderer,
+            overlay_band_text_renderers: Vec::new(),
+            root_element,
+            layout_status: LayoutStatus::StructureChanged,
+            template_paths: HashMap::new(),
+            pending_layout_dirty: Vec::new(),
+            last_hover_cursor: None,
+            last_render_scroll_metrics: Vec::new(),
+            scroll_metrics_cache: HashMap::new(),
+            damage_rect: None,
+            ime_allowed_latched: false,
+            os_focused: false,
+            ime_os_blur_at: None,
+            text_nodes: Vec::new(),
+            has_input_caret: false,
+            compositor_alpha,
+            composition_swapchain: true,
+            chrome,
+            owner: None,
+        }
     }
 
     pub(super) fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -181,6 +276,11 @@ impl SecondaryWindowState {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        super::window_chrome::apply_created_window(
+            &self.window,
+            &self.chrome,
+            self.composition_swapchain,
+        );
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
         self.layout_status = LayoutStatus::LayoutChanged;
@@ -188,6 +288,11 @@ impl SecondaryWindowState {
 
     pub(super) fn recover_surface(&mut self) {
         self.surface.configure(&self.device, &self.config);
+        super::window_chrome::apply_created_window(
+            &self.window,
+            &self.chrome,
+            self.composition_swapchain,
+        );
     }
 
     /// Layout + clear + draw primitives/text for this secondary window.

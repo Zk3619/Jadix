@@ -42,6 +42,7 @@ struct VertexOutput {
 
 struct Globals {
     resolution: vec2<f32>,
+    premultiply: f32,
 };
 
 @group(0) @binding(0)
@@ -216,5 +217,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Swapchain / offscreen targets use `*Srgb` formats: the GPU expects **linear** fragment
     // output and encodes on write. Without this step, display values are encoded twice
     // (e.g. `#333` → `#7B`, `#F5F5F5` → `#FBFBFB`).
-    return vec4<f32>(linearize_srgb_rgb(out_rgb), out_a);
+    var rgb = linearize_srgb_rgb(out_rgb);
+    if (globals.premultiply > 0.5) {
+        rgb = rgb * out_a;
+    }
+    return vec4<f32>(rgb, out_a);
 }

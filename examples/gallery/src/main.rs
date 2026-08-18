@@ -2923,7 +2923,7 @@ fn gallery_blur_root() -> Element {
             <VStack flex_grow="1" p="1rem" gap="0.5rem">
                 <Label font_weight="700">"透明 + 系统模糊"</Label>
                 <Label text_size="0.875rem" color="muted-foreground" leading="normal">
-                    "Win11 Acrylic；macOS vibrancy；Wayland kwin blur。半透明填色才能看到材质。GL 上看不到时可设 RUI_GPU_BACKEND=dx12。"
+                    "Win11 Acrylic；macOS vibrancy；Wayland kwin blur。半透明填色才能看到材质。"
                 </Label>
             </VStack>
         </VStack>

@@ -5,7 +5,18 @@ use wgpu::util::DeviceExt;
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Globals {
     pub resolution: [f32; 2],
-    pub _padding: [f32; 2],
+    pub premultiply: f32,
+    pub _pad: f32,
+}
+
+impl Globals {
+    pub fn new(width: f32, height: f32, premultiply: f32) -> Self {
+        Self {
+            resolution: [width, height],
+            premultiply,
+            _pad: 0.0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -165,6 +176,7 @@ pub struct RuiPipeline {
     pub num_indices: u32,
     pub globals_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
+    premultiply: f32,
 }
 
 impl RuiPipeline {
@@ -197,6 +209,8 @@ impl RuiPipeline {
         config: &wgpu::SurfaceConfiguration,
         wgsl_source: &str,
     ) -> Self {
+        let premultiply =
+            compositor_premultiply(config.alpha_mode);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Rounded Rect Shader"),
             source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
@@ -204,10 +218,11 @@ impl RuiPipeline {
 
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Globals Buffer"),
-            contents: bytemuck::cast_slice(&[Globals {
-                resolution: [config.width as f32, config.height as f32],
-                _padding: [0.0; 2],
-            }]),
+            contents: bytemuck::cast_slice(&[Globals::new(
+                config.width as f32,
+                config.height as f32,
+                premultiply,
+            )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -254,6 +269,7 @@ impl RuiPipeline {
             num_indices: indices.len() as u32,
             globals_buffer,
             bind_group,
+            premultiply,
         }
     }
 
@@ -352,10 +368,14 @@ impl RuiPipeline {
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
-        let globals = Globals {
-            resolution: [width as f32, height as f32],
-            _padding: [0.0; 2],
-        };
+        let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
+    }
+}
+
+pub(crate) fn compositor_premultiply(alpha_mode: wgpu::CompositeAlphaMode) -> f32 {
+    match alpha_mode {
+        wgpu::CompositeAlphaMode::PreMultiplied => 1.0,
+        _ => 0.0,
     }
 }
