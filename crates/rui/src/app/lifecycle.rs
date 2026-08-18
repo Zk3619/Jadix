@@ -199,14 +199,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 super::ui_bridge::drain_ui_tasks();
                 crate::app::runtime::request_redraw_all();
             }
-            super::RuiUserEvent::OpenWindow { title, builder } => {
-                let attrs = super::multi_window::default_window_attributes_with_title(title);
+            super::RuiUserEvent::OpenWindow { options, builder } => {
+                let attrs = options.to_window_attributes();
                 let Ok(window) = event_loop.create_window(attrs) else {
                     log::warn!("multi-window: create_window failed");
                     return;
                 };
+                super::window_chrome::apply_created_window(&window, &options);
                 let window = Arc::new(window);
                 let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
+                let compositor_alpha = options.compositor_alpha();
 
                 let secondary = {
                     let state_borrow = self.state.borrow();
@@ -219,8 +221,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                         Arc::clone(&primary.device),
                         Arc::clone(&primary.queue),
                         &primary.instance,
+                        &primary.adapter,
                         &primary.config,
                         placeholder,
+                        compositor_alpha,
                     ) {
                         Ok(s) => s,
                         Err(e) => {
@@ -266,6 +270,21 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
                 window.set_visible(true);
                 window.request_redraw();
+            }
+            super::RuiUserEvent::CloseWindow { id } => {
+                let is_primary = self.window_registry.primary_id() == Some(id)
+                    || (*self.state.borrow())
+                        .as_ref()
+                        .is_some_and(|s| s.window.id() == id);
+                if is_primary {
+                    self.shutdown_renderer();
+                    event_loop.exit();
+                    return;
+                }
+                self.drop_secondary(id);
+                if let Some(slot) = self.window_registry.remove_secondary(id) {
+                    slot.window.set_visible(false);
+                }
             }
             super::RuiUserEvent::Exit => {
                 self.shutdown_renderer();
@@ -434,14 +453,19 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.borrow().is_none() {
-            let attrs = super::multi_window::default_window_attributes();
-            let window = Arc::new(event_loop.create_window(attrs).unwrap());
+            let attrs = self.window_options.to_window_attributes();
+            let window = event_loop.create_window(attrs).unwrap();
+            super::window_chrome::apply_created_window(&window, &self.window_options);
+            let window = Arc::new(window);
 
             // Initialize GPU/runtime state with a private bootstrap root. The user app tree must be
             // built exactly once, inside the tracked root effect below; otherwise startup creates
             // a throwaway tree whose Drop/on_unmount side effects can invalidate resources still
             // referenced by the tracked tree.
-            let state = pollster::block_on(super::state::AppState::new_bootstrap(window.clone()));
+            let state = pollster::block_on(super::state::AppState::new_bootstrap(
+                window.clone(),
+                self.window_options.compositor_alpha(),
+            ));
             *self.state.borrow_mut() = Some(state);
             self.window_registry.insert_primary(window.clone());
 
@@ -777,7 +801,10 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
     }
 }
 
-pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
+pub(super) fn run<F: FnMut() -> Element + 'static>(
+    window_options: super::WindowOptions,
+    app_builder: F,
+) {
     #[cfg(feature = "runtime-logging")]
     env_logger::builder()
         .filter_level(log::LevelFilter::Warn)
@@ -858,6 +885,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
         secondary_accesskit: std::collections::HashMap::new(),
         ime_owner_window: None,
         custom_cursors: crate::style::CustomCursorCache::new(),
+        window_options,
         #[cfg(debug_assertions)]
         hot_reload: super::hot_reload::HotReloadState::new(event_loop_proxy),
     };

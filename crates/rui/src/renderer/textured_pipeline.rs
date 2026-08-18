@@ -135,7 +135,7 @@ impl TexturedQuadPipeline {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(crate::renderer::color_target_blend(config.alpha_mode)),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),

@@ -4,8 +4,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Weak;
+use std::sync::Arc;
 
-use winit::window::WindowId;
+use winit::window::{Window, WindowId};
 
 use crate::core::tree::Element;
 
@@ -160,6 +161,31 @@ pub fn request_redraw_all() {
             rt.request_redraw_all();
         }
     });
+}
+
+/// Clone the active [`Window`] handle (primary or secondary) and run `f`.
+///
+/// Drops AppState / secondary borrows before calling `f` so OS APIs that re-enter
+/// the event loop (`drag_window`, DWM) cannot `RefCell`-panic.
+pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&Window) -> R) -> Option<R> {
+    let window: Arc<Window> = APP_RUNTIME.with(|c| {
+        let rt = c.borrow();
+        let rt = rt.as_ref()?;
+        match window_scope::tree_home_for(window_scope::active()) {
+            TreeHome::AppState => {
+                let state_rc = rt.state.upgrade()?;
+                let opt = state_rc.try_borrow().ok()?;
+                Some(opt.as_ref()?.window.clone())
+            }
+            TreeHome::SecondarySlot => {
+                let id = window_scope::active_window_id()?;
+                let secs = rt.secondaries.upgrade()?;
+                let secs = secs.try_borrow().ok()?;
+                Some(secs.get(&id)?.window.clone())
+            }
+        }
+    })?;
+    Some(f(&window))
 }
 
 pub fn try_update_element_by_template_id<F>(

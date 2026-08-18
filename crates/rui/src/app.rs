@@ -1,6 +1,7 @@
 use crate::core::tree::Element;
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
+use winit::window::WindowId;
 
 use secondary_window::SecondaryUiBuilder;
 
@@ -13,8 +14,12 @@ pub(super) enum RuiUserEvent {
     UiWake,
     /// Create and show a secondary window (see [`multi_window::open_secondary_window`]).
     OpenWindow {
-        title: String,
+        options: WindowOptions,
         builder: SecondaryUiBuilder,
+    },
+    /// Drop a secondary window (custom chrome Close).
+    CloseWindow {
+        id: WindowId,
     },
     AccessKit(accesskit_winit::Event),
     /// Request a clean event-loop exit (tray Quit / [`ui_bridge::request_exit`]).
@@ -27,11 +32,12 @@ impl std::fmt::Debug for RuiUserEvent {
             #[cfg(debug_assertions)]
             Self::HotReloadWake => f.write_str("HotReloadWake"),
             Self::UiWake => f.write_str("UiWake"),
-            Self::OpenWindow { title, .. } => f
+            Self::OpenWindow { options, .. } => f
                 .debug_struct("OpenWindow")
-                .field("title", title)
+                .field("title", &options.title)
                 .field("builder", &"SecondaryUiBuilder(..)")
                 .finish(),
+            Self::CloseWindow { id } => f.debug_struct("CloseWindow").field("id", id).finish(),
             Self::AccessKit(ev) => f.debug_tuple("AccessKit").field(ev).finish(),
             Self::Exit => f.write_str("Exit"),
         }
@@ -79,16 +85,24 @@ pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
 pub mod ui_bridge;
+mod window_chrome;
 mod window_events;
 pub mod window_keys;
 pub(crate) mod window_scope;
 
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
-pub use multi_window::{open_secondary_window, open_secondary_window_title_only, shared_slot};
+pub use multi_window::{
+    open_secondary_window, open_secondary_window_title_only, open_secondary_window_with,
+    shared_slot,
+};
 pub use resource::{create_resource, suspense, Resource, ResourceState};
 pub use router::Router;
 pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
+pub use window_chrome::{
+    close_window, set_window_maximized, set_window_minimized, start_window_drag,
+    toggle_window_maximized, window_is_maximized, WindowBackdrop, WindowOptions,
+};
 
 use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;
@@ -214,12 +228,18 @@ struct App {
     /// Window whose HWND currently owns OS IME drive (`LAST_IME_FOCUS_ID` / Imm).
     ime_owner_window: Option<winit::window::WindowId>,
     custom_cursors: crate::style::CustomCursorCache,
+    window_options: WindowOptions,
     #[cfg(debug_assertions)]
     hot_reload: hot_reload::HotReloadState,
 }
 
 pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
-    lifecycle::run(app_builder);
+    lifecycle::run(WindowOptions::default(), app_builder);
+}
+
+/// Like [`run`], with creation-time chrome (frameless / transparent / blur).
+pub fn run_with<F: FnMut() -> Element + 'static>(options: WindowOptions, app_builder: F) {
+    lifecycle::run(options, app_builder);
 }
 
 /// Enable mouse primary-button drag-to-scroll (content pan) on scroll viewports.

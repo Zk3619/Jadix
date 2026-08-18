@@ -19,6 +19,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 use crate::core::tree::Element;
 
 use super::secondary_window::SecondaryUiBuilder;
+use super::window_chrome::WindowOptions;
 
 /// Per-window handle slot. Primary owns full [`super::state::AppState`];
 /// secondaries are tracked here and rendered via [`super::secondary_window::SecondaryWindowState`].
@@ -112,27 +113,12 @@ impl WindowRegistry {
 /// Reads `RUI_WINDOW_TITLE` / `RUI_WINDOW_WIDTH` / `RUI_WINDOW_HEIGHT` the same way
 /// as the primary `resumed` path.
 pub fn default_window_attributes() -> WindowAttributes {
-    default_window_attributes_with_title(
-        std::env::var("RUI_WINDOW_TITLE").unwrap_or_else(|_| "RUI Engine".into()),
-    )
+    WindowOptions::default().to_window_attributes()
 }
 
 /// Like [`default_window_attributes`], but with an explicit title (secondary windows).
 pub fn default_window_attributes_with_title(title: impl Into<String>) -> WindowAttributes {
-    let mut attrs = Window::default_attributes()
-        .with_title(title)
-        .with_visible(false);
-    if let (Ok(w), Ok(h)) = (
-        std::env::var("RUI_WINDOW_WIDTH"),
-        std::env::var("RUI_WINDOW_HEIGHT"),
-    ) {
-        if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
-            if w > 0.0 && h > 0.0 {
-                attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(w, h));
-            }
-        }
-    }
-    attrs
+    WindowOptions::default().title(title).to_window_attributes()
 }
 
 /// Queue creation of a secondary window with its own UI tree builder.
@@ -146,12 +132,20 @@ pub fn open_secondary_window(
     title: impl Into<String>,
     builder: impl FnMut() -> Element + 'static,
 ) -> Result<(), String> {
+    open_secondary_window_with(WindowOptions::new().title(title), builder)
+}
+
+/// Like [`open_secondary_window`], with frameless / transparent / blur options.
+pub fn open_secondary_window_with(
+    options: WindowOptions,
+    builder: impl FnMut() -> Element + 'static,
+) -> Result<(), String> {
     let proxy = super::ui_bridge::proxy().ok_or_else(|| {
         "multi-window: event loop proxy not installed (call rui::run first)".to_string()
     })?;
     proxy
         .send_event(super::RuiUserEvent::OpenWindow {
-            title: title.into(),
+            options,
             builder: SecondaryUiBuilder(Box::new(builder)),
         })
         .map_err(|e| format!("multi-window: failed to queue OpenWindow: {e}"))
@@ -190,6 +184,15 @@ mod tests {
         assert!(
             err2.contains("proxy not installed") || err2.contains("failed to queue"),
             "unexpected message: {err2}"
+        );
+        let err3 = open_secondary_window_with(
+            WindowOptions::new().title("Glass").frameless().blur(true),
+            Element::new,
+        )
+        .expect_err("needs proxy");
+        assert!(
+            err3.contains("proxy not installed") || err3.contains("failed to queue"),
+            "unexpected message: {err3}"
         );
     }
 

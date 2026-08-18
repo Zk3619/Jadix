@@ -66,6 +66,7 @@ pub(super) struct AppState {
     pub(super) window: Arc<Window>,
     /// Retained so secondary windows can `create_surface` on the same GPU backend.
     pub(super) instance: wgpu::Instance,
+    pub(super) adapter: wgpu::Adapter,
     pub(super) device: Arc<wgpu::Device>,
     pub(super) queue: Arc<wgpu::Queue>,
     pub(super) surface: wgpu::Surface<'static>,
@@ -177,6 +178,8 @@ pub(super) struct AppState {
     /// (pixels move across the viewport; scissor from hover/bind_text would paint scroll only
     /// inside the old dirty rect).
     last_scroll_offset_fp: u64,
+    /// Swapchain uses compositor alpha (transparent / blur windows).
+    compositor_alpha: bool,
 }
 
 /// `queue.write_buffer` 在 submit 时先于 render pass 执行；同一 buffer 多次写 offset 0
@@ -494,7 +497,7 @@ impl AppState {
         el.get_attr(Self::BOOTSTRAP_ROOT_ATTR).map(|s| s.as_str()) == Some("1")
     }
 
-    pub(super) async fn new_bootstrap(window: Arc<Window>) -> Self {
+    pub(super) async fn new_bootstrap(window: Arc<Window>, compositor_alpha: bool) -> Self {
         let mut root_element = Element::new().w("100%").h("100%");
         root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
         let size = window.inner_size();
@@ -569,7 +572,9 @@ impl AppState {
                     .find(|m| matches!(m, wgpu::PresentMode::Mailbox))
             })
             .unwrap_or(surface_caps.present_modes[0]);
-        log::info!("surface present_mode: {present_mode:?}");
+        let alpha_mode =
+            crate::renderer::pick_composite_alpha(&surface_caps.alpha_modes, compositor_alpha);
+        log::info!("surface present_mode: {present_mode:?} alpha_mode: {alpha_mode:?}");
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -577,14 +582,7 @@ impl AppState {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode,
-            // Prefer opaque: on Windows GLES the first listed mode is often premultiplied
-            // transparency, which shows the desktop/terminal through undrawn pixels.
-            alpha_mode: surface_caps
-                .alpha_modes
-                .iter()
-                .copied()
-                .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
-                .unwrap_or(surface_caps.alpha_modes[0]),
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -633,6 +631,7 @@ impl AppState {
         Self {
             window,
             instance,
+            adapter,
             device,
             queue,
             surface,
@@ -719,6 +718,7 @@ impl AppState {
             has_presented_frame: false,
             last_gpu_frame_fp: 0,
             last_scroll_offset_fp: 0,
+            compositor_alpha,
         }
     }
 
@@ -2000,12 +2000,7 @@ impl AppState {
         } else {
             self.present_retain.invalidate_contents();
         }
-        let clear_color = wgpu::Color {
-            r: 0.95,
-            g: 0.95,
-            b: 0.95,
-            a: 1.0,
-        };
+        let clear_color = crate::renderer::surface_clear_color(self.compositor_alpha);
         let color_load = if use_partial_damage {
             wgpu::LoadOp::Load
         } else {

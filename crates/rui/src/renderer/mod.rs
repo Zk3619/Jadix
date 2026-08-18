@@ -2,11 +2,11 @@
 
 pub mod backdrop_blur;
 pub mod cpu_text;
+pub mod effect;
+pub mod effect_pass;
 pub mod emoji_detect;
 pub mod emoji_layout;
 pub mod emoji_matrix;
-pub mod effect;
-pub mod effect_pass;
 #[cfg(test)]
 mod emoji_shape_diag;
 pub mod emoji_svg;
@@ -53,6 +53,59 @@ pub use text_hit::{
     truncate_with_ellipsis,
 };
 pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
+
+/// Pick swapchain alpha. Opaque windows force `Opaque` so undrawn pixels stay solid;
+/// frameless glass / transparent windows prefer premultiplied compositor alpha.
+pub(crate) fn pick_composite_alpha(
+    modes: &[wgpu::CompositeAlphaMode],
+    compositor_alpha: bool,
+) -> wgpu::CompositeAlphaMode {
+    if modes.is_empty() {
+        return wgpu::CompositeAlphaMode::Auto;
+    }
+    if compositor_alpha {
+        for want in [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+            wgpu::CompositeAlphaMode::Inherit,
+            wgpu::CompositeAlphaMode::Auto,
+        ] {
+            if modes.contains(&want) {
+                return want;
+            }
+        }
+        log::warn!(
+            "compositor alpha requested but surface only offers {modes:?}; glass may not show"
+        );
+        return modes[0];
+    }
+    modes
+        .iter()
+        .copied()
+        .find(|m| *m == wgpu::CompositeAlphaMode::Opaque)
+        .unwrap_or(modes[0])
+}
+
+pub(crate) fn surface_clear_color(compositor_alpha: bool) -> wgpu::Color {
+    if compositor_alpha {
+        wgpu::Color::TRANSPARENT
+    } else {
+        wgpu::Color {
+            r: 0.95,
+            g: 0.95,
+            b: 0.95,
+            a: 1.0,
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn color_target_blend(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::BlendState {
+    match alpha_mode {
+        wgpu::CompositeAlphaMode::PreMultiplied => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        _ => wgpu::BlendState::ALPHA_BLENDING,
+    }
+}
 
 /// 将逻辑空间实例缩放到物理像素（DPI）。
 pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceInput> {
@@ -256,5 +309,36 @@ mod textured_uv_tests {
             d.uv_scale[1],
             d.rect[3] / 180.0
         );
+    }
+}
+
+#[cfg(test)]
+mod composite_alpha_tests {
+    use super::{pick_composite_alpha, surface_clear_color};
+
+    #[test]
+    fn opaque_prefers_opaque_mode() {
+        let modes = [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::Opaque,
+        ];
+        assert_eq!(
+            pick_composite_alpha(&modes, false),
+            wgpu::CompositeAlphaMode::Opaque
+        );
+        assert_eq!(surface_clear_color(false).a, 1.0);
+    }
+
+    #[test]
+    fn compositor_prefers_premultiplied() {
+        let modes = [
+            wgpu::CompositeAlphaMode::Opaque,
+            wgpu::CompositeAlphaMode::PreMultiplied,
+        ];
+        assert_eq!(
+            pick_composite_alpha(&modes, true),
+            wgpu::CompositeAlphaMode::PreMultiplied
+        );
+        assert_eq!(surface_clear_color(true).a, 0.0);
     }
 }

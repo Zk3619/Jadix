@@ -69,6 +69,8 @@ pub(super) struct SecondaryWindowState {
     pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
     /// Last frame painted an Input/Textarea caret — drives blink wake in [`super::window_events`].
     pub(super) has_input_caret: bool,
+    /// Swapchain uses compositor alpha (transparent / blur).
+    compositor_alpha: bool,
     /// Drops first (declared last) so secondary effects dispose before GPU teardown.
     owner: Option<OwnerHandle>,
 }
@@ -79,21 +81,26 @@ impl SecondaryWindowState {
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
         primary_config: &wgpu::SurfaceConfiguration,
         mut root_element: Element,
+        compositor_alpha: bool,
     ) -> Result<Self, String> {
         let size = window.inner_size();
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| format!("secondary window: create_surface failed: {e}"))?;
 
+        let surface_caps = surface.get_capabilities(adapter);
+        let alpha_mode =
+            crate::renderer::pick_composite_alpha(&surface_caps.alpha_modes, compositor_alpha);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: primary_config.format,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: primary_config.present_mode,
-            alpha_mode: primary_config.alpha_mode,
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -155,6 +162,7 @@ impl SecondaryWindowState {
             ime_os_blur_at: None,
             text_nodes: Vec::new(),
             has_input_caret: false,
+            compositor_alpha,
             owner: None,
         })
     }
@@ -393,12 +401,9 @@ impl SecondaryWindowState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.95,
-                            g: 0.95,
-                            b: 0.95,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(crate::renderer::surface_clear_color(
+                            self.compositor_alpha,
+                        )),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
