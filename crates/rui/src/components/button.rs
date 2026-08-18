@@ -620,7 +620,7 @@ impl ButtonBuilder {
 
     pub fn text(mut self, content: impl Into<String>) -> Self {
         // We'll build the text element later during into() to apply the correct variant color
-        self.content.push(Element::new().text(content));
+        self.content.push(Element::new().text(content.into()));
         self
     }
 

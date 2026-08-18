@@ -76,5 +76,5 @@ pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Elem
 
 /// Lucide 图标字形节点（与宏 `<Icon>` 默认行为一致）。
 pub fn build_icon_text_node(glyph: impl Into<String>) -> Element {
-    Element::new().font_family("lucide").text(glyph)
+    Element::new().font_family("lucide").text(glyph.into())
 }

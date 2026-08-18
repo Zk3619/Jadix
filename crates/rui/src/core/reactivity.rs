@@ -141,9 +141,18 @@ struct OwnerNode {
     window_key_scope: u64,
 }
 
+/// Flush order (I-12 / WP-R.9): memos, then Computed, then Render (`bind_*`), then User.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum EffectPhase {
+    Computed = 0,
+    Render = 1,
+    User = 2,
+}
+
 struct EffectState {
     owner: OwnerId,
     depth: u32,
+    phase: EffectPhase,
     f: Rc<RefCell<dyn FnMut()>>,
 }
 
@@ -576,7 +585,7 @@ fn flush_deferred_effects(rt: &Runtime) {
     rt.flushing_deferred.set(true);
     let mut rounds = 0usize;
     loop {
-        let ids: Vec<EffectId> = std::mem::take(&mut *rt.deferred_effects.borrow_mut());
+        let mut ids: Vec<EffectId> = std::mem::take(&mut *rt.deferred_effects.borrow_mut());
         if ids.is_empty() {
             break;
         }
@@ -590,6 +599,7 @@ fn flush_deferred_effects(rt: &Runtime) {
         if rounds > 100_000 {
             panic!("flush_deferred_effects exceeded 100k rounds — likely effect create loop");
         }
+        ids.sort_by_key(|id| effect_phase_depth(rt, *id));
         for id in ids {
             run_effect(rt, id);
         }
@@ -694,7 +704,23 @@ fn ensure_memo_fresh(rt: &Runtime, memo_id: MemoId) {
     }
 }
 
-/// Drain pending memos (by depth ascending) then effects (by depth ascending).
+fn effect_phase_depth(rt: &Runtime, id: EffectId) -> (u8, u32) {
+    rt.effects
+        .borrow()
+        .get(&id)
+        .map(|e| (e.phase as u8, e.depth))
+        .unwrap_or((u8::MAX, u32::MAX))
+}
+
+fn effect_phase_of(rt: &Runtime, id: EffectId) -> EffectPhase {
+    rt.effects
+        .borrow()
+        .get(&id)
+        .map(|e| e.phase)
+        .unwrap_or(EffectPhase::User)
+}
+
+/// Drain pending memos, then effects by phase (Computed → Render → User), each by depth.
 fn flush_pending(rt: &Runtime) {
     // Re-entrant notify during an in-flight flush must only enqueue; the outer loop drains.
     if rt.flushing_pending.get() {
@@ -770,15 +796,28 @@ fn flush_pending(rt: &Runtime) {
             drained
         };
 
-        let mut ordered = effect_chunk;
-        ordered.sort_by_key(|id| {
+        let min_phase = effect_chunk
+            .iter()
+            .map(|id| effect_phase_of(rt, *id))
+            .min()
+            .unwrap_or(EffectPhase::User);
+
+        let mut now = Vec::new();
+        for id in effect_chunk {
+            if effect_phase_of(rt, id) == min_phase {
+                now.push(id);
+            } else {
+                enqueue_pending_effect(rt, id);
+            }
+        }
+        now.sort_by_key(|id| {
             rt.effects
                 .borrow()
                 .get(id)
                 .map(|e| e.depth)
                 .unwrap_or(u32::MAX)
         });
-        for effect_id in ordered {
+        for effect_id in now {
             run_effect(rt, effect_id);
         }
         // Effects may have dirtied more memos / effects.
@@ -840,6 +879,12 @@ impl<T> Clone for Signal<T> {
 }
 
 impl<T> Copy for Signal<T> {}
+
+impl<T> Signal<T> {
+    pub(crate) fn id(self) -> SignalId {
+        self.id
+    }
+}
 
 impl<T: Clone + 'static> Signal<T> {
     pub fn new(value: T) -> Self {
@@ -1012,6 +1057,33 @@ pub fn create_effect<F>(f: F) -> EffectId
 where
     F: FnMut() + 'static,
 {
+    create_effect_with_phase(EffectPhase::User, f)
+}
+
+/// Render-phase effect used by `bind_*` (and structure islands). Runs after memos /
+/// [`create_computed`] and **before** user [`create_effect`] (I-12).
+pub(crate) fn create_render_effect<F>(f: F) -> EffectId
+where
+    F: FnMut() + 'static,
+{
+    create_effect_with_phase(EffectPhase::Render, f)
+}
+
+/// Eager computed (Solid `createComputed`): same-frame, **before** `bind_*` and user effects.
+///
+/// Use this to synchronously write other signals. Prefer [`create_memo`] when the result is a
+/// derived value readers should subscribe to. Does not introduce a `RenderEffect` type.
+pub fn create_computed<F>(f: F) -> EffectId
+where
+    F: FnMut() + 'static,
+{
+    create_effect_with_phase(EffectPhase::Computed, f)
+}
+
+fn create_effect_with_phase<F>(phase: EffectPhase, f: F) -> EffectId
+where
+    F: FnMut() + 'static,
+{
     RUNTIME.with(|rt_rc| {
         let rt = rt_rc.borrow();
         let parent = ensure_owner(&rt);
@@ -1025,15 +1097,15 @@ where
             EffectState {
                 owner,
                 depth,
+                phase,
                 f: Rc::clone(&effect_rc),
             },
         );
         if let Some(node) = rt.owners.borrow_mut().get_mut(&owner) {
             node.effects.push(id);
         }
-        // Also record on parent? The effect's own owner holds it; parent holds the owner as child.
 
-        if rt.mark_next_as_ui_root.get() {
+        if phase == EffectPhase::User && rt.mark_next_as_ui_root.get() {
             rt.mark_next_as_ui_root.set(false);
             rt.ui_root_effect.set(Some(id));
             rt.ui_root_bare_get_warned.set(false);
@@ -1235,6 +1307,9 @@ impl OwnerHandle {
         if self.disposed.replace(true) {
             return;
         }
+        if !runtime_tls_alive() {
+            return;
+        }
         RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
             dispose_owner(&rt, self.id);
@@ -1298,6 +1373,122 @@ where
 /// Current owner id, if any.
 pub fn current_owner() -> Option<OwnerId> {
     RUNTIME.with(|rt_rc| *rt_rc.borrow().current_owner.borrow())
+}
+
+/// Live owner nodes in the runtime graph (WP-R.5 / leak diagnostics).
+pub fn live_owner_count() -> usize {
+    RUNTIME.with(|rt_rc| rt_rc.borrow().owners.borrow().len())
+}
+
+/// WP-R.8 debug edge: one signal and its current effect subscribers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalEffectEdge {
+    pub signal_id: usize,
+    pub effect_ids: Vec<usize>,
+}
+
+/// WP-R.8 debug edge: one signal and memos that read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignalMemoEdge {
+    pub signal_id: usize,
+    pub memo_ids: Vec<usize>,
+}
+
+/// WP-R.8 snapshot hook (non-DevTools UI): runtime graph counts + adjacency edges.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReactivityDebugSnapshot {
+    pub live_owners: usize,
+    pub live_effects: usize,
+    pub live_memos: usize,
+    pub live_signals: usize,
+    pub named_signals: usize,
+    pub pending_effects: usize,
+    pub pending_memos: usize,
+    pub ui_root_dep_count: usize,
+    pub signal_effect_edges: Vec<SignalEffectEdge>,
+    pub signal_memo_edges: Vec<SignalMemoEdge>,
+}
+
+/// Collect a structured reactivity graph snapshot for leak / dependency diagnostics.
+pub fn reactivity_debug_snapshot() -> ReactivityDebugSnapshot {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let live_owners = rt.owners.borrow().len();
+        let live_effects = rt.effects.borrow().len();
+        let live_memos = rt.memos.borrow().len();
+        let live_signals = rt.signals.borrow().len();
+        let named_signals = rt.named_signals.borrow().len();
+        let pending_effects = rt.pending_effects.borrow().len();
+        let pending_memos = rt.pending_memos.borrow().len();
+        let ui_root_dep_count = ui_root_effect_dep_count();
+
+        let mut signal_effect_edges: Vec<SignalEffectEdge> = rt
+            .signal_subscribers
+            .borrow()
+            .iter()
+            .map(|(signal_id, effects)| {
+                let mut effect_ids: Vec<usize> = effects.iter().map(|id| id.0).collect();
+                effect_ids.sort_unstable();
+                SignalEffectEdge {
+                    signal_id: signal_id.0,
+                    effect_ids,
+                }
+            })
+            .collect();
+        signal_effect_edges.sort_by_key(|edge| edge.signal_id);
+
+        let mut signal_memo_edges: Vec<SignalMemoEdge> = rt
+            .signal_memo_subscribers
+            .borrow()
+            .iter()
+            .map(|(signal_id, memos)| {
+                let mut memo_ids: Vec<usize> = memos.iter().map(|id| id.0).collect();
+                memo_ids.sort_unstable();
+                SignalMemoEdge {
+                    signal_id: signal_id.0,
+                    memo_ids,
+                }
+            })
+            .collect();
+        signal_memo_edges.sort_by_key(|edge| edge.signal_id);
+
+        ReactivityDebugSnapshot {
+            live_owners,
+            live_effects,
+            live_memos,
+            live_signals,
+            named_signals,
+            pending_effects,
+            pending_memos,
+            ui_root_dep_count,
+            signal_effect_edges,
+            signal_memo_edges,
+        }
+    })
+}
+
+impl ReactivityDebugSnapshot {
+    /// Compact one-line dump for logs / tests (WP-R.8). Not a DevTools UI.
+    pub fn dump(&self) -> String {
+        format!(
+            "owners={} effects={} memos={} signals={} named={} pending_e={} pending_m={} root_deps={} e_edges={} m_edges={}",
+            self.live_owners,
+            self.live_effects,
+            self.live_memos,
+            self.live_signals,
+            self.named_signals,
+            self.pending_effects,
+            self.pending_memos,
+            self.ui_root_dep_count,
+            self.signal_effect_edges.len(),
+            self.signal_memo_edges.len(),
+        )
+    }
+}
+
+/// Convenience alias of [`reactivity_debug_snapshot`]`.dump()`.
+pub fn dump_reactivity_graph() -> String {
+    reactivity_debug_snapshot().dump()
 }
 
 /// Owner path string used for scoped keys (e.g. `root1/4/9`).
@@ -1550,6 +1741,68 @@ pub fn use_signal<T: 'static>(id_str: &str, init: impl FnOnce() -> T) -> Signal<
     let remapped = remap_window_local_signal_key(id_str);
     RUNTIME.with(|rt_rc| rt_rc.borrow().use_signal(remapped.as_ref(), init))
 }
+
+// ─── Trigger (Solid `createTrigger`) ────────────────────────────────────────
+
+/// A zero-payload reactive primitive: `.track()` subscribes, `.notify()` fires subscribers.
+///
+/// Unlike `Signal<()>`, it never compares values — every `notify()` unconditionally schedules
+/// dependents. Use for invalidation-only patterns (e.g. force re-render, cache bust).
+#[derive(Clone, Copy)]
+pub struct Trigger {
+    id: SignalId,
+}
+
+impl Trigger {
+    pub fn new() -> Self {
+        let sig: Signal<()> = Signal::new(());
+        Self { id: sig.id }
+    }
+
+    /// Subscribe the current effect / memo without reading a value.
+    pub fn track(&self) {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            track_signal_read(&rt, self.id);
+        });
+    }
+
+    /// Fire all subscribers unconditionally.
+    pub fn notify(&self) {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            notify_signal_subscribers(&rt, self.id);
+        });
+    }
+
+    /// Whether the underlying signal slot is still alive.
+    pub fn is_alive(&self) -> bool {
+        RUNTIME.with(|rt_rc| rt_rc.borrow().signals.borrow().contains_key(&self.id))
+    }
+}
+
+/// Create a [`Trigger`] (Solid `createTrigger`).
+pub fn create_trigger() -> Trigger {
+    Trigger::new()
+}
+
+// ─── Transition ─────────────────────────────────────────────────────────────
+
+/// Run `f` inside a deferred batch: reactive updates inside `f` are committed after the
+/// current flush completes (Solid `startTransition` analogy on a frame-synchronous runtime).
+///
+/// If no flush is in progress, the deferred fn executes immediately via a flush kick.
+pub fn start_transition<F: FnOnce() + 'static>(f: F) {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        enqueue_deferred_fn(&rt, Box::new(f));
+        if !rt.flushing_pending.get() {
+            flush_pending(&rt);
+        }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Run `f` while tracking stays on ([`is_tracking`] is true) but collected `get()` deps are discarded.
 ///
@@ -2383,5 +2636,116 @@ mod tests {
         // After full flush, deferred has caught up and effect observed 2.
         assert_eq!(deferred.peek(), 2);
         assert_eq!(*seen.borrow(), vec![1, 2]);
+    }
+
+    #[test]
+    fn effect_phases_computed_then_render_then_user() {
+        let src = Signal::new(0_i32);
+        let order = Rc::new(RefCell::new(Vec::<&'static str>::new()));
+        create_effect({
+            let order = Rc::clone(&order);
+            move || {
+                order.borrow_mut().push("user");
+                let _ = src.get();
+            }
+        });
+        create_render_effect({
+            let order = Rc::clone(&order);
+            move || {
+                order.borrow_mut().push("bind");
+                let _ = src.get();
+            }
+        });
+        create_computed({
+            let order = Rc::clone(&order);
+            move || {
+                order.borrow_mut().push("computed");
+                let _ = src.get();
+            }
+        });
+        order.borrow_mut().clear();
+        src.set(1);
+        assert_eq!(
+            *order.borrow(),
+            vec!["computed", "bind", "user"],
+            "I-12: Computed → bind_* → user create_effect"
+        );
+    }
+
+    #[test]
+    fn reactivity_debug_snapshot_reports_edges_and_counts() {
+        clear_effects();
+        let (_root, src) = create_root(|| {
+            let src = Signal::new(1_i32);
+            let _memo = create_memo({
+                move || src.get() + 1
+            });
+            create_effect({
+                move || {
+                    let _ = src.get();
+                }
+            });
+            src
+        });
+        let snap = reactivity_debug_snapshot();
+        assert!(snap.live_owners >= 1);
+        assert!(snap.live_effects >= 1);
+        assert!(snap.live_memos >= 1);
+        assert!(
+            snap.signal_effect_edges
+                .iter()
+                .any(|edge| !edge.effect_ids.is_empty()),
+            "at least one signal should have effect subscribers"
+        );
+        assert!(
+            snap.signal_memo_edges
+                .iter()
+                .any(|edge| !edge.memo_ids.is_empty()),
+            "at least one signal should have memo subscribers"
+        );
+        src.set(2);
+        let snap_after = reactivity_debug_snapshot();
+        assert_eq!(snap_after.pending_effects, 0);
+        assert_eq!(snap_after.pending_memos, 0);
+        let dump = dump_reactivity_graph();
+        assert!(dump.contains("owners="), "{dump}");
+        assert!(dump.contains("e_edges="), "{dump}");
+    }
+
+    #[test]
+    fn trigger_notifies_subscribers_unconditionally() {
+        clear_effects();
+        let trigger = create_trigger();
+        let count = Rc::new(Cell::new(0_u32));
+        let count_c = Rc::clone(&count);
+        let _root = create_root(|| {
+            create_effect(move || {
+                trigger.track();
+                count_c.set(count_c.get() + 1);
+            });
+        });
+        assert_eq!(count.get(), 1);
+        trigger.notify();
+        assert_eq!(count.get(), 2);
+        trigger.notify();
+        assert_eq!(count.get(), 3);
+    }
+
+    #[test]
+    fn start_transition_defers_update() {
+        clear_effects();
+        let sig = Signal::new(0_i32);
+        let seen = Rc::new(RefCell::new(Vec::<i32>::new()));
+        let seen_c = Rc::clone(&seen);
+        let _root = create_root(|| {
+            create_effect(move || {
+                seen_c.borrow_mut().push(sig.get());
+            });
+        });
+        assert_eq!(*seen.borrow(), vec![0]);
+        start_transition(move || {
+            sig.set(42);
+        });
+        assert_eq!(*seen.borrow(), vec![0, 42]);
     }
 }

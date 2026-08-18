@@ -483,6 +483,32 @@ impl IntoElementList for &str {
     }
 }
 
+/// Argument to [`Element::text`]: a static string, or (via impls in `app/reactive`) a
+/// [`crate::core::reactivity::Signal`] / `FnMut() -> String` live binding.
+pub trait IntoNodeText {
+    fn apply_node_text(self, el: Element) -> Element;
+}
+
+impl IntoNodeText for String {
+    fn apply_node_text(self, mut el: Element) -> Element {
+        el.text = Some(self);
+        el.style.flex_shrink = 0.0;
+        el
+    }
+}
+
+impl IntoNodeText for &str {
+    fn apply_node_text(self, el: Element) -> Element {
+        el.text(self.to_string())
+    }
+}
+
+impl IntoNodeText for &String {
+    fn apply_node_text(self, el: Element) -> Element {
+        el.text(self.clone())
+    }
+}
+
 impl Element {
     pub(crate) fn into_margin_auto(val: impl IntoDimension) -> LengthPercentageAuto {
         match val.into_dimension() {
@@ -833,11 +859,10 @@ impl Element {
         self.style.overflow.y = Self::parse_overflow_mode(mode.as_ref());
         self
     }
-    pub fn text(mut self, text: impl Into<String>) -> Self {
-        self.text = Some(text.into());
-        // 与 CSS 中文本节点类似：不在 flex 行内被 shrink 压窄，避免盒宽小于实际 glyph 宽而裁字。
-        self.style.flex_shrink = 0.0;
-        self
+    /// Static string, [`crate::core::reactivity::Signal`], or `|| String` compute.
+    /// `text(sig.get())` is still a snapshot — pass `sig` or `|| sig.get().to_string()`.
+    pub fn text(self, text: impl IntoNodeText) -> Self {
+        text.apply_node_text(self)
     }
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
         self.text_style.font_family = Some(family.into());

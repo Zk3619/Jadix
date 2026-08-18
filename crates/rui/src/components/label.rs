@@ -246,7 +246,7 @@ pub fn text_node(id: impl Into<String>) -> LabelBuilder {
 }
 
 impl LabelBuilder {
-    pub fn text(mut self, content: impl Into<String>) -> Self {
+    pub fn text(mut self, content: impl crate::core::tree::IntoNodeText) -> Self {
         self.inner = self.inner.text(content);
         self
     }

@@ -132,7 +132,7 @@ impl InteractiveBuilder {
         self
     }
 
-    pub fn text(mut self, text: impl Into<String>) -> Self {
+    pub fn text(mut self, text: impl crate::core::tree::IntoNodeText) -> Self {
         self.el = self.el.text(text);
         self
     }

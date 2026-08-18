@@ -1,4 +1,4 @@
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 use serde::Deserialize;
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
@@ -86,17 +86,7 @@ impl HotReloadState {
             match cmd {
                 HotReloadCommand::Reload => batch.force_reload = true,
                 HotReloadCommand::TemplatePatch(patch) => {
-                    if batch.last_patch_file.is_empty() {
-                        batch.last_patch_file = patch.file.clone();
-                    }
-                    if patch.templates.is_empty() {
-                        // 解析到文件但无 ui! 块：退化为整树重建（与旧版「有 patch 但 templates 为空」行为一致）。
-                        batch.force_reload = true;
-                    } else {
-                        for tpl in patch.templates {
-                            by_template_id.insert(tpl.id.clone(), tpl);
-                        }
-                    }
+                    ingest_template_patch(&mut batch, patch, &mut by_template_id);
                 }
                 HotReloadCommand::AssetReload(paths) => {
                     for p in paths {
@@ -117,7 +107,7 @@ impl HotReloadState {
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Default)]
 pub(super) struct HotReloadBatch {
     pub(super) count: usize,
@@ -128,7 +118,7 @@ pub(super) struct HotReloadBatch {
     pub(super) asset_paths: Vec<String>,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone)]
 pub(super) enum HotReloadCommand {
     Reload,
@@ -136,7 +126,7 @@ pub(super) enum HotReloadCommand {
     AssetReload(Vec<String>),
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TemplatePatchMsg {
     pub(super) file: String,
@@ -144,7 +134,7 @@ pub(super) struct TemplatePatchMsg {
     pub(super) templates: Vec<TemplateFragment>,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TemplateFragment {
     pub(super) id: String,
@@ -160,7 +150,7 @@ pub(super) struct TemplateFragment {
     pub(super) style_attrs: Vec<StyleAttr>,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct StyleAttr {
     #[serde(default)]
@@ -169,7 +159,7 @@ pub(super) struct StyleAttr {
     pub(super) value: String,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TextReplacement {
     #[serde(default)]
@@ -192,6 +182,26 @@ enum IncomingMessage {
         #[serde(default)]
         paths: Vec<String>,
     },
+}
+
+/// WP-R.6：`templates: []` 表示文件解析成功但没有 `ui!` 块，必须整树 `rebuild_ui`，
+/// 禁止对反应槽做模糊/空补丁注入。
+#[cfg(any(debug_assertions, test))]
+fn ingest_template_patch(
+    batch: &mut HotReloadBatch,
+    patch: TemplatePatchMsg,
+    by_template_id: &mut std::collections::HashMap<String, TemplateFragment>,
+) {
+    if batch.last_patch_file.is_empty() {
+        batch.last_patch_file = patch.file.clone();
+    }
+    if patch.templates.is_empty() {
+        batch.force_reload = true;
+        return;
+    }
+    for tpl in patch.templates {
+        by_template_id.insert(tpl.id.clone(), tpl);
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -333,7 +343,10 @@ pub(super) fn collect_template_ids(root: &crate::core::tree::Element, out: &mut 
 
 #[cfg(test)]
 mod tests {
-    use super::template_id_matches;
+    use super::{
+        ingest_template_patch, template_id_matches, HotReloadBatch, TemplateFragment,
+        TemplatePatchMsg,
+    };
 
     #[test]
     fn template_id_match_accepts_same_tail_components_with_same_line() {
@@ -365,5 +378,84 @@ mod tests {
             "examples/gallery/src/main.rs:188",
             "examples/gallery/src/main.rs:189",
         ));
+    }
+
+    #[test]
+    fn ingest_template_patch_empty_templates_forces_full_rebuild() {
+        let mut batch = HotReloadBatch::default();
+        let mut by_template_id = std::collections::HashMap::new();
+        ingest_template_patch(
+            &mut batch,
+            TemplatePatchMsg {
+                file: "examples/gallery/src/main.rs".to_string(),
+                templates: vec![],
+            },
+            &mut by_template_id,
+        );
+        assert!(batch.force_reload);
+        assert_eq!(batch.last_patch_file, "examples/gallery/src/main.rs");
+        assert!(by_template_id.is_empty());
+    }
+
+    #[test]
+    fn ingest_template_patch_merges_by_template_id() {
+        let mut batch = HotReloadBatch::default();
+        let mut by_template_id = std::collections::HashMap::new();
+        ingest_template_patch(
+            &mut batch,
+            TemplatePatchMsg {
+                file: "a.rs".to_string(),
+                templates: vec![TemplateFragment {
+                    id: "slot:a".to_string(),
+                    hash: "h1".to_string(),
+                    len: 1,
+                    index: 0,
+                    text_literals: vec!["A".to_string()],
+                    text_replacements: vec![],
+                    style_attrs: vec![],
+                }],
+            },
+            &mut by_template_id,
+        );
+        ingest_template_patch(
+            &mut batch,
+            TemplatePatchMsg {
+                file: "b.rs".to_string(),
+                templates: vec![TemplateFragment {
+                    id: "slot:a".to_string(),
+                    hash: "h2".to_string(),
+                    len: 2,
+                    index: 1,
+                    text_literals: vec!["B".to_string()],
+                    text_replacements: vec![],
+                    style_attrs: vec![],
+                }],
+            },
+            &mut by_template_id,
+        );
+        assert!(!batch.force_reload);
+        assert_eq!(batch.last_patch_file, "a.rs");
+        assert_eq!(by_template_id.len(), 1);
+        let merged = by_template_id.get("slot:a").expect("slot:a present");
+        assert_eq!(merged.hash, "h2");
+        assert_eq!(merged.text_literals, vec!["B".to_string()]);
+    }
+
+    /// WP-R.6: hot-reload inject may fuzzy-match path suffix; `reconcile_subtree`
+    /// must **not** — it only equals after slash/case normalize.
+    #[test]
+    fn reconcile_anchor_id_is_exact_not_fuzzy() {
+        let incoming = "d:/projects/rust-native-ui/examples/gallery/src/main.rs:188";
+        let runtime = "examples/gallery/src/main.rs:188";
+        assert!(
+            template_id_matches(incoming, runtime),
+            "dev patches still use fuzzy path-suffix matching"
+        );
+        let a = incoming.replace('\\', "/").to_ascii_lowercase();
+        let b = runtime.replace('\\', "/").to_ascii_lowercase();
+        assert_ne!(
+            a, b,
+            "structure-island reconcile must not treat these as the same slot"
+        );
     }
 }

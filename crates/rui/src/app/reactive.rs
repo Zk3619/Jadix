@@ -34,8 +34,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{create_effect, dispose_effect, untrack, use_signal, EffectId};
-use crate::core::tree::{Element, IntoCssDim, LayoutStatus, UnitSlot, UnmountHook};
+use crate::core::reactivity::{
+    create_render_effect, dispose_effect, untrack, use_signal, EffectId, Signal,
+};
+use crate::core::tree::{Element, IntoCssDim, IntoNodeText, LayoutStatus, UnitSlot, UnmountHook};
 
 use super::runtime;
 
@@ -53,7 +55,7 @@ thread_local! {
 pub(crate) const REACTIVE_PLACEHOLDER_HASH: &str = "__rui_reactive_placeholder_v1";
 
 /// Registry keys must not collide across windows when component ids match.
-fn window_scoped_registry_key(id: &str) -> String {
+pub(crate) fn window_scoped_registry_key(id: &str) -> String {
     let scope = crate::core::reactivity::signal_key_scope();
     if scope == 0 {
         id.to_string()
@@ -155,6 +157,7 @@ pub fn reset_registered_anchors() {
 
     COMPONENT_PROPS.with(|store| store.borrow_mut().clear());
     COMPONENT_CHILDREN.with(|store| store.borrow_mut().clear());
+    super::keyed_list::reset_keyed_list_registry();
 }
 
 /// Stash RSX `children` for a reactive component between `From`/function calls.
@@ -271,7 +274,7 @@ where
     let effect_registry_key = registry_key.clone();
     let effect_scope = super::window_scope::active();
     let effect_window = super::window_scope::active_window_id();
-    let effect_id = create_effect(move || {
+    let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
         let mut fragment = f();
         fragment.template_id = Some(effect_anchor_id.clone());
@@ -472,21 +475,23 @@ where
         Element::new().template_id(id.clone()),
         id,
         compute,
-        |el, next| {
-            if el.text.as_deref() == Some(next.as_str()) {
-                return LayoutStatus::Clean;
-            }
-            let old = el.text.as_deref().unwrap_or("");
-            let needs_layout = bind_text_metric_needs_layout(el, old, next.as_str());
-            el.text = Some(next);
-            el.style.flex_shrink = 0.0;
-            if needs_layout {
-                LayoutStatus::LayoutChanged
-            } else {
-                LayoutStatus::StyleChanged
-            }
-        },
+        |el, next| apply_bound_text_value(el, next),
     )
+}
+
+pub(crate) fn apply_bound_text_value(el: &mut Element, next: String) -> LayoutStatus {
+    if el.text.as_deref() == Some(next.as_str()) {
+        return LayoutStatus::Clean;
+    }
+    let old = el.text.as_deref().unwrap_or("");
+    let needs_layout = bind_text_metric_needs_layout(el, old, next.as_str());
+    el.text = Some(next);
+    el.style.flex_shrink = 0.0;
+    if needs_layout {
+        LayoutStatus::LayoutChanged
+    } else {
+        LayoutStatus::StyleChanged
+    }
 }
 
 /// Whether a `bind_text` string change must reflow (vs paint-only).
@@ -637,7 +642,7 @@ where
     let effect_node_id = node_id;
     let effect_scope = super::window_scope::active();
     let effect_window = super::window_scope::active_window_id();
-    let effect_id = create_effect(move || {
+    let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
         let next = compute();
         if let Some(status) =
@@ -852,8 +857,35 @@ where
     })
 }
 
+/// Solid-style `<Match>` / `<MatchArm when>`: first true `when` wins; all false → empty or fallback.
+///
+/// Re-evaluates inside a dedicated [`reactive_view`] so `when={…get()}` does not subscribe the
+/// root / component boundary. Prefer this over nested [`show_reactive`] for multi-arm branches
+/// that are boolean (key-based arms still use [`switch_reactive`]).
+pub fn match_when_reactive<F>(anchor_id: impl Into<String>, mut pick: F) -> Element
+where
+    F: FnMut() -> Element + 'static,
+{
+    reactive_view(anchor_id, move || pick())
+}
+
+/// In-place `attrs[key] = value` for `ui!` auto-bind of otherwise unknown attributes.
+pub fn apply_bound_attr(el: &mut Element, key: &str, value: String) -> LayoutStatus {
+    match el.attrs.get(key) {
+        Some(old) if old == &value => LayoutStatus::Clean,
+        _ => {
+            el.set_attr(key, value);
+            LayoutStatus::StyleChanged
+        }
+    }
+}
+
 /// Solid-style `<For each={list.get()}>`: rebuild the keyed children list inside a dedicated
 /// [`reactive_view`] so reading the list signal does not subscribe the root tree.
+///
+/// This is the **whole-list** path (re-runs `render_list` then keyed Element reconcile).
+/// For item-level owners (I-7, unchanged keys do not re-run item `render`) use
+/// [`for_keyed_reactive`].
 pub fn for_reactive<F>(anchor_id: impl Into<String>, mut render_list: F) -> Element
 where
     F: FnMut() -> Vec<Element> + 'static,
@@ -892,6 +924,8 @@ where
 
 /// List helper with index-based stable keys (`{scope_id}:{index}`).
 /// Useful as a lower-boilerplate `<For each={...}>` fallback when explicit keys are omitted.
+///
+/// This is **not** Solid `<Index>` (no per-index Accessor). Use [`index_reactive`] for I-11.
 pub fn for_each<T, RF>(scope_id: impl Into<String>, items: &[T], mut render: RF) -> Vec<Element>
 where
     RF: FnMut(&T) -> Element,
@@ -925,6 +959,11 @@ where
     for_keyed(scope_id, &items_vec, key_of, render)
 }
 
+pub use super::keyed_list::{
+    for_keyed_reactive, for_keyed_reactive_with_fallback, index_reactive,
+    keyed_list_item_owner_count,
+};
+
 /// Iterator variant for index-keyed list rendering.
 pub fn for_each_iter<I, T, RF>(scope_id: impl Into<String>, items: I, render: RF) -> Vec<Element>
 where
@@ -933,6 +972,33 @@ where
 {
     let items_vec: Vec<T> = items.into_iter().collect();
     for_each(scope_id, &items_vec, render)
+}
+
+impl<T: Clone + std::fmt::Display + 'static> IntoNodeText for Signal<T> {
+    fn apply_node_text(self, el: Element) -> Element {
+        let id = format!("__rui_text_sig:{:?}", self.id());
+        bind_prop(
+            el,
+            id,
+            move || self.get().to_string(),
+            apply_bound_text_value,
+        )
+    }
+}
+
+impl<F> IntoNodeText for F
+where
+    F: FnMut() -> String + 'static,
+{
+    #[track_caller]
+    fn apply_node_text(self, el: Element) -> Element {
+        let loc = std::panic::Location::caller();
+        let id = el
+            .template_id
+            .clone()
+            .unwrap_or_else(|| format!("{}:{}:{}:bind_text", loc.file(), loc.line(), loc.column()));
+        bind_prop(el, id, self, apply_bound_text_value)
+    }
 }
 
 #[cfg(test)]
@@ -1014,6 +1080,70 @@ mod intrinsic_width_tests {
             tid
         });
         assert_eq!(tid, "sw-test");
+    }
+
+    #[test]
+    fn match_when_reactive_builds_placeholder() {
+        use crate::core::reactivity::{create_effect, create_root, create_signal};
+        let (_o, tid) = create_root(|| {
+            let ok = create_signal(true);
+            let out = std::rc::Rc::new(std::cell::RefCell::new(None::<String>));
+            let out2 = out.clone();
+            create_effect(move || {
+                let el = match_when_reactive("match-test", move || {
+                    if ok.get() {
+                        Element::new().text("yes")
+                    } else {
+                        Element::new().text("no")
+                    }
+                });
+                *out2.borrow_mut() = el.template_id.clone();
+            });
+            let tid = out.borrow().clone().expect("id");
+            tid
+        });
+        assert_eq!(tid, "match-test");
+    }
+
+    #[test]
+    fn element_text_signal_and_closure_bind() {
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+        reset_registered_anchors();
+        let (_o, (sig_id, clos_id, snap_id)) = create_root(|| {
+            let sig = use_signal("__rui_into_node_text", || "live".to_string());
+            sig.set_silent("live".to_string());
+            let out = std::rc::Rc::new(std::cell::RefCell::new(
+                None::<(Option<String>, Option<String>, Option<String>)>,
+            ));
+            let out2 = out.clone();
+            create_effect(move || {
+                let bound = Element::new().text(sig);
+                let clos = Element::new().text(move || sig.get());
+                let snap = Element::new().text(sig.get());
+                *out2.borrow_mut() = Some((
+                    bound.template_id.clone(),
+                    clos.template_id.clone(),
+                    snap.template_id.clone(),
+                ));
+            });
+            let ids = out.borrow().clone().expect("ids");
+            ids
+        });
+        assert!(
+            sig_id
+                .as_deref()
+                .is_some_and(|id| id.contains("__rui_text_sig")),
+            "Element::text(sig) must bind; id={sig_id:?}"
+        );
+        assert!(
+            clos_id.is_some(),
+            "Element::text(|| sig.get()) must bind; id={clos_id:?}"
+        );
+        assert!(
+            snap_id.is_none(),
+            "Element::text(sig.get()) is a snapshot; id={snap_id:?}"
+        );
+        reset_registered_anchors();
     }
 
     #[test]

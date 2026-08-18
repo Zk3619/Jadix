@@ -121,6 +121,38 @@ macro_rules! bind_style {
     }};
 }
 
+/// Solid `mergeProps`: later `Some` wins. `#[component]` `*Props` impl [`MergeProps`](crate::app::props::MergeProps).
+///
+/// ```ignore
+/// let props = merge_props!(defaults, incoming, overrides);
+/// ```
+#[macro_export]
+macro_rules! merge_props {
+    ($first:expr $(,)?) => {
+        $first
+    };
+    ($first:expr, $($rest:expr),+ $(,)?) => {{
+        $crate::app::props::MergeProps::merge_with(
+            $first,
+            $crate::merge_props!($($rest),+),
+        )
+    }};
+}
+
+/// Solid `splitProps`: take listed fields (`mem::take`), return `(tuple, rest)` for `..rest` spread.
+///
+/// ```ignore
+/// let ((id, class), rest) = split_props!(props, id, class);
+/// ```
+#[macro_export]
+macro_rules! split_props {
+    ($props:expr, $($field:ident),+ $(,)?) => {{
+        let mut __rui_rest = $props;
+        let __rui_local = ($(std::mem::take(&mut __rui_rest.$field),)+);
+        (__rui_local, __rui_rest)
+    }};
+}
+
 pub fn init() {}
 
 /// 将 RGBA8 贴图排队上传到 GPU，供 [`components::Image`](crate::components::Image) 等通过 `texture` 引用。
@@ -161,6 +193,9 @@ pub use app::damage::{
     full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
 };
 pub use app::pointer_events::{MouseEvent, PointerEvent};
+pub use app::props::{
+    children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
+};
 pub use app::{mouse_content_pan_enabled, set_mouse_content_pan_enabled};
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,

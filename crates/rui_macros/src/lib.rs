@@ -380,6 +380,8 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         syn::parse_macro_input!(_attr with attr_parser);
     }
 
+    let mut merge_fields = Vec::new();
+
     for arg in &input.sig.inputs {
         if let syn::FnArg::Typed(pat_type) = arg
             && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
@@ -402,6 +404,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             field_names.push(name.clone());
+            merge_fields.push(merge_prop_field(&crate_path, name, &name_str));
 
             if name_str == "id" {
                 fields.push(quote! { #(#arg_docs)* pub #name: String });
@@ -458,12 +461,16 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
         fields.push(quote! { pub children: Option<#crate_path::core::tree::Element> });
         field_names.push(syn::Ident::new("children", proc_macro2::Span::call_site()));
         field_unwrapping.push(quote! { let children = children; });
+        let children_ident = syn::Ident::new("children", proc_macro2::Span::call_site());
+        merge_fields.push(merge_prop_field(&crate_path, &children_ident, "children"));
     }
 
     // Add base prop for styling/layout
     fields.push(quote! { pub base: Option<Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>> });
     field_names.push(syn::Ident::new("base", proc_macro2::Span::call_site()));
     field_unwrapping.push(quote! { let mut base = base; });
+    let base_ident = syn::Ident::new("base", proc_macro2::Span::call_site());
+    merge_fields.push(merge_prop_field(&crate_path, &base_ident, "base"));
 
     let body = &input.block;
 
@@ -541,6 +548,14 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
             #(#fields),*
         }
 
+        impl #impl_generics #crate_path::app::props::MergeProps for #props_name #ty_generics #where_clause {
+            fn merge_with(self, overlay: Self) -> Self {
+                Self {
+                    #(#merge_fields,)*
+                }
+            }
+        }
+
         #(#fn_docs)*
         #vis fn #name #impl_generics (props: #props_name #ty_generics) -> #crate_path::core::tree::Element
         #where_clause
@@ -552,6 +567,30 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+fn merge_prop_field(
+    crate_path: &proc_macro2::TokenStream,
+    name: &syn::Ident,
+    name_str: &str,
+) -> proc_macro2::TokenStream {
+    if name_str == "id" {
+        quote! {
+            #name: if overlay.#name.is_empty() {
+                self.#name
+            } else {
+                overlay.#name
+            }
+        }
+    } else if name_str == "base" || name_str == "base_builder" {
+        quote! {
+            #name: #crate_path::app::props::merge_base_prop(self.#name, overlay.#name)
+        }
+    } else {
+        quote! {
+            #name: overlay.#name.or(self.#name)
+        }
+    }
 }
 
 fn reactive_snapshot_skip(name: &str, ty_str: &str) -> bool {
@@ -621,12 +660,24 @@ fn expr_reads_get(expr: &Expr) -> bool {
                 Expr::Group(g) => Self::receiver_ok(&g.expr),
                 Expr::Reference(r) => Self::receiver_ok(&r.expr),
                 Expr::Try(t) => Self::receiver_ok(&t.expr),
+                Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => Self::receiver_ok(&u.expr),
                 Expr::MethodCall(m) => {
                     // Allow chains like `self.count.get()` / `state.foo.get()`.
                     Self::receiver_ok(&m.receiver)
                 }
                 _ => false,
             }
+        }
+
+        fn receiver_looks_like_thread_local(expr: &Expr) -> bool {
+            let Expr::Path(p) = expr else {
+                return false;
+            };
+            let Some(seg) = p.path.segments.last() else {
+                return false;
+            };
+            let s = seg.ident.to_string();
+            s.len() > 1 && s.chars().all(|c| c.is_ascii_uppercase() || c == '_')
         }
     }
     impl Visit<'_> for Finder {
@@ -635,6 +686,16 @@ fn expr_reads_get(expr: &Expr) -> bool {
                 return;
             }
             if node.method == "get" && node.args.is_empty() && Self::receiver_ok(&node.receiver) {
+                self.found = true;
+                return;
+            }
+            // Signal::with is a tracked read. Skip ALL_CAPS receivers (`THREAD.with`) so
+            // `thread_local!` is not treated as a UI signal.
+            if node.method == "with"
+                && node.args.len() == 1
+                && Self::receiver_ok(&node.receiver)
+                && !Self::receiver_looks_like_thread_local(&node.receiver)
+            {
                 self.found = true;
                 return;
             }
@@ -679,7 +740,7 @@ fn expand_node(
         RsxNode::Expr(expr) => {
             // Solid-style: dynamic text children that read `.get()` become in-place bindings
             // instead of subscribing the surrounding (often root) effect.
-            if !in_reactive_boundary && expr_reads_get(expr) {
+            if expr_reads_get(expr) {
                 let idx = *node_counter;
                 *node_counter += 1;
                 return quote! {
@@ -726,6 +787,9 @@ fn expand_node(
                 || name_str == "TabsContent"
                 || name_str == "ForKeyed"
                 || name_str == "For"
+                || name_str == "Match"
+                || name_str == "MatchArm"
+                || name_str == "When"
                 || name_str == "Fragment"
                 || name_str == "Dynamic"
             {
@@ -1709,6 +1773,110 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "MatchArm" || name_str == "When" {
+                    return quote! {
+                        compile_error!("<MatchArm>/<When> must be a child of <Match>")
+                    };
+                }
+
+                if name_str == "Match" {
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let scope_ts = quote! { format!("{}:{}:Match#{}", file!(), line!(), #idx) };
+                    let maybe_fallback_ts = get_attr("fallback").map(|e| quote! { #e });
+                    let maybe_key = get_attr("key");
+
+                    let mut expand_kids = |children: &[RsxNode]| -> proc_macro2::TokenStream {
+                        let mut expanded_children = Vec::new();
+                        for child in children {
+                            expanded_children.push(expand_node(
+                                child,
+                                node_counter,
+                                in_reactive_boundary,
+                            ));
+                        }
+                        if expanded_children.is_empty() {
+                            quote! { rui::core::tree::Element::new() }
+                        } else {
+                            quote! {
+                                {
+                                    use rui::core::tree::IntoElementList;
+                                    let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                    #( __list.extend((#expanded_children).into_element_list()); )*
+                                    if __list.len() == 1 {
+                                        __list.remove(0)
+                                    } else {
+                                        let mut __v = rui::primitives::vstack();
+                                        __v = __v.children(__list);
+                                        rui::core::tree::Element::from(__v)
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    if let Some(key_expr) = maybe_key {
+                        if el.children.len() != 1 {
+                            return quote! {
+                                compile_error!("<Match key={...}> expects a single closure child `{ |k| ... }`")
+                            };
+                        }
+                        let render_ts = match &el.children[0] {
+                            RsxNode::Expr(e) => quote! { #e },
+                            _ => {
+                                return quote! {
+                                    compile_error!("<Match key={...}> expects closure child expression")
+                                };
+                            }
+                        };
+                        return quote! {
+                            rui::app::reactive::switch_reactive(
+                                #scope_ts,
+                                move || { #key_expr },
+                                #render_ts,
+                            )
+                        };
+                    }
+
+                    let mut arm_when = Vec::new();
+                    let mut arm_body = Vec::new();
+                    for child in &el.children {
+                        let RsxNode::Element(arm) = child else {
+                            return quote! {
+                                compile_error!("<Match> without `key` expects <MatchArm when={...}> / <When when={...}> children")
+                            };
+                        };
+                        let arm_name = arm.name.to_string();
+                        if arm_name != "MatchArm" && arm_name != "When" {
+                            return quote! {
+                                compile_error!("<Match> children must be <MatchArm> or <When>")
+                            };
+                        }
+                        let Some((_, when_expr)) = arm.attributes.iter().find(|(k, _)| k == "when")
+                        else {
+                            return quote! {
+                                compile_error!("<MatchArm>/<When> requires `when={...}`")
+                            };
+                        };
+                        arm_when.push(quote! { #when_expr });
+                        arm_body.push(expand_kids(&arm.children));
+                    }
+                    let fallback_el = if let Some(fb) = maybe_fallback_ts {
+                        quote! { #fb }
+                    } else {
+                        quote! { rui::core::tree::Element::new() }
+                    };
+                    return quote! {
+                        rui::app::reactive::match_when_reactive(
+                            #scope_ts,
+                            move || {
+                                #( if { #arm_when } { return { #arm_body }; } )*
+                                #fallback_el
+                            },
+                        )
+                    };
+                }
+
                 if name_str == "Popover" {
                     let Some(open_expr) = get_attr("open") else {
                         return quote! { compile_error!("<Popover> requires `open={...}` (`rui::Signal<bool>`)"); };
@@ -1825,6 +1993,51 @@ fn expand_node(
                 } else {
                     quote! { #scope_ts }
                 };
+                let item_ident_for_key = maybe_item_ident
+                    .as_ref()
+                    .and_then(|v| v.as_ref().ok())
+                    .cloned()
+                    .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())));
+                // I-7 via ui!: `each={…get()}` + `key` → item-level owners (`for_keyed_reactive`).
+                // Empty source + `fallback` still keeps item owners for non-empty updates.
+                if each_is_reactive && let Some(key_ts) = maybe_key_ts.as_ref() {
+                    let key_fn = if let Some(item_ident) = item_ident_for_key.clone() {
+                        quote! {
+                            |__rui_for_item| {
+                                let #item_ident = __rui_for_item;
+                                #key_ts
+                            }
+                        }
+                    } else {
+                        quote! { #key_ts }
+                    };
+                    if let Some(fallback_ts) = maybe_fallback_ts.as_ref() {
+                        return quote! {
+                            rui::app::reactive::for_keyed_reactive_with_fallback(
+                                #scope_ts,
+                                move || {
+                                    (#each_expr).into_iter().collect::<Vec<_>>()
+                                },
+                                #key_fn,
+                                #render_ts,
+                                move || {
+                                    use rui::core::tree::IntoElementList;
+                                    (#fallback_ts).into_element_list()
+                                },
+                            )
+                        };
+                    }
+                    return quote! {
+                        rui::app::reactive::for_keyed_reactive(
+                            #scope_ts,
+                            move || {
+                                (#each_expr).into_iter().collect::<Vec<_>>()
+                            },
+                            #key_fn,
+                            #render_ts,
+                        )
+                    };
+                }
                 let emit_for =
                     |base: proc_macro2::TokenStream, fallback: Option<proc_macro2::TokenStream>| {
                         let list_body = if let Some(fallback_ts) = fallback {
@@ -1849,12 +2062,7 @@ fn expand_node(
                     };
 
                 if let Some(key_ts) = maybe_key_ts {
-                    if let Some(item_ident) = maybe_item_ident
-                        .as_ref()
-                        .and_then(|v| v.as_ref().ok())
-                        .cloned()
-                        .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())))
-                    {
+                    if let Some(item_ident) = item_ident_for_key {
                         let base = quote! {
                             rui::app::reactive::for_keyed_iter(
                                 #items_scope_ts,
@@ -1938,8 +2146,7 @@ fn expand_node(
                     }
 
                     // Button / Input chrome attrs → bind_attr (Solid-style, no rebuild).
-                    if !in_reactive_boundary
-                        && matches!(name_str.as_str(), "Button" | "Input")
+                    if matches!(name_str.as_str(), "Button" | "Input")
                         && matches!(attr_name, "variant" | "disabled" | "invalid")
                         && expr_reads_get(value)
                     {
@@ -2216,7 +2423,7 @@ fn expand_node(
                             continue;
                         }
                         // Dynamic class / color base attrs → bind on resulting Element.
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             if matches!(attr_name, "class" | "className" | "tw" | "uno") {
@@ -2551,12 +2758,12 @@ fn expand_node(
                                 })
                             ) {
                                 quote! { Some(rui::core::tree::parse_bool_like(#value)) }
-                            } else if !in_reactive_boundary && expr_reads_get(value) {
+                            } else if expr_reads_get(value) {
                                 quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
                             } else {
                                 quote! { Some((#value).into()) }
                             }
-                        } else if !in_reactive_boundary && expr_reads_get(value) {
+                        } else if expr_reads_get(value) {
                             // Avoid subscribing the parent effect during props construction.
                             quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
                         } else {
@@ -2720,7 +2927,7 @@ fn expand_node(
                 let mut dynamic_name: Option<&syn::Expr> = None;
                 for (attr, value) in &el.attributes {
                     if *attr == "name" {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             dynamic_name = Some(value);
                             continue;
                         }
@@ -2785,7 +2992,7 @@ fn expand_node(
             for (attr, value) in &el.attributes {
                 let attr_str = attr.to_string();
                 if matches!(attr_str.as_str(), "class" | "className" | "tw" | "uno") {
-                    if !in_reactive_boundary && expr_reads_get(value) {
+                    if expr_reads_get(value) {
                         let idx = *node_counter;
                         *node_counter += 1;
                         dynamic_binds.push(quote! {
@@ -2912,10 +3119,7 @@ fn expand_node(
                 }
                 match attr_str.as_str() {
                     "w" | "width" | "inline_size" | "inlineSize" => {
-                        if !in_reactive_boundary
-                            && expr_reads_get(value)
-                            && parse_min_max_call(value).is_none()
-                        {
+                        if expr_reads_get(value) && parse_min_max_call(value).is_none() {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "w";
@@ -2934,7 +3138,7 @@ fn expand_node(
                         }
                     }
                     "max_w" | "maxWidth" | "max_width" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "max_w";
@@ -2953,7 +3157,7 @@ fn expand_node(
                         }
                     }
                     "min_w" | "minWidth" | "min_width" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "min_w";
@@ -2972,10 +3176,7 @@ fn expand_node(
                         }
                     }
                     "h" | "height" | "block_size" | "blockSize" => {
-                        if !in_reactive_boundary
-                            && expr_reads_get(value)
-                            && parse_min_max_call(value).is_none()
-                        {
+                        if expr_reads_get(value) && parse_min_max_call(value).is_none() {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "h";
@@ -2994,7 +3195,7 @@ fn expand_node(
                         }
                     }
                     "max_h" | "maxHeight" | "max_height" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "max_h";
@@ -3013,7 +3214,7 @@ fn expand_node(
                         }
                     }
                     "min_h" | "minHeight" | "min_height" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             let axis = "min_h";
@@ -3032,7 +3233,7 @@ fn expand_node(
                         }
                     }
                     "bg" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             dynamic_binds.push(quote! {
@@ -3061,7 +3262,7 @@ fn expand_node(
                         element = quote! { #element.border_style(#value) }
                     }
                     "border_color" | "borderColor" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             dynamic_binds.push(quote! {
@@ -3127,7 +3328,7 @@ fn expand_node(
                         element = quote! { #element.outline_width(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
                     "color" | "text_color" => {
-                        if !in_reactive_boundary && expr_reads_get(value) {
+                        if expr_reads_get(value) {
                             let idx = *node_counter;
                             *node_counter += 1;
                             dynamic_binds.push(quote! {
@@ -3506,16 +3707,31 @@ fn expand_node(
                     // be a false "unknown attribute" report.
                     "name" if name_str == "Icon" => {}
                     _ => {
-                        let msg = format!("unknown rui attribute `{attr_str}` on `<{name_str}>`");
-                        let span = attr.span();
-                        unknown_attr_warnings.push(quote_spanned! { span =>
-                            {
-                                #[deprecated(note = #msg)]
-                                #[allow(dead_code)]
-                                fn __rui_unknown_attr() {}
-                                __rui_unknown_attr();
-                            }
-                        });
+                        if expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            let key = attr_str.clone();
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_attr:{}#{}", file!(), line!(), #key, #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::app::reactive::apply_bound_attr(el, #key, v),
+                                );
+                            });
+                        } else {
+                            let msg =
+                                format!("unknown rui attribute `{attr_str}` on `<{name_str}>`");
+                            let span = attr.span();
+                            unknown_attr_warnings.push(quote_spanned! { span =>
+                                {
+                                    #[deprecated(note = #msg)]
+                                    #[allow(dead_code)]
+                                    fn __rui_unknown_attr() {}
+                                    __rui_unknown_attr();
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -3664,5 +3880,60 @@ fn apply_min_max_size_expr(
         "w" => quote! { #element.w(#value) },
         "h" => quote! { #element.h(#value) },
         _ => quote! { #element },
+    }
+}
+
+#[cfg(test)]
+mod rsx_lowering_tests {
+    use super::*;
+
+    fn expand(src: &str) -> String {
+        let root: RsxNode = syn::parse_str(src).unwrap_or_else(|e| panic!("{e} in {src}"));
+        let mut c = 0usize;
+        expand_node(&root, &mut c, false).to_string()
+    }
+
+    #[test]
+    fn match_key_emits_switch_reactive() {
+        let s = expand("<Match key={tab.get()}>{ |k| k }</Match>");
+        assert!(s.contains("switch_reactive"), "{s}");
+        assert!(s.contains("Match #") || s.contains("Match#"), "{s}");
+    }
+
+    #[test]
+    fn match_when_emits_match_when_reactive() {
+        let s = expand(
+            r#"<Match fallback={fallback}><MatchArm when={ok.get()}><Rect></Rect></MatchArm></Match>"#,
+        );
+        assert!(s.contains("match_when_reactive"), "{s}");
+    }
+
+    #[test]
+    fn reactive_island_emits_bind_text() {
+        let s = expand(r#"<Reactive id={"isle"}><Rect>{ label.get() }</Rect></Reactive>"#);
+        assert!(s.contains("bind_text"), "{s}");
+    }
+
+    #[test]
+    fn unknown_attr_emits_bind_attr() {
+        let s = expand("<Rect data_status={status.get()} />");
+        assert!(s.contains("bind_attr"), "{s}");
+        assert!(s.contains("apply_bound_attr"), "{s}");
+    }
+
+    #[test]
+    fn for_key_fallback_emits_keyed_with_fallback() {
+        let s = expand(
+            r#"<For each={items.get()} key={*item} item={item} fallback={empty}><Rect></Rect></For>"#,
+        );
+        assert!(s.contains("for_keyed_reactive_with_fallback"), "{s}");
+    }
+
+    #[test]
+    fn with_emits_bind_text_peek_does_not() {
+        let with_s = expand("<Rect>{ label.with(|s| s.clone()) }</Rect>");
+        assert!(with_s.contains("bind_text"), "{with_s}");
+        let peek_s = expand("<Rect>{ label.peek() }</Rect>");
+        assert!(!peek_s.contains("bind_text"), "{peek_s}");
     }
 }

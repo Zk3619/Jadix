@@ -53,7 +53,8 @@
 // ---------------------------------------------------------------------------
 
 pub use crate::{
-    bind_attr, bind_style, bind_text, component, for_keyed, reactive, reactive_anchor_id, ui,
+    bind_attr, bind_style, bind_text, component, for_keyed, merge_props, reactive,
+    reactive_anchor_id, split_props, ui,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,8 @@ pub use crate::{
 // ---------------------------------------------------------------------------
 
 pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
+pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
+pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };

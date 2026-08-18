@@ -7,7 +7,7 @@ pub struct TextBuilder {
 impl TextBuilder {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
-            el: Element::new().text(text),
+            el: Element::new().text(text.into()),
         }
     }
 
@@ -51,8 +51,8 @@ impl TextBuilder {
         self
     }
 
-    pub fn text(mut self, text: impl Into<String>) -> Self {
-        self.el = self.el.text(text);
+    pub fn text(mut self, text: impl crate::core::tree::IntoNodeText) -> Self {
+        self.el = text.apply_node_text(self.el);
         self
     }
 
