@@ -2,8 +2,8 @@
 
 > **冻结展开（2026-08-12）**：勾选、排期以 [`AUTHORITY.md`](AUTHORITY.md) **WP-2.4 / 2.5 / 2.7 / WP-R.*** 为**唯一执行源**。本文仅保留 R-WP 验收矩阵与加深细则；旧编号对照见 AUTHORITY §9。**禁止**在此改勾选充进度。  
 > **原地位**：把 [`REACTIVITY.md`](REACTIVITY.md) 的开放缺口落成 R-WP。行为状态机下沉归组件域，不把开合塞进反应性包。  
-> **前提**：ADR-1 已锁；主路径 API 已齐；**禁止为对齐 Leptos/Floem/Dioxus 扩 API 表面**。战略：[`REACTIVITY.md`](REACTIVITY.md) **§0.1 超过 Floem、逼近 Solid 机制**（§5.9 记分牌），不是 JSX/SSR。  
-> **日期**：2026-08-12；**机制对照修订 2026-08-13**；**战略升格 2026-08-13**  
+> **前提**：ADR-1 已锁；主路径 API 已齐；**禁止为对齐 Leptos/Floem/Dioxus 扩 API 表面**。战略：[`REACTIVITY.md`](REACTIVITY.md) **§0.1 超过 Floem、逼近 Solid 机制**（§5.9 记分牌）；**终极目标 §0.2 / §5.10**（Solid 机制 × 原生 GUI），不是 JSX/SSR。  
+> **日期**：2026-08-12；**机制对照修订 2026-08-13**；**战略升格 2026-08-13**；**源码审计 2026-08-18**  
 
 交叉：[`AUTHORITY.md`](AUTHORITY.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`element_identity.md`](element_identity.md)
 
@@ -11,11 +11,11 @@
 
 ## 0. 目标与原则
 
-**总目标**：卫生与契约可写入 SemVer；细粒度机制 **超过 Floem、逼近 SolidJS**（[`REACTIVITY.md`](REACTIVITY.md) §0.1 / §5.9）。顺序：I-7 For 项级 → I-11 Index → I-8 Store 路径 → I-12 effect 分相。不换核、不抄 VDOM/SSR。
+**总目标**：卫生与契约可写入 SemVer；细粒度机制 **超过 Floem、逼近 SolidJS**（[`REACTIVITY.md`](REACTIVITY.md) §0.1 / §5.9）；北极星是把该机制落到 **原生 retained GUI**（同文 §0.2 / §5.10）。顺序：I-7 For 项级 → I-11 Index → I-8 Store 路径 → I-12 effect 分相。不换核、不抄 VDOM/SSR。
 
 | 原则 | 含义 |
 |------|------|
-| **硬化 > 扩面** | 卫生已齐；加深按 §0.1 序，不先做 DevTools / mergeProps |
+| **硬化 > 扩面** | 卫生已齐；加深按 §0.1 序，不先做 DevTools |
 | **不挡工程化** | 与 W1/W2/W4 **并行**；不以 Solid API / SSR 为 Beta 前置；**宣称超过 Floem** 须 WP-R.5b；0.1 Win-first 仍可不挡 |
 | **一门禁一勾选** | WP-2.4 / 2.5 关闭条件仍记在总计划；R-WP-1/4 提供审计清单与加深，不另开第二套勾选互掐 |
 | **原生优先对照** | **标尺 Solid**（要逼近机制）；**近邻 Floem**（要超过纯度）；图协议可借鉴 Leptos；**反例** Dioxus；禁止抄 SSR / 换核 |
@@ -25,7 +25,7 @@
 - [x] WP-2.4 ☑（总计划）：Anchors/Bindings 随 Owner dispose；scoped id 辅助 API；无表膨胀测  
 - [x] WP-2.5 ☑（总计划）：produce 文档+测；Resource Err→EB e2e；SemVer 面草稿  
 - [x] R-WP-2：根裸 `get()` 可观测或 debug 断言；文档红线可测  
-- [x] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G3 / G5 关闭；G4 **升 P1**（逼近 Solid → WP-R.3B） 
+- [x] [`REACTIVITY.md`](REACTIVITY.md) §6 表 G1–G5 关闭；G4 **closed**（WP-R.3B ☑ 2026-08-18） 
 - [ ] [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) 与 identity §7 与实现同步  
 
 ---
@@ -82,9 +82,9 @@ flowchart LR
 | 阶段 | 包 | 说明 |
 |------|----|------|
 | **Gate（与 W2 并行）** | WP-2.4 + R-WP-1；WP-2.5 + R-WP-4 | 可预测更新门槛（已关） |
-| **超过 Floem** | R-WP-5a/b + R-WP-7 | I-7 测绿才许宣称纯度超过 Floem |
-| **逼近 Solid** | R-WP-5c + R-WP-3B + R-WP-9 | I-11 / I-8 / I-12 |
-| **Later** | R-WP-8 | 可观测；非 DevTools UI |
+| **超过 Floem** | R-WP-5a/b ☑ + **R-WP-7 ☑** | I-7 测绿才许宣称纯度超过 Floem |
+| **逼近 Solid** | R-WP-5c + **R-WP-3B ☑** + **R-WP-9 ☑** + **R-WP-7 ☑** | I-11 / I-8 ☑ / I-12 ☑ / G8 ☑ |
+| **Later** | R-WP-6 ☑；R-WP-8 ☑ | 热重载槽 ☑ 2026-08-18；信号图可观测 ☑ 2026-08-18 |
 
 ---
 
@@ -118,7 +118,7 @@ flowchart LR
 | **路径** | `core/store.rs` |
 | **任务** | **选 B**：路径触发器（思想对齐 Solid proxy / Leptos `reactive_stores`，实现自研）。兄字段 `set` **不**重跑弟 select/compute。`store_select`+`produce` 作过渡 SemVer 实验面可留 |
 | **验收** | 字段级更新测：改 `age` 时 `name` select 的 compute 计数不变；CHANGELOG 标明路径 API |
-| **状态** | ☐ **P1**（AUTHORITY WP-R.3；不再默认冻结 A） |
+| **状态** | ☑ 2026-08-18（`Store::field` / `store_field`；测 `field_sibling_set_does_not_rerun_sibling_compute`；`store_select`+`produce` 过渡可留） |
 
 ### R-WP-4 Async 边界完整契约
 
@@ -136,12 +136,12 @@ flowchart LR
 
 | | |
 |--|--|
-| **路径** | `app/reactive.rs`、`app/state.rs` `reconcile_keyed_children` |
-| **5a 硬化** | keyed 插/删/**换位**库测；文档标明现状 ≠ Solid For/Index |
+| **路径** | `app/keyed_list.rs`、`app/reactive.rs`、`app/state.rs` `reconcile_keyed_children` |
+| **5a 硬化** | keyed 插/删/**换位**库测；文档标明 `for_reactive`+`for_keyed` ≠ 项级 For；`for_each` ≠ Index |
 | **5b 超 Floem（I-7）** | 每 key 一个 child `Owner`；列表 signal 只 insert/remove/reorder；未动 key **不**重跑项 `render`（Solid `mapArray`） |
 | **5c 逼近 Solid（I-11）** | 真 `<Index>`：下标固定，项为 Accessor/`Signal`；同下标改值不重建节点 |
 | **验收** | **5a** 插删换位绿；**5b** 无关项 / 换位时未变 key 的 render 计数不变 + Owner 无泄漏；**5c** 改 `items[i]` 只触发订了该项的 `bind_*` |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18（`for_keyed_reactive` / `index_reactive`；测 `show_for` 5a + `for_index` 5b/5c） |
 | **宣称门** | 5b 绿 → 可说「细粒度纯度超过 Floem」；5b+5c → 列表机制逼近 Solid |
 
 ### R-WP-6 热重载 × 反应槽不变量
@@ -151,16 +151,16 @@ flowchart LR
 | **路径** | `app/hot_reload.rs`、`reactivity_and_hot_reload.md` |
 | **任务** | ① 结构岛稳定 `template_id` 指南（gallery 抽 2 例）；② 空 templates 退化整树策略写明；③ 与 `reconcile` 精确匹配回归（禁止 fuzzy） |
 | **验收** | 手册 § 更新；至少一回归测或清单项 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18（`ingest_template_patch` 空 templates → `force_reload`；`reconcile_anchor_id_is_exact_not_fuzzy` 回归；gallery 两例稳定 `template_id` 注释） |
 
 ### R-WP-7 宏降级完备性
 
 | | |
 |--|--|
 | **路径** | `rui_macros`、`#[component(reactive)]`、gallery 试点 |
-| **任务** | ① `isolate_reads` 下漏绑回归；② Switch/Match 糖评估（可延后）；③ gallery 扩 `ReactiveStatusBadge` 模式 |
-| **验收** | 漏绑有测或已知限制表 |
-| **状态** | ☐ **P1**（否则超 Floem 只写在纸上） |
+| **任务** | ① `isolate_reads` 下漏绑回归；② `<Match>`/`<MatchArm>`/`<When>` RSX（RUI `<Switch>` 为 toggle，不占用）；③ gallery 扩 `ReactiveStatusBadge` 模式 |
+| **验收** | 漏绑有测；Match / For+fallback / 岛内 bind / 未列 attr / `with()` / `IntoNodeText` 回归 |
+| **状态** | ☑ 2026-08-18（测 `macro_lowering`；`<For each={…get()} key>` → keyed For（含 fallback）；`<Match>` RSX；gallery `ReactiveCountChip`） |
 
 ### R-WP-8 信号图可观测（P2 / Backlog）
 
@@ -168,7 +168,7 @@ flowchart LR
 |--|--|
 | **任务** | effect/owner/订阅计数或泄漏诊断钩子；**非**完整 DevTools UI |
 | **验收** | feature 门或 debug API 文档；进纲领 P2 |
-| **状态** | ☐ |
+| **状态** | ☑ 2026-08-18（`ReactivityDebugSnapshot` + `reactivity_debug_snapshot()` + `dump_reactivity_graph()`；edges sorted；测绿） |
 
 ### R-WP-9 Effect 分相（逼近 Solid · I-12）
 
@@ -178,7 +178,20 @@ flowchart LR
 | **路径** | `core/reactivity.rs` `flush_pending`；`bind_*` 标记为渲染绑 |
 | **任务** | ① flush 序：dirty memo / Computed → `bind_*`（渲染）→ 用户 `create_effect`；② 可选 `create_computed`（同步写其它 Signal，对齐 Solid `createComputed`，**不必**改名 RenderEffect）；③ 测：一次 `set` 下 bind 先于用户 effect 观察到新值 |
 | **验收** | 分相测绿；REACTIVITY §5.9 I-12 行更新；无 SSR tick 假设（可同帧，但顺序固定） |
-| **状态** | ☐ P1 |
+| **状态** | ☑ 2026-08-18（`flush_pending` 三相；`create_computed`；测 `effect_phase` + `effect_phases_computed_then_render_then_user`） |
+
+### 剩余通向「Solid × 原生 GUI」（不挡 0.1）
+
+机制不变量 I-1…I-8 / I-11 / I-12 已齐。相对 Solid 编译器级 DX 与可观测，仍开放：
+
+| 项 | 映射 | 说明 |
+|----|------|------|
+| 热重载不破坏反应槽 | **R-WP-6 / G7 ☑** | `template_id` 槽位 + 空 templates `force_reload` + 精确匹配回归测 |
+| 信号图 dump / 泄漏诊断 | **R-WP-8 / G9 ☑** | `reactivity_debug_snapshot` / `dump_reactivity_graph`；测绿 |
+| `store_select` 订根 | 过渡 SemVer | 主路径用 `Store::field` |
+| 无 key `<For>` 整表 | 手册红线 | 主路径 `for_keyed_reactive` |
+
+源码级对照见 [`REACTIVITY.md`](REACTIVITY.md) §5.10。
 
 ---
 

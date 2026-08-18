@@ -1,7 +1,7 @@
 # PROJECT: Rust Native UI Stack (SolidJS + Tailwind + ShadCN 风格)
 
 > **愿景与早期阶段叙事**（非巩固期执行源）。  
-> **权威文档**：[AUTHORITY.md](AUTHORITY.md)（执行源）· [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) · [REACTIVITY.md](REACTIVITY.md) · [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)  
+> **权威文档**：[AUTHORITY.md](AUTHORITY.md)（执行源）· [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) · [REACTIVITY.md](REACTIVITY.md)（细粒度：超过 Floem / 逼近 Solid / **§0.2 原生 GUI 北极星**）· [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md)  
 > 历史选型过程见 [archive/](archive/README.md)。阶段七～十二 MVP 历史排期见 [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md)。
 
 ## 1. 项目愿景与目标 (Vision & Goals)

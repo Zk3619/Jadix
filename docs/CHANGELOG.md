@@ -9,7 +9,11 @@
 
 | API | 路径 | 说明 |
 |-----|------|------|
-| `Store` / `create_store` / `store_select` / `Store::produce` | `core/store.rs` | `produce` ≡ `update`；无 proxy 路径触发器（R-WP-3） |
+| `create_computed` | `core/reactivity.rs` | **WP-R.9 ☑**：Computed 相；先于 `bind_*` / 用户 `create_effect`；非 `RenderEffect` 类型 |
+| `reactivity_debug_snapshot` / `dump_reactivity_graph` / `ReactivityDebugSnapshot` | `core/reactivity.rs` | **WP-R.8 ☑**：运行时信号图计数 + 边列表诊断钩子；非 DevTools UI |
+| `Trigger` / `create_trigger` | `core/reactivity.rs` | 零载荷通知原语（Solid `createTrigger`）；每次 `notify()` 无条件触发订阅者 |
+| `start_transition` | `core/reactivity.rs` | 帧级延迟批（Solid `startTransition` 类比）；复用 deferred-fn 队列 |
+| `Store` / `create_store` / `Store::field` / `store_field` / `store_select` / `Store::produce` | `core/store.rs` | **WP-R.3 ☑**：`field.set` 兄变不重跑弟 compute；`store_select`+`produce` 仍为整根过渡 |
 | `create_resource` / `Resource` / `suspense` | `app/resource.rs` | 桌面语义；无 SSR |
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
@@ -36,6 +40,10 @@
 - Popover / Date·Time·Color `strategy=fixed`：钉在触发器下方，滚动不挤压高度。Select `scroll_selected`（`none`/`start`/`center`，默认 none）；打开后用布局真实 `content_h` 把当前项滚到视口中线（不再在菜单 effect 里订滚动信号，避免整树重建/悬停闪烁）。Calendar 六周等分列宽；非本月日 muted 可点并切月。
 - TimePicker：三个 Combobox 选时分秒（限 0–23 / 0–59）；`datetime-local` 日历下 `Separator` + 时间行。行内 Calendar 下拉可重复打开。DateTime：日历与 `Separator` 间距 `pt 1rem`；HMS→val / val→HMS 分向同步；浮层用 `isolate_reads`（勿 `untrack`，否则 Calendar/Combobox 无法注册 anchor，浮层空壳）。Combobox/Select **实例根** `with_child_owner`（Trigger+下拉同属该实例 owner；`#[component]` 不会自动开 scope）。Combobox 打开时 `active`/滚动对齐当前 value（如 `"09"` → index 9）。Calendar 非本月日 `muted-foreground`；日网格占位固定 `17rem` + `overflow:hidden`。
 - Chart 交互按实例隔离：未传 `selected_signal` 时每图自带选中/pin 信号（不再共用 `chart_pin`）；饼/环选中改为 TanStack `radialArc` 式外半径加大 + 同色描边，不平移扇区。
+- B2：`merge_props` / `merge_props!` / `split_props!` / `children()` / `resolve_children`（Rust 语义：后源 `Some` 覆盖、fragment 展平；非 JS Proxy）。`#[component]` `*Props` impl `MergeProps`。
+- WP-R.7：`ui!` 宏降级漏绑回归（`isolate_reads` / `#[component(reactive)]`）；`<For each={…get()} key>`（含 `fallback`）走 keyed For；`<Match key>` / `<MatchArm>`/`<When>` RSX；岛内叶子与未列 attr 亦可 `bind_*`；`with()` 视为 tracked read（`peek()` 故意不订）；`Element::text(sig)` / `|| String` 经 `IntoNodeText` 自动 bind。gallery 扩 `ReactiveCountChip`。
+- WP-R.9：`flush_pending` 分相 Computed → `bind_*` → 用户 `create_effect`（I-12）；可选 [`create_computed`](../crates/rui/src/core/reactivity.rs)。同帧、顺序固定，无 SSR tick。
+- WP-R.3：`Store::field` / `store_field` 路径触发器；兄字段 `set` 不重跑弟 compute（I-8）。`store_select`+`produce` 仍为整根过渡。
 - WP-2.5：`throw_resource_error`；Resource `from_signal` / `set_error`；`produce` 切片契约测；Resource Err→EB e2e 测。
 - WP-2.9：Builder `.border_box()`；utility `box-border` / `box-content`；命中/裁剪库测；测宽叶审计见 `docs/box_model.md` 附录 A。
 - 盒模型单位：布局期真 `vw`/`vh`/`dvh`、局部 `em`、`calc(A ± B)`（含 `calc(100% - Npx)` 相对父 content box）；逻辑 `*-inline`/`*-block` 双值；`row-gap`/`column-gap`。

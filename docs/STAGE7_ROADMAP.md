@@ -54,7 +54,7 @@ flowchart TB
 ## 现状锚点（阶段六后 · 历史；2026-08-09 勘误）
 
 - 阶段清单 P0/P1/P2 已关；开放面转为巩固期：**真窗冒烟签署、组件 golden≥5、crates.io、文档站、稳定面 CV**。
-- Solid：`ErrorBoundary` / `switch_reactive` / `on_mount` **已落地**（旧「缺」作废）；部分 reconcile / Index；`mergeProps` 等可长期空缺。
+- Solid：`ErrorBoundary` / `switch_reactive` / `on_mount` **已落地**（旧「缺」作废）；部分 reconcile / Index；`mergeProps` / `children()` 见 AUTHORITY **B2 ☑**（Rust 语义糖）。
 - 组件：约 **45** 公开模块（见 [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §5）；相对 EUI 仍缺块级 markdown 等。 VirtualMasonry **WP-3.10 ☑**（experimental）。
 - MVP 已有、工程未闭环：IME 代码路径、焦点环、focus_trap、Router/次窗、块级 md MVP、2 个 offscreen golden、Gallery 八分区。
 

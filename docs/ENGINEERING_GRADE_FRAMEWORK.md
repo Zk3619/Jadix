@@ -152,13 +152,13 @@ crates/
 
 衡量的是**细粒度响应式编程模型**覆盖度，不是 solid-main 仓库对齐度。DOM/SSR 相关 API **不在范围内**。
 
-**权威展开**：战略 **超过 Floem、逼近 Solid 机制**（§0.1 / §5.9 记分牌）、四框架对照、不变量 → [`REACTIVITY.md`](REACTIVITY.md)；执行 → [`AUTHORITY.md`](AUTHORITY.md) WP-R.5 / R.3 / R.9 / R.7。发布门槛仍是原生+crates.io（ADR-8），**不是** Solid API 百分百。
+**权威展开**：战略 **超过 Floem、逼近 Solid 机制**（§0.1 / §5.9 记分牌）；**终极目标：Solid 细粒度 × 原生 GUI**（§0.2 / §5.10 源码对照）；四框架对照、不变量 → [`REACTIVITY.md`](REACTIVITY.md)；执行 → [`AUTHORITY.md`](AUTHORITY.md) WP-R.5 / R.3 / R.9 / R.7。发布门槛仍是原生+crates.io（ADR-8），**不是** Solid API 百分百。
 
 | 状态 | 代表 API |
 |------|----------|
-| 已有 | Signal / Effect / Memo / batch / untrack / Root / cleanup / Context / Store(select+produce) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`**；**REGISTERED_* → Owner**（WP-2.4） |
-| 部分 | 列表仍为整表 effect + keyed Element reconcile（≠ Solid `mapArray` 项级 Owner）；`for_each` ≠ `<Index>`；Store 无路径触发器 |
-| 可长期空缺 | `mergeProps` / `splitProps` / `children()` helper / DevTools；Read/Write 半边拆分；`RenderEffect` 类型 |
+| 已有 | Signal / Effect / Memo / `create_computed` / batch / untrack / Root / cleanup / Context / Store(`field` 路径 + select/produce 过渡) / Resource / Suspense / **ErrorBoundary** / Show / For / **`switch_reactive`** / Dynamic / Portal / selector / deferred / `bind_*` / **`on_mount`**；**REGISTERED_* → Owner**（WP-2.4）；**`for_keyed_reactive` / `index_reactive`**（WP-R.5）；**effect 分相**（WP-R.9）；**宏降级**（WP-R.7 / G8） |
+| 部分 | `for_each` ≠ `<Index>`（用 `index_reactive`）；`store_select` 仍订根（用 `Store::field`）；热重载 × 反应槽回归（G7 / WP-R.6 ☑ 2026-08-18） |
+| 可长期空缺 | DevTools；Read/Write 半边拆分；`RenderEffect` 类型 |
 
 ### 4.3 组件面（相对 EUI 密度标尺）
 

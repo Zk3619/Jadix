@@ -1,7 +1,7 @@
 # RUI 权威入口与统一计划（巩固期）
 
 > **文档地位**：巩固期**唯一入口**与**唯一执行源**（勾选、排期、DoD、禁区摘要）。  
-> **日期**：2026-08-12；**W2 退出 / 进入 W3**：2026-08-13  
+> **日期**：2026-08-12；**W2 退出 / 进入 W3**：2026-08-13；**反应性北极星**：2026-08-18（`REACTIVITY.md` §0.2 / §5.10）  
 > **前提**：阶段一～十二 MVP 已落地；底座锁定（ADR-1～9）。本文**不**新开架构分叉。
 
 读本文即可知道：现在做到哪、下一步做什么、争议找哪份规范。  
@@ -67,7 +67,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 |----------|------|------|
 | 要不要换 VDOM / 弃 wgpu / 废 Builder | 纲领 ADR + 本文 §3 | 在组件 PR 里静默改哲学 |
 | 默认交付面 = shadcn？双书写？ | `COMPONENT_LIBRARY.md` | 另起纯无头产品包 |
-| 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid | `REACTIVITY.md`（§0.1 / §5.7 / **§5.9 记分牌**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
+| 这次 `set` 触发什么？Store/Resource 语义；何为完整细粒度；是否超过 Floem / 逼近 Solid；**Solid × 原生 GUI 终极目标** | `REACTIVITY.md`（§0.1 / **§0.2** / §5.7 / **§5.9 记分牌** / **§5.10 源码对照**） | 以「追平 Solid API 面 / SSR」或 Dioxus 组件级 diff 替代机制目标 |
 | `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
@@ -96,7 +96,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 代码 | `crates/` ≈ 5.3 万行；`components/` ≈ 45 模块 | 稳定面文档化；破坏性可追踪 |
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
 | 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | 细粒度 damage 默认；glyph 级 golden 可加深 |
-| 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；主缺口 I-7 For 项级 → I-11 Index → I-8 Store 路径 → I-12 effect 分相 | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 须 I-8/11/12 + G8；**不挡** Win-first 0.1 |
+| 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**WP-R.5 ☑**（I-7/I-11）；**WP-R.3 ☑**（I-8）；**WP-R.9 ☑**（I-12 分相）；**WP-R.7 ☑**（G8 宏漏绑，含 `<Match>` RSX）；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；**北极星：Solid 机制 × 原生 GUI**（§0.2 / §5.10） | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 机制可宣称（G8 ☑）；**不挡** Win-first 0.1；**G7 ☑ / G9 ☑ 2026-08-18** |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
 
@@ -120,7 +120,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 
 **巩固期明确不做**：换 VDOM / EUI DSL / 弃 wgpu；Solid DOM/SSR/hydration；移动/鸿蒙一等公民；完整 CSSOM；平行「纯 Radix 组件包」；未过 CV 对全量组件做行为大重构；无验收大重构；DevTools（Backlog）。
 
-**细粒度战略**（展开 `REACTIVITY.md` §0.1 / §5.9）：**超过 Floem 纯度、逼近 SolidJS 机制**（非 DOM/SSR/API 名）。I-1…I-6 已齐；**超 Floem 决胜 = WP-R.5b（I-7）**；逼近 Solid = 5c Index + WP-R.3B Store 路径 + WP-R.9 effect 分相 + G8。ADR-8 仍禁止用 Solid 百分百 API 替代发布门槛。
+**细粒度战略**（展开 `REACTIVITY.md` §0.1 / **§0.2** / §5.9 / **§5.10**）：**超过 Floem 纯度、逼近 SolidJS 机制**，终极目标是把 Solid 细粒度**机制纯度**落到原生 retained GUI（非 DOM/SSR/API 名）。I-1…I-8 / I-11 / I-12 已齐；**G8 ☑ 2026-08-18**（WP-R.7）。ADR-8 仍禁止用 Solid 百分百 API 替代发布门槛。**G7 ☑ / G9 ☑ 2026-08-18**。
 
 **三档更新**（开发者红线，展开 `REACTIVITY.md` §3）：
 
@@ -138,7 +138,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 |----|--------|----------------|------|
 | **工程** | 六门槛、栈、发布叙事、质量门命令；自绘面纪律 [`drawing.md`](drawing.md) | W1 冒烟、**W2 已退出**、W3 产品+Svg/Canvas、W4 crates.io | 单个组件 variant 名 |
 | **组件** | 分层、双书写、受控 API、清单、质量门模板 | CV 走查（仅 `components/` 控件）、行为下沉、Gallery 覆盖 | 重写 Signal 内核；Theme/utility SemVer |
-| **响应式** | §0.1 战略、§5.9 记分牌、§5.7 不变量、缺口 G1–G10 | WP-R.5a/b/c、R.3B、R.9、R.7 | 浮层 placement、chrome 色值；换 `reactive_graph` / VDOM / 抄 Solid DOM |
+| **响应式** | §0.1 战略、§5.9 记分牌、§5.7 不变量、缺口 G1–G10 | **WP-R.5 ☑**；**WP-R.3 ☑**；**WP-R.9 ☑**；**WP-R.7 ☑** | 浮层 placement、chrome 色值；换 `reactive_graph` / VDOM / 抄 Solid DOM |
 | **身份**（横切） | 四轴不变量 I-1… | 审计 + 空串收敛 + scoped API（并入 WP-2.4 / CV） | 当「第四套计划」 |
 
 组件受控 Signal 的**语义**以反应性规范为准；**暴露面**（`*_signal` / 非受控键）以组件规范为准；**键的生命周期**以身份契约 + WP-2.4 为准。
@@ -615,17 +615,17 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 ### 5.7 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
 
-并入 W2 之后或与 W3 交错；勾选仍只在本表。顺序：**5 → 3 → 9 → 7**（见 `REACTIVITY.md` §0.1）。
+并入 W2 之后或与 W3 交错；勾选仍只在本表。顺序：**5 → 3 → 9 → 7**（见 `REACTIVITY.md` §0.1）。**北极星**（不挡 0.1）：Solid 机制 × 原生 GUI，见 `REACTIVITY.md` §0.2 / §5.10。
 
 | ID | 主题 | 别名 | 挡 Beta？ | 状态 |
 |----|------|------|-----------|------|
 | （见 2.4 / 2.5 / 2.7） | 门禁三项 | R-WP-1 / 4 / 2 | 2.6 是；2.7 建议 | 2.4 ☑；2.5 ☑；**2.7 ☑** |
-| **WP-R.5** | 列表：**5a** keyed 插删换位测；**5b** 项级 For Owner（I-7，**超 Floem 决胜**）；**5c** 真 Index Accessor（I-11） | R-WP-5 | 否（0.1）；**挡「宣称超过 Floem」= 5b**；**挡「逼近 Solid」= 5b+5c** | ☐ |
-| **WP-R.3** | Store **路径触发器**（选 B；兄变不重跑弟） | R-WP-3 | 否 · **P1**（逼近 Solid；不再默认冻结 A） | ☐ |
-| **WP-R.9** | Effect 分相：Computed → `bind_*` → 用户 effect（I-12） | R-WP-9 | 否 · P1（逼近 Solid） | ☐ |
-| **WP-R.7** | 宏降级漏绑 | R-WP-7 | 否 · **P1**（否则 5b 只写在纸上） | ☐ |
-| **WP-R.6** | 热重载 × 反应槽不变量 | R-WP-6 | 否 | ☐ |
-| **WP-R.8** | 信号图可观测（非 DevTools UI） | R-WP-8 | 否 · P2 | ☐ |
+| **WP-R.5** | 列表：**5a** keyed 插删换位测；**5b** 项级 For Owner（I-7，**超 Floem 决胜**）；**5c** 真 Index Accessor（I-11） | R-WP-5 | 否（0.1）；**挡「宣称超过 Floem」= 5b**；**挡「逼近 Solid」= 5b+5c** | ☑ 2026-08-18 |
+| **WP-R.3** | Store **路径触发器**（选 B；兄变不重跑弟） | R-WP-3 | 否 · **P1**（逼近 Solid；不再默认冻结 A） | ☑ 2026-08-18 |
+| **WP-R.9** | Effect 分相：Computed → `bind_*` → 用户 effect（I-12） | R-WP-9 | 否 · P1（逼近 Solid） | ☑ 2026-08-18 |
+| **WP-R.7** | 宏降级漏绑 | R-WP-7 | 否 · **P1**（否则 5b 只写在纸上） | ☑ 2026-08-18 |
+| **WP-R.6** | 热重载 × 反应槽不变量 | R-WP-6 | 否 | ☑ 2026-08-18 |
+| **WP-R.8** | 信号图可观测（非 DevTools UI） | R-WP-8 | 否 · P2 | ☑ 2026-08-18 |
 
 ---
 
@@ -652,7 +652,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | ID | 项 | 来源 |
 |----|-----|------|
 | B1 | DevTools（Signal 依赖图） | 工程 |
-| B2 | `mergeProps` / `splitProps` / `children()` | 反应性 |
+| B2 | `mergeProps` / `splitProps` / `children()` | 反应性 · ☑ 2026-08-18 Rust 语义糖（非 JS Proxy） |
 | B3 | backdrop-blur 离屏缓存 | 工程 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
 | B5 | VirtualMasonry 产品化（升格 / 密度打磨） | 工程 WP-3.10 MVP ☑ 2026-08-18；升 `verified` 仍 backlog |

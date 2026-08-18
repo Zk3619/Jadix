@@ -3,7 +3,7 @@
 > **历史审计底稿（非巩固期执行源）**。排期与勾选请以 [AUTHORITY.md](AUTHORITY.md) 为准；门槛与禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md)；**Solid 细粒度现状**见 [REACTIVITY.md](REACTIVITY.md)。  
 > 审计对象：`crates/rui`、[`crates/rui_macros`](../crates/rui_macros/src/lib.rs)、`crates/rui_style_tokens`、`crates/rui_hot_reload_cli`、`docs/`  
 > 对照基准（各司其职，见 §1）：[`Reference/SolidJS`](../Reference/SolidJS) 编程模型 · [`Reference/ShadCN-UI`](../Reference/ShadCN-UI) + [`Reference/TailwindCSS`](../Reference/TailwindCSS) 组件体验 · [`Reference/EUI-NEO-main`](../Reference/EUI-NEO-main) 产品完整度 · [`Reference/pretext-main`](../Reference/pretext-main) 文本算法  
-> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md；**2026-08-13**：公开自绘面移交 [`drawing.md`](drawing.md) / AUTHORITY WP-3.11–3.13
+> 主审计日期：2026-08-07；**勘误条**：2026-08-09（体量 / Solid 表 / 执行移交）；**2026-08-12**：§5 镜像移交 REACTIVITY.md；**2026-08-13**：公开自绘面移交 [`drawing.md`](drawing.md) / AUTHORITY WP-3.11–3.13；**2026-08-18**：§5 For/Index 行与 REACTIVITY §5.10 对齐
 
 三个问题：**距离工程级 UI 框架还差什么**、**类 SolidJS 能力还缺什么**、**还需要哪些组件**。
 
@@ -135,7 +135,7 @@
 | ~~P1~~ | 缺原地更新 | ✅ | `Signal::update` |
 | ~~P1~~ | scoped ID | ✅ | `use_scoped_signal` |
 | ~~P1~~ | 单线程 runtime，无后台线程桥 | ✅ MVP | [`ui_bridge`](../crates/rui/src/app/ui_bridge.rs)：`run_on_ui_thread` / `spawn_blocking` + `RuiUserEvent::UiWake` |
-| ~~P1~~ | 缺 Store（路径级订阅） | ✅ MVP | [`create_store`](../crates/rui/src/core/store.rs) + `store_select`（memo 路径）；完整 proxy/`produce` 仍可加深 |
+| ~~P1~~ | 缺 Store（路径级订阅） | ✅ | [`Store::field`](../crates/rui/src/core/store.rs)（WP-R.3 / I-8）；`store_select`+`produce` 过渡可留 |
 | ~~P1~~ | 绑定分发是 O(n) DFS，不是 O(1) 直达 | ✅ MVP | `template_paths: HashMap<template_id, Vec<usize>>`，查找 O(depth) |
 | ~~P2~~ | 缺 `on()` / `createSelector` / `createDeferred` | ✅ MVP | [`on`](../crates/rui/src/core/reactivity.rs) / [`create_selector`](../crates/rui/src/core/reactivity.rs) / [`create_deferred`](../crates/rui/src/core/reactivity.rs)（单 flush 延迟，非 idle 超时） |
 
@@ -213,13 +213,13 @@
 
 > **2026-08-09 勘误后口径**：编程模型主路径已齐；剩余多为 DX 糖与 DevTools。按 §1 收窄口径：衡量细粒度响应式覆盖度，非整仓 solid-main。DOM / SSR / hydration 不在范围内。  
 > **2026-08-12**：下表为**历史镜像**；权威清单、四框架机制对照（Solid / Leptos / Floem / Dioxus）与完整细粒度不变量以 [REACTIVITY.md](REACTIVITY.md) §4–§6 / §5.7 为准；执行 [AUTHORITY.md](AUTHORITY.md)。  
-> **2026-08-13**：For 行勿再读成「已对齐 Solid」——RUI 仍是整表 `for_reactive` + keyed Element reconcile，项级 `mapArray`/`createRoot` 见 G6 / WP-R.5b。
+> **2026-08-18**：For / Index 主路径已是 `for_keyed_reactive` / `index_reactive`（WP-R.5 ☑）。Store 路径触发器 `Store::field`（WP-R.3 ☑）。`store_select`+`produce` 仍为整根过渡。三框架源码对照见 [REACTIVITY.md](REACTIVITY.md) §5.10。机制深描见 [REACTIVITY.md](REACTIVITY.md) §0.2 / §5.10。
 
 | Solid API | RUI 对应 | 状态 | 备注 |
 |-----------|----------|------|------|
 | `createSignal` | `Signal::new` / `create_signal` | 有 | 另有 `with` / `update` / `peek` / `try_set` |
 | setter 函数式更新 | `Signal::update` | 有 | 阶段一 |
-| `createEffect` | `create_effect` | 有 | 挂在 Owner 子树上 |
+| `createEffect` | `create_effect` / `create_computed` | 有 | **WP-R.9 ☑** User / Computed 相；`bind_*` 为 Render 相 |
 | `createMemo` | `create_memo` | 有 | 惰性 dirty + 深度 flush |
 | `untrack` | `untrack` | 有 | |
 | `batch` | `batch` | 有 | |
@@ -228,7 +228,7 @@
 | `onCleanup` | `on_cleanup` | 有 | 阶段一 |
 | `onMount` | `on_mount` | 有 | 阶段九 MVP |
 | `createContext` / `useContext` | `create_context` / `provide_context` / `use_context` | 有 | 阶段一 |
-| `createStore` / `produce` | `create_store` / `store_select` / produce | 有 | MVP；完整 proxy 仍可加深（巩固期 WP-2.5） |
+| `createStore` / `produce` | `create_store` / `Store::field` / `store_select` / produce | 有 | **WP-R.3 ☑** 路径触发；`store_select` 仍订根 |
 | `reconcile` | `for_keyed` | 部分 | |
 | `createResource` | [`create_resource`](../crates/rui/src/app/resource.rs) | 有 | 阶段六 |
 | `Suspense` | [`suspense`](../crates/rui/src/app/resource.rs) | 有 | 阶段六 |
@@ -236,13 +236,13 @@
 | `createSelector` | `create_selector` / `Selector::is` | 有 | 阶段六 |
 | `createDeferred` / transition | `create_deferred` | 有 | 阶段六；单 flush 延迟，非 idle |
 | `<Show>` | `show_reactive` / `show_scoped` | 有 | |
-| `<For>` | `for_reactive` / `for_keyed` | 部分 | 整表 render + `template_id` reconcile；≠ `mapArray` 项级 Owner（REACTIVITY §5.5） |
-| `<Index>` | `for_each` | 部分 | 仅下标键，不是 Accessor 项 |
-| `<Switch>` / `<Match>` | `switch_reactive` | 有 | 阶段九 MVP |
+| `<For>` | `for_keyed_reactive`（主）/ `for_reactive`+`for_keyed`（整表降级） | 有 | **WP-R.5b ☑**：项级 Owner；无 key 的 `<For>` 仍整表。对照 Solid `mapArray`（REACTIVITY §5.5 / §5.10） |
+| `<Index>` | `index_reactive`（主）/ `for_each`（下标键降级） | 有 | **WP-R.5c ☑**：项为 `Signal`；`for_each` ≠ Index |
+| `<Switch>` / `<Match>` | `<Match key>` → `switch_reactive`；`<MatchArm>`/`<When>` → `match_when_reactive`（RUI `<Switch>` 是 toggle） | 有 | RSX 糖 ☑；toggle 名不占用 |
 | `<Dynamic>` | `<Dynamic component={…}>` | 有 | 阶段六 |
 | `<Portal>` | `Portal` | 有 | |
-| `children()` helper | — | 无 | 可长期空缺 |
-| `mergeProps` / `splitProps` | — | 无 | 可长期空缺 |
+| `children()` helper | [`children`](../crates/rui/src/app/props.rs) / [`resolve_children`](../crates/rui/src/app/props.rs) | 有 | **B2 ☑**；fragment 展平；闭包版订 signal |
+| `mergeProps` / `splitProps` | [`merge_props`](../crates/rui/src/app/props.rs) / `merge_props!` / `split_props!` | 有 | **B2 ☑**；后源 `Some` 覆盖；非 JS Proxy |
 | 细粒度属性绑定 | `bind_*` | 有 | 亮点 |
 | DevTools | — | 无 | Backlog |
 
@@ -311,7 +311,7 @@
 ### 阶段五 · 文本与工程化（发布级）— ✅ MVP 完成（2026-08-06）
 
 - [x] 文本管线：[`text/measure`](../crates/rui/src/text/measure.rs) `prepare`/`layout` + [`layout_tree`](../crates/rui/src/layout/layout_tree.rs) 接入
-- [x] Store：[`create_store`](../crates/rui/src/core/store.rs) + `store_select`
+- [x] Store：[`create_store`](../crates/rui/src/core/store.rs) + `Store::field`（WP-R.3）+ `store_select`
 - [x] 线程桥：[`run_on_ui_thread`](../crates/rui/src/app/ui_bridge.rs) / `spawn_blocking` + `RuiUserEvent::UiWake`
 - [x] 跨平台离屏冒烟：CI `RUI_FORCE_SOFTWARE=1` + `offscreen` 测试
 - [x] golden CI MVP：`assert_matches_golden` / encode-load roundtrip

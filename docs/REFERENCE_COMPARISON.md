@@ -2,7 +2,7 @@
 
 > **文档地位**：对照审计（非巩固期执行源）。排期与勾选以 [AUTHORITY.md](AUTHORITY.md) 为准；底座禁区见 [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) §2–§3；**细粒度反应性**见 [REACTIVITY.md](REACTIVITY.md)（Solid / Leptos / Floem / Dioxus **机制**对照 + §5.7 完整 FG 不变量）。  
 > **对照源**：`Reference/gpui` · `Reference/slint-master` · `Reference/xilem-main` · `Reference/EUI-NEO-main` · `Reference/iced-master` · `Reference/egui-main`；反应性另见 `Reference/leptos-main` · `Reference/floem-main` · `Reference/SolidJS` · `Reference/dioxus`；RUI 以 `crates/` 与工程文档为准。  
-> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；公开自绘面见 [`drawing.md`](drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）
+> **日期**：2026-08-10（由对照 Canvas 落盘；同日补 iced / egui）；**2026-08-12** 链入 REACTIVITY*；**2026-08-13** 反应性四框架机制移交 REACTIVITY §5；**2026-08-18** 反应性源码对照见 [REACTIVITY.md](REACTIVITY.md) §5.10；公开自绘面见 [`drawing.md`](drawing.md)（对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)「包住子树」· [react-bits](https://github.com/DavidHDev/react-bits) 动效目录；不搬 HTML-in-canvas / CSS 运行时）
 
 ---
 
@@ -98,7 +98,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 
 在「自绘 + 细粒度」轴上，RUI/Solid 路线相对六者最干净；Iced/Xilem/GPUI 偏粗粒度失效；egui/EUI 偏整帧/整页重建。
 
-**反应性四框架**（不在上表六参考内；权威在 [REACTIVITY.md](REACTIVITY.md) §5）：Solid = 完整 FG 标尺（含 `mapArray` 项级 root）；Leptos = 可移植图协议 + RenderEffect；Floem = 原生 UpdaterEffect / `dyn_stack`；Dioxus = Copy Signal + **组件级 VNode diff**（有 Signal ≠ 细粒度渲染）。RUI 属性 `bind_*` 已对齐 Floem/Leptos 叶子绑；**列表仍是整表 effect + Element reconcile**（G6 / WP-R.5），勿在本文六参考表上把「细粒度响应式」打成满分后误以为 For 已追平 Solid。
+**反应性四框架**（不在上表六参考内；权威在 [REACTIVITY.md](REACTIVITY.md) §5 / **§5.10 源码审计**）：Solid = 完整 FG 标尺（含 `mapArray` 项级 root）；Leptos = 可移植图协议 + RenderEffect；Floem = 原生 UpdaterEffect / 列表偏 View diff；Dioxus = Copy Signal + **组件级 VNode diff**（有 Signal ≠ 细粒度渲染）。RUI 属性 `bind_*` 已对齐 Floem/Leptos 叶子绑；**Keyed For / Index 主路径 `for_keyed_reactive` / `index_reactive`（WP-R.5 ☑）**；**Store 路径 `Store::field`（WP-R.3 ☑）**；**effect 分相（WP-R.9 ☑）**。`for_reactive` 仍是整表降级，勿把降级路径当成 I-7；`store_select` 仍订根，勿当成 I-8。终极目标：Solid 机制纯度 × 原生 retained GUI（同文 §0.2）。
 
 ### 5.2 窗口 · 渲染 · 布局 · 文本
 

@@ -384,7 +384,7 @@ flowchart TB
 | ID | 项 | 备注 |
 |----|-----|------|
 | B1 | DevTools（Signal 依赖图） | 不对齐 Solid 也不阻塞 Beta |
-| B2 | `mergeProps` / `splitProps` / `children()` | DX 糖 |
+| B2 | `mergeProps` / `splitProps` / `children()` | DX 糖 · ☑ 2026-08-18 |
 | B3 | backdrop-blur 离屏缓存 | 视觉打磨 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 仅留扩展点 |
 | B5 | VirtualMasonry 产品化 | 见 WP-3.7 |
