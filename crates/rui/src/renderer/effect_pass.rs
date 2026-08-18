@@ -36,7 +36,7 @@ impl EffectPassGpu {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(
-                        std::mem::size_of::<EffectUniforms>() as u64,
+                        std::mem::size_of::<EffectUniforms>() as u64
                     ),
                 },
                 count: None,
@@ -307,11 +307,13 @@ impl EffectPassGpu {
         let tex_buf = if tex_insts.is_empty() {
             None
         } else {
-            Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("capture-tex-inst"),
-                contents: bytemuck::cast_slice(&tex_insts),
-                usage: wgpu::BufferUsages::VERTEX,
-            }))
+            Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("capture-tex-inst"),
+                    contents: bytemuck::cast_slice(&tex_insts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+            )
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -359,7 +361,10 @@ impl EffectPassGpu {
                     pass.set_bind_group(0, &src.bind_group, &[]);
                     pass.set_vertex_buffer(0, textured.vertex_buffer.slice(..));
                     pass.set_vertex_buffer(1, buf.slice(..));
-                    pass.set_index_buffer(textured.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    pass.set_index_buffer(
+                        textured.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
                     pass.draw_indexed(0..textured.num_indices, 0, ti as u32..(ti + run) as u32);
                     ti += run;
                 }
@@ -415,8 +420,9 @@ impl EffectPassGpu {
                 (pointer[1] - job.bounds[1]) / job.bounds[3].max(1.0),
             ],
             strength: job.strength,
+            _pad0: 0.0,
             texel: [1.0 / w as f32, 1.0 / h as f32],
-            _pad: 0.0,
+            _pad1: [0.0; 4],
         };
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
 

@@ -127,7 +127,9 @@ impl CanvasPath2D {
 
     pub fn arc(&mut self, cx: f32, cy: f32, r: f32, start_rad: f32, end_rad: f32) {
         let span = end_rad - start_rad;
-        let steps = ((span.abs() / std::f32::consts::TAU) * 32.0).ceil().max(8.0) as usize;
+        let steps = ((span.abs() / std::f32::consts::TAU) * 32.0)
+            .ceil()
+            .max(8.0) as usize;
         for i in 0..=steps {
             let t = i as f32 / steps as f32;
             let a = start_rad + span * t;
@@ -174,14 +176,7 @@ pub trait Canvas2D {
     }
     fn save(&mut self);
     fn restore(&mut self);
-    fn draw_image(
-        &mut self,
-        _src: &CanvasImageSource<'_>,
-        _dx: f32,
-        _dy: f32,
-        _dw: f32,
-        _dh: f32,
-    ) {
+    fn draw_image(&mut self, _src: &CanvasImageSource<'_>, _dx: f32, _dy: f32, _dw: f32, _dh: f32) {
     }
     fn get_image_data(&self, _x: u32, _y: u32, _w: u32, _h: u32) -> Option<Vec<u8>> {
         None
@@ -554,7 +549,12 @@ impl Canvas2D for RasterCanvas {
     }
 
     fn draw_image(&mut self, src: &CanvasImageSource<'_>, dx: f32, dy: f32, dw: f32, dh: f32) {
-        let CanvasImageSource::Rgba { width, height, rgba } = src else {
+        let CanvasImageSource::Rgba {
+            width,
+            height,
+            rgba,
+        } = src
+        else {
             return;
         };
         if *width == 0 || *height == 0 || dw <= 0.0 || dh <= 0.0 {
@@ -604,10 +604,8 @@ impl Canvas2D for RasterCanvas {
                 if a > 1e-6 {
                     let inv = 1.0 / a;
                     out[di] = (self.buf[si] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
-                    out[di + 1] =
-                        (self.buf[si + 1] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
-                    out[di + 2] =
-                        (self.buf[si + 2] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out[di + 1] = (self.buf[si + 1] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out[di + 2] = (self.buf[si + 2] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }

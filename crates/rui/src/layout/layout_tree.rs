@@ -1642,7 +1642,10 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
-        let tex_keys: Vec<String> = textured_draws.iter().map(|d| d.texture_key.clone()).collect();
+        let tex_keys: Vec<String> = textured_draws
+            .iter()
+            .map(|d| d.texture_key.clone())
+            .collect();
         let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
         crate::renderer::enrich_render_graph(&mut render_graph);
         RenderResult {
@@ -1833,7 +1836,10 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
-        let tex_keys: Vec<String> = textured_draws.iter().map(|d| d.texture_key.clone()).collect();
+        let tex_keys: Vec<String> = textured_draws
+            .iter()
+            .map(|d| d.texture_key.clone())
+            .collect();
         let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
         crate::renderer::enrich_render_graph(&mut render_graph);
         RenderResult {
@@ -2613,10 +2619,7 @@ impl LayoutTree {
                 },
                 style: text_style.clone(),
                 prepared,
-                glyph_fx: element
-                    .attrs
-                    .get(crate::renderer::ATTR_GLYPH_FX)
-                    .cloned(),
+                glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
             });
             let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                 hidden_input_text_clip(parent_clip, render_rect)
@@ -2857,12 +2860,7 @@ impl LayoutTree {
                 child_insts,
                 child_tex,
             ) {
-                if let Some(draw) = TexturedDraw::clipped(
-                    visible_rect,
-                    clip,
-                    out_key,
-                    opacity,
-                ) {
+                if let Some(draw) = TexturedDraw::clipped(visible_rect, clip, out_key, opacity) {
                     textured_draws.push(draw);
                 }
             }

@@ -133,8 +133,10 @@ impl Scene3dBuilder {
             .set_attr(ATTR_SCENE3D_FOV_DEG, format!("{:.3}", cam.fov_deg.max(1.0)));
         self.el
             .set_attr(ATTR_SCENE3D_PITCH, format!("{:.4}", cam.pitch));
-        self.el
-            .set_attr(ATTR_SCENE3D_CAMERA_Z, format!("{:.4}", cam.distance.max(0.1)));
+        self.el.set_attr(
+            ATTR_SCENE3D_CAMERA_Z,
+            format!("{:.4}", cam.distance.max(0.1)),
+        );
         self
     }
 

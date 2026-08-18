@@ -82,13 +82,7 @@ impl TexturePool {
         self.frame = self.frame.wrapping_add(1);
     }
 
-    pub fn insert_with_size(
-        &mut self,
-        key: String,
-        tex: GpuImageTexture,
-        width: u32,
-        height: u32,
-    ) {
+    pub fn insert_with_size(&mut self, key: String, tex: GpuImageTexture, width: u32, height: u32) {
         let kind = ResourceKind::from_key(&key);
         self.meta.insert(
             key.clone(),

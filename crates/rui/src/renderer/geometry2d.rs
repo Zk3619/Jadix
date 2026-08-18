@@ -3,7 +3,7 @@
 //! CPU coverage raster (`paint_path_premul`) remains the default product path and
 //! the golden/headless fallback. Enable GPU quads with `RUI_GPU_2D=1`.
 
-use crate::primitives::path::{tessellate_path, PathCommand, PathStyle, PathQuad};
+use crate::primitives::path::{tessellate_path, PathCommand, PathQuad, PathStyle};
 use crate::renderer::InstanceInput;
 
 /// `RUI_GPU_2D=1` opts Chart/Svg/Canvas path leaves into tessellated GPU quads.

@@ -11,8 +11,9 @@ struct EffectUniforms {
     time: f32,
     pointer: vec2<f32>,
     strength: f32,
+    _pad0: f32,
     texel: vec2<f32>,
-    _pad: f32,
+    _pad1: vec4<f32>,
 };
 
 @group(0) @binding(0)

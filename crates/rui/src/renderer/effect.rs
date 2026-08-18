@@ -57,6 +57,8 @@ impl EffectKind {
     }
 }
 
+/// GPU uniform block. Must match `effect_pass.wgsl` (WGSL uniform: `vec2` align 8,
+/// struct size round up to 16). Rust `[f32; 2]` is align-4, so `_pad0` sits before `texel`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct EffectUniforms {
@@ -64,8 +66,9 @@ pub struct EffectUniforms {
     pub time: f32,
     pub pointer: [f32; 2],
     pub strength: f32,
+    pub _pad0: f32,
     pub texel: [f32; 2],
-    pub _pad: f32,
+    pub _pad1: [f32; 4],
 }
 
 #[derive(Clone, Debug)]
@@ -134,7 +137,12 @@ pub fn queue_from_attrs(
         textured_draws: Vec::new(),
     });
     let in_key = input_key.unwrap_or(cap_key.as_str()).to_string();
-    let out_key = format!("rui_fx:{}:{:.0}x{:.0}", kind.as_mode(), bounds[2], bounds[3]);
+    let out_key = format!(
+        "rui_fx:{}:{:.0}x{:.0}",
+        kind.as_mode(),
+        bounds[2],
+        bounds[3]
+    );
     queue_effect(EffectJob {
         kind,
         input_key: in_key,
@@ -199,7 +207,12 @@ pub fn queue_subtree_wrap(
         instances,
         textured_draws,
     });
-    let out_key = format!("rui_fx:{}:{:.0}x{:.0}", kind.as_mode(), bounds[2], bounds[3]);
+    let out_key = format!(
+        "rui_fx:{}:{:.0}x{:.0}",
+        kind.as_mode(),
+        bounds[2],
+        bounds[3]
+    );
     queue_effect(EffectJob {
         kind,
         input_key: cap_key,
@@ -213,6 +226,12 @@ pub fn queue_subtree_wrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uniforms_match_wgsl_uniform_layout() {
+        assert_eq!(std::mem::size_of::<EffectUniforms>(), 48);
+        assert_eq!(std::mem::offset_of!(EffectUniforms, texel), 24);
+    }
 
     #[test]
     fn parse_kinds() {

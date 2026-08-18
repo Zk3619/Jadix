@@ -2677,9 +2677,7 @@ mod tests {
         clear_effects();
         let (_root, src) = create_root(|| {
             let src = Signal::new(1_i32);
-            let _memo = create_memo({
-                move || src.get() + 1
-            });
+            let _memo = create_memo({ move || src.get() + 1 });
             create_effect({
                 move || {
                     let _ = src.get();

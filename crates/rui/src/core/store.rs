@@ -233,7 +233,10 @@ pub fn create_store<T: Clone + PartialEq + 'static>(initial: T) -> Store<T> {
 /// Transitional: the memo still **subscribes the root**, so every [`Store::produce`] re-runs
 /// `select`. Downstream effects fire only when the slice changes (`PartialEq`).
 /// Prefer [`Store::field`] when sibling computes must not re-run.
-#[deprecated(since = "0.1.0", note = "Use `Store::field` for path-level granularity (WP-R.3). `store_select` subscribes the root.")]
+#[deprecated(
+    since = "0.1.0",
+    note = "Use `Store::field` for path-level granularity (WP-R.3). `store_select` subscribes the root."
+)]
 pub fn store_select<T, U, F>(store: Store<T>, mut select: F) -> Memo<U>
 where
     T: Clone + PartialEq + 'static,

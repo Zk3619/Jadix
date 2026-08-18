@@ -23,10 +23,6 @@ pub use animation::{
     use_spring, use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween,
     CubicTweenState, Spring, SpringState,
 };
-pub use timeline::{
-    any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,
-    Timeline, TimelineInner,
-};
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
     display_srgba_to_linear_srgba, encode_linear_srgb_component,
@@ -59,6 +55,10 @@ pub use text_style::{
 pub use theme::{
     focus_ring_style, get_theme, is_dark_theme, set_focus_ring_style, set_theme, set_theme_mode,
     theme_mode, toggle_theme_mode, with_theme, DesignTokens, FocusRingStyle, Theme, ThemeMode,
+};
+pub use timeline::{
+    any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,
+    Timeline, TimelineInner,
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, resolve_class_variants, sync_class_variants_subtree,

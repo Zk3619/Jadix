@@ -2426,8 +2426,9 @@ pub fn prepare_text_frame(
             if kind != crate::renderer::GlyphFxKind::None {
                 let fx = crate::renderer::GlyphFx::new(kind, crate::style::global_time_s().fract());
                 let n = info.text.chars().count().max(1);
-                glyph_color[3] =
-                    ((glyph_color[3] as f32) * fx.opacity(0, n)).round().clamp(0.0, 255.0) as u8;
+                glyph_color[3] = ((glyph_color[3] as f32) * fx.opacity(0, n))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
                 let (_, off_y) = fx.offset(0, n);
                 glyph_dy += off_y * ui_scale;
             }

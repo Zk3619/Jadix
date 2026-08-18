@@ -128,10 +128,9 @@ pub fn tick_timelines(dt: f32) -> bool {
 /// Whether any timeline is still playing (does not advance time).
 pub fn any_timeline_playing() -> bool {
     TIMELINES.with(|slot| {
-        slot.borrow().iter().any(|w| {
-            w.upgrade()
-                .is_some_and(|rc| rc.borrow().playing)
-        })
+        slot.borrow()
+            .iter()
+            .any(|w| w.upgrade().is_some_and(|rc| rc.borrow().playing))
     })
 }
 pub fn global_time_s() -> f32 {
