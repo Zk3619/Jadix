@@ -39,6 +39,7 @@ const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
 const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
 const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
 const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";
+#[cfg(test)]
 const GAL_SHELL_TRAY_SHOW: &str = "gal_shell_tray_show";
 const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
 const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
@@ -1289,7 +1290,7 @@ fn StoreResourceShowcase() -> rui::core::tree::Element {
     use rui::app::{error_boundary, throw_resource_error};
     use rui::core::reactivity::{create_effect, create_memo};
     use rui::core::resource::{Resource, ResourceState};
-    use rui::core::store::{create_store, store_select};
+    use rui::core::store::create_store;
 
     #[derive(Clone, Debug, PartialEq)]
     struct Form {
@@ -1301,13 +1302,13 @@ fn StoreResourceShowcase() -> rui::core::tree::Element {
         name: "alice".into(),
         age: 20,
     });
-    let name = store_select(store, |f| f.name.clone());
-    let age = store_select(store, |f| f.age);
+    let name = store.field("name", |f| f.name.clone(), |f, v| f.name = v);
+    let age = store.field("age", |f| f.age, |f, v| f.age = v);
     let name_ticks = use_signal("gal_wp25_name_ticks", || 0_u32);
     let age_ticks = use_signal("gal_wp25_age_ticks", || 0_u32);
     let action_note = use_signal("gal_wp25_action_note", || "尚未操作".to_string());
     create_effect({
-        let name = name;
+        let name = name.clone();
         let name_ticks = name_ticks;
         move || {
             let _ = name.get();
@@ -1315,7 +1316,7 @@ fn StoreResourceShowcase() -> rui::core::tree::Element {
         }
     });
     create_effect({
-        let age = age;
+        let age = age.clone();
         let age_ticks = age_ticks;
         move || {
             let _ = age.get();
@@ -3525,9 +3526,32 @@ fn DrawingSvgShowcase() -> Element {
     }
 }
 
+/// Chaikin corner-cutting: two passes of subdivision produce a smooth C1 curve
+/// that never overshoots the control polygon.  Anchors the first and last
+/// points so the stroke starts and ends exactly at the pointer position.
+fn chaikin_smooth(pts: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
+    let mut cur = pts.to_vec();
+    for _ in 0..3 {
+        let n = cur.len();
+        let mut next = Vec::with_capacity(n * 2);
+        next.push(cur[0]);
+        for i in 0..n - 1 {
+            let (ax, ay) = cur[i];
+            let (bx, by) = cur[i + 1];
+            next.push((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by));
+            next.push((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by));
+        }
+        next.push(cur[n - 1]);
+        cur = next;
+    }
+    cur
+}
+
 #[component]
 fn DrawingCanvasShowcase() -> Element {
-    // RefCell not Signal: `Signal::update` clones the whole stroke list every move.
     let strokes = Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()));
     let drawing = Rc::new(Cell::new(false));
 
@@ -3543,7 +3567,7 @@ fn DrawingCanvasShowcase() -> Element {
                 ctx.set_line_width(2.5);
                 for line in strokes.borrow().iter() {
                     if line.len() >= 2 {
-                        ctx.stroke_path(&polyline(line));
+                        ctx.stroke_path(&polyline(&chaikin_smooth(line)));
                     }
                 }
                 LayoutStatus::Clean
@@ -3565,16 +3589,12 @@ fn DrawingCanvasShowcase() -> Element {
                 if !drawing.get() {
                     return;
                 }
-                if e.buttons & 1 == 0 {
-                    drawing.set(false);
-                    return;
-                }
                 let p = (e.offset_x(), e.offset_y());
                 let mut v = strokes.borrow_mut();
                 if let Some(last) = v.last_mut() {
                     if last
                         .last()
-                        .is_some_and(|q| (q.0 - p.0).hypot(q.1 - p.1) < 0.75)
+                        .is_some_and(|q| (q.0 - p.0).hypot(q.1 - p.1) < 1.5)
                     {
                         return;
                     }
