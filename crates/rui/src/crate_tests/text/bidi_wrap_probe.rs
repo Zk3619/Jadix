@@ -101,9 +101,12 @@ fn gallery_bidi_paint_uses_fit_wrap_width_not_full_leaf() {
     // Mirrors prepare_text: shape at cached fit wrap, not full leaf width.
     buffer.set_size(Some(fit.wrap_width), Some(lh * 16.0));
     buffer.shape_until_scroll(&mut fs, false);
+    // cosmic-text 0.19 often fits this sample at the leaf width; older versions overflowed
+    // (~253px ink in a 240px buffer) and required wrap_width < leaf_w.
     assert!(
-        fit.wrap_width + 0.01 < leaf_w || fit.max_ink > leaf_w,
-        "sanity: fit should tighten when ink spills leaf"
+        fit.wrap_width <= leaf_w + 0.01,
+        "fit wrap {:.1} must not exceed leaf {leaf_w}",
+        fit.wrap_width
     );
     assert!(
         max_ink(&buffer) <= leaf_w * 1.08 + 2.0,

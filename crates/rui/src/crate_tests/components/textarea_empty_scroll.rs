@@ -51,14 +51,8 @@ fn empty_textarea_no_spurious_scroll() {
         .find(|(r, ..)| r == &rest)
         .expect("metrics");
 
-    let pad_top = match region.style.padding.top {
-        taffy::style::LengthPercentage::Length(v) => v,
-        _ => 0.0,
-    };
-    let pad_bottom = match region.style.padding.bottom {
-        taffy::style::LengthPercentage::Length(v) => v,
-        _ => 0.0,
-    };
+    let pad_top = crate::layout::lp_length_px(region.style.padding.top).unwrap_or(0.0);
+    let pad_bottom = crate::layout::lp_length_px(region.style.padding.bottom).unwrap_or(0.0);
     let content_box_h = bounds[3] - pad_top - pad_bottom;
     let leaf_h = leaf.layout_bounds[3];
 

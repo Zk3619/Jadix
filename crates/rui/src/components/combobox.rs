@@ -1272,8 +1272,8 @@ mod tests {
             .options([("a", "A")])
             .class("w-[4.75rem] min-w-[4.75rem]")
             .into();
-        match plain.style.size.width {
-            taffy::style::Dimension::Length(px) => {
+        match crate::layout::dim_kind(plain.style.size.width) {
+            crate::layout::DimKind::Length(px) => {
                 assert!(
                     (px - 16.0 * 16.0).abs() < 0.5,
                     "default shell 16rem, got {px}"
@@ -1281,8 +1281,8 @@ mod tests {
             }
             other => panic!("default combobox shell should be 16rem, got {other:?}"),
         }
-        match sized.style.size.width {
-            taffy::style::Dimension::Length(px) => assert!(
+        match crate::layout::dim_kind(sized.style.size.width) {
+            crate::layout::DimKind::Length(px) => assert!(
                 (px - 4.75 * 16.0).abs() < 0.5,
                 "class should set 4.75rem, got {px}"
             ),

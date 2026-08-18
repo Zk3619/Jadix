@@ -423,8 +423,8 @@ impl From<ScrollAreaBuilder> for Element {
 
         outer.style.padding = taffy::prelude::Rect::zero();
         outer.style.gap = taffy::geometry::Size {
-            width: taffy::style::LengthPercentage::Length(0.0),
-            height: taffy::style::LengthPercentage::Length(0.0),
+            width: taffy::style::LengthPercentage::length(0.0),
+            height: taffy::style::LengthPercentage::length(0.0),
         };
         outer.style.overflow.x = taffy::style::Overflow::Visible;
         outer.style.overflow.y = taffy::style::Overflow::Visible;
@@ -433,13 +433,12 @@ impl From<ScrollAreaBuilder> for Element {
         let content_children = std::mem::take(&mut outer.children);
         let inside_reserve = base_thickness + SCROLLBAR_EDGE_PAD;
         let add_padding = |p: &mut taffy::style::LengthPercentage, delta: f32| {
-            *p = match *p {
-                taffy::style::LengthPercentage::Length(v) => {
-                    taffy::style::LengthPercentage::Length((v + delta).max(0.0))
+            *p = match crate::layout::lp_kind(*p) {
+                crate::layout::DimKind::Length(v) => {
+                    taffy::style::LengthPercentage::length((v + delta).max(0.0))
                 }
-                taffy::style::LengthPercentage::Percent(v) => {
-                    taffy::style::LengthPercentage::Percent(v)
-                }
+                crate::layout::DimKind::Percent(v) => taffy::style::LengthPercentage::percent(v),
+                crate::layout::DimKind::Auto => taffy::style::LengthPercentage::length(delta.max(0.0)),
             };
         };
 
@@ -477,8 +476,8 @@ impl From<ScrollAreaBuilder> for Element {
                 .min_w(0.0)
                 .min_h(0.0)
                 .w("100%");
-            inner_col.style.justify_content = Some(taffy::style::JustifyContent::FlexStart);
-            inner_col.style.align_items = Some(taffy::style::AlignItems::Stretch);
+            inner_col.style.justify_content = Some(taffy::style::JustifyContent::FLEX_START);
+            inner_col.style.align_items = Some(taffy::style::AlignItems::STRETCH);
             let vp = viewport
                 .flex_grow(1.0)
                 .flex_shrink(1.0)

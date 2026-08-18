@@ -10,7 +10,9 @@
 
 use taffy::prelude::*;
 
-use crate::layout::dimension::{CssDim, PercentAxis, UnitCtx};
+use crate::layout::dimension::{
+    dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind, CssDim, DimKind, PercentAxis, UnitCtx,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxShadow {
@@ -285,13 +287,13 @@ pub struct Style {
     pub z_index: i32,
 
     /// Grid 容器：显式列轨（`grid-template-columns`）。
-    pub grid_template_columns: Vec<TrackSizingFunction>,
+    pub grid_template_columns: Vec<crate::layout::GridTrack>,
     /// Grid 容器：显式行轨（`grid-template-rows`）。
-    pub grid_template_rows: Vec<TrackSizingFunction>,
+    pub grid_template_rows: Vec<crate::layout::GridTrack>,
     /// Grid 隐式行尺寸。
-    pub grid_auto_rows: Vec<NonRepeatedTrackSizingFunction>,
+    pub grid_auto_rows: Vec<TrackSizingFunction>,
     /// Grid 隐式列尺寸。
-    pub grid_auto_columns: Vec<NonRepeatedTrackSizingFunction>,
+    pub grid_auto_columns: Vec<TrackSizingFunction>,
     pub grid_auto_flow: GridAutoFlow,
     /// Grid 子项：行占位。
     pub grid_row: Line<GridPlacement>,
@@ -355,21 +357,21 @@ impl Default for Style {
             box_sizing: BoxSizing::BorderBox,
             size: Size::auto(),
             min_size: Size {
-                width: Dimension::Auto,
-                height: Dimension::Auto,
+                width: Dimension::auto(),
+                height: Dimension::auto(),
             },
             max_size: Size {
-                width: Dimension::Auto,
-                height: Dimension::Auto,
+                width: Dimension::auto(),
+                height: Dimension::auto(),
             },
             flex_grow: 0.0,
             flex_shrink: 1.0,
-            flex_basis: Dimension::Auto,
+            flex_basis: Dimension::auto(),
             padding: Rect::zero(),
             margin: Rect::zero(),
             gap: taffy::geometry::Size {
-                width: taffy::style::LengthPercentage::Length(0.0),
-                height: taffy::style::LengthPercentage::Length(0.0),
+                width: taffy::style::LengthPercentage::length(0.0),
+                height: taffy::style::LengthPercentage::length(0.0),
             },
             overflow: taffy::geometry::Point {
                 x: taffy::style::Overflow::Visible,
@@ -456,10 +458,10 @@ impl Style {
     pub fn to_taffy_style_with(&self, ctx: &UnitCtx) -> taffy::style::Style {
         let [bt, br, bb, bl] = self.resolved_border_widths();
         let border = Rect {
-            top: LengthPercentage::Length(bt),
-            right: LengthPercentage::Length(br),
-            bottom: LengthPercentage::Length(bb),
-            left: LengthPercentage::Length(bl),
+            top: LengthPercentage::length(bt),
+            right: LengthPercentage::length(br),
+            bottom: LengthPercentage::length(bb),
+            left: LengthPercentage::length(bl),
         };
         let mut size = self.size;
         let mut min_size = self.min_size;
@@ -554,8 +556,8 @@ impl Style {
             grid_auto_rows: self.grid_auto_rows.clone(),
             grid_auto_columns: self.grid_auto_columns.clone(),
             grid_auto_flow: self.grid_auto_flow,
-            grid_row: self.grid_row,
-            grid_column: self.grid_column,
+            grid_row: self.grid_row.clone(),
+            grid_column: self.grid_column.clone(),
             ..Default::default()
         }
     }
@@ -636,10 +638,10 @@ impl Style {
         let pad_y = lp_used(taffy.padding.top, ctx.cb_w) + lp_used(taffy.padding.bottom, ctx.cb_w);
         let border_box = matches!(self.box_sizing, BoxSizing::BorderBox);
         let content = |dim: Dimension, cb: Option<f32>, chrome: f32| -> Option<f32> {
-            let used = match dim {
-                Dimension::Length(l) => Some(l),
-                Dimension::Percent(p) => cb.map(|c| p * c),
-                Dimension::Auto => None,
+            let used = match dim_kind(dim) {
+                DimKind::Length(l) => Some(l),
+                DimKind::Percent(p) => cb.map(|c| p * c),
+                DimKind::Auto => None,
             }?;
             if border_box {
                 Some((used - chrome).max(0.0))
@@ -666,16 +668,8 @@ impl Style {
     }
 
     fn apply_taffy_slot(&mut self, slot: UnitSlot, dim: Dimension) {
-        let lp = match dim {
-            Dimension::Length(l) => LengthPercentage::Length(l),
-            Dimension::Percent(p) => LengthPercentage::Percent(p),
-            Dimension::Auto => LengthPercentage::Length(0.0),
-        };
-        let lpa = match dim {
-            Dimension::Length(l) => LengthPercentageAuto::Length(l),
-            Dimension::Percent(p) => LengthPercentageAuto::Percent(p),
-            Dimension::Auto => LengthPercentageAuto::Auto,
-        };
+        let lp = dimension_to_lp(dim);
+        let lpa = dimension_to_lpa(dim);
         match slot {
             UnitSlot::Width => self.size.width = dim,
             UnitSlot::Height => self.size.height = dim,
@@ -705,8 +699,9 @@ impl Style {
 const CSS_FALLBACK_FONT: f32 = 16.0;
 
 fn lp_used(lp: LengthPercentage, cb_w: Option<f32>) -> f32 {
-    match lp {
-        LengthPercentage::Length(l) => l,
-        LengthPercentage::Percent(p) => cb_w.map(|c| p * c).unwrap_or(0.0),
+    match lp_kind(lp) {
+        DimKind::Length(l) => l,
+        DimKind::Percent(p) => cb_w.map(|c| p * c).unwrap_or(0.0),
+        DimKind::Auto => 0.0,
     }
 }

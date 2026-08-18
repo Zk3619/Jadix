@@ -356,13 +356,8 @@ mod tests {
         });
         fn find_zero(el: &Element) -> bool {
             let is_view = el.template_id.as_deref() == Some("tip-anchor__tooltip_view");
-            let dim0 = matches!(
-                el.style.size.width,
-                taffy::style::Dimension::Length(w) if w == 0.0
-            ) && matches!(
-                el.style.size.height,
-                taffy::style::Dimension::Length(h) if h == 0.0
-            );
+            let dim0 = crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
+                && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0);
             (is_view && dim0) || el.children.iter().any(find_zero)
         }
         assert!(

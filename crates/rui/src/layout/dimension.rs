@@ -1,6 +1,78 @@
-use taffy::prelude::{Dimension, LengthPercentage, LengthPercentageAuto};
+use taffy::prelude::{CompactLength, Dimension, LengthPercentage, LengthPercentageAuto};
 
 pub const CSS_ROOT_FONT_SIZE_PX: f32 = 16.0;
+
+/// Taffy 0.13 stores length/percent/auto as a tagged pointer, not an enum.
+/// Classify so call sites can still `match` without poking `CompactLength` tags.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DimKind {
+    Length(f32),
+    Percent(f32),
+    Auto,
+}
+
+#[inline]
+pub fn dim_kind(d: Dimension) -> DimKind {
+    match d.tag() {
+        CompactLength::LENGTH_TAG => DimKind::Length(d.value()),
+        CompactLength::PERCENT_TAG => DimKind::Percent(d.value()),
+        _ => DimKind::Auto,
+    }
+}
+
+#[inline]
+pub fn dim_length_px(d: Dimension) -> Option<f32> {
+    (d.tag() == CompactLength::LENGTH_TAG).then(|| d.value())
+}
+
+#[inline]
+pub fn lp_kind(lp: LengthPercentage) -> DimKind {
+    let raw = lp.into_raw();
+    match raw.tag() {
+        CompactLength::PERCENT_TAG => DimKind::Percent(raw.value()),
+        _ => DimKind::Length(raw.value()),
+    }
+}
+
+#[inline]
+pub fn lp_length_px(lp: LengthPercentage) -> Option<f32> {
+    let raw = lp.into_raw();
+    (raw.tag() == CompactLength::LENGTH_TAG).then(|| raw.value())
+}
+
+#[inline]
+pub fn lpa_kind(lpa: LengthPercentageAuto) -> DimKind {
+    let raw = lpa.into_raw();
+    match raw.tag() {
+        CompactLength::LENGTH_TAG => DimKind::Length(raw.value()),
+        CompactLength::PERCENT_TAG => DimKind::Percent(raw.value()),
+        _ => DimKind::Auto,
+    }
+}
+
+#[inline]
+pub fn lpa_length_px(lpa: LengthPercentageAuto) -> Option<f32> {
+    let raw = lpa.into_raw();
+    (raw.tag() == CompactLength::LENGTH_TAG).then(|| raw.value())
+}
+
+#[inline]
+pub fn dimension_to_lp(d: Dimension) -> LengthPercentage {
+    match dim_kind(d) {
+        DimKind::Length(l) => LengthPercentage::length(l),
+        DimKind::Percent(p) => LengthPercentage::percent(p),
+        DimKind::Auto => LengthPercentage::length(0.0),
+    }
+}
+
+#[inline]
+pub fn dimension_to_lpa(d: Dimension) -> LengthPercentageAuto {
+    match dim_kind(d) {
+        DimKind::Length(l) => LengthPercentageAuto::length(l),
+        DimKind::Percent(p) => LengthPercentageAuto::percent(p),
+        DimKind::Auto => LengthPercentageAuto::auto(),
+    }
+}
 
 fn parse_css_number(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok()
@@ -38,7 +110,7 @@ pub trait IntoDimension {
 
 impl IntoDimension for f32 {
     fn into_dimension(self) -> Dimension {
-        Dimension::Length(self)
+        Dimension::length(self)
     }
 }
 
@@ -50,7 +122,7 @@ impl IntoDimension for Dimension {
 
 impl IntoDimension for i32 {
     fn into_dimension(self) -> Dimension {
-        Dimension::Length(self as f32)
+        Dimension::length(self as f32)
     }
 }
 
@@ -59,18 +131,18 @@ impl IntoDimension for &str {
         let s = self.trim();
         if let Some(rest) = s.strip_suffix('%') {
             if let Ok(val) = rest.parse::<f32>() {
-                return Dimension::Percent(val / 100.0);
+                return Dimension::percent(val / 100.0);
             }
         } else if let Some(rest) = strip_viewport_unit(s) {
             // Taffy Dimension has no viewport units; map to percent of the containing
             // block (portal body mount ≈ viewport for Dialog / floating shells).
             if let Ok(val) = rest.parse::<f32>() {
-                return Dimension::Percent(val / 100.0);
+                return Dimension::percent(val / 100.0);
             }
         } else if let Some(val) = parse_css_length_px(s, CSS_ROOT_FONT_SIZE_PX) {
-            return Dimension::Length(val);
+            return Dimension::length(val);
         }
-        Dimension::Auto
+        Dimension::auto()
     }
 }
 
@@ -193,10 +265,10 @@ impl CssDim {
     /// Immediate Taffy value when no viewport / element font-size is required.
     pub fn as_immediate_dimension(&self) -> Option<Dimension> {
         match self {
-            Self::Auto => Some(Dimension::Auto),
-            Self::Px(v) => Some(Dimension::Length(*v)),
-            Self::Percent(p) => Some(Dimension::Percent(*p)),
-            Self::Rem(v) => Some(Dimension::Length(*v * CSS_ROOT_FONT_SIZE_PX)),
+            Self::Auto => Some(Dimension::auto()),
+            Self::Px(v) => Some(Dimension::length(*v)),
+            Self::Percent(p) => Some(Dimension::percent(*p)),
+            Self::Rem(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
             _ => None,
         }
     }
@@ -207,8 +279,8 @@ impl CssDim {
             return Some(d);
         }
         match self {
-            Self::Em(v) => Some(Dimension::Length(*v * CSS_ROOT_FONT_SIZE_PX)),
-            Self::Vw(p) | Self::Vh(p) => Some(Dimension::Percent(*p)),
+            Self::Em(v) => Some(Dimension::length(*v * CSS_ROOT_FONT_SIZE_PX)),
+            Self::Vw(p) | Self::Vh(p) => Some(Dimension::percent(*p)),
             _ => None,
         }
     }
@@ -239,23 +311,19 @@ impl CssDim {
 
     pub fn to_dimension_axis(&self, ctx: &UnitCtx, axis: PercentAxis) -> Dimension {
         if let Self::Percent(p) = *self {
-            return Dimension::Percent(p);
+            return Dimension::percent(p);
         }
         if let Self::Auto = self {
-            return Dimension::Auto;
+            return Dimension::auto();
         }
         if let Some(px) = self.resolve_px(ctx, axis) {
-            return Dimension::Length(px);
+            return Dimension::length(px);
         }
-        self.preview_dimension().unwrap_or(Dimension::Auto)
+        self.preview_dimension().unwrap_or(Dimension::auto())
     }
 
     pub fn to_length_percentage(&self, ctx: &UnitCtx, axis: PercentAxis) -> LengthPercentage {
-        match self.to_dimension_axis(ctx, axis) {
-            Dimension::Length(l) => LengthPercentage::Length(l),
-            Dimension::Percent(p) => LengthPercentage::Percent(p),
-            _ => LengthPercentage::Length(0.0),
-        }
+        dimension_to_lp(self.to_dimension_axis(ctx, axis))
     }
 
     pub fn to_length_percentage_auto(
@@ -263,11 +331,7 @@ impl CssDim {
         ctx: &UnitCtx,
         axis: PercentAxis,
     ) -> LengthPercentageAuto {
-        match self.to_dimension_axis(ctx, axis) {
-            Dimension::Length(l) => LengthPercentageAuto::Length(l),
-            Dimension::Percent(p) => LengthPercentageAuto::Percent(p),
-            Dimension::Auto => LengthPercentageAuto::Auto,
-        }
+        dimension_to_lpa(self.to_dimension_axis(ctx, axis))
     }
 }
 
@@ -377,10 +441,10 @@ impl IntoCssDim for i32 {
 
 impl IntoCssDim for Dimension {
     fn into_css_dim(self) -> CssDim {
-        match self {
-            Dimension::Length(v) => CssDim::Px(v),
-            Dimension::Percent(p) => CssDim::Percent(p),
-            Dimension::Auto => CssDim::Auto,
+        match dim_kind(self) {
+            DimKind::Length(v) => CssDim::Px(v),
+            DimKind::Percent(p) => CssDim::Percent(p),
+            DimKind::Auto => CssDim::Auto,
         }
     }
 }
@@ -457,12 +521,12 @@ mod tests {
     #[test]
     fn em_resolves_against_root_16px_not_element_font_size() {
         // IntoDimension 无节点上下文：em ≡ rem ≡ 根 16px。布局期 CssDim 用本节点 font-size。
-        match "1em".into_dimension() {
-            Dimension::Length(px) => assert!((px - 16.0).abs() < 1e-6, "1em → {px}"),
+        match dim_kind("1em".into_dimension()) {
+            DimKind::Length(px) => assert!((px - 16.0).abs() < 1e-6, "1em → {px}"),
             other => panic!("expected length, got {other:?}"),
         }
-        match "0.5em".into_dimension() {
-            Dimension::Length(px) => assert!((px - 8.0).abs() < 1e-6, "0.5em → {px}"),
+        match dim_kind("0.5em".into_dimension()) {
+            DimKind::Length(px) => assert!((px - 8.0).abs() < 1e-6, "0.5em → {px}"),
             other => panic!("expected length, got {other:?}"),
         }
         assert!((IntoF32::into_f32("1.25em") - 20.0).abs() < 1e-6);
@@ -483,16 +547,16 @@ mod tests {
 
     #[test]
     fn parses_dvh_dvw_as_percent() {
-        match "85dvh".into_dimension() {
-            Dimension::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
+        match dim_kind("85dvh".into_dimension()) {
+            DimKind::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
             other => panic!("expected percent, got {other:?}"),
         }
-        match "85dvw".into_dimension() {
-            Dimension::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
+        match dim_kind("85dvw".into_dimension()) {
+            DimKind::Percent(p) => assert!((p - 0.85).abs() < 1e-6),
             other => panic!("expected percent, got {other:?}"),
         }
-        match "50vh".into_dimension() {
-            Dimension::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
+        match dim_kind("50vh".into_dimension()) {
+            DimKind::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
             other => panic!("expected percent, got {other:?}"),
         }
     }
@@ -501,52 +565,54 @@ mod tests {
     fn css_dim_vw_vh_em_calc_resolve() {
         let ctx = UnitCtx::new(800.0, 600.0, 20.0);
         assert!(matches!(parse_css_dim("auto"), Some(CssDim::Auto)));
-        match parse_css_dim("50vw").unwrap().to_dimension(&ctx) {
-            Dimension::Length(px) => assert!((px - 400.0).abs() < 0.5, "50vw → {px}"),
+        match dim_kind(parse_css_dim("50vw").unwrap().to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 400.0).abs() < 0.5, "50vw → {px}"),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("100dvh").unwrap().to_dimension(&ctx) {
-            Dimension::Length(px) => assert!((px - 600.0).abs() < 0.5, "100dvh → {px}"),
+        match dim_kind(parse_css_dim("100dvh").unwrap().to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 600.0).abs() < 0.5, "100dvh → {px}"),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("2em").unwrap().to_dimension(&ctx) {
-            Dimension::Length(px) => assert!((px - 40.0).abs() < 0.5, "2em@20px → {px}"),
+        match dim_kind(parse_css_dim("2em").unwrap().to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 40.0).abs() < 0.5, "2em@20px → {px}"),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("10rem").unwrap().to_dimension(&ctx) {
-            Dimension::Length(px) => assert!((px - 160.0).abs() < 0.5, "10rem → {px}"),
+        match dim_kind(parse_css_dim("10rem").unwrap().to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 160.0).abs() < 0.5, "10rem → {px}"),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("50%").unwrap().to_dimension(&ctx) {
-            Dimension::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
+        match dim_kind(parse_css_dim("50%").unwrap().to_dimension(&ctx)) {
+            DimKind::Percent(p) => assert!((p - 0.5).abs() < 1e-6),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("calc(100vw - 2rem)")
-            .unwrap()
-            .to_dimension(&ctx)
-        {
-            Dimension::Length(px) => assert!((px - 768.0).abs() < 0.5, "calc → {px}"),
+        match dim_kind(
+            parse_css_dim("calc(100vw - 2rem)")
+                .unwrap()
+                .to_dimension(&ctx),
+        ) {
+            DimKind::Length(px) => assert!((px - 768.0).abs() < 0.5, "calc → {px}"),
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("calc(1em + 8px)").unwrap().to_dimension(&ctx) {
-            Dimension::Length(px) => assert!((px - 28.0).abs() < 0.5, "calc em+px → {px}"),
+        match dim_kind(parse_css_dim("calc(1em + 8px)").unwrap().to_dimension(&ctx)) {
+            DimKind::Length(px) => assert!((px - 28.0).abs() < 0.5, "calc em+px → {px}"),
             other => panic!("{other:?}"),
         }
         let pct_calc = parse_css_dim("calc(100% - 40px)").unwrap();
         assert!(pct_calc.has_percent());
-        assert!(matches!(pct_calc.to_dimension(&ctx), Dimension::Auto));
+        assert!(pct_calc.to_dimension(&ctx).is_auto());
         let ctx_cb = ctx.with_containing_block(Some(260.0), Some(180.0));
-        match pct_calc.to_dimension(&ctx_cb) {
-            Dimension::Length(px) => {
+        match dim_kind(pct_calc.to_dimension(&ctx_cb)) {
+            DimKind::Length(px) => {
                 assert!((px - 220.0).abs() < 0.5, "calc(100%-40px) @260 → {px}")
             }
             other => panic!("{other:?}"),
         }
-        match parse_css_dim("calc(50% + 10px)")
-            .unwrap()
-            .to_dimension_axis(&ctx_cb, PercentAxis::Block)
-        {
-            Dimension::Length(px) => {
+        match dim_kind(
+            parse_css_dim("calc(50% + 10px)")
+                .unwrap()
+                .to_dimension_axis(&ctx_cb, PercentAxis::Block),
+        ) {
+            DimKind::Length(px) => {
                 assert!((px - 100.0).abs() < 0.5, "50% of 180 + 10 → {px}")
             }
             other => panic!("{other:?}"),
@@ -565,11 +631,7 @@ pub trait IntoLengthPercentage {
 
 impl<T: IntoDimension> IntoLengthPercentage for T {
     fn into_length_percentage(self) -> LengthPercentage {
-        match self.into_dimension() {
-            Dimension::Length(l) => LengthPercentage::Length(l),
-            Dimension::Percent(p) => LengthPercentage::Percent(p),
-            _ => LengthPercentage::Length(0.0),
-        }
+        dimension_to_lp(self.into_dimension())
     }
 }
 

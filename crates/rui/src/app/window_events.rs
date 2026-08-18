@@ -419,9 +419,10 @@ impl super::App {
     }
 
     fn fmt_lp(v: taffy::prelude::LengthPercentage) -> String {
-        match v {
-            taffy::prelude::LengthPercentage::Length(px) => format!("{px:.1}px"),
-            taffy::prelude::LengthPercentage::Percent(p) => format!("{:.1}%", p * 100.0),
+        match crate::layout::lp_kind(v) {
+            crate::layout::DimKind::Length(px) => format!("{px:.1}px"),
+            crate::layout::DimKind::Percent(p) => format!("{:.1}%", p * 100.0),
+            crate::layout::DimKind::Auto => "0px".to_string(),
         }
     }
 
@@ -436,10 +437,10 @@ impl super::App {
     }
 
     fn fmt_lp_auto(v: taffy::prelude::LengthPercentageAuto) -> String {
-        match v {
-            taffy::prelude::LengthPercentageAuto::Auto => "auto".to_string(),
-            taffy::prelude::LengthPercentageAuto::Length(px) => format!("{px:.1}px"),
-            taffy::prelude::LengthPercentageAuto::Percent(p) => format!("{:.1}%", p * 100.0),
+        match crate::layout::lpa_kind(v) {
+            crate::layout::DimKind::Auto => "auto".to_string(),
+            crate::layout::DimKind::Length(px) => format!("{px:.1}px"),
+            crate::layout::DimKind::Percent(p) => format!("{:.1}%", p * 100.0),
         }
     }
 
@@ -491,9 +492,10 @@ impl super::App {
                     // stretched field, border-box ≈ CB; subtract own border so we don't
                     // treat the stroke as part of the percentage basis.
                     let basis = (visual[2] - bl - br).max(0.0);
-                    let pad_l = match e.style.padding.left {
-                        taffy::style::LengthPercentage::Length(v) => v,
-                        taffy::style::LengthPercentage::Percent(p) => basis * p,
+                    let pad_l = match crate::layout::lp_kind(e.style.padding.left) {
+                        crate::layout::DimKind::Length(v) => v,
+                        crate::layout::DimKind::Percent(p) => basis * p,
+                        crate::layout::DimKind::Auto => 0.0,
                     };
                     pad_l + bl
                 })

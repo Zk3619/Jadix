@@ -61,7 +61,7 @@ fn nested_flex_child_width_growth_reflows_footer() {
     // Widen leaf so mid wraps (60+60+gap < 200; 180+60+gap > 200).
     {
         let leaf = find_tid_mut(&mut root, "leaf").expect("leaf");
-        leaf.style.size.width = Dimension::Length(180.0);
+        leaf.style.size.width = Dimension::length(180.0);
     }
     let dirty = std::collections::HashSet::from([leaf_node]);
     tree.mark_dirty_nodes_in_tree(&root, &dirty);

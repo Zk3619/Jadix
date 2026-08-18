@@ -660,7 +660,7 @@ pub(crate) fn set_adornment_visible(btn: &mut Element, visible: bool) -> bool {
         changed = true;
     }
     // Keep a stable 1.25rem slot so clear/eye gap never jumps when visibility flips.
-    let w = taffy::style::Dimension::Length(1.25 * 16.0);
+    let w = taffy::style::Dimension::length(1.25 * 16.0);
     if btn.style.size.width != w {
         btn.style.size.width = w;
         btn.style.min_size.width = w;

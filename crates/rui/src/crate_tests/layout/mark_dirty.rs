@@ -32,7 +32,7 @@ fn layout_changed_mark_dirty_updates_leaf_size() {
     );
 
     let calls_before = tree.mark_dirty_calls;
-    root.children[1].children[0].style.size.height = Dimension::Length(80.0);
+    root.children[1].children[0].style.size.height = Dimension::length(80.0);
     tree.mark_element_layout_dirty(&root.children[1].children[0]);
     assert!(
         tree.mark_dirty_calls > calls_before,

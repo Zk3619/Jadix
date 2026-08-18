@@ -292,17 +292,11 @@ fn floating_place_signal_key(id: &str) -> String {
 }
 
 fn inset_length(v: taffy::style::LengthPercentageAuto) -> Option<f32> {
-    match v {
-        taffy::style::LengthPercentageAuto::Length(n) => Some(n),
-        _ => None,
-    }
+    crate::layout::lpa_length_px(v)
 }
 
 fn dimension_length(v: taffy::style::Dimension) -> Option<f32> {
-    match v {
-        taffy::style::Dimension::Length(n) => Some(n),
-        _ => None,
-    }
+    crate::layout::dim_length_px(v)
 }
 
 /// Write absolute geometry onto a floating panel. Returns whether any field changed.
@@ -321,23 +315,23 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
     }
 
     if place.width_auto {
-        if !matches!(el.style.size.width, taffy::style::Dimension::Auto) {
-            el.style.size.width = taffy::style::Dimension::Auto;
+        if !el.style.size.width.is_auto() {
+            el.style.size.width = taffy::style::Dimension::auto();
             changed = true;
         }
         let min_w = place.min_w.max(0.0);
         if min_w > 0.0 {
             if dimension_length(el.style.min_size.width).is_none_or(|v| (v - min_w).abs() > 0.5) {
-                el.style.min_size.width = taffy::style::Dimension::Length(min_w);
+                el.style.min_size.width = taffy::style::Dimension::length(min_w);
                 changed = true;
             }
         } else if dimension_length(el.style.min_size.width).unwrap_or(0.0) > 0.5 {
-            el.style.min_size.width = taffy::style::Dimension::Auto;
+            el.style.min_size.width = taffy::style::Dimension::auto();
             changed = true;
         }
     } else {
         if dimension_length(el.style.size.width).is_none_or(|v| (v - place.w).abs() > 0.5) {
-            el.style.size.width = taffy::style::Dimension::Length(place.w);
+            el.style.size.width = taffy::style::Dimension::length(place.w);
             changed = true;
         }
         // Allow a larger min-width than the matched trigger (e.g. component sets
@@ -346,7 +340,7 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
             && dimension_length(el.style.min_size.width)
                 .is_none_or(|v| (v - place.min_w).abs() > 0.5)
         {
-            el.style.min_size.width = taffy::style::Dimension::Length(place.min_w);
+            el.style.min_size.width = taffy::style::Dimension::length(place.min_w);
             changed = true;
         }
     }
@@ -354,31 +348,31 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
     if let Some(raw) = el.attrs.get(ATTR_FLOATING_H) {
         let h = parse_css_px(raw, place.max_h).max(0.0);
         if dimension_length(el.style.size.height).is_none_or(|v| (v - h).abs() > 0.5) {
-            el.style.size.height = taffy::style::Dimension::Length(h);
+            el.style.size.height = taffy::style::Dimension::length(h);
             changed = true;
         }
     } else {
         // Absolute floaters must not keep `h: 100%` of the portal/viewport (layout footgun).
-        match el.style.size.height {
-            taffy::style::Dimension::Percent(_) => {
-                el.style.size.height = taffy::style::Dimension::Auto;
+        match crate::layout::dim_kind(el.style.size.height) {
+            crate::layout::DimKind::Percent(_) => {
+                el.style.size.height = taffy::style::Dimension::auto();
                 changed = true;
             }
-            taffy::style::Dimension::Length(_) | taffy::style::Dimension::Auto => {}
+            crate::layout::DimKind::Length(_) | crate::layout::DimKind::Auto => {}
         }
     }
 
     // `max_h <= 0` → unbounded (`strategy=fixed` without ATTR_FLOATING_MAX_H).
     // Viewport-available max must be allowed to **grow** after scroll (no ratchet).
     if place.max_h <= 0.0 {
-        if !matches!(el.style.max_size.height, taffy::style::Dimension::Auto) {
-            el.style.max_size.height = taffy::style::Dimension::Auto;
+        if !el.style.max_size.height.is_auto() {
+            el.style.max_size.height = taffy::style::Dimension::auto();
             changed = true;
         }
     } else if dimension_length(el.style.max_size.height)
         .is_none_or(|v| (v - place.max_h).abs() > 0.5)
     {
-        el.style.max_size.height = taffy::style::Dimension::Length(place.max_h.max(1.0));
+        el.style.max_size.height = taffy::style::Dimension::length(place.max_h.max(1.0));
         changed = true;
     }
 
@@ -387,7 +381,7 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
         if min_h > 0.0
             && dimension_length(el.style.min_size.height).is_none_or(|v| (v - min_h).abs() > 0.5)
         {
-            el.style.min_size.height = taffy::style::Dimension::Length(min_h);
+            el.style.min_size.height = taffy::style::Dimension::length(min_h);
             changed = true;
         }
     }
@@ -870,8 +864,8 @@ mod tests {
         };
         assert!(write_floating_place(&mut el, place));
         assert_eq!(el.style.overflow.y, taffy::style::Overflow::Hidden);
-        match el.style.max_size.height {
-            taffy::style::Dimension::Length(h) => assert!((h - 120.0).abs() < 0.1),
+        match crate::layout::dim_kind(el.style.max_size.height) {
+            crate::layout::DimKind::Length(h) => assert!((h - 120.0).abs() < 0.1),
             other => panic!("expected max height length, got {other:?}"),
         }
         // Capability layer: no default min-height unless ATTR_FLOATING_MIN_H is set.
@@ -894,11 +888,11 @@ mod tests {
         };
         assert!(write_floating_place(&mut el, place));
         assert!(
-            matches!(el.style.size.height, taffy::style::Dimension::Auto),
+            el.style.size.height.is_auto(),
             "ScrollArea h:100% must not stretch floating menus"
         );
-        match el.style.max_size.height {
-            taffy::style::Dimension::Length(h) => assert!(
+        match crate::layout::dim_kind(el.style.max_size.height) {
+            crate::layout::DimKind::Length(h) => assert!(
                 (h - 400.0).abs() < 0.1,
                 "viewport max_h must not ratchet against prior style.max_h, got {h}"
             ),
@@ -923,8 +917,8 @@ mod tests {
             ..small
         };
         assert!(write_floating_place(&mut el, big));
-        match el.style.max_size.height {
-            taffy::style::Dimension::Length(h) => assert!(
+        match crate::layout::dim_kind(el.style.max_size.height) {
+            crate::layout::DimKind::Length(h) => assert!(
                 (h - 320.0).abs() < 0.1,
                 "max_h must grow back after scroll, got {h}"
             ),
@@ -945,8 +939,8 @@ mod tests {
             min_w: 0.0,
         };
         assert!(write_floating_place(&mut el, place));
-        match el.style.size.height {
-            taffy::style::Dimension::Length(h) => assert!((h - 200.0).abs() < 0.1),
+        match crate::layout::dim_kind(el.style.size.height) {
+            crate::layout::DimKind::Length(h) => assert!((h - 200.0).abs() < 0.1),
             other => panic!("expected fixed height, got {other:?}"),
         }
     }
@@ -963,8 +957,8 @@ mod tests {
             min_w: 0.0,
         };
         assert!(write_floating_place(&mut el, place));
-        match el.style.min_size.height {
-            taffy::style::Dimension::Length(h) => assert!((h - 64.0).abs() < 0.1),
+        match crate::layout::dim_kind(el.style.min_size.height) {
+            crate::layout::DimKind::Length(h) => assert!((h - 64.0).abs() < 0.1),
             other => panic!("expected preserved min height, got {other:?}"),
         }
     }
@@ -982,11 +976,11 @@ mod tests {
         };
         assert!(write_floating_place(&mut el, place));
         assert!(
-            matches!(el.style.size.width, taffy::style::Dimension::Auto),
+            el.style.size.width.is_auto(),
             "independent panel must not force trigger width"
         );
-        match el.style.min_size.width {
-            taffy::style::Dimension::Length(w) => assert!((w - 120.0).abs() < 0.1),
+        match crate::layout::dim_kind(el.style.min_size.width) {
+            crate::layout::DimKind::Length(w) => assert!((w - 120.0).abs() < 0.1),
             other => panic!("expected min-width = trigger, got {other:?}"),
         }
     }
@@ -1011,11 +1005,11 @@ mod tests {
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let menu = &root.children[1];
         assert!(
-            matches!(menu.style.size.width, taffy::style::Dimension::Auto),
+            menu.style.size.width.is_auto(),
             "panel width must stay independent of trigger"
         );
-        match menu.style.min_size.width {
-            taffy::style::Dimension::Length(w) => assert!((w - 80.0).abs() < 0.5),
+        match crate::layout::dim_kind(menu.style.min_size.width) {
+            crate::layout::DimKind::Length(w) => assert!((w - 80.0).abs() < 0.5),
             other => panic!("min-width should be trigger width, got {other:?}"),
         }
     }
@@ -1041,12 +1035,12 @@ mod tests {
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
         let tip = &root.children[1];
         assert!(
-            matches!(tip.style.size.width, taffy::style::Dimension::Auto),
+            tip.style.size.width.is_auto(),
             "tooltip must be w-fit (width: auto)"
         );
-        match tip.style.min_size.width {
-            taffy::style::Dimension::Auto => {}
-            taffy::style::Dimension::Length(w) if w < 0.5 => {}
+        match crate::layout::dim_kind(tip.style.min_size.width) {
+            crate::layout::DimKind::Auto => {}
+            crate::layout::DimKind::Length(w) if w < 0.5 => {}
             other => panic!("w-fit must not floor min-width to trigger, got {other:?}"),
         }
         // Prefer below with gap 4; center on trigger mid-x (20+80=100 → x=100-36=64).
@@ -1193,14 +1187,8 @@ mod tests {
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
 
         let menu = &root.children[1];
-        let left = match menu.style.inset.left {
-            taffy::style::LengthPercentageAuto::Length(v) => v,
-            _ => panic!("expected Length left inset"),
-        };
-        let top = match menu.style.inset.top {
-            taffy::style::LengthPercentageAuto::Length(v) => v,
-            _ => panic!("expected Length top inset"),
-        };
+        let left = inset_length(menu.style.inset.left).expect("expected Length left inset");
+        let top = inset_length(menu.style.inset.top).expect("expected Length top inset");
         assert!(
             (left - 40.0).abs() < 0.5,
             "x should follow visual trigger, got {left}"
@@ -1235,10 +1223,7 @@ mod tests {
         root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
 
         assert!(sync_floating_placement(&mut root, 800.0, 600.0));
-        let top = match root.children[1].style.inset.top {
-            taffy::style::LengthPercentageAuto::Length(v) => v,
-            _ => panic!("expected Length top inset"),
-        };
+        let top = inset_length(root.children[1].style.inset.top).expect("expected Length top inset");
         // visual trigger y=120, h=32, gap 8 → y=160 (not unscrolled 480+32+8=520)
         assert!(
             (top - 160.0).abs() < 0.5,
@@ -1329,7 +1314,7 @@ mod tests {
             "fixed y must stay below trigger, got {top}"
         );
         assert!(
-            matches!(menu.style.max_size.height, taffy::style::Dimension::Auto),
+            menu.style.max_size.height.is_auto(),
             "fixed strategy must not clamp max_h to remaining viewport"
         );
     }
@@ -1375,7 +1360,7 @@ mod tests {
     }
 
     fn is_zero_len(d: taffy::style::Dimension) -> bool {
-        matches!(d, taffy::style::Dimension::Length(n) if n.abs() < f32::EPSILON)
+        crate::layout::dim_length_px(d).is_some_and(|n| n.abs() < f32::EPSILON)
     }
 
     fn find_anchored_overlay(el: &Element) -> bool {

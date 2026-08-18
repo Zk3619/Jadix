@@ -87,10 +87,10 @@ pub(crate) fn scrollbar_track_content_inset_px(
 
 #[inline]
 pub(crate) fn scrollbar_track_content_inset(track: &Element) -> f32 {
-    let pad = match track.style.padding.left {
-        taffy::style::LengthPercentage::Length(px) if px.is_finite() => px.max(0.0),
-        _ => 0.0,
-    };
+    let pad = crate::layout::lp_length_px(track.style.padding.left)
+        .filter(|px| px.is_finite())
+        .unwrap_or(0.0)
+        .max(0.0);
     let has_border =
         track.style.border_style != crate::style::LineStyle::None && track.style.border_width > 0.0;
     scrollbar_track_content_inset_px(pad, track.style.border_width, has_border)

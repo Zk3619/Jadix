@@ -13,7 +13,9 @@ mod toggle_state;
 #[cfg(test)]
 mod glyphon_newline_diag {
     //! cosmic-text only shapes lines that fit in `buffer` height (`shape_until_scroll`).
-    //! Textarea must size the buffer to full content height (external scroll model).
+    //! 0.19 still includes a line whose top is inside the viewport, so `lh + 4` is no
+    //! longer a 1-line window. Textarea must size the buffer to full content height
+    //! (or `None`) for the external scroll model.
 
     use crate::renderer::font_loader;
     use crate::style::tailwind_default_leading_scale;
@@ -28,7 +30,9 @@ mod glyphon_newline_diag {
         let size = 14.0_f32;
         let lh = size * tailwind_default_leading_scale(size);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(Some(360.0), Some(lh + 4.0));
+        // Height must sit below the first line's full metrics or 0.19 still yields line 2
+        // (partially visible: line_top + centering is inside `lh + 4`).
+        buffer.set_size(Some(360.0), Some(lh * 0.5));
         buffer.set_text(
             "啊\n啊",
             &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
@@ -39,7 +43,7 @@ mod glyphon_newline_diag {
         let n = buffer.layout_runs().count();
         assert_eq!(
             n, 1,
-            "regression guard: 1-line buffer must only yield 1 run (got {n})"
+            "regression guard: sub-line buffer must only yield 1 run (got {n})"
         );
     }
 
@@ -134,7 +138,7 @@ mod glyphon_newline_diag {
         );
     }
 
-    /// Bug: growing text while leaving a 1-line `height_opt` drops lines 2+ (matches screenshot).
+    /// Bug: growing text while leaving a sub-line `height_opt` drops lines 2+ (matches screenshot).
     #[test]
     fn reshape_growing_text_keeping_short_height_drops_lines() {
         let mut fs = font_loader::create_font_system();
@@ -145,17 +149,17 @@ mod glyphon_newline_diag {
         let lh = size * tailwind_default_leading_scale(size);
         let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(Some(360.0), Some(lh + 4.0));
+        buffer.set_size(Some(360.0), Some(lh * 0.5));
         buffer.set_text("啊啊", &attrs, glyphon::Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut fs, false);
 
         buffer.set_text("啊啊\n啊\n啊", &attrs, glyphon::Shaping::Advanced, None);
-        // height_opt still lh+4 from set_size above — set_text does not clear it.
+        // height_opt still sub-line from set_size above — set_text does not clear it.
         buffer.shape_until_scroll(&mut fs, false);
         let n = buffer.layout_runs().count();
         assert_eq!(
             n, 1,
-            "stale 1-line height_opt must drop later hard lines (got {n})"
+            "stale sub-line height_opt must drop later hard lines (got {n})"
         );
     }
 }

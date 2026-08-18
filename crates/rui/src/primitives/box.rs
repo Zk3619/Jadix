@@ -3,7 +3,7 @@
 //! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` / `Rect` 由宏映射到
 //! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]。
 
-use taffy::prelude::TrackSizingFunction;
+use crate::layout::GridTrack;
 
 use crate::core::scroll_viewport::maybe_activate_scroll_viewport;
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoF32};
@@ -389,12 +389,12 @@ impl BoxBuilder {
         self
     }
 
-    pub fn grid_template_columns(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+    pub fn grid_template_columns(mut self, tracks: Vec<GridTrack>) -> Self {
         self.el = self.el.grid_template_columns(tracks);
         self
     }
 
-    pub fn grid_template_rows(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+    pub fn grid_template_rows(mut self, tracks: Vec<GridTrack>) -> Self {
         self.el = self.el.grid_template_rows(tracks);
         self
     }

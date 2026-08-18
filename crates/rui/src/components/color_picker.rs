@@ -895,8 +895,8 @@ fn sv_knob_frac(sat: f32, val: f32) -> (f32, f32) {
 }
 
 fn inset_percent_mismatch(cur: LengthPercentageAuto, want: f32) -> bool {
-    match cur {
-        LengthPercentageAuto::Percent(p) => (p - want).abs() > 0.0005,
+    match crate::layout::lpa_kind(cur) {
+        crate::layout::DimKind::Percent(p) => (p - want).abs() > 0.0005,
         _ => true,
     }
 }
@@ -916,8 +916,8 @@ fn place_sv_knob(
     if inset_percent_mismatch(knob.style.inset.left, left)
         || inset_percent_mismatch(knob.style.inset.top, top)
     {
-        knob.style.inset.left = LengthPercentageAuto::Percent(left);
-        knob.style.inset.top = LengthPercentageAuto::Percent(top);
+        knob.style.inset.left = LengthPercentageAuto::percent(left);
+        knob.style.inset.top = LengthPercentageAuto::percent(top);
         if let Some(lt) = layout_tree {
             if knob.layout_node.is_some() {
                 lt.update_taffy_node_style(knob);
@@ -2091,14 +2091,14 @@ mod tests {
                 .find(|ch| ch.attrs.get(ATTR_CP_SLOT).map(|s| s.as_str()) == Some(SLOT_SV_KNOB))
                 .expect("sv knob");
             let (left, top) = sv_knob_frac(s0, v0);
-            match knob.style.inset.left {
-                LengthPercentageAuto::Percent(p) => {
+            match crate::layout::lpa_kind(knob.style.inset.left) {
+                crate::layout::DimKind::Percent(p) => {
                     assert!((p - left).abs() < 0.0005, "left percent {p} vs {left}")
                 }
                 other => panic!("expected percent left, got {other:?}"),
             }
-            match knob.style.inset.top {
-                LengthPercentageAuto::Percent(p) => {
+            match crate::layout::lpa_kind(knob.style.inset.top) {
+                crate::layout::DimKind::Percent(p) => {
                     assert!((p - top).abs() < 0.0005, "top percent {p} vs {top}")
                 }
                 other => panic!("expected percent top, got {other:?}"),
@@ -2150,12 +2150,12 @@ mod tests {
         let mut k1 = Element::new();
         let _ = place_sv_knob(&mut k0, None, c, s0, v0);
         let _ = place_sv_knob(&mut k1, None, c, s1, v1);
-        let left = |k: &Element| match k.style.inset.left {
-            LengthPercentageAuto::Percent(p) => p,
+        let left = |k: &Element| match crate::layout::lpa_kind(k.style.inset.left) {
+            crate::layout::DimKind::Percent(p) => p,
             other => panic!("{other:?}"),
         };
-        let top = |k: &Element| match k.style.inset.top {
-            LengthPercentageAuto::Percent(p) => p,
+        let top = |k: &Element| match crate::layout::lpa_kind(k.style.inset.top) {
+            crate::layout::DimKind::Percent(p) => p,
             other => panic!("{other:?}"),
         };
         assert!((left(&k0) - s0).abs() < 0.0005);

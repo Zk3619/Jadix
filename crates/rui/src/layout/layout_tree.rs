@@ -1119,7 +1119,7 @@ impl TextMeasureCacheKey {
 
 #[inline]
 fn dimension_is_content_sized(d: Dimension) -> bool {
-    matches!(d, Dimension::Auto)
+    d.is_auto()
 }
 
 fn element_tree_has_deferred_units(el: &Element) -> bool {
@@ -1552,8 +1552,8 @@ impl LayoutTree {
 
         let t_rebuild_begin = Instant::now();
         self.viewport = [width.max(0.0), height.max(0.0)];
-        root.style.size.width = Dimension::Length(width);
-        root.style.size.height = Dimension::Length(height);
+        root.style.size.width = Dimension::length(width);
+        root.style.size.height = Dimension::length(height);
         cascade_inheritable_text_style(root, None);
 
         self.text_measurements.clear();
@@ -1726,8 +1726,8 @@ impl LayoutTree {
         // island in the corner while the swapchain is full-window.
         let t_setup_begin = Instant::now();
         self.viewport = [width.max(0.0), height.max(0.0)];
-        root.style.size.width = Dimension::Length(width);
-        root.style.size.height = Dimension::Length(height);
+        root.style.size.width = Dimension::length(width);
+        root.style.size.height = Dimension::length(height);
         cascade_inheritable_text_style(root, None);
         self.update_taffy_node_style(root);
         let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
@@ -2922,9 +2922,11 @@ fn scrollbar_track_overlay_abs(
     axis: &str,
     sig: &ScrollAreaSignalsCached,
 ) -> ([f32; 4], [f32; 4]) {
-    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| match *v {
-        taffy::style::LengthPercentageAuto::Length(px) if px.is_finite() => px.max(0.0),
-        _ => 0.0,
+    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| {
+        crate::layout::lpa_length_px(*v)
+            .filter(|px| px.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0)
     };
     let vw = sig.vw;
     let vh = sig.vh;
@@ -2979,14 +2981,12 @@ fn scrollbar_track_overlay_abs(
     }
 
     let base_thickness = match axis {
-        "x" => match track_el.style.max_size.height {
-            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
-            _ => SCROLLBAR_DEFAULT_CROSS_PX,
-        },
-        _ => match track_el.style.max_size.width {
-            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
-            _ => SCROLLBAR_DEFAULT_CROSS_PX,
-        },
+        "x" => crate::layout::dim_length_px(track_el.style.max_size.height)
+            .filter(|px| px.is_finite() && *px > 1.0)
+            .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
+        _ => crate::layout::dim_length_px(track_el.style.max_size.width)
+            .filter(|px| px.is_finite() && *px > 1.0)
+            .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
     };
 
     let x_inside = !sig.inset_x.eq_ignore_ascii_case("outside");

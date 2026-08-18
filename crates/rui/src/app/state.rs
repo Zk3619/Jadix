@@ -2628,9 +2628,11 @@ fn update_scrollbar_elements(
     mode: ScrollbarUpdateMode,
     active_drag_rest: Option<&str>,
 ) {
-    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| match *v {
-        taffy::style::LengthPercentageAuto::Length(px) if px.is_finite() => px.max(0.0),
-        _ => 0.0,
+    let inset_len_px = |v: &taffy::style::LengthPercentageAuto| {
+        crate::layout::lpa_length_px(*v)
+            .filter(|px| px.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0)
     };
     fn subtree_contains_scroll_rest(el: &Element, target_rest: &str) -> bool {
         if let Some(fid) = el.focus_id.as_deref() {
@@ -2826,14 +2828,12 @@ fn update_scrollbar_elements(
     // Recover base thickness from the track's max cross constraint only. Using `layout_bounds`
     // here caused cross-axis jitter whenever unrelated flex reflows nudged the resolved size.
     let base_thickness = match axis {
-        "x" => match el.style.max_size.height {
-            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
-            _ => SCROLLBAR_DEFAULT_CROSS_PX,
-        },
-        _ => match el.style.max_size.width {
-            Dimension::Length(px) if px.is_finite() && px > 1.0 => px,
-            _ => SCROLLBAR_DEFAULT_CROSS_PX,
-        },
+        "x" => crate::layout::dim_length_px(el.style.max_size.height)
+            .filter(|px| px.is_finite() && *px > 1.0)
+            .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
+        _ => crate::layout::dim_length_px(el.style.max_size.width)
+            .filter(|px| px.is_finite() && *px > 1.0)
+            .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
     };
 
     // Collapse when:
@@ -2841,12 +2841,12 @@ fn update_scrollbar_elements(
     // - explicitly `never`, or
     // - `auto` but not scrollable (no hidden hit-slab reservation for non-scrollable axis).
     if !axis_allows || vis == "never" || (vis != "always" && !scrollable) {
-        el.style.size.width = Dimension::Length(0.0);
-        el.style.size.height = Dimension::Length(0.0);
+        el.style.size.width = Dimension::length(0.0);
+        el.style.size.height = Dimension::length(0.0);
         el.style.border_width = 0.0;
         if let Some(thumb) = el.children.first_mut() {
-            thumb.style.size.width = Dimension::Length(0.0);
-            thumb.style.size.height = Dimension::Length(0.0);
+            thumb.style.size.width = Dimension::length(0.0);
+            thumb.style.size.height = Dimension::length(0.0);
             thumb.style.border_width = 0.0;
             layout_tree.update_taffy_node_style(thumb);
         }
@@ -2926,14 +2926,14 @@ fn update_scrollbar_elements(
 
     match axis {
         "x" => {
-            el.style.size.width = Dimension::Length(
+            el.style.size.width = Dimension::length(
                 (main_available - reserve_left - reserve_right - edge_pad_main).max(1.0),
             );
-            el.style.size.height = Dimension::Length(cross);
+            el.style.size.height = Dimension::length(cross);
         }
         _ => {
-            el.style.size.width = Dimension::Length(cross);
-            el.style.size.height = Dimension::Length(
+            el.style.size.width = Dimension::length(cross);
+            el.style.size.height = Dimension::length(
                 (main_available - reserve_top - reserve_bottom - edge_pad_main).max(1.0),
             );
         }
@@ -2941,8 +2941,8 @@ fn update_scrollbar_elements(
     // The scrollbar builder sets `min_w / min_h` at build time to the initial viewport
     // dimensions. These stale constraints override our runtime `size` — Taffy computes
     // `max(min_size, size)`. Clear them so the explicit size above is authoritative.
-    el.style.min_size.width = Dimension::Auto;
-    el.style.min_size.height = Dimension::Auto;
+    el.style.min_size.width = Dimension::auto();
+    el.style.min_size.height = Dimension::auto();
 
     // Update thumb geometry (assumes first child is thumb).
     let Some(thumb) = el.children.first_mut() else {
@@ -3021,10 +3021,10 @@ fn update_scrollbar_elements(
                 } else {
                     (track_inner, 0.0)
                 };
-                thumb.style.size.width = Dimension::Length(tw);
-                thumb.style.size.height = Dimension::Length(thumb_cross);
-                thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(ml);
-                thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(0.0);
+                thumb.style.size.width = Dimension::length(tw);
+                thumb.style.size.height = Dimension::length(thumb_cross);
+                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(ml);
+                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(0.0);
             }
             _ => {
                 let track =
@@ -3045,10 +3045,10 @@ fn update_scrollbar_elements(
                 } else {
                     (track_inner, 0.0)
                 };
-                thumb.style.size.width = Dimension::Length(thumb_cross);
-                thumb.style.size.height = Dimension::Length(th);
-                thumb.style.margin.top = taffy::style::LengthPercentageAuto::Length(mt);
-                thumb.style.margin.left = taffy::style::LengthPercentageAuto::Length(0.0);
+                thumb.style.size.width = Dimension::length(thumb_cross);
+                thumb.style.size.height = Dimension::length(th);
+                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(mt);
+                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(0.0);
             }
         }
         layout_tree.update_taffy_node_style(thumb);
@@ -3222,7 +3222,7 @@ mod hot_reload_inject {
                         }
                         "p" | "padding" => {
                             if let Some(px) = parse_length_px(v) {
-                                let lp = taffy::style::LengthPercentage::Length(px);
+                                let lp = taffy::style::LengthPercentage::length(px);
                                 target.style.padding = taffy::prelude::Rect {
                                     left: lp,
                                     right: lp,
@@ -3234,7 +3234,7 @@ mod hot_reload_inject {
                         }
                         "m" | "margin" => {
                             if let Some(px) = parse_length_px(v) {
-                                let lp = taffy::style::LengthPercentageAuto::Length(px);
+                                let lp = taffy::style::LengthPercentageAuto::length(px);
                                 target.style.margin = taffy::prelude::Rect {
                                     left: lp,
                                     right: lp,
@@ -3258,7 +3258,7 @@ mod hot_reload_inject {
                         }
                         "gap" => {
                             if let Some(px) = parse_length_px(v) {
-                                let lp = taffy::style::LengthPercentage::Length(px);
+                                let lp = taffy::style::LengthPercentage::length(px);
                                 target.style.gap = taffy::geometry::Size {
                                     width: lp,
                                     height: lp,
@@ -3312,16 +3312,16 @@ mod hot_reload_inject {
     fn parse_dimension(raw: &str) -> Option<taffy::style::Dimension> {
         let s = raw.trim();
         if s.eq_ignore_ascii_case("auto") {
-            return Some(taffy::style::Dimension::Auto);
+            return Some(taffy::style::Dimension::auto());
         }
         if let Some(v) = s.strip_suffix('%') {
             return v
                 .trim()
                 .parse::<f32>()
                 .ok()
-                .map(|n| taffy::style::Dimension::Percent(n / 100.0));
+                .map(|n| taffy::style::Dimension::percent(n / 100.0));
         }
-        parse_length_px(s).map(taffy::style::Dimension::Length)
+        parse_length_px(s).map(taffy::style::Dimension::length)
     }
 
     pub(super) fn resolve_dev_asset_path(p: &str) -> Option<PathBuf> {

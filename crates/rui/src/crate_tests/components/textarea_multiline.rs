@@ -1177,10 +1177,7 @@ fn gallery_like_nine_lines_must_have_large_max_scroll() {
     let region = find_tid(&root, &format!("__rui_textarea:{id}:region")).expect("region");
     let leaf_h = leaf.layout_bounds[3];
     let region_h = region.layout_bounds[3];
-    let style_h = match leaf.style.size.height {
-        taffy::style::Dimension::Length(v) => v,
-        _ => -1.0,
-    };
+    let style_h = crate::layout::dim_length_px(leaf.style.size.height).unwrap_or(-1.0);
     let (_id, bounds, max_scroll, content) = result
         .scroll_metrics
         .iter()
@@ -1358,14 +1355,11 @@ fn textarea_scroll_extent_includes_bottom_padding() {
 
     let region = find_tid(&root, &region_tid).expect("region");
     let leaf = find_tid(&root, &tid).expect("leaf");
-    let pad_bottom = match region.style.padding.bottom {
-        taffy::style::LengthPercentage::Length(v) => v,
-        _ => {
-            let region_bottom = region.layout_bounds[1] + region.layout_bounds[3];
-            let leaf_bottom = leaf.layout_bounds[1] + leaf.layout_bounds[3];
-            (region_bottom - leaf_bottom).max(0.0)
-        }
-    };
+    let pad_bottom = crate::layout::lp_length_px(region.style.padding.bottom).unwrap_or_else(|| {
+        let region_bottom = region.layout_bounds[1] + region.layout_bounds[3];
+        let leaf_bottom = leaf.layout_bounds[1] + leaf.layout_bounds[3];
+        (region_bottom - leaf_bottom).max(0.0)
+    });
     assert!(
         pad_bottom > 4.0,
         "textarea region must have bottom padding (got {pad_bottom})"

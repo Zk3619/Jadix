@@ -19,7 +19,6 @@
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
-use taffy::prelude::Dimension;
 
 pub struct BaseComponentBuilder {
     pub el: Element,
@@ -66,7 +65,10 @@ impl BaseComponentBuilder {
 
     pub fn w(mut self, w: impl IntoCssDim) -> Self {
         let dim = w.into_css_dim();
-        if let Some(Dimension::Length(px)) = dim.as_immediate_dimension() {
+        if let Some(px) = dim
+            .as_immediate_dimension()
+            .and_then(crate::layout::dim_length_px)
+        {
             self.custom_w_px = Some(px);
             self.recompute_auto_text_size();
         }
@@ -77,7 +79,10 @@ impl BaseComponentBuilder {
 
     pub fn h(mut self, h: impl IntoCssDim) -> Self {
         let dim = h.into_css_dim();
-        if let Some(Dimension::Length(px)) = dim.as_immediate_dimension() {
+        if let Some(px) = dim
+            .as_immediate_dimension()
+            .and_then(crate::layout::dim_length_px)
+        {
             self.custom_h_px = Some(px);
             self.recompute_auto_text_size();
         }

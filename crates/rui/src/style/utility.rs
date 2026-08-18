@@ -942,11 +942,11 @@ mod p1_utility_tests {
         assert_eq!(impact, LayoutStatus::LayoutChanged);
         assert_eq!(
             el.style.margin.left,
-            taffy::style::LengthPercentageAuto::Length(-16.0)
+            taffy::style::LengthPercentageAuto::length(-16.0)
         );
         assert_eq!(
             el.style.margin.top,
-            taffy::style::LengthPercentageAuto::Length(-16.0)
+            taffy::style::LengthPercentageAuto::length(-16.0)
         );
     }
 

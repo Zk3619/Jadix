@@ -14,10 +14,7 @@ use crate::renderer::InstanceInput;
 use crate::style::apply_class_list;
 
 fn length_px(v: taffy::style::LengthPercentage) -> f32 {
-    match v {
-        taffy::style::LengthPercentage::Length(px) => px,
-        _ => 0.0,
-    }
+    crate::layout::lp_length_px(v).unwrap_or(0.0)
 }
 
 #[test]
@@ -236,10 +233,7 @@ fn overflow_clip_uses_border_box_not_padding_inset() {
 }
 
 fn taffy_len(v: taffy::style::LengthPercentage) -> f32 {
-    match v {
-        taffy::style::LengthPercentage::Length(px) => px,
-        _ => panic!("expected length, got {v:?}"),
-    }
+    crate::layout::lp_length_px(v).unwrap_or_else(|| panic!("expected length, got {v:?}"))
 }
 
 #[test]

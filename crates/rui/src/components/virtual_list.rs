@@ -342,8 +342,8 @@ mod tests {
         let body = build_body("vl", 120, 21.0, 11, 28, &|i| {
             Element::new().text(format!("{i}"))
         });
-        match body.style.size.height {
-            taffy::style::Dimension::Length(h) => assert!((h - 120.0 * 21.0).abs() < 0.01),
+        match crate::layout::dim_kind(body.style.size.height) {
+            crate::layout::DimKind::Length(h) => assert!((h - 120.0 * 21.0).abs() < 0.01),
             other => panic!("expected Length total height, got {other:?}"),
         }
     }

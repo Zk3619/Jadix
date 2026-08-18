@@ -410,13 +410,10 @@ fn sync_one_text_edit_paint(
         } else {
             line_box
         };
-        let cur_h = match text_el.style.size.height {
-            taffy::style::Dimension::Length(v) => v,
-            _ => -1.0,
-        };
+        let cur_h = crate::layout::dim_length_px(text_el.style.size.height).unwrap_or(-1.0);
         if (cur_h - want_h).abs() > 0.5 {
-            text_el.style.size.height = taffy::style::Dimension::Length(want_h);
-            text_el.style.min_size.height = taffy::style::Dimension::Length(want_h);
+            text_el.style.size.height = taffy::style::Dimension::length(want_h);
+            text_el.style.min_size.height = taffy::style::Dimension::length(want_h);
             if desc.multiline {
                 text_el.style.flex_shrink = 0.0;
             }
@@ -427,12 +424,10 @@ fn sync_one_text_edit_paint(
                 text_el.style.flex_shrink = 1.0;
                 text_layout = true;
             }
-            match text_el.style.min_size.width {
-                taffy::style::Dimension::Length(v) if v <= 0.5 => {}
-                _ => {
-                    text_el.style.min_size.width = taffy::style::Dimension::Length(0.0);
-                    text_layout = true;
-                }
+            let w = crate::layout::dim_length_px(text_el.style.min_size.width);
+            if !w.is_some_and(|v| v <= 0.5) {
+                text_el.style.min_size.width = taffy::style::Dimension::length(0.0);
+                text_layout = true;
             }
         }
     }
@@ -470,12 +465,9 @@ fn sync_one_text_edit_paint(
         let want_h = use_signal(&h_key, || desc.resize_min_h)
             .peek()
             .clamp(desc.resize_min_h, desc.resize_max_h);
-        let cur_h = match el.style.size.height {
-            taffy::style::Dimension::Length(v) => v,
-            _ => -1.0,
-        };
+        let cur_h = crate::layout::dim_length_px(el.style.size.height).unwrap_or(-1.0);
         if (cur_h - want_h).abs() > 0.5 {
-            el.style.size.height = taffy::style::Dimension::Length(want_h);
+            el.style.size.height = taffy::style::Dimension::length(want_h);
             container_layout = true;
         }
 

@@ -184,20 +184,17 @@ fn list_variant_of(el: &Element) -> &str {
 }
 
 fn length_px(v: taffy::style::LengthPercentage) -> f32 {
-    match v {
-        taffy::style::LengthPercentage::Length(x) => x,
-        _ => 0.0,
-    }
+    crate::layout::lp_length_px(v).unwrap_or(0.0)
 }
 
 fn set_padding_x(el: &mut Element, px: f32) {
-    el.style.padding.left = taffy::style::LengthPercentage::Length(px);
-    el.style.padding.right = taffy::style::LengthPercentage::Length(px);
+    el.style.padding.left = taffy::style::LengthPercentage::length(px);
+    el.style.padding.right = taffy::style::LengthPercentage::length(px);
 }
 
 fn set_padding_y(el: &mut Element, px: f32) {
-    el.style.padding.top = taffy::style::LengthPercentage::Length(px);
-    el.style.padding.bottom = taffy::style::LengthPercentage::Length(px);
+    el.style.padding.top = taffy::style::LengthPercentage::length(px);
+    el.style.padding.bottom = taffy::style::LengthPercentage::length(px);
 }
 
 // ── Trigger chrome ───────────────────────────────────────────────────────────
@@ -271,12 +268,12 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         el.style.flex_direction = FlexDirection::Row;
         layout = true;
     }
-    if el.style.justify_content != Some(JustifyContent::Center) {
-        el.style.justify_content = Some(JustifyContent::Center);
+    if el.style.justify_content != Some(JustifyContent::CENTER) {
+        el.style.justify_content = Some(JustifyContent::CENTER);
         layout = true;
     }
-    if el.style.align_items != Some(AlignItems::Center) {
-        el.style.align_items = Some(AlignItems::Center);
+    if el.style.align_items != Some(AlignItems::CENTER) {
+        el.style.align_items = Some(AlignItems::CENTER);
         layout = true;
     }
     if length_px(el.style.padding.left) != PAD_X

@@ -4,8 +4,10 @@ use winit::event::KeyEvent;
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
-    CssDim, CssRectPair, IntoBorderWidths, IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32,
-    IntoF32Raw, IntoLengthPercentage, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
+    dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, lp_kind, lp_length_px, lpa_kind,
+    lpa_length_px, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim, IntoCssRectPair,
+    IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, PercentAxis, UnitCtx,
+    CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
@@ -511,11 +513,7 @@ impl IntoNodeText for &String {
 
 impl Element {
     pub(crate) fn into_margin_auto(val: impl IntoDimension) -> LengthPercentageAuto {
-        match val.into_dimension() {
-            Dimension::Length(v) => LengthPercentageAuto::Length(v),
-            Dimension::Percent(v) => LengthPercentageAuto::Percent(v),
-            Dimension::Auto => LengthPercentageAuto::Auto,
-        }
+        crate::layout::dimension_to_lpa(val.into_dimension())
     }
 
     fn set_css(mut self, slot: UnitSlot, dim: impl IntoCssDim) -> Self {
@@ -1367,15 +1365,15 @@ impl Element {
         self
     }
     pub fn justify_center(mut self) -> Self {
-        self.style.justify_content = Some(JustifyContent::Center);
+        self.style.justify_content = Some(JustifyContent::CENTER);
         self
     }
     pub fn justify_start(mut self) -> Self {
-        self.style.justify_content = Some(JustifyContent::FlexStart);
+        self.style.justify_content = Some(JustifyContent::FLEX_START);
         self
     }
     pub fn justify_end(mut self) -> Self {
-        self.style.justify_content = Some(JustifyContent::FlexEnd);
+        self.style.justify_content = Some(JustifyContent::FLEX_END);
         self
     }
 
@@ -1383,13 +1381,13 @@ impl Element {
     pub fn justify(mut self, keyword: impl AsRef<str>) -> Self {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.justify_content = Some(match s.as_str() {
-            "center" => JustifyContent::Center,
-            "start" | "flex-start" => JustifyContent::FlexStart,
-            "end" | "flex-end" => JustifyContent::FlexEnd,
-            "between" | "space-between" => JustifyContent::SpaceBetween,
-            "around" | "space-around" => JustifyContent::SpaceAround,
-            "evenly" | "space-evenly" => JustifyContent::SpaceEvenly,
-            _ => JustifyContent::FlexStart,
+            "center" => JustifyContent::CENTER,
+            "start" | "flex-start" => JustifyContent::FLEX_START,
+            "end" | "flex-end" => JustifyContent::FLEX_END,
+            "between" | "space-between" => JustifyContent::SPACE_BETWEEN,
+            "around" | "space-around" => JustifyContent::SPACE_AROUND,
+            "evenly" | "space-evenly" => JustifyContent::SPACE_EVENLY,
+            _ => JustifyContent::FLEX_START,
         });
         self
     }
@@ -1398,12 +1396,12 @@ impl Element {
     pub fn flex_items(mut self, keyword: impl AsRef<str>) -> Self {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.align_items = Some(match s.as_str() {
-            "center" => AlignItems::Center,
-            "start" | "flex-start" => AlignItems::FlexStart,
-            "end" | "flex-end" => AlignItems::FlexEnd,
-            "stretch" => AlignItems::Stretch,
-            "baseline" => AlignItems::Baseline,
-            _ => AlignItems::Stretch,
+            "center" => AlignItems::CENTER,
+            "start" | "flex-start" => AlignItems::FLEX_START,
+            "end" | "flex-end" => AlignItems::FLEX_END,
+            "stretch" => AlignItems::STRETCH,
+            "baseline" => AlignItems::BASELINE,
+            _ => AlignItems::STRETCH,
         });
         self
     }
@@ -1421,7 +1419,7 @@ impl Element {
     }
 
     pub fn items_center(mut self) -> Self {
-        self.style.align_items = Some(AlignItems::Center);
+        self.style.align_items = Some(AlignItems::CENTER);
         self
     }
     pub fn p(self, padding: impl IntoCssDim) -> Self {
@@ -1569,11 +1567,11 @@ impl Element {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.align_self = match s.as_str() {
             "" | "auto" => None,
-            "center" => Some(AlignSelf::Center),
-            "start" | "flex-start" => Some(AlignSelf::FlexStart),
-            "end" | "flex-end" => Some(AlignSelf::FlexEnd),
-            "stretch" => Some(AlignSelf::Stretch),
-            "baseline" => Some(AlignSelf::Baseline),
+            "center" => Some(AlignSelf::CENTER),
+            "start" | "flex-start" => Some(AlignSelf::FLEX_START),
+            "end" | "flex-end" => Some(AlignSelf::FLEX_END),
+            "stretch" => Some(AlignSelf::STRETCH),
+            "baseline" => Some(AlignSelf::BASELINE),
             _ => None,
         };
         self
@@ -1583,14 +1581,14 @@ impl Element {
     pub fn align_content_kw(mut self, keyword: impl AsRef<str>) -> Self {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.align_content = Some(match s.as_str() {
-            "start" | "flex-start" => AlignContent::FlexStart,
-            "end" | "flex-end" => AlignContent::FlexEnd,
-            "center" => AlignContent::Center,
-            "stretch" => AlignContent::Stretch,
-            "space-between" | "between" => AlignContent::SpaceBetween,
-            "space-around" | "around" => AlignContent::SpaceAround,
-            "space-evenly" | "evenly" => AlignContent::SpaceEvenly,
-            _ => AlignContent::Stretch,
+            "start" | "flex-start" => AlignContent::FLEX_START,
+            "end" | "flex-end" => AlignContent::FLEX_END,
+            "center" => AlignContent::CENTER,
+            "stretch" => AlignContent::STRETCH,
+            "space-between" | "between" => AlignContent::SPACE_BETWEEN,
+            "space-around" | "around" => AlignContent::SPACE_AROUND,
+            "space-evenly" | "evenly" => AlignContent::SPACE_EVENLY,
+            _ => AlignContent::STRETCH,
         });
         self
     }
@@ -1599,12 +1597,12 @@ impl Element {
     pub fn justify_items_kw(mut self, keyword: impl AsRef<str>) -> Self {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.justify_items = Some(match s.as_str() {
-            "center" => AlignItems::Center,
-            "start" | "flex-start" => AlignItems::FlexStart,
-            "end" | "flex-end" => AlignItems::FlexEnd,
-            "stretch" => AlignItems::Stretch,
-            "baseline" => AlignItems::Baseline,
-            _ => AlignItems::Stretch,
+            "center" => AlignItems::CENTER,
+            "start" | "flex-start" => AlignItems::FLEX_START,
+            "end" | "flex-end" => AlignItems::FLEX_END,
+            "stretch" => AlignItems::STRETCH,
+            "baseline" => AlignItems::BASELINE,
+            _ => AlignItems::STRETCH,
         });
         self
     }
@@ -1614,22 +1612,22 @@ impl Element {
         let s = keyword.as_ref().trim().to_ascii_lowercase();
         self.style.justify_self = match s.as_str() {
             "" | "auto" => None,
-            "center" => Some(AlignSelf::Center),
-            "start" | "flex-start" => Some(AlignSelf::FlexStart),
-            "end" | "flex-end" => Some(AlignSelf::FlexEnd),
-            "stretch" => Some(AlignSelf::Stretch),
-            "baseline" => Some(AlignSelf::Baseline),
+            "center" => Some(AlignSelf::CENTER),
+            "start" | "flex-start" => Some(AlignSelf::FLEX_START),
+            "end" | "flex-end" => Some(AlignSelf::FLEX_END),
+            "stretch" => Some(AlignSelf::STRETCH),
+            "baseline" => Some(AlignSelf::BASELINE),
             _ => None,
         };
         self
     }
 
-    pub fn grid_template_columns(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+    pub fn grid_template_columns(mut self, tracks: Vec<crate::layout::GridTrack>) -> Self {
         self.style.grid_template_columns = tracks;
         self
     }
 
-    pub fn grid_template_rows(mut self, tracks: Vec<TrackSizingFunction>) -> Self {
+    pub fn grid_template_rows(mut self, tracks: Vec<crate::layout::GridTrack>) -> Self {
         self.style.grid_template_rows = tracks;
         self
     }

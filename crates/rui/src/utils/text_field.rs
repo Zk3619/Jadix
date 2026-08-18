@@ -50,10 +50,9 @@ pub fn textarea_default_height(rows: u32, line_height_px: f32, pad_y_px: f32) ->
 
 #[inline]
 fn length_percentage_px(v: &taffy::style::LengthPercentage) -> f32 {
-    match *v {
-        taffy::style::LengthPercentage::Length(px) if px.is_finite() => px,
-        _ => 0.0,
-    }
+    crate::layout::lp_length_px(*v)
+        .filter(|px| px.is_finite())
+        .unwrap_or(0.0)
 }
 
 /// Scrollport vertical padding from style, falling back to layout gap text leaf ↔ region box.
@@ -107,10 +106,9 @@ pub fn textarea_scroll_content_h(
         if !is_text {
             continue;
         }
-        let style_h = match child.style.size.height {
-            taffy::style::Dimension::Length(h) if h.is_finite() => h,
-            _ => 0.0,
-        };
+        let style_h = crate::layout::dim_length_px(child.style.size.height)
+            .filter(|h| h.is_finite())
+            .unwrap_or(0.0);
         let layout_h = child.layout_bounds[3];
         // Layout is authoritative; stale style must not inflate scroll when leaf is shorter.
         let mut child_h = if layout_h > 0.5 { layout_h } else { style_h };

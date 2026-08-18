@@ -610,12 +610,12 @@ impl From<SliderBuilder> for Element {
             }
 
             if let Some(fill) = find_slot_deep_mut(root, SLOT_FILL) {
-                let mismatch = match fill.style.size.width {
-                    Dimension::Percent(p) => (p - want_frac).abs() > 0.0005,
+                let mismatch = match crate::layout::dim_kind(fill.style.size.width) {
+                    crate::layout::DimKind::Percent(p) => (p - want_frac).abs() > 0.0005,
                     _ => true,
                 };
                 if mismatch {
-                    fill.style.size.width = Dimension::Percent(want_frac);
+                    fill.style.size.width = Dimension::percent(want_frac);
                     if fill.layout_node.is_some() {
                         layout_tree.update_taffy_node_style(fill);
                     }

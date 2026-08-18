@@ -2,7 +2,6 @@ use crate::app::test_support::sync_reactive_elements_subtree;
 use crate::components::{radio_group, slider, toggle_group};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
-use taffy::prelude::Dimension;
 
 fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
     if el.attrs.get("data-slot").map(|s| s.as_str()) == Some(slot) {
@@ -24,8 +23,8 @@ fn slider_value_sync_updates_track_without_rebuilding_component() {
     let left = find_slot(&root, "slider-left").expect("left");
     assert!((left.style.flex_grow - 0.2).abs() < 0.001);
     let fill = find_slot(&root, "slider-fill").expect("fill");
-    match fill.style.size.width {
-        Dimension::Percent(p) => assert!((p - 0.2).abs() < 0.001),
+    match crate::layout::dim_kind(fill.style.size.width) {
+        crate::layout::DimKind::Percent(p) => assert!((p - 0.2).abs() < 0.001),
         other => panic!("expected percent width, got {other:?}"),
     }
 
@@ -39,8 +38,8 @@ fn slider_value_sync_updates_track_without_rebuilding_component() {
     assert!((left.style.flex_grow - 0.8).abs() < 0.001);
     assert!((right.style.flex_grow - 0.2).abs() < 0.001);
     let fill = find_slot(&root, "slider-fill").expect("fill");
-    match fill.style.size.width {
-        Dimension::Percent(p) => assert!((p - 0.8).abs() < 0.001),
+    match crate::layout::dim_kind(fill.style.size.width) {
+        crate::layout::DimKind::Percent(p) => assert!((p - 0.8).abs() < 0.001),
         other => panic!("expected percent width, got {other:?}"),
     }
     assert_eq!(impact, LayoutStatus::LayoutChanged);
