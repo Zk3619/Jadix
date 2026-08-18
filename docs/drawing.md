@@ -2,7 +2,7 @@
 
 > **文档地位**：绘制原语与公开标签的**领域规范**（「是什么 / 禁区」）。  
 > **执行勾选**：[`AUTHORITY.md`](AUTHORITY.md) **WP-3.2 / WP-3.11 / WP-3.12 / WP-3.13**；未来创意库 **B16**（canvas-ui）· **B17**（react-bits）。  
-> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**  
+> **日期**：2026-08-13（W2 退出后、进入 W3 前落地；同日补 B17）；**2026-08-18 WP-3.11 Svg MVP ☑**；**2026-08-18 WP-3.12 Canvas MVP ☑**；**2026-08-18 2D/3D 能力层 Phase 1–6 ☑**（RenderGraph / TexturePool / Canvas2D 正式面 / GPU 2D 可选 / 子树 effect / scene3d camera·light / Timeline·glyph_fx）。**B16/B17 产品目录仍不挡 Beta**。  
 > **对照**：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（包住子树的 shader/paint）· [react-bits](https://github.com/DavidHDev/react-bits)（文字动效 / 背景 / 动画 UI）；**禁止**搬 HTML-in-canvas / Chrome flag / DOM 纹理 / CSS-in-JS 运行时。
 
 交叉：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §2 · [`component_inventory.md`](component_inventory.md) · [`damage.md`](damage.md) · [`box_model.md`](box_model.md) · Chart → WP-3.2
@@ -33,8 +33,10 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | Chart | **grammar**：`define_chart` + cartesian / **polar 族** / `custom_mark` + `ChartTheme`；**compact scales**（linear / band / point / **log** / **time**）；tooltip · crosshair；预设薄封装；**同一 path 核** | JS D3 运行时（禁）；组合图可画在 Svg 叶上 |
 | emoji SVG | `emoji-svg` feature：`resvg`/`usvg` **光栅成贴图** | **不是**公开 `<svg>` 场景图 |
 | 用户 `<svg>` 场景图 | **WP-3.11 ☑** `primitives/svg`：叶 + viewBox + circle/path/rect/line/polyline/g；同一 path 核 | 完整 SVG 1.1 / SMIL |
-| 用户 `<canvas>` / paint 回调 | **WP-3.12 ☑** `primitives/canvas`：叶 + `Canvas2D` MVP；同一 path 核；dirty 缓存 + 按段描边 | 完整 Canvas2D；图源 Image 贴图 |
-| 3D mesh / camera | **WP-3.13 ☑** `<scene3d>` 实验 feature（默认关）；透视立方；同一 wgpu | glTF 全家桶 |
+| 用户 `<canvas>` / paint 回调 | **WP-3.12 ☑** `primitives/canvas`：正式 `Canvas2D`（曲线/图像/状态/离屏/命中）；CPU fallback + `RUI_GPU_2D=1` GPU 主路径 | 完整 WHATWG Canvas2D |
+| 3D mesh / camera | **WP-3.13 ☑** `<scene3d>` 实验 feature；`Scene3dCamera`/`Light`/`Material` builder；透视立方 | glTF 全家桶 |
+| 子树特效 wrap | **B16 底座 ☑** `effect_wrap()` + `EffectPassGpu`（capture → shader → `rui_fx:`） | 创意组件目录件 |
+| 字形动效 | **B17 底座 ☑** `Timeline` + `text().glyph_fx()` + `GlyphFx` 前处理 | 165 件动效目录 |
 
 ---
 
@@ -92,13 +94,13 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 |----|------|
 | 根 | `<canvas width height>` / `canvas().w(…).h(…).paint(…)` |
 | **自定义绘制** | `Fn(&mut dyn Canvas2D, Size) -> LayoutStatus`（或等价 trait）；每帧或 dirty 时调用 |
-| 2D API（MVP） | clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip；图源可贴 `Image`/离屏 |
+| 2D API（正式） | Path：begin_path / move_to / line_to / bezier / quadratic / arc / ellipse；状态：line_cap / line_join / global_alpha；图像：draw_image；像素：get/put_image_data；命中：is_point_in_path。CPU raster = fallback / golden；`RUI_GPU_2D=1` 走 tessellate |
 | 缓冲 | 默认离屏纹理或 CPU pixmap → 上传；damage 仅标该叶 |
 | 与 Svg | Canvas 可 **调用同一 `PathCommand` 核**；不要两套 path 代数 |
 | 不做 | 抄齐 WHATWG Canvas2D（阴影滤镜/globalComposite 全家）；WebGLRenderingContext 别名（3D 走 §5） |
 
 **验收（MVP）**：Gallery：指针拖线或时钟自绘；paint 内 `peek` Signal 不订根 effect；resize 走 `LayoutChanged`。  
-**落地（2026-08-18）**：`primitives/canvas`；`<canvas>` / `canvas().paint`；`Canvas2D`（clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip / save·restore / `request_frame`）；CPU pixmap → `rui_canvas:`；paint 包在 `untrack` 内。**交互**：path 核按段描边；静态叶 dirty 缓存（滚动不重光栅）；指针按住才标 dirty。
+**落地（2026-08-18）**：`primitives/canvas`；`<canvas>` / `canvas().paint`；`Canvas2D`（clear / fill_rect / stroke_rect / fill_path / stroke_path / 曲线 / clip / save·restore / draw_image / get·put_image_data / is_point_in_path / `request_frame`）；CPU pixmap → `rui_canvas:`；paint 包在 `untrack` 内。**交互**：path 核按段描边；静态叶 dirty 缓存（滚动不重光栅）；指针按住才标 dirty。
 
 ---
 
@@ -115,8 +117,11 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 **验收（2D）**：变换 + clip 有测或 Gallery。**验收（3D MVP）**：一旋转立方或 GLB；无 feature 时编译过、文档标明 opt-in。  
 **落地（2026-08-18）**：
 
-- **2D 能力层**：Canvas 变换栈 / clip AABB / save·restore；Svg 场景 Affine；控件 `rotate`/`scale`。**不是**第三套标签。B16 wrap 将复用离屏贴图 + 本层 clip。
-- **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`。
+- **2D 能力层**：Canvas 变换栈 / clip AABB / save·restore；Svg 场景 Affine；控件 `rotate`/`scale`。**不是**第三套标签。`RenderGraph` + `TexturePool` 统一 path/canvas/image/scene3d/capture/fx。B16 wrap 复用离屏贴图 + 本层 clip。
+- **GPU 2D（可选）**：`RUI_GPU_2D=1` 把 Chart/Svg/Canvas path 叶切到 tessellate 四边形；默认仍 CPU 覆盖率光栅（golden / headless 回退）。
+- **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；`camera` / `light` / `material` builder；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`。
+- **B16 底座**：`effect_wrap("blur"|"glass"|"liquid"|"vhs"|…)` 捕获子树几何到离屏 → shader pass → 合成；**命中仍走 Element**。产品目录仍 experimental backlog。
+- **B17 底座**：`Timeline`（duration / easing / repeat）接入 `tick_animations`；`text().glyph_fx("split"|"blur"|…)` 在 glyphon prepare 前处理簇级 opacity/offset。不拆每字 DOM span。
 
 对照后续：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（B16 包住子树）· [react-bits](https://github.com/DavidHDev/react-bits)（B17 文字/背景/动画 UI）依赖本层，本包不搬 HTML-in-canvas / CSS-in-JS。
 
@@ -140,12 +145,12 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 「效果包住整页/子树」；Gallery + playground；typed props；MCP/registry 可选 | **HTML-in-canvas**、Chrome `canvas-draw-element`、DOM 当纹理、WebGL overlay fallback |
 | 组件自包含 | 把默认组件面改成「只卖特效」 |
 
-实现路径（依赖 3.11–3.13）：
+实现路径（依赖 3.11–3.13；**2026-08-18 底座已落地，产品目录仍 backlog**）：
 
-1. 子树 → 离屏 wgpu 纹理（offscreen / damage 可复用）。  
-2. 全屏或叶上 shader / Canvas paint / 3D pass 扭曲该纹理。  
+1. 子树 → 离屏 wgpu 纹理（`effect_wrap` capture pass；damage 可复用）。  
+2. 全屏或叶上 shader / Canvas paint / 3D pass 扭曲该纹理（`rui_fx:`）。  
 3. 命中与 a11y **仍走底下 Element 树**（特效不得吞掉 Button/Input）。  
-4. 产品面：`components/canvas_fx/` 或独立 `rui_canvas_ui` crate。
+4. 产品面：`components/canvas_fx/` 或独立 `rui_canvas_ui` crate（**不挡** W3 / Beta）。
 
 ### 6.2 B17 · react-bits 式（动效目录）
 
@@ -163,12 +168,12 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 四分类目录 + playground；typed props；可定制、可 tree-shake | React / CSS-in-JS / Tailwind 变体矩阵；复制粘贴进用户仓为默认 DX |
 | 背景与文字动效**可独立于**包住子树的特效（B16） | Background Studio / Shape Magic / Texture Lab 网页工具链 |
 
-实现倾向：
+实现倾向（**2026-08-18 底座已落地，目录仍 backlog**）：
 
-1. **先**通用动画原语（duration / easing / 弹簧；`peek` 驱动 chrome，禁止根 effect 风暴）。  
-2. 文字件吃 glyphon 测量（测宽≡绘制仍成立；动效不得破坏 WP-2.1）。  
+1. **先**通用动画原语（`Timeline` duration / easing / 弹簧；`peek` 驱动 chrome，禁止根 effect 风暴）。☑  
+2. 文字件吃 glyphon 测量（测宽≡绘制仍成立；`glyph_fx` 前处理，不得破坏 WP-2.1）。☑ 底座  
 3. 背景件 = 装饰 Canvas 叶 + 上层普通布局；与 B16 wrap 可组合（背景在下、Liquid 包内容）。  
-4. 产品面：`components/bits/` 或独立 `rui_bits` crate；先 `experimental`。
+4. 产品面：`components/bits/` 或独立 `rui_bits` crate；先 `experimental`。**不挡** W3 / Beta。
 
 ---
 
@@ -183,7 +188,7 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | **B16** | Liquid/Glass/… **wrap** 产品件 | 换核；文字 SplitText 目录（归 B17） |
 | **B17** | 文字动效 / 背景 / 动画 UI 目录 | 换核；包住子树的 shader（归 B16） |
 
-W3 **退出不要求** 3.13 3D / B16 / B17；3.11/3.12 MVP **建议**在 W3 内开工，不挡 Win-first 0.1。
+W3 **退出不要求** 3.13 3D 产品化 / B16 / B17 目录；3.11/3.12 MVP **建议**在 W3 内开工，不挡 Win-first 0.1。能力层（graph / canvas 正式面 / GPU 2D 可选 / effect wrap / timeline）可并行，**不升** SemVer 稳定面、**不挡** Beta。
 
 ---
 

@@ -411,7 +411,7 @@ WP-3.11 任务要点（已签）：`primitives/svg` 叶 + 场景图 flatten；`u
 
 WP-3.12 任务要点（已签）：`primitives/canvas` 叶 + `paint` / `Canvas2D` MVP（clear / fill_rect / stroke_rect / fill_path / stroke_path / translate·rotate·scale / clip / save·restore）；CPU pixmap → `rui_canvas:`；paint 包 `untrack`（peek 不订根）；`ui!` `<canvas>` 与 `canvas()` 双入口；Gallery「绘制」拖线。不搬 WHATWG Canvas2D 全家桶。**交互（同日）**：path 按段描边；dirty 缓存（滚动不重跑 paint）；指针按住才标 dirty。
 
-WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。为 B16 [canvas-ui](https://github.com/DavidHDev/canvas-ui) / B17 [react-bits](https://github.com/DavidHDev/react-bits) 留离屏贴图 + 3D pass 底座。
+WP-3.13 任务要点（已签）：2D 变换/clip 有测（canvas clip/rotate）+ Gallery rotate；`<scene3d>` / `scene3d()` 叶默认无 GPU；feature `scene3d` 透视旋转立方、同一 wgpu、无 glTF。**能力层加深（2026-08-18，不挡 Beta）**：`RenderGraph` / `TexturePool`；Canvas2D 曲线/图像/命中；`RUI_GPU_2D=1` 可选 tessellate；`effect_wrap` 子树捕获+shader；`scene3d` camera/light/material；`Timeline` + `glyph_fx`。B16/B17 **产品目录**仍 backlog。
 
 WP-3.3 任务要点（已签）：独立 `Calendar`（`caption_layout`、ISO、方向键）；Date/TimePicker 复用 + Enter/Esc；ColorPicker HSV + hex/rgb/hsl；Command ↑↓/Enter；浮层 `floating_portal_anchor` + 嵌套 Popover/Select；TimePicker 三 Combobox。作者面 **WP-3.14 ☑**；浮层单一路径 **WP-3.4 ☑**。键盘表 [`keyboard_nav.md`](keyboard_nav.md)。
 
@@ -657,8 +657,8 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |
 | B5 | VirtualMasonry 产品化（升格 / 密度打磨） | 工程 WP-3.10 MVP ☑ 2026-08-18；升 `verified` 仍 backlog |
 | B6 | 完整 3D/矩阵变换 | **并入 WP-3.13**（2026-08-13）；不再单列挡 W3 |
-| B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；依赖 3.11–3.13；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
-| B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；动画原语 + glyphon；背景/3D 跟 3.12/3.13；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
+| B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
+| B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI | 工程 |
 | B8 | GPU PartialLoad / retain 默认开 | 工程；见 `damage.md` |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
