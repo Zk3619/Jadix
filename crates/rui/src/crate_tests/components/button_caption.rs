@@ -139,14 +139,14 @@ fn measure_uses_normalized_weight_so_captions_fit() {
         let measure_w = intrinsic_width(&prepared);
 
         let mut buf = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        buf.set_size(&mut fs, Some(16_384.0), Some(23.0));
+        buf.set_size(Some(16_384.0), Some(23.0));
         buf.set_text(
-            &mut fs,
             text,
-            glyphon::Attrs::new()
+            &glyphon::Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(norm)),
             glyphon::Shaping::Basic,
+            None,
         );
         buf.shape_until_scroll(&mut fs, false);
         let render_w = buf.layout_runs().map(|r| r.line_w).fold(0.0_f32, f32::max);
@@ -157,14 +157,14 @@ fn measure_uses_normalized_weight_so_captions_fit() {
         );
 
         let mut buf2 = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        buf2.set_size(&mut fs, Some(measure_w.max(1.0)), Some(84.0));
+        buf2.set_size(Some(measure_w.max(1.0)), Some(84.0));
         buf2.set_text(
-            &mut fs,
             text,
-            glyphon::Attrs::new()
+            &glyphon::Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(norm)),
             glyphon::Shaping::Basic,
+            None,
         );
         buf2.shape_until_scroll(&mut fs, false);
         assert_eq!(

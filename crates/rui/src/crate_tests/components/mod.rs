@@ -28,12 +28,12 @@ mod glyphon_newline_diag {
         let size = 14.0_f32;
         let lh = size * tailwind_default_leading_scale(size);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(360.0), Some(lh + 4.0));
+        buffer.set_size(Some(360.0), Some(lh + 4.0));
         buffer.set_text(
-            &mut fs,
             "啊\n啊",
-            glyphon::Attrs::new().family(glyphon::Family::SansSerif),
+            &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         let n = buffer.layout_runs().count();
@@ -52,12 +52,12 @@ mod glyphon_newline_diag {
         let size = 14.0_f32;
         let lh = size * tailwind_default_leading_scale(size);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(360.0), Some(lh * 2.0 + 8.0));
+        buffer.set_size(Some(360.0), Some(lh * 2.0 + 8.0));
         buffer.set_text(
-            &mut fs,
             "啊\n啊",
-            glyphon::Attrs::new().family(glyphon::Family::SansSerif),
+            &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         let runs: Vec<_> = buffer
@@ -82,12 +82,12 @@ mod glyphon_newline_diag {
         let lh = size * tailwind_default_leading_scale(size);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         // Matches prepare_text's Input/Textarea path: height_opt = None.
-        buffer.set_size(&mut fs, Some(360.0), None);
+        buffer.set_size(Some(360.0), None);
         buffer.set_text(
-            &mut fs,
             "啊啊\n啊\n啊",
-            glyphon::Attrs::new().family(glyphon::Family::SansSerif),
+            &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
         buffer.shape_until_scroll(&mut fs, false);
@@ -115,16 +115,16 @@ mod glyphon_newline_diag {
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
 
         // First shape: single line into a 1-line-tall buffer (historical squash path).
-        buffer.set_size(&mut fs, Some(360.0), Some(lh + 4.0));
-        buffer.set_text(&mut fs, "啊啊", attrs, glyphon::Shaping::Advanced);
+        buffer.set_size(Some(360.0), Some(lh + 4.0));
+        buffer.set_text("啊啊", &attrs, glyphon::Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut fs, false);
         assert_eq!(buffer.layout_runs().count(), 1);
 
         // Grow text; size buffer to content (the fix). Must not keep the 1-line window.
         let text = "啊啊\n啊\n啊";
         let soft_h = lh * 3.0 + 8.0;
-        buffer.set_size(&mut fs, Some(360.0), Some(soft_h));
-        buffer.set_text(&mut fs, text, attrs, glyphon::Shaping::Advanced);
+        buffer.set_size(Some(360.0), Some(soft_h));
+        buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
         buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
         buffer.shape_until_scroll(&mut fs, false);
         let n = buffer.layout_runs().count();
@@ -145,11 +145,11 @@ mod glyphon_newline_diag {
         let lh = size * tailwind_default_leading_scale(size);
         let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(360.0), Some(lh + 4.0));
-        buffer.set_text(&mut fs, "啊啊", attrs, glyphon::Shaping::Advanced);
+        buffer.set_size(Some(360.0), Some(lh + 4.0));
+        buffer.set_text("啊啊", &attrs, glyphon::Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut fs, false);
 
-        buffer.set_text(&mut fs, "啊啊\n啊\n啊", attrs, glyphon::Shaping::Advanced);
+        buffer.set_text("啊啊\n啊\n啊", &attrs, glyphon::Shaping::Advanced, None);
         // height_opt still lh+4 from set_size above — set_text does not clear it.
         buffer.shape_until_scroll(&mut fs, false);
         let n = buffer.layout_runs().count();

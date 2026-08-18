@@ -64,8 +64,8 @@ impl PresentRetainPipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Present Retain PL"),
-            bind_group_layouts: &[&tex_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&tex_bgl)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -73,13 +73,13 @@ impl PresentRetainPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
-                buffers: &[VertexInput::desc()],
+                entry_point: Some("vs_main"),
+                buffers: &[Some(VertexInput::desc())],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -93,7 +93,7 @@ impl PresentRetainPipeline {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -104,7 +104,7 @@ impl PresentRetainPipeline {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -237,6 +237,7 @@ impl PresentRetainPipeline {
             label: Some("Present Retain → Surface"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: surface_view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(clear),
@@ -246,6 +247,7 @@ impl PresentRetainPipeline {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &rt.bind_group, &[]);

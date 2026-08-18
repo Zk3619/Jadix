@@ -1,8 +1,9 @@
 //! Dedicated GPU for windows that need compositor alpha.
 //!
-//! wgpu 22 GL reports only `Opaque`; DX12 maps every alpha mode to
-//! `DXGI_ALPHA_MODE_IGNORE`. Vulkan on Windows exposes `PreMultiplied`, which
-//! DWM can composite over the desktop when the HWND has `WS_EX_NOREDIRECTIONBITMAP`.
+//! wgpu 30 GL still reports only `Opaque`. Vulkan exposes `PreMultiplied`.
+//! DX12 (opt-in `backend-dx12`) maps compositor alpha correctly since wgpu ~26.
+//! DWM can composite that swapchain over the desktop when the HWND has
+//! `WS_EX_NOREDIRECTIONBITMAP`.
 
 use std::sync::Arc;
 
@@ -40,10 +41,7 @@ pub(super) fn try_acquire(window: &Arc<Window>) -> Option<CompositorGpu> {
 
 async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
     for (backends, name) in backend_candidates() {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        });
+        let instance = crate::renderer::wgpu_compat::instance(backends);
         let Ok(surface) = instance.create_surface(window.clone()) else {
             log::debug!("glass gpu {name}: no surface");
             continue;
@@ -53,9 +51,10 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
                 power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                ..Default::default()
             })
             .await;
-        let Some(adapter) = adapter else {
+        let Ok(adapter) = adapter else {
             log::debug!("glass gpu {name}: no adapter");
             continue;
         };
@@ -75,15 +74,11 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
             .max_texture_dimension_3d
             .min(required_limits.max_texture_dimension_3d.max(2048));
         let (device, queue) = match adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    label: Some("rui glass"),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                },
-                None,
-            )
+            .request_device(&crate::renderer::wgpu_compat::device_desc(
+                Some("rui glass"),
+                required_limits,
+                wgpu::MemoryHints::MemoryUsage,
+            ))
             .await
         {
             Ok(dq) => dq,
@@ -92,8 +87,7 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
                 continue;
             }
         };
-        let alpha_mode =
-            crate::renderer::pick_composite_alpha(&caps.alpha_modes, true);
+        let alpha_mode = crate::renderer::pick_composite_alpha(&caps.alpha_modes, true);
         let format = caps
             .formats
             .iter()
@@ -120,6 +114,7 @@ async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {
             height: size.height.max(1),
             present_mode,
             alpha_mode,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };

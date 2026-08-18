@@ -67,8 +67,8 @@ impl EffectPassGpu {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("rui-effect-pl"),
-            bind_group_layouts: &[&uniform_bgl, &tex_bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&uniform_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -76,13 +76,13 @@ impl EffectPassGpu {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
-                buffers: &[VertexInput::desc()],
+                entry_point: Some("vs_main"),
+                buffers: &[Some(VertexInput::desc())],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -93,7 +93,7 @@ impl EffectPassGpu {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -324,6 +324,7 @@ impl EffectPassGpu {
                 label: Some("rui-capture-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -333,6 +334,7 @@ impl EffectPassGpu {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             if !insts.is_empty() {
                 pass.set_pipeline(&rect_pipeline.render_pipeline);
@@ -434,6 +436,7 @@ impl EffectPassGpu {
                 label: Some("rui-effect-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &dst_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -443,6 +446,7 @@ impl EffectPassGpu {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniform_bg, &[]);

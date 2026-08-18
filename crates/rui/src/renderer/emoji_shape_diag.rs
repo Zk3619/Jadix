@@ -34,12 +34,12 @@ fn shape_probe(
     size: f32,
 ) -> Vec<GlyphProbe> {
     let mut buffer = glyphon::Buffer::new(font_system, glyphon::Metrics::new(size, size * 1.25));
-    buffer.set_size(font_system, Some(800.0), Some(80.0));
+    buffer.set_size(Some(800.0), Some(80.0));
     buffer.set_text(
-        font_system,
         text,
-        glyphon::Attrs::new().family(family),
+        &glyphon::Attrs::new().family(family),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(font_system, false);
     let mut metas: Vec<(usize, usize, glyphon::fontdb::ID, glyphon::CacheKey)> = Vec::new();
@@ -483,12 +483,12 @@ mod tests {
             .unwrap();
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(400.0), Some(lh + 2.0));
+        buffer.set_size(Some(400.0), Some(lh + 2.0));
         buffer.set_text(
-            &mut fs,
             &layout,
-            glyphon::Attrs::new().family(ui),
+            &glyphon::Attrs::new().family(ui),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
 
@@ -533,12 +533,12 @@ mod tests {
         let lh = size * 1.5;
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(1200.0), Some(lh * 2.0));
+        buffer.set_size(Some(1200.0), Some(lh * 2.0));
         buffer.set_text(
-            &mut fs,
             &layout,
-            glyphon::Attrs::new().family(ui),
+            &glyphon::Attrs::new().family(ui),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
 
@@ -712,12 +712,12 @@ mod tests {
         let avail = 220.0_f32;
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(avail), Some(lh * 8.0));
+        buffer.set_size(Some(avail), Some(lh * 8.0));
         buffer.set_text(
-            &mut fs,
             &layout,
-            glyphon::Attrs::new().family(ui),
+            &glyphon::Attrs::new().family(ui),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
 

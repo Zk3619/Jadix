@@ -96,7 +96,7 @@ impl ApplicationHandler for Probe {
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: selected_backends(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         stage("after wgpu::Instance");
         if stop_after() == "instance" {
@@ -111,6 +111,7 @@ impl ApplicationHandler for Probe {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            ..Default::default()
         }))
         .expect("adapter");
         println!("[probe] adapter: {:?}", adapter.get_info());
@@ -125,15 +126,14 @@ impl ApplicationHandler for Probe {
         limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
         limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                label: None,
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
-            },
-            None,
-        ))
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            label: None,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            experimental_features: wgpu::ExperimentalFeatures::default(),
+            trace: wgpu::Trace::Off,
+        }))
         .expect("device");
         stage("after request_device");
         if stop_after() == "device" {
@@ -158,6 +158,7 @@ impl ApplicationHandler for Probe {
                 height: size.height.max(1),
                 present_mode: wgpu::PresentMode::Fifo,
                 alpha_mode: caps.alpha_modes[0],
+                color_space: wgpu::SurfaceColorSpace::Auto,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 1,
             },
@@ -179,8 +180,10 @@ impl ApplicationHandler for Probe {
                 let Some(gpu) = self.gpu.as_ref() else {
                     return;
                 };
-                let Ok(frame) = gpu.surface.get_current_texture() else {
-                    return;
+                let frame = match gpu.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(t)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                    _ => return,
                 };
                 let view = frame.texture.create_view(&Default::default());
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -189,6 +192,7 @@ impl ApplicationHandler for Probe {
                         label: None,
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
+                            depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -198,10 +202,11 @@ impl ApplicationHandler for Probe {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                 }
                 gpu.queue.submit(Some(encoder.finish()));
-                frame.present();
+                gpu.queue.present(frame);
 
                 self.frames += 1;
                 if matches!(self.frames, 1 | 60 | 300) {

@@ -206,12 +206,12 @@ mod tests {
         let size = 14.0_f32;
         let lh = size * 1.5;
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(64.0), Some(lh + 2.0));
+        buffer.set_size(Some(64.0), Some(lh + 2.0));
         buffer.set_text(
-            &mut fs,
             &slot,
-            glyphon::Attrs::new().family(ui),
+            &glyphon::Attrs::new().family(ui),
             glyphon::Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         let w = buffer
@@ -254,7 +254,7 @@ mod tests {
         let visible = glyphon::Attrs::new()
             .family(ui)
             .color(glyphon::Color::rgba(0, 0, 0, 255));
-        let invisible = visible.color(glyphon::Color::rgba(0, 0, 0, 0));
+        let invisible = visible.clone().color(glyphon::Color::rgba(0, 0, 0, 0));
         let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
         let slot_end = slot_start + EMOJI_LAYOUT_SLOT.len_utf8();
         let owned = [
@@ -263,10 +263,10 @@ mod tests {
             (layout[slot_end..].to_string(), visible),
         ];
         let rich: Vec<(&str, glyphon::Attrs)> =
-            owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+            owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(&mut fs, Some(400.0), Some(lh * 2.0));
-        buffer.set_rich_text(&mut fs, rich, visible, glyphon::Shaping::Advanced);
+        buffer.set_size(Some(400.0), Some(lh * 2.0));
+        buffer.set_rich_text(rich, &visible, glyphon::Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut fs, false);
         let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, size, size)
             .expect("alpha=0 slot must still produce a layout glyph for Twemoji alignment");

@@ -199,6 +199,7 @@ impl RuiPipeline {
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
         };
         Self::new(device, &config)
@@ -209,8 +210,7 @@ impl RuiPipeline {
         config: &wgpu::SurfaceConfiguration,
         wgsl_source: &str,
     ) -> Self {
-        let premultiply =
-            compositor_premultiply(config.alpha_mode);
+        let premultiply = compositor_premultiply(config.alpha_mode);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Rounded Rect Shader"),
             source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
@@ -305,8 +305,8 @@ impl RuiPipeline {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Rui Render Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -314,13 +314,13 @@ impl RuiPipeline {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: "vs_main",
-                buffers: &[VertexInput::desc(), InstanceInput::desc()],
+                entry_point: Some("vs_main"),
+                buffers: &[Some(VertexInput::desc()), Some(InstanceInput::desc())],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(crate::renderer::color_target_blend(config.alpha_mode)),
@@ -343,7 +343,7 @@ impl RuiPipeline {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

@@ -124,8 +124,8 @@ rui = { path = "../../crates/rui", features = ["backend-dx12"] }
 
 | 组件                                                                                                                      | `.text`  | 说明                                                                                         |
 | ------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
-| `naga`（+ `codespan_reporting` + `enum2$<naga>`）                                                                         | ~576 KiB | WGSL 前端 + GLSL/HLSL 后端。wgpu 22 在 DX12 上不支持预编译着色器直通，去不掉                 |
-| `wgpu_core` + `wgpu` + `wgpu_hal` + `glow` + `ash`                                                                        | ~813 KiB | Windows 上 wgpu 22 通过自身 target cfg **强制**链接 Vulkan 与 GLES 后端，无法用 feature 关掉 |
+| `naga`（+ `codespan_reporting` + `enum2$<naga>`）                                                                         | ~576 KiB | WGSL 前端 + 各后端 IR。wgpu 30 仍走运行时编译，预编译着色器直通不是默认路径                 |
+| `wgpu_core` + `wgpu` + `wgpu_hal` + `glow` + `ash`                                                                        | ~813 KiB | wgpu 30 起 Vulkan/GLES/Metal 由 workspace features 显式打开；DX12 仍走 `backend-dx12` |
 | `std`                                                                                                                     | 545 KiB  | 已开 `panic="abort"`；进一步压缩需 nightly（见 §6）                                          |
 | 文本栈：`skrifa` + `rustybuzz` + `zeno` + `ttf_parser` + `cosmic_text` + `read_fonts` + `swash` + `unicode_bidi` + `yazi` | ~621 KiB | 复杂文本整形的必要代价                                                                       |
 | `taffy`                                                                                                                   | 212 KiB  | 布局引擎                                                                                     |

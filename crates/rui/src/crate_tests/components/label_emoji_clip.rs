@@ -116,12 +116,12 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
     let layout = emoji_layout::plan_emoji_layout_text(text);
     let emoji_start = layout.find(emoji_layout::EMOJI_LAYOUT_SLOT).unwrap();
     let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-    buffer.set_size(&mut fs, Some(info.width.max(1.0)), Some(lh + 2.0));
+    buffer.set_size(Some(info.width.max(1.0)), Some(lh + 2.0));
     buffer.set_text(
-        &mut fs,
         &layout,
-        glyphon::Attrs::new().family(glyphon::Family::SansSerif),
+        &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(&mut fs, false);
 

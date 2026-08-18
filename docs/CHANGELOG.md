@@ -23,6 +23,7 @@
 
 ### Added
 
+- 图形栈升到 glyphon **0.12** / wgpu **30** / cosmic-text **0.19**（`swash` 0.2 / `fontdb` 0.23 / `ttf-parser` 0.25 / `pollster` 0.4）。wgpu 30 起 DX12 可正确映射 compositor alpha；玻璃窗仍优先独立 Vulkan 预乘交换链，`backend-dx12` 时再试 DX12。手册 [`multi_window.md`](multi_window.md)。
 - WP-3.6：可选 feature `system-tray` 接入 `tray-icon`；菜单点击经 `run_on_ui_thread`；[`request_exit`](../crates/rui/src/app/ui_bridge.rs) 退出事件循环；默认仍 stub。手册 [`tray.md`](tray.md)。
 - 窗口 chrome：[`WindowOptions`](../crates/rui/src/app/window_chrome.rs)（`frameless` / `transparent` / `blur`）+ [`open_secondary_window_with`](../crates/rui/src/app/multi_window.rs) / [`run_with`](../crates/rui/src/app.rs)；自定义标题栏 [`start_window_drag`](../crates/rui/src/app/window_chrome.rs)。手册 [`multi_window.md`](multi_window.md)。
 - WP-3.8：稳定面 [`component_variants.md`](component_variants.md)（Button 词汇 + 差异表 + 受控命名 + 双书写审计）；未知 variant/size → default；Input RSX `value`；Toast success/warning 走 `chart-*` token。

@@ -271,14 +271,14 @@ fn measure_run_width(
     let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
-        buffer.set_size(font_system, Some(16_384.0), Some(line_height + 2.0));
+        buffer.set_size(Some(16_384.0), Some(line_height + 2.0));
         buffer.set_text(
-            font_system,
             layout.as_ref(),
-            Attrs::new()
+            &Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(weight)),
             shaping,
+            None,
         );
         buffer.shape_until_scroll(font_system, false);
         buffer
@@ -671,23 +671,23 @@ pub fn glyphon_fit_soft_wrap(
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
         buffer.set_text(
-            font_system,
             layout.as_ref(),
-            Attrs::new()
+            &Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(weight)),
             shaping,
+            None,
         );
         let tall = (line_height * 128.0).max(line_height + 2.0);
         // Mild first-pass shrink only — aggressive multi-step shrink scrambled bidi breaks.
-        buffer.set_size(font_system, Some(target), Some(tall));
+        buffer.set_size(Some(target), Some(tall));
         buffer.shape_until_scroll(font_system, false);
         let (mut line_count, mut max_ink) = buffer_max_ink(&buffer);
         let mut wrap_w = target;
         if max_ink > target + 0.5 && target > 8.0 {
             let over = (max_ink - target).max(1.0).min((target * 0.15).max(1.0));
             wrap_w = (target - over).max(target * 0.85).max(1.0);
-            buffer.set_size(font_system, Some(wrap_w), Some(tall));
+            buffer.set_size(Some(wrap_w), Some(tall));
             buffer.shape_until_scroll(font_system, false);
             let (n, ink) = buffer_max_ink(&buffer);
             line_count = n;
@@ -696,7 +696,7 @@ pub fn glyphon_fit_soft_wrap(
             if max_ink > target + 1.0 {
                 let over2 = (max_ink - target).max(1.0).min((target * 0.2).max(1.0));
                 wrap_w = (wrap_w - over2).max(target * 0.75).max(1.0);
-                buffer.set_size(font_system, Some(wrap_w), Some(tall));
+                buffer.set_size(Some(wrap_w), Some(tall));
                 buffer.shape_until_scroll(font_system, false);
                 let (n2, ink2) = buffer_max_ink(&buffer);
                 line_count = n2;

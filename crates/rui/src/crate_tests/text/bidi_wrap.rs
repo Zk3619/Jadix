@@ -203,20 +203,20 @@ fn shaped_buffer_set_size_reflows_gallery_bidi_line() {
     let lh = size * 1.5;
     let family = best_font_family(&fs);
     let mut buffer = Buffer::new(&mut fs, Metrics::new(size, lh));
-    buffer.set_size(&mut fs, Some(10_000.0), Some(lh * 4.0));
+    buffer.set_size(Some(10_000.0), Some(lh * 4.0));
     buffer.set_text(
-        &mut fs,
         text,
-        Attrs::new()
+        &Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(500)),
         Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(&mut fs, false);
     assert_eq!(buffer.layout_runs().count(), 1);
 
     let avail = 280.0f32;
-    buffer.set_size(&mut fs, Some(avail), Some(lh * 8.0));
+    buffer.set_size(Some(avail), Some(lh * 8.0));
     buffer.shape_until_scroll(&mut fs, false);
     let runs: Vec<f32> = buffer.layout_runs().map(|r| r.line_w).collect();
     assert!(runs.len() >= 2, "set_size must soft-wrap; runs={runs:?}");

@@ -6,6 +6,7 @@ use winit::{
 
 use super::state::ScrollbarUpdateMode;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
+use crate::renderer::wgpu_compat::SurfaceAcquireError;
 
 impl super::App {
     pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
@@ -182,16 +183,16 @@ impl super::App {
             }
             let render_ok = match sec.render() {
                 Ok(()) => true,
-                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
                     sec.recover_surface();
                     sec.window.request_redraw();
                     false
                 }
-                Err(wgpu::SurfaceError::OutOfMemory) => {
-                    log::error!("secondary window: GPU out of memory");
+                Err(SurfaceAcquireError::Validation) => {
+                    log::error!("secondary window: surface validation error");
                     false
                 }
-                Err(wgpu::SurfaceError::Timeout) => {
+                Err(SurfaceAcquireError::Timeout | SurfaceAcquireError::Occluded) => {
                     sec.window.request_redraw();
                     false
                 }
@@ -3184,7 +3185,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     window.request_redraw();
                 }
             }
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
                 let mut rb = self.state.borrow_mut();
                 if let Some(state) = rb.as_mut() {
                     let inner = state.window.inner_size();
@@ -3197,10 +3198,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     self.force_redraw_count = 3;
                 }
             }
-            Err(wgpu::SurfaceError::Timeout) => {
+            Err(SurfaceAcquireError::Timeout | SurfaceAcquireError::Occluded) => {
                 window.request_redraw();
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
+            Err(SurfaceAcquireError::Validation) => {
+                log::error!("primary window: surface validation error");
+            }
         }
     }
 

@@ -46,7 +46,7 @@ pub fn upload_rgba8(
 
     let unpadded = width.saturating_mul(4);
     let padded = padded_bytes_per_row(width);
-    let layout = wgpu::ImageDataLayout {
+    let layout = wgpu::TexelCopyBufferLayout {
         offset: 0,
         bytes_per_row: Some(padded),
         rows_per_image: Some(height),
@@ -56,7 +56,7 @@ pub fn upload_rgba8(
         height,
         depth_or_array_layers: 1,
     };
-    let dest = wgpu::ImageCopyTexture {
+    let dest = wgpu::TexelCopyTextureInfo {
         texture: &texture,
         mip_level: 0,
         origin: wgpu::Origin3d::ZERO,

@@ -36,32 +36,28 @@ pub struct OffscreenGpu {
 
 impl OffscreenGpu {
     pub fn new() -> Option<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let instance = super::wgpu_compat::instance(wgpu::Backends::all());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: None,
             force_fallback_adapter: std::env::var("RUI_FORCE_SOFTWARE").is_ok(),
-        }))?;
+            ..Default::default()
+        }))
+        .ok()?;
         let adapter_limits = adapter.limits();
         let mut required_limits = wgpu::Limits::downlevel_defaults();
         required_limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
         required_limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
         // Rounded-rect VS needs >31 inter-stage components (WebGL2 default is too low).
-        required_limits.max_inter_stage_shader_components =
-            adapter_limits.max_inter_stage_shader_components.max(60);
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("rui-offscreen"),
-                required_features: wgpu::Features::empty(),
+        required_limits.max_inter_stage_shader_variables =
+            adapter_limits.max_inter_stage_shader_variables.max(60);
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&super::wgpu_compat::device_desc(
+                Some("rui-offscreen"),
                 required_limits,
-                memory_hints: Default::default(),
-            },
-            None,
-        ))
-        .ok()?;
+                Default::default(),
+            )))
+            .ok()?;
         Some(Self { device, queue })
     }
 
@@ -128,6 +124,7 @@ impl OffscreenGpu {
                 label: Some("rui-offscreen-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
@@ -137,6 +134,7 @@ impl OffscreenGpu {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             if let Some(ref ib) = instance_buffer {
                 pass.set_pipeline(&pipeline.render_pipeline);
@@ -169,15 +167,15 @@ fn readback_texture(
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &output_buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
                 rows_per_image: Some(height),
@@ -196,10 +194,10 @@ fn readback_texture(
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    device.poll(wgpu::Maintain::Wait);
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().ok()?.ok()?;
 
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().ok()?;
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
     for row in 0..height {
         let start = (row * bytes_per_row) as usize;

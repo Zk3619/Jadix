@@ -427,7 +427,7 @@ fn node_shape_hash(
 
 fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text::ShapedTextEntry {
     let mut buffer = glyphon::Buffer::new(font_system, glyphon::Metrics::new(1.0, 1.0));
-    buffer.set_size(font_system, Some(1.0), Some(1.0));
+    buffer.set_size(Some(1.0), Some(1.0));
     super::text::ShapedTextEntry {
         key_hash: 0,
         shape_hash: 0,
@@ -478,7 +478,7 @@ fn correct_bidi_ink_spill(
     let fit = crate::text::glyphon_fit_soft_wrap(text, size, weight, logical_lh, fit_lookup_w);
     let fit_w = (fit.wrap_width * ui_scale).max(1.0);
     if horizontal_spill && (fit_w - wrap_w).abs() > 0.5 {
-        buffer.set_size(font_system, Some(fit_w), height_opt);
+        buffer.set_size(Some(fit_w), height_opt);
         buffer.shape_until_scroll(font_system, false);
     }
     let need_h = fit.line_count.max(1) as f32 * line_height;
@@ -718,20 +718,20 @@ fn resolve_text_align(
 /// which dropped the first emoji on each wrapped line (gallery stair-step overflow).
 fn set_shaped_buffer_text(
     buffer: &mut glyphon::Buffer,
-    font_system: &mut glyphon::FontSystem,
+    _font_system: &mut glyphon::FontSystem,
     text: &str,
     attrs: glyphon::Attrs,
     shaping: glyphon::Shaping,
     hide_emoji_font_glyphs: bool,
 ) {
     if !hide_emoji_font_glyphs || !emoji_detect::text_contains_emoji(text) {
-        buffer.set_text(font_system, text, attrs, shaping);
+        buffer.set_text(text, &attrs, shaping, None);
         return;
     }
     let (layout, segments) = plan_emoji_layout(text);
     // Slot char (CJK `一`) must keep ~1em advance but paint invisible — otherwise the
     // ideograph stroke shows as a black line through every Twemoji quad.
-    let invisible = attrs.color(glyphon::Color::rgba(0, 0, 0, 0));
+    let invisible = attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0));
     let slot_len = EMOJI_LAYOUT_SLOT.len_utf8();
     let mut owned: Vec<(String, glyphon::Attrs)> = Vec::new();
     let mut cursor = 0usize;
@@ -740,21 +740,22 @@ fn set_shaped_buffer_text(
             continue;
         };
         if cursor < *start {
-            owned.push((layout[cursor..*start].to_string(), attrs));
+            owned.push((layout[cursor..*start].to_string(), attrs.clone()));
         }
         let end = (*start + slot_len).min(layout.len());
-        owned.push((layout[*start..end].to_string(), invisible));
+        owned.push((layout[*start..end].to_string(), invisible.clone()));
         cursor = end;
     }
     if cursor < layout.len() {
-        owned.push((layout[cursor..].to_string(), attrs));
+        owned.push((layout[cursor..].to_string(), attrs.clone()));
     }
     if owned.is_empty() {
-        buffer.set_text(font_system, &layout, attrs, shaping);
+        buffer.set_text(&layout, &attrs, shaping, None);
         return;
     }
-    let rich: Vec<(&str, glyphon::Attrs)> = owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
-    buffer.set_rich_text(font_system, rich, attrs, shaping);
+    let rich: Vec<(&str, glyphon::Attrs)> =
+        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
+    buffer.set_rich_text(rich, &attrs, shaping, None);
 }
 
 /// 与占位字形对齐后的额外垂直微调（仅当设置了 `RUI_EMOJI_BASELINE_FACTOR` 时非零）。
@@ -1299,14 +1300,14 @@ pub(crate) fn load_font_fallback_raster(
     let canvas_w = (size * 6.0).max(size * 2.0);
     let canvas_h = (size * 2.0).max(size);
     let mut buffer = glyphon::Buffer::new(font_system, glyphon::Metrics::new(size, size * 1.2));
-    buffer.set_size(font_system, Some(canvas_w), Some(canvas_h));
+    buffer.set_size(Some(canvas_w), Some(canvas_h));
     buffer.set_text(
-        font_system,
         sequence,
-        glyphon::Attrs::new()
+        &glyphon::Attrs::new()
             .family(emoji_family)
             .weight(glyphon::fontdb::Weight(font_weight)),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(font_system, false);
 
@@ -1315,7 +1316,7 @@ pub(crate) fn load_font_fallback_raster(
         for g in run.glyphs.iter() {
             let physical = g.physical((0.0, 0.0), 1.0);
             // Prefer our COLR path (avoids swash ColorOutline bottom crop).
-            let font_arc = font_system.get_font(g.font_id);
+            let font_arc = font_system.get_font(g.font_id, g.font_weight);
             let colr = font_arc
                 .as_ref()
                 .and_then(|f| rasterize_colr_glyph_unclipped(f.as_swash(), g.glyph_id, size));
@@ -1965,11 +1966,7 @@ pub fn prepare_text_frame(
                 if ok {
                     if is_input_text {
                         let mut wrap_w = resolve_paint_wrap();
-                        entry.buffer.set_size(
-                            unsafe { &mut *text_renderer.font_system },
-                            Some(wrap_w),
-                            buffer_height_opt,
-                        );
+                        entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
                         entry
                             .buffer
                             .set_scroll(glyphon::cosmic_text::Scroll::default());
@@ -2017,11 +2014,7 @@ pub fn prepare_text_frame(
                             let need_reshape = (wrap_w - cur_wrap).abs() > 0.5
                                 || (runs as f32 * line_height) > scaled_h + 1.0;
                             if need_reshape {
-                                entry.buffer.set_size(
-                                    unsafe { &mut *text_renderer.font_system },
-                                    Some(wrap_w),
-                                    buffer_height_opt,
-                                );
+                                entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
                                 entry.buffer.shape_until_scroll(
                                     unsafe { &mut *text_renderer.font_system },
                                     false,
@@ -2082,11 +2075,7 @@ pub fn prepare_text_frame(
                     }
                 } else {
                     let mut wrap_w = want_wrap;
-                    entry.buffer.set_size(
-                        unsafe { &mut *text_renderer.font_system },
-                        Some(wrap_w),
-                        buffer_height_opt,
-                    );
+                    entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
                     entry
                         .buffer
                         .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
@@ -2134,11 +2123,7 @@ pub fn prepare_text_frame(
                     unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
-                buffer.set_size(
-                    unsafe { &mut *text_renderer.font_system },
-                    Some(buffer_soft_w),
-                    buffer_height_opt,
-                );
+                buffer.set_size(Some(buffer_soft_w), buffer_height_opt);
                 let attrs = glyphon::Attrs::new()
                     .family(family)
                     .weight(glyphon::fontdb::Weight(font_weight))
@@ -2159,7 +2144,7 @@ pub fn prepare_text_frame(
                                 body = format!("{m}{body}");
                             }
                         }
-                        let mut a = attrs;
+                        let mut a = attrs.clone();
                         if let Some(c) = span.color {
                             a = a.color(glyphon::Color::rgba(c[0], c[1], c[2], c[3]));
                         }
@@ -2187,13 +2172,8 @@ pub fn prepare_text_frame(
                         owned.push((body, a));
                     }
                     let rich: Vec<(&str, glyphon::Attrs)> =
-                        owned.iter().map(|(t, a)| (t.as_str(), *a)).collect();
-                    buffer.set_rich_text(
-                        unsafe { &mut *text_renderer.font_system },
-                        rich,
-                        attrs,
-                        shaping,
-                    );
+                        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
+                    buffer.set_rich_text(rich, &attrs, shaping, None);
                 } else {
                     set_shaped_buffer_text(
                         &mut buffer,
@@ -3299,14 +3279,14 @@ mod input_shaping_stability_tests {
         let lh = size * 1.5;
         let family = best_font_family(fs);
         let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(fs, Some(1024.0), Some(lh + 2.0));
+        buffer.set_size(Some(1024.0), Some(lh + 2.0));
         buffer.set_text(
-            fs,
             text,
-            glyphon::Attrs::new()
+            &glyphon::Attrs::new()
                 .family(family)
                 .weight(glyphon::fontdb::Weight(400)),
             shaping,
+            None,
         );
         buffer.shape_until_scroll(fs, false);
         buffer

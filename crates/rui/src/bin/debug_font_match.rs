@@ -12,14 +12,14 @@ fn collect_used_faces(
     text: &str,
 ) -> String {
     let mut buffer = Buffer::new(font_system, Metrics::new(14.0, 20.0));
-    buffer.set_size(font_system, Some(800.0), Some(40.0));
+    buffer.set_size(Some(800.0), Some(40.0));
     buffer.set_text(
-        font_system,
         text,
-        Attrs::new()
+        &Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight)),
         Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(font_system, false);
 

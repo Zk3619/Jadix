@@ -197,11 +197,7 @@ pub(crate) fn apply_created_window(
 }
 
 #[cfg(target_os = "windows")]
-fn apply_windows_glass(
-    window: &Window,
-    options: &WindowOptions,
-    composition_swapchain: bool,
-) {
+fn apply_windows_glass(window: &Window, options: &WindowOptions, composition_swapchain: bool) {
     use winit::platform::windows::WindowExtWindows;
 
     let Some(hwnd) = win32_hwnd(window) else {

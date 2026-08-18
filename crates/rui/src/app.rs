@@ -59,6 +59,7 @@ pub use ime_support::{
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
 };
 pub mod error_boundary;
+mod glass_gpu;
 mod input_controller;
 pub mod keyed_list;
 mod lifecycle;
@@ -73,7 +74,6 @@ pub mod resource;
 pub mod router;
 pub mod runtime;
 pub(crate) mod scroll_support;
-mod glass_gpu;
 mod secondary_input;
 mod secondary_window;
 mod state;

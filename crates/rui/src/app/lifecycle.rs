@@ -202,8 +202,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             super::RuiUserEvent::OpenWindow { options, builder } => {
                 let wants_glass = options.compositor_alpha();
                 let mut composition = wants_glass;
-                let Ok(created) =
-                    event_loop.create_window(options.window_attributes(composition))
+                let Ok(created) = event_loop.create_window(options.window_attributes(composition))
                 else {
                     log::warn!("multi-window: create_window failed");
                     return;
@@ -565,11 +564,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
                 .borrow()
                 .as_ref()
                 .is_some_and(|s| s.composition_swapchain);
-            super::window_chrome::apply_created_window(
-                &window,
-                &self.window_options,
-                composition,
-            );
+            super::window_chrome::apply_created_window(&window, &self.window_options, composition);
             self.accesskit_adapter = Some(adapter);
         }
 

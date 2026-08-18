@@ -87,14 +87,14 @@ pub fn measure_prefix_width(
     } else {
         Some(max_width.max(1.0))
     };
-    buffer.set_size(font_system, width_opt, Some(line_height + 2.0));
+    buffer.set_size(width_opt, Some(line_height + 2.0));
     buffer.set_text(
-        font_system,
         layout.as_ref(),
-        glyphon::Attrs::new()
+        &glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight)),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(font_system, false);
     let measured = buffer

@@ -91,15 +91,15 @@ fn gallery_bidi_paint_uses_fit_wrap_width_not_full_leaf() {
 
     let mut buffer = Buffer::new(&mut fs, Metrics::new(size, lh));
     buffer.set_text(
-        &mut fs,
         GALLERY_BIDI,
-        Attrs::new()
+        &Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(500)),
         Shaping::Advanced,
+        None,
     );
     // Mirrors prepare_text: shape at cached fit wrap, not full leaf width.
-    buffer.set_size(&mut fs, Some(fit.wrap_width), Some(lh * 16.0));
+    buffer.set_size(Some(fit.wrap_width), Some(lh * 16.0));
     buffer.shape_until_scroll(&mut fs, false);
     assert!(
         fit.wrap_width + 0.01 < leaf_w || fit.max_ink > leaf_w,
@@ -144,14 +144,14 @@ fn gallery_rtl_emoji_paint_wrap_stays_inside_leaf() {
 
     let mut buffer = Buffer::new(&mut fs, Metrics::new(size, lh));
     buffer.set_text(
-        &mut fs,
         GALLERY_RTL_EMOJI,
-        Attrs::new()
+        &Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(500)),
         Shaping::Advanced,
+        None,
     );
-    buffer.set_size(&mut fs, Some(fit.wrap_width), Some(lh * 16.0));
+    buffer.set_size(Some(fit.wrap_width), Some(lh * 16.0));
     buffer.shape_until_scroll(&mut fs, false);
     assert!(
         max_ink(&buffer) <= leaf_w * 1.08 + 2.0,
@@ -177,14 +177,14 @@ fn ascii_blurb_reflows_when_leaf_grows_past_stale_wrap() {
 
     let mut buffer = Buffer::new(&mut fs, Metrics::new(size, lh));
     buffer.set_text(
-        &mut fs,
         text,
-        Attrs::new()
+        &Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(500)),
         Shaping::Advanced,
+        None,
     );
-    buffer.set_size(&mut fs, Some(narrow), Some(lh * 16.0));
+    buffer.set_size(Some(narrow), Some(lh * 16.0));
     buffer.shape_until_scroll(&mut fs, false);
     let runs_narrow = buffer.layout_runs().count();
     assert!(
@@ -193,7 +193,7 @@ fn ascii_blurb_reflows_when_leaf_grows_past_stale_wrap() {
     );
 
     // Grow leaf: must set_size to wide (not keep narrow wrap just because ink fits).
-    buffer.set_size(&mut fs, Some(wide), Some(lh * 16.0));
+    buffer.set_size(Some(wide), Some(lh * 16.0));
     buffer.shape_until_scroll(&mut fs, false);
     let runs_wide = buffer.layout_runs().count();
     assert!(

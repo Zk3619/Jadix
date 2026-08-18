@@ -25,6 +25,7 @@ pub mod text_hit;
 pub(crate) mod text_prepare_debug;
 pub mod textured_pipeline;
 pub mod twemoji_name;
+pub(crate) mod wgpu_compat;
 
 #[cfg(feature = "scene3d")]
 pub mod scene3d;

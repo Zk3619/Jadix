@@ -330,14 +330,14 @@ fn textarea_shaped_line_height_matches_style_not_chrome() {
     let family = best_font_family(&fs);
     let soft_h = 2.0 * lh + text_edit_ink_pad_px(size);
     let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-    buffer.set_size(&mut fs, Some(info.width.max(1.0)), Some(soft_h));
+    buffer.set_size(Some(info.width.max(1.0)), Some(soft_h));
     buffer.set_text(
-        &mut fs,
         info.text.as_str(),
-        glyphon::Attrs::new()
+        &glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(400)),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(&mut fs, false);
     let runs: Vec<_> = buffer.layout_runs().collect();
@@ -395,26 +395,26 @@ fn textarea_glyphon_buffer_keeps_all_hard_lines_after_grow() {
     let soft_h = (hard * lh).max(lh) + text_edit_ink_pad_px(size);
     let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
     // Simulate prepare_text cache: first shape short, then grow with content soft_h.
-    buffer.set_size(&mut fs, Some(info.width.max(1.0)), Some(lh + 4.0));
+    buffer.set_size(Some(info.width.max(1.0)), Some(lh + 4.0));
     buffer.set_text(
-        &mut fs,
         "啊啊",
-        glyphon::Attrs::new()
+        &glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(400)),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(&mut fs, false);
     assert_eq!(buffer.layout_runs().count(), 1);
 
-    buffer.set_size(&mut fs, Some(info.width.max(1.0)), Some(soft_h));
+    buffer.set_size(Some(info.width.max(1.0)), Some(soft_h));
     buffer.set_text(
-        &mut fs,
         info.text.as_str(),
-        glyphon::Attrs::new()
+        &glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(400)),
         glyphon::Shaping::Advanced,
+        None,
     );
     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
     buffer.shape_until_scroll(&mut fs, false);

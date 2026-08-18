@@ -16,8 +16,7 @@ dx12 = ["wgpu/dx12"]
 
 [dependencies]
 winit = { workspace = true }
-# On Windows wgpu 22 force-links the Vulkan + GLES backends regardless of features,
-# so GL and Vulkan can be compared without any extra feature.
+# GL and Vulkan are on in the workspace wgpu features; DX12 still needs `dx12`.
 wgpu = { workspace = true }
 pollster = { workspace = true }
 

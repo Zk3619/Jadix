@@ -109,6 +109,7 @@ impl SecondaryWindowState {
             height: size.height.max(1),
             present_mode: primary_config.present_mode,
             alpha_mode,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -296,7 +297,9 @@ impl SecondaryWindowState {
     }
 
     /// Layout + clear + draw primitives/text for this secondary window.
-    pub(super) fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub(super) fn render(
+        &mut self,
+    ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         let inner = self.window.inner_size();
         if inner.width > 0
             && inner.height > 0
@@ -488,7 +491,7 @@ impl SecondaryWindowState {
             overlay_band_underlines.push(overlay_prep.underline_instances);
         }
 
-        let output = self.surface.get_current_texture()?;
+        let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -504,6 +507,7 @@ impl SecondaryWindowState {
                 label: Some("Secondary Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(crate::renderer::surface_clear_color(
@@ -515,6 +519,7 @@ impl SecondaryWindowState {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             render_pass.set_pipeline(&self.pipeline.render_pipeline);
@@ -678,7 +683,7 @@ impl SecondaryWindowState {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.queue.present(output);
 
         if prep.culled_skip_prepare || prep.needs_warmup || overlay_needs_warmup {
             self.window.request_redraw();

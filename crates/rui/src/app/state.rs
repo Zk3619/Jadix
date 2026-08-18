@@ -395,11 +395,12 @@ impl AppState {
             vec![(wgpu::Backends::METAL, "metal")]
         } else if cfg!(windows) {
             if compositor_alpha {
-                // GL/DX12 cannot composite per-pixel alpha on wgpu 22; Vulkan can.
+                // GL still reports only Opaque. wgpu 30 DX12 maps PreMultiplied
+                // (fixed ~v26 #7117); Vulkan remains the most reliable compositor path.
                 vec![
                     (wgpu::Backends::VULKAN, "vulkan"),
-                    (wgpu::Backends::GL, "gl"),
                     (wgpu::Backends::DX12, "dx12"),
+                    (wgpu::Backends::GL, "gl"),
                 ]
             } else {
                 vec![
@@ -448,10 +449,7 @@ impl AppState {
         let candidates = Self::backend_candidates(compositor_alpha);
         if !force_software {
             for (backends, name) in &candidates {
-                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                    backends: *backends,
-                    ..Default::default()
-                });
+                let instance = crate::renderer::wgpu_compat::instance(*backends);
                 let Ok(surface) = instance.create_surface(window.clone()) else {
                     log::debug!("backend {name}: no surface");
                     continue;
@@ -462,9 +460,10 @@ impl AppState {
                         power_preference: wgpu::PowerPreference::LowPower,
                         compatible_surface: Some(&surface),
                         force_fallback_adapter: false,
+                        ..Default::default()
                     })
                     .await;
-                if let Some(adapter) = adapter {
+                if let Ok(adapter) = adapter {
                     log::info!("gpu backend: {name} ({})", adapter.get_info().name);
                     return (instance, surface, adapter);
                 }
@@ -474,10 +473,7 @@ impl AppState {
 
         // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
         for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN] {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends,
-                ..Default::default()
-            });
+            let instance = crate::renderer::wgpu_compat::instance(backends);
             let Ok(surface) = instance.create_surface(window.clone()) else {
                 continue;
             };
@@ -486,9 +482,10 @@ impl AppState {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: Some(&surface),
                     force_fallback_adapter: true,
+                    ..Default::default()
                 })
                 .await;
-            if let Some(adapter) = adapter {
+            if let Ok(adapter) = adapter {
                 log::warn!(
                     "falling back to software adapter: {}",
                     adapter.get_info().name
@@ -550,15 +547,11 @@ impl AppState {
             .min(required_limits.max_texture_dimension_3d.max(2048));
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    label: None,
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                },
+            .request_device(&crate::renderer::wgpu_compat::device_desc(
                 None,
-            )
+                required_limits,
+                wgpu::MemoryHints::MemoryUsage,
+            ))
             .await
             .unwrap();
         let device = Arc::new(device);
@@ -609,6 +602,7 @@ impl AppState {
             height: size.height.max(1),
             present_mode,
             alpha_mode,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
         };
@@ -1230,7 +1224,7 @@ impl AppState {
         self.config.width = width;
         self.config.height = height;
         // Only reconfigure when the backing size changes. Calling `configure` on every occlusion
-        // / redraw causes visible flicker; use `recover_surface` after `SurfaceError::Lost` instead.
+        // / redraw causes visible flicker; use `recover_surface` after a Lost acquire instead.
         if dims_changed {
             self.surface.configure(&self.device, &self.config);
             super::window_chrome::apply_created_window(
@@ -1271,7 +1265,7 @@ impl AppState {
         // 无拇指拖拽时：overlay 弹簧或平滑滚会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
         // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
         scrollbar_skip_flex_layout: bool,
-    ) -> Result<(), wgpu::SurfaceError> {
+    ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
         // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
         // Settle is deferred one frame after `inner_size` matches the last Resized event so the
@@ -1981,7 +1975,7 @@ impl AppState {
         // with present pacing; this typically reduces blocking time in get_current_texture().
         #[cfg(debug_assertions)]
         let acquire_begin = Instant::now();
-        let output = self.surface.get_current_texture()?;
+        let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
         #[cfg(debug_assertions)]
         let acquire_done = Instant::now();
         let view = output
@@ -2074,6 +2068,7 @@ impl AppState {
                         label: Some("Backdrop Scene Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: scene_view,
+                            depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(clear_color),
@@ -2083,6 +2078,7 @@ impl AppState {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
+                        multiview_mask: None,
                     });
                     page_pass.set_pipeline(&self.pipeline.render_pipeline);
                     page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
@@ -2198,7 +2194,7 @@ impl AppState {
             let color_view = if draw_to_retain {
                 self.present_retain
                     .color_view()
-                    .ok_or(wgpu::SurfaceError::Lost)?
+                    .ok_or(crate::renderer::wgpu_compat::SurfaceAcquireError::Lost)?
             } else {
                 &view
             };
@@ -2206,6 +2202,7 @@ impl AppState {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: color_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: color_load,
@@ -2215,6 +2212,7 @@ impl AppState {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             if let Some((x, y, w, h)) = scissor_physical {
@@ -2492,7 +2490,7 @@ impl AppState {
         let submit_done = Instant::now();
         #[cfg(debug_assertions)]
         let present_begin = Instant::now();
-        output.present();
+        self.queue.present(output);
         self.damage_rect = None;
         self.force_full_redraw = false;
         self.has_presented_frame = true;
