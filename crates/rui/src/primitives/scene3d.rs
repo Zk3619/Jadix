@@ -8,6 +8,65 @@ use crate::style::parse_color;
 
 /// 叶标记：`1` = 启用 GPU 立方（仅 `scene3d` feature）。
 pub const ATTR_SCENE3D: &str = "rui_scene3d";
+pub const ATTR_SCENE3D_FOV_DEG: &str = "rui_scene3d_fov_deg";
+pub const ATTR_SCENE3D_YAW_SPEED: &str = "rui_scene3d_yaw_speed";
+pub const ATTR_SCENE3D_PITCH: &str = "rui_scene3d_pitch";
+pub const ATTR_SCENE3D_BG: &str = "rui_scene3d_bg";
+pub const ATTR_SCENE3D_CAMERA_Z: &str = "rui_scene3d_camera_z";
+pub const ATTR_SCENE3D_LIGHT: &str = "rui_scene3d_light";
+pub const ATTR_SCENE3D_MATERIAL: &str = "rui_scene3d_material";
+
+/// Formal scene camera (perspective MVP inputs).
+#[derive(Clone, Copy, Debug)]
+pub struct Scene3dCamera {
+    pub fov_deg: f32,
+    pub pitch: f32,
+    pub distance: f32,
+}
+
+impl Default for Scene3dCamera {
+    fn default() -> Self {
+        Self {
+            fov_deg: 45.0,
+            pitch: 0.35,
+            distance: 2.35,
+        }
+    }
+}
+
+/// Simple directional + ambient light (shader uniforms later).
+#[derive(Clone, Copy, Debug)]
+pub struct Scene3dLight {
+    pub ambient: f32,
+    pub directional: f32,
+    pub dir: [f32; 3],
+}
+
+impl Default for Scene3dLight {
+    fn default() -> Self {
+        Self {
+            ambient: 0.22,
+            directional: 0.78,
+            dir: [0.3, 0.8, 0.5],
+        }
+    }
+}
+
+/// Per-mesh material coefficients (metallic / roughness MVP).
+#[derive(Clone, Copy, Debug)]
+pub struct Scene3dMaterial {
+    pub metallic: f32,
+    pub roughness: f32,
+}
+
+impl Default for Scene3dMaterial {
+    fn default() -> Self {
+        Self {
+            metallic: 0.15,
+            roughness: 0.55,
+        }
+    }
+}
 
 pub struct Scene3dBuilder {
     el: Element,
@@ -41,6 +100,60 @@ impl Scene3dBuilder {
     }
 
     pub fn children(self, _children: impl IntoIterator<Item = Element>) -> Self {
+        self
+    }
+
+    pub fn fov_deg(mut self, deg: f32) -> Self {
+        self.el
+            .set_attr(ATTR_SCENE3D_FOV_DEG, format!("{:.3}", deg.max(1.0)));
+        self
+    }
+
+    pub fn yaw_speed(mut self, speed: f32) -> Self {
+        self.el
+            .set_attr(ATTR_SCENE3D_YAW_SPEED, format!("{:.4}", speed));
+        self
+    }
+
+    pub fn pitch_deg(mut self, deg: f32) -> Self {
+        self.el
+            .set_attr(ATTR_SCENE3D_PITCH, format!("{:.4}", deg.to_radians()));
+        self
+    }
+
+    pub fn background(mut self, color: impl AsRef<str>) -> Self {
+        let raw = color.as_ref().to_string();
+        self.el.set_attr(ATTR_SCENE3D_BG, raw.clone());
+        self.el = self.el.bg(parse_color(&raw));
+        self
+    }
+
+    pub fn camera(mut self, cam: Scene3dCamera) -> Self {
+        self.el
+            .set_attr(ATTR_SCENE3D_FOV_DEG, format!("{:.3}", cam.fov_deg.max(1.0)));
+        self.el
+            .set_attr(ATTR_SCENE3D_PITCH, format!("{:.4}", cam.pitch));
+        self.el
+            .set_attr(ATTR_SCENE3D_CAMERA_Z, format!("{:.4}", cam.distance.max(0.1)));
+        self
+    }
+
+    pub fn light(mut self, light: Scene3dLight) -> Self {
+        self.el.set_attr(
+            ATTR_SCENE3D_LIGHT,
+            format!(
+                "{:.3},{:.3},{:.3},{:.3},{:.3}",
+                light.ambient, light.directional, light.dir[0], light.dir[1], light.dir[2]
+            ),
+        );
+        self
+    }
+
+    pub fn material(mut self, mat: Scene3dMaterial) -> Self {
+        self.el.set_attr(
+            ATTR_SCENE3D_MATERIAL,
+            format!("{:.3},{:.3}", mat.metallic, mat.roughness),
+        );
         self
     }
 }
@@ -83,6 +196,48 @@ pub struct Scene3dJob {
     pub height: u32,
     pub yaw: f32,
     pub pitch: f32,
+    pub fov_deg: f32,
+    pub camera_z: f32,
+    pub bg: [f32; 4],
+    pub light: Scene3dLight,
+    pub material: Scene3dMaterial,
+}
+
+#[cfg(feature = "scene3d")]
+fn parse_light(attrs: &std::collections::HashMap<String, String>) -> Scene3dLight {
+    attrs
+        .get(ATTR_SCENE3D_LIGHT)
+        .and_then(|s| {
+            let p: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+            if p.len() >= 5 {
+                Some(Scene3dLight {
+                    ambient: p[0],
+                    directional: p[1],
+                    dir: [p[2], p[3], p[4]],
+                })
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "scene3d")]
+fn parse_material(attrs: &std::collections::HashMap<String, String>) -> Scene3dMaterial {
+    attrs
+        .get(ATTR_SCENE3D_MATERIAL)
+        .and_then(|s| {
+            let p: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+            if p.len() >= 2 {
+                Some(Scene3dMaterial {
+                    metallic: p[0],
+                    roughness: p[1],
+                })
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "scene3d")]
@@ -127,13 +282,40 @@ pub fn scene3d_tex_from_element_attrs(
     let t0 = *SCENE3D_EPOCH.get_or_init(std::time::Instant::now);
     let t = t0.elapsed().as_secs_f32();
     let key = format!("rui_scene3d:{w}x{h}");
+    let yaw_speed = attrs
+        .get(ATTR_SCENE3D_YAW_SPEED)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.85);
+    let pitch = attrs
+        .get(ATTR_SCENE3D_PITCH)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.35 + (t * 0.4).sin() * 0.12);
+    let fov_deg = attrs
+        .get(ATTR_SCENE3D_FOV_DEG)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(45.0);
+    let bg = attrs
+        .get(ATTR_SCENE3D_BG)
+        .map(|s| parse_color(s))
+        .unwrap_or(parse_color("secondary"));
+    let camera_z = attrs
+        .get(ATTR_SCENE3D_CAMERA_Z)
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(2.35);
+    let light = parse_light(attrs);
+    let material = parse_material(attrs);
     JOBS.with(|j| {
         j.borrow_mut().push(Scene3dJob {
             key: key.clone(),
             width: w,
             height: h,
-            yaw: t * 0.85,
-            pitch: 0.35 + (t * 0.4).sin() * 0.12,
+            yaw: t * yaw_speed,
+            pitch,
+            fov_deg,
+            camera_z,
+            bg,
+            light,
+            material,
         });
     });
     // Do not call `runtime::request_redraw()` here: collect runs while `AppState` is
@@ -181,6 +363,31 @@ mod tests {
         {
             assert!(root.children[0].get_attr(ATTR_SCENE3D).is_none());
         }
+    }
+
+    #[test]
+    fn scene3d_camera_light_attrs() {
+        let leaf: Element = scene3d()
+            .w(80.0)
+            .h(60.0)
+            .camera(Scene3dCamera {
+                fov_deg: 50.0,
+                pitch: 0.2,
+                distance: 3.0,
+            })
+            .light(Scene3dLight::default())
+            .material(Scene3dMaterial {
+                metallic: 0.4,
+                roughness: 0.3,
+            })
+            .into();
+        assert_eq!(
+            leaf.get_attr(ATTR_SCENE3D_FOV_DEG).map(|s| s.as_str()),
+            Some("50.000")
+        );
+        assert!(leaf.get_attr(ATTR_SCENE3D_CAMERA_Z).is_some());
+        assert!(leaf.get_attr(ATTR_SCENE3D_LIGHT).is_some());
+        assert!(leaf.get_attr(ATTR_SCENE3D_MATERIAL).is_some());
     }
 
     /// Layout collect used to call `runtime::request_redraw` while `AppState` was already

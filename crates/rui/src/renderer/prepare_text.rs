@@ -1828,6 +1828,16 @@ pub fn prepare_text_frame(
                     family,
                     scaled_w.max(0.0),
                 ))
+            } else if let Some(raw) = info.glyph_fx.as_deref() {
+                let kind = crate::renderer::GlyphFxKind::parse(raw);
+                if kind == crate::renderer::GlyphFxKind::Split {
+                    let t = crate::style::global_time_s().fract();
+                    let n = info.text.chars().count().max(1);
+                    let keep = ((n as f32) * t).ceil() as usize;
+                    Cow::Owned(info.text.chars().take(keep.max(1)).collect())
+                } else {
+                    Cow::Borrowed(info.text.as_str())
+                }
             } else {
                 Cow::Borrowed(info.text.as_str())
             };
@@ -2409,6 +2419,19 @@ pub fn prepare_text_frame(
         } else {
             0.0
         };
+        let mut glyph_color = st.color;
+        let mut glyph_dy = dy;
+        if let Some(raw) = info.glyph_fx.as_deref() {
+            let kind = crate::renderer::GlyphFxKind::parse(raw);
+            if kind != crate::renderer::GlyphFxKind::None {
+                let fx = crate::renderer::GlyphFx::new(kind, crate::style::global_time_s().fract());
+                let n = info.text.chars().count().max(1);
+                glyph_color[3] =
+                    ((glyph_color[3] as f32) * fx.opacity(0, n)).round().clamp(0.0, 255.0) as u8;
+                let (_, off_y) = fx.offset(0, n);
+                glyph_dy += off_y * ui_scale;
+            }
+        }
         let sdx = st.shadow_offset[0] * ui_scale;
         let sdy = st.shadow_offset[1] * ui_scale;
         let sblur = st.shadow_blur * ui_scale;
@@ -2469,7 +2492,7 @@ pub fn prepare_text_frame(
             y,
             box_w: scaled_w,
             box_h: scaled_h,
-            dy,
+            dy: glyph_dy,
             text_size: scaled_size,
             align: st.align,
             measured_text_w,
@@ -2480,7 +2503,7 @@ pub fn prepare_text_frame(
             decoration_color: st.decoration_color,
             decoration_thickness: st.decoration_thickness,
             underline_offset: st.underline_offset,
-            color: st.color,
+            color: glyph_color,
             shadow_col: st.shadow_color,
             shadow_dx: sdx,
             shadow_dy: sdy,

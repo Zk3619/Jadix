@@ -74,9 +74,10 @@ pub use crate::core::tree::{Element, LayoutStatus};
 // ---------------------------------------------------------------------------
 
 pub use crate::primitives::{
-    canvas, circle, gstack, hstack, icon, interactive, r#box, scene3d, svg, svg_path, svg_rect,
-    text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder,
-    InteractiveBuilder, PathBuilder, Portal, PortalProps, Scene3dBuilder, SvgBuilder, TextBuilder,
+    canvas, circle, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, svg, svg_path,
+    svg_rect, text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder,
+    EffectWrapBuilder, InteractiveBuilder, PathBuilder, Portal, PortalProps, Scene3dBuilder,
+    Scene3dCamera, Scene3dLight, Scene3dMaterial, SvgBuilder, TextBuilder,
 };
 
 // ---------------------------------------------------------------------------

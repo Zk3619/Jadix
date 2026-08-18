@@ -34,12 +34,129 @@ pub struct CanvasSize {
 /// 规范 `docs/drawing.md` §4 里的 `Size`。
 pub type Size = CanvasSize;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineCap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineJoin {
+    Miter,
+    Round,
+    Bevel,
+}
+
+/// CPU-visible image source for `draw_image`. GPU texture keys may be wired later by
+/// the unified resource graph; the software canvas currently draws RGBA buffers directly.
+pub enum CanvasImageSource<'a> {
+    Rgba {
+        width: u32,
+        height: u32,
+        rgba: &'a [u8],
+    },
+    TextureKey(&'a str),
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CanvasPath2D {
+    cmds: Vec<PathCommand>,
+}
+
+impl CanvasPath2D {
+    pub fn new() -> Self {
+        Self { cmds: Vec::new() }
+    }
+
+    pub fn move_to(&mut self, x: f32, y: f32) {
+        self.cmds.push(PathCommand::MoveTo((x, y)));
+    }
+
+    pub fn line_to(&mut self, x: f32, y: f32) {
+        self.cmds.push(PathCommand::LineTo((x, y)));
+    }
+
+    pub fn quadratic_curve_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        let p0 = self
+            .cmds
+            .iter()
+            .rev()
+            .find_map(|c| match *c {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => Some(p),
+                PathCommand::Close => None,
+            })
+            .unwrap_or((x, y));
+        for i in 1..=12 {
+            let t = i as f32 / 12.0;
+            let mt = 1.0 - t;
+            let q = (
+                mt * mt * p0.0 + 2.0 * mt * t * cx + t * t * x,
+                mt * mt * p0.1 + 2.0 * mt * t * cy + t * t * y,
+            );
+            self.cmds.push(PathCommand::LineTo(q));
+        }
+    }
+
+    pub fn bezier_curve_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
+        let p0 = self
+            .cmds
+            .iter()
+            .rev()
+            .find_map(|c| match *c {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => Some(p),
+                PathCommand::Close => None,
+            })
+            .unwrap_or((x, y));
+        for i in 1..=16 {
+            let t = i as f32 / 16.0;
+            let mt = 1.0 - t;
+            let q = (
+                mt * mt * mt * p0.0
+                    + 3.0 * mt * mt * t * c1x
+                    + 3.0 * mt * t * t * c2x
+                    + t * t * t * x,
+                mt * mt * mt * p0.1
+                    + 3.0 * mt * mt * t * c1y
+                    + 3.0 * mt * t * t * c2y
+                    + t * t * t * y,
+            );
+            self.cmds.push(PathCommand::LineTo(q));
+        }
+    }
+
+    pub fn arc(&mut self, cx: f32, cy: f32, r: f32, start_rad: f32, end_rad: f32) {
+        let span = end_rad - start_rad;
+        let steps = ((span.abs() / std::f32::consts::TAU) * 32.0).ceil().max(8.0) as usize;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let a = start_rad + span * t;
+            let p = (cx + r * a.cos(), cy + r * a.sin());
+            if i == 0 && self.cmds.is_empty() {
+                self.cmds.push(PathCommand::MoveTo(p));
+            } else {
+                self.cmds.push(PathCommand::LineTo(p));
+            }
+        }
+    }
+
+    pub fn close_path(&mut self) {
+        self.cmds.push(PathCommand::Close);
+    }
+
+    pub fn commands(&self) -> &[PathCommand] {
+        &self.cmds
+    }
+}
+
 /// 2D 立即模式上下文（MVP：clear / 矩形 / path / 变换 / clip）。
 pub trait Canvas2D {
     fn size(&self) -> CanvasSize;
     fn set_fill(&mut self, color: &str);
     fn set_stroke(&mut self, color: &str);
     fn set_line_width(&mut self, width: f32);
+    fn set_line_cap(&mut self, _cap: LineCap) {}
+    fn set_line_join(&mut self, _join: LineJoin) {}
     /// 整缓冲重置为 `color`（忽略当前变换与 clip）。
     fn clear(&mut self, color: &str);
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32);
@@ -57,6 +174,22 @@ pub trait Canvas2D {
     }
     fn save(&mut self);
     fn restore(&mut self);
+    fn draw_image(
+        &mut self,
+        _src: &CanvasImageSource<'_>,
+        _dx: f32,
+        _dy: f32,
+        _dw: f32,
+        _dh: f32,
+    ) {
+    }
+    fn get_image_data(&self, _x: u32, _y: u32, _w: u32, _h: u32) -> Option<Vec<u8>> {
+        None
+    }
+    fn put_image_data(&mut self, _x: u32, _y: u32, _w: u32, _h: u32, _rgba: &[u8]) {}
+    fn is_point_in_path(&self, _path: &[PathCommand], _x: f32, _y: f32) -> bool {
+        false
+    }
     /// 下一帧继续 paint（时钟/粒子）。返回 [`LayoutStatus::Clean`] 且不调用本方法时，布局收集可复用上一张贴图。
     fn request_frame(&mut self) {
         let _ = self;
@@ -223,6 +356,8 @@ struct CanvasState {
     fill: [f32; 4],
     stroke: [f32; 4],
     line_width: f32,
+    line_cap: LineCap,
+    line_join: LineJoin,
 }
 
 struct RasterCanvas {
@@ -247,6 +382,8 @@ impl RasterCanvas {
                 fill: [0.0, 0.0, 0.0, 1.0],
                 stroke: [0.0, 0.0, 0.0, 1.0],
                 line_width: 1.0,
+                line_cap: LineCap::Round,
+                line_join: LineJoin::Round,
             },
             stack: Vec::new(),
             want_frame: false,
@@ -312,6 +449,14 @@ impl Canvas2D for RasterCanvas {
 
     fn set_line_width(&mut self, width: f32) {
         self.state.line_width = width.max(0.0);
+    }
+
+    fn set_line_cap(&mut self, cap: LineCap) {
+        self.state.line_cap = cap;
+    }
+
+    fn set_line_join(&mut self, join: LineJoin) {
+        self.state.line_join = join;
     }
 
     fn clear(&mut self, color: &str) {
@@ -405,6 +550,89 @@ impl Canvas2D for RasterCanvas {
     fn restore(&mut self) {
         if let Some(s) = self.stack.pop() {
             self.state = s;
+        }
+    }
+
+    fn draw_image(&mut self, src: &CanvasImageSource<'_>, dx: f32, dy: f32, dw: f32, dh: f32) {
+        let CanvasImageSource::Rgba { width, height, rgba } = src else {
+            return;
+        };
+        if *width == 0 || *height == 0 || dw <= 0.0 || dh <= 0.0 {
+            return;
+        }
+        let x0 = dx.floor().max(0.0) as i32;
+        let y0 = dy.floor().max(0.0) as i32;
+        let x1 = (dx + dw).ceil().min(self.width as f32) as i32;
+        let y1 = (dy + dh).ceil().min(self.height as f32) as i32;
+        for py in y0.max(0)..y1.max(0) {
+            for px in x0.max(0)..x1.max(0) {
+                let u = (((px as f32 + 0.5) - dx) / dw).clamp(0.0, 0.999_999);
+                let v = (((py as f32 + 0.5) - dy) / dh).clamp(0.0, 0.999_999);
+                let sx = (u * *width as f32) as usize;
+                let sy = (v * *height as f32) as usize;
+                let si = (sy * *width as usize + sx) * 4;
+                if si + 3 >= rgba.len() {
+                    continue;
+                }
+                let a = rgba[si + 3] as f32 / 255.0;
+                let i = (py as usize * self.width as usize + px as usize) * 4;
+                src_over_premul(
+                    &mut self.buf,
+                    i,
+                    rgba[si] as f32 / 255.0,
+                    rgba[si + 1] as f32 / 255.0,
+                    rgba[si + 2] as f32 / 255.0,
+                    a,
+                );
+            }
+        }
+    }
+
+    fn get_image_data(&self, x: u32, y: u32, w: u32, h: u32) -> Option<Vec<u8>> {
+        if w == 0 || h == 0 || x >= self.width || y >= self.height {
+            return None;
+        }
+        let rw = w.min(self.width - x);
+        let rh = h.min(self.height - y);
+        let mut out = vec![0u8; rw as usize * rh as usize * 4];
+        for row in 0..rh as usize {
+            for col in 0..rw as usize {
+                let si = (((y as usize + row) * self.width as usize) + (x as usize + col)) * 4;
+                let di = (row * rw as usize + col) * 4;
+                let a = self.buf[si + 3].clamp(0.0, 1.0);
+                out[di + 3] = (a * 255.0).round() as u8;
+                if a > 1e-6 {
+                    let inv = 1.0 / a;
+                    out[di] = (self.buf[si] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out[di + 1] =
+                        (self.buf[si + 1] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out[di + 2] =
+                        (self.buf[si + 2] * inv * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        Some(out)
+    }
+
+    fn put_image_data(&mut self, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+        if rgba.len() < w as usize * h as usize * 4 {
+            return;
+        }
+        for row in 0..h as usize {
+            for col in 0..w as usize {
+                let dx = x as usize + col;
+                let dy = y as usize + row;
+                if dx >= self.width as usize || dy >= self.height as usize {
+                    continue;
+                }
+                let si = (row * w as usize + col) * 4;
+                let di = (dy * self.width as usize + dx) * 4;
+                let a = rgba[si + 3] as f32 / 255.0;
+                self.buf[di] = rgba[si] as f32 / 255.0 * a;
+                self.buf[di + 1] = rgba[si + 1] as f32 / 255.0 * a;
+                self.buf[di + 2] = rgba[si + 2] as f32 / 255.0 * a;
+                self.buf[di + 3] = a;
+            }
         }
     }
 

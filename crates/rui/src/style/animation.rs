@@ -326,8 +326,10 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
         let _ = sig.try_set(val);
     }
 
+    let timeline_any = super::timeline::tick_timelines(dt);
+
     AnimationTick {
-        any: spring_any_running || cubic_running,
+        any: spring_any_running || cubic_running || timeline_any,
         scrollbar_overlay,
     }
 }
@@ -354,7 +356,7 @@ pub fn any_ui_animation_active() -> bool {
         anim.borrow()
             .iter()
             .any(|w| w.upgrade().is_some_and(|s| s.borrow().active))
-    })
+    }) || super::timeline::any_timeline_playing()
 }
 
 #[cfg(test)]

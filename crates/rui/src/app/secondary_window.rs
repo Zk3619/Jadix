@@ -54,9 +54,11 @@ pub(super) struct SecondaryWindowState {
     pub(super) layout_status: LayoutStatus,
     pub(super) template_paths: HashMap<String, Vec<usize>>,
     pub(super) pending_layout_dirty: Vec<taffy::prelude::NodeId>,
+    #[allow(dead_code)]
     pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
     pub(super) scroll_metrics_cache: HashMap<String, ([f32; 4], [f32; 2], [f32; 2])>,
+    #[allow(dead_code)]
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) ime_allowed_latched: bool,
     /// Latest `WindowEvent::Focused` for this secondary (IME HWND drive / soft-blur).

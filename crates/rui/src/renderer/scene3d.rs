@@ -231,12 +231,13 @@ impl Scene3dGpu {
 
         let aspect = w as f32 / h as f32;
         let mvp = mul4(
-            perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 20.0),
+            perspective(job.fov_deg.to_radians(), aspect, 0.1, 20.0),
             mul4(
-                translation(0.0, 0.0, -2.35),
+                translation(0.0, 0.0, -job.camera_z),
                 mul4(rotate_y(job.yaw), rotate_x(job.pitch)),
             ),
         );
+        let _ = (job.light, job.material);
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&mvp));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -250,10 +251,10 @@ impl Scene3dGpu {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.12,
-                            g: 0.13,
-                            b: 0.16,
-                            a: 1.0,
+                            r: job.bg[0] as f64,
+                            g: job.bg[1] as f64,
+                            b: job.bg[2] as f64,
+                            a: job.bg[3] as f64,
                         }),
                         store: wgpu::StoreOp::Store,
                     },

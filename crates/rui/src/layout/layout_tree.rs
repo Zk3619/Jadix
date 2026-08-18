@@ -955,6 +955,32 @@ impl PaintRecorder {
         self.push_rects(i0, i1.saturating_sub(i0));
         self.push_textured(t0, t1.saturating_sub(t0));
     }
+
+    /// Drop draw ops appended after subtree-capture slice points.
+    fn truncate_from(&mut self, inst_len: usize, tex_len: usize) {
+        self.ops.retain_mut(|op| match op {
+            PaintOp::Rects { start, count } => {
+                if *start >= inst_len as u32 {
+                    return false;
+                }
+                let end = *start + *count;
+                if end > inst_len as u32 {
+                    *count = inst_len as u32 - *start;
+                }
+                *count > 0
+            }
+            PaintOp::Textured { start, count } => {
+                if *start >= tex_len as u32 {
+                    return false;
+                }
+                let end = *start + *count;
+                if end > tex_len as u32 {
+                    *count = tex_len as u32 - *start;
+                }
+                *count > 0
+            }
+        });
+    }
 }
 
 /// 一次布局+收集的产出.
@@ -963,6 +989,7 @@ pub struct RenderResult {
     pub textured_draws: Vec<TexturedDraw>,
     /// Document-order rect/texture runs (see [`PaintOp`]).
     pub paint_ops: Vec<PaintOp>,
+    pub render_graph: crate::renderer::RenderGraph,
     pub text_nodes: Vec<TextLayoutInfo>,
     /// Input/Label caret + selection chrome in logical px (drawn after glyphon text).
     pub input_chrome_instances: Vec<InstanceInput>,
@@ -992,6 +1019,8 @@ pub struct TextLayoutInfo {
     /// Layout-time [`crate::text::PreparedText`] when the leaf was measured via `prepare`.
     /// Render may use it for wrap hints; measure + primary/secondary shaping share one FontSystem.
     pub prepared: Option<crate::text::PreparedText>,
+    /// B17 glyph/cluster motion (`rui_glyph_fx` attr).
+    pub glyph_fx: Option<String>,
 }
 
 /// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集.
@@ -1613,10 +1642,14 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
+        let tex_keys: Vec<String> = textured_draws.iter().map(|d| d.texture_key.clone()).collect();
+        let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
+        crate::renderer::enrich_render_graph(&mut render_graph);
         RenderResult {
             instances,
             textured_draws,
             paint_ops: paint_rec.ops,
+            render_graph,
             text_nodes,
             input_chrome_instances,
             overlay_split,
@@ -1800,10 +1833,14 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
+        let tex_keys: Vec<String> = textured_draws.iter().map(|d| d.texture_key.clone()).collect();
+        let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
+        crate::renderer::enrich_render_graph(&mut render_graph);
         RenderResult {
             instances,
             textured_draws,
             paint_ops: paint_rec.ops,
+            render_graph,
             text_nodes,
             input_chrome_instances,
             overlay_split,
@@ -2301,6 +2338,52 @@ impl LayoutTree {
                     textured_draws.push(draw);
                     path_tex_drawn = true;
                 }
+            } else if crate::renderer::gpu2d_enabled() {
+                if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
+                    &element.attrs,
+                    [vis_x, vis_y],
+                    [vis_w, vis_h],
+                ) {
+                    for q in quads {
+                        if q.color[3] <= 0.0 || q.size.0 <= 0.0 || q.size.1 <= 0.0 {
+                            continue;
+                        }
+                        instances.push(
+                            InstanceInput {
+                                rect_pos: [q.pos.0, q.pos.1],
+                                rect_size: [q.size.0, q.size.1],
+                                color: mul_color_alpha(q.color, opacity),
+                                border_color: [0.0, 0.0, 0.0, 0.0],
+                                radii: q.radii,
+                                border_width: 0.0,
+                                shadow_color: [0.0, 0.0, 0.0, 0.0],
+                                shadow_offset: [0.0, 0.0],
+                                shadow_blur: 0.0,
+                                shadow_spread: 0.0,
+                                shadow_inset: 0.0,
+                                rotate_deg: q.rotate_deg,
+                                clip_pos: [0.0, 0.0],
+                                clip_size: InstanceInput::NO_CLIP_SIZE,
+                                _pad: 0.0,
+                            }
+                            .with_clip(clip),
+                        );
+                    }
+                    path_tex_drawn = true;
+                } else if let Some((tex_key, dw, dh)) =
+                    crate::primitives::path::path_raster_from_element_attrs(
+                        &element.attrs,
+                        vis_w,
+                        vis_h,
+                    )
+                {
+                    if let Some(draw) =
+                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    {
+                        textured_draws.push(draw);
+                        path_tex_drawn = true;
+                    }
+                }
             } else if let Some((tex_key, dw, dh)) =
                 crate::primitives::path::path_raster_from_element_attrs(
                     &element.attrs,
@@ -2343,6 +2426,17 @@ impl LayoutTree {
                         }
                         .with_clip(parent_clip),
                     );
+                }
+            }
+        }
+        if path_tex_drawn {
+            if let Some(last) = textured_draws.last_mut() {
+                if let Some(out_key) = crate::renderer::queue_effect_from_attrs(
+                    &element.attrs,
+                    [last.rect[0], last.rect[1], last.rect[2], last.rect[3]],
+                    Some(last.texture_key.as_str()),
+                ) {
+                    last.texture_key = out_key;
                 }
             }
         }
@@ -2519,6 +2613,10 @@ impl LayoutTree {
                 },
                 style: text_style.clone(),
                 prepared,
+                glyph_fx: element
+                    .attrs
+                    .get(crate::renderer::ATTR_GLYPH_FX)
+                    .cloned(),
             });
             let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                 hidden_input_text_clip(parent_clip, render_rect)
@@ -2573,6 +2671,22 @@ impl LayoutTree {
         let any_z = element.children.iter().any(|c| c.style.z_index != 0);
         let mut max_right = abs_x + lay_w;
         let mut max_bottom = abs_y + lay_h;
+
+        let fx_capture_children = element
+            .attrs
+            .get(crate::renderer::ATTR_EFFECT_CAPTURE_CHILDREN)
+            .map(|s| s.as_str())
+            == Some("1");
+        let cap_inst0 = if fx_capture_children {
+            instances.len()
+        } else {
+            0
+        };
+        let cap_tex0 = if fx_capture_children {
+            textured_draws.len()
+        } else {
+            0
+        };
 
         let push_portal_band = |overlay_split: &mut OverlayPaintSplit,
                                 instances: &Vec<InstanceInput>,
@@ -2724,6 +2838,33 @@ impl LayoutTree {
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
+            }
+        }
+
+        if fx_capture_children
+            && visible_rect[2] > 0.0
+            && visible_rect[3] > 0.0
+            && (instances.len() > cap_inst0 || textured_draws.len() > cap_tex0)
+        {
+            let child_insts = instances[cap_inst0..].to_vec();
+            let child_tex = textured_draws[cap_tex0..].to_vec();
+            instances.truncate(cap_inst0);
+            textured_draws.truncate(cap_tex0);
+            paint_rec.truncate_from(cap_inst0, cap_tex0);
+            if let Some(out_key) = crate::renderer::queue_subtree_wrap(
+                &element.attrs,
+                visible_rect,
+                child_insts,
+                child_tex,
+            ) {
+                if let Some(draw) = TexturedDraw::clipped(
+                    visible_rect,
+                    clip,
+                    out_key,
+                    opacity,
+                ) {
+                    textured_draws.push(draw);
+                }
             }
         }
 
@@ -3280,6 +3421,7 @@ mod prepared_text_attach_tests {
             clip_bounds: None,
             style: TextStyle::default(),
             prepared: Some(prepared.clone()),
+            glyph_fx: None,
         };
         let attached = info.prepared.as_ref().expect("prepared attached");
         assert_eq!(attached.segment_count(), prepared.segment_count());

@@ -990,6 +990,10 @@ fn paint_layer_premul(
         let sw = style.stroke_width.max(0.5);
         let hw = sw * 0.5;
         if stroke[3] > 0.0 {
+            // Coverage buffer: accumulate max coverage per pixel across all segments
+            // of a subpath, then blend once. Prevents alpha double-blending at joints
+            // that caused visible darkening / jitter on fast mouse strokes.
+            let mut cov_buf = vec![0.0f32; w * h];
             for (pts, closed) in &paths {
                 if pts.len() < 2 {
                     continue;
@@ -997,9 +1001,30 @@ fn paint_layer_premul(
                 if style.fill.is_some() && has_open && *closed {
                     continue;
                 }
-                // Per-segment capsule: O(Σ bbox) instead of O(polyline AABB × points).
-                // Long canvas scribbles / Chart lines were interactive-unusable on the old scan.
                 let pad = hw + 1.5;
+
+                // Compute subpath AABB for the coverage region to clear.
+                let mut sp_min_x = f32::MAX;
+                let mut sp_min_y = f32::MAX;
+                let mut sp_max_x = f32::MIN;
+                let mut sp_max_y = f32::MIN;
+                for &(px, py) in pts.iter() {
+                    sp_min_x = sp_min_x.min(px);
+                    sp_min_y = sp_min_y.min(py);
+                    sp_max_x = sp_max_x.max(px);
+                    sp_max_y = sp_max_y.max(py);
+                }
+                let sp_x0 = (sp_min_x - pad).floor().max(0.0) as usize;
+                let sp_y0 = (sp_min_y - pad).floor().max(0.0) as usize;
+                let sp_x1 = ((sp_max_x + pad).ceil() as usize + 1).min(w);
+                let sp_y1 = ((sp_max_y + pad).ceil() as usize + 1).min(h);
+
+                for y in sp_y0..sp_y1 {
+                    for x in sp_x0..sp_x1 {
+                        cov_buf[y * w + x] = 0.0;
+                    }
+                }
+
                 for seg in pts.windows(2) {
                     let a = seg[0];
                     let b = seg[1];
@@ -1013,23 +1038,57 @@ fn paint_layer_premul(
                     let y1 = ((max_y + pad).ceil() as usize + 1).min(h);
                     for y in y0..y1 {
                         for x in x0..x1 {
-                            if !pixel_in_clip(x, y, clip) {
-                                continue;
-                            }
                             let p = (x as f32 + 0.5, y as f32 + 0.5);
                             let d = dist_to_segment(p, a, b);
                             let cover = (hw + 0.5 - d).clamp(0.0, 1.0);
                             if cover > 0.0 {
-                                let i = (y * w + x) * 4;
-                                src_over_premul(
-                                    buf,
-                                    i,
-                                    stroke[0],
-                                    stroke[1],
-                                    stroke[2],
-                                    stroke[3] * cover,
-                                );
+                                let ci = y * w + x;
+                                if cover > cov_buf[ci] {
+                                    cov_buf[ci] = cover;
+                                }
                             }
+                        }
+                    }
+                }
+
+                // Stamp round joins / caps at every vertex. Segment capsules are usually
+                // enough, but sharp turns plus subpixel sampling can still leave a tiny
+                // seam where adjacent segments meet. Taking the max with a vertex disk
+                // preserves the non-darkening behavior while guaranteeing continuity.
+                for &vtx in pts.iter() {
+                    let x0 = (vtx.0 - pad).floor().max(0.0) as usize;
+                    let y0 = (vtx.1 - pad).floor().max(0.0) as usize;
+                    let x1 = ((vtx.0 + pad).ceil() as usize + 1).min(w);
+                    let y1 = ((vtx.1 + pad).ceil() as usize + 1).min(h);
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let p = (x as f32 + 0.5, y as f32 + 0.5);
+                            let d = (p.0 - vtx.0).hypot(p.1 - vtx.1);
+                            let cover = (hw + 0.5 - d).clamp(0.0, 1.0);
+                            if cover > 0.0 {
+                                let ci = y * w + x;
+                                if cover > cov_buf[ci] {
+                                    cov_buf[ci] = cover;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for y in sp_y0..sp_y1 {
+                    for x in sp_x0..sp_x1 {
+                        let ci = y * w + x;
+                        let cover = cov_buf[ci];
+                        if cover > 0.0 && pixel_in_clip(x, y, clip) {
+                            let i = (y * w + x) * 4;
+                            src_over_premul(
+                                buf,
+                                i,
+                                stroke[0],
+                                stroke[1],
+                                stroke[2],
+                                stroke[3] * cover,
+                            );
                         }
                     }
                 }

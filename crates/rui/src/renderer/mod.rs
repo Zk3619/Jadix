@@ -5,15 +5,21 @@ pub mod cpu_text;
 pub mod emoji_detect;
 pub mod emoji_layout;
 pub mod emoji_matrix;
+pub mod effect;
+pub mod effect_pass;
 #[cfg(test)]
 mod emoji_shape_diag;
 pub mod emoji_svg;
 mod extended_pictographic;
 pub mod font_loader;
+pub mod geometry2d;
+pub mod glyph_fx;
+pub mod graph;
 pub mod offscreen;
 pub mod pipeline;
 pub mod prepare_text;
 pub mod present_retain;
+pub mod resources;
 pub mod text;
 pub mod text_hit;
 pub(crate) mod text_prepare_debug;
@@ -24,10 +30,23 @@ pub mod twemoji_name;
 pub mod scene3d;
 
 pub use backdrop_blur::BackdropBlurPipeline;
+pub use effect::{
+    enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
+    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob, EffectJob, EffectKind,
+    EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN, ATTR_EFFECT_STRENGTH,
+};
+pub use effect_pass::EffectPassGpu;
+pub use geometry2d::{gpu2d_enabled, path_to_instances, quads_to_instances};
+pub use glyph_fx::{GlyphFx, GlyphFxKind, ATTR_GLYPH_FX};
+pub use graph::{
+    env_dump_enabled as render_graph_dump_enabled, store_last_dump as store_render_graph_dump,
+    PassKind, RenderGraph, RenderPassNode,
+};
 pub use pipeline::{Globals, InstanceInput, RuiPipeline, VertexInput};
 pub use prepare_text::prepare_text_frame;
 pub(crate) use prepare_text::{caret_blink_next_toggle_at, caret_blink_phase, caret_blink_visible};
 pub use present_retain::PresentRetainPipeline;
+pub use resources::{ResourceKind, TextureMeta, TexturePool};
 pub use text::RuiTextRenderer;
 pub use text_hit::{
     best_font_family, hit_test_input_text_index, is_single_line_text_box, measure_prefix_width,

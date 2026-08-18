@@ -76,9 +76,10 @@ pub(super) struct AppState {
     #[cfg(feature = "scene3d")]
     scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
     backdrop_blur: BackdropBlurPipeline,
+    effect_pass: crate::renderer::EffectPassGpu,
     /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
     present_retain: PresentRetainPipeline,
-    image_textures: std::collections::HashMap<String, super::image_registry::GpuImageTexture>,
+    image_textures: crate::renderer::TexturePool,
     textured_instance_buffer: wgpu::Buffer,
     textured_instance_capacity: usize,
     pub(super) instance_buffer: wgpu::Buffer,
@@ -592,6 +593,7 @@ impl AppState {
         let pipeline = RuiPipeline::new(&device, &config);
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
+        let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
@@ -641,8 +643,9 @@ impl AppState {
             #[cfg(feature = "scene3d")]
             scene3d: None,
             backdrop_blur,
+            effect_pass,
             present_retain,
-            image_textures: std::collections::HashMap::new(),
+            image_textures: crate::renderer::TexturePool::new(),
             textured_instance_buffer,
             textured_instance_capacity: 256,
             instance_buffer,
@@ -1556,6 +1559,13 @@ impl AppState {
             scale_instances(&render_result.input_chrome_instances, self.ui_scale());
         self.num_instances = render_result.instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
+        if self
+            .text_nodes
+            .iter()
+            .any(|n| n.glyph_fx.as_deref().is_some_and(|s| !s.is_empty()))
+        {
+            self.window.request_redraw();
+        }
         let overlay_inst_start = overlay_split.instance_start.min(scaled_instances.len());
         let overlay_text_start = overlay_split.text_start.min(self.text_nodes.len());
         let overlay_tex_start = overlay_split
@@ -1622,6 +1632,7 @@ impl AppState {
         let upload_done = Instant::now();
 
         let ui_scale = self.ui_scale();
+        self.image_textures.begin_frame();
 
         for (id, rgba, w, h) in super::pending_images::take_pending() {
             let gpu = super::image_registry::upload_rgba8(
@@ -1632,7 +1643,7 @@ impl AppState {
                 w,
                 h,
             );
-            self.image_textures.insert(id, gpu);
+            self.image_textures.insert_with_size(id, gpu, w, h);
         }
         #[cfg(feature = "scene3d")]
         {
@@ -1648,6 +1659,41 @@ impl AppState {
                 // Collect already ran under `&mut self`; do not go through `runtime::request_redraw`.
                 self.window.request_redraw();
             }
+        }
+        let captures = crate::renderer::take_capture_jobs();
+        let effects = crate::renderer::take_effect_jobs();
+        if self.effect_pass.flush(
+            &self.device,
+            &self.queue,
+            &self.textured_pipeline,
+            &mut self.image_textures,
+            &captures,
+            &effects,
+            crate::style::global_time_s(),
+            mouse_pos,
+            ui_scale,
+            &self.pipeline,
+        ) {
+            self.window.request_redraw();
+        }
+        // Capture/effect passes rewrite pipeline globals.resolution to RT size.
+        self.pipeline
+            .update_resolution(&self.queue, self.config.width, self.config.height);
+        self.textured_pipeline.update_resolution(
+            &self.queue,
+            self.config.width,
+            self.config.height,
+        );
+        for draw in &render_result.textured_draws {
+            self.image_textures.touch(&draw.texture_key);
+        }
+        if crate::renderer::render_graph_dump_enabled() {
+            let dump = format!(
+                "{}{}",
+                render_result.render_graph.dump(),
+                self.image_textures.dump()
+            );
+            crate::renderer::store_render_graph_dump(dump);
         }
         let scaled_tex = scale_textured_draws(&render_result.textured_draws, ui_scale);
         let tex_insts: Vec<TexturedInstanceInput> =

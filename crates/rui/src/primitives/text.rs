@@ -51,6 +51,13 @@ impl TextBuilder {
         self
     }
 
+    /// B17 glyph/cluster motion (`blur` / `split` / `scramble` / `countup` / `dissolve`).
+    pub fn glyph_fx(mut self, kind: impl Into<String>) -> Self {
+        self.el
+            .set_attr(crate::renderer::ATTR_GLYPH_FX, kind.into());
+        self
+    }
+
     pub fn text(mut self, text: impl crate::core::tree::IntoNodeText) -> Self {
         self.el = text.apply_node_text(self.el);
         self
@@ -109,4 +116,20 @@ pub fn text(content: impl Into<String>) -> TextBuilder {
 
 pub fn icon(glyph: impl Into<String>) -> TextBuilder {
     TextBuilder::new(glyph).family("lucide")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::{GlyphFxKind, ATTR_GLYPH_FX};
+
+    #[test]
+    fn glyph_fx_attr_roundtrip() {
+        let el: crate::core::tree::Element = text("BlurText").glyph_fx("split").into();
+        assert_eq!(
+            el.get_attr(ATTR_GLYPH_FX).map(String::as_str),
+            Some("split")
+        );
+        assert_eq!(GlyphFxKind::parse("split"), GlyphFxKind::Split);
+    }
 }

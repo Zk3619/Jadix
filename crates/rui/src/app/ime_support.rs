@@ -1135,6 +1135,7 @@ mod tests {
                 clip_bounds: None,
                 style: TextStyle::default(),
                 prepared: None,
+                glyph_fx: None,
             },
             TextLayoutInfo {
                 text: "啊a".into(),
@@ -1148,6 +1149,7 @@ mod tests {
                 clip_bounds: None,
                 style,
                 prepared: None,
+                glyph_fx: None,
             },
         ];
         let b = painted_text_edit_visual_bounds(&nodes, "input:gal").expect("bounds");

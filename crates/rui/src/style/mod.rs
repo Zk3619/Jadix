@@ -15,12 +15,17 @@ mod focus_ring;
 mod tailwind_leading;
 mod text_style;
 mod theme;
+pub mod timeline;
 mod utility;
 
 pub use animation::{
     any_ui_animation_active, cubic_bezier_y_at_x, tick_animations, use_scrollbar_visibility_spring,
     use_spring, use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween,
     CubicTweenState, Spring, SpringState,
+};
+pub use timeline::{
+    any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,
+    Timeline, TimelineInner,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{

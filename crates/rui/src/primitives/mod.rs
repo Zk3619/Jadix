@@ -7,7 +7,8 @@
 //! - **[`path`]**：折线/多边形/扇区（WP-3.2 / 3.11 共用核；CPU 覆盖率光栅贴图，tessellate 回退）。
 //! - **[`svg`]**：公开 `<svg>` 叶（场景图；描边/填充；子形状不占 taffy）。
 //! - **[`canvas`]**：公开 `<canvas>` 叶（paint / 2D context MVP；同一 path 核）。
-//! - **[`scene3d`]**：公开 `<scene3d>` 叶（WP-3.13 实验 feature；默认关）。
+//! - **[`scene3d`]**：公开 `<scene3d>` 叶（WP-3.13 实验 feature；camera/light/material）。
+//! - **[`effect_wrap`]**：B16 子树特效 wrap（离屏捕获 + shader pass）。
 //! - **[`Portal`]**：树外挂载（Solid `<Portal>`）；定位 / Esc 栈仍在 [`crate::utils::popup`] /
 //!   [`crate::app::portal_overlay`]。
 //!
@@ -16,6 +17,7 @@
 
 pub mod r#box;
 pub mod canvas;
+pub mod effect_wrap;
 pub mod interactive;
 pub mod overlay;
 pub mod path;
@@ -25,6 +27,7 @@ pub mod svg;
 pub mod text;
 
 pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
+pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
 pub use interactive::{interactive, InteractiveBuilder};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
@@ -38,7 +41,9 @@ pub use path::{
 };
 pub use portal::{Portal, PortalProps};
 pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
-pub use scene3d::{scene3d, Scene3dBuilder, ATTR_SCENE3D};
+pub use scene3d::{
+    scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
+};
 pub use svg::{
     circle, g, line, path as svg_path, polyline as svg_polyline, rect as svg_rect, svg,
     CircleBuilder, GroupBuilder, LineBuilder, PathBuilder, PolylineBuilder, RectBuilder,
