@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use accesskit::{Node, NodeId, Role, Tree, TreeUpdate};
+use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use accesskit_winit::Adapter;
 use winit::{
     application::ApplicationHandler,
@@ -180,6 +180,7 @@ impl accesskit::ActivationHandler for AccessKitBootstrap {
         Some(TreeUpdate {
             nodes: vec![(RID, Node::new(Role::Window))],
             tree: Some(Tree::new(RID)),
+            tree_id: TreeId::ROOT,
             focus: RID,
         })
     }

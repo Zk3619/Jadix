@@ -2,7 +2,7 @@
 //!
 //! Part of [`crate::a11y`]; Adapter lifecycle remains in `app`.
 
-use accesskit::{Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeUpdate};
+use accesskit::{Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
 use std::hash::{Hash, Hasher};
 
 use crate::components::label::ATTR_LABEL_FOR;
@@ -666,6 +666,7 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     TreeUpdate {
         nodes,
         tree: Some(Tree::new(ROOT_ID)),
+        tree_id: TreeId::ROOT,
         focus,
     }
 }
@@ -743,7 +744,7 @@ fn apply_accesskit_action(el: &Element, request: &ActionRequest) -> bool {
 
 /// Handle an AccessKit action request against the current element tree.
 pub fn dispatch_accesskit_action(root: &Element, request: &ActionRequest) -> bool {
-    if request.target == document_node_id() && matches!(request.action, Action::Focus) {
+    if request.target_node == document_node_id() && matches!(request.action, Action::Focus) {
         use_signal("__rui_button_focus_id", String::new).set(DOCUMENT_FOCUS_ID.to_string());
         return true;
     }
@@ -754,7 +755,7 @@ pub fn dispatch_accesskit_action(root: &Element, request: &ActionRequest) -> boo
     // Same path scheme as [`tree_update_from_elements`].
     for (i, child) in root.children.iter().enumerate() {
         if let Some(el) =
-            find_element_by_node_id(child, request.target, &i.to_string(), &mut used, false)
+            find_element_by_node_id(child, request.target_node, &i.to_string(), &mut used, false)
         {
             return apply_accesskit_action(el, request);
         }
@@ -762,7 +763,7 @@ pub fn dispatch_accesskit_action(root: &Element, request: &ActionRequest) -> boo
     if should_be_accesskit_node(root) {
         let preferred = stable_node_key(root, "root");
         let (_key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
-        if id == request.target {
+        if id == request.target_node {
             return apply_accesskit_action(root, request);
         }
     }
@@ -929,7 +930,8 @@ mod tests {
             &root,
             &ActionRequest {
                 action: Action::Click,
-                target,
+                target_tree: TreeId::ROOT,
+                target_node: target,
                 data: None,
             },
         );

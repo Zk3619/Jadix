@@ -4,8 +4,8 @@ resolver = "2"
 
 [workspace.dependencies]
 winit = "0.30"
-accesskit = "0.22"
-accesskit_winit = { version = "0.30", default-features = false, features = [
+accesskit = "0.24.1"
+accesskit_winit = { version = "0.33.2", default-features = false, features = [
     "rwh_06",
 ] }
 taffy = "0.6"

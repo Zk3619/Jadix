@@ -258,9 +258,9 @@ mod tests {
         let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
         let slot_end = slot_start + EMOJI_LAYOUT_SLOT.len_utf8();
         let owned = [
-            (layout[..slot_start].to_string(), visible),
+            (layout[..slot_start].to_string(), visible.clone()),
             (layout[slot_start..slot_end].to_string(), invisible),
-            (layout[slot_end..].to_string(), visible),
+            (layout[slot_end..].to_string(), visible.clone()),
         ];
         let rich: Vec<(&str, glyphon::Attrs)> =
             owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
