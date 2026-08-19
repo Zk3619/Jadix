@@ -1,3 +1,15 @@
+# Temporary and generated files
+tmp_*
+tmp_*/
+tmp_svgs/
+crates/rui/tmp_stack_crumb.txt
+*.tmp
+*.cache
+*.log
+
+# Editors
+*.swp
+*.swo
 # Ignore everything by default
 *
 
