@@ -12,6 +12,17 @@ use winit::{
 
 use crate::core::tree::Element;
 
+fn collect_scroll_rests(el: &crate::core::tree::Element, out: &mut std::collections::HashSet<String>) {
+    if let Some(fid) = el.focus_id.as_deref() {
+        if let Some(rest) = crate::core::scroll_viewport::strip_scroll_viewport_focus_id(fid) {
+            out.insert(rest.to_string());
+        }
+    }
+    for child in &el.children {
+        collect_scroll_rests(child, out);
+    }
+}
+
 impl super::App {
     /// Drop GPU resources while the window / event loop are still valid.
     ///
@@ -35,6 +46,7 @@ impl super::App {
                 );
             }
             sec.hide_window();
+            sec.trim_before_drop();
             drop(sec.take_owner());
             drop(sec);
         }
@@ -66,7 +78,18 @@ impl super::App {
                 token,
             ));
         }
-        self.secondaries.borrow_mut().remove(&id);
+        if let Some(mut sec) = self.secondaries.borrow_mut().remove(&id) {
+            let mut scroll_rests = std::collections::HashSet::new();
+            collect_scroll_rests(&sec.root_element, &mut scroll_rests);
+            for rest in &scroll_rests {
+                crate::core::scroll_viewport::remove_scroll_viewport_signals(rest);
+                super::scroll_support::cancel_scroll_item_into_view(rest);
+            }
+            sec.hide_window();
+            sec.trim_before_drop();
+            drop(sec.take_owner());
+            drop(sec);
+        }
         self.secondary_accesskit.remove(&id);
         if self.ime_owner_window == Some(id) {
             self.ime_owner_window = None;
@@ -410,20 +433,16 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
 
-        // Scrollbar auto-hide timer: wake once when `visible_until` expires so fade-out can start,
-        // instead of continuous request_redraw for the whole 1.5s hold.
-        let mut visibility_expired = false;
-        for &until in self.scrollbar_visible_until.values() {
-            if until <= now {
-                visibility_expired = true;
-            } else {
-                next_wake = Some(next_wake.map_or(until, |t| t.min(until)));
-            }
-        }
-        if visibility_expired {
+        // Scrollbar auto-hide: `WaitUntil` the hold deadline, then one redraw starts fade-out.
+        // Expired keys MUST be removed — leaving them makes every later `about_to_wait`
+        // see `until <= now` and `request_redraw()` forever (~vsync idle CPU).
+        if self.prune_expired_scrollbar_visibility(now) {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
+        }
+        for &until in self.scrollbar_visible_until.values() {
+            next_wake = Some(next_wake.map_or(until, |t| t.min(until)));
         }
 
         if let Some(wake) = self.caret_wake_at {

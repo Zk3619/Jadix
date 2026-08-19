@@ -36,6 +36,8 @@ pub struct ClassSet {
     pub variants: Vec<(Vec<VariantSelector>, String)>,
     pub base_style: Option<Style>,
     pub base_text_style: Option<TextStyle>,
+    /// Last resolved interaction fingerprint; skip `Style` clone when unchanged.
+    last_ctx_fp: Option<u64>,
 }
 
 /// Interaction / theme context used to resolve variant utilities each frame.
@@ -154,6 +156,7 @@ fn apply_parsed_class_list(
         variants: parsed.variants,
         base_style: Some(el.style.clone()),
         base_text_style: Some(el.text_style.clone()),
+        last_ctx_fp: None,
     };
     el.class_set = Some(class_set);
     el.attrs
@@ -193,6 +196,61 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     impact
 }
 
+fn mix_fp(h: &mut u64, x: u64) {
+    *h ^= x;
+    *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+}
+
+fn str_fp(s: &str) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for b in s.as_bytes() {
+        mix_fp(&mut h, *b as u64);
+    }
+    h
+}
+
+fn variant_ctx_fingerprint(
+    hovered: bool,
+    focused: bool,
+    disabled: bool,
+    dark: bool,
+    viewport_w: f32,
+    group_hovered: &[Option<&str>],
+    peer_hovered: &[Option<&str>],
+    attrs: &std::collections::HashMap<String, String>,
+) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    mix_fp(&mut h, hovered as u64);
+    mix_fp(&mut h, focused as u64 + 2);
+    mix_fp(&mut h, disabled as u64 + 4);
+    mix_fp(&mut h, dark as u64 + 8);
+    mix_fp(&mut h, viewport_w.to_bits() as u64);
+    for g in group_hovered {
+        mix_fp(&mut h, 0x11);
+        if let Some(s) = g {
+            mix_fp(&mut h, str_fp(s));
+        }
+    }
+    for p in peer_hovered {
+        mix_fp(&mut h, 0x22);
+        if let Some(s) = p {
+            mix_fp(&mut h, str_fp(s));
+        }
+    }
+    let mut attrs_h = 0u64;
+    for (k, v) in attrs {
+        if k.starts_with("data-") || k == "disabled" || k == "aria-disabled" {
+            attrs_h ^= str_fp(k).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ str_fp(v);
+        }
+    }
+    mix_fp(&mut h, attrs_h);
+    if h == 0 {
+        1
+    } else {
+        h
+    }
+}
+
 /// Walk the tree and resolve class variants (chrome sync).
 pub fn sync_class_variants_subtree(
     el: &mut Element,
@@ -200,6 +258,7 @@ pub fn sync_class_variants_subtree(
     focused_id: &str,
     dark: bool,
     viewport_w: f32,
+    viewport_h: f32,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
@@ -209,6 +268,7 @@ pub fn sync_class_variants_subtree(
         focused_id,
         dark,
         viewport_w,
+        viewport_h,
         &[],
         &[],
         [0.0_f32, 0.0],
@@ -223,6 +283,7 @@ fn sync_class_variants_subtree_inner(
     focused_id: &str,
     dark: bool,
     viewport_w: f32,
+    viewport_h: f32,
     ancestor_group_hovered: &[Option<&str>],
     peer_hovered: &[Option<&str>],
     scroll_acc: [f32; 2],
@@ -231,14 +292,17 @@ fn sync_class_variants_subtree_inner(
 ) {
     // Reset accumulated scroll for fixed-position or portal-layer elements,
     // mirroring the behaviour in pick_hover_target / hit_path.
-    let scroll_acc = if el.style.position_fixed
-        || el.template_id.as_deref()
-            == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
-    {
+    let is_portal = el.template_id.as_deref()
+        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    let scroll_acc = if el.style.position_fixed || is_portal {
         [0.0_f32, 0.0]
     } else {
         scroll_acc
     };
+
+    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+        return;
+    }
 
     let b = el.layout_bounds;
     let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
@@ -248,82 +312,113 @@ fn sync_class_variants_subtree_inner(
         && mouse_pos[0] < vx + b[2]
         && mouse_pos[1] < vy + b[3];
 
-    let is_portal = el.template_id.as_deref()
-        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    let hovered = inside;
-    let focused = el
-        .focus_id
-        .as_deref()
-        .is_some_and(|id| !id.is_empty() && id == focused_id);
-    let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
-        || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
-    let attrs_snapshot = el.attrs.clone();
-    let ctx = VariantContext {
-        hovered,
-        focused,
-        disabled,
-        active: false,
-        dark,
-        viewport_w,
-        group_hovered: ancestor_group_hovered,
-        peer_hovered,
-        attrs: Some(&attrs_snapshot),
-    };
-    let before = el.style.clone();
-    let before_text = el.text_style.clone();
-    let local = resolve_class_variants(el, &ctx);
-    // MVP `animate-spin`: advance rotate each frame while the attr is set.
-    let spun = tick_animate_spin(el);
-    let sprung = tick_rui_transition_spring(el);
-    let css_trans = super::animation::tick_element_transitions(
-        &mut el.style,
-        &mut el.transition_snapshot,
-        frame_dt(),
-    );
-    if local != LayoutStatus::Clean
-        || spun
-        || sprung
-        || css_trans
-        || el.style != before
-        || el.text_style != before_text
-    {
-        *impact = impact.merge(if spun || sprung || css_trans {
-            local.merge(LayoutStatus::StyleChanged)
-        } else {
-            local
-        });
-        mark_hover_paint_dirty();
-        if el.layout_node.is_some() {
-            layout_tree.update_taffy_node_style(el);
-        }
-    }
-
-    // Child group context: push this node's group marker if hovered.
-    let mut owned_group_names: Vec<Option<String>> = ancestor_group_hovered
-        .iter()
-        .map(|n| n.map(|s| s.to_string()))
-        .collect();
-    if hovered {
-        if let Some(name) = attrs_snapshot.get("rui_group") {
-            if name == "1" {
-                owned_group_names.push(None);
-            } else if !name.is_empty() {
-                owned_group_names.push(Some(name.clone()));
+    let has_variants = el
+        .class_set
+        .as_ref()
+        .is_some_and(|cs| !cs.variants.is_empty());
+    let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
+    let has_rui_tr = el.attrs.contains_key("rui_transition");
+    let has_css_tr = !el.style.transition.is_empty() || el.transition_snapshot.has_tweens();
+    if has_variants || has_spin || has_rui_tr || has_css_tr {
+        let hovered = inside;
+        let focused = el
+            .focus_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && id == focused_id);
+        let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
+            || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
+        let ctx_fp = variant_ctx_fingerprint(
+            hovered,
+            focused,
+            disabled,
+            dark,
+            viewport_w,
+            ancestor_group_hovered,
+            peer_hovered,
+            &el.attrs,
+        );
+        let ctx_unchanged = el
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.last_ctx_fp)
+            .is_some_and(|fp| fp == ctx_fp);
+        if !ctx_unchanged || has_spin || has_rui_tr || has_css_tr {
+            let attrs_snapshot = el.attrs.clone();
+            let ctx = VariantContext {
+                hovered,
+                focused,
+                disabled,
+                active: false,
+                dark,
+                viewport_w,
+                group_hovered: ancestor_group_hovered,
+                peer_hovered,
+                attrs: Some(&attrs_snapshot),
+            };
+            let before = el.style.clone();
+            let before_text = el.text_style.clone();
+            let local = resolve_class_variants(el, &ctx);
+            let spun = tick_animate_spin(el);
+            let sprung = tick_rui_transition_spring(el);
+            let css_trans = super::animation::tick_element_transitions(
+                &mut el.style,
+                &mut el.transition_snapshot,
+                frame_dt(),
+            );
+            if let Some(cs) = el.class_set.as_mut() {
+                cs.last_ctx_fp = Some(ctx_fp);
+            }
+            if local != LayoutStatus::Clean
+                || spun
+                || sprung
+                || css_trans
+                || el.style != before
+                || el.text_style != before_text
+            {
+                *impact = impact.merge(if spun || sprung || css_trans {
+                    local.merge(LayoutStatus::StyleChanged)
+                } else {
+                    local
+                });
+                mark_hover_paint_dirty();
+                if el.layout_node.is_some() {
+                    layout_tree.update_taffy_node_style(el);
+                }
             }
         }
     }
-    let child_group_refs: Vec<Option<&str>> =
-        owned_group_names.iter().map(|n| n.as_deref()).collect();
 
-    // Accumulate scroll offset for children (same logic as pick_hover_target).
+    let mut pushed_group: Option<Option<String>> = None;
+    if inside {
+        if let Some(name) = el.attrs.get("rui_group") {
+            if name == "1" {
+                pushed_group = Some(None);
+            } else if !name.is_empty() {
+                pushed_group = Some(Some(name.clone()));
+            }
+        }
+    }
+    let owned_group_names: Vec<Option<String>> = if let Some(pushed) = pushed_group {
+        let mut names: Vec<Option<String>> = ancestor_group_hovered
+            .iter()
+            .map(|n| n.map(|s| s.to_string()))
+            .collect();
+        names.push(pushed);
+        names
+    } else {
+        Vec::new()
+    };
+    let child_group_refs_owned: Vec<Option<&str>> =
+        owned_group_names.iter().map(|n| n.as_deref()).collect();
+    let child_group_refs: &[Option<&str>] = if owned_group_names.is_empty() {
+        ancestor_group_hovered
+    } else {
+        &child_group_refs_owned
+    };
+
     let mut child_scroll_acc = scroll_acc;
     if !is_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            child_scroll_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            child_scroll_acc[1] += el.scroll_offset[1];
-        }
+        child_scroll_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
     }
 
     let mut prev_peer_owned: Vec<Option<String>> = Vec::new();
@@ -335,13 +430,13 @@ fn sync_class_variants_subtree_inner(
             focused_id,
             dark,
             viewport_w,
+            viewport_h,
             &child_group_refs,
             &peer_refs,
             child_scroll_acc,
             layout_tree,
             impact,
         );
-        // After visiting child, if it is a hovered peer marker, expose to following siblings.
         let cb = child.layout_bounds;
         let cvx = cb[0] - child_scroll_acc[0];
         let cvy = cb[1] - child_scroll_acc[1];

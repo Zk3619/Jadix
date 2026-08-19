@@ -83,6 +83,34 @@ pub(super) struct SecondaryWindowState {
 }
 
 impl SecondaryWindowState {
+    /// Best-effort memory trim before dropping the secondary window state.
+    ///
+    /// This helps RSS fall back faster after repeatedly opening/closing windows:
+    /// clear large CPU-side caches and vectors before GPU/owner teardown.
+    pub(super) fn trim_before_drop(&mut self) {
+        self.root_element.children.clear();
+        self.template_paths.clear();
+        self.pending_layout_dirty.clear();
+        self.last_render_scroll_metrics.clear();
+        self.scroll_metrics_cache.clear();
+        self.text_nodes.clear();
+
+        self.text_renderer.shaped_cache.clear();
+        self.text_renderer.emoji_cache = Default::default();
+        self.text_renderer.pending_warmup.clear();
+
+        self.overlay_text_renderer.shaped_cache.clear();
+        self.overlay_text_renderer.emoji_cache = Default::default();
+        self.overlay_text_renderer.pending_warmup.clear();
+
+        for r in &mut self.overlay_band_text_renderers {
+            r.shaped_cache.clear();
+            r.emoji_cache = Default::default();
+            r.pending_warmup.clear();
+        }
+        self.overlay_band_text_renderers.clear();
+    }
+
     pub(super) fn new(
         window: Arc<Window>,
         device: Arc<wgpu::Device>,
@@ -317,6 +345,9 @@ impl SecondaryWindowState {
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
+            logical_w,
+            logical_h,
+            [0.0, 0.0],
         );
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);

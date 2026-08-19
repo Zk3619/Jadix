@@ -370,7 +370,7 @@ impl AppState {
 
     /// Snapshot for [`accesskit_winit::Adapter::update_if_active`].
     pub(super) fn accesskit_tree_update(&self) -> accesskit::TreeUpdate {
-        let focused = use_signal("__rui_button_focus_id", String::new).get();
+        let focused = use_signal("__rui_button_focus_id", String::new).peek();
         let fid = if focused.is_empty() {
             None
         } else {
@@ -1386,9 +1386,12 @@ impl AppState {
         scrollbar_update: ScrollbarUpdateMode,
         active_drag_rest: Option<&str>,
         text_force_fast_mode: bool,
-        // 无拇指拖拽时：overlay 弹簧或平滑滚会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
+        // 无拇指拖拽时：overlay 淡入淡出会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
         // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
         scrollbar_skip_flex_layout: bool,
+        // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
+        // caret paint). Hover/class variants still run because content slides under a still cursor.
+        scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
         // resize — scrolling must still compute/consult fit so bidi labels do not overflow.
@@ -1432,73 +1435,84 @@ impl AppState {
         let pre_chrome_layout_status = self.layout_status;
 
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
+        let (viewport_w, viewport_h) = self.logical_size();
         crate::core::tree::sync_reactive_elements_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
+            viewport_w,
+            viewport_h,
+            [0.0, 0.0],
         );
         crate::components::button::sync_button_hover_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
+            viewport_w,
+            viewport_h,
+            [0.0, 0.0],
         );
-        crate::components::command::sync_command_item_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::switch::sync_switch_checked_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::checkbox::sync_checkbox_checked_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::radio_group::sync_radio_checked_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::tabs::sync_tabs_trigger_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
-        crate::style::sync_focus_ring_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
+        if !scroll_paint_only {
+            crate::components::command::sync_command_item_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::switch::sync_switch_checked_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::checkbox::sync_checkbox_checked_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::radio_group::sync_radio_checked_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::tabs::sync_tabs_trigger_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
+            crate::style::sync_focus_ring_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+        }
         {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
             let dark = crate::style::is_dark_theme();
-            let (viewport_w, _) = self.logical_size();
             crate::style::sync_class_variants_subtree(
                 &mut self.root_element,
                 mouse_pos,
                 focused.as_str(),
                 dark,
                 viewport_w,
+                viewport_h,
                 &mut self.layout_tree,
                 &mut sync_impact,
             );
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
-        // `text_style.input_caret` before collect.
-        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
-        crate::components::label::sync_label_selection_paint_subtree(
-            &mut self.root_element,
-            &mut sync_impact,
-        );
+        // `text_style.input_caret` before collect. Offset-only scroll frames keep last paint.
+        if !scroll_paint_only {
+            crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::label::sync_label_selection_paint_subtree(
+                &mut self.root_element,
+                &mut sync_impact,
+            );
+        }
 
         use crate::core::tree::LayoutStatus;
         // Merge local chrome dirty rects (button hover, etc.) before deciding Clear vs Load.
@@ -1918,8 +1932,6 @@ impl AppState {
                 &shadow_cached_keys,
                 &self.shadow_rect_cache,
             );
-            // Mid-resize cull race: atlas left intact; do not promote an empty prepare into
-            // text_cache_valid or the blank frame sticks until geometry drifts.
             if prep_out.culled_skip_prepare {
                 self.window.request_redraw();
                 (
@@ -1956,7 +1968,6 @@ impl AppState {
                 if prep_out.needs_warmup {
                     self.window.request_redraw();
                 }
-                // P1: paint spill→fit may need a taller leaf; remeasure next frame from FIT_CACHE.
                 if crate::text::take_fit_needs_relayout() {
                     self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
                     self.window.request_redraw();

@@ -168,7 +168,7 @@ impl super::App {
     pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         super::window_scope::force_secondary_id(id);
         let suspended = self.is_suspended;
-        let (has_caret, render_ok, a11y_update) = {
+        let (has_caret, render_ok) = {
             let owner_slot = &mut self.ime_owner_window;
             let mut secs = self.secondaries.borrow_mut();
             let Some(sec) = secs.get_mut(&id) else {
@@ -198,7 +198,7 @@ impl super::App {
                 }
             };
             let has_caret = render_ok && sec.has_input_caret;
-            let a11y_update = if render_ok {
+            if render_ok {
                 if let Some(at) = sec.ime_os_blur_at {
                     if sec.os_focused {
                         sec.ime_os_blur_at = None;
@@ -228,21 +228,8 @@ impl super::App {
                     &mut sec.ime_allowed_latched,
                     owner_slot,
                 );
-                let focused =
-                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).get();
-                let fid = if focused.is_empty() {
-                    None
-                } else {
-                    Some(focused.as_str())
-                };
-                Some(crate::a11y::tree_update_from_elements(
-                    &sec.root_element,
-                    fid,
-                ))
-            } else {
-                None
-            };
-            (has_caret, render_ok, a11y_update)
+            }
+            (has_caret, render_ok)
         };
 
         if has_caret {
@@ -251,9 +238,29 @@ impl super::App {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake));
         }
 
-        if let Some(update) = a11y_update {
+        if render_ok {
             if let Some(adapter) = self.secondary_accesskit.get_mut(&id) {
-                adapter.update_if_active(|| update);
+                let secondaries = &self.secondaries;
+                adapter.update_if_active(|| {
+                    let secs = secondaries.borrow();
+                    let Some(sec) = secs.get(&id) else {
+                        return crate::a11y::tree_update_from_elements(
+                            &crate::core::tree::Element::new(),
+                            None,
+                        );
+                    };
+                    let focused = crate::core::reactivity::use_signal(
+                        "__rui_button_focus_id",
+                        String::new,
+                    )
+                    .peek();
+                    let fid = if focused.is_empty() {
+                        None
+                    } else {
+                        Some(focused.as_str())
+                    };
+                    crate::a11y::tree_update_from_elements(&sec.root_element, fid)
+                });
             }
         }
 
@@ -610,6 +617,12 @@ impl super::App {
         let until = now + std::time::Duration::from_millis(1500);
         self.scrollbar_visible_until
             .insert(Self::scrollbar_axis_key(rest, axis), until);
+    }
+
+    /// Remove auto-hide deadlines that have already passed.
+    /// Returns true if any expired (caller must request **one** redraw to start fade-out).
+    pub(super) fn prune_expired_scrollbar_visibility(&mut self, now: std::time::Instant) -> bool {
+        super::scroll_support::retain_future_instants(&mut self.scrollbar_visible_until, now)
     }
 
     fn spring_key(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
@@ -2098,6 +2111,7 @@ impl super::App {
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
+        self.smooth_active_until.retain(|_, until| *until > now);
         // Avoid α→0 on duplicate redraws / timer quirks; cap so a long pause does not “teleport”.
         let scroll_dt = dt.clamp(1.0 / 240.0, 0.08);
         // UI spring/cubic 与滚动共用夹紧口径（`tick_animations` 内部亦会再夹一次）。
@@ -2231,10 +2245,16 @@ impl super::App {
                 crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
             })
             .peek();
-            let old_sx = sx.peek();
-            let old_sy = sy.peek();
-            let raw_max_x = mx.max(0.0);
-            let raw_max_y = my.max(0.0);
+            let old_sx = if sx.peek().is_finite() { sx.peek() } else { 0.0 };
+            let old_sy = if sy.peek().is_finite() { sy.peek() } else { 0.0 };
+            if !sx.peek().is_finite() {
+                sx.set_silent(0.0);
+            }
+            if !sy.peek().is_finite() {
+                sy.set_silent(0.0);
+            }
+            let raw_max_x = if mx.is_finite() { mx.max(0.0) } else { 0.0 };
+            let raw_max_y = if my.is_finite() { my.max(0.0) } else { 0.0 };
             let lp = self
                 .scroll_max_lowpass
                 .entry(rest.clone())
@@ -2249,10 +2269,12 @@ impl super::App {
             // Persist clamped targets when max shrinks (e.g. viewport grew until content
             // fits). Offset-only clamp left a stale target; smooth-scroll then re-sought it
             // after a later shrink and scrolled the top out of view.
+            let tx_raw = if tx.peek().is_finite() { tx.peek() } else { 0.0 };
+            let ty_raw = if ty.peek().is_finite() { ty.peek() } else { 0.0 };
             let (sx_clamped, tx_clamped) =
-                super::scroll_support::clamp_scroll_offset_and_target(old_sx, tx.peek(), raw_max_x);
+                super::scroll_support::clamp_scroll_offset_and_target(old_sx, tx_raw, raw_max_x);
             let (sy_clamped, ty_clamped) =
-                super::scroll_support::clamp_scroll_offset_and_target(old_sy, ty.peek(), raw_max_y);
+                super::scroll_support::clamp_scroll_offset_and_target(old_sy, ty_raw, raw_max_y);
             if (tx.peek() - tx_clamped).abs() > 0.01 {
                 tx.set_silent(tx_clamped);
             }
@@ -2377,7 +2399,9 @@ impl super::App {
         let mut re_borrow = match self.state.try_borrow_mut() {
             Ok(b) => b,
             Err(_) => {
-                window.request_redraw();
+                // Borrow contention can happen transiently during reactive callbacks.
+                // Do not self-pump redraw here, otherwise we can end up in an idle
+                // busy loop (high CPU while no visible state is changing).
                 return;
             }
         };
@@ -2401,8 +2425,9 @@ impl super::App {
         // dragging, smoothing scroll, coalescing wheel delta, or — crucially — spring-animating
         // scrollbar fade-in/out (hover show / auto-hide). Without this, ViewportsOnly skips the
         // alpha/color multiplication and tracks stay frozen (invisible on hover, opaque after idle).
+        // Smooth scroll moves thumbs via overlay collect (live offset signals). Full prepass is
+        // only required while dragging, fading auto-scrollbar alpha, or coalescing wheel.
         let scrollbar_pass = if self.scrollbar_drag.is_some()
-            || smooth_scroll_animating
             || !self.scroll_accum.is_empty()
             || anim_tick.scrollbar_overlay
         {
@@ -2416,10 +2441,9 @@ impl super::App {
             || !self.scroll_accum.is_empty()
             || anim_tick.scrollbar_overlay;
 
-        // `scroll_accum` 在本函数开头已 drain，此处恒空；平滑滚仍会使 `scrollbar_pass == Full`，
-        // 与 overlay 弹簧一样可在 `Clean` 下跳过整树 Taffy（collect 用信号画滚动条）。
-        let scrollbar_skip_flex_layout = self.scrollbar_drag.is_none()
-            && (anim_tick.scrollbar_overlay || smooth_scroll_animating);
+        let scrollbar_skip_flex_layout =
+            self.scrollbar_drag.is_none() && anim_tick.scrollbar_overlay;
+        let scroll_paint_only = smooth_scroll_animating || anim_tick.scrollbar_overlay;
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(
@@ -2428,11 +2452,13 @@ impl super::App {
             active_drag_rest,
             text_force_fast_mode,
             scrollbar_skip_flex_layout,
+            scroll_paint_only,
         ) {
             Ok(_) => {
                 if let Some(adapter) = &mut self.accesskit_adapter {
-                    let update = state.accesskit_tree_update();
-                    adapter.update_if_active(|| update);
+                    // Build the a11y tree only when a screen reader is actually subscribed.
+                    // Eager `tree_update_from_elements` on every scroll frame is a full-tree walk.
+                    adapter.update_if_active(|| state.accesskit_tree_update());
                 }
                 let scroll_metrics: Vec<_> = state.last_render_scroll_metrics.drain(..).collect();
                 let mut diag_track_bounds: std::collections::HashMap<String, ([f32; 4], [f32; 4])> =
@@ -2995,10 +3021,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // `about_to_wait` + WaitUntil (one wake starts fade-out) instead of ~1.5s of frames.
                 // Switch 等 chrome 在本帧 render/sync 里才 `set` tween（晚于上方 tick），
                 // 必须在此用 `any_ui_animation_active` 补泵，否则停在第 0 帧。
+                let ui_anim_active = crate::style::any_ui_animation_active();
                 if smooth_scroll_animating
                     || scrollbar_fade_animating
                     || super::scroll_support::has_pending_scroll_item_align()
-                    || crate::style::any_ui_animation_active()
+                    // `any_ui_animation_active()` is a post-tick safety net for late-set tweens.
+                    // Gate it with `force_redraw_count` to avoid long-running stale animation
+                    // flags keeping an idle redraw pump alive indefinitely.
+                    || (ui_anim_active && self.force_redraw_count > 0)
                 {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
@@ -3174,7 +3204,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         state.resize(inner);
                     }
                     state.recover_surface();
-                    let _ = state.render([0.0, 0.0], ScrollbarUpdateMode::Full, None, false, false);
+                    let _ = state.render(
+                        [0.0, 0.0],
+                        ScrollbarUpdateMode::Full,
+                        None,
+                        false,
+                        false,
+                        false,
+                    );
                     state.window.request_redraw();
                     self.force_redraw_count = 3;
                 }

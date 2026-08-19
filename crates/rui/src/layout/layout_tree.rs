@@ -1934,11 +1934,18 @@ impl LayoutTree {
         // build (e.g. after maximize / restore while status is `Clean`) and the UI stays a small
         // island in the corner while the swapchain is full-window.
         let t_setup_begin = Instant::now();
-        self.viewport = [width.max(0.0), height.max(0.0)];
-        root.style.size.width = Dimension::length(width);
-        root.style.size.height = Dimension::length(height);
-        cascade_inheritable_text_style(root, None);
-        self.update_taffy_node_style(root);
+        let next_viewport = [width.max(0.0), height.max(0.0)];
+        // `taffy.set_style` marks the node dirty. Doing that every scroll-only frame
+        // invalidates the whole tree for no geometric change. Inherit cascade is likewise
+        // unchanged when only `scroll_offset` moved.
+        let viewport_changed = self.viewport != next_viewport;
+        if !scroll_only || viewport_changed {
+            self.viewport = next_viewport;
+            root.style.size.width = Dimension::length(width);
+            root.style.size.height = Dimension::length(height);
+            cascade_inheritable_text_style(root, None);
+            self.update_taffy_node_style(root);
+        }
         let setup_ms = t_setup_begin.elapsed().as_secs_f32() * 1000.0;
 
         let taffy_compute_ms = if !scroll_only {
@@ -2407,6 +2414,27 @@ impl LayoutTree {
             clip = Some(intersect_rect(clip, render_rect));
         }
         let visible_rect = intersect_rect(clip, render_rect);
+
+        // Clip-cull: skip paint + descendants when this box (plus shadow/transform outset)
+        // is fully outside the ancestor clip. Parent scroll metrics still use this node's
+        // Taffy size so content height does not collapse to the viewport.
+        if parent_clip.is_some() && !escape_overflow_clip {
+            let pad = paint_outset_pad(&element.style, lay_w, lay_h);
+            let vis = intersect_rect(parent_clip, inflate_rect(render_rect, pad, pad));
+            if vis[2] <= 0.0 || vis[3] <= 0.0 {
+                if let Some(fid) = element.focus_id.as_deref() {
+                    if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                        scroll_metrics.push((
+                            rest.to_string(),
+                            [abs_x, abs_y, layout.size.width, layout.size.height],
+                            [0.0, 0.0],
+                            [layout.size.width.max(0.0), layout.size.height.max(0.0)],
+                        ));
+                    }
+                }
+                return [abs_x + lay_w, abs_y + lay_h];
+            }
+        }
 
         // Hit Testing (Update cursor if mouse is over visible part)
         if mouse_pos[0] >= visible_rect[0]
@@ -3424,6 +3452,50 @@ fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {
         (rect[2] + dx * 2.0).max(0.0),
         (rect[3] + dy * 2.0).max(0.0),
     ]
+}
+
+/// Outset past `layout_bounds` that can still paint into the clip (shadow / outline / transform).
+fn paint_outset_pad(style: &crate::style::Style, lay_w: f32, lay_h: f32) -> f32 {
+    let outset = |blur: f32, spread: f32, ox: f32, oy: f32, inset: bool| {
+        if inset {
+            0.0
+        } else {
+            blur.max(0.0) + spread.abs() + ox.abs().max(oy.abs())
+        }
+    };
+    let mut pad = 8.0_f32;
+    pad = pad.max(outset(
+        style.shadow_blur,
+        style.shadow_spread,
+        style.shadow_offset[0],
+        style.shadow_offset[1],
+        style.shadow_inset,
+    ));
+    for sh in &style.extra_shadows {
+        pad = pad.max(outset(
+            sh.blur,
+            sh.spread,
+            sh.offset[0],
+            sh.offset[1],
+            sh.inset,
+        ));
+    }
+    pad = pad.max(style.outline_width.max(0.0));
+    let sx = if style.scale[0].is_finite() {
+        style.scale[0].abs()
+    } else {
+        1.0
+    };
+    let sy = if style.scale[1].is_finite() {
+        style.scale[1].abs()
+    } else {
+        1.0
+    };
+    if (sx - 1.0).abs() > 0.01 || (sy - 1.0).abs() > 0.01 || style.rotate_deg.abs() > 0.5 {
+        pad += 0.5 * (lay_w * sx.max(1.0)).hypot(lay_h * sy.max(1.0));
+    }
+    pad += style.translate[0].abs().max(style.translate[1].abs());
+    pad
 }
 
 /// Native `<input>`: clip at the padding box. The text leaf is the content box —

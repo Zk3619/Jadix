@@ -230,6 +230,40 @@ pub fn strip_scroll_viewport_focus_id(focus_id: &str) -> Option<&str> {
     focus_id.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX)
 }
 
+/// Remove all named signals associated with one scroll viewport `rest` id.
+///
+/// Call on deterministic teardown paths (e.g. secondary-window drop) to keep
+/// signal tables and animation slots bounded in long-running sessions.
+pub fn remove_scroll_viewport_signals(rest: &str) {
+    use super::reactivity::remove_named_signal;
+    let keys = ScrollViewportSignalKeys::new(rest);
+    remove_named_signal(keys.offset_x.as_str());
+    remove_named_signal(keys.offset_y.as_str());
+    remove_named_signal(keys.target_x.as_str());
+    remove_named_signal(keys.target_y.as_str());
+    remove_named_signal(keys.viewport_w.as_str());
+    remove_named_signal(keys.viewport_h.as_str());
+    remove_named_signal(keys.content_w.as_str());
+    remove_named_signal(keys.content_h.as_str());
+    remove_named_signal(keys.behavior.as_str());
+    remove_named_signal(keys.activity.as_str());
+    remove_named_signal(keys.overflow_x.as_str());
+    remove_named_signal(keys.overflow_y.as_str());
+    remove_named_signal(keys.hover_legacy.as_str());
+    remove_named_signal(keys.hover_axis_x.as_str());
+    remove_named_signal(keys.hover_axis_y.as_str());
+    remove_named_signal(keys.scrollbar_visibility_x.as_str());
+    remove_named_signal(keys.scrollbar_visibility_y.as_str());
+    remove_named_signal(keys.spring_x.as_str());
+    remove_named_signal(keys.spring_y.as_str());
+    remove_named_signal(scroll_hover_mode_signal_key(rest).as_str());
+    remove_named_signal(scroll_scrollbar_inset_signal_key(rest).as_str());
+    remove_named_signal(scroll_scrollbar_inset_x_signal_key(rest).as_str());
+    remove_named_signal(scroll_scrollbar_inset_y_signal_key(rest).as_str());
+    remove_named_signal(scroll_scrollbar_x_side_signal_key(rest).as_str());
+    remove_named_signal(scroll_scrollbar_y_side_signal_key(rest).as_str());
+}
+
 /// 将已有节点登记为滚动视口：写 focus_id、offset、overflow/behavior/hover 信号。
 /// 不含滚动条。
 pub fn activate_scroll_viewport(

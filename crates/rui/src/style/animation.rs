@@ -66,6 +66,9 @@ impl Spring {
     }
 
     pub fn set(&self, target: f32) {
+        if !target.is_finite() {
+            return;
+        }
         let mut state = self.0.borrow_mut();
         if (state.target - target).abs() < 0.0001 {
             return;
@@ -79,6 +82,9 @@ impl Spring {
     /// retargets after idle is not stuck waiting for a redraw that never comes (tick runs
     /// before chrome sync; see button focus-ring sync).
     pub fn snap(&self, value: f32) {
+        if !value.is_finite() {
+            return;
+        }
         let mut state = self.0.borrow_mut();
         state.target = value;
         state.current = value;
@@ -240,6 +246,15 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
         while i < list.len() {
             if let Some(spring) = list[i].upgrade() {
                 let mut s = spring.borrow_mut();
+                if !s.current.is_finite() || !s.target.is_finite() || !s.velocity.is_finite() {
+                    // Corrupted spring state (NaN/Inf) must not keep the redraw pump alive.
+                    s.target = 0.0;
+                    s.current = 0.0;
+                    s.velocity = 0.0;
+                    let _ = s.signal.try_set_silent(0.0);
+                    i += 1;
+                    continue;
+                }
 
                 // Already at rest: skip integrate + signal write (avoids idle try_set noise).
                 if (s.current - s.target).abs() < SPRING_SETTLE_POS_EPS
@@ -344,6 +359,9 @@ pub fn any_ui_animation_active() -> bool {
         anim.borrow().iter().any(|w| {
             w.upgrade().is_some_and(|s| {
                 let s = s.borrow();
+                if !s.current.is_finite() || !s.target.is_finite() || !s.velocity.is_finite() {
+                    return false;
+                }
                 (s.current - s.target).abs() >= SPRING_SETTLE_POS_EPS
                     || s.velocity.abs() >= SPRING_SETTLE_VEL_EPS
             })
@@ -382,6 +400,12 @@ struct PropertyTween {
 #[derive(Clone, Debug, Default)]
 pub struct TransitionSnapshot {
     tweens: HashMap<TransitionProperty, PropertyTween>,
+}
+
+impl TransitionSnapshot {
+    pub(crate) fn has_tweens(&self) -> bool {
+        !self.tweens.is_empty()
+    }
 }
 
 fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 4], u8) {

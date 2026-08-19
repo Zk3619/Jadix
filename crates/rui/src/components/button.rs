@@ -1194,7 +1194,13 @@ pub(crate) fn sync_button_hover_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
+    viewport_w: f32,
+    viewport_h: f32,
+    scroll_acc: [f32; 2],
 ) {
+    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+        return;
+    }
     if let Some(desc) = el.button_hover_paint.clone() {
         if let Some(fid) = el.focus_id.clone() {
             let key = format!("{}_hover", fid);
@@ -1222,8 +1228,16 @@ pub(crate) fn sync_button_hover_paint_subtree(
             );
         }
     }
+    let child_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
     for child in &mut el.children {
-        sync_button_hover_paint_subtree(child, layout_tree, impact);
+        sync_button_hover_paint_subtree(
+            child,
+            layout_tree,
+            impact,
+            viewport_w,
+            viewport_h,
+            child_acc,
+        );
     }
 }
 

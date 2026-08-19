@@ -2196,18 +2196,66 @@ impl Element {
     }
 }
 
+/// Last-frame layout box is fully outside the window (plus pad for shadows).
+/// Unlaid-out / zero-size / fixed / portal roots return false so we still walk them.
+#[inline]
+pub(crate) fn element_is_offscreen(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    viewport_w: f32,
+    viewport_h: f32,
+) -> bool {
+    if el.style.position_fixed || el.template_id.as_deref() == Some("__rui_portal_layer") {
+        return false;
+    }
+    let b = el.layout_bounds;
+    if b[2] <= 0.0 || b[3] <= 0.0 || viewport_w <= 0.0 || viewport_h <= 0.0 {
+        return false;
+    }
+    const PAD: f32 = 32.0;
+    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
+    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
+    vx + b[2] < -PAD || vy + b[3] < -PAD || vx > viewport_w + PAD || vy > viewport_h + PAD
+}
+
+#[inline]
+pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    let mut next = scroll_acc;
+    if el.style.overflow.x != taffy::style::Overflow::Visible {
+        next[0] += el.scroll_offset[0];
+    }
+    if el.style.overflow.y != taffy::style::Overflow::Visible {
+        next[1] += el.scroll_offset[1];
+    }
+    next
+}
+
 /// Run generic component-owned reactive synchronizers for the mounted tree.
 pub(crate) fn sync_reactive_elements_subtree(
     element: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
+    viewport_w: f32,
+    viewport_h: f32,
+    scroll_acc: [f32; 2],
 ) {
+    if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
+        return;
+    }
     // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
     if let Some(sync) = element.reactive_sync.clone() {
         *impact = impact.merge(sync.run(element, layout_tree));
     }
+    let child_acc = child_scroll_accumulation(element, scroll_acc);
     for child in &mut element.children {
-        sync_reactive_elements_subtree(child, layout_tree, impact);
+        sync_reactive_elements_subtree(
+            child,
+            layout_tree,
+            impact,
+            viewport_w,
+            viewport_h,
+            child_acc,
+        );
     }
 }
 

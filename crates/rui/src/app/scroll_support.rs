@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::core::tree::Element;
 
@@ -16,6 +17,7 @@ struct PendingScrollItemAlign {
     item_count: usize,
     align: ScrollItemAlign,
     tries: u8,
+    requested_at: Instant,
 }
 
 thread_local! {
@@ -49,6 +51,7 @@ pub(crate) fn request_scroll_item_into_view(
                 item_count: item_count.max(1),
                 align,
                 tries: 0,
+                requested_at: Instant::now(),
             },
         );
     });
@@ -61,7 +64,15 @@ pub(crate) fn cancel_scroll_item_into_view(rest: &str) {
 }
 
 pub(crate) fn has_pending_scroll_item_align() -> bool {
-    PENDING_SCROLL_ITEM_ALIGN.with(|m| !m.borrow().is_empty())
+    const PENDING_ALIGN_MAX_AGE: Duration = Duration::from_secs(3);
+    PENDING_SCROLL_ITEM_ALIGN.with(|m| {
+        let mut map = m.borrow_mut();
+        let now = Instant::now();
+        // If a rest key disappeared (page switch / window close), stale pending entries
+        // would otherwise keep the redraw pump alive forever.
+        map.retain(|_, v| now.duration_since(v.requested_at) <= PENDING_ALIGN_MAX_AGE);
+        !map.is_empty()
+    })
 }
 
 /// 用布局后的真实 `content_h` / `viewport_h` 对齐。度量未就绪时保留请求。
@@ -432,6 +443,23 @@ pub(super) fn find_scroll_area_metrics_by_rest(
     None
 }
 
+/// Keep only future deadlines. Returns true if any entry was dropped as expired.
+pub(super) fn retain_future_instants(
+    map: &mut HashMap<String, Instant>,
+    now: Instant,
+) -> bool {
+    let mut expired = false;
+    map.retain(|_, until| {
+        if *until <= now {
+            expired = true;
+            false
+        } else {
+            true
+        }
+    });
+    expired
+}
+
 /// Clamp offset + target to the current scroll max.
 ///
 /// When the viewport grows enough that `max → 0`, offset is forced to 0 for paint,
@@ -537,6 +565,26 @@ mod clamp_scroll_extent_tests {
         // Standard browser-like: stay near bottom when max shrinks.
         let (o, t) = clamp_scroll_offset_and_target(350.0, 350.0, 200.0);
         assert_eq!((o, t), (200.0, 200.0));
+    }
+}
+
+#[cfg(test)]
+mod visibility_deadline_tests {
+    use super::retain_future_instants;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn expired_deadlines_are_removed_once() {
+        let now = Instant::now();
+        let mut map = HashMap::new();
+        map.insert("past".into(), now - Duration::from_millis(1));
+        map.insert("future".into(), now + Duration::from_secs(1));
+        assert!(retain_future_instants(&mut map, now));
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("future"));
+        assert!(!retain_future_instants(&mut map, now));
+        assert_eq!(map.len(), 1);
     }
 }
 
