@@ -1044,6 +1044,434 @@ fn BorderStyleShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// CSS `scale` + `zoom` Gallery 展示。
+#[component]
+fn ScaleZoomShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="CSS scale + zoom">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "CSS scale：纯视觉缩放（不影响布局），围绕元素中心。支持 1–3 个值（X/Y/Z）和百分比。CSS zoom：放大级别，影响布局（缩放 size/padding/border 后传给 Taffy）。"
+                </Label>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "1 · scale — 均匀缩放（纯视觉）"
+                </Label>
+                <HStack gap="1rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-50" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-50 (0.5×)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-100 (1×)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-150" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-150 (1.5×)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-[0.75]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-[0.75]"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "2 · scale X/Y — 分轴缩放（纯视觉）"
+                </Label>
+                <HStack gap="1rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-x-150"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-y-50" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-y-50"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150 scale-y-50" />
+                        <Label text_size="0.6rem" color="muted-foreground">"X 1.5 + Y 0.5"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="secondary" rounded="0.375rem" class="scale-x-[0.5] scale-y-[2]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"X 0.5 + Y 2"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "3 · scale: none 与 hover 过渡"
+                </Label>
+                <HStack gap="1rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="transition-transform hover:scale-125" />
+                        <Label text_size="0.6rem" color="muted-foreground">"hover → 1.25×"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="scale-75 transition-transform hover:scale-100" />
+                        <Label text_size="0.6rem" color="muted-foreground">"0.75 → hover 1×"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-100 transition-transform hover:scale-x-150" />
+                        <Label text_size="0.6rem" color="muted-foreground">"hover X 1.5×"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "4 · zoom — 放大级别（影响布局）"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "zoom 缩放元素的 size/padding/border/gap 后传入布局引擎。注意与 scale 的区别：scale 不改布局，zoom 改。"
+                </Label>
+                <HStack gap="1rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="2rem" bg="chart-1" rounded="0.25rem" class="zoom-50" />
+                        <Label text_size="0.6rem" color="muted-foreground">"zoom-50 (0.5×)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="2rem" bg="chart-2" rounded="0.25rem" class="zoom-normal" />
+                        <Label text_size="0.6rem" color="muted-foreground">"zoom-normal"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="2rem" bg="chart-3" rounded="0.25rem" class="zoom-150" />
+                        <Label text_size="0.6rem" color="muted-foreground">"zoom-150 (1.5×)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="2rem" bg="chart-4" rounded="0.25rem" class="zoom-200" />
+                        <Label text_size="0.6rem" color="muted-foreground">"zoom-200 (2×)"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "5 · scale vs zoom 对比"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "左：scale-200（视觉缩放，不撑开布局）。右：zoom-200（布局缩放，撑开周围空间）。两盒原始尺寸均为 3rem×2rem。"
+                </Label>
+                <HStack gap="2rem" wrap="wrap" items="start" justify="start" p="1rem" bg="muted" rounded="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3rem" h="2rem" bg="primary" rounded="0.25rem" class="scale-200" />
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-200"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3rem" h="2rem" bg="destructive" rounded="0.25rem" class="zoom-200" />
+                        <Label text_size="0.6rem" color="muted-foreground">"zoom-200"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// CSS `transform` 属性族 Gallery 展示。
+#[component]
+fn TransformShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="CSS transform">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "CSS transform：支持 translate/rotate/scale/skew/matrix/perspective 及其 3D 变体，transform-origin 控制变换原点。3D 函数投影至 2D 渲染。"
+                </Label>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "1 · rotate — CSS transform: rotate()"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("primary")).rounded(6.0))
+                            .css_transform("rotate(15deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate(15deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("primary")).rounded(6.0))
+                            .css_transform("rotate(45deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate(45deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("destructive")).rounded(6.0))
+                            .css_transform("rotate(-30deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate(-30deg)"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "2 · skew — CSS transform: skew()"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("accent")).rounded(6.0))
+                            .css_transform("skewX(15deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"skewX(15deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("accent")).rounded(6.0))
+                            .css_transform("skewY(15deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"skewY(15deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("accent")).rounded(6.0))
+                            .css_transform("skew(10deg, 20deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"skew(10,20)"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "3 · skew utility class — skew-x-* / skew-y-*"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="chart-1" rounded="0.375rem" class="skew-x-6" />
+                        <Label text_size="0.6rem" color="muted-foreground">"skew-x-6"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="chart-2" rounded="0.375rem" class="skew-y-12" />
+                        <Label text_size="0.6rem" color="muted-foreground">"skew-y-12"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="4rem" bg="chart-3" rounded="0.375rem" class="skew-x-[20deg]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"skew-x-[20deg]"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "4 · 组合变换 — 多函数叠加"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("chart-4")).rounded(6.0))
+                            .css_transform("rotate(30deg) scale(1.2)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate+scale"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("chart-5")).rounded(6.0))
+                            .css_transform("translateX(8px) skewX(15deg) rotate(10deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"translate+skew+rotate"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("destructive")).rounded(6.0))
+                            .css_transform("matrix(0.87, 0.5, -0.5, 0.87, 0, 0)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"matrix()"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "5 · transform-origin"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("primary")).rounded(6.0))
+                            .css_transform("rotate(45deg)")
+                            .transform_origin("left top") }
+                        <Label text_size="0.6rem" color="muted-foreground">"origin: left top"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("primary")).rounded(6.0))
+                            .css_transform("rotate(45deg)")
+                            .transform_origin("center") }
+                        <Label text_size="0.6rem" color="muted-foreground">"origin: center"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("primary")).rounded(6.0))
+                            .css_transform("rotate(45deg)")
+                            .transform_origin("right bottom") }
+                        <Label text_size="0.6rem" color="muted-foreground">"origin: right bottom"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "6 · 3D 投影到 2D — rotateX / rotateY / perspective"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("secondary")).rounded(6.0))
+                            .css_transform("rotateX(45deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotateX(45deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("secondary")).rounded(6.0))
+                            .css_transform("rotateY(45deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"rotateY(45deg)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("secondary")).rounded(6.0))
+                            .css_transform("perspective(200px) rotateY(30deg)") }
+                        <Label text_size="0.6rem" color="muted-foreground">"perspective+rotateY"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "7 · Builder API — .skew() / .matrix() / .perspective()"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("chart-1")).rounded(6.0))
+                            .skew(15.0, 0.0) }
+                        <Label text_size="0.6rem" color="muted-foreground">".skew(15,0)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("chart-2")).rounded(6.0))
+                            .skew_x(20.0) }
+                        <Label text_size="0.6rem" color="muted-foreground">".skew_x(20)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        { Element::from(r#box().w("4rem").h("4rem").bg(parse_color("chart-3")).rounded(6.0))
+                            .matrix(1.0, 0.3, -0.3, 1.0, 0.0, 0.0) }
+                        <Label text_size="0.6rem" color="muted-foreground">".matrix()"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+/// CSS `rotate` + `translate` Gallery 展示。
+#[component]
+fn RotateTranslateShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="CSS rotate + translate">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "CSS rotate：围绕中心旋转（不影响布局）。支持 deg / turn / rad，默认 Z 轴。CSS translate：视觉平移（不影响布局）。支持 px 和百分比（相对自身 bounding box）。"
+                </Label>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "1 · rotate — 预设角度"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-0" />
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-0"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-12" />
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-12"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45" />
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-45"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-90" />
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-90"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-180" />
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-180"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="-rotate-45" />
+                        <Label text_size="0.6rem" color="muted-foreground">"-rotate-45"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "2 · rotate — 任意角度 + 单位"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[30deg]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"[30deg]"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[0.25turn]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"[0.25turn]"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[1.57rad]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"[1.57rad]"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "3 · rotate hover 过渡"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-90" />
+                        <Label text_size="0.6rem" color="muted-foreground">"hover → 90°"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="rotate-45 transition-transform hover:rotate-0" />
+                        <Label text_size="0.6rem" color="muted-foreground">"45° → hover 0°"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-180" />
+                        <Label text_size="0.6rem" color="muted-foreground">"hover → 180°"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "4 · translate — px 偏移"
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "视觉平移，不影响布局。灰色虚框表示原始位置。"
+                </Label>
+                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="chart-1" rounded="0.375rem" class="translate-x-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"translate-x-4"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="chart-2" rounded="0.375rem" class="translate-y-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"translate-y-4"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="chart-3" rounded="0.375rem" class="-translate-x-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"-translate-x-4"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="chart-4" rounded="0.375rem" class="translate-x-4 translate-y-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"X+Y 偏移"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "5 · translate — 百分比 + 任意值"
+                </Label>
+                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="3rem" bg="primary" rounded="0.375rem" class="translate-x-1/2" />
+                        <Label text_size="0.6rem" color="muted-foreground">"x-1/2 (50%)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="3rem" bg="destructive" rounded="0.375rem" class="translate-x-full" />
+                        <Label text_size="0.6rem" color="muted-foreground">"x-full (100%)"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="3rem" bg="accent" rounded="0.375rem" class="-translate-x-1/2" />
+                        <Label text_size="0.6rem" color="muted-foreground">"-x-1/2"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="3rem" bg="secondary" rounded="0.375rem" class="translate-x-[30px]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"x-[30px]"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="4rem" h="3rem" bg="chart-1" rounded="0.375rem" class="translate-y-[50%]" />
+                        <Label text_size="0.6rem" color="muted-foreground">"y-[50%]"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "6 · rotate + translate 组合"
+                </Label>
+                <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45 translate-x-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"旋转+平移"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="rotate-12 translate-x-1/2 scale-110" />
+                        <Label text_size="0.6rem" color="muted-foreground">"旋转+%平移+缩放"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 hover:translate-x-4 hover:scale-110" />
+                        <Label text_size="0.6rem" color="muted-foreground">"hover 组合"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn ScrollShowcase() -> rui::core::tree::Element {
     ui! {
@@ -4545,6 +4973,9 @@ fn gallery_section_body(section: &str) -> Element {
                     <GridAndDragShowcase />
                     <ShadowShowcase />
                     <BorderStyleShowcase />
+                    <ScaleZoomShowcase />
+                    <RotateTranslateShowcase />
+                    <TransformShowcase />
                 </VStack>
             </ScrollArea>
         },

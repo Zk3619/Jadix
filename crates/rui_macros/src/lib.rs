@@ -3703,6 +3703,18 @@ fn expand_node(
                         }
                     }
 
+                    "css_transform" | "cssTransform" => {
+                        element = quote! { #element.css_transform(#value) }
+                    }
+                    "transform_origin" | "transformOrigin" | "transform-origin" => {
+                        element = quote! { #element.transform_origin(#value) }
+                    }
+                    "transform_style" | "transformStyle" | "transform-style" => {
+                        element = quote! { #element.transform_style(#value) }
+                    }
+                    "transform_box" | "transformBox" | "transform-box" => {
+                        element = quote! { #element.transform_box(#value) }
+                    }
                     // Consumed by a dedicated pre-pass above, so reaching the fallback here would
                     // be a false "unknown attribute" report.
                     "name" if name_str == "Icon" => {}

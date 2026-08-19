@@ -95,8 +95,12 @@ pub enum KnownUtility<'a> {
     Opacity(f32),
     /// Visual translate X in logical px (`translate-x-*`).
     TranslateX(f32),
+    /// Visual translate X as fraction of own width (`translate-x-1/2` → 0.5).
+    TranslateXPct(f32),
     /// Visual translate Y in logical px (`translate-y-*`).
     TranslateY(f32),
+    /// Visual translate Y as fraction of own height (`translate-y-1/2` → 0.5).
+    TranslateYPct(f32),
     /// Single-line ellipsis overflow (`truncate`).
     Truncate,
     /// CSS `text-overflow`: `clip` | `hidden` | `ellipsis` | `newline` (`text-overflow-*` classes).
@@ -108,7 +112,20 @@ pub enum KnownUtility<'a> {
     PositionRelative,
     AspectRatio(f32),
     Rotate(f32),
+    /// Uniform scale (`scale-*`) — CSS `scale` single-value.
     Scale(f32),
+    /// X-axis scale (`scale-x-*`) — CSS `scale` per-axis.
+    ScaleX(f32),
+    /// Y-axis scale (`scale-y-*`) — CSS `scale` per-axis.
+    ScaleY(f32),
+    /// Visual skew X in degrees (`skew-x-*`).
+    SkewX(f32),
+    /// Visual skew Y in degrees (`skew-y-*`).
+    SkewY(f32),
+    /// CSS `transform-origin` keyword (`origin-*`).
+    TransformOrigin(&'a str),
+    /// CSS `zoom` — magnification that affects layout (`zoom-*`).
+    Zoom(f32),
     /// `pointer-events-auto`
     PointerEventsAuto,
     /// `pointer-events-none` — block self + descendants
@@ -265,7 +282,12 @@ fn negate_margin_or_translate(known: KnownUtility<'_>) -> Option<KnownUtility<'_
         KnownUtility::MarginB(v) => KnownUtility::MarginB(negate_px_string(&v)),
         KnownUtility::MarginL(v) => KnownUtility::MarginL(negate_px_string(&v)),
         KnownUtility::TranslateX(px) => KnownUtility::TranslateX(-px),
+        KnownUtility::TranslateXPct(p) => KnownUtility::TranslateXPct(-p),
         KnownUtility::TranslateY(px) => KnownUtility::TranslateY(-px),
+        KnownUtility::TranslateYPct(p) => KnownUtility::TranslateYPct(-p),
+        KnownUtility::SkewX(v) => KnownUtility::SkewX(-v),
+        KnownUtility::SkewY(v) => KnownUtility::SkewY(-v),
+        KnownUtility::Rotate(deg) => KnownUtility::Rotate(-deg),
         _ => return None,
     })
 }
@@ -280,6 +302,7 @@ fn is_negatable_spacing_token(token: &str) -> bool {
         || token.starts_with("ml-")
         || token.starts_with("translate-x-")
         || token.starts_with("translate-y-")
+        || token.starts_with("rotate-")
 }
 
 /// Classify a bare utility token (no `hover:` / `dark:` prefixes).
@@ -492,10 +515,10 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return parse_opacity_token(rest).map(KnownUtility::Opacity);
     }
     if let Some(rest) = token.strip_prefix("translate-x-") {
-        return spacing_token_to_px(rest).map(KnownUtility::TranslateX);
+        return parse_translate_token(rest, true);
     }
     if let Some(rest) = token.strip_prefix("translate-y-") {
-        return spacing_token_to_px(rest).map(KnownUtility::TranslateY);
+        return parse_translate_token(rest, false);
     }
     if token == "truncate" {
         return Some(KnownUtility::Truncate);
@@ -531,29 +554,63 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         }
     }
 
+    if token == "rotate-none" {
+        return Some(KnownUtility::Rotate(0.0));
+    }
     if let Some(rest) = token.strip_prefix("rotate-") {
         if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            let inner = inner.trim().strip_suffix("deg").unwrap_or(inner.trim());
-            let v: f32 = inner.parse().ok()?;
-            return Some(KnownUtility::Rotate(v));
+            let inner = inner.trim();
+            return parse_angle_value(inner).map(KnownUtility::Rotate);
         }
-        let deg = match rest {
+        let deg: f32 = match rest {
             "0" => 0.0,
+            "1" => 1.0,
+            "2" => 2.0,
+            "3" => 3.0,
+            "6" => 6.0,
+            "12" => 12.0,
             "45" => 45.0,
             "90" => 90.0,
             "180" => 180.0,
-            _ => return None,
+            "270" => 270.0,
+            _ => return rest.parse().ok().map(KnownUtility::Rotate).or(None),
         };
         return Some(KnownUtility::Rotate(deg));
     }
 
+    if let Some(rest) = token.strip_prefix("scale-x-") {
+        return parse_scale_value(rest).map(KnownUtility::ScaleX);
+    }
+    if let Some(rest) = token.strip_prefix("scale-y-") {
+        return parse_scale_value(rest).map(KnownUtility::ScaleY);
+    }
     if let Some(rest) = token.strip_prefix("scale-") {
+        return parse_scale_value(rest).map(KnownUtility::Scale);
+    }
+    if let Some(rest) = token.strip_prefix("zoom-") {
+        return parse_zoom_token(rest).map(KnownUtility::Zoom);
+    }
+
+    if let Some(rest) = token.strip_prefix("skew-x-") {
         if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            let v: f32 = inner.trim().parse().ok()?;
-            return Some(KnownUtility::Scale(v));
+            let inner = inner.trim().strip_suffix("deg").unwrap_or(inner.trim());
+            let v: f32 = inner.parse().ok()?;
+            return Some(KnownUtility::SkewX(v));
         }
-        let pct: f32 = rest.parse().ok()?;
-        return Some(KnownUtility::Scale(pct / 100.0));
+        let v: f32 = rest.parse().ok()?;
+        return Some(KnownUtility::SkewX(v));
+    }
+    if let Some(rest) = token.strip_prefix("skew-y-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let inner = inner.trim().strip_suffix("deg").unwrap_or(inner.trim());
+            let v: f32 = inner.parse().ok()?;
+            return Some(KnownUtility::SkewY(v));
+        }
+        let v: f32 = rest.parse().ok()?;
+        return Some(KnownUtility::SkewY(v));
+    }
+    if let Some(rest) = token.strip_prefix("origin-") {
+        return Some(KnownUtility::TransformOrigin(rest));
     }
 
     if let Some(rest) = token.strip_prefix("from-") {
@@ -591,6 +648,80 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     None
+}
+
+fn parse_scale_value(rest: &str) -> Option<f32> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            return pct.trim().parse::<f32>().ok().map(|v| v / 100.0);
+        }
+        return inner.parse().ok();
+    }
+    let pct: f32 = rest.parse().ok()?;
+    Some(pct / 100.0)
+}
+
+/// Parse `zoom-*` values: `zoom-150` → 1.5, `zoom-[2.5]` → 2.5, `zoom-normal` → 1.0.
+fn parse_zoom_token(rest: &str) -> Option<f32> {
+    match rest {
+        "normal" => return Some(1.0),
+        _ => {}
+    }
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            return pct.trim().parse::<f32>().ok().map(|v| (v / 100.0).max(0.0));
+        }
+        return inner.parse::<f32>().ok().map(|v| v.max(0.0));
+    }
+    let pct: f32 = rest.parse().ok()?;
+    Some((pct / 100.0).max(0.0))
+}
+
+/// Parse translate token: px via spacing scale, fractions (`1/2`, `full`), percentage (`[50%]`), arbitrary px (`[20px]`).
+fn parse_translate_token(rest: &str, is_x: bool) -> Option<KnownUtility<'_>> {
+    match rest {
+        "full" => return Some(if is_x { KnownUtility::TranslateXPct(1.0) } else { KnownUtility::TranslateYPct(1.0) }),
+        "1/2" => return Some(if is_x { KnownUtility::TranslateXPct(0.5) } else { KnownUtility::TranslateYPct(0.5) }),
+        "1/3" => return Some(if is_x { KnownUtility::TranslateXPct(1.0 / 3.0) } else { KnownUtility::TranslateYPct(1.0 / 3.0) }),
+        "2/3" => return Some(if is_x { KnownUtility::TranslateXPct(2.0 / 3.0) } else { KnownUtility::TranslateYPct(2.0 / 3.0) }),
+        "1/4" => return Some(if is_x { KnownUtility::TranslateXPct(0.25) } else { KnownUtility::TranslateYPct(0.25) }),
+        "3/4" => return Some(if is_x { KnownUtility::TranslateXPct(0.75) } else { KnownUtility::TranslateYPct(0.75) }),
+        _ => {}
+    }
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            let v: f32 = pct.trim().parse().ok()?;
+            return Some(if is_x { KnownUtility::TranslateXPct(v / 100.0) } else { KnownUtility::TranslateYPct(v / 100.0) });
+        }
+        if let Some(px) = inner.strip_suffix("px") {
+            let v: f32 = px.trim().parse().ok()?;
+            return Some(if is_x { KnownUtility::TranslateX(v) } else { KnownUtility::TranslateY(v) });
+        }
+        if let Some(rem) = inner.strip_suffix("rem") {
+            let v: f32 = rem.trim().parse().ok()?;
+            return Some(if is_x { KnownUtility::TranslateX(v * 16.0) } else { KnownUtility::TranslateY(v * 16.0) });
+        }
+        let v: f32 = inner.parse().ok()?;
+        return Some(if is_x { KnownUtility::TranslateX(v) } else { KnownUtility::TranslateY(v) });
+    }
+    spacing_token_to_px(rest).map(|px| if is_x { KnownUtility::TranslateX(px) } else { KnownUtility::TranslateY(px) })
+}
+
+/// Parse angle value: `45deg`, `0.5turn`, `1.57rad`, or bare number as degrees.
+fn parse_angle_value(s: &str) -> Option<f32> {
+    if let Some(deg) = s.strip_suffix("deg") {
+        return deg.trim().parse().ok();
+    }
+    if let Some(turn) = s.strip_suffix("turn") {
+        return turn.trim().parse::<f32>().ok().map(|v| v * 360.0);
+    }
+    if let Some(rad) = s.strip_suffix("rad") {
+        return rad.trim().parse::<f32>().ok().map(|v| v.to_degrees());
+    }
+    s.parse().ok()
 }
 
 fn parse_opacity_token(rest: &str) -> Option<f32> {
@@ -744,6 +875,34 @@ mod tests {
         assert!(matches!(
             classify_utility("scale-[1.2]"),
             Some(KnownUtility::Scale(1.2))
+        ));
+        assert!(matches!(
+            classify_utility("scale-x-150"),
+            Some(KnownUtility::ScaleX(1.5))
+        ));
+        assert!(matches!(
+            classify_utility("scale-y-[0.5]"),
+            Some(KnownUtility::ScaleY(0.5))
+        ));
+        assert!(matches!(
+            classify_utility("scale-[50%]"),
+            Some(KnownUtility::Scale(0.5))
+        ));
+        assert!(matches!(
+            classify_utility("zoom-200"),
+            Some(KnownUtility::Zoom(2.0))
+        ));
+        assert!(matches!(
+            classify_utility("zoom-normal"),
+            Some(KnownUtility::Zoom(1.0))
+        ));
+        assert!(matches!(
+            classify_utility("zoom-[1.5]"),
+            Some(KnownUtility::Zoom(1.5))
+        ));
+        assert!(matches!(
+            classify_utility("zoom-[75%]"),
+            Some(KnownUtility::Zoom(0.75))
         ));
         assert!(matches!(
             classify_utility("tracking-wide"),
