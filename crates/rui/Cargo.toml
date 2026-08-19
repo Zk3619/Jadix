@@ -22,6 +22,8 @@ system-tray = ["dep:tray-icon"]
 # the GL backend renders the same UI and its driver commits ~80 MB less on Windows.
 # Enable when you need WARP software fallback or D3D12-specific behaviour.
 backend-dx12 = ["wgpu/dx12"]
+# Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
+backend-vulkan = ["wgpu/vulkan"]
 # Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
 bundled-lucide = []
 # Embed large fonts into the binary (single-file distro; dramatically increases size).

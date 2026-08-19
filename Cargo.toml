@@ -17,15 +17,14 @@ palette = "0.7"
 bytemuck = { version = "1.25", features = ["derive"] }
 glyphon = "0.12.0"
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
-# Vulkan+GLES on Windows). Keep GL/Vulkan/Metal on by default; DX12 stays behind
-# `rui/backend-dx12` so the extra ~520 KiB and DXC stay opt-in.
+# Vulkan+GLES on Windows). Keep GL/Metal on by default; Vulkan/DX12 stay opt-in
+# so Windows release does not pull multiple native backends at once.
 # glyphon 0.12 pins wgpu 30 + cosmic-text 0.19; swash/fontdb/ttf-parser follow that stack.
 wgpu = { version = "30", default-features = false, features = [
     "std",
     "parking_lot",
     "wgsl",
     "gles",
-    "vulkan",
     "metal",
 ] }
 cosmic-text = "0.19"
@@ -47,6 +46,8 @@ serde_json = "1.0"
 codegen-units = 1
 # Extreme size: "z" over "s". Fat LTO deletes more dead code (slower / hungrier link).
 opt-level = "z"
-lto = true
-strip = true
+lto = "fat"
+debug = false
+split-debuginfo = "off"
+strip = "symbols"
 panic = "abort"

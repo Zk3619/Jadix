@@ -7,16 +7,15 @@ edition = "2021"
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
 rui = { path = "../../crates/rui", default-features = false, features = [
     "bundled-lucide",
-    "images",
     "svg",
 ] }
-winit = { workspace = true }
-wgpu = { workspace = true }
-pollster = { workspace = true }
-env_logger = { workspace = true }
+env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 
 [features]
+# Optional logger initialization for local profiling/debug.
+#   cargo run -p gallery --features runtime-logging
+runtime-logging = ["dep:env_logger"]
 # Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
 #   cargo run -p gallery --features system-tray
 system-tray = ["rui/system-tray"]
@@ -25,3 +24,6 @@ devtools = ["rui/devtools"]
 # WP-3.13 rotating cube. Off by default.
 #   cargo run -p gallery --features scene3d
 scene3d = ["rui/scene3d"]
+# Enable optional decoders (jpeg/gif/webp) for image demos.
+#   cargo run -p gallery --features images
+images = ["rui/images"]

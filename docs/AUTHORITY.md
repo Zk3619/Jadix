@@ -160,14 +160,15 @@ flowchart TB
   CV[Wave CV 稳定面验证]
   W2[W2 文本像素与内核]
   W3[W3 产品面与自绘]
+  WP[WP 性能收敛]
   W4[W4 发布]
   D0 --> W1
   W1 --> CV
   W1 --> W2
   CV --> W3c[W3 组件下沉 3.4/3.7/3.8]
   W2 --> W3
-  W2 --> W4
-  W3 --> W4
+  W3 --> WP
+  WP --> W4
   CV --> W4
 ```
 
@@ -178,6 +179,7 @@ flowchart TB
 | **CV** | 稳定面走查 + 身份审计 + 最小测网 | **挡组件大重构**；不单独挡 0.1 Win-first | 1–2 周 |
 | **W2** | 文本已签；Owner/Store；golden；**盒模型收口** | **已退出（2026-08-13）** 2.1–2.9 ☑；2.9 不挡 Beta | 2–3 周 |
 | **W3** | Gallery / Chart / 选器 / 外壳；**Svg/Canvas 自绘**；CV 后才下沉行为 | 分区已有；3.11/3.12 MVP 建议；3D/B16/B17 不挡 | 2–3 周 |
+| **WP** | 体积 / 内存 / 流畅度收敛；量化基线 + 退出门 | **挡 W4 发布**；不过门不 publish | 1–2 周 |
 | **W4** | CHANGELOG / crates.io / 文档站 / CI | **挡 Beta** | 1–2 周 |
 
 \*单人全职量级。每波结束：代码合入 + 测试绿 + **只改本文勾选** + 必要时改对应规范事实表。
@@ -601,7 +603,69 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 **W3 退出（产品+外壳，不要求 3.13 3D / B16 / B17）**：Gallery 分区完整；Chart≥2 种真实绘制（3.2 ☑）；Date/Time/Color+Command 键盘（3.3 ☑）；作者面默认 Owner（3.14 ☑）；浮层单一路径（3.4 ☑）；Router 历史可演示（3.5 ☑）；托盘接线（**3.6 ☑**，默认仍 stub）；布尔态原语（**3.7 ☑**）；API 词汇（**3.8 ☑**）；Form 校验路径（**3.9 ☑**）；VirtualMasonry（**3.10 ☑**，experimental）；**3.11 Svg ☑ · 3.12 Canvas ☑**。不可宣称「表单产品组件已进稳定面」（Form 仍是 experimental helpers）。不可宣称 VirtualMasonry 已进稳定面。
 
-### 5.6 Wave 4 — 发布与质量矩阵
+### 5.6 Wave P — 性能收敛（体积 / 内存 / 流畅度）
+
+**目标**：把开发期已感知的包体偏大、运行内存偏高、滚动/动画不流畅问题收敛到可发布水平；**量化退出，不做无底洞优化**。  
+**前置**：W3 已退出。**挡 W4**：不过退出门不 `cargo publish`。
+
+#### WP-P.0 基线摸底
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **P.0.1** | `release` 编译：`cargo build -p gallery --release` 产物体积；各 `--features` 组合增量 | ☐ |
+| **P.0.2** | 运行内存基线：空窗口 RSS / Gallery 满载 RSS（Win Task Manager / `process_info`） | ☐ |
+| **P.0.3** | 帧率基线：Gallery ScrollArea 连续滚动 p50/p99 帧时间（`--features devtools` 帧计数或外部工具） | ☐ |
+| **P.0.4** | 数据记入 [`size_and_memory.md`](size_and_memory.md)；后续每项优化前后对比写同一文档 | ☐ |
+
+#### WP-P.1 包体瘦身
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **P.1.1** | `cargo bloat --release -p gallery`：Top-20 函数 / crate 级占比；识别意外膨胀依赖 | ☑ 2026-08-19 |
+| **P.1.2** | 未用 feature 裁剪：`gallery` 默认裁掉 `rui/images`（jpeg/gif/webp）但保留 `rui/svg`；`scene3d` / `system-tray` / `devtools` 默认关确认；wgpu backend 按平台单选（Win 默认 GL，DX12/Vulkan 显式 feature；macOS=Metal）；热重载仅 debug/test 编译 | ☑ 2026-08-19 |
+| **P.1.3** | 泛型膨胀排查：热路径组件是否因 `impl Into<X>` 层层单态化；必要时 trait-object 化或 `#[inline(never)]` | ☑ 2026-08-20 |
+| **P.1.4** | LTO / codegen-units / strip：`Cargo.toml` `[profile.release]` 调优；记录体积变化 | ☑ 2026-08-20 |
+
+> 2026-08-20 P.1 快照：`gallery.exe` 约 8.75 MiB（`9,177,600` bytes）。P.1.3 已将 `layout_tree` 三处 `compute_layout_with_measure` 闭包合并为单 helper（`#[inline(never)]`）以收敛泛型单态化；P.1.4 已将 `[profile.release]` 显式收敛为 `lto="fat"` / `codegen-units=1` / `opt-level="z"` / `strip="symbols"` / `panic="abort"` / `debug=false` / `split-debuginfo="off"`。`cargo bloat --crates` Top 仍为 `rui` / `gallery` / `std` / `naga` / `wgpu_core` / `taffy` / `wgpu_hal`，`resvg` 约 78 KiB（非主因）。
+
+#### WP-P.2 运行内存收敛
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **P.2.1** | wgpu 显存：ADR-3「Win 默认 GL 降内存」落实检查；纹理 atlas / buffer 池化审计 | ☐ |
+| **P.2.2** | Element 树常驻开销：空闲窗口 `ElementTree` + `LayoutTree` 节点数与 RSS 占比 | ☐ |
+| **P.2.3** | 信号 / Store 注册表：长会话不膨胀（WP-2.4 已签，此处做 Gallery 实测确认） | ☐ |
+| **P.2.4** | 纹理缓存回收策略：不可见纹理 / glyph atlas 是否只增不减 | ☐ |
+
+#### WP-P.3 流畅度优化
+
+| 子项 | 任务 | 状态 |
+|------|------|------|
+| **P.3.1** | 帧热路径 profile（`cargo flamegraph` 或 Tracy）：定位 Top-3 帧时间瓶颈 | ☐ |
+| **P.3.2** | damage 策略实效：确认滚动/动画只重绘脏区；B8 GPU PartialLoad 关键子集是否可提前开启 | ☐ |
+| **P.3.3** | 布局热路径：滚动时 `compute_layout` 是否触发非必要全树重算；子树布局缓存命中率 | ☐ |
+| **P.3.4** | effect 风暴排查：三档更新纪律（§3 红线）实测；根裸 `get()` 诊断仍为 0 | ☐ |
+| **P.3.5** | 渲染批次：draw call 合并现状；文本 / 矩形是否逐元素提交 | ☐ |
+
+#### Wave P 退出门（量化 · 可判定）
+
+| 指标 | 退出标准 | 测量方式 | 失败 |
+|------|----------|----------|------|
+| **release 包体** | Gallery.exe ≤ 15 MB（strip + LTO 后） | `ls -l target/release/gallery.exe` | 超标须继续裁剪或记录已知原因 |
+| **空窗口 RSS** | ≤ 40 MB（Win，DX12 或 GL） | Task Manager / `process_info` | 超标 |
+| **Gallery 满载 RSS** | ≤ 120 MB（全分区已展开） | 同上 | 超标 |
+| **滚动帧率** | Gallery ScrollArea p99 ≤ 16.7 ms（≥ 60 fps） | DevTools 帧计数 / 外部帧率工具 | p99 > 20 ms |
+| **动画帧率** | CSS transition / Timeline 动画 p99 ≤ 16.7 ms | 同上 | p99 > 20 ms |
+
+> **注**：以上数值为初始建议门槛，P.0 基线摸底后可根据实际数据**上调或下调**，但必须在 `size_and_memory.md` 中记录调整理由。退出门不追求极致——目标是「可发布」而非「极限优化」。超标项若有明确已知原因（如 wgpu 本底开销）可标注豁免但须写入文档。
+
+**禁区**：换 wgpu / Skia 主线；为体积删除稳定面功能；为帧率放弃细粒度走回 VDOM；在优化 PR 中混入功能变更。
+
+**Wave P 退出**：P.0 基线已记录 + 退出门全过（或有文档化豁免）→ 进入 W4。
+
+---
+
+### 5.7 Wave 4 — 发布与质量矩阵
 
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
@@ -613,7 +677,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **WP-4.6** | 体积/内存发布核对 | — | ☐ |
 | **WP-4.7** | 对外叙事升 Beta | — | ☐ 依赖 §6 全勾 |
 
-### 5.7 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
+### 5.8 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
 
 并入 W2 之后或与 W3 交错；勾选仍只在本表。顺序：**5 → 3 → 9 → 7**（见 `REACTIVITY.md` §0.1）。**北极星**（不挡 0.1）：Solid 机制 × 原生 GUI，见 `REACTIVITY.md` §0.2 / §5.10。
 
@@ -640,6 +704,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 - [x] damage 策略可测（WP-2.2；GPU PartialLoad = B8）  
 - [x] 测宽对齐测 + ≥5 组件 golden CI（WP-2.1 ☑，**WP-2.6 ☑ 2026-08-13**；WP-4.5 CI 矩阵仍可加深）  
 - [x] WP-2.4：Owner 注册表无泄漏测（2026-08-13；`registry_owner`）  
+- [ ] Wave P 性能退出门已过或有文档化豁免（WP-P.0–P.3；[`size_and_memory.md`](size_and_memory.md)）  
 - [ ] 开放 P0 = 0（冒烟列、crates、文档站、CHANGELOG）  
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1 / 4.7）  
 
@@ -679,8 +744,9 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | 1–2 | **CV**（走查 + 最小测网 + 身份审计）∥ 启动 WP-2.4；macOS/Linux 冒烟可并行 |
 | 3–4 | WP-2.4 / 2.5 / 2.6 / 2.7 / **2.9**（盒模型）；CV 收尾 |
 | 5–6 | **W3**：**3.4 / 3.5 / 3.6 / 3.7 / 3.8 ☑**；**3.11 Svg / 3.12 Canvas / 3.13 ☑**（3D feature 默认关，不挡退出）；3.2/3.3/3.14 已签 |
-| 7 | WP-4.2–4.6；冻结承诺面 |
-| 8 | publish + 升 Beta |
+| 7 | **WP 性能收敛**：基线摸底 → 包体/内存/帧率优化 → 退出门 |
+| 8 | WP-4.2–4.6；冻结承诺面 |
+| 9 | publish + 升 Beta |
 
 原则：**一 WP 一 PR**（或与别名旧号同 PR，描述只点本文 ID）。  
 **未过 CV 不开 3.4/3.7/3.8。** 修不好的稳定候选**降级**，不阻塞 Beta。

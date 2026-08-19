@@ -53,6 +53,7 @@ impl From<accesskit_winit::Event> for RuiUserEvent {
 pub mod damage;
 #[cfg(debug_assertions)]
 mod hmr_log;
+#[cfg(any(debug_assertions, test))]
 mod hot_reload;
 pub(crate) mod image_registry;
 pub(crate) mod ime_support;

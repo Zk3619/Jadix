@@ -1479,6 +1479,25 @@ impl Default for LayoutTree {
 }
 
 impl LayoutTree {
+    /// Shared Taffy measure callback wrapper to avoid repeating closure
+    /// monomorphizations at multiple compute callsites.
+    #[inline(never)]
+    fn compute_layout_cached_measure(
+        &mut self,
+        node: NodeId,
+        available_space: Size<AvailableSpace>,
+    ) -> Result<(), taffy::TaffyError> {
+        let tm = &self.text_measurements;
+        let mcache = &self.measure_layout_cache;
+        self.taffy.compute_layout_with_measure(
+            node,
+            available_space,
+            |known_dimensions, available_space, node_id, _context, _style| {
+                measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+            },
+        )
+    }
+
     pub fn new() -> Self {
         let mut taffy = TaffyTree::new();
         // Taffy defaults to integer pixel rounding. That floors glyph widths
@@ -1775,19 +1794,10 @@ impl LayoutTree {
 
         let t_compute_begin = Instant::now();
         self.measure_layout_cache.borrow_mut().clear();
-        let tm = &self.text_measurements;
-        let mcache = &self.measure_layout_cache;
         {
             #[cfg(feature = "tracing")]
             let _taffy_span = tracing::trace_span!("layout_tree.taffy_compute").entered();
-            self.taffy
-                .compute_layout_with_measure(
-                    root_node,
-                    available_space,
-                    |known_dimensions, available_space, node_id, _context, _style| {
-                        measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-                    },
-                )
+            self.compute_layout_cached_measure(root_node, available_space)
                 .unwrap();
         }
         let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
@@ -1962,21 +1972,13 @@ impl LayoutTree {
 
             let t_compute_begin = Instant::now();
             self.measure_layout_cache.borrow_mut().clear();
-            let tm = &self.text_measurements;
-            let mcache = &self.measure_layout_cache;
             #[cfg(test)]
             {
                 self.last_compute_root = Some(compute_node);
             }
             // Note: We assume the caller has updated any necessary styles (like scrollbar thumbs)
             // using update_taffy_node_style before calling this.
-            if let Err(err) = self.taffy.compute_layout_with_measure(
-                compute_node,
-                available_space,
-                |known_dimensions, available_space, node_id, _context, _style| {
-                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-                },
-            ) {
+            if let Err(err) = self.compute_layout_cached_measure(compute_node, available_space) {
                 log::error!("taffy compute_layout_with_measure failed: {err:?}");
             }
             let relayout_ms =
@@ -2085,15 +2087,7 @@ impl LayoutTree {
         }
         let t0 = Instant::now();
         self.measure_layout_cache.borrow_mut().clear();
-        let tm = &self.text_measurements;
-        let mcache = &self.measure_layout_cache;
-        if let Err(err) = self.taffy.compute_layout_with_measure(
-            compute_node,
-            available_space,
-            |known_dimensions, available_space, node_id, _context, _style| {
-                measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
-            },
-        ) {
+        if let Err(err) = self.compute_layout_cached_measure(compute_node, available_space) {
             log::error!("taffy deferred-unit relayout failed: {err:?}");
         }
         t0.elapsed().as_secs_f32() * 1000.0

@@ -446,7 +446,13 @@ thread_local! {
 }
 
 fn set_active_navigator(host_id: String, pop: Rc<dyn Fn() -> bool>) {
-    ACTIVE_NAV.with(|c| *c.borrow_mut() = Some((host_id, pop)));
+    let prev = ACTIVE_NAV.with(|c| {
+        let mut b = c.borrow_mut();
+        std::mem::replace(&mut *b, Some((host_id, pop)))
+    });
+    // Drop old callback outside `RefCell` borrow scope: its captures may run
+    // cleanup hooks that re-enter `clear_active_navigator`.
+    drop(prev);
 }
 
 fn clear_active_navigator(host_id: &str) {
@@ -459,7 +465,12 @@ fn clear_active_navigator(host_id: &str) {
 }
 
 fn set_active_tick(host_id: String, tick: Rc<dyn Fn(f32) -> bool>) {
-    ACTIVE_TICK.with(|c| *c.borrow_mut() = Some((host_id, tick)));
+    let prev = ACTIVE_TICK.with(|c| {
+        let mut b = c.borrow_mut();
+        std::mem::replace(&mut *b, Some((host_id, tick)))
+    });
+    // Same re-entrancy rule as navigator callback replacement.
+    drop(prev);
 }
 
 fn clear_active_tick(host_id: &str) {
@@ -613,5 +624,25 @@ mod tests {
         );
         assert!(!tick_active(0.016));
         assert!(!tick_active(0.016));
+    }
+
+    #[test]
+    fn replacing_active_navigator_drops_old_callback_outside_borrow() {
+        struct DropClearNav;
+        impl Drop for DropClearNav {
+            fn drop(&mut self) {
+                clear_active_navigator("old_nav");
+            }
+        }
+        let guard = DropClearNav;
+        set_active_navigator(
+            "old_nav".into(),
+            Rc::new(move || {
+                let _ = &guard;
+                true
+            }) as Rc<dyn Fn() -> bool>,
+        );
+        set_active_navigator("new_nav".into(), Rc::new(|| true) as Rc<dyn Fn() -> bool>);
+        assert!(try_pop_active());
     }
 }

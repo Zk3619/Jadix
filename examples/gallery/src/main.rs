@@ -5276,6 +5276,7 @@ fn build_gallery_app() -> Element {
 }
 
 fn main() {
+    #[cfg(feature = "runtime-logging")]
     env_logger::Builder::from_env(
         env_logger::Env::default()
             .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off"),
