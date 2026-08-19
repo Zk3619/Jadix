@@ -1487,6 +1487,12 @@ impl Element {
         self.style.translate = [x, y];
         self
     }
+    /// Set translate as a fraction of own bounding box (CSS percentage translate).
+    /// `translate_pct(0.5, 0.0)` = shift right by 50% of own width.
+    pub fn translate_pct(mut self, x: f32, y: f32) -> Self {
+        self.style.translate_pct = [x, y];
+        self
+    }
     pub fn w(self, width: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::Width, width)
     }
@@ -1877,8 +1883,88 @@ impl Element {
         self.style.rotate_deg = deg;
         self
     }
+    /// CSS `scale` — uniform visual scale (does not affect layout).
     pub fn scale(mut self, scale: f32) -> Self {
-        self.style.scale = scale;
+        self.style.scale = [scale, scale];
+        self
+    }
+    /// CSS `scale: x y` — per-axis visual scale (does not affect layout).
+    pub fn scale_xy(mut self, x: f32, y: f32) -> Self {
+        self.style.scale = [x, y];
+        self
+    }
+    /// CSS `scale: x y z` — per-axis visual scale with Z (does not affect layout).
+    pub fn scale_xyz(mut self, x: f32, y: f32, z: f32) -> Self {
+        self.style.scale = [x, y];
+        self.style.scale_z = z;
+        self
+    }
+    /// CSS `transform` property — parse a CSS transform string.
+    pub fn css_transform(mut self, s: &str) -> Self {
+        self.style.transform = crate::style::parse_transform(s);
+        self
+    }
+    /// Set the CSS `transform-origin` from a CSS string (e.g. `"left top"`, `"50% 50%"`).
+    pub fn transform_origin(mut self, s: &str) -> Self {
+        self.style.transform_origin = crate::style::parse_transform_origin(s);
+        self
+    }
+    /// Set `transform-origin` by pixel offsets.
+    pub fn transform_origin_xy(mut self, x: f32, y: f32) -> Self {
+        use crate::layout::dimension::CssDim;
+        use crate::style::transform::{TransformOriginX, TransformOriginY};
+        self.style.transform_origin.x = TransformOriginX::Length(CssDim::Px(x));
+        self.style.transform_origin.y = TransformOriginY::Length(CssDim::Px(y));
+        self
+    }
+    /// CSS `transform-style`: `"flat"` or `"preserve-3d"`.
+    pub fn transform_style(mut self, s: &str) -> Self {
+        self.style.transform_style = crate::style::parse_transform_style(s);
+        self
+    }
+    /// CSS `transform-box`.
+    pub fn transform_box(mut self, s: &str) -> Self {
+        self.style.transform_box = crate::style::parse_transform_box(s);
+        self
+    }
+    /// Shorthand: apply `skew(xdeg, ydeg)` as a transform function.
+    pub fn skew(mut self, x_deg: f32, y_deg: f32) -> Self {
+        use crate::layout::dimension::CssAngle;
+        use crate::style::TransformFunction;
+        let func = TransformFunction::Skew(CssAngle::Deg(x_deg), Some(CssAngle::Deg(y_deg)));
+        self.style.transform.get_or_insert_with(Vec::new).push(func);
+        self
+    }
+    /// Shorthand: `skewX(deg)`.
+    pub fn skew_x(mut self, deg: f32) -> Self {
+        use crate::layout::dimension::CssAngle;
+        use crate::style::TransformFunction;
+        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::SkewX(CssAngle::Deg(deg)));
+        self
+    }
+    /// Shorthand: `skewY(deg)`.
+    pub fn skew_y(mut self, deg: f32) -> Self {
+        use crate::layout::dimension::CssAngle;
+        use crate::style::TransformFunction;
+        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::SkewY(CssAngle::Deg(deg)));
+        self
+    }
+    /// Shorthand: `perspective(px)`.
+    pub fn perspective(mut self, px: f32) -> Self {
+        use crate::layout::dimension::CssDim;
+        use crate::style::TransformFunction;
+        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::Perspective(CssDim::Px(px)));
+        self
+    }
+    /// Set a raw `matrix(a,b,c,d,e,f)` transform.
+    pub fn matrix(mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
+        use crate::style::TransformFunction;
+        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::Matrix([a, b, c, d, e, f]));
+        self
+    }
+    /// CSS `zoom` — magnification factor that **affects layout**.
+    pub fn zoom(mut self, factor: f32) -> Self {
+        self.style.zoom = factor.max(0.0);
         self
     }
     pub fn linear_gradient(mut self, from: [f32; 4], to: [f32; 4], angle_deg: f32) -> Self {

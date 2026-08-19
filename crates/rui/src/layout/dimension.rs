@@ -74,8 +74,69 @@ pub fn dimension_to_lpa(d: Dimension) -> LengthPercentageAuto {
     }
 }
 
-fn parse_css_number(s: &str) -> Option<f32> {
+pub(crate) fn parse_css_number(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok()
+}
+
+// ---------------------------------------------------------------------------
+// CSS angle type
+// ---------------------------------------------------------------------------
+
+/// CSS `<angle>` value: `deg | rad | grad | turn`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CssAngle {
+    Deg(f32),
+    Rad(f32),
+    Grad(f32),
+    Turn(f32),
+}
+
+impl Default for CssAngle {
+    fn default() -> Self {
+        Self::Deg(0.0)
+    }
+}
+
+impl CssAngle {
+    pub fn to_rad(self) -> f32 {
+        match self {
+            Self::Deg(d) => d * std::f32::consts::PI / 180.0,
+            Self::Rad(r) => r,
+            Self::Grad(g) => g * std::f32::consts::PI / 200.0,
+            Self::Turn(t) => t * 2.0 * std::f32::consts::PI,
+        }
+    }
+
+    pub fn to_deg(self) -> f32 {
+        match self {
+            Self::Deg(d) => d,
+            Self::Rad(r) => r * 180.0 / std::f32::consts::PI,
+            Self::Grad(g) => g * 0.9,
+            Self::Turn(t) => t * 360.0,
+        }
+    }
+}
+
+/// Parse a CSS angle string like `"45deg"`, `"1.5rad"`, `"100grad"`, `"0.5turn"`.
+/// Also accepts bare `"0"` as zero degrees.
+pub fn parse_css_angle(s: &str) -> Option<CssAngle> {
+    let s = s.trim();
+    if s == "0" {
+        return Some(CssAngle::Deg(0.0));
+    }
+    if let Some(raw) = s.strip_suffix("deg") {
+        return parse_css_number(raw).map(CssAngle::Deg);
+    }
+    if let Some(raw) = s.strip_suffix("grad") {
+        return parse_css_number(raw).map(CssAngle::Grad);
+    }
+    if let Some(raw) = s.strip_suffix("rad") {
+        return parse_css_number(raw).map(CssAngle::Rad);
+    }
+    if let Some(raw) = s.strip_suffix("turn") {
+        return parse_css_number(raw).map(CssAngle::Turn);
+    }
+    None
 }
 
 fn parse_css_length_px(s: &str, em_base_px: f32) -> Option<f32> {

@@ -582,7 +582,7 @@ fn push_per_side_border_strips(
     colors: [[f32; 4]; 4],
     styles: [crate::style::LineStyle; 4],
     opacity: f32,
-    rotate_deg: f32,
+    transform: [f32; 6],
     parent_clip: Option<[f32; 4]>,
 ) {
     use crate::style::LineStyle;
@@ -606,7 +606,7 @@ fn push_per_side_border_strips(
         style: LineStyle,
         horizontal: bool,
         opacity: f32,
-        rotate_deg: f32,
+        transform: [f32; 6],
         parent_clip: Option<[f32; 4]>,
     ) {
         if size[0] <= 0.0 || size[1] <= 0.0 || color[3] <= 0.0 || style.is_invisible() {
@@ -632,7 +632,7 @@ fn push_per_side_border_strips(
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
-                    rotate_deg,
+                    transform,
                     clip_pos: [0.0, 0.0],
                     clip_size: InstanceInput::NO_CLIP_SIZE,
                     border_extra: 0.0,
@@ -717,14 +717,14 @@ fn push_per_side_border_strips(
     }
 
     // Top (full width)
-    push_styled_side(instances, [x, y], [w, bt], colors[0], styles[0], true, opacity, rotate_deg, parent_clip);
+    push_styled_side(instances, [x, y], [w, bt], colors[0], styles[0], true, opacity, transform, parent_clip);
     // Bottom (full width)
-    push_styled_side(instances, [x, y + (h - bb).max(0.0)], [w, bb], colors[2], styles[2], true, opacity, rotate_deg, parent_clip);
+    push_styled_side(instances, [x, y + (h - bb).max(0.0)], [w, bb], colors[2], styles[2], true, opacity, transform, parent_clip);
     let mid_h = (h - bt - bb).max(0.0);
     // Left
-    push_styled_side(instances, [x, y + bt], [bl, mid_h], colors[3], styles[3], false, opacity, rotate_deg, parent_clip);
+    push_styled_side(instances, [x, y + bt], [bl, mid_h], colors[3], styles[3], false, opacity, transform, parent_clip);
     // Right
-    push_styled_side(instances, [x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1], styles[1], false, opacity, rotate_deg, parent_clip);
+    push_styled_side(instances, [x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1], styles[1], false, opacity, transform, parent_clip);
 }
 
 /// Generate nine-slice `TexturedDraw` instances for CSS `border-image`.
@@ -2330,27 +2330,45 @@ impl LayoutTree {
         } else {
             scroll_acc
         };
-        let render_x = abs_x - scroll_for_render[0] + element.style.translate[0];
-        let render_y = abs_y - scroll_for_render[1] + element.style.translate[1];
-        let scale = if element.style.scale.is_finite() && element.style.scale > 0.0 {
-            element.style.scale
+        let render_x = abs_x - scroll_for_render[0] + element.style.translate[0] + lay_w * element.style.translate_pct[0];
+        let render_y = abs_y - scroll_for_render[1] + element.style.translate[1] + lay_h * element.style.translate_pct[1];
+        let scale_x = if element.style.scale[0].is_finite() && element.style.scale[0] > 0.0 {
+            element.style.scale[0]
         } else {
             1.0
         };
-        let (vis_w, vis_h, vis_x, vis_y) = if (scale - 1.0).abs() > f32::EPSILON {
-            let sw = lay_w * scale;
-            let sh = lay_h * scale;
-            (
-                sw,
-                sh,
-                render_x + (lay_w - sw) * 0.5,
-                render_y + (lay_h - sh) * 0.5,
-            )
+        let scale_y = if element.style.scale[1].is_finite() && element.style.scale[1] > 0.0 {
+            element.style.scale[1]
         } else {
-            (lay_w, lay_h, render_x, render_y)
+            1.0
         };
+        let (vis_w, vis_h, vis_x, vis_y) =
+            if (scale_x - 1.0).abs() > f32::EPSILON || (scale_y - 1.0).abs() > f32::EPSILON {
+                let sw = lay_w * scale_x;
+                let sh = lay_h * scale_y;
+                (
+                    sw,
+                    sh,
+                    render_x + (lay_w - sw) * 0.5,
+                    render_y + (lay_h - sh) * 0.5,
+                )
+            } else {
+                (lay_w, lay_h, render_x, render_y)
+            };
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
-        let rotate_deg = element.style.rotate_deg;
+        let resolved_translate = [
+            element.style.translate[0] + lay_w * element.style.translate_pct[0],
+            element.style.translate[1] + lay_h * element.style.translate_pct[1],
+        ];
+        let transform = crate::style::compute_combined_transform(
+            &resolved_translate,
+            element.style.rotate_deg,
+            &element.style.scale,
+            element.style.transform.as_ref(),
+            &element.style.transform_origin,
+            vis_w,
+            vis_h,
+        );
         let self_inst0 = instances.len();
         let self_tex0 = textured_draws.len();
 
@@ -2451,7 +2469,7 @@ impl LayoutTree {
                             shadow_blur: 0.0,
                             shadow_spread: 0.0,
                             shadow_inset: 0.0,
-                            rotate_deg,
+                            transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: sdf_border_extra,
@@ -2473,7 +2491,7 @@ impl LayoutTree {
                             shadow_blur: element.style.shadow_blur,
                             shadow_spread: element.style.shadow_spread,
                             shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
-                            rotate_deg,
+                            transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: sdf_border_extra,
@@ -2495,7 +2513,7 @@ impl LayoutTree {
                         shadow_blur: element.style.shadow_blur,
                         shadow_spread: element.style.shadow_spread,
                         shadow_inset: if element.style.shadow_inset { 1.0 } else { 0.0 },
-                        rotate_deg,
+                        transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         border_extra: sdf_border_extra,
@@ -2511,7 +2529,7 @@ impl LayoutTree {
                     element.style.resolved_border_colors(),
                     element.style.resolved_border_styles(),
                     opacity,
-                    rotate_deg,
+                    transform,
                     parent_clip,
                 );
             }
@@ -2543,7 +2561,7 @@ impl LayoutTree {
                         shadow_blur: sh.blur,
                         shadow_spread: sh.spread,
                         shadow_inset: if sh.inset { 1.0 } else { 0.0 },
-                        rotate_deg,
+                        transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         border_extra: 0.0,
@@ -2607,7 +2625,7 @@ impl LayoutTree {
                                 shadow_blur: 0.0,
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
-                                rotate_deg: q.rotate_deg,
+                                transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
                                 border_extra: 0.0,
@@ -2665,7 +2683,7 @@ impl LayoutTree {
                             shadow_blur: 0.0,
                             shadow_spread: 0.0,
                             shadow_inset: 0.0,
-                            rotate_deg: q.rotate_deg,
+                            transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: 0.0,
@@ -2723,7 +2741,7 @@ impl LayoutTree {
                             shadow_blur: 0.0,
                             shadow_spread: 0.0,
                             shadow_inset: 0.0,
-                            rotate_deg,
+                            transform,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: 0.0,
@@ -2771,7 +2789,7 @@ impl LayoutTree {
                         shadow_blur: 0.0,
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
-                        rotate_deg,
+                        transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         border_extra: 0.0,
@@ -2988,8 +3006,8 @@ impl LayoutTree {
                     child,
                     child_nodes[i],
                     [
-                        abs_x + element.style.translate[0],
-                        abs_y + element.style.translate[1],
+                        abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
+                        abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
                     ],
                     next_scroll_acc,
                     clip,
@@ -3058,8 +3076,8 @@ impl LayoutTree {
                     &mut element.children[i],
                     child_nodes[i],
                     [
-                        abs_x + element.style.translate[0],
-                        abs_y + element.style.translate[1],
+                        abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
+                        abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
                     ],
                     next_scroll_acc,
                     clip,
@@ -3461,7 +3479,7 @@ fn push_chrome_rect(
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_inset: 0.0,
-            rotate_deg: 0.0,
+            transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: InstanceInput::NO_CLIP_SIZE,
             border_extra: 0.0,
