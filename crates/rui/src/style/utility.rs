@@ -383,24 +383,39 @@ fn tick_rui_transition_spring(el: &mut Element) -> bool {
                 crate::style::use_ui_transition_spring(&format!("{key}:tx"), el.style.translate[0]);
             let sy =
                 crate::style::use_ui_transition_spring(&format!("{key}:ty"), el.style.translate[1]);
+            let spx =
+                crate::style::use_ui_transition_spring(&format!("{key}:tpx"), el.style.translate_pct[0]);
+            let spy =
+                crate::style::use_ui_transition_spring(&format!("{key}:tpy"), el.style.translate_pct[1]);
             let sr =
                 crate::style::use_ui_transition_spring(&format!("{key}:rot"), el.style.rotate_deg);
-            let ss = crate::style::use_ui_transition_spring(&format!("{key}:sc"), el.style.scale);
+            let ssx = crate::style::use_ui_transition_spring(&format!("{key}:sx"), el.style.scale[0]);
+            let ssy = crate::style::use_ui_transition_spring(&format!("{key}:sy"), el.style.scale[1]);
             sx.set(el.style.translate[0]);
             sy.set(el.style.translate[1]);
+            spx.set(el.style.translate_pct[0]);
+            spy.set(el.style.translate_pct[1]);
             sr.set(el.style.rotate_deg);
-            ss.set(el.style.scale);
+            ssx.set(el.style.scale[0]);
+            ssy.set(el.style.scale[1]);
             let nx = sx.get();
             let ny = sy.get();
+            let npx = spx.get();
+            let npy = spy.get();
             let nr = sr.get();
-            let ns = ss.get();
+            let nsx = ssx.get();
+            let nsy = ssy.get();
             let changed = (el.style.translate[0] - nx).abs() > 0.01
                 || (el.style.translate[1] - ny).abs() > 0.01
+                || (el.style.translate_pct[0] - npx).abs() > 0.001
+                || (el.style.translate_pct[1] - npy).abs() > 0.001
                 || (el.style.rotate_deg - nr).abs() > 0.01
-                || (el.style.scale - ns).abs() > 0.001;
+                || (el.style.scale[0] - nsx).abs() > 0.001
+                || (el.style.scale[1] - nsy).abs() > 0.001;
             el.style.translate = [nx, ny];
+            el.style.translate_pct = [npx, npy];
             el.style.rotate_deg = nr;
-            el.style.scale = ns;
+            el.style.scale = [nsx, nsy];
             changed
         }
         _ => false,
@@ -649,9 +664,25 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
+        KnownUtility::TranslateXPct(p) => {
+            if (el.style.translate_pct[0] - p).abs() > f32::EPSILON {
+                el.style.translate_pct[0] = p;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
         KnownUtility::TranslateY(px) => {
             if (el.style.translate[1] - px).abs() > f32::EPSILON {
                 el.style.translate[1] = px;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::TranslateYPct(p) => {
+            if (el.style.translate_pct[1] - p).abs() > f32::EPSILON {
+                el.style.translate_pct[1] = p;
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
@@ -719,12 +750,68 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::Scale(s) => {
-            if (el.style.scale - s).abs() > f32::EPSILON {
-                el.style.scale = s;
+            let new = [s, s];
+            if (el.style.scale[0] - new[0]).abs() > f32::EPSILON
+                || (el.style.scale[1] - new[1]).abs() > f32::EPSILON
+            {
+                el.style.scale = new;
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
             }
+        }
+        KnownUtility::ScaleX(s) => {
+            if (el.style.scale[0] - s).abs() > f32::EPSILON {
+                el.style.scale[0] = s;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::ScaleY(s) => {
+            if (el.style.scale[1] - s).abs() > f32::EPSILON {
+                el.style.scale[1] = s;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::Zoom(z) => {
+            if (el.style.zoom - z).abs() > f32::EPSILON {
+                el.style.zoom = z;
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        KnownUtility::SkewX(deg) => {
+            use crate::layout::dimension::CssAngle;
+            use super::transform::TransformFunction;
+            let func = TransformFunction::SkewX(CssAngle::Deg(deg));
+            let list = el.style.transform.get_or_insert_with(Vec::new);
+            // Replace existing SkewX or append
+            if let Some(pos) = list.iter().position(|f| matches!(f, TransformFunction::SkewX(_))) {
+                list[pos] = func;
+            } else {
+                list.push(func);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::SkewY(deg) => {
+            use crate::layout::dimension::CssAngle;
+            use super::transform::TransformFunction;
+            let func = TransformFunction::SkewY(CssAngle::Deg(deg));
+            let list = el.style.transform.get_or_insert_with(Vec::new);
+            if let Some(pos) = list.iter().position(|f| matches!(f, TransformFunction::SkewY(_))) {
+                list[pos] = func;
+            } else {
+                list.push(func);
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransformOrigin(kw) => {
+            el.style.transform_origin = super::transform::parse_transform_origin(kw);
+            LayoutStatus::StyleChanged
         }
         KnownUtility::BgGradientTo(angle) => {
             let mut g = el.style.bg_gradient.unwrap_or_default();

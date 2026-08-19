@@ -11,7 +11,8 @@
 use taffy::prelude::*;
 
 use crate::layout::dimension::{
-    dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind, CssDim, DimKind, PercentAxis, UnitCtx,
+    dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind, lpa_kind, CssDim, DimKind, PercentAxis,
+    UnitCtx,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -452,10 +453,27 @@ pub struct Style {
     pub opacity: f32,
     /// Visual translate offset in logical px (MVP transform; does not affect layout).
     pub translate: [f32; 2],
+    /// Visual translate offset as fraction of own bounding box (CSS `translate: 50%`).
+    /// `[0.5, 0.0]` = shift right by half the element's width.
+    pub translate_pct: [f32; 2],
     /// Visual rotation in degrees around the element center (does not affect layout).
     pub rotate_deg: f32,
-    /// Visual uniform scale around the element center (does not affect layout). Default 1.0.
-    pub scale: f32,
+    /// Visual scale around the element center (does not affect layout).
+    /// `[x, y]`; CSS `scale` property supports 1–3 values (Z stored separately).
+    pub scale: [f32; 2],
+    /// Visual Z-axis scale (CSS `scale` 3-value form). Default 1.0. Reserved for 3D transforms.
+    pub scale_z: f32,
+    /// CSS `transform`: ordered list of transform functions. `None` = `none`.
+    pub transform: Option<super::transform::TransformList>,
+    /// CSS `transform-origin`. Default: `50% 50% 0` (center).
+    pub transform_origin: super::transform::TransformOrigin,
+    /// CSS `transform-box`. Default: `border-box` (for CSS elements).
+    pub transform_box: super::transform::TransformBox,
+    /// CSS `transform-style`. Default: `flat`.
+    pub transform_style: super::transform::TransformStyle,
+    /// CSS `zoom`: magnification factor that **affects layout** (scales size/padding/margin).
+    /// `1.0` = normal. Values > 1 enlarge, < 1 shrink. Applied before Taffy compute.
+    pub zoom: f32,
     /// CSS `aspect-ratio` (width / height). Passed to Taffy.
     pub aspect_ratio: Option<f32>,
     /// Emulate CSS `position: fixed` (taffy has no Fixed): Absolute layout + ignore ancestor scroll.
@@ -547,8 +565,15 @@ impl Default for Style {
             bg_gradient: None,
             opacity: 1.0,
             translate: [0.0, 0.0],
+            translate_pct: [0.0, 0.0],
             rotate_deg: 0.0,
-            scale: 1.0,
+            scale: [1.0, 1.0],
+            scale_z: 1.0,
+            transform: None,
+            transform_origin: super::transform::TransformOrigin::default(),
+            transform_box: super::transform::TransformBox::default(),
+            transform_style: super::transform::TransformStyle::default(),
+            zoom: 1.0,
             aspect_ratio: None,
             position_fixed: false,
             backdrop_blur: 0.0,
@@ -659,8 +684,32 @@ impl Style {
                 }
             }
         }
+        // CSS `zoom`: scale layout dimensions by the zoom factor.
+        let z = if self.zoom.is_finite() && self.zoom > 0.0 && (self.zoom - 1.0).abs() > f32::EPSILON {
+            self.zoom
+        } else {
+            1.0
+        };
+        if z != 1.0 {
+            size.width = zoom_dimension(size.width, z);
+            size.height = zoom_dimension(size.height, z);
+            min_size.width = zoom_dimension(min_size.width, z);
+            min_size.height = zoom_dimension(min_size.height, z);
+            max_size.width = zoom_dimension(max_size.width, z);
+            max_size.height = zoom_dimension(max_size.height, z);
+            flex_basis = zoom_dimension(flex_basis, z);
+            padding = zoom_rect_lp(padding, z);
+            margin = zoom_rect_lpa(margin, z);
+            gap.width = zoom_lp(gap.width, z);
+            gap.height = zoom_lp(gap.height, z);
+        }
+        let border = if z != 1.0 {
+            zoom_rect_lp_from(border, z)
+        } else {
+            border
+        };
+
         taffy::style::Style {
-            // 默认 BorderBox（Tailwind）。个别文案叶可改 ContentBox 以便自带 padding。
             box_sizing: self.box_sizing,
             display: self.display,
             flex_direction: self.flex_direction,
@@ -869,6 +918,50 @@ impl Style {
             UnitSlot::InsetT => self.inset.top = lpa,
             UnitSlot::InsetB => self.inset.bottom = lpa,
         }
+    }
+}
+
+/// Scale a `Dimension` by zoom factor (length values only; percent/auto pass through).
+fn zoom_dimension(dim: Dimension, z: f32) -> Dimension {
+    match dim_kind(dim) {
+        DimKind::Length(l) => Dimension::length(l * z),
+        _ => dim,
+    }
+}
+
+fn zoom_lp(lp: LengthPercentage, z: f32) -> LengthPercentage {
+    match lp_kind(lp) {
+        DimKind::Length(l) => LengthPercentage::length(l * z),
+        _ => lp,
+    }
+}
+
+fn zoom_rect_lp(r: Rect<LengthPercentage>, z: f32) -> Rect<LengthPercentage> {
+    Rect {
+        top: zoom_lp(r.top, z),
+        right: zoom_lp(r.right, z),
+        bottom: zoom_lp(r.bottom, z),
+        left: zoom_lp(r.left, z),
+    }
+}
+
+fn zoom_rect_lp_from(r: Rect<LengthPercentage>, z: f32) -> Rect<LengthPercentage> {
+    zoom_rect_lp(r, z)
+}
+
+fn zoom_lpa_val(lpa: LengthPercentageAuto, z: f32) -> LengthPercentageAuto {
+    match lpa_kind(lpa) {
+        DimKind::Length(l) => LengthPercentageAuto::length(l * z),
+        DimKind::Percent(_) | DimKind::Auto => lpa,
+    }
+}
+
+fn zoom_rect_lpa(r: Rect<LengthPercentageAuto>, z: f32) -> Rect<LengthPercentageAuto> {
+    Rect {
+        top: zoom_lpa_val(r.top, z),
+        right: zoom_lpa_val(r.right, z),
+        bottom: zoom_lpa_val(r.bottom, z),
+        left: zoom_lpa_val(r.left, z),
     }
 }
 

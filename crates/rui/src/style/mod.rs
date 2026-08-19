@@ -16,6 +16,7 @@ mod tailwind_leading;
 mod text_style;
 mod theme;
 pub mod timeline;
+pub mod transform;
 mod utility;
 
 pub use animation::{
@@ -60,6 +61,12 @@ pub use theme::{
 pub use timeline::{
     any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,
     Timeline, TimelineInner,
+};
+pub use transform::{
+    compute_combined_transform, mat2d_inverse, mat2d_is_identity, mat2d_transform_point,
+    parse_transform, parse_transform_box, parse_transform_origin, parse_transform_style,
+    resolve_transform_matrix, Mat2d, TransformBox, TransformFunction, TransformList,
+    TransformOrigin, TransformOriginX, TransformOriginY, TransformStyle, MAT2D_IDENTITY,
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, resolve_class_variants, sync_class_variants_subtree,
