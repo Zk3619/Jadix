@@ -112,6 +112,16 @@ pub(super) fn escape_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] 
     }
 }
 
+/// Compute the visual top-left of an element for hit testing, accounting for sticky offset.
+#[inline]
+pub(super) fn visual_xy(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    let b = el.layout_bounds;
+    [
+        b[0] - scroll_acc[0] + el.sticky_visual_offset[0],
+        b[1] - scroll_acc[1] + el.sticky_visual_offset[1],
+    ]
+}
+
 pub(super) fn pick_cursor(
     el: &Element,
     x: f32,
@@ -127,8 +137,7 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
     }
     let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
     let is_body_portal =
@@ -248,8 +257,7 @@ fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> L
     }
     let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
     let is_body_portal =
@@ -358,8 +366,7 @@ fn find_input_text_leaf_for_rest_acc(
                 || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
             {
                 let b = el.layout_bounds;
-                let vx = b[0] - scroll_acc[0];
-                let vy = b[1] - scroll_acc[1];
+                let [vx, vy] = visual_xy(el, scroll_acc);
                 return Some((
                     [vx, vy, b[2], b[3]],
                     text.clone(),
@@ -392,8 +399,7 @@ pub(super) fn find_input_text_at(
         return None;
     }
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
 
     if (el.style.overflow.x != taffy::style::Overflow::Visible
         || el.style.overflow.y != taffy::style::Overflow::Visible)
@@ -493,8 +499,7 @@ fn pointer_on_text_edit_adornment(el: &Element, x: f32, y: f32, scroll_acc: [f32
         return false;
     }
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
     let mut next_acc = scroll_acc;
     if el.style.overflow.x != taffy::style::Overflow::Visible {
         next_acc[0] += el.scroll_offset[0];
@@ -565,8 +570,7 @@ fn find_selectable_text_leaf_for_key_acc(
     {
         if let Some(text) = &el.text {
             let b = el.layout_bounds;
-            let vx = b[0] - scroll_acc[0];
-            let vy = b[1] - scroll_acc[1];
+            let [vx, vy] = visual_xy(el, scroll_acc);
             return Some((
                 [vx, vy, b[2], b[3]],
                 text.clone(),
@@ -589,8 +593,7 @@ pub(super) fn find_selectable_text_at(
         return None;
     }
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
 
     if (el.style.overflow.x != taffy::style::Overflow::Visible
         || el.style.overflow.y != taffy::style::Overflow::Visible)
@@ -698,8 +701,7 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
     };
 
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
     let is_body_portal =
@@ -771,8 +773,7 @@ pub(crate) fn find_click(
         return None;
     }
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
 
     if (el.style.overflow.x != taffy::style::Overflow::Visible
         || el.style.overflow.y != taffy::style::Overflow::Visible)
@@ -1268,8 +1269,7 @@ fn pick_element_path_acc(
     }
     let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = visual_xy(el, scroll_acc);
     let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
     let is_body_portal =

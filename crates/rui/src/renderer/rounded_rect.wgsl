@@ -14,14 +14,12 @@ struct InstanceInput {
     @location(7) border_width: f32,
     @location(8) shadow_color: vec4<f32>,
     @location(9) shadow_offset: vec2<f32>,
-    @location(10) shadow_blur: f32,
-    @location(11) shadow_spread: f32,
-    @location(12) shadow_inset: f32,
-    @location(13) transform_ab: vec2<f32>,   // [a, b] of 2D affine
-    @location(14) transform_cd: vec2<f32>,   // [c, d] of 2D affine
-    @location(15) transform_txty: vec2<f32>, // [tx, ty] of 2D affine
-    @location(16) clip_pos: vec2<f32>,
-    @location(17) clip_size_and_extra: vec3<f32>, // xy=clip_size, z=packed border_extra
+    @location(10) shadow_params: vec3<f32>, // x=blur, y=spread, z=inset
+    @location(11) transform_ab: vec2<f32>,   // [a, b] of 2D affine
+    @location(12) transform_cd: vec2<f32>,   // [c, d] of 2D affine
+    @location(13) transform_txty: vec2<f32>, // [tx, ty] of 2D affine
+    @location(14) clip_pos: vec2<f32>,
+    @location(15) clip_size_and_extra: vec3<f32>, // xy=clip_size, z=packed border_extra
 };
 
 struct VertexOutput {
@@ -77,12 +75,15 @@ fn vs_main(
     let txty = instance.transform_txty;
 
     // Extend quad: outset needs extra for blur/offset/spread; inset shadow lives inside the rect.
-    let spread = max(0.0, instance.shadow_spread);
+    let shadow_blur = instance.shadow_params.x;
+    let shadow_spread = instance.shadow_params.y;
+    let shadow_inset = instance.shadow_params.z;
+    let spread = max(0.0, shadow_spread);
     var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
-        + vec2<f32>(instance.shadow_blur * 2.0 + instance.border_width + spread);
-    if (instance.shadow_inset > 0.5) {
+        + vec2<f32>(shadow_blur * 2.0 + instance.border_width + spread);
+    if (shadow_inset > 0.5) {
         ext = vec2<f32>(
-            instance.shadow_blur * 2.0 + instance.border_width + abs(instance.shadow_spread)
+            shadow_blur * 2.0 + instance.border_width + abs(shadow_spread)
         );
     }
 
@@ -115,9 +116,9 @@ fn vs_main(
     out.border_width = instance.border_width;
     out.shadow_color = instance.shadow_color;
     out.shadow_offset = instance.shadow_offset;
-    out.shadow_blur = instance.shadow_blur;
-    out.shadow_spread = instance.shadow_spread;
-    out.shadow_inset = instance.shadow_inset;
+    out.shadow_blur = shadow_blur;
+    out.shadow_spread = shadow_spread;
+    out.shadow_inset = shadow_inset;
     out.clip_pos = instance.clip_pos;
     out.clip_size = instance.clip_size_and_extra.xy;
     out.frag_px = physical_pos;

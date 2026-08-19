@@ -1044,7 +1044,177 @@ fn BorderStyleShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// CSS `outline` 全能力展示。
+#[component]
+fn OutlineShowcase() -> rui::core::tree::Element {
+    fn outline_box(label: &str, color: [f32; 4], width: f32, style: &str, offset: f32, rounded: f32) -> Element {
+        let el: Element = Element::from(
+            r#box()
+                .w("7rem")
+                .h("4rem")
+                .bg(parse_color("background"))
+                .outline(color, width)
+                .outline_style(style)
+                .rounded(rounded),
+        ).outline_offset(offset);
+        ui! {
+            <VStack gap="0.25rem" items="center">
+                { el }
+                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+            </VStack>
+        }
+    }
+
+    fn shorthand_box(shorthand: &str) -> Element {
+        let el = Element::from(
+            r#box().w("7rem").h("4rem").bg(parse_color("background")).rounded(8.0)
+        ).apply_outline_shorthand(shorthand);
+        let label = shorthand.to_string();
+        ui! {
+            <VStack gap="0.25rem" items="center">
+                { el }
+                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+            </VStack>
+        }
+    }
+
+    let oc = parse_color("primary");
+
+    ui! {
+        <MyCard title="14) CSS Outline 全能力">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "outline 不占布局空间 · outline-style（solid/dashed/dotted/double/…） · outline-offset · outline 简写。"
+                </Label>
+
+                <Label font_weight="700" text_size="0.875rem">"outline-style 样式"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { outline_box("solid", oc, 3.0, "solid", 0.0, 8.0) }
+                    { outline_box("dotted", oc, 3.0, "dotted", 0.0, 8.0) }
+                    { outline_box("dashed", oc, 3.0, "dashed", 0.0, 8.0) }
+                    { outline_box("double", oc, 4.0, "double", 0.0, 8.0) }
+                    { outline_box("groove", oc, 4.0, "groove", 0.0, 8.0) }
+                    { outline_box("ridge", oc, 4.0, "ridge", 0.0, 8.0) }
+                    { outline_box("inset", oc, 4.0, "inset", 0.0, 8.0) }
+                    { outline_box("outset", oc, 4.0, "outset", 0.0, 8.0) }
+                    { outline_box("none", oc, 3.0, "none", 0.0, 8.0) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"outline-width"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { outline_box("1px", oc, 1.0, "solid", 0.0, 6.0) }
+                    { outline_box("2px", oc, 2.0, "solid", 0.0, 6.0) }
+                    { outline_box("4px", oc, 4.0, "solid", 0.0, 6.0) }
+                    { outline_box("8px", oc, 8.0, "solid", 0.0, 6.0) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"outline-offset"</Label>
+                <HStack gap="1.5rem" wrap="wrap" items="start" justify="start">
+                    { outline_box("offset: 0", oc, 3.0, "solid", 0.0, 8.0) }
+                    { outline_box("offset: 4px", oc, 3.0, "solid", 4.0, 8.0) }
+                    { outline_box("offset: 8px", oc, 3.0, "solid", 8.0, 8.0) }
+                    { outline_box("offset: 12px", oc, 3.0, "solid", 12.0, 8.0) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"outline-color"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { outline_box("primary", parse_color("primary"), 3.0, "solid", 0.0, 8.0) }
+                    { outline_box("destructive", parse_color("destructive"), 3.0, "solid", 0.0, 8.0) }
+                    { outline_box("chart-1", parse_color("chart-1"), 3.0, "solid", 0.0, 8.0) }
+                    { outline_box("accent", parse_color("accent"), 3.0, "dashed", 0.0, 8.0) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"outline 简写"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { shorthand_box("3px solid red") }
+                    { shorthand_box("4px dashed blue") }
+                    { shorthand_box("2px dotted green") }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"utility class"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        <Rect w="7rem" h="4rem" bg="background" rounded="0.5rem" class="outline outline-2 outline-offset-4" />
+                        <Label text_size="0.6rem" color="muted-foreground">"outline outline-2 outline-offset-4"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 /// CSS `scale` + `zoom` Gallery 展示。
+#[component]
+#[component]
+fn TransitionShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="CSS transition">
+            <VStack w="100%" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Hover each box to see CSS transition effects."
+                </Label>
+
+                <Label text_size="0.7rem" font_weight="600">"Opacity fade (transition-opacity)"</Label>
+                <HStack gap="0.75rem" wrap="wrap">
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                              class="transition-opacity duration-300 hover:opacity-[0.3]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"300ms"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                              class="transition-opacity duration-700 hover:opacity-[0.3]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"700ms"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                              class="transition-opacity duration-300 delay-200 hover:opacity-[0.3]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"300ms +delay"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label text_size="0.7rem" font_weight="600">"Transform (transition-transform)"</Label>
+                <HStack gap="0.75rem" wrap="wrap">
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                              class="transition-transform duration-300 ease-out hover:scale-125" />
+                        <Label text_size="0.55rem" color="muted-foreground">"scale 1.25"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="5rem" h="3rem" bg="accent" rounded="0.5rem"
+                              class="scale-100 transition-transform duration-300 ease-in hover:scale-75" />
+                        <Label text_size="0.55rem" color="muted-foreground">"scale 0.75"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label text_size="0.7rem" font_weight="600">"Timing function comparison (transition-all)"</Label>
+                <HStack gap="0.75rem" wrap="wrap">
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                              class="transition-all duration-500 ease-linear hover:opacity-[0.2]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"linear"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                              class="transition-all duration-500 ease-in hover:opacity-[0.2]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"ease-in"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                              class="transition-all duration-500 ease-out hover:opacity-[0.2]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"ease-out"</Label>
+                    </VStack>
+                    <VStack items="center" gap="0.2rem">
+                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                              class="transition-all duration-500 ease-in-out hover:opacity-[0.2]" />
+                        <Label text_size="0.55rem" color="muted-foreground">"ease-in-out"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn ScaleZoomShowcase() -> rui::core::tree::Element {
     ui! {
@@ -4973,6 +5143,8 @@ fn gallery_section_body(section: &str) -> Element {
                     <GridAndDragShowcase />
                     <ShadowShowcase />
                     <BorderStyleShowcase />
+                    <OutlineShowcase />
+                    <TransitionShowcase />
                     <ScaleZoomShowcase />
                     <RotateTranslateShowcase />
                     <TransformShowcase />

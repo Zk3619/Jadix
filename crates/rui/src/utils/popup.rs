@@ -496,7 +496,7 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
         let b = el.layout_bounds;
         out.push((
             fid.clone(),
-            [b[0] - scroll_acc[0], b[1] - scroll_acc[1], b[2], b[3]],
+            [b[0] - scroll_acc[0] + el.sticky_visual_offset[0], b[1] - scroll_acc[1] + el.sticky_visual_offset[1], b[2], b[3]],
         ));
     }
     let mut next_acc = scroll_acc;

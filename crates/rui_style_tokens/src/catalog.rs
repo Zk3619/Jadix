@@ -110,6 +110,16 @@ pub enum KnownUtility<'a> {
     PositionFixed,
     PositionAbsolute,
     PositionRelative,
+    PositionSticky,
+    PositionStatic,
+    /// `inset-*` / `top-*` / `right-*` / `bottom-*` / `left-*` spacing utilities.
+    InsetAll(String),
+    InsetX(String),
+    InsetY(String),
+    InsetTop(String),
+    InsetRight(String),
+    InsetBottom(String),
+    InsetLeft(String),
     AspectRatio(f32),
     Rotate(f32),
     /// Uniform scale (`scale-*`) — CSS `scale` single-value.
@@ -139,10 +149,22 @@ pub enum KnownUtility<'a> {
     LetterSpacing(f32),
     TextDirectionLtr,
     TextDirectionRtl,
-    /// `transition-opacity` — marks element for opacity transitions (`rui_transition=opacity`).
+    /// `transition-opacity` — marks element for opacity transitions.
     TransitionOpacity,
-    /// `transition-transform` — marks element for transform transitions (`rui_transition=transform`).
+    /// `transition-transform` — marks element for transform transitions.
     TransitionTransform,
+    /// `transition-all` — transition all animatable properties.
+    TransitionAll,
+    /// `transition-colors` — transition color-related properties.
+    TransitionColors,
+    /// `transition-none` — disable transitions.
+    TransitionNone,
+    /// `duration-N` — transition duration in ms (e.g. `duration-300`).
+    TransitionDuration(u32),
+    /// `delay-N` — transition delay in ms (e.g. `delay-150`).
+    TransitionDelay(u32),
+    /// `ease-*` — transition timing function.
+    TransitionEase(&'static str),
     /// `animate-spin` — continuous rotate (`rui_animate=spin`).
     AnimateSpin,
     /// `animate-none` — clear animation (`rui_animate=none`).
@@ -161,6 +183,14 @@ pub enum KnownUtility<'a> {
     BoxBorder,
     /// Tailwind `box-content` → `box-sizing: content-box`。
     BoxContent,
+    /// `outline-none` / `outline` / `outline-dashed` / `outline-dotted` / `outline-double` (style).
+    OutlineStyle(&'a str),
+    /// `outline-0` / `outline-1` / `outline-2` / `outline-4` / `outline-8` (width in px).
+    OutlineWidth(f32),
+    /// `outline-offset-*` (offset in px).
+    OutlineOffset(f32),
+    /// `outline-<color>` (color token).
+    OutlineColor(&'a str),
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -339,6 +369,13 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "self-baseline" => return Some(KnownUtility::AlignSelf("baseline")),
         "transition-opacity" => return Some(KnownUtility::TransitionOpacity),
         "transition-transform" => return Some(KnownUtility::TransitionTransform),
+        "transition-all" => return Some(KnownUtility::TransitionAll),
+        "transition-colors" => return Some(KnownUtility::TransitionColors),
+        "transition-none" => return Some(KnownUtility::TransitionNone),
+        "ease-linear" => return Some(KnownUtility::TransitionEase("linear")),
+        "ease-in" => return Some(KnownUtility::TransitionEase("ease-in")),
+        "ease-out" => return Some(KnownUtility::TransitionEase("ease-out")),
+        "ease-in-out" => return Some(KnownUtility::TransitionEase("ease-in-out")),
         "pointer-events-auto" => return Some(KnownUtility::PointerEventsAuto),
         "pointer-events-none" => return Some(KnownUtility::PointerEventsNone),
         "pointer-events-box-none" => return Some(KnownUtility::PointerEventsBoxNone),
@@ -530,7 +567,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     match token {
         "fixed" => return Some(KnownUtility::PositionFixed),
         "absolute" => return Some(KnownUtility::PositionAbsolute),
-        "relative" | "sticky" => return Some(KnownUtility::PositionRelative),
+        "relative" => return Some(KnownUtility::PositionRelative),
+        "sticky" => return Some(KnownUtility::PositionSticky),
+        "static" => return Some(KnownUtility::PositionStatic),
         "aspect-square" => return Some(KnownUtility::AspectRatio(1.0)),
         "aspect-video" => return Some(KnownUtility::AspectRatio(16.0 / 9.0)),
         "rtl" => return Some(KnownUtility::TextDirectionRtl),
@@ -621,6 +660,66 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::GradientTo(rest));
     }
 
+    // Transition duration / delay
+    if let Some(rest) = token.strip_prefix("duration-") {
+        if let Ok(ms) = rest.parse::<u32>() {
+            return Some(KnownUtility::TransitionDuration(ms));
+        }
+    }
+    if let Some(rest) = token.strip_prefix("delay-") {
+        if let Ok(ms) = rest.parse::<u32>() {
+            return Some(KnownUtility::TransitionDelay(ms));
+        }
+    }
+
+    // Outline utilities (Tailwind v4 style)
+    if let Some(rest) = token.strip_prefix("outline-offset-") {
+        let px = spacing_token_to_px(rest)?;
+        return Some(KnownUtility::OutlineOffset(px));
+    }
+    if let Some(rest) = token.strip_prefix("outline-") {
+        match rest {
+            "none" => return Some(KnownUtility::OutlineStyle("none")),
+            "dashed" => return Some(KnownUtility::OutlineStyle("dashed")),
+            "dotted" => return Some(KnownUtility::OutlineStyle("dotted")),
+            "double" => return Some(KnownUtility::OutlineStyle("double")),
+            "solid" => return Some(KnownUtility::OutlineStyle("solid")),
+            _ => {}
+        }
+        if let Some(px) = outline_width_token(rest) {
+            return Some(KnownUtility::OutlineWidth(px));
+        }
+        if !rest.is_empty() {
+            return Some(KnownUtility::OutlineColor(rest));
+        }
+    }
+    if token == "outline" {
+        return Some(KnownUtility::OutlineStyle("solid"));
+    }
+
+    // Inset / top / right / bottom / left utilities
+    if let Some(v) = spacing_value(token, "inset-x-") {
+        return Some(KnownUtility::InsetX(v));
+    }
+    if let Some(v) = spacing_value(token, "inset-y-") {
+        return Some(KnownUtility::InsetY(v));
+    }
+    if let Some(v) = spacing_value(token, "inset-") {
+        return Some(KnownUtility::InsetAll(v));
+    }
+    if let Some(v) = spacing_value(token, "top-") {
+        return Some(KnownUtility::InsetTop(v));
+    }
+    if let Some(v) = spacing_value(token, "right-") {
+        return Some(KnownUtility::InsetRight(v));
+    }
+    if let Some(v) = spacing_value(token, "bottom-") {
+        return Some(KnownUtility::InsetBottom(v));
+    }
+    if let Some(v) = spacing_value(token, "left-") {
+        return Some(KnownUtility::InsetLeft(v));
+    }
+
     if let Some(rest) = token.strip_prefix("tracking-") {
         if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             let inner = inner.trim();
@@ -648,6 +747,22 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     None
+}
+
+fn outline_width_token(rest: &str) -> Option<f32> {
+    match rest {
+        "0" => Some(0.0),
+        "1" => Some(1.0),
+        "2" => Some(2.0),
+        "4" => Some(4.0),
+        "8" => Some(8.0),
+        _ => {
+            if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                return inner.trim().strip_suffix("px").unwrap_or(inner.trim()).parse().ok();
+            }
+            None
+        }
+    }
 }
 
 fn parse_scale_value(rest: &str) -> Option<f32> {

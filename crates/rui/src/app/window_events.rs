@@ -2106,6 +2106,7 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
 
+        crate::style::utility::set_frame_dt(anim_dt);
         let anim_tick = crate::style::tick_animations(anim_dt);
         let nav_animating = crate::app::navigator::tick_active(anim_dt);
         if anim_tick.any || nav_animating {

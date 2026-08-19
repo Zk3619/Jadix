@@ -717,13 +717,25 @@ fn parse_overflow(value: &str) -> taffy::style::Overflow {
 fn apply_position(el: &mut Element, value: &str) -> LayoutStatus {
     use taffy::prelude::*;
     match value.trim().to_ascii_lowercase().as_str() {
-        "absolute" | "fixed" => {
+        "absolute" => {
             el.style.position = Position::Absolute;
-            el.style.position_fixed = value.eq_ignore_ascii_case("fixed");
+            el.style.position_fixed = false;
+            el.style.position_sticky = false;
+        }
+        "fixed" => {
+            el.style.position = Position::Absolute;
+            el.style.position_fixed = true;
+            el.style.position_sticky = false;
+        }
+        "sticky" => {
+            el.style.position = Position::Relative;
+            el.style.position_fixed = false;
+            el.style.position_sticky = true;
         }
         "relative" | "static" => {
             el.style.position = Position::Relative;
             el.style.position_fixed = false;
+            el.style.position_sticky = false;
         }
         _ => return LayoutStatus::Clean,
     }

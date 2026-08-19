@@ -91,6 +91,18 @@ impl ParseBoolLike for &String {
 
 /// Whether hit-testing may target this node's own bounds (not only descendants).
 #[inline]
+/// Parse CSS time value like `"300ms"` or `"0.3s"` into milliseconds.
+pub fn parse_time_ms(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(ms) = s.strip_suffix("ms") {
+        ms.trim().parse::<f32>().ok()
+    } else if let Some(secs) = s.strip_suffix('s') {
+        secs.trim().parse::<f32>().ok().map(|v| v * 1000.0)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
 pub fn pointer_events_targets_self(el: &Element) -> bool {
     el.pointer_events_mode() == PointerEvents::Auto
 }
@@ -253,6 +265,10 @@ pub struct Element {
     pub text_shape_suffix: Option<String>,
     pub text_style: TextStyle,
     pub layout_bounds: [f32; 4],
+    /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
+    pub sticky_visual_offset: [f32; 2],
+    /// Per-element CSS transition tween state (persists across frames).
+    pub transition_snapshot: crate::style::TransitionSnapshot,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
@@ -548,6 +564,8 @@ impl Element {
             text_shape_suffix: None,
             text_style: TextStyle::default(),
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
+            sticky_visual_offset: [0.0, 0.0],
+            transition_snapshot: Default::default(),
             on_click: None,
             on_hover: None,
             on_mousedown: None,
@@ -1429,6 +1447,38 @@ impl Element {
         self.style.outline_width = width;
         self
     }
+    pub fn outline_offset(mut self, offset: impl IntoF32) -> Self {
+        self.style.outline_offset = offset.into_f32();
+        self
+    }
+    /// Parse CSS `outline` shorthand: `<line-width> || <line-style> || <color>` (any order).
+    pub fn apply_outline_shorthand(mut self, value: impl AsRef<str>) -> Self {
+        let parts: Vec<&str> = value.as_ref().split_whitespace().collect();
+        for token in &parts {
+            let t = token.to_ascii_lowercase();
+            if matches!(
+                t.as_str(),
+                "none" | "auto" | "dotted" | "dashed" | "solid" | "double"
+                    | "groove" | "ridge" | "inset" | "outset"
+            ) {
+                self.style.outline_style = LineStyle::from_css_keyword(&t);
+            } else if token.bytes().next().map_or(false, |b| b.is_ascii_digit() || b == b'.') {
+                self.style.outline_width = (*token).into_f32();
+            } else {
+                self.style.outline_color = parse_color(token);
+            }
+        }
+        if self.style.outline_style == LineStyle::None
+            && self.style.outline_width > 0.0
+            && parts.iter().any(|p| {
+                let t = p.to_ascii_lowercase();
+                !matches!(t.as_str(), "none")
+            })
+        {
+            self.style.outline_style = LineStyle::Solid;
+        }
+        self
+    }
     pub fn rounded(mut self, radius: impl IntoF32) -> Self {
         let r = radius.into_f32();
         self.style.radii = [r, r, r, r];
@@ -1463,6 +1513,91 @@ impl Element {
         self.style.backdrop_blur = blur.into_f32().max(0.0);
         self
     }
+    /// Parse CSS `transition` shorthand, e.g. `"opacity 300ms ease-in-out 100ms"`.
+    /// Multiple entries separated by commas.
+    pub fn transition(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::{TransitionEntry, TransitionProperty, TimingFunction};
+        self.style.transition.clear();
+        for segment in value.as_ref().split(',') {
+            let parts: Vec<&str> = segment.split_whitespace().collect();
+            if parts.is_empty() { continue; }
+            let mut property = TransitionProperty::All;
+            let mut duration_ms: f32 = 0.0;
+            let mut delay_ms: f32 = 0.0;
+            let mut timing = TimingFunction::Ease;
+            let mut dur_set = false;
+            for p in &parts {
+                if let Some(ms) = parse_time_ms(p) {
+                    if !dur_set { duration_ms = ms; dur_set = true; } else { delay_ms = ms; }
+                } else if p.starts_with("cubic-bezier(") || p.contains("cubic-bezier") {
+                    timing = TimingFunction::from_css(p);
+                } else {
+                    match *p {
+                        "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" => {
+                            timing = TimingFunction::from_css(p);
+                        }
+                        _ => property = TransitionProperty::from_css(p),
+                    }
+                }
+            }
+            self.style.transition.push(TransitionEntry { property, duration_ms, delay_ms, timing });
+        }
+        self
+    }
+
+    pub fn transition_property(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::TransitionProperty;
+        let props: Vec<TransitionProperty> = value.as_ref()
+            .split(',')
+            .map(|s| TransitionProperty::from_css(s))
+            .collect();
+        if self.style.transition.is_empty() {
+            for p in props {
+                self.style.transition.push(crate::style::TransitionEntry {
+                    property: p, duration_ms: 0.0, delay_ms: 0.0,
+                    timing: crate::style::TimingFunction::Ease,
+                });
+            }
+        } else {
+            for (i, p) in props.into_iter().enumerate() {
+                let idx: usize = i.min(self.style.transition.len() - 1);
+                self.style.transition[idx].property = p;
+            }
+        }
+        self
+    }
+
+    pub fn transition_duration(mut self, value: impl AsRef<str>) -> Self {
+        let durations: Vec<f32> = value.as_ref().split(',').filter_map(|s| parse_time_ms(s.trim())).collect();
+        for (i, d) in durations.into_iter().enumerate() {
+            if i < self.style.transition.len() {
+                self.style.transition[i].duration_ms = d;
+            }
+        }
+        self
+    }
+
+    pub fn transition_delay(mut self, value: impl AsRef<str>) -> Self {
+        let delays: Vec<f32> = value.as_ref().split(',').filter_map(|s| parse_time_ms(s.trim())).collect();
+        for (i, d) in delays.into_iter().enumerate() {
+            if i < self.style.transition.len() {
+                self.style.transition[i].delay_ms = d;
+            }
+        }
+        self
+    }
+
+    pub fn transition_timing_function(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::TimingFunction;
+        let funcs: Vec<TimingFunction> = value.as_ref().split(',').map(|s| TimingFunction::from_css(s.trim())).collect();
+        for (i, f) in funcs.into_iter().enumerate() {
+            if i < self.style.transition.len() {
+                self.style.transition[i].timing = f;
+            }
+        }
+        self
+    }
+
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
         self.style.shadow_offset[0] = dx;
         self
@@ -1859,17 +1994,48 @@ impl Element {
 
     pub fn absolute(mut self) -> Self {
         self.style.position = Position::Absolute;
+        self.style.position_fixed = false;
+        self.style.position_sticky = false;
         self
     }
     pub fn relative(mut self) -> Self {
         self.style.position = Position::Relative;
+        self.style.position_fixed = false;
+        self.style.position_sticky = false;
+        self
+    }
+    /// CSS `position: static` — normal flow, inset properties ignored.
+    pub fn static_position(mut self) -> Self {
+        self.style.position = Position::Relative;
+        self.style.position_fixed = false;
+        self.style.position_sticky = false;
         self
     }
 
     pub fn fixed(mut self) -> Self {
         self.style.position = Position::Absolute;
         self.style.position_fixed = true;
+        self.style.position_sticky = false;
         self
+    }
+
+    /// CSS `position: sticky` — relative layout + scroll-aware offset clamping.
+    pub fn sticky(mut self) -> Self {
+        self.style.position = Position::Relative;
+        self.style.position_fixed = false;
+        self.style.position_sticky = true;
+        self
+    }
+
+    /// Generic CSS `position` setter: `"static"` | `"relative"` | `"absolute"` | `"fixed"` | `"sticky"`.
+    pub fn position(self, value: impl AsRef<str>) -> Self {
+        match value.as_ref().trim().to_ascii_lowercase().as_str() {
+            "absolute" => self.absolute(),
+            "fixed" => self.fixed(),
+            "sticky" => self.sticky(),
+            "static" => self.static_position(),
+            _ => self.relative(),
+        }
     }
     pub fn aspect_ratio(mut self, ratio: f32) -> Self {
         self.style.aspect_ratio = Some(ratio);

@@ -359,6 +359,187 @@ pub fn any_ui_animation_active() -> bool {
     }) || super::timeline::any_timeline_playing()
 }
 
+// ─── CSS Transition engine ───────────────────────────────────────────────
+
+use super::element_style::{TimingFunction, TransitionEntry, TransitionProperty};
+use std::collections::HashMap;
+
+/// Per-property in-flight tween state.
+#[derive(Clone, Debug)]
+struct PropertyTween {
+    from: [f32; 4],
+    to: [f32; 4],
+    /// Number of meaningful components (1 for scalar, 4 for color).
+    components: u8,
+    elapsed: f32,
+    duration_ms: f32,
+    delay_ms: f32,
+    timing: TimingFunction,
+    active: bool,
+}
+
+/// Per-element transition snapshot stored alongside the element.
+#[derive(Clone, Debug, Default)]
+pub struct TransitionSnapshot {
+    tweens: HashMap<TransitionProperty, PropertyTween>,
+}
+
+fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 4], u8) {
+    match prop {
+        TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::BackgroundColor => (style.bg_color, 4),
+        TransitionProperty::BorderColor => (style.border_color, 4),
+        TransitionProperty::OutlineColor => (style.outline_color, 4),
+        TransitionProperty::Color => ([0.0; 4], 0), // text color is on TextStyle, not Style
+        TransitionProperty::OutlineWidth => ([style.outline_width, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::OutlineOffset => ([style.outline_offset, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::BoxShadow => {
+            ([style.shadow_color[0], style.shadow_color[1], style.shadow_color[2], style.shadow_color[3]], 4)
+        }
+        TransitionProperty::Transform => {
+            ([style.scale[0], style.scale[1], style.rotate_deg, 0.0], 3)
+        }
+        TransitionProperty::All => ([0.0; 4], 0),
+    }
+}
+
+fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 4]) {
+    match prop {
+        TransitionProperty::Opacity => style.opacity = val[0],
+        TransitionProperty::BackgroundColor => style.bg_color = *val,
+        TransitionProperty::BorderColor => style.border_color = *val,
+        TransitionProperty::OutlineColor => style.outline_color = *val,
+        TransitionProperty::Color => {} // text color is on TextStyle
+        TransitionProperty::OutlineWidth => style.outline_width = val[0],
+        TransitionProperty::OutlineOffset => style.outline_offset = val[0],
+        TransitionProperty::BoxShadow => style.shadow_color = *val,
+        TransitionProperty::Transform => {
+            style.scale = [val[0], val[1]];
+            style.rotate_deg = val[2];
+        }
+        TransitionProperty::All => {}
+    }
+}
+
+fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+fn lerp_arr(a: &[f32; 4], b: &[f32; 4], t: f32, n: u8) -> [f32; 4] {
+    let mut out = [0.0; 4];
+    for i in 0..n as usize {
+        out[i] = lerp_f32(a[i], b[i], t);
+    }
+    out
+}
+
+/// All concrete properties that `All` expands into.
+const ALL_PROPS: &[TransitionProperty] = &[
+    TransitionProperty::Opacity,
+    TransitionProperty::BackgroundColor,
+    TransitionProperty::BorderColor,
+    TransitionProperty::OutlineColor,
+    TransitionProperty::OutlineWidth,
+    TransitionProperty::OutlineOffset,
+    TransitionProperty::BoxShadow,
+    TransitionProperty::Color,
+    TransitionProperty::Transform,
+];
+
+/// Tick CSS transitions for a single element. Returns `true` if any tween is still active.
+///
+/// Call this **after** class-variant resolution has written the target style.
+/// `snapshot` is mutable storage that persists across frames on the element.
+pub fn tick_element_transitions(
+    style: &mut super::Style,
+    snapshot: &mut TransitionSnapshot,
+    dt_secs: f32,
+) -> bool {
+    if style.transition.is_empty() {
+        if !snapshot.tweens.is_empty() {
+            snapshot.tweens.clear();
+        }
+        return false;
+    }
+
+    let dt_ms = dt_secs * 1000.0;
+
+    // Clone transition config to avoid borrow conflict with style mutation.
+    let transition_entries: Vec<TransitionEntry> = style.transition.clone();
+
+    // Build a lookup: for each concrete property, find the best matching entry index.
+    let mut config_map: HashMap<TransitionProperty, usize> = HashMap::new();
+    for (idx, entry) in transition_entries.iter().enumerate() {
+        if entry.property == TransitionProperty::All {
+            for &p in ALL_PROPS {
+                config_map.entry(p).or_insert(idx);
+            }
+        } else {
+            config_map.insert(entry.property, idx);
+        }
+    }
+
+    let mut any_active = false;
+
+    for (&prop, &cfg_idx) in &config_map {
+        let cfg = &transition_entries[cfg_idx];
+        let (target, comps) = extract_prop(style, prop);
+        if comps == 0 {
+            continue;
+        }
+
+        let tween = snapshot.tweens.entry(prop).or_insert_with(|| PropertyTween {
+            from: target,
+            to: target,
+            components: comps,
+            elapsed: 0.0,
+            duration_ms: cfg.duration_ms,
+            delay_ms: cfg.delay_ms,
+            timing: cfg.timing,
+            active: false,
+        });
+
+        // Target changed → restart tween from current interpolated value.
+        let target_changed = (0..comps as usize).any(|i| (tween.to[i] - target[i]).abs() > 1e-5);
+        if target_changed {
+            if tween.active {
+                let t = ((tween.elapsed - tween.delay_ms).max(0.0) / tween.duration_ms.max(0.001)).min(1.0);
+                let eased = tween.timing.eval(t);
+                tween.from = lerp_arr(&tween.from, &tween.to, eased, comps);
+            }
+            tween.to = target;
+            tween.elapsed = 0.0;
+            tween.duration_ms = cfg.duration_ms;
+            tween.delay_ms = cfg.delay_ms;
+            tween.timing = cfg.timing;
+            tween.active = true;
+        }
+
+        if !tween.active {
+            continue;
+        }
+
+        tween.elapsed += dt_ms;
+        let eff_elapsed = (tween.elapsed - tween.delay_ms).max(0.0);
+        let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
+        let eased = tween.timing.eval(linear_t);
+        let interpolated = lerp_arr(&tween.from, &tween.to, eased, comps);
+        write_prop(style, prop, &interpolated);
+
+        if linear_t >= 1.0 - 1e-6 {
+            tween.active = false;
+            tween.from = tween.to;
+            write_prop(style, prop, &tween.to);
+        } else {
+            any_active = true;
+        }
+    }
+
+    snapshot.tweens.retain(|p, _| config_map.contains_key(p));
+
+    any_active
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

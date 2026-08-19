@@ -8,10 +8,25 @@ use rui_style_tokens::{
     classify_utility, parse_class_list, KnownUtility, ParsedClassList, VariantSelector,
 };
 
+use std::cell::Cell;
+
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::style::{parse_color, parse_text_color, Style, TextStyle};
+
+thread_local! {
+    static FRAME_DT: Cell<f32> = const { Cell::new(1.0 / 60.0) };
+}
+
+/// Set the frame delta-time (seconds) used by CSS transition ticking.
+pub fn set_frame_dt(dt: f32) {
+    FRAME_DT.with(|c| c.set(dt));
+}
+
+fn frame_dt() -> f32 {
+    FRAME_DT.with(|c| c.get())
+}
 
 /// Snapshot + variant rules attached to an [`Element`] after [`apply_class_list`].
 #[derive(Clone, Debug, Default)]
@@ -226,8 +241,8 @@ fn sync_class_variants_subtree_inner(
     };
 
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0];
+    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
     let inside = mouse_pos[0] >= vx
         && mouse_pos[1] >= vy
         && mouse_pos[0] < vx + b[2]
@@ -260,13 +275,19 @@ fn sync_class_variants_subtree_inner(
     // MVP `animate-spin`: advance rotate each frame while the attr is set.
     let spun = tick_animate_spin(el);
     let sprung = tick_rui_transition_spring(el);
+    let css_trans = super::animation::tick_element_transitions(
+        &mut el.style,
+        &mut el.transition_snapshot,
+        frame_dt(),
+    );
     if local != LayoutStatus::Clean
         || spun
         || sprung
+        || css_trans
         || el.style != before
         || el.text_style != before_text
     {
-        *impact = impact.merge(if spun || sprung {
+        *impact = impact.merge(if spun || sprung || css_trans {
             local.merge(LayoutStatus::StyleChanged)
         } else {
             local
@@ -441,6 +462,17 @@ fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflo
         LayoutStatus::Clean
     } else {
         LayoutStatus::LayoutChanged
+    }
+}
+
+fn ensure_transition_entry(el: &mut Element, prop: crate::style::TransitionProperty) {
+    if !el.style.transition.iter().any(|e| e.property == prop) {
+        el.style.transition.push(crate::style::TransitionEntry {
+            property: prop,
+            duration_ms: 150.0,
+            delay_ms: 0.0,
+            timing: crate::style::TimingFunction::Ease,
+        });
     }
 }
 
@@ -713,8 +745,43 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             LayoutStatus::LayoutChanged
         }
         KnownUtility::PositionRelative => {
-            el.style.position_fixed = false;
             *el = std::mem::take(el).relative();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::PositionSticky => {
+            *el = std::mem::take(el).sticky();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::PositionStatic => {
+            *el = std::mem::take(el).static_position();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetAll(v) => {
+            *el = std::mem::take(el).inset(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetX(v) => {
+            *el = std::mem::take(el).left(v.as_str()).right(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetY(v) => {
+            *el = std::mem::take(el).top(v.as_str()).bottom(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetTop(v) => {
+            *el = std::mem::take(el).top(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetRight(v) => {
+            *el = std::mem::take(el).right(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetBottom(v) => {
+            *el = std::mem::take(el).bottom(v.as_str());
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::InsetLeft(v) => {
+            *el = std::mem::take(el).left(v.as_str());
             LayoutStatus::LayoutChanged
         }
         KnownUtility::PointerEventsAuto => {
@@ -860,24 +927,47 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::TransitionOpacity => {
-            let prev = el
-                .attrs
-                .insert("rui_transition".to_string(), "opacity".to_string());
-            if prev.as_deref() == Some("opacity") {
-                LayoutStatus::Clean
-            } else {
-                LayoutStatus::StyleChanged
-            }
+            ensure_transition_entry(el, crate::style::TransitionProperty::Opacity);
+            LayoutStatus::StyleChanged
         }
         KnownUtility::TransitionTransform => {
-            let prev = el
-                .attrs
-                .insert("rui_transition".to_string(), "transform".to_string());
-            if prev.as_deref() == Some("transform") {
-                LayoutStatus::Clean
-            } else {
-                LayoutStatus::StyleChanged
+            ensure_transition_entry(el, crate::style::TransitionProperty::Transform);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionAll => {
+            ensure_transition_entry(el, crate::style::TransitionProperty::All);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionColors => {
+            ensure_transition_entry(el, crate::style::TransitionProperty::BackgroundColor);
+            ensure_transition_entry(el, crate::style::TransitionProperty::BorderColor);
+            ensure_transition_entry(el, crate::style::TransitionProperty::OutlineColor);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionNone => {
+            el.style.transition.clear();
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionDuration(ms) => {
+            let ms_f = ms as f32;
+            for entry in &mut el.style.transition {
+                entry.duration_ms = ms_f;
             }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionDelay(ms) => {
+            let ms_f = ms as f32;
+            for entry in &mut el.style.transition {
+                entry.delay_ms = ms_f;
+            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::TransitionEase(name) => {
+            let tf = crate::style::TimingFunction::from_css(name);
+            for entry in &mut el.style.transition {
+                entry.timing = tf;
+            }
+            LayoutStatus::StyleChanged
         }
         KnownUtility::AnimateSpin => {
             let prev = el
@@ -933,6 +1023,49 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             } else {
                 LayoutStatus::LayoutChanged
+            }
+        }
+        KnownUtility::OutlineStyle(kw) => {
+            use crate::style::LineStyle;
+            let s = LineStyle::from_css_keyword(kw);
+            if el.style.outline_style == s {
+                LayoutStatus::Clean
+            } else {
+                el.style.outline_style = s;
+                // Tailwind `outline` implies currentColor; default transparent → foreground.
+                if !s.is_invisible() && el.style.outline_color == [0.0, 0.0, 0.0, 0.0] {
+                    el.style.outline_color = parse_color("foreground");
+                }
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::OutlineWidth(px) => {
+            if (el.style.outline_width - px).abs() < f32::EPSILON {
+                LayoutStatus::Clean
+            } else {
+                el.style.outline_width = px;
+                // Ensure visible color when width is set without explicit color.
+                if px > 0.0 && el.style.outline_color == [0.0, 0.0, 0.0, 0.0] {
+                    el.style.outline_color = parse_color("foreground");
+                }
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::OutlineOffset(px) => {
+            if (el.style.outline_offset - px).abs() < f32::EPSILON {
+                LayoutStatus::Clean
+            } else {
+                el.style.outline_offset = px;
+                LayoutStatus::StyleChanged
+            }
+        }
+        KnownUtility::OutlineColor(c) => {
+            let color = parse_color(c);
+            if el.style.outline_color == color {
+                LayoutStatus::Clean
+            } else {
+                el.style.outline_color = color;
+                LayoutStatus::StyleChanged
             }
         }
     }

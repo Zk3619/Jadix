@@ -370,8 +370,7 @@ fn hit_path_rec(
     };
 
     let b = el.layout_bounds;
-    let vx = b[0] - scroll_acc[0];
-    let vy = b[1] - scroll_acc[1];
+    let [vx, vy] = super::tree_hit::visual_xy(el, scroll_acc);
 
     // Root portal layer must not reject hits via its own box when children extend
     // visually (layer is a stacking shell; children carry geometry).

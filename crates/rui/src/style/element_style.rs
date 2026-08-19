@@ -439,6 +439,9 @@ pub struct Style {
     pub outline_style: LineStyle,
     pub outline_color: [f32; 4],
     pub outline_width: f32,
+    /// Distance between the outline and the border edge (CSS `outline-offset`).
+    /// Positive = outward, negative = inward. Default 0.
+    pub outline_offset: f32,
     pub radii: [f32; 4],
     pub shadow_color: [f32; 4],
     pub shadow_offset: [f32; 2],
@@ -478,9 +481,113 @@ pub struct Style {
     pub aspect_ratio: Option<f32>,
     /// Emulate CSS `position: fixed` (taffy has no Fixed): Absolute layout + ignore ancestor scroll.
     pub position_fixed: bool,
+    /// Emulate CSS `position: sticky`: Relative layout + scroll-aware offset clamping.
+    pub position_sticky: bool,
     /// CSS-like `backdrop-filter: blur(Npx)` radius in logical px. `0` = off.
     /// Consumed by fullscreen modal underlays ([`crate::primitives::overlay`]); general elements TBD.
     pub backdrop_blur: f32,
+    /// CSS `transition` entries. Each entry specifies which property to animate,
+    /// duration, delay, and timing function.
+    pub transition: Vec<TransitionEntry>,
+}
+
+/// Which CSS property a transition applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TransitionProperty {
+    All,
+    Opacity,
+    Transform,
+    BackgroundColor,
+    BorderColor,
+    OutlineColor,
+    OutlineWidth,
+    OutlineOffset,
+    BoxShadow,
+    Color,
+}
+
+impl TransitionProperty {
+    pub fn from_css(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" => Self::All,
+            "opacity" => Self::Opacity,
+            "transform" => Self::Transform,
+            "background-color" | "background" | "bg" => Self::BackgroundColor,
+            "border-color" => Self::BorderColor,
+            "outline-color" => Self::OutlineColor,
+            "outline-width" => Self::OutlineWidth,
+            "outline-offset" => Self::OutlineOffset,
+            "box-shadow" | "shadow" => Self::BoxShadow,
+            "color" => Self::Color,
+            _ => Self::All,
+        }
+    }
+
+    /// Whether this property matches a specific property (All matches everything).
+    pub fn matches(self, specific: Self) -> bool {
+        self == Self::All || self == specific
+    }
+}
+
+/// CSS `transition-timing-function`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TimingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    CubicBezier(f32, f32, f32, f32),
+}
+
+impl Default for TimingFunction {
+    fn default() -> Self {
+        Self::Ease
+    }
+}
+
+impl TimingFunction {
+    pub fn eval(&self, t: f32) -> f32 {
+        use super::animation::cubic_bezier_y_at_x;
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::Ease => cubic_bezier_y_at_x(t, 0.25, 0.1, 0.25, 1.0),
+            Self::EaseIn => cubic_bezier_y_at_x(t, 0.42, 0.0, 1.0, 1.0),
+            Self::EaseOut => cubic_bezier_y_at_x(t, 0.0, 0.0, 0.58, 1.0),
+            Self::EaseInOut => cubic_bezier_y_at_x(t, 0.42, 0.0, 0.58, 1.0),
+            Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_y_at_x(t, *x1, *y1, *x2, *y2),
+        }
+    }
+
+    pub fn from_css(s: &str) -> Self {
+        let s = s.trim().to_ascii_lowercase();
+        match s.as_str() {
+            "linear" => Self::Linear,
+            "ease" => Self::Ease,
+            "ease-in" => Self::EaseIn,
+            "ease-out" => Self::EaseOut,
+            "ease-in-out" => Self::EaseInOut,
+            _ => {
+                if let Some(inner) = s.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')) {
+                    let parts: Vec<f32> = inner.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                    if parts.len() == 4 {
+                        return Self::CubicBezier(parts[0], parts[1], parts[2], parts[3]);
+                    }
+                }
+                Self::Ease
+            }
+        }
+    }
+}
+
+/// A single CSS transition entry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransitionEntry {
+    pub property: TransitionProperty,
+    pub duration_ms: f32,
+    pub delay_ms: f32,
+    pub timing: TimingFunction,
 }
 
 impl Default for Style {
@@ -555,6 +662,7 @@ impl Default for Style {
             outline_style: LineStyle::None,
             outline_color: [0.0, 0.0, 0.0, 0.0],
             outline_width: 0.0,
+            outline_offset: 0.0,
             radii: [0.0; 4],
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             shadow_offset: [0.0, 0.0],
@@ -576,7 +684,9 @@ impl Default for Style {
             zoom: 1.0,
             aspect_ratio: None,
             position_fixed: false,
+            position_sticky: false,
             backdrop_blur: 0.0,
+            transition: Vec::new(),
         }
     }
 }

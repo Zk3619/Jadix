@@ -115,6 +115,43 @@ fn outline_does_not_expand_pointer_hit() {
 }
 
 #[test]
+fn outline_offset_expands_outline_rect() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let target: Element = {
+                let el: Element = r#box()
+                    .w(100.0)
+                    .h(80.0)
+                    .outline([1.0, 0.0, 0.0, 1.0], 4.0)
+                    .into();
+                el.outline_offset(8.0)
+            };
+            let mut root = Element::new().w(300.0).h(200.0).p(40.0).child(target);
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut root, 300.0, 200.0, [-1.0, -1.0]);
+            let el = &root.children[0];
+            let b = el.layout_bounds;
+            // layout_bounds must remain unaffected
+            assert!(
+                (b[2] - 100.0).abs() < 1.0 && (b[3] - 80.0).abs() < 1.0,
+                "outline_offset must not change layout_bounds, got {:?}",
+                b
+            );
+            // outline instance should be expanded by (width + offset) * 2 = (4+8)*2 = 24 per axis
+            let outline = result
+                .instances
+                .iter()
+                .find(|i| i.border_width > 2.0 && (i.rect_size[0] - (b[2] + 24.0)).abs() < 2.0)
+                .expect("outline instance expanded by offset+width");
+            assert!(
+                outline.rect_pos[0] < b[0] - 1.0,
+                "outline with offset starts further outside layout_bounds"
+            );
+        });
+    });
+}
+
+#[test]
 fn border_edge_is_hittable() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {

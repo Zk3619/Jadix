@@ -2273,6 +2273,7 @@ fn expand_node(
                                 | "flex_basis"
                                 | "absolute"
                                 | "relative"
+                                | "position"
                                 | "pointer_events"
                                 | "pointerEvents"
                                 | "cursor"
@@ -2354,6 +2355,18 @@ fn expand_node(
                                 | "outlineColor"
                                 | "outline_width"
                                 | "outlineWidth"
+                                | "outline_offset"
+                                | "outlineOffset"
+                                | "outline"
+                                | "transition"
+                                | "transition_property"
+                                | "transitionProperty"
+                                | "transition_duration"
+                                | "transitionDuration"
+                                | "transition_delay"
+                                | "transitionDelay"
+                                | "transition_timing_function"
+                                | "transitionTimingFunction"
                                 | "shadow"
                                 | "box_shadow"
                                 | "boxShadow"
@@ -2638,6 +2651,11 @@ fn expand_node(
                                 "outlineStyle" => "outline_style",
                                 "outlineColor" => "outline_color",
                                 "outlineWidth" => "outline_width",
+                                "outlineOffset" => "outline_offset",
+                                "transitionProperty" => "transition_property",
+                                "transitionDuration" => "transition_duration",
+                                "transitionDelay" => "transition_delay",
+                                "transitionTimingFunction" => "transition_timing_function",
                                 "boxShadow" | "box-shadow" => "box_shadow",
                                 "boxShadowColor" => "box_shadow_color",
                                 "boxShadowBlur" => "box_shadow_blur",
@@ -3327,6 +3345,27 @@ fn expand_node(
                     "outline_width" | "outlineWidth" => {
                         element = quote! { #element.outline_width(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
+                    "outline_offset" | "outlineOffset" => {
+                        element = quote! { #element.outline_offset(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "outline" => {
+                        element = quote! { #element.apply_outline_shorthand(#value) }
+                    }
+                    "transition" => {
+                        element = quote! { #element.transition(#value) }
+                    }
+                    "transition_property" => {
+                        element = quote! { #element.transition_property(#value) }
+                    }
+                    "transition_duration" => {
+                        element = quote! { #element.transition_duration(#value) }
+                    }
+                    "transition_delay" => {
+                        element = quote! { #element.transition_delay(#value) }
+                    }
+                    "transition_timing_function" => {
+                        element = quote! { #element.transition_timing_function(#value) }
+                    }
                     "color" | "text_color" => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;
@@ -3685,6 +3724,7 @@ fn expand_node(
                     "pointer_events" | "pointerEvents" => {
                         element = quote! { #element.pointer_events(#value) }
                     }
+                    "position" => element = quote! { #element.position(#value) },
                     "cursor" => element = quote! { #element.cursor(#value) },
                     "top" => element = quote! { #element.top(#value) },
                     "right" => element = quote! { #element.right(#value) },

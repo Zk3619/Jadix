@@ -17,12 +17,12 @@ mod text_style;
 mod theme;
 pub mod timeline;
 pub mod transform;
-mod utility;
+pub(crate) mod utility;
 
 pub use animation::{
     any_ui_animation_active, cubic_bezier_y_at_x, tick_animations, use_scrollbar_visibility_spring,
     use_spring, use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween,
-    CubicTweenState, Spring, SpringState,
+    CubicTweenState, Spring, SpringState, TransitionSnapshot,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
@@ -36,7 +36,7 @@ pub use cursor_image::register_cursor_rgba8;
 pub(crate) use cursor_image::CustomCursorCache;
 pub use element_style::{
     parse_box_shadow, parse_box_shadows, BorderImageRepeat, BoxShadow, CornerShape, LineStyle,
-    LinearGradient, Style, UnitSlot,
+    LinearGradient, Style, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
 };
 pub use focus_ring::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,

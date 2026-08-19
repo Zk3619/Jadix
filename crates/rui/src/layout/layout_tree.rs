@@ -2330,8 +2330,41 @@ impl LayoutTree {
         } else {
             scroll_acc
         };
-        let render_x = abs_x - scroll_for_render[0] + element.style.translate[0] + lay_w * element.style.translate_pct[0];
-        let render_y = abs_y - scroll_for_render[1] + element.style.translate[1] + lay_h * element.style.translate_pct[1];
+        let mut render_x = abs_x - scroll_for_render[0] + element.style.translate[0] + lay_w * element.style.translate_pct[0];
+        let mut render_y = abs_y - scroll_for_render[1] + element.style.translate[1] + lay_h * element.style.translate_pct[1];
+
+        // CSS `position: sticky` — clamp render position within the nearest scroll ancestor clip.
+        if element.style.position_sticky {
+            let orig_rx = render_x;
+            let orig_ry = render_y;
+            if let Some(clip) = parent_clip {
+                let clip_top = clip[1];
+                let clip_left = clip[0];
+                let clip_bottom = clip[1] + clip[3];
+                let clip_right = clip[0] + clip[2];
+
+                let inset_top = lpa_to_px(element.style.inset.top);
+                let inset_bottom = lpa_to_px(element.style.inset.bottom);
+                let inset_left = lpa_to_px(element.style.inset.left);
+                let inset_right = lpa_to_px(element.style.inset.right);
+
+                if let Some(t) = inset_top {
+                    render_y = render_y.max(clip_top + t);
+                }
+                if let Some(b) = inset_bottom {
+                    render_y = render_y.min(clip_bottom - lay_h - b);
+                }
+                if let Some(l) = inset_left {
+                    render_x = render_x.max(clip_left + l);
+                }
+                if let Some(r) = inset_right {
+                    render_x = render_x.min(clip_right - lay_w - r);
+                }
+            }
+            element.sticky_visual_offset = [render_x - orig_rx, render_y - orig_ry];
+        } else {
+            element.sticky_visual_offset = [0.0, 0.0];
+        }
         let scale_x = if element.style.scale[0].is_finite() && element.style.scale[0] > 0.0 {
             element.style.scale[0]
         } else {
@@ -2759,23 +2792,29 @@ impl LayoutTree {
             element.style.outline_width
         };
         if outline_w > 0.0 && lay_w > 0.0 && lay_h > 0.0 {
-            // Outline should not be clipped by element's own overflow; only parent clip applies.
+            // outline-offset: gap between the border edge and the outline.
+            let oo = element.style.outline_offset;
             let outline_rect = [
-                render_x - outline_w,
-                render_y - outline_w,
-                lay_w + outline_w * 2.0,
-                lay_h + outline_w * 2.0,
+                render_x - outline_w - oo,
+                render_y - outline_w - oo,
+                lay_w + (outline_w + oo) * 2.0,
+                lay_h + (outline_w + oo) * 2.0,
             ];
             let outline_visible = intersect_rect(parent_clip, outline_rect);
             if outline_visible[2] > 0.0 && outline_visible[3] > 0.0 {
                 let mut outline_radii = element.style.radii;
                 for r in &mut outline_radii {
                     if *r >= 0.0 {
-                        *r += outline_w;
+                        *r += outline_w + oo;
                     }
                 }
                 let resolved_radii =
                     resolve_corner_radii(outline_radii, outline_rect[2], outline_rect[3]);
+                let outline_extra = InstanceInput::pack_border_extra(
+                    element.style.outline_style.to_shader_f32(),
+                    element.style.corner_shape.to_shader_f32(),
+                    element.style.corner_shape.shader_param(),
+                );
                 instances.push(
                     InstanceInput {
                         rect_pos: [outline_rect[0], outline_rect[1]],
@@ -2792,7 +2831,7 @@ impl LayoutTree {
                         transform,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
+                        border_extra: outline_extra,
                     }
                     .with_clip(parent_clip),
                 );
@@ -3399,6 +3438,16 @@ fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {
 fn hidden_input_text_clip(parent_clip: Option<[f32; 4]>, leaf: [f32; 4]) -> Option<[f32; 4]> {
     const INK: f32 = 2.0;
     Some(intersect_rect(parent_clip, inflate_rect(leaf, INK, 0.0)))
+}
+
+/// Extract a definite px value from `LengthPercentageAuto`, returning `None` for `Auto`.
+#[inline]
+fn lpa_to_px(v: taffy::style::LengthPercentageAuto) -> Option<f32> {
+    use crate::layout::dimension::{lpa_kind, DimKind};
+    match lpa_kind(v) {
+        DimKind::Length(px) => Some(px),
+        DimKind::Percent(_) | DimKind::Auto => None,
+    }
 }
 
 fn intersect_rect(clip: Option<[f32; 4]>, rect: [f32; 4]) -> [f32; 4] {
