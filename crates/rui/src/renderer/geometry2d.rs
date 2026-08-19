@@ -55,7 +55,7 @@ pub fn quads_to_instances(
                 shadow_blur: 0.0,
                 shadow_spread: 0.0,
                 shadow_inset: 0.0,
-                rotate_deg: q.rotate_deg,
+                transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
                 clip_pos,
                 clip_size,
                 border_extra: 0.0,

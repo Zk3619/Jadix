@@ -17,9 +17,11 @@ struct InstanceInput {
     @location(10) shadow_blur: f32,
     @location(11) shadow_spread: f32,
     @location(12) shadow_inset: f32,
-    @location(13) rotate_deg: f32,
-    @location(14) clip_pos: vec2<f32>,
-    @location(15) clip_size_and_extra: vec3<f32>, // xy=clip_size, z=packed border_extra
+    @location(13) transform_ab: vec2<f32>,   // [a, b] of 2D affine
+    @location(14) transform_cd: vec2<f32>,   // [c, d] of 2D affine
+    @location(15) transform_txty: vec2<f32>, // [tx, ty] of 2D affine
+    @location(16) clip_pos: vec2<f32>,
+    @location(17) clip_size_and_extra: vec3<f32>, // xy=clip_size, z=packed border_extra
 };
 
 struct VertexOutput {
@@ -49,8 +51,18 @@ struct Globals {
 @group(0) @binding(0)
 var<uniform> globals: Globals;
 
-fn rotate2(v: vec2<f32>, c: f32, s: f32) -> vec2<f32> {
-    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
+// Apply the linear part (2x2) of the affine transform.
+fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(ab.x * v.x + cd.x * v.y,
+                     ab.y * v.x + cd.y * v.y);
+}
+
+// Inverse of the 2x2 linear part.
+fn affine_inv_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
+    let det = ab.x * cd.y - ab.y * cd.x;
+    let inv_det = 1.0 / det;
+    return vec2<f32>( cd.y * v.x - cd.x * v.y,
+                     -ab.y * v.x + ab.x * v.y) * inv_det;
 }
 
 @vertex
@@ -60,39 +72,41 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    let center = instance.rect_pos + instance.rect_size * 0.5;
-    let angle = instance.rotate_deg * 0.017453292519943295;
-    let ca = cos(angle);
-    let sa = sin(angle);
+    let ab = instance.transform_ab;
+    let cd = instance.transform_cd;
+    let txty = instance.transform_txty;
 
     // Extend quad: outset needs extra for blur/offset/spread; inset shadow lives inside the rect.
     let spread = max(0.0, instance.shadow_spread);
     var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
         + vec2<f32>(instance.shadow_blur * 2.0 + instance.border_width + spread);
     if (instance.shadow_inset > 0.5) {
-        // Inset ring can extend inward with positive spread; keep margin for blur + spread sampling.
         ext = vec2<f32>(
             instance.shadow_blur * 2.0 + instance.border_width + abs(instance.shadow_spread)
         );
     }
 
-    // Grow AABB enough to cover rotated corners.
+    // Grow AABB enough to cover all four transformed corners.
     let half = instance.rect_size * 0.5 + ext;
-    let c0 = abs(rotate2(vec2<f32>( half.x,  half.y), ca, sa));
-    let c1 = abs(rotate2(vec2<f32>( half.x, -half.y), ca, sa));
-    let c2 = abs(rotate2(vec2<f32>(-half.x,  half.y), ca, sa));
-    let c3 = abs(rotate2(vec2<f32>(-half.x, -half.y), ca, sa));
-    let rot_half = max(max(c0, c1), max(c2, c3));
+    let c0 = abs(affine_linear(vec2<f32>( half.x,  half.y), ab, cd));
+    let c1 = abs(affine_linear(vec2<f32>( half.x, -half.y), ab, cd));
+    let c2 = abs(affine_linear(vec2<f32>(-half.x,  half.y), ab, cd));
+    let c3 = abs(affine_linear(vec2<f32>(-half.x, -half.y), ab, cd));
+    let aabb_half = max(max(c0, c1), max(c2, c3));
 
-    let local = (model.position - 0.5) * 2.0 * rot_half;
-    let physical_pos = center + rotate2(local, ca, sa);
+    let local_scaled = (model.position - 0.5) * 2.0 * aabb_half;
+    // Inverse-transform the fragment position back to local space for SDF.
+    let local = affine_inv_linear(local_scaled, ab, cd);
+
+    // Physical position: rect_pos already includes the affine tx/ty offset.
+    let center = instance.rect_pos + instance.rect_size * 0.5;
+    let physical_pos = center + local_scaled + txty;
 
     // Convert to NDC
     let x = (physical_pos.x / globals.resolution.x) * 2.0 - 1.0;
     let y = 1.0 - (physical_pos.y / globals.resolution.y) * 2.0;
 
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    // SDF samples in unrotated local space.
     out.p = local;
     out.rect_size = instance.rect_size;
     out.color = instance.color;

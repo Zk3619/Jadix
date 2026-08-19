@@ -61,8 +61,9 @@ pub struct InstanceInput {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_inset: f32,
-    /// Visual rotation in degrees around rect center.
-    pub rotate_deg: f32,
+    /// 2D affine transform `[a, b, c, d, tx, ty]`.
+    /// Identity = `[1, 0, 0, 1, 0, 0]`.
+    pub transform: [f32; 6],
     /// Overflow clip in the same space as `rect_pos` (logical or physical after scale).
     /// When `clip_size[0] < 0.0`, clipping is disabled.
     pub clip_pos: [f32; 2],
@@ -152,24 +153,40 @@ impl InstanceInput {
                     shader_location: 11,
                     format: wgpu::VertexFormat::Float32,
                 },
+                // shadow_inset
                 wgpu::VertexAttribute {
                     offset: 100,
                     shader_location: 12,
                     format: wgpu::VertexFormat::Float32,
                 },
+                // transform_ab [a, b]
                 wgpu::VertexAttribute {
                     offset: 104,
                     shader_location: 13,
-                    format: wgpu::VertexFormat::Float32,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
+                // transform_cd [c, d]
                 wgpu::VertexAttribute {
-                    offset: 108,
+                    offset: 112,
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x2,
                 },
+                // transform_txty [tx, ty]
                 wgpu::VertexAttribute {
-                    offset: 116,
+                    offset: 120,
                     shader_location: 15,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // clip_pos
+                wgpu::VertexAttribute {
+                    offset: 128,
+                    shader_location: 16,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // clip_size + border_extra
+                wgpu::VertexAttribute {
+                    offset: 136,
+                    shader_location: 17,
                     format: wgpu::VertexFormat::Float32x3,
                 },
             ],
