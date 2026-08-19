@@ -20,6 +20,8 @@ log = { workspace = true }
 # Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
 #   cargo run -p gallery --features system-tray
 system-tray = ["rui/system-tray"]
+# B1 Inspector (F12). cargo run -p gallery --features devtools
+devtools = ["rui/devtools"]
 # WP-3.13 rotating cube. Off by default.
 #   cargo run -p gallery --features scene3d
 scene3d = ["rui/scene3d"]

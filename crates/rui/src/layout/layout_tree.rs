@@ -580,42 +580,234 @@ fn push_per_side_border_strips(
     render_rect: [f32; 4],
     widths: [f32; 4],
     colors: [[f32; 4]; 4],
+    styles: [crate::style::LineStyle; 4],
     opacity: f32,
     rotate_deg: f32,
     parent_clip: Option<[f32; 4]>,
 ) {
+    use crate::style::LineStyle;
     let [x, y, w, h] = render_rect;
     let [bt, br, bb, bl] = widths;
-    let mut push = |pos: [f32; 2], size: [f32; 2], color: [f32; 4]| {
-        if size[0] <= 0.0 || size[1] <= 0.0 || color[3] <= 0.0 {
+
+    fn darken(c: [f32; 4]) -> [f32; 4] {
+        [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, c[3]]
+    }
+    fn lighten(c: [f32; 4]) -> [f32; 4] {
+        [(c[0] * 1.4).min(1.0), (c[1] * 1.4).min(1.0), (c[2] * 1.4).min(1.0), c[3]]
+    }
+
+    /// Push a single side strip with style-aware rendering.
+    /// `horizontal`: true for top/bottom edges (span full width), false for left/right.
+    fn push_styled_side(
+        instances: &mut Vec<InstanceInput>,
+        pos: [f32; 2],
+        size: [f32; 2],
+        color: [f32; 4],
+        style: LineStyle,
+        horizontal: bool,
+        opacity: f32,
+        rotate_deg: f32,
+        parent_clip: Option<[f32; 4]>,
+    ) {
+        if size[0] <= 0.0 || size[1] <= 0.0 || color[3] <= 0.0 || style.is_invisible() {
             return;
         }
-        instances.push(
-            InstanceInput {
-                rect_pos: pos,
-                rect_size: size,
-                color: mul_color_alpha(color, opacity),
-                border_color: [0.0, 0.0, 0.0, 0.0],
-                radii: [0.0; 4],
-                border_width: 0.0,
-                shadow_color: [0.0, 0.0, 0.0, 0.0],
-                shadow_offset: [0.0, 0.0],
-                shadow_blur: 0.0,
-                shadow_spread: 0.0,
-                shadow_inset: 0.0,
-                rotate_deg,
-                clip_pos: [0.0, 0.0],
-                clip_size: InstanceInput::NO_CLIP_SIZE,
-                _pad: 0.0,
+        let bw = if horizontal { size[1] } else { size[0] };
+        let span = if horizontal { size[0] } else { size[1] };
+
+        let push_one = |instances: &mut Vec<InstanceInput>, p: [f32; 2], s: [f32; 2], c: [f32; 4]| {
+            if s[0] <= 0.0 || s[1] <= 0.0 || c[3] <= 0.0 {
+                return;
             }
-            .with_clip(parent_clip),
-        );
-    };
-    push([x, y], [w, bt], colors[0]);
-    push([x, y + (h - bb).max(0.0)], [w, bb], colors[2]);
+            instances.push(
+                InstanceInput {
+                    rect_pos: p,
+                    rect_size: s,
+                    color: mul_color_alpha(c, opacity),
+                    border_color: [0.0; 4],
+                    radii: [0.0; 4],
+                    border_width: 0.0,
+                    shadow_color: [0.0; 4],
+                    shadow_offset: [0.0; 2],
+                    shadow_blur: 0.0,
+                    shadow_spread: 0.0,
+                    shadow_inset: 0.0,
+                    rotate_deg,
+                    clip_pos: [0.0, 0.0],
+                    clip_size: InstanceInput::NO_CLIP_SIZE,
+                    border_extra: 0.0,
+                }
+                .with_clip(parent_clip),
+            );
+        };
+
+        match style {
+            LineStyle::Solid => {
+                push_one(instances, pos, size, color);
+            }
+            LineStyle::Dotted => {
+                let dot_size = bw;
+                let step = dot_size * 2.0;
+                let mut t = 0.0;
+                while t < span {
+                    let seg = dot_size.min(span - t);
+                    let (p, s) = if horizontal {
+                        ([pos[0] + t, pos[1]], [seg, size[1]])
+                    } else {
+                        ([pos[0], pos[1] + t], [size[0], seg])
+                    };
+                    push_one(instances, p, s, color);
+                    t += step;
+                }
+            }
+            LineStyle::Dashed => {
+                let dash = bw * 3.0;
+                let gap = bw * 1.5;
+                let step = dash + gap;
+                let mut t = 0.0;
+                while t < span {
+                    let seg = dash.min(span - t);
+                    let (p, s) = if horizontal {
+                        ([pos[0] + t, pos[1]], [seg, size[1]])
+                    } else {
+                        ([pos[0], pos[1] + t], [size[0], seg])
+                    };
+                    push_one(instances, p, s, color);
+                    t += step;
+                }
+            }
+            LineStyle::Double => {
+                let third = bw / 3.0;
+                if horizontal {
+                    push_one(instances, pos, [size[0], third], color);
+                    push_one(instances, [pos[0], pos[1] + bw - third], [size[0], third], color);
+                } else {
+                    push_one(instances, pos, [third, size[1]], color);
+                    push_one(instances, [pos[0] + bw - third, pos[1]], [third, size[1]], color);
+                }
+            }
+            LineStyle::Groove => {
+                let half = bw / 2.0;
+                if horizontal {
+                    push_one(instances, pos, [size[0], half], darken(color));
+                    push_one(instances, [pos[0], pos[1] + half], [size[0], half], lighten(color));
+                } else {
+                    push_one(instances, pos, [half, size[1]], darken(color));
+                    push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], lighten(color));
+                }
+            }
+            LineStyle::Ridge => {
+                let half = bw / 2.0;
+                if horizontal {
+                    push_one(instances, pos, [size[0], half], lighten(color));
+                    push_one(instances, [pos[0], pos[1] + half], [size[0], half], darken(color));
+                } else {
+                    push_one(instances, pos, [half, size[1]], lighten(color));
+                    push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], darken(color));
+                }
+            }
+            LineStyle::Inset => {
+                push_one(instances, pos, size, darken(color));
+            }
+            LineStyle::Outset => {
+                push_one(instances, pos, size, lighten(color));
+            }
+            LineStyle::None | LineStyle::Hidden => {}
+        }
+    }
+
+    // Top (full width)
+    push_styled_side(instances, [x, y], [w, bt], colors[0], styles[0], true, opacity, rotate_deg, parent_clip);
+    // Bottom (full width)
+    push_styled_side(instances, [x, y + (h - bb).max(0.0)], [w, bb], colors[2], styles[2], true, opacity, rotate_deg, parent_clip);
     let mid_h = (h - bt - bb).max(0.0);
-    push([x, y + bt], [bl, mid_h], colors[3]);
-    push([x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1]);
+    // Left
+    push_styled_side(instances, [x, y + bt], [bl, mid_h], colors[3], styles[3], false, opacity, rotate_deg, parent_clip);
+    // Right
+    push_styled_side(instances, [x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1], styles[1], false, opacity, rotate_deg, parent_clip);
+}
+
+/// Generate nine-slice `TexturedDraw` instances for CSS `border-image`.
+fn push_border_image_draws(
+    textured_draws: &mut Vec<TexturedDraw>,
+    render_rect: [f32; 4],
+    border_widths: [f32; 4],
+    style: &crate::style::Style,
+    opacity: f32,
+    parent_clip: Option<[f32; 4]>,
+) {
+    let tex_key = match style.border_image_source.as_ref() {
+        Some(k) if !k.is_empty() => k.clone(),
+        _ => return,
+    };
+
+    let [rx, ry, rw, rh] = render_rect;
+    let outset = style.border_image_outset;
+    // Expand render rect by outset
+    let bx = rx - outset[3];
+    let by = ry - outset[0];
+    let bw = rw + outset[3] + outset[1];
+    let bh = rh + outset[0] + outset[2];
+
+    // Border image widths (fall back to border-width)
+    let biw = style.border_image_width.unwrap_or(border_widths);
+    let [wt, wr, wb, wl] = biw;
+
+    // Slice values as fractions of image (default 100% = 1.0 for UV)
+    let slice = style.border_image_slice;
+    let st = (slice[0] / 100.0).clamp(0.0, 1.0);
+    let sr = (slice[1] / 100.0).clamp(0.0, 1.0);
+    let sb = (slice[2] / 100.0).clamp(0.0, 1.0);
+    let sl = (slice[3] / 100.0).clamp(0.0, 1.0);
+
+    // Helper: create a TexturedDraw with explicit UV rect
+    let mut push_slice = |rect: [f32; 4], uv_x: f32, uv_y: f32, uv_w: f32, uv_h: f32| {
+        if rect[2] <= 0.0 || rect[3] <= 0.0 || uv_w <= 0.0 || uv_h <= 0.0 {
+            return;
+        }
+        // Apply clipping
+        let draw = intersect_rect(parent_clip, rect);
+        if draw[2] <= 0.0 || draw[3] <= 0.0 {
+            return;
+        }
+        // Compute UV for the clipped portion relative to the full rect
+        let sub_u = if rect[2] > 0.0 { (draw[0] - rect[0]) / rect[2] } else { 0.0 };
+        let sub_v = if rect[3] > 0.0 { (draw[1] - rect[1]) / rect[3] } else { 0.0 };
+        let sub_uw = if rect[2] > 0.0 { draw[2] / rect[2] } else { 1.0 };
+        let sub_vh = if rect[3] > 0.0 { draw[3] / rect[3] } else { 1.0 };
+        // Map to source UV (Y flipped: top of rect → uv_y + uv_h)
+        let final_u = uv_x + sub_u * uv_w;
+        let final_v = (uv_y + uv_h) - sub_v * uv_h - sub_vh * uv_h;
+        textured_draws.push(TexturedDraw {
+            rect: draw,
+            uv_offset: [final_u, final_v],
+            uv_scale: [sub_uw * uv_w, sub_vh * uv_h],
+            texture_key: tex_key.clone(),
+            opacity,
+        });
+    };
+
+    // Nine regions (CSS border-image nine-slice):
+    // Corners (always stretch)
+    push_slice([bx, by, wl, wt], 0.0, 0.0, sl, st);                                    // top-left
+    push_slice([bx + bw - wr, by, wr, wt], 1.0 - sr, 0.0, sr, st);                     // top-right
+    push_slice([bx, by + bh - wb, wl, wb], 0.0, 1.0 - sb, sl, sb);                      // bottom-left
+    push_slice([bx + bw - wr, by + bh - wb, wr, wb], 1.0 - sr, 1.0 - sb, sr, sb);       // bottom-right
+
+    // Edges (stretch for now; repeat/round/space would need multiple draws)
+    let ew = bw - wl - wr;
+    let eh = bh - wt - wb;
+    let eu_w = (1.0 - sl - sr).max(0.0);
+    let eu_h = (1.0 - st - sb).max(0.0);
+    push_slice([bx + wl, by, ew, wt], sl, 0.0, eu_w, st);              // top edge
+    push_slice([bx + wl, by + bh - wb, ew, wb], sl, 1.0 - sb, eu_w, sb); // bottom edge
+    push_slice([bx, by + wt, wl, eh], 0.0, st, sl, eu_h);              // left edge
+    push_slice([bx + bw - wr, by + wt, wr, eh], 1.0 - sr, st, sr, eu_h); // right edge
+
+    // Center (only if fill)
+    if style.border_image_slice_fill {
+        push_slice([bx + wl, by + wt, ew, eh], sl, st, eu_w, eu_h);
+    }
 }
 
 /// Minimum cross-axis size for an `auto` scrollbar at spring?; must match `app::state`.
@@ -1611,6 +1803,11 @@ impl LayoutTree {
         let mut paint_rec = PaintRecorder::default();
 
         let t_collect_begin = Instant::now();
+        #[cfg(feature = "devtools")]
+        {
+            crate::app::devtools::begin_highlight_collect();
+            crate::app::devtools::set_highlight_collect_root(root);
+        }
         self.collect_instances_mut(
             root,
             root_node,
@@ -1633,6 +1830,8 @@ impl LayoutTree {
             &mut overlay_split,
             &mut paint_rec,
         );
+        #[cfg(feature = "devtools")]
+        crate::app::devtools::clear_highlight_collect_root();
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
             overlay_split.instance_start = instances.len();
@@ -1805,6 +2004,11 @@ impl LayoutTree {
             };
 
         let t_collect_begin = Instant::now();
+        #[cfg(feature = "devtools")]
+        {
+            crate::app::devtools::begin_highlight_collect();
+            crate::app::devtools::set_highlight_collect_root(root);
+        }
         self.collect_instances_mut(
             root,
             root_node,
@@ -1827,6 +2031,8 @@ impl LayoutTree {
             &mut overlay_split,
             &mut paint_rec,
         );
+        #[cfg(feature = "devtools")]
+        crate::app::devtools::clear_highlight_collect_root();
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
             overlay_split.instance_start = instances.len();
@@ -2050,8 +2256,15 @@ impl LayoutTree {
 
         let mut thumb_rect_for_child: Option<[f32; 4]> = None;
 
+        #[cfg(feature = "devtools")]
+        let devtools_highlight_rect = crate::app::devtools::stamped_highlight_abs_rect(element);
+        #[cfg(not(feature = "devtools"))]
+        let devtools_highlight_rect: Option<[f32; 4]> = None;
+
         let (abs_x, abs_y, lay_w, lay_h) = if let Some(r) = thumb_geometry_override {
             (r[0], r[1], r[2], r[3])
+        } else if let Some(b) = devtools_highlight_rect {
+            (b[0], b[1], b[2], b[3])
         } else if scrollbar_overlay_collect {
             if let Some(cache) = scroll_signals_cache.as_mut() {
                 if let Some(fid) = element.focus_id.as_deref() {
@@ -2103,6 +2316,13 @@ impl LayoutTree {
         };
 
         element.layout_bounds = [abs_x, abs_y, lay_w, lay_h];
+
+        #[cfg(feature = "devtools")]
+        if element.template_id.as_deref()
+            == Some(crate::app::devtools::HIGHLIGHT_SLOT_ID)
+        {
+            let _ = crate::app::devtools::refresh_highlight_slot(element);
+        }
 
         let opacity = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
         let scroll_for_render = if element.style.position_fixed {
@@ -2168,6 +2388,14 @@ impl LayoutTree {
         } else {
             mul_color_alpha(element.style.border_color, opacity)
         };
+        let sdf_border_extra = {
+            let bs = if use_border_strips { 0.0 } else { element.style.border_style.to_shader_f32() };
+            InstanceInput::pack_border_extra(
+                bs,
+                element.style.corner_shape.to_shader_f32(),
+                element.style.corner_shape.shader_param(),
+            )
+        };
         let has_bg = element.style.bg_color[3] > 0.0 || element.style.bg_gradient.is_some();
         let has_border = border_w > 0.0;
         let has_shadow = element.style.shadow_color[3] > 0.0;
@@ -2226,7 +2454,7 @@ impl LayoutTree {
                             rotate_deg,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            _pad: 0.0,
+                            border_extra: sdf_border_extra,
                         }
                         .with_clip(parent_clip),
                     );
@@ -2248,7 +2476,7 @@ impl LayoutTree {
                             rotate_deg,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            _pad: 0.0,
+                            border_extra: sdf_border_extra,
                         }
                         .with_clip(parent_clip),
                     );
@@ -2270,7 +2498,7 @@ impl LayoutTree {
                         rotate_deg,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        _pad: 0.0,
+                        border_extra: sdf_border_extra,
                     }
                     .with_clip(parent_clip),
                 );
@@ -2281,8 +2509,20 @@ impl LayoutTree {
                     render_rect,
                     border_widths,
                     element.style.resolved_border_colors(),
+                    element.style.resolved_border_styles(),
                     opacity,
                     rotate_deg,
+                    parent_clip,
+                );
+            }
+            // border-image overrides normal border rendering when present
+            if element.style.border_image_source.is_some() {
+                push_border_image_draws(
+                    textured_draws,
+                    render_rect,
+                    border_widths,
+                    &element.style,
+                    opacity,
                     parent_clip,
                 );
             }
@@ -2306,7 +2546,7 @@ impl LayoutTree {
                         rotate_deg,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        _pad: 0.0,
+                        border_extra: 0.0,
                     }
                     .with_clip(parent_clip),
                 );
@@ -2370,7 +2610,7 @@ impl LayoutTree {
                                 rotate_deg: q.rotate_deg,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                _pad: 0.0,
+                                border_extra: 0.0,
                             }
                             .with_clip(clip),
                         );
@@ -2428,7 +2668,7 @@ impl LayoutTree {
                             rotate_deg: q.rotate_deg,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            _pad: 0.0,
+                            border_extra: 0.0,
                         }
                         .with_clip(parent_clip),
                     );
@@ -2486,7 +2726,7 @@ impl LayoutTree {
                             rotate_deg,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
-                            _pad: 0.0,
+                            border_extra: 0.0,
                         }
                         .with_clip(parent_clip),
                     );
@@ -2495,7 +2735,7 @@ impl LayoutTree {
         }
 
         // Collect outline as an overlay (drawn outside; does not affect layout).
-        let outline_w = if element.style.outline_style == crate::style::LineStyle::None {
+        let outline_w = if element.style.outline_style.is_invisible() {
             0.0
         } else {
             element.style.outline_width
@@ -2534,7 +2774,7 @@ impl LayoutTree {
                         rotate_deg,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        _pad: 0.0,
+                        border_extra: 0.0,
                     }
                     .with_clip(parent_clip),
                 );
@@ -3224,7 +3464,7 @@ fn push_chrome_rect(
             rotate_deg: 0.0,
             clip_pos: [0.0, 0.0],
             clip_size: InstanceInput::NO_CLIP_SIZE,
-            _pad: 0.0,
+            border_extra: 0.0,
         }
         .with_clip(clip),
     );

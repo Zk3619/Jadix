@@ -92,6 +92,8 @@ mod window_chrome;
 mod window_events;
 pub mod window_keys;
 pub(crate) mod window_scope;
+#[cfg(feature = "devtools")]
+pub mod devtools;
 
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use multi_window::{

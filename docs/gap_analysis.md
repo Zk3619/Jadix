@@ -244,7 +244,7 @@
 | `children()` helper | [`children`](../crates/rui/src/app/props.rs) / [`resolve_children`](../crates/rui/src/app/props.rs) | 有 | **B2 ☑**；fragment 展平；闭包版订 signal |
 | `mergeProps` / `splitProps` | [`merge_props`](../crates/rui/src/app/props.rs) / `merge_props!` / `split_props!` | 有 | **B2 ☑**；后源 `Some` 覆盖；非 JS Proxy |
 | 细粒度属性绑定 | `bind_*` | 有 | 亮点 |
-| DevTools | — | 无 | Backlog |
+| DevTools | Inspector MVP（`devtools` feature） | B1 P0–P2 ☑ 2026-08-19 |
 
 ---
 

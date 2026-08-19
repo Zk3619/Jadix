@@ -58,7 +58,7 @@ pub fn quads_to_instances(
                 rotate_deg: q.rotate_deg,
                 clip_pos,
                 clip_size,
-                _pad: 0.0,
+                border_extra: 0.0,
             }
         })
         .collect()

@@ -1318,6 +1318,14 @@ impl super::App {
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
 
+        #[cfg(feature = "devtools")]
+        if element_state == ElementState::Pressed
+            && crate::app::devtools::try_pick_click(&state.root_element, x, y)
+        {
+            state.window.request_redraw();
+            return;
+        }
+
         let mut input_drag: Option<(String, usize, String)> = None;
         let mut label_drag: Option<(String, usize)> = None;
         if element_state == ElementState::Pressed {

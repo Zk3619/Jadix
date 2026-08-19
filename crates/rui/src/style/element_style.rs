@@ -205,22 +205,123 @@ mod tests {
     }
 }
 
+/// CSS `border-image-repeat` value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BorderImageRepeat {
+    #[default]
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
+impl BorderImageRepeat {
+    pub fn from_css_keyword(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "repeat" => Self::Repeat,
+            "round" => Self::Round,
+            "space" => Self::Space,
+            _ => Self::Stretch,
+        }
+    }
+}
+
+/// CSS `border-shape` / `corner-shape` (CSS Borders and Box Decorations Level 4).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum CornerShape {
+    #[default]
+    Round,
+    Angle,
+    /// Superellipse exponent (`n`). `n=2` is equivalent to `Round`.
+    Superellipse(f32),
+    Notch,
+    Scoop,
+}
+
+impl CornerShape {
+    pub fn from_css_keyword(s: &str) -> Self {
+        let s = s.trim().to_ascii_lowercase();
+        if let Some(inner) = s.strip_prefix("superellipse(").and_then(|r| r.strip_suffix(')')) {
+            return Self::Superellipse(inner.trim().parse::<f32>().unwrap_or(2.0));
+        }
+        match s.as_str() {
+            "round" => Self::Round,
+            "angle" | "bevel" | "chamfer" => Self::Angle,
+            "notch" => Self::Notch,
+            "scoop" => Self::Scoop,
+            _ => Self::Round,
+        }
+    }
+
+    /// Float encoding for the GPU shader.
+    pub fn to_shader_f32(self) -> f32 {
+        match self {
+            Self::Round => 0.0,
+            Self::Angle => 1.0,
+            Self::Superellipse(_) => 2.0,
+            Self::Notch => 3.0,
+            Self::Scoop => 4.0,
+        }
+    }
+
+    /// Superellipse exponent (only meaningful when `Superellipse`).
+    pub fn shader_param(self) -> f32 {
+        match self {
+            Self::Superellipse(n) => n,
+            _ => 2.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineStyle {
     #[default]
     None,
+    Hidden,
     Solid,
+    Dotted,
+    Dashed,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
 }
 
 impl LineStyle {
     pub fn from_css_keyword(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
-            "" | "none" | "hidden" => Self::None,
-            // Shader currently supports solid only.
-            "solid" | "double" | "dotted" | "dashed" | "groove" | "ridge" | "inset" | "outset" => {
-                Self::Solid
-            }
+            "" | "none" => Self::None,
+            "hidden" => Self::Hidden,
+            "solid" => Self::Solid,
+            "dotted" => Self::Dotted,
+            "dashed" => Self::Dashed,
+            "double" => Self::Double,
+            "groove" => Self::Groove,
+            "ridge" => Self::Ridge,
+            "inset" => Self::Inset,
+            "outset" => Self::Outset,
             _ => Self::Solid,
+        }
+    }
+
+    /// Returns `true` when the style produces no visible border.
+    pub fn is_invisible(self) -> bool {
+        matches!(self, Self::None | Self::Hidden)
+    }
+
+    /// Float encoding for the GPU shader (matches `rounded_rect.wgsl` constants).
+    pub fn to_shader_f32(self) -> f32 {
+        match self {
+            Self::None | Self::Hidden => 0.0,
+            Self::Solid => 1.0,
+            Self::Dotted => 2.0,
+            Self::Dashed => 3.0,
+            Self::Double => 4.0,
+            Self::Groove => 5.0,
+            Self::Ridge => 6.0,
+            Self::Inset => 7.0,
+            Self::Outset => 8.0,
         }
     }
 }
@@ -311,6 +412,28 @@ pub struct Style {
     pub border_width_sides: Option<[f32; 4]>,
     /// Per-side colors **T R B L**. `None` = all sides use [`Self::border_color`].
     pub border_color_sides: Option<[[f32; 4]; 4]>,
+    /// Per-side styles **T R B L**. `None` = all sides use [`Self::border_style`].
+    pub border_style_sides: Option<[LineStyle; 4]>,
+    /// CSS `border-collapse` (table layout).
+    pub border_collapse: bool,
+    /// CSS `border-spacing` `[horizontal, vertical]` in logical px.
+    pub border_spacing: [f32; 2],
+    /// CSS `border-image-source` — texture key for the image pipeline.
+    pub border_image_source: Option<String>,
+    /// CSS `border-image-slice` **T R B L** (unitless number or percentage of image size).
+    pub border_image_slice: [f32; 4],
+    /// CSS `border-image-slice: ... fill`.
+    pub border_image_slice_fill: bool,
+    /// CSS `border-image-width` **T R B L**. `None` = use `border-width`.
+    pub border_image_width: Option<[f32; 4]>,
+    /// CSS `border-image-outset` **T R B L** in logical px.
+    pub border_image_outset: [f32; 4],
+    /// CSS `border-image-repeat` `[horizontal, vertical]`.
+    pub border_image_repeat: [BorderImageRepeat; 2],
+    /// CSS `border-shape` / `corner-shape` (all corners).
+    pub corner_shape: CornerShape,
+    /// Per-corner shapes **TL TR BR BL**. `None` = all use [`Self::corner_shape`].
+    pub corner_shape_sides: Option<[CornerShape; 4]>,
     /// 仅绘制，不进 Taffy。
     pub outline_style: LineStyle,
     pub outline_color: [f32; 4],
@@ -400,6 +523,17 @@ impl Default for Style {
             border_width: 0.0,
             border_width_sides: None,
             border_color_sides: None,
+            border_style_sides: None,
+            border_collapse: false,
+            border_spacing: [0.0; 2],
+            border_image_source: None,
+            border_image_slice: [100.0; 4],
+            border_image_slice_fill: false,
+            border_image_width: None,
+            border_image_outset: [0.0; 4],
+            border_image_repeat: [BorderImageRepeat::Stretch; 2],
+            corner_shape: CornerShape::Round,
+            corner_shape_sides: None,
             outline_style: LineStyle::None,
             outline_color: [0.0, 0.0, 0.0, 0.0],
             outline_width: 0.0,
@@ -573,9 +707,9 @@ impl Style {
             .any(|(_, d)| d.needs_layout_context())
     }
 
-    /// Border widths **T R B L** that participate in layout (0 if `border_style` is none).
+    /// Border widths **T R B L** that participate in layout (0 if `border_style` is invisible).
     pub fn resolved_border_widths(&self) -> [f32; 4] {
-        if self.border_style == LineStyle::None {
+        if self.border_style.is_invisible() {
             return [0.0; 4];
         }
         self.border_width_sides.unwrap_or([self.border_width; 4])
@@ -588,7 +722,10 @@ impl Style {
     pub fn border_is_uniform(&self) -> bool {
         let w = self.resolved_border_widths();
         let c = self.resolved_border_colors();
-        w[0] == w[1] && w[1] == w[2] && w[2] == w[3] && c[0] == c[1] && c[1] == c[2] && c[2] == c[3]
+        let s = self.resolved_border_styles();
+        w[0] == w[1] && w[1] == w[2] && w[2] == w[3]
+            && c[0] == c[1] && c[1] == c[2] && c[2] == c[3]
+            && s[0] == s[1] && s[1] == s[2] && s[2] == s[3]
     }
 
     pub fn set_border_side_width(&mut self, side: usize, width: f32) {
@@ -626,6 +763,45 @@ impl Style {
         } else {
             self.border_width_sides = Some(sides);
             self.border_width = sides.into_iter().fold(0.0_f32, f32::max);
+        }
+    }
+
+    pub fn resolved_border_styles(&self) -> [LineStyle; 4] {
+        self.border_style_sides.unwrap_or([self.border_style; 4])
+    }
+
+    pub fn set_border_side_style(&mut self, side: usize, style: LineStyle) {
+        let mut sides = self.border_style_sides.unwrap_or([self.border_style; 4]);
+        sides[side.min(3)] = style;
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.border_style = sides[0];
+            self.border_style_sides = None;
+        } else {
+            self.border_style_sides = Some(sides);
+        }
+    }
+
+    pub fn set_border_styles_trbl(&mut self, sides: [LineStyle; 4]) {
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.border_style = sides[0];
+            self.border_style_sides = None;
+        } else {
+            self.border_style_sides = Some(sides);
+        }
+    }
+
+    pub fn resolved_corner_shapes(&self) -> [CornerShape; 4] {
+        self.corner_shape_sides.unwrap_or([self.corner_shape; 4])
+    }
+
+    pub fn set_corner_side_shape(&mut self, corner: usize, shape: CornerShape) {
+        let mut sides = self.corner_shape_sides.unwrap_or([self.corner_shape; 4]);
+        sides[corner.min(3)] = shape;
+        if sides[0] == sides[1] && sides[1] == sides[2] && sides[2] == sides[3] {
+            self.corner_shape = sides[0];
+            self.corner_shape_sides = None;
+        } else {
+            self.corner_shape_sides = Some(sides);
         }
     }
 

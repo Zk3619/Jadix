@@ -223,6 +223,13 @@ impl super::App {
 
     fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
+            #[cfg(feature = "devtools")]
+            if crate::app::devtools::try_toggle_from_key(&event, self.modifiers) {
+                crate::app::runtime::request_redraw();
+                return true;
+            }
+        }
+        if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
                 if !allow_primary_tree {
                     return false;

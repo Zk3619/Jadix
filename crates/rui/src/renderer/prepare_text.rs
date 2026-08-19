@@ -2559,7 +2559,7 @@ pub fn prepare_text_frame(
                         rotate_deg: 0.0,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        _pad: 0.0,
+                        border_extra: 0.0,
                     });
                 };
             for g in run.glyphs.iter() {
@@ -2753,7 +2753,7 @@ pub fn prepare_text_frame(
                         rotate_deg: 0.0,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
-                        _pad: 0.0,
+                        border_extra: 0.0,
                     });
                 }
                 for g in &entry.glyphs {
@@ -2783,7 +2783,7 @@ pub fn prepare_text_frame(
                                 rotate_deg: 0.0,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
-                                _pad: 0.0,
+                                border_extra: 0.0,
                             });
                         }
                     }
@@ -2838,7 +2838,7 @@ pub fn prepare_text_frame(
                     rotate_deg: 0.0,
                     clip_pos: [0.0, 0.0],
                     clip_size: InstanceInput::NO_CLIP_SIZE,
-                    _pad: 0.0,
+                    border_extra: 0.0,
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {

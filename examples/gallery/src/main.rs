@@ -5,7 +5,7 @@
 //! RUI Gallery — 完整框架能力与组件 / 变体展示。
 //!
 //! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 关于。
-//! 运行：`cargo run -p gallery`；托盘原生：`cargo run -p gallery --features system-tray`
+//! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`cargo run -p gallery --features system-tray`
 
 use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
 use rui::app::{
@@ -854,6 +854,189 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                             "多行 Label\n第二行仍应有阴影"
                         </Label>
                         <Label text_size="0.65rem" color="muted-foreground">"换行"</Label>
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn BorderStyleShowcase() -> rui::core::tree::Element {
+    use rui::style::CornerShape;
+
+    fn demo_box(label: &str, style_name: &str, color: [f32; 4]) -> Element {
+        let el = Element::from(
+            r#box()
+                .w("7rem")
+                .h("4rem")
+                .bg(parse_color("background"))
+                .border(color, 4.0)
+                .border_style(style_name)
+                .rounded(8.0),
+        );
+        ui! {
+            <VStack gap="0.25rem" items="center">
+                { el }
+                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+            </VStack>
+        }
+    }
+
+    fn per_side_box() -> Element {
+        Element::from(
+            r#box()
+                .w("9rem")
+                .h("5rem")
+                .bg(parse_color("background"))
+                .border_top(parse_color("destructive"), 6.0)
+                .border_right(parse_color("primary"), 3.0)
+                .border_bottom(parse_color("chart-1"), 8.0)
+                .border_left(parse_color("accent"), 4.0)
+                .border_top_style("dashed")
+                .border_right_style("dotted")
+                .border_bottom_style("double")
+                .border_left_style("solid")
+                .rounded(6.0),
+        )
+    }
+
+    fn corner_shape_box(label: &str, shape: CornerShape) -> Element {
+        let el = Element::from(
+            r#box()
+                .w("7rem")
+                .h("4rem")
+                .bg(parse_color("secondary"))
+                .border(parse_color("primary"), 3.0)
+                .rounded(16.0)
+                .border_shape(shape),
+        );
+        ui! {
+            <VStack gap="0.25rem" items="center">
+                { el }
+                <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+            </VStack>
+        }
+    }
+
+    let bc = parse_color("primary");
+
+    ui! {
+        <MyCard title="13) CSS Border 全能力">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "border-style 全 8 种样式 · 四边独立样式/宽度/颜色 · border-shape/corner-shape（round/angle/superellipse/notch/scoop）。"
+                </Label>
+
+                <Label font_weight="700" text_size="0.875rem">"border-style 样式"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { demo_box("solid", "solid", bc) }
+                    { demo_box("dotted", "dotted", bc) }
+                    { demo_box("dashed", "dashed", bc) }
+                    { demo_box("double", "double", bc) }
+                    { demo_box("groove", "groove", bc) }
+                    { demo_box("ridge", "ridge", bc) }
+                    { demo_box("inset", "inset", bc) }
+                    { demo_box("outset", "outset", bc) }
+                    { demo_box("none", "none", bc) }
+                    { demo_box("hidden", "hidden", bc) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"四边独立 width / color / style"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        { per_side_box() }
+                        <Label text_size="0.6rem" color="muted-foreground">"T:dashed R:dotted B:double L:solid"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"border-radius longhand"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        {
+                            Element::from(
+                                r#box()
+                                    .w("7rem").h("4rem")
+                                    .bg(parse_color("muted"))
+                                    .border(parse_color("primary"), 2.0)
+                                    .border_top_left_radius(20.0)
+                                    .border_top_right_radius(4.0)
+                                    .border_bottom_right_radius(16.0)
+                                    .border_bottom_left_radius(0.0)
+                            )
+                        }
+                        <Label text_size="0.6rem" color="muted-foreground">"TL:20 TR:4 BR:16 BL:0"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        {
+                            Element::from(
+                                r#box()
+                                    .w("4rem").h("4rem")
+                                    .bg(parse_color("muted"))
+                                    .border(parse_color("accent"), 2.0)
+                                    .rounded(32.0)
+                            )
+                        }
+                        <Label text_size="0.6rem" color="muted-foreground">"圆形 (r=32)"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"corner-shape（CSS Level 4）"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { corner_shape_box("round（默认）", CornerShape::Round) }
+                    { corner_shape_box("angle（斜切）", CornerShape::Angle) }
+                    { corner_shape_box("superellipse(4)", CornerShape::Superellipse(4.0)) }
+                    { corner_shape_box("superellipse(8)", CornerShape::Superellipse(8.0)) }
+                    { corner_shape_box("notch（切口）", CornerShape::Notch) }
+                    { corner_shape_box("scoop（内凹）", CornerShape::Scoop) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"border-collapse / border-spacing"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        {
+                            Element::from(
+                                r#box()
+                                    .w("8rem").h("4rem")
+                                    .bg(parse_color("background"))
+                                    .border(parse_color("border"), 2.0)
+                                    .border_spacing(4.0, 4.0)
+                                    .rounded(4.0)
+                            )
+                        }
+                        <Label text_size="0.6rem" color="muted-foreground">"spacing: 4px 4px"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"逻辑属性 (LTR)"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    <VStack gap="0.25rem" items="center">
+                        {
+                            Element::from(
+                                r#box()
+                                    .w("8rem").h("4rem")
+                                    .bg(parse_color("background"))
+                                    .border_inline(parse_color("primary"), 4.0)
+                                    .border_block(parse_color("destructive"), 2.0)
+                                    .rounded(4.0)
+                            )
+                        }
+                        <Label text_size="0.6rem" color="muted-foreground">"inline:4+primary block:2+red"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        {
+                            Element::from(
+                                r#box()
+                                    .w("8rem").h("4rem")
+                                    .bg(parse_color("background"))
+                                    .border_inline_start(parse_color("chart-1"), 6.0)
+                                    .border_inline_end(parse_color("accent"), 2.0)
+                                    .border_block_start(parse_color("primary"), 4.0)
+                                    .border_block_end(parse_color("destructive"), 8.0)
+                                    .rounded(4.0)
+                            )
+                        }
+                        <Label text_size="0.6rem" color="muted-foreground">"四向独立逻辑"</Label>
                     </VStack>
                 </HStack>
             </VStack>
@@ -4361,6 +4544,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <UtilityClassShowcase />
                     <GridAndDragShowcase />
                     <ShadowShowcase />
+                    <BorderStyleShowcase />
                 </VStack>
             </ScrollArea>
         },
@@ -4497,6 +4681,12 @@ fn main() {
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
 
+    #[cfg(feature = "devtools")]
+    rui::app::run_with(
+        rui::app::WindowOptions::new().devtools(true),
+        build_gallery_app,
+    );
+    #[cfg(not(feature = "devtools"))]
     rui::app::run(build_gallery_app);
 }
 

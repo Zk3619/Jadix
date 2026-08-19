@@ -65,7 +65,7 @@ flowchart TB
 
 \*单人全职量级；可按人力并行压缩。每波结束必须：**代码合入 + 测试绿 + 更新本计划勾选 + 同步 gap §4.4**。
 
-**明确不做**（整计划期）：换 VDOM/EUI DSL；弃 wgpu；Solid DOM/SSR；移动/鸿蒙一等公民；无验收大重构；DevTools（列入 Backlog §7）。
+**明确不做**（整计划期）：换 VDOM/EUI DSL；弃 wgpu；Solid DOM/SSR；移动/鸿蒙一等公民；无验收大重构。DevTools Inspector P0–P2 已落地（`devtools` feature，仍不挡 Beta）。
 
 ---
 
@@ -383,7 +383,7 @@ flowchart TB
 
 | ID | 项 | 备注 |
 |----|-----|------|
-| B1 | DevTools（Signal 依赖图） | 不对齐 Solid 也不阻塞 Beta |
+| B1 | DevTools / Inspector（Elements + Reactivity + 样式 live edit；`devtools` feature） | 不对齐 Solid 也不阻塞 Beta；见 [`devtools.md`](devtools.md) |
 | B2 | `mergeProps` / `splitProps` / `children()` | DX 糖 · ☑ 2026-08-18 |
 | B3 | backdrop-blur 离屏缓存 | 视觉打磨 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 仅留扩展点 |

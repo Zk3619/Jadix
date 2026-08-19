@@ -92,7 +92,7 @@ pub(crate) fn scrollbar_track_content_inset(track: &Element) -> f32 {
         .unwrap_or(0.0)
         .max(0.0);
     let has_border =
-        track.style.border_style != crate::style::LineStyle::None && track.style.border_width > 0.0;
+        !track.style.border_style.is_invisible() && track.style.border_width > 0.0;
     scrollbar_track_content_inset_px(pad, track.style.border_width, has_border)
 }
 

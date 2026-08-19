@@ -39,6 +39,9 @@ pub struct WindowOptions {
     pub blur: bool,
     /// Windows 11 material when [`Self::blur`] is set.
     pub backdrop: WindowBackdrop,
+    /// Enable runtime Inspector (F12). Requires `rui` crate feature `devtools`.
+    #[cfg(feature = "devtools")]
+    pub devtools: bool,
 }
 
 impl Default for WindowOptions {
@@ -51,6 +54,8 @@ impl Default for WindowOptions {
             transparent: false,
             blur: false,
             backdrop: WindowBackdrop::Acrylic,
+            #[cfg(feature = "devtools")]
+            devtools: false,
         }
     }
 }
@@ -93,6 +98,13 @@ impl WindowOptions {
 
     pub fn backdrop(mut self, backdrop: WindowBackdrop) -> Self {
         self.backdrop = backdrop;
+        self
+    }
+
+    /// Enable runtime Inspector ([`super::devtools`], F12). Requires crate feature `devtools`.
+    #[cfg(feature = "devtools")]
+    pub fn devtools(mut self, enabled: bool) -> Self {
+        self.devtools = enabled;
         self
     }
 

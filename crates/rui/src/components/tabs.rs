@@ -247,7 +247,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         paint = true;
     }
     // line 用绘制属性，不用 border（四边均匀）。
-    if el.style.border_width != 0.0 || el.style.border_style != LineStyle::None {
+    if el.style.border_width != 0.0 || !el.style.border_style.is_invisible() {
         el.style.border_width = 0.0;
         el.style.border_color = parse_color("transparent");
         el.style.border_style = LineStyle::None;

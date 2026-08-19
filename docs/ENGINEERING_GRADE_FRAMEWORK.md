@@ -182,7 +182,7 @@ crates/
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
 | P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |
-| P2 | DevTools、backdrop-blur 缓存、移动/鸿蒙一等公民 | 明确延后或条件项 |
+| P2 | backdrop-blur 缓存、移动/鸿蒙一等公民 | Inspector P0–P2 已落地（`devtools` feature）；选择器级联 / 样式表仍不做 |
 
 ---
 

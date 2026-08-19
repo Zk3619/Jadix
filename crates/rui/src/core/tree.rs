@@ -1257,8 +1257,155 @@ impl Element {
     pub fn border_block_end_width(self, width: impl IntoF32) -> Self {
         self.border_bottom_width(width)
     }
+    // Per-side style
+    pub fn border_top_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.set_border_side_style(0, LineStyle::from_css_keyword(style.as_ref()));
+        self
+    }
+    pub fn border_right_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.set_border_side_style(1, LineStyle::from_css_keyword(style.as_ref()));
+        self
+    }
+    pub fn border_bottom_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.set_border_side_style(2, LineStyle::from_css_keyword(style.as_ref()));
+        self
+    }
+    pub fn border_left_style(mut self, style: impl AsRef<str>) -> Self {
+        self.style.set_border_side_style(3, LineStyle::from_css_keyword(style.as_ref()));
+        self
+    }
+    // Logical property style
+    pub fn border_inline_start_style(self, style: impl AsRef<str>) -> Self {
+        self.border_left_style(style)
+    }
+    pub fn border_inline_end_style(self, style: impl AsRef<str>) -> Self {
+        self.border_right_style(style)
+    }
+    pub fn border_block_start_style(self, style: impl AsRef<str>) -> Self {
+        self.border_top_style(style)
+    }
+    pub fn border_block_end_style(self, style: impl AsRef<str>) -> Self {
+        self.border_bottom_style(style)
+    }
+    // Logical property color
+    pub fn border_inline_start_color(self, color: [f32; 4]) -> Self {
+        self.border_left_color(color)
+    }
+    pub fn border_inline_end_color(self, color: [f32; 4]) -> Self {
+        self.border_right_color(color)
+    }
+    pub fn border_block_start_color(self, color: [f32; 4]) -> Self {
+        self.border_top_color(color)
+    }
+    pub fn border_block_end_color(self, color: [f32; 4]) -> Self {
+        self.border_bottom_color(color)
+    }
+    // Logical compound shortcuts
+    pub fn border_inline(self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
+        self.ensure_border_solid()
+            .border_left_color(color).border_right_color(color)
+            .border_left_width(width).border_right_width(width)
+    }
+    pub fn border_block(self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
+        self.ensure_border_solid()
+            .border_top_color(color).border_bottom_color(color)
+            .border_top_width(width).border_bottom_width(width)
+    }
+    pub fn border_inline_start(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.border_left(color, width)
+    }
+    pub fn border_inline_end(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.border_right(color, width)
+    }
+    pub fn border_block_start(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.border_top(color, width)
+    }
+    pub fn border_block_end(self, color: [f32; 4], width: impl IntoF32) -> Self {
+        self.border_bottom(color, width)
+    }
+    // border-radius longhand
+    pub fn border_top_left_radius(mut self, r: f32) -> Self {
+        self.style.radii[2] = r.max(0.0);
+        self
+    }
+    pub fn border_top_right_radius(mut self, r: f32) -> Self {
+        self.style.radii[0] = r.max(0.0);
+        self
+    }
+    pub fn border_bottom_right_radius(mut self, r: f32) -> Self {
+        self.style.radii[1] = r.max(0.0);
+        self
+    }
+    pub fn border_bottom_left_radius(mut self, r: f32) -> Self {
+        self.style.radii[3] = r.max(0.0);
+        self
+    }
+    // border-shape / corner-shape
+    pub fn border_shape(mut self, shape: crate::style::CornerShape) -> Self {
+        self.style.corner_shape = shape;
+        self.style.corner_shape_sides = None;
+        self
+    }
+    pub fn corner_top_left_shape(mut self, shape: crate::style::CornerShape) -> Self {
+        self.style.set_corner_side_shape(0, shape);
+        self
+    }
+    pub fn corner_top_right_shape(mut self, shape: crate::style::CornerShape) -> Self {
+        self.style.set_corner_side_shape(1, shape);
+        self
+    }
+    pub fn corner_bottom_right_shape(mut self, shape: crate::style::CornerShape) -> Self {
+        self.style.set_corner_side_shape(2, shape);
+        self
+    }
+    pub fn corner_bottom_left_shape(mut self, shape: crate::style::CornerShape) -> Self {
+        self.style.set_corner_side_shape(3, shape);
+        self
+    }
+    // border-collapse / border-spacing
+    pub fn border_collapse(mut self, collapse: bool) -> Self {
+        self.style.border_collapse = collapse;
+        self
+    }
+    pub fn border_spacing(mut self, h: f32, v: f32) -> Self {
+        self.style.border_spacing = [h, v];
+        self
+    }
+    // border-image
+    pub fn border_image_source(mut self, src: impl Into<String>) -> Self {
+        let s: String = src.into();
+        if s.is_empty() {
+            self.style.border_image_source = None;
+        } else {
+            let key = crate::app::pending_images::texture_key_for_src(&s);
+            crate::app::pending_images::queue_image_from_src(&key, &s);
+            self.style.border_image_source = Some(key);
+        }
+        self
+    }
+    pub fn border_image_slice(mut self, slice: [f32; 4]) -> Self {
+        self.style.border_image_slice = slice;
+        self
+    }
+    pub fn border_image_slice_fill(mut self, fill: bool) -> Self {
+        self.style.border_image_slice_fill = fill;
+        self
+    }
+    pub fn border_image_width(mut self, widths: [f32; 4]) -> Self {
+        self.style.border_image_width = Some(widths);
+        self
+    }
+    pub fn border_image_outset(mut self, outset: [f32; 4]) -> Self {
+        self.style.border_image_outset = outset;
+        self
+    }
+    pub fn border_image_repeat(mut self, repeat: [crate::style::BorderImageRepeat; 2]) -> Self {
+        self.style.border_image_repeat = repeat;
+        self
+    }
+
     fn ensure_border_solid(mut self) -> Self {
-        if self.style.border_style == LineStyle::None {
+        if self.style.border_style.is_invisible() {
             self.style.border_style = LineStyle::Solid;
         }
         self

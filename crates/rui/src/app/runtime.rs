@@ -44,7 +44,9 @@ impl AppRuntime {
         match window_scope::tree_home_for(window_scope::active()) {
             TreeHome::AppState => {
                 let state_rc = self.state.upgrade()?;
-                let mut opt = state_rc.borrow_mut();
+                // Root rebuild / input handlers may already hold this RefCell
+                // (Inspector overlay used to panic here via nested reactive_view).
+                let mut opt = state_rc.try_borrow_mut().ok()?;
                 let state = opt.as_mut()?;
                 #[cfg(debug_assertions)]
                 state.apply_hot_reload_overrides_to_fragment(&mut new_fragment);
@@ -114,7 +116,7 @@ impl AppRuntime {
         match window_scope::tree_home_for(window_scope::active()) {
             TreeHome::AppState => {
                 let state_rc = self.state.upgrade()?;
-                let mut opt = state_rc.borrow_mut();
+                let mut opt = state_rc.try_borrow_mut().ok()?;
                 let state = opt.as_mut()?;
                 Some(state.update_element_by_template_id(template_id, patch))
             }
@@ -201,6 +203,60 @@ where
         c.borrow()
             .as_ref()
             .and_then(|rt| rt.try_update_element_by_template_id(template_id, patch))
+    })
+}
+
+/// Read-only access to the primary window UI root (Inspector snapshots).
+pub fn with_primary_root<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&Element) -> R,
+{
+    APP_RUNTIME.with(|c| {
+        let guard = c.borrow();
+        let rt = guard.as_ref()?;
+        let state_rc = rt.state.upgrade()?;
+        let opt = state_rc.try_borrow().ok()?;
+        let state = opt.as_ref()?;
+        Some(f(&state.root_element))
+    })
+}
+
+/// Apply an Inspector style patch to a node by child-index path (P1).
+#[cfg(feature = "devtools")]
+pub fn patch_devtools_style(path: &[usize], patch: crate::app::devtools::StylePatch) {
+    APP_RUNTIME.with(|c| {
+        let guard = c.borrow();
+        let Some(rt) = guard.as_ref() else {
+            return;
+        };
+        let Some(state_rc) = rt.state.upgrade() else {
+            return;
+        };
+        let Ok(mut opt) = state_rc.try_borrow_mut() else {
+            return;
+        };
+        let Some(state) = opt.as_mut() else {
+            return;
+        };
+        if state.patch_devtools_element_at_path(path, patch) {
+            state.window.request_redraw();
+        }
+    });
+}
+
+/// Apply Inspector CSSOM text to a node by child-index path (P2).
+/// Returns the canonical dump of the node's style after apply.
+#[cfg(feature = "devtools")]
+pub fn patch_devtools_cssom(path: &[usize], css: &str) -> Option<String> {
+    APP_RUNTIME.with(|c| {
+        let guard = c.borrow();
+        let rt = guard.as_ref()?;
+        let state_rc = rt.state.upgrade()?;
+        let mut opt = state_rc.try_borrow_mut().ok()?;
+        let state = opt.as_mut()?;
+        let dump = state.patch_devtools_cssom_at_path(path, css)?;
+        state.window.request_redraw();
+        Some(dump)
     })
 }
 

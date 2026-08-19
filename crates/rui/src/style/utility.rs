@@ -196,6 +196,7 @@ pub fn sync_class_variants_subtree(
         viewport_w,
         &[],
         &[],
+        [0.0_f32, 0.0],
         layout_tree,
         impact,
     );
@@ -209,10 +210,32 @@ fn sync_class_variants_subtree_inner(
     viewport_w: f32,
     ancestor_group_hovered: &[Option<&str>],
     peer_hovered: &[Option<&str>],
+    scroll_acc: [f32; 2],
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    let hovered = point_in_bounds(mouse_pos, el.layout_bounds);
+    // Reset accumulated scroll for fixed-position or portal-layer elements,
+    // mirroring the behaviour in pick_hover_target / hit_path.
+    let scroll_acc = if el.style.position_fixed
+        || el.template_id.as_deref()
+            == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+    {
+        [0.0_f32, 0.0]
+    } else {
+        scroll_acc
+    };
+
+    let b = el.layout_bounds;
+    let vx = b[0] - scroll_acc[0];
+    let vy = b[1] - scroll_acc[1];
+    let inside = mouse_pos[0] >= vx
+        && mouse_pos[1] >= vy
+        && mouse_pos[0] < vx + b[2]
+        && mouse_pos[1] < vy + b[3];
+
+    let is_portal = el.template_id.as_deref()
+        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    let hovered = inside;
     let focused = el
         .focus_id
         .as_deref()
@@ -271,6 +294,17 @@ fn sync_class_variants_subtree_inner(
     let child_group_refs: Vec<Option<&str>> =
         owned_group_names.iter().map(|n| n.as_deref()).collect();
 
+    // Accumulate scroll offset for children (same logic as pick_hover_target).
+    let mut child_scroll_acc = scroll_acc;
+    if !is_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            child_scroll_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            child_scroll_acc[1] += el.scroll_offset[1];
+        }
+    }
+
     let mut prev_peer_owned: Vec<Option<String>> = Vec::new();
     for child in &mut el.children {
         let peer_refs: Vec<Option<&str>> = prev_peer_owned.iter().map(|n| n.as_deref()).collect();
@@ -282,11 +316,18 @@ fn sync_class_variants_subtree_inner(
             viewport_w,
             &child_group_refs,
             &peer_refs,
+            child_scroll_acc,
             layout_tree,
             impact,
         );
         // After visiting child, if it is a hovered peer marker, expose to following siblings.
-        let child_hovered = point_in_bounds(mouse_pos, child.layout_bounds);
+        let cb = child.layout_bounds;
+        let cvx = cb[0] - child_scroll_acc[0];
+        let cvy = cb[1] - child_scroll_acc[1];
+        let child_hovered = mouse_pos[0] >= cvx
+            && mouse_pos[1] >= cvy
+            && mouse_pos[0] < cvx + cb[2]
+            && mouse_pos[1] < cvy + cb[3];
         prev_peer_owned.clear();
         if child_hovered {
             if let Some(name) = child.attrs.get("rui_peer") {
@@ -366,9 +407,6 @@ fn tick_rui_transition_spring(el: &mut Element) -> bool {
     }
 }
 
-fn point_in_bounds(pos: [f32; 2], b: [f32; 4]) -> bool {
-    pos[0] >= b[0] && pos[1] >= b[1] && pos[0] < b[0] + b[2] && pos[1] < b[1] + b[3]
-}
 
 fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflow) -> LayoutStatus {
     let before = (

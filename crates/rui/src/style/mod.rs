@@ -34,7 +34,8 @@ pub use cursor::{CursorKind, CursorUrl, CursorValue};
 pub use cursor_image::register_cursor_rgba8;
 pub(crate) use cursor_image::CustomCursorCache;
 pub use element_style::{
-    parse_box_shadow, parse_box_shadows, BoxShadow, LineStyle, LinearGradient, Style, UnitSlot,
+    parse_box_shadow, parse_box_shadows, BorderImageRepeat, BoxShadow, CornerShape, LineStyle,
+    LinearGradient, Style, UnitSlot,
 };
 pub use focus_ring::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,

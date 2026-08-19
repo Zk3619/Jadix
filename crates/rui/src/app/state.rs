@@ -1052,6 +1052,67 @@ impl AppState {
         status
     }
 
+    /// Inspector live style edit (B1 P1): patch one node by child-index path.
+    #[cfg(feature = "devtools")]
+    pub(super) fn patch_devtools_element_at_path(
+        &mut self,
+        path: &[usize],
+        patch: crate::app::devtools::StylePatch,
+    ) -> bool {
+        use crate::app::devtools::{apply_style_patch, find_element_by_path_mut};
+        let Some(el) = find_element_by_path_mut(&mut self.root_element, path) else {
+            return false;
+        };
+        let bounds = el.layout_bounds;
+        let status = apply_style_patch(el, &patch);
+        if let Some(n) = el.layout_node {
+            self.pending_layout_dirty.push(n);
+            self.layout_tree.update_taffy_node_style(el);
+        }
+        self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        if matches!(status, crate::core::tree::LayoutStatus::StyleChanged)
+            && bounds[2] > 0.0
+            && bounds[3] > 0.0
+        {
+            super::damage::accumulate_paint_damage(&mut self.damage_rect, bounds);
+        } else if matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) {
+            self.mark_full_redraw();
+        }
+        true
+    }
+
+    /// Inspector CSSOM text apply (B1 P2). Returns canonical dump after apply.
+    #[cfg(feature = "devtools")]
+    pub(super) fn patch_devtools_cssom_at_path(
+        &mut self,
+        path: &[usize],
+        css: &str,
+    ) -> Option<String> {
+        use crate::app::devtools::{
+            apply_cssom_text, cssom_text_from_style, find_element_by_path_mut, style_snapshot,
+        };
+        let Some(el) = find_element_by_path_mut(&mut self.root_element, path) else {
+            return None;
+        };
+        let bounds = el.layout_bounds;
+        let status = apply_cssom_text(el, css);
+        let dump = cssom_text_from_style(&style_snapshot(&el.style));
+        if let Some(n) = el.layout_node {
+            self.pending_layout_dirty.push(n);
+            self.layout_tree.update_taffy_node_style(el);
+        }
+        self.layout_status = Self::merge_layout_status(self.layout_status, status);
+        if matches!(status, crate::core::tree::LayoutStatus::StyleChanged)
+            && bounds[2] > 0.0
+            && bounds[3] > 0.0
+        {
+            super::damage::accumulate_paint_damage(&mut self.damage_rect, bounds);
+        } else if matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) {
+            self.mark_full_redraw();
+        }
+        Some(dump)
+    }
+
     fn template_path_matches(root: &Element, path: &[usize], template_id: &str) -> bool {
         let mut cursor = root;
         for &index in path {
@@ -1453,7 +1514,7 @@ impl AppState {
                 self.mark_full_redraw();
             }
         }
-        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+        let mut layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
 
         if matches!(
             pre_chrome_layout_status,
@@ -1525,6 +1586,19 @@ impl AppState {
                     full as f32 / frames as f32
                 );
             }
+        }
+
+        #[cfg(feature = "devtools")]
+        {
+            if crate::app::devtools::sync_overlay(&mut self.root_element) {
+                layout_for_build = Self::merge_layout_status(
+                    layout_for_build,
+                    crate::core::tree::LayoutStatus::StructureChanged,
+                );
+                self.mark_full_redraw();
+            }
+            let _ = crate::app::devtools::sync_box_model_visuals(&mut self.root_element);
+            let _ = crate::app::devtools::sync_tree_row_hovers(&mut self.root_element);
         }
 
         let (logical_w, logical_h) = self.logical_size();

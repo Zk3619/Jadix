@@ -67,12 +67,20 @@ pub struct InstanceInput {
     /// When `clip_size[0] < 0.0`, clipping is disabled.
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
-    pub _pad: f32,
+    /// Packed border/corner data: `border_style + corner_shape * 16 + round(corner_param * 100) * 256`.
+    /// border_style: 0=none, 1=solid, 2=dotted, 3=dashed, 4=double, 5=groove, 6=ridge, 7=inset, 8=outset.
+    /// corner_shape: 0=round, 1=angle, 2=superellipse, 3=notch, 4=scoop.
+    pub border_extra: f32,
 }
 
 impl InstanceInput {
     /// Sentinel: fragment shader skips scissor-style discard.
     pub const NO_CLIP_SIZE: [f32; 2] = [-1.0, -1.0];
+
+    /// Pack border_style (0-8), corner_shape (0-4), and corner_param into a single f32.
+    pub fn pack_border_extra(border_style: f32, corner_shape: f32, corner_param: f32) -> f32 {
+        border_style + corner_shape * 16.0 + (corner_param * 100.0).round() * 256.0
+    }
 
     pub fn with_clip(mut self, clip: Option<[f32; 4]>) -> Self {
         match clip {
@@ -162,7 +170,7 @@ impl InstanceInput {
                 wgpu::VertexAttribute {
                     offset: 116,
                     shader_location: 15,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float32x3,
                 },
             ],
         }

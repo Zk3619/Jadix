@@ -1245,3 +1245,73 @@ mod drag_select_bounds_tests {
         );
     }
 }
+
+/// Inspector pick: child-index path for the topmost hit target (logical coords).
+pub(crate) fn pick_element_path(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> Option<Vec<usize>> {
+    pick_element_path_acc(el, x, y, scroll_acc, Vec::new())
+}
+
+fn pick_element_path_acc(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+    path: Vec<usize>,
+) -> Option<Vec<usize>> {
+    if pointer_events_blocked(el) {
+        return None;
+    }
+    let scroll_acc = escape_scroll_acc(el, scroll_acc);
+    let b = el.layout_bounds;
+    let vx = b[0] - scroll_acc[0];
+    let vy = b[1] - scroll_acc[1];
+    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
+
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal
+        && (el.style.overflow.x != taffy::style::Overflow::Visible
+            || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && !inside
+    {
+        return None;
+    }
+
+    let mut next_acc = scroll_acc;
+    if !is_body_portal {
+        if el.style.overflow.x != taffy::style::Overflow::Visible {
+            next_acc[0] += el.scroll_offset[0];
+        }
+        if el.style.overflow.y != taffy::style::Overflow::Visible {
+            next_acc[1] += el.scroll_offset[1];
+        }
+    }
+
+    let order = if children_share_same_z_index(el) {
+        (0..el.children.len()).collect::<Vec<_>>()
+    } else {
+        hit_test_child_indices(el)
+    };
+
+    for i in order.into_iter().rev() {
+        let child = &el.children[i];
+        let mut child_path = path.clone();
+        child_path.push(i);
+        if let Some(hit) = pick_element_path_acc(child, x, y, next_acc, child_path) {
+            return Some(hit);
+        }
+    }
+
+    // Inspector pick: deepest layout box at the point (text leaves may be selected
+    // even when they do not `claims_own_bounds`; normalization promotes class parents).
+    if inside && b[2] > 0.0 && b[3] > 0.0 {
+        Some(path)
+    } else {
+        None
+    }
+}

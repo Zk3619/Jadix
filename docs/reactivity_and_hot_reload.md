@@ -140,7 +140,9 @@ Grid drag / Navigator / VirtualList / Portal 等拓扑变化场景继续用结�
 
 ## 信号图诊断（WP-R.8 ☑）
 
-`reactivity_debug_snapshot()` 返回 `ReactivityDebugSnapshot`（owners / effects / memos / signals / pending 计数 + signal→effect / signal→memo 边列表）。`dump_reactivity_graph()` 输出单行紧凑文本，适合日志 / 测试断言。**非** DevTools UI——仅运行时数据钩子。
+`reactivity_debug_snapshot()` 返回 `ReactivityDebugSnapshot`（owners / effects / memos / signals / pending 计数 + signal→effect / signal→memo 边列表）。`dump_reactivity_graph()` 输出单行紧凑文本，适合日志 / 测试断言。
+
+可视化：[`devtools.md`](devtools.md) Inspector **Reactivity** Tab（`devtools` feature；B1 P0–P2）。数据钩子本身仍可独立于 UI 使用。
 
 回归测试：`crate_tests::reactive`、`core::reactivity::tests`、`crate_tests::layout::headless_smoke`。
 

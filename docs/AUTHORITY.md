@@ -50,7 +50,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │
 ├─ 操作手册（验收步骤，不是第二套 WP）
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
-│   reactivity_and_hot_reload · headless · custom_components
+│   reactivity_and_hot_reload · headless · custom_components · devtools
 │   color · font* · damage · layout_subtree · text_align · box_model
 │   drawing（自绘面规范，亦作手册入口）
 │   glyphon_audit · PUBLISH · size_and_memory · multi_window · tray
@@ -118,7 +118,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | ADR-8 | 工程级以原生+发布为准，不以 Solid API 百分百对齐为准 |
 | ADR-9 | `ui!` 与 Builder **双书写面**一等公民，禁止只留其一 |
 
-**巩固期明确不做**：换 VDOM / EUI DSL / 弃 wgpu；Solid DOM/SSR/hydration；移动/鸿蒙一等公民；完整 CSSOM；平行「纯 Radix 组件包」；未过 CV 对全量组件做行为大重构；无验收大重构；DevTools（Backlog）。
+**巩固期明确不做**：换 VDOM / EUI DSL / 弃 wgpu；Solid DOM/SSR/hydration；移动/鸿蒙一等公民；完整 CSSOM（选择器级联 / 样式表）；平行「纯 Radix 组件包」；未过 CV 对全量组件做行为大重构；无验收大重构。DevTools Inspector P0–P2 已落地（`devtools` feature，仍不挡 Beta）。
 
 **细粒度战略**（展开 `REACTIVITY.md` §0.1 / **§0.2** / §5.9 / **§5.10**）：**超过 Floem 纯度、逼近 SolidJS 机制**，终极目标是把 Solid 细粒度**机制纯度**落到原生 retained GUI（非 DOM/SSR/API 名）。I-1…I-8 / I-11 / I-12 已齐；**G8 ☑ 2026-08-18**（WP-R.7）。ADR-8 仍禁止用 Solid 百分百 API 替代发布门槛。**G7 ☑ / G9 ☑ 2026-08-18**。
 
@@ -651,7 +651,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 | ID | 项 | 来源 |
 |----|-----|------|
-| B1 | DevTools（Signal 依赖图） | 工程 |
+| B1 | **DevTools / Inspector**（`devtools` feature）：Elements + Layout + Reactivity + 样式 live edit + 声明列表 CSSOM 编辑 + `template_id` 源码定位。**P0/P1/P2 ☑ 2026-08-19**。**不**做选择器级联 / 样式表；不挡 Beta | 工程 · [`devtools.md`](devtools.md) |
 | B2 | `mergeProps` / `splitProps` / `children()` | 反应性 · ☑ 2026-08-18 Rust 语义糖（非 JS Proxy） |
 | B3 | backdrop-blur 离屏缓存 | 工程 |
 | B4 | 移动 / 鸿蒙 `PlatformWindow` 实装 | 工程 |

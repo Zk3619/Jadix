@@ -176,7 +176,7 @@ SolidJS（Web 标尺）          Leptos（可移植图协议）       Floem（�
 | reactive! 结构岛 | **done** | `reactive_view` / anchor | 对标 Floem `dyn_*` |
 | REGISTERED_* → Owner | **done** | Anchors + Bindings + COMPONENT_* 均 `on_cleanup`；`registry_owner` 测 | WP-2.4 ☑ |
 | mergeProps / splitProps / children() | **done（B2 ☑ 2026-08-18）** | `app/props.rs`；`Some` 覆盖 + fragment 展平 | 不是 JS Proxy / DOM children() |
-| DevTools | **missing（可空缺）** | — | 不阻塞工程级 |
+| DevTools | **Inspector MVP**（`devtools` feature；B1 P0–P2 ☑） | `app/devtools/` | 选择器级联 / 样式表仍空缺；不阻塞工程级 |
 
 ### 4.1 Resource / ErrorBoundary 策略（WP-2.5）
 

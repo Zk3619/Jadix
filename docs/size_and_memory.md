@@ -252,7 +252,7 @@ cargo bloat --release -p calculator --crates -n 40 --config "profile.release.str
 
 #### 3. 开发者体验 (DX) 与生态建设
 
-- **UI Inspector**：类似 Flutter DevTools 或 React Developer Tools，允许开发者在运行时查看 UI 树、检查布局边界（taffy 的 Flexbox 计算结果）、审查样式。这比单纯减小体积更能吸引开发者使用你的框架。
+- **UI Inspector**：B1 P0–P2 已落地（`devtools` feature）。运行时查看 UI 树、点选高亮、盒模型、Layout、样式/CSSOM 声明编辑、Signal 依赖图、`template_id` 源码定位。见 [`devtools.md`](devtools.md)。
 - **Hot Reload 增强**：利用你保留的 `hot_reload` 机制，优化 WGSL 着色器的热更新，让 UI 开发者调整颜色和动画时无需重启应用。
 
 #### 4. 复杂交互与动画系统

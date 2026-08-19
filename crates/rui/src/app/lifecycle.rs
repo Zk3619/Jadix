@@ -529,6 +529,11 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
 
             crate::debug_stack::reset_crumb_file();
             crate::debug_stack::crumb("lifecycle: before root create_effect");
+            // Enable Inspector before the root effect so wrap_app sees the flag on first run.
+            #[cfg(feature = "devtools")]
+            if self.window_options.devtools {
+                crate::app::devtools::DevToolsState::enable_for_window();
+            }
             // create_effect runs synchronously on registration. By the time it returns, the real
             // root has been reconciled and deferred fine-grained reactive anchors have mounted, so
             // making the window visible cannot expose the bootstrap root.
@@ -537,6 +542,8 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             crate::core::reactivity::create_effect(move || {
                 crate::debug_stack::crumb("root_effect: before app_builder");
                 let new_root = (builder_ref.borrow_mut())();
+                #[cfg(feature = "devtools")]
+                let new_root = crate::app::devtools::wrap_app(new_root);
                 crate::debug_stack::crumb(&format!(
                     "root_effect: after app_builder children={}",
                     new_root.children.len()

@@ -18,7 +18,7 @@
 | `error_boundary` / `throw_error` / `throw_resource_error` | `app/error_boundary.rs` | Resource Err→EB 须**显式** `throw_resource_error`（巩固期不自动桥） |
 | `define_chart` / marks / `ChartTheme` / `custom_mark`；polar 族；`scale_log`/`scale_time`；`.tooltip`/`.crosshair`；预设 `pie_chart` / `area_chart`；`ChartDatum.time`；path 核光栅贴图 | `components/chart/` · `primitives/path.rs` | WP-3.2 grammar（对照 TanStack，不搬 D3）；RSX `<Chart>`/`BarChart`…；Donut=`inner_radius`；禁区≠可加深见 `drawing.md` §8；未进 SemVer |
 | `tray_icon` / `TrayIcon` / `request_exit` / `system_tray_native` | `app/tray.rs` · `ui_bridge.rs` | WP-3.6；默认 stub；`system-tray` 才有原生副作用 |
-| `WindowOptions` / `run_with` / `open_secondary_window_with` / `start_window_drag` / `close_window` | `app/window_chrome.rs` · `multi_window.rs` | 无边框 / 透明 / 系统模糊（Win11 Acrylic）；Gallery 导航卡 |
+| `WindowOptions::devtools` / `rui::app::devtools::*` | `app/devtools/` · `app/runtime.rs` | **B1**：Inspector（Elements + Layout + Reactivity + 样式/CSSOM 编辑）；`devtools` feature |
 | `virtual_masonry` / `VirtualMasonryBuilder` | `components/virtual_masonry.rs` · `utils/virtual_masonry.rs` | WP-3.10；变高瀑布流虚拟化；`item_height` + 测宽缓存；未进 SemVer |
 
 ### Added

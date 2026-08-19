@@ -126,7 +126,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 |----|-----|--------|----------|
 | 组件 | ~44 模块；信任＜密度 | EUI 图表/MD/Picker；Slint 主题包；Iced table/grid/markdown/pane_grid | CV 门禁后再加深；Pie/VirtualMasonry 跟 EUI；表格/编辑器跟 Iced 能力表 |
 | 测试 | 三平台 CI；golden×2 | Xilem 截图；Slint cases；Iced headless + e2e；egui_kittest | 组件 golden≥5；Harness 风格冒烟 |
-| 工具链 | `hot_reload_cli` | Slint LSP；Iced comet/devtools/time-travel；egui inspection/MCP | 不造 DSL；Gallery + 可选 inspector（B1）；热重载对齐 Iced `hot` 叙事即可 |
+| 工具链 | `hot_reload_cli` + Inspector（`devtools` feature，B1 P0/P1） | Slint LSP；Iced comet/devtools/time-travel；egui inspection/MCP | 不造 DSL；Gallery `cargo run -p gallery --features devtools`；热重载对齐 Iced `hot` 叙事即可 |
 | 发布 | 未 crates.io；无 CHANGELOG | Slint 1.x；egui 高频发版；Iced 0.14 契约 | W4：SemVer 面 + 文档站 + [PUBLISH.md](PUBLISH.md) |
 
 ---
@@ -210,7 +210,7 @@ RUI 的架构赌注（**Solid 细粒度 + winit/wgpu/taffy/glyphon**）相对六
 | 3 | Owner/ID 与上溢升父 | 细粒度优势若泄漏全局表会空转 | 大型 App 难维护 |
 | 4 | EUI/Iced 密度缺口（Chart/Masonry/Picker/Table） | 产品叙事对标需要可见差距关闭 | Gallery 看起来「半成品」 |
 | 5 | crates.io + 文档站 + CHANGELOG | Slint/egui/Iced 证明契约 = 采用前提 | 无人 `cargo add` |
-| 6 | GPU PartialLoad / DevTools | Iced comet 证明有价值但非 Beta 阻塞 | 可进 Backlog |
+| 6 | GPU PartialLoad | Inspector P0–P2 已落地；Iced comet 级 time-travel 仍非 Beta 阻塞 | 不挡 Beta |
 
 ---
 
