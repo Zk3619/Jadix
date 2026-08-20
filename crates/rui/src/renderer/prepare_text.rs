@@ -64,6 +64,65 @@ fn plan_emoji_layout(text: &str) -> (String, Vec<TextSegment>) {
     (layout, segments)
 }
 
+/// Pair original emoji graphemes with UTF-8 starts of `EMOJI_LAYOUT_SLOT` in slotted layout text
+/// (e.g. UAX#14 `fit.shape_text` that already replaced emoji and inserted soft `\n`).
+fn emoji_segments_from_slotted_layout(original: &str, slotted_layout: &str) -> Vec<TextSegment> {
+    let emojis: Vec<String> = original
+        .graphemes(true)
+        .filter(|g| emoji_detect::grapheme_is_emoji(g))
+        .map(|g| g.to_string())
+        .collect();
+    if emojis.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(emojis.len());
+    let mut emoji_i = 0usize;
+    for (idx, c) in slotted_layout.char_indices() {
+        if c == EMOJI_LAYOUT_SLOT {
+            if let Some(text) = emojis.get(emoji_i) {
+                out.push(TextSegment::Emoji {
+                    text: text.clone(),
+                    start: idx,
+                });
+                emoji_i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn buffer_joined_text(buffer: &glyphon::Buffer) -> String {
+    let mut out = String::new();
+    for (i, line) in buffer.lines.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line.text());
+    }
+    out
+}
+
+/// True when the shaped buffer already carries UAX#14 hard breaks for this leaf width.
+///
+/// Fast Miss used to shape raw BiDi with `Wrap::WordOrGlyph`. Settle then hit Bounds
+/// (same `shape_hash`) and reused that buffer — WJ pairs stayed illegally split.
+fn bidi_prewrap_applied(
+    buffer: &glyphon::Buffer,
+    text: &str,
+    size: f32,
+    weight: u16,
+    logical_lh: f32,
+    layout_w: f32,
+) -> bool {
+    let target = crate::text::layout_wrap_target_prewrap(layout_w).max(1.0);
+    let Some(fit) =
+        crate::text::try_glyphon_fit_soft_wrap(text, size, weight, logical_lh, target)
+    else {
+        return false;
+    };
+    buffer_joined_text(buffer) == fit.shape_text.as_ref()
+}
+
 #[derive(Clone)]
 struct FrameTextNodeMeta {
     x: f32,
@@ -477,7 +536,30 @@ fn correct_bidi_ink_spill(
     }
     let fit = crate::text::glyphon_fit_soft_wrap(text, size, weight, logical_lh, fit_lookup_w);
     let fit_w = (fit.wrap_width * ui_scale).max(1.0);
-    if horizontal_spill && (fit_w - wrap_w).abs() > 0.5 {
+    if crate::text::needs_logical_prewrap(text) {
+        // Width-dependent UAX#14 prewrap: must set_text, not only set_size.
+        let attrs_owned = buffer
+            .lines
+            .first()
+            .map(|l| glyphon::AttrsOwned::new(&l.attrs_list().defaults()))
+            .unwrap_or_else(|| glyphon::AttrsOwned::new(&glyphon::Attrs::new()));
+        let aligns: Vec<_> = buffer.lines.iter().map(|l| l.align()).collect();
+        buffer.set_wrap(glyphon::Wrap::None);
+        // fit.shape_text may already contain emoji slots (`一`) — keep them invisible.
+        set_shaped_buffer_text(
+            buffer,
+            font_system,
+            fit.shape_text.as_ref(),
+            attrs_owned.as_attrs(),
+            glyphon::Shaping::Advanced,
+            emoji_custom_glyph_enabled(),
+        );
+        for (line, align) in buffer.lines.iter_mut().zip(aligns) {
+            line.set_align(align);
+        }
+        buffer.set_size(Some(fit_w), height_opt);
+        buffer.shape_until_scroll(font_system, false);
+    } else if horizontal_spill && (fit_w - wrap_w).abs() > 0.5 {
         buffer.set_size(Some(fit_w), height_opt);
         buffer.shape_until_scroll(font_system, false);
     }
@@ -580,6 +662,30 @@ fn nowrap_buffer_width(
     } else {
         intrinsic.max(box_w).max(1.0)
     }
+}
+
+/// Live intrinsic for `whitespace-nowrap` paint.
+///
+/// Prefer this over a layout-attached `PreparedText`: IME preedit is spliced into
+/// `info.text` every keystroke while `prepared` can lag one frame. A stale (too
+/// narrow) wrap width lets Word-wrap invent extra runs so a textarea line appears
+/// to jump downward while composing Latin syllables after CJK.
+fn nowrap_layout_width_from_text(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height_logical: f32,
+    overflow: TextOverflow,
+    static_ellipsis: bool,
+    box_w: f32,
+) -> f32 {
+    let prepared = crate::text::prepare(text, size, weight, line_height_logical.max(1.0));
+    nowrap_buffer_width(
+        overflow,
+        static_ellipsis,
+        crate::text::intrinsic_width(&prepared),
+        box_w,
+    )
 }
 
 fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4]> {
@@ -724,7 +830,18 @@ fn set_shaped_buffer_text(
     shaping: glyphon::Shaping,
     hide_emoji_font_glyphs: bool,
 ) {
-    if !hide_emoji_font_glyphs || !emoji_detect::text_contains_emoji(text) {
+    if !hide_emoji_font_glyphs {
+        buffer.set_text(text, &attrs, shaping, None);
+        return;
+    }
+    // UAX#14 fit.shape_text may already contain EMOJI_LAYOUT_SLOT (`一`). That string has
+    // no emoji codepoints, so text_contains_emoji is false — still must paint slots
+    // invisible or the ideograph stroke shows as a line through Twemoji quads.
+    if text.contains(EMOJI_LAYOUT_SLOT) {
+        set_text_with_invisible_emoji_slots(buffer, text, attrs, shaping);
+        return;
+    }
+    if !emoji_detect::text_contains_emoji(text) {
         buffer.set_text(text, &attrs, shaping, None);
         return;
     }
@@ -755,6 +872,53 @@ fn set_shaped_buffer_text(
     }
     let rich: Vec<(&str, glyphon::Attrs)> =
         owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
+    buffer.set_rich_text(rich, &attrs, shaping, None);
+}
+
+/// Paint already-slotted layout text (`一` placeholders) with alpha-0 on each slot.
+fn set_text_with_invisible_emoji_slots(
+    buffer: &mut glyphon::Buffer,
+    text: &str,
+    attrs: glyphon::Attrs,
+    shaping: glyphon::Shaping,
+) {
+    let visible = glyphon::AttrsOwned::new(&attrs);
+    let invisible = glyphon::AttrsOwned::new(
+        &attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0)),
+    );
+    let mut owned: Vec<(String, glyphon::AttrsOwned)> = Vec::new();
+    let mut buf = String::new();
+    let mut slot_run = false;
+    let flush = |owned: &mut Vec<(String, glyphon::AttrsOwned)>,
+                 buf: &mut String,
+                 slot_run: bool| {
+        if buf.is_empty() {
+            return;
+        }
+        let a = if slot_run {
+            invisible.clone()
+        } else {
+            visible.clone()
+        };
+        owned.push((std::mem::take(buf), a));
+    };
+    for c in text.chars() {
+        let is_slot = c == EMOJI_LAYOUT_SLOT;
+        if !buf.is_empty() && is_slot != slot_run {
+            flush(&mut owned, &mut buf, slot_run);
+        }
+        slot_run = is_slot;
+        buf.push(c);
+    }
+    flush(&mut owned, &mut buf, slot_run);
+    if owned.is_empty() {
+        buffer.set_text(text, &attrs, shaping, None);
+        return;
+    }
+    let rich: Vec<(&str, glyphon::Attrs)> = owned
+        .iter()
+        .map(|(t, a)| (t.as_str(), a.as_attrs()))
+        .collect();
     buffer.set_rich_text(rich, &attrs, shaping, None);
 }
 
@@ -1741,26 +1905,21 @@ pub fn prepare_text_frame(
         // `layout(&prepared, info.width)` for line-count / max-width hints and drive
         // buffer size from the same logical avail width. Full glyph/buffer sharing with
         // the layout-only FontSystem is still deferred (separate FontSystems).
-        // `whitespace-nowrap`: shape against intrinsic (or wider box), never soft-wrap mid-label.
+        // `whitespace-nowrap`: shape against **live** intrinsic (or wider box), never
+        // soft-wrap mid-line. Do not use a possibly-stale `prepared` width — IME preedit
+        // updates `info.text` before layout re-prepares (textarea: line jumps down).
         // Ellipsis captions are already truncated to the box — using intrinsic here would
         // center a short "Very long…" run inside the full caption width (left-side gap).
         let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
-        let layout_w = if let Some(ref prepared) = info.prepared {
-            if nowrap {
-                nowrap_buffer_width(
-                    st.overflow,
-                    st.input_caret.is_none(),
-                    crate::text::intrinsic_width(prepared),
-                    info.width,
-                )
-            } else {
-                info.width.max(1.0)
-            }
-        } else if nowrap {
-            nowrap_buffer_width(
+        let logical_lh = line_height / ui_scale.max(0.001);
+        let layout_w = if nowrap {
+            nowrap_layout_width_from_text(
+                info.text.as_str(),
+                st.size,
+                font_weight,
+                logical_lh,
                 st.overflow,
                 st.input_caret.is_none(),
-                info.width,
                 info.width,
             )
         } else {
@@ -1904,17 +2063,23 @@ pub fn prepare_text_frame(
 
         // Wrap: FIT_CACHE hit always. Fast miss → leaf (smooth resize). Settle miss →
         // one glyphon_fit (bidi/emoji ink must not paint past the leaf).
-        let logical_lh = line_height / ui_scale.max(0.001);
+        // BiDi/WJ prewrap uses floor-8 buckets (≤ leaf) so Wrap::None paint cannot reflow.
         let fit_lookup_w = {
-            let fit_target = crate::text::layout_wrap_target(layout_w, force_fast_mode);
-            if force_fast_mode {
-                fit_target
+            if crate::text::needs_logical_prewrap(info.text.as_str()) {
+                crate::text::layout_wrap_target_prewrap(layout_w)
+            } else if force_fast_mode {
+                crate::text::layout_wrap_target(layout_w, true)
             } else {
                 layout_w
             }
         };
         let resolve_paint_wrap = || -> f32 {
             if nowrap || info.text.is_ascii() || info.prepared.is_none() {
+                return soft_w_target;
+            }
+            // Prewrap hard-breaks are sized for the leaf; do not shrink buffer below leaf
+            // (that reflows the last word on settle).
+            if crate::text::needs_logical_prewrap(info.text.as_str()) {
                 return soft_w_target;
             }
             if let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(
@@ -1966,6 +2131,9 @@ pub fn prepare_text_frame(
                 if ok {
                     if is_input_text {
                         let mut wrap_w = resolve_paint_wrap();
+                        if nowrap {
+                            entry.buffer.set_wrap(glyphon::Wrap::None);
+                        }
                         entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
                         entry
                             .buffer
@@ -1999,6 +2167,19 @@ pub fn prepare_text_frame(
                             measured: entry.measured_text_w,
                             wrap_w,
                         }
+                    } else if !nowrap
+                        && crate::text::needs_logical_prewrap(info.text.as_str())
+                        && !bidi_prewrap_applied(
+                            &entry.buffer,
+                            info.text.as_str(),
+                            st.size,
+                            font_weight,
+                            logical_lh,
+                            layout_w,
+                        )
+                    {
+                        // Stale Exact entry shaped raw BiDi (fast WordOrGlyph) — must re-Miss.
+                        ShapePath::Miss
                     } else {
                         // Exact hit (labels): fast may have shaped at full leaf; settle must
                         // apply fit wrap so bidi/emoji ink does not clip at the card edge.
@@ -2053,16 +2234,29 @@ pub fn prepare_text_frame(
                 }
             } else if bounds_only {
                 // iced Difference::Bounds: same Buffer, set_size only (no set_text).
-                // Skip set_size only when wrap already matches the desired width. "ink fits
-                // wider leaf" alone is wrong on grow: old narrow wrap leaves empty space on
-                // the right (gallery Checkbox blurb after widening the window).
+                // BiDi/WJ prewrap is width-dependent → re-Miss when wrap target moves OR
+                // when the buffer still has raw text from a fast WordOrGlyph Miss.
+                let logical_prewrap = !nowrap
+                    && !is_input_text
+                    && crate::text::needs_logical_prewrap(info.text.as_str());
                 let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
                 let measured = entry.measured_text_w;
                 let runs = entry.buffer.layout_runs().count().max(1);
                 let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
                 let want_wrap = resolve_paint_wrap();
                 let wrap_matches_leaf = (cur_wrap - want_wrap).abs() <= 1.0;
-                if measured > 0.0
+                let prewrap_ok = !logical_prewrap
+                    || bidi_prewrap_applied(
+                        &entry.buffer,
+                        info.text.as_str(),
+                        st.size,
+                        font_weight,
+                        logical_lh,
+                        layout_w,
+                    );
+                if logical_prewrap && (!wrap_matches_leaf || !prewrap_ok) {
+                    ShapePath::Miss
+                } else if measured > 0.0
                     && measured <= soft_w_target + 0.5
                     && height_ok
                     && wrap_matches_leaf
@@ -2073,7 +2267,8 @@ pub fn prepare_text_frame(
                         measured,
                         wrap_w: cur_wrap,
                     }
-                } else {
+                } else if logical_prewrap {
+                    // Width still matches but ink/height drifted — spill path can set_text.
                     let mut wrap_w = want_wrap;
                     entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
                     entry
@@ -2105,6 +2300,57 @@ pub fn prepare_text_frame(
                     entry.shape_hash = shape_hash;
                     entry.measured_text_w = measured;
                     ShapePath::Bounds { measured, wrap_w }
+                } else {
+                // Skip set_size only when wrap already matches the desired width. "ink fits
+                // wider leaf" alone is wrong on grow: old narrow wrap leaves empty space on
+                // the right (gallery Checkbox blurb after widening the window).
+                if measured > 0.0
+                    && measured <= soft_w_target + 0.5
+                    && height_ok
+                    && wrap_matches_leaf
+                {
+                    entry.key_hash = key_hash;
+                    entry.shape_hash = shape_hash;
+                    ShapePath::Bounds {
+                        measured,
+                        wrap_w: cur_wrap,
+                    }
+                } else {
+                    let mut wrap_w = want_wrap;
+                    if nowrap {
+                        entry.buffer.set_wrap(glyphon::Wrap::None);
+                    }
+                    entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
+                    entry
+                        .buffer
+                        .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                    wrap_w = correct_bidi_ink_spill(
+                        &mut entry.buffer,
+                        unsafe { &mut *text_renderer.font_system },
+                        info.text.as_str(),
+                        st.size,
+                        font_weight,
+                        logical_lh,
+                        fit_lookup_w,
+                        soft_w_target,
+                        ui_scale,
+                        line_height,
+                        scaled_h,
+                        buffer_height_opt,
+                        wrap_w,
+                        nowrap,
+                        force_fast_mode,
+                    );
+                    let measured = entry
+                        .buffer
+                        .layout_runs()
+                        .map(|run| run.line_w)
+                        .fold(0.0_f32, f32::max);
+                    entry.key_hash = key_hash;
+                    entry.shape_hash = shape_hash;
+                    entry.measured_text_w = measured;
+                    ShapePath::Bounds { measured, wrap_w }
+                }
                 }
             } else {
                 ShapePath::Miss
@@ -2123,6 +2369,42 @@ pub fn prepare_text_frame(
                     unsafe { &mut *text_renderer.font_system },
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
+                let logical_prewrap = !nowrap
+                    && !is_input_text
+                    && crate::text::needs_logical_prewrap(info.text.as_str());
+                // UAX#14 prewrap from FIT_CACHE. Use 8px width buckets so resize fast and
+                // settle share the same breaks (avoids last-word jump on mouse-up).
+                // Never pair Wrap::None with raw text.
+                let prewrapped: Option<std::sync::Arc<str>> = if logical_prewrap {
+                    let prewrap_target =
+                        crate::text::layout_wrap_target_prewrap(layout_w).max(1.0);
+                    // Always UAX#14 prewrap — including force_fast. Skipping left raw text
+                    // + WordOrGlyph in the cache; Bounds then reused it and split WJ.
+                    let fit = crate::text::try_glyphon_fit_soft_wrap(
+                        info.text.as_str(),
+                        st.size,
+                        font_weight,
+                        logical_lh,
+                        prewrap_target,
+                    )
+                    .unwrap_or_else(|| {
+                        crate::text::glyphon_fit_soft_wrap(
+                            info.text.as_str(),
+                            st.size,
+                            font_weight,
+                            logical_lh,
+                            prewrap_target,
+                        )
+                    });
+                    buffer_soft_w = soft_w_target;
+                    buffer.set_wrap(glyphon::Wrap::None);
+                    Some(fit.shape_text)
+                } else {
+                    None
+                };
+                if nowrap {
+                    buffer.set_wrap(glyphon::Wrap::None);
+                }
                 buffer.set_size(Some(buffer_soft_w), buffer_height_opt);
                 let attrs = glyphon::Attrs::new()
                     .family(family)
@@ -2175,10 +2457,13 @@ pub fn prepare_text_frame(
                         owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
                     buffer.set_rich_text(rich, &attrs, shaping, None);
                 } else {
+                    let paint_text = prewrapped
+                        .as_deref()
+                        .unwrap_or_else(|| shape_text.as_ref());
                     set_shaped_buffer_text(
                         &mut buffer,
                         unsafe { &mut *text_renderer.font_system },
-                        shape_text.as_ref(),
+                        paint_text,
                         attrs,
                         shaping,
                         emoji_custom_glyph_enabled() && has_emoji,
@@ -2252,7 +2537,15 @@ pub fn prepare_text_frame(
                     .unwrap_or_default();
                 let mut sibling_iter = sibling_ids.into_iter();
                 let mut next_custom_id = text_renderer.emoji_cache.next_custom_id;
-                let (layout_text, segments) = plan_emoji_layout(shape_text.as_ref());
+                // Prefer the text actually in the Buffer (may be UAX#14-prewrapped + slotted).
+                let slotted = buffer_joined_text(&text_renderer.shaped_cache[i].buffer);
+                let (layout_text, segments) = if slotted.contains(EMOJI_LAYOUT_SLOT) {
+                    let segs =
+                        emoji_segments_from_slotted_layout(shape_text.as_ref(), &slotted);
+                    (slotted, segs)
+                } else {
+                    plan_emoji_layout(shape_text.as_ref())
+                };
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
                 // Same-line backstop if a slot advance collapses; reset on soft-wrap.
@@ -3270,9 +3563,11 @@ mod hidden_scroll_cull_tests {
 
 #[cfg(test)]
 mod input_shaping_stability_tests {
+    use super::nowrap_layout_width_from_text;
     use crate::renderer::font_loader;
     use crate::renderer::text_hit::best_font_family;
     use crate::renderer::text_prepare_debug::is_input_inline_text;
+    use crate::style::TextOverflow;
 
     fn shaped_line_w(fs: &mut glyphon::FontSystem, text: &str, shaping: glyphon::Shaping) -> f32 {
         let size = 14.0_f32;
@@ -3314,6 +3609,63 @@ mod input_shaping_stability_tests {
         assert!(!is_input_inline_text(Some("__rui_input:pw:clear")));
         assert!(!is_input_inline_text(Some("label")));
         assert!(!is_input_inline_text(None));
+    }
+
+    #[test]
+    fn nowrap_live_intrinsic_prevents_soft_wrap_after_cjk_latin_preedit() {
+        // Textarea IME: committed CJK + in-flight pinyin under a narrow leaf.
+        // Stale prepared intrinsic (CJK only) + Word wrap → extra runs → line jumps down.
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        crate::text::install_shared_font_system(&mut fs);
+
+        let size = 14.0_f32;
+        let lh = 21.0_f32;
+        let box_w = 72.0_f32;
+        let committed = "你好世界";
+        let live = format!("{committed}nihaoshijie");
+        let stale = crate::text::prepare(committed, size, 400, lh);
+        let stale_w = crate::text::intrinsic_width(&stale);
+        let live_w = nowrap_layout_width_from_text(
+            &live,
+            size,
+            400,
+            lh,
+            TextOverflow::Clip,
+            false,
+            box_w,
+        );
+        assert!(
+            live_w > stale_w + 8.0,
+            "live wrap must exceed stale CJK-only intrinsic (live={live_w} stale={stale_w})"
+        );
+
+        let family = best_font_family(&fs);
+        let attrs = glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(400));
+
+        let mut soft = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        soft.set_size(Some(stale_w.max(box_w)), None);
+        soft.set_text(&live, &attrs, glyphon::Shaping::Advanced, None);
+        soft.shape_until_scroll(&mut fs, false);
+        let soft_runs = soft.layout_runs().count();
+
+        let mut hard = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        hard.set_wrap(glyphon::Wrap::None);
+        hard.set_size(Some(live_w), None);
+        hard.set_text(&live, &attrs, glyphon::Shaping::Advanced, None);
+        hard.shape_until_scroll(&mut fs, false);
+        let hard_runs = hard.layout_runs().count();
+
+        assert!(
+            soft_runs > 1,
+            "stale narrow Word-wrap must invent extra runs (got {soft_runs})"
+        );
+        assert_eq!(
+            hard_runs, 1,
+            "nowrap + live intrinsic must keep one run; got {hard_runs}"
+        );
     }
 
     #[test]

@@ -32,6 +32,7 @@ swash = "0.2.6"
 fontdb = "0.23"
 ttf-parser = "0.25"
 unicode-segmentation = "1.11.0"
+unicode-linebreak = "0.1.5"
 # Text-only clipboard: the default `image` feature drags in image 0.25 with
 # bmp/png/jpeg decoders that nothing here calls.
 clipboard-rs = { version = "0.3", default-features = false }

@@ -468,4 +468,32 @@ mod tests {
             "drag right of the box must move caret toward the end (right={right} edge={right_edge})"
         );
     }
+
+    #[test]
+    fn multiline_hard_line_hit_ignores_long_prev_line_width() {
+        // Long hard line 0 must not steal Y hits for hard line 1 (devtools CSSOM “串行”).
+        let mut fs = test_font_system();
+        let line0 = "padding: 8px 16px 8px 16px; background: #ffffff; border-radius: 6px;";
+        let line1 = "border-width: 1px;";
+        let text = format!("{line0}\n{line1}");
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.overflow = TextOverflow::Clip;
+        style.white_space = crate::style::WhiteSpace::Nowrap;
+        let bounds = [0.0, 0.0, 80.0, 42.0];
+        let ix = hit_test_input_text_index(&mut fs, &text, 1.0, 30.0, bounds, &style, 1.0);
+        assert_eq!(
+            ix,
+            line0.len() + 1,
+            "click on visual row 1 must land at start of hard line 1, got {ix}"
+        );
+        // Soft-wrap of line0 under width 80 would put extra visual rows before line1;
+        // hard-line indexing must still map y≈30 to line1 (not mid-line0).
+        assert!(
+            ix > line0.len(),
+            "must not land inside hard line 0 when clicking the second row"
+        );
+    }
 }

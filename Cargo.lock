@@ -3363,6 +3363,7 @@ dependencies = [
  "tracing",
  "tray-icon",
  "ttf-parser",
+ "unicode-linebreak",
  "unicode-segmentation",
  "wgpu",
  "windows-sys 0.59.0",

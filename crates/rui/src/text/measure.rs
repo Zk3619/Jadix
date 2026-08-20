@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Wrap};
 
 use crate::renderer::font_loader::{self, ensure_coverage_for_text};
 
@@ -185,6 +185,10 @@ fn is_cjk(c: char) -> bool {
 }
 
 /// Split into measure/break segments: whitespace tokens, CJK chars, Latin runs.
+///
+/// Respects UAX#14 glue/soft opportunities that Rust's `char::is_whitespace` misses:
+/// - `U+2060` WJ / `U+FEFF` ZWNBSP stay inside the word (no break)
+/// - `U+200B` ZWSP is an explicit soft-break opportunity
 fn split_segments(text: &str) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     let mut buf = String::new();
@@ -198,6 +202,12 @@ fn split_segments(text: &str) -> Vec<(String, bool)> {
         if c == '\n' {
             flush_word(&mut buf, &mut out);
             out.push(("\n".to_string(), true));
+        } else if c == '\u{2060}' || c == '\u{FEFF}' {
+            // Word Joiner / ZWNBSP: glue into the current unbreakable run.
+            buf.push(c);
+        } else if c == '\u{200B}' {
+            flush_word(&mut buf, &mut out);
+            out.push((c.to_string(), true));
         } else if c.is_whitespace() || is_cjk(c) {
             flush_word(&mut buf, &mut out);
             out.push((c.to_string(), true));
@@ -440,15 +450,17 @@ pub fn glyphon_soft_wrap_line_count(
 }
 
 /// Result of shaping with a wrap width tightened until glyph ink fits `target_width`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GlyphonFitSoftWrap {
     /// Buffer wrap width actually used (≤ target when bidi overflow required shrink).
     pub wrap_width: f32,
     pub line_count: usize,
     pub max_ink: f32,
+    /// Text actually shaped: original, or UAX#14 soft-wrapped (`\n`) for BiDi/WJ.
+    pub shape_text: std::sync::Arc<str>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct FitCacheEntry {
     gen: u64,
     value: GlyphonFitSoftWrap,
@@ -504,7 +516,7 @@ fn fit_cache_touch(key: &FitKey) -> Option<GlyphonFitSoftWrap> {
         let mut cache = c.borrow_mut();
         let entry = cache.get_mut(key)?;
         entry.gen = gen;
-        Some(entry.value)
+        Some(entry.value.clone())
     })
 }
 
@@ -531,6 +543,22 @@ pub fn layout_wrap_target(width: f32, fast: bool) -> f32 {
     let w = width.max(1.0);
     if fast && w > 8.0 {
         ((w / 8.0).round() * 8.0).max(1.0)
+    } else {
+        w
+    }
+}
+
+/// 8px bucket for BiDi/WJ UAX#14 prewrap — always ≤ `width`.
+///
+/// Rounding **up** (see [`layout_wrap_target`]) then painting at the real leaf with
+/// `Wrap::Word` lets cosmic-text re-break inside a hard line and split Word Joiner
+/// pairs across BiDi level spans (Hebrew + EN digits). Floor + `Wrap::None` keeps
+/// hard `\n` as the only soft breaks.
+#[inline]
+pub fn layout_wrap_target_prewrap(width: f32) -> f32 {
+    let w = width.max(1.0);
+    if w > 8.0 {
+        ((w / 8.0).floor() * 8.0).max(1.0)
     } else {
         w
     }
@@ -573,6 +601,7 @@ pub fn try_glyphon_fit_soft_wrap(
             wrap_width: target_width.max(1.0),
             line_count: 0,
             max_ink: 0.0,
+            shape_text: std::sync::Arc::from(""),
         });
     }
     let target = target_width.max(1.0);
@@ -601,7 +630,12 @@ pub fn bidi_soft_wrap_height(
         return base;
     }
     let fast = layout_text_fast_mode();
-    let target = layout_wrap_target(layout_w, fast);
+    // BiDi/WJ prewrap paint always floor-buckets width; keep layout height on the same key.
+    let target = if super::uax14_wrap::needs_logical_prewrap(text) {
+        layout_wrap_target_prewrap(layout_w)
+    } else {
+        layout_wrap_target(layout_w, fast)
+    };
     if let Some(fit) = try_glyphon_fit_soft_wrap(text, size, weight, line_height, target) {
         return (line_height * fit.line_count.max(1) as f32).max(base);
     }
@@ -613,7 +647,7 @@ pub fn bidi_soft_wrap_height(
     if fast {
         return base;
     }
-    let fit = glyphon_fit_soft_wrap(text, size, weight, line_height, layout_w);
+    let fit = glyphon_fit_soft_wrap(text, size, weight, line_height, target);
     (line_height * fit.line_count.max(1) as f32).max(base)
 }
 
@@ -629,8 +663,11 @@ pub fn take_fit_needs_relayout() -> bool {
 
 /// Shape `text` so every layout run's ink stays within `target_width`.
 ///
-/// Cosmic-text soft-wrap can leave bidi / emoji-mixed runs wider than the buffer (gallery:
-/// avail=240 → line_w≈253). Results are cached — measure + prepare must not reshape 12×/frame.
+/// For BiDi / Word Joiner text, soft breaks are decided with UAX#14 on the **logical**
+/// string first (see [`super::uax14_wrap`]), then shaped with `Wrap::None`. That avoids
+/// cosmic-text wrapping between BiDi level spans and illegally splitting WJ pairs.
+///
+/// Results are cached — measure + prepare must not reshape 12×/frame.
 pub fn glyphon_fit_soft_wrap(
     text: &str,
     size: f32,
@@ -643,6 +680,7 @@ pub fn glyphon_fit_soft_wrap(
             wrap_width: target_width.max(1.0),
             line_count: 0,
             max_ink: 0.0,
+            shape_text: std::sync::Arc::from(""),
         };
     }
     let target = target_width.max(1.0);
@@ -669,22 +707,39 @@ pub fn glyphon_fit_soft_wrap(
             );
         }
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
+        let logical_prewrap = super::uax14_wrap::needs_logical_prewrap(layout.as_ref());
+
+        let mut wrap_w = target;
+        let shape_text = if logical_prewrap {
+            super::uax14_wrap::soft_wrap_logical(
+                font_system,
+                layout.as_ref(),
+                size,
+                weight,
+                line_height,
+                wrap_w,
+            )
+        } else {
+            std::sync::Arc::from(layout.as_ref())
+        };
+
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
-        buffer.set_text(
-            layout.as_ref(),
-            &Attrs::new()
-                .family(family)
-                .weight(glyphon::fontdb::Weight(weight)),
-            shaping,
-            None,
-        );
+        if logical_prewrap {
+            buffer.set_wrap(Wrap::None);
+        }
+        let attrs = Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight));
+        buffer.set_text(shape_text.as_ref(), &attrs, shaping, None);
         let tall = (line_height * 128.0).max(line_height + 2.0);
-        // Mild first-pass shrink only — aggressive multi-step shrink scrambled bidi breaks.
-        buffer.set_size(Some(target), Some(tall));
+        buffer.set_size(Some(wrap_w), Some(tall));
         buffer.shape_until_scroll(font_system, false);
         let (mut line_count, mut max_ink) = buffer_max_ink(&buffer);
-        let mut wrap_w = target;
-        if max_ink > target + 0.5 && target > 8.0 {
+
+        // Mild shrink for residual ink spill (emoji / measurement slack).
+        // Skip for UAX#14 prewrap: shrinking wrap_w and re-breaking makes the last word
+        // jump to the next line on settle (resize flicker).
+        if !logical_prewrap && max_ink > target + 0.5 && target > 8.0 {
             let over = (max_ink - target).max(1.0).min((target * 0.15).max(1.0));
             wrap_w = (target - over).max(target * 0.85).max(1.0);
             buffer.set_size(Some(wrap_w), Some(tall));
@@ -692,7 +747,6 @@ pub fn glyphon_fit_soft_wrap(
             let (n, ink) = buffer_max_ink(&buffer);
             line_count = n;
             max_ink = ink;
-            // Second correction only if still badly overflowing.
             if max_ink > target + 1.0 {
                 let over2 = (max_ink - target).max(1.0).min((target * 0.2).max(1.0));
                 wrap_w = (wrap_w - over2).max(target * 0.75).max(1.0);
@@ -703,13 +757,15 @@ pub fn glyphon_fit_soft_wrap(
                 max_ink = ink2;
             }
         }
+
         GlyphonFitSoftWrap {
             wrap_width: wrap_w,
             line_count,
             max_ink,
+            shape_text,
         }
     });
-    fit_cache_insert(key, fitted);
+    fit_cache_insert(key, fitted.clone());
     fitted
 }
 

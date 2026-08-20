@@ -87,6 +87,7 @@ swash = { workspace = true }
 fontdb = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
+unicode-linebreak = { workspace = true }
 png = "0.18.1"
 jpeg-decoder = { version = "0.3", optional = true, default-features = false }
 gif = { version = "0.13", optional = true, default-features = false }
