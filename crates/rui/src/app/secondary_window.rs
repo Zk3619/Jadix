@@ -522,6 +522,12 @@ impl SecondaryWindowState {
             overlay_band_underlines.push(overlay_prep.underline_instances);
         }
 
+        self.text_renderer.trim_glyph_atlas();
+        self.overlay_text_renderer.trim_glyph_atlas();
+        for tr in &mut self.overlay_band_text_renderers {
+            tr.trim_glyph_atlas();
+        }
+
         let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
         let view = output
             .texture

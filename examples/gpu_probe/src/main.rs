@@ -1,9 +1,10 @@
-//! Memory floor probe: winit + wgpu(DX12), clear-screen only, zero rui code.
+//! Memory floor probe: winit + wgpu clear-screen only, zero rui code.
 //!
 //! Prints working set / private commit after each initialization stage so the
 //! GPU driver's contribution can be told apart from framework allocations.
 //!
 //! Stages can be stopped early with `PROBE_STOP=instance|adapter|device|surface`.
+//! By default the window clears `PROBE_FRAMES` times (default 300) then exits.
 
 use std::sync::Arc;
 
@@ -54,6 +55,14 @@ fn stop_after() -> String {
     std::env::var("PROBE_STOP").unwrap_or_else(|_| "all".into())
 }
 
+fn target_frames() -> u32 {
+    std::env::var("PROBE_FRAMES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(300)
+}
+
 fn selected_backends() -> wgpu::Backends {
     match std::env::var("PROBE_BACKEND")
         .unwrap_or_default()
@@ -63,7 +72,8 @@ fn selected_backends() -> wgpu::Backends {
         "vulkan" | "vk" => wgpu::Backends::VULKAN,
         "gl" | "gles" | "opengl" => wgpu::Backends::GL,
         "dx12" => wgpu::Backends::DX12,
-        _ if cfg!(windows) => wgpu::Backends::DX12,
+        // ADR-3 / rui default: GL on Windows for lower driver private bytes.
+        _ if cfg!(windows) => wgpu::Backends::GL,
         _ => wgpu::Backends::PRIMARY,
     }
 }
@@ -72,12 +82,23 @@ struct Probe {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     frames: u32,
+    done: bool,
 }
 
+/// Keep `Instance` alive for the whole surface lifetime (same as `rui` AppState).
 struct Gpu {
+    _instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+}
+
+impl Probe {
+    fn finish_probe(&mut self, event_loop: &ActiveEventLoop, tag: &str) {
+        stage(tag);
+        self.done = true;
+        event_loop.exit();
+    }
 }
 
 impl ApplicationHandler for Probe {
@@ -101,11 +122,17 @@ impl ApplicationHandler for Probe {
         stage("after wgpu::Instance");
         if stop_after() == "instance" {
             self.window = Some(window);
+            self.finish_probe(event_loop, "probe stop=instance");
             return;
         }
 
         let surface = instance.create_surface(window.clone()).expect("surface");
         stage("after create_surface");
+        if stop_after() == "surface" {
+            self.window = Some(window);
+            self.finish_probe(event_loop, "probe stop=surface");
+            return;
+        }
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -118,6 +145,7 @@ impl ApplicationHandler for Probe {
         stage("after request_adapter");
         if stop_after() == "adapter" {
             self.window = Some(window);
+            self.finish_probe(event_loop, "probe stop=adapter");
             return;
         }
 
@@ -138,6 +166,7 @@ impl ApplicationHandler for Probe {
         stage("after request_device");
         if stop_after() == "device" {
             self.window = Some(window);
+            self.finish_probe(event_loop, "probe stop=device");
             return;
         }
 
@@ -167,6 +196,7 @@ impl ApplicationHandler for Probe {
 
         self.window = Some(window);
         self.gpu = Some(Gpu {
+            _instance: instance,
             surface,
             device,
             queue,
@@ -183,7 +213,12 @@ impl ApplicationHandler for Probe {
                 let frame = match gpu.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(t)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-                    _ => return,
+                    wgpu::CurrentSurfaceTexture::Timeout => return,
+                    wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                        return;
+                    }
+                    wgpu::CurrentSurfaceTexture::Occluded => return,
+                    wgpu::CurrentSurfaceTexture::Validation => return,
                 };
                 let view = frame.texture.create_view(&Default::default());
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -212,14 +247,25 @@ impl ApplicationHandler for Probe {
                 if matches!(self.frames, 1 | 60 | 300) {
                     stage(&format!("after frame {}", self.frames));
                 }
+                if self.frames >= target_frames() {
+                    self.finish_probe(event_loop, "probe complete");
+                }
             }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(w) = self.window.as_ref() {
-            w.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.done {
+            return;
+        }
+        if self.gpu.is_some() {
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
+        } else if self.window.is_some() {
+            // Early PROBE_STOP without exit (should not happen) — avoid a Poll hot loop.
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 }
@@ -231,6 +277,7 @@ fn main() {
         window: None,
         gpu: None,
         frames: 0,
+        done: false,
     };
     event_loop.run_app(&mut app).expect("run");
 }

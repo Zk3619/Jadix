@@ -36,6 +36,13 @@ use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
+fn render_profile_log_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(debug_assertions) || std::env::var_os("RUI_RENDER_PROFILE").is_some()
+    })
+}
+
 #[cfg(debug_assertions)]
 static SCROLL_PREPASS_RECURSE_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(debug_assertions)]
@@ -125,36 +132,21 @@ pub(super) struct AppState {
     scroll_prepass_log_last: Instant,
     #[cfg(debug_assertions)]
     scroll_prepass_log_frames: u32,
-    #[cfg(debug_assertions)]
     render_prof_last: Instant,
-    #[cfg(debug_assertions)]
     render_prof_frames: u32,
-    #[cfg(debug_assertions)]
     render_prof_pre_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_layout_ms: f32,
     /// `RenderResult.prof`：`build_and_layout` 建/剪 Taffy（与总 `layout` 互补读）。
-    #[cfg(debug_assertions)]
     render_prof_layout_rebuild_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_layout_setup_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_layout_taffy_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_layout_collect_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_draw_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_acquire_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_submit_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_present_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_upload_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_text_ms: f32,
-    #[cfg(debug_assertions)]
     render_prof_encode_ms: f32,
     last_text_nodes_cache: Vec<crate::core::tree::TextLayoutInfo>,
     last_text_ui_scale: f32,
@@ -387,66 +379,13 @@ impl AppState {
         )
     }
 
-    /// Backends to try, in order. `RUI_GPU_BACKEND` (`gl` / `dx12` / `vulkan` / `metal`)
-    /// moves one to the front; the rest stay as fallbacks so an unsupported pick
-    /// degrades instead of aborting.
-    fn backend_candidates(compositor_alpha: bool) -> Vec<(wgpu::Backends, &'static str)> {
-        let mut order: Vec<(wgpu::Backends, &'static str)> = if cfg!(target_os = "macos") {
-            vec![(wgpu::Backends::METAL, "metal")]
-        } else if cfg!(windows) {
-            if compositor_alpha {
-                // GL still reports only Opaque. wgpu 30 DX12 maps PreMultiplied
-                // (fixed ~v26 #7117); Vulkan remains the most reliable compositor path.
-                vec![
-                    (wgpu::Backends::VULKAN, "vulkan"),
-                    (wgpu::Backends::DX12, "dx12"),
-                    (wgpu::Backends::GL, "gl"),
-                ]
-            } else {
-                vec![
-                    (wgpu::Backends::GL, "gl"),
-                    (wgpu::Backends::DX12, "dx12"),
-                    (wgpu::Backends::VULKAN, "vulkan"),
-                ]
-            }
-        } else if compositor_alpha {
-            vec![
-                (wgpu::Backends::VULKAN, "vulkan"),
-                (wgpu::Backends::GL, "gl"),
-            ]
-        } else {
-            vec![
-                (wgpu::Backends::GL, "gl"),
-                (wgpu::Backends::VULKAN, "vulkan"),
-            ]
-        };
-
-        let requested = std::env::var("RUI_GPU_BACKEND").unwrap_or_default();
-        let requested = match requested.trim().to_ascii_lowercase().as_str() {
-            "gl" | "gles" | "opengl" => Some(wgpu::Backends::GL),
-            "dx12" | "d3d12" => Some(wgpu::Backends::DX12),
-            "vulkan" | "vk" => Some(wgpu::Backends::VULKAN),
-            "metal" => Some(wgpu::Backends::METAL),
-            _ => None,
-        };
-        if let Some(front) = requested {
-            let label = order
-                .iter()
-                .find(|(b, _)| *b == front)
-                .map_or("requested", |(_, name)| *name);
-            order.retain(|(b, _)| *b != front);
-            order.insert(0, (front, label));
-        }
-        order
-    }
-
     /// Create the instance / surface / adapter triple from the first backend that works.
     async fn acquire_adapter(
         window: &Arc<Window>,
         force_software: bool,
         compositor_alpha: bool,
     ) -> (wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter) {
-        let candidates = Self::backend_candidates(compositor_alpha);
+        let candidates = super::wgpu_backend::backend_candidates(compositor_alpha);
         if !force_software {
             for (backends, name) in &candidates {
                 let instance = crate::renderer::wgpu_compat::instance(*backends);
@@ -694,35 +633,20 @@ impl AppState {
             scroll_prepass_log_last: Instant::now(),
             #[cfg(debug_assertions)]
             scroll_prepass_log_frames: 0,
-            #[cfg(debug_assertions)]
             render_prof_last: Instant::now(),
-            #[cfg(debug_assertions)]
             render_prof_frames: 0,
-            #[cfg(debug_assertions)]
             render_prof_pre_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_layout_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_layout_rebuild_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_layout_setup_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_layout_taffy_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_layout_collect_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_draw_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_acquire_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_submit_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_present_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_upload_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_text_ms: 0.0,
-            #[cfg(debug_assertions)]
             render_prof_encode_ms: 0.0,
             last_text_nodes_cache: Vec::new(),
             last_text_ui_scale: 0.0,
@@ -811,6 +735,14 @@ impl AppState {
                     &self.config,
                     font_ptr,
                 ));
+        }
+    }
+
+    fn trim_all_glyph_atlases(&mut self) {
+        self.text_renderer.trim_glyph_atlas();
+        self.overlay_text_renderer.trim_glyph_atlas();
+        for tr in &mut self.overlay_band_text_renderers {
+            tr.trim_glyph_atlas();
         }
     }
 
@@ -1408,7 +1340,6 @@ impl AppState {
         crate::text::set_layout_text_fast_mode(layout_fast);
         let text_fast = text_force_fast_mode || layout_fast;
         let _text_backend = self.text_backend;
-        #[cfg(debug_assertions)]
         let render_begin = Instant::now();
         let inner = self.window.inner_size();
         if inner.width > 0 && inner.height > 0 {
@@ -1574,7 +1505,6 @@ impl AppState {
             }
             self.last_scroll_offset_fp = scroll_fp;
         }
-        #[cfg(debug_assertions)]
         let pre_done = Instant::now();
         #[cfg(debug_assertions)]
         {
@@ -1734,7 +1664,6 @@ impl AppState {
                 None,
             );
         }
-        #[cfg(debug_assertions)]
         let layout_done = Instant::now();
 
         let overlay_split = render_result.overlay_split;
@@ -1768,7 +1697,6 @@ impl AppState {
         {
             self.mark_full_redraw();
         }
-        #[cfg(debug_assertions)]
         {
             let p = &render_result.prof;
             self.render_prof_layout_rebuild_ms += p.rebuild_ms;
@@ -1798,6 +1726,22 @@ impl AppState {
             );
         }
         self.layout_status = crate::core::tree::LayoutStatus::Clean;
+        if crate::core::tree_stats::tree_stats_enabled()
+            && !Self::is_bootstrap_root(&self.root_element)
+        {
+            static TREE_STATS_ONCE: std::sync::Once = std::sync::Once::new();
+            TREE_STATS_ONCE.call_once(|| {
+                crate::core::tree_stats::emit_tree_stats(&self.root_element, &self.layout_tree);
+            });
+        }
+        if crate::core::registry_stats::registry_stats_enabled()
+            && !Self::is_bootstrap_root(&self.root_element)
+        {
+            static REGISTRY_STATS_ONCE: std::sync::Once = std::sync::Once::new();
+            REGISTRY_STATS_ONCE.call_once(|| {
+                crate::core::registry_stats::emit_registry_stats();
+            });
+        }
         // Persist settle intent across the Clean reset above (next frame remasures + reshapes).
         if self.needs_text_settle {
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
@@ -1812,7 +1756,6 @@ impl AppState {
             self.config.width,
             self.config.height,
         );
-        #[cfg(debug_assertions)]
         let upload_done = Instant::now();
 
         let ui_scale = self.ui_scale();
@@ -2048,7 +1991,21 @@ impl AppState {
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             self.window.request_redraw();
         }
-        #[cfg(debug_assertions)]
+        self.trim_all_glyph_atlases();
+        if crate::core::texture_stats::texture_stats_enabled()
+            && !Self::is_bootstrap_root(&self.root_element)
+        {
+            static TEXTURE_STATS_ONCE: std::sync::Once = std::sync::Once::new();
+            TEXTURE_STATS_ONCE.call_once(|| {
+                crate::core::texture_stats::emit_texture_stats(
+                    &self.image_textures,
+                    self.shadow_tex_cache.len(),
+                    &self.text_renderer,
+                    &self.overlay_text_renderer,
+                    &self.overlay_band_text_renderers,
+                );
+            });
+        }
         let text_done = Instant::now();
 
         // Skip swapchain acquire/submit/present when this redraw produced the same GPU content
@@ -2121,10 +2078,8 @@ impl AppState {
 
         // Acquire swapchain image as late as possible so CPU-side text/layout work can overlap
         // with present pacing; this typically reduces blocking time in get_current_texture().
-        #[cfg(debug_assertions)]
         let acquire_begin = Instant::now();
         let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
-        #[cfg(debug_assertions)]
         let acquire_done = Instant::now();
         let view = output
             .texture
@@ -2628,21 +2583,16 @@ impl AppState {
             // Surface-direct FullClear: retain no longer matches the presented frame.
             self.present_retain.invalidate_contents();
         }
-        #[cfg(debug_assertions)]
         let encode_done = Instant::now();
 
-        #[cfg(debug_assertions)]
         let submit_begin = Instant::now();
         self.queue.submit(std::iter::once(encoder.finish()));
-        #[cfg(debug_assertions)]
         let submit_done = Instant::now();
-        #[cfg(debug_assertions)]
         let present_begin = Instant::now();
         self.queue.present(output);
         self.damage_rect = None;
         self.force_full_redraw = false;
         self.has_presented_frame = true;
-        #[cfg(debug_assertions)]
         {
             let draw_done = Instant::now();
             self.render_prof_frames = self.render_prof_frames.saturating_add(1);
@@ -2653,13 +2603,11 @@ impl AppState {
             self.render_prof_submit_ms += (submit_done - submit_begin).as_secs_f32() * 1000.0;
             self.render_prof_present_ms += (draw_done - present_begin).as_secs_f32() * 1000.0;
             self.render_prof_upload_ms += (upload_done - layout_done).as_secs_f32() * 1000.0;
-            // text phase is CPU glyph prep before swapchain acquire.
             self.render_prof_text_ms += (text_done - upload_done).as_secs_f32() * 1000.0;
-            // encode phase starts after acquire and includes render-pass encoding.
             self.render_prof_encode_ms += (encode_done - acquire_done).as_secs_f32() * 1000.0;
 
             let elapsed = self.render_prof_last.elapsed();
-            if elapsed >= std::time::Duration::from_secs(1) {
+            if elapsed >= std::time::Duration::from_secs(1) && render_profile_log_enabled() {
                 let f = self.render_prof_frames.max(1) as f32;
                 log::warn!(
                     "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [layout_tree: rebuild={:.2} setup={:.2} taffy={:.2} collect={:.2}] [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",

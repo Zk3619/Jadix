@@ -133,6 +133,14 @@ impl EmojiGlyphCache {
         })
     }
 
+    pub(crate) fn resident_counts(&self) -> (usize, usize, usize) {
+        (
+            self.entries.len(),
+            self.raster_entries.len(),
+            self.id_rasters.len(),
+        )
+    }
+
     pub fn rasterize(&self, input: RasterizeCustomGlyphRequest) -> Option<RasterizedCustomGlyph> {
         let try_raster = |r: &EmojiRaster| -> Option<RasterizedCustomGlyph> {
             if r.width == input.width && r.height == input.height {
@@ -370,6 +378,12 @@ impl RuiTextRenderer {
         {
             log::error!("glyphon TextRenderer::render failed: {err:?}");
         }
+    }
+
+    /// Clear per-frame `glyphs_in_use` so glyphon can LRU-evict atlas slots not
+    /// referenced on the next prepare (see glyphon `hello-world` example).
+    pub(crate) fn trim_glyph_atlas(&mut self) {
+        self.text_atlas.trim();
     }
 }
 

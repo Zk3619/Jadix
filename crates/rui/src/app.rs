@@ -63,6 +63,7 @@ pub use ime_support::{
 };
 pub mod error_boundary;
 mod glass_gpu;
+mod wgpu_backend;
 mod input_controller;
 pub mod keyed_list;
 mod lifecycle;

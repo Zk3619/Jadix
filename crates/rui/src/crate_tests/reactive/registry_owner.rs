@@ -11,7 +11,7 @@ use crate::app::reactive::{
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::Element;
 
-fn registry_totals() -> (usize, usize, usize, usize) {
+pub(crate) fn registry_totals() -> (usize, usize, usize, usize) {
     (
         registered_anchor_count(),
         registered_binding_count(),

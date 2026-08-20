@@ -11,6 +11,16 @@ use crate::app::image_registry::GpuImageTexture;
 
 const DEFAULT_MAX_ENTRIES: usize = 256;
 
+fn texture_pool_stale_frames() -> Option<u64> {
+    static MAX: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("RUI_TEXTURE_POOL_STALE_FRAMES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n > 0)
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TextureMeta {
     pub width: u32,
@@ -80,6 +90,50 @@ impl TexturePool {
 
     pub fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        if let Some(max_age) = texture_pool_stale_frames() {
+            self.evict_stale(max_age);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    pub fn max_entries(&self) -> usize {
+        self.max_entries
+    }
+
+    /// Entries not touched for more than `max_age` frames (relative to current frame).
+    pub fn stale_count(&self, max_age: u64) -> usize {
+        if max_age == 0 {
+            return 0;
+        }
+        self.meta
+            .values()
+            .filter(|m| self.frame.saturating_sub(m.last_frame) > max_age)
+            .count()
+    }
+
+    /// Drop entries older than `max_age` frames without a draw-time `touch`.
+    pub fn evict_stale(&mut self, max_age: u64) {
+        if max_age == 0 {
+            return;
+        }
+        let frame = self.frame;
+        let stale: Vec<String> = self
+            .meta
+            .iter()
+            .filter(|(_, m)| frame.saturating_sub(m.last_frame) > max_age)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in stale {
+            self.map.remove(&k);
+            self.meta.remove(&k);
+        }
     }
 
     pub fn insert_with_size(&mut self, key: String, tex: GpuImageTexture, width: u32, height: u32) {

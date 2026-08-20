@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Diagnostic-only: measures the memory floor of winit + wgpu(DX12) with no rui code,
+# Diagnostic-only: measures the memory floor of winit + wgpu with no rui code,
 # so framework-side allocations can be separated from driver-side ones.
+# Windows default backend is GL (ADR-3); use PROBE_BACKEND=dx12 with --features dx12 to compare.
 
 [features]
 default = []
