@@ -8,6 +8,8 @@
 | 工程门槛 / ADR | [ENGINEERING_GRADE_FRAMEWORK.md](ENGINEERING_GRADE_FRAMEWORK.md) |
 | 组件规范 | [COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) · [component_inventory.md](component_inventory.md) · [component_variants.md](component_variants.md) |
 | 响应式规范 | [REACTIVITY.md](REACTIVITY.md) |
+| W4 发布开工清单 | [W4_PRELAUNCH_CHECKLIST.md](W4_PRELAUNCH_CHECKLIST.md) |
+| W4 Step 0 命名决策 | [NAMING_DECISION.md](NAMING_DECISION.md)（**已锁定 `jadix` / 琢玉**） |
 | 身份契约 | [element_identity.md](element_identity.md) |
 | 盒模型 | [box_model.md](box_model.md)（WP-2.9 ☑） |
 | DevTools / Inspector | [devtools.md](devtools.md)（B1 backlog · `devtools` feature） |

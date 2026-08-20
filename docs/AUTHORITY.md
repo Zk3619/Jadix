@@ -99,7 +99,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | 细粒度 damage 默认；glyph 级 golden 可加深 |
 | 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**WP-R.5 ☑**（I-7/I-11）；**WP-R.3 ☑**（I-8）；**WP-R.9 ☑**（I-12 分相）；**WP-R.7 ☑**（G8 宏漏绑，含 `<Match>` RSX）；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；**北极星：Solid 机制 × 原生 GUI**（§0.2 / §5.10） | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 机制可宣称（G8 ☑）；**不挡** Win-first 0.1；**G7 ☑ / G9 ☑ 2026-08-18** |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
-| 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
+| 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io；**主名已锁 `jadix`（琢玉），重命名未执行** | `cargo add jadix` + 文档站 · [`NAMING_DECISION.md`](NAMING_DECISION.md) |
 | 性能（WP-P） | **Wave P ☑ 已退出（2026-08-20）**：包体 ≈8.6 MiB；满载 RSS **≤85 MiB**；release 滚动 CPU~1% / profile p99≈7 ms | W4；layer cache / B8 → **≥B3 backlog** |
 
 ---
@@ -731,6 +731,10 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **WP-4.6** | 体积/内存发布核对 | — | ☐ |
 | **WP-4.7** | 对外叙事升 Beta | — | ☐ 依赖 §6 全勾 |
 
+开工执行清单见 [`W4_PRELAUNCH_CHECKLIST.md`](W4_PRELAUNCH_CHECKLIST.md)。**Step 0**：命名已锁定 **`jadix`（琢玉）**，见 [`NAMING_DECISION.md`](NAMING_DECISION.md)；**重命名尚未执行**，仍阻塞 publish。热重载为 **`jadix_hot_reload`**（无 `_cli`）。
+W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_style_tokens` + `jadix_hot_reload` 四 crate 同步发布（热重载策略 A）。
+底层架构口径：当前 `layout` / `renderer` 等仍在主 crate 内；Beta 后按门槛评估拆分为 `jadix_layout` / `jadix_renderer` / `jadix_core` 等独立 crate（仍由伞形入口重导出）。
+
 ### 5.8 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
 
 并入 W2 之后或与 W3 交错；勾选仍只在本表。顺序：**5 → 3 → 9 → 7**（见 `REACTIVITY.md` §0.1）。**北极星**（不挡 0.1）：Solid 机制 × 原生 GUI，见 `REACTIVITY.md` §0.2 / §5.10。
@@ -751,7 +755,8 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 全部为真才可将对外叙事从 **Alpha / 工程级 MVP** 改为 **Beta / 工程可用**：
 
-- [ ] `cargo publish` 三 crate 成功；干净环境最小窗口可跑（WP-4.3）  
+- [x] 主 crate 名锁定 **`jadix`**（crates.io 无硬冲突）；☐ workspace 重命名完成（Step 0 · [`NAMING_DECISION.md`](NAMING_DECISION.md)）
+- [ ] `cargo publish` 四 crate（主 crate + `_macros` + `_style_tokens` + `_hot_reload_cli`）成功；干净环境最小窗口可跑（WP-4.3）  
 - [ ] 文档站：Getting Started（含双写法）+ 更新契约 + 组件索引（WP-4.4）  
 - [ ] 三平台真窗口冒烟 #1–#8（WP-1.4；**Win 已签**，macOS/Linux ☐）  
 - [x] AccessKit 主路径可演示并有文档（WP-1.3）  

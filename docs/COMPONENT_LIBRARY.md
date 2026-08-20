@@ -391,6 +391,13 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 验收归属工程域：WP-2.9、[`color.md`](color.md)、换肤冒烟；**禁止**用 Gallery 控件走查或 verified/stable-candidate 分桶标记。
 
+#### 5.2.3 `components/` 发布模式（W4 决策）
+
+- 当前采用 **伞形 crate**：`crates/rui/src/components` 作为 `rui` crate 的产品 API 面随 `rui` 一并发布（用户入口 `cargo add rui`）。
+- `components/` 当前**不单独拆 crate**：Beta 前避免额外版本耦合、发布顺序复杂度与迁移成本。
+- 稳定/实验边界继续以 §5.2.1 与 [`component_inventory.md`](component_inventory.md) 为准；破坏性调整通过 `rui` 的 SemVer + CHANGELOG 对外声明。
+- 若后续评估拆出独立组件包（如 `rui_components`），前置条件：API 边界稳定、CI/冒烟独立、迁移指南与兼容层齐备（Beta 后再议）。
+
 ### 5.3 明确不做（组件库范围）
 
 - 换 VDOM / 弃 wgpu / 引入浏览器控件。  

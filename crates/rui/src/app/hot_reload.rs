@@ -135,6 +135,7 @@ pub(super) struct TemplatePatchMsg {
 }
 
 #[cfg(any(debug_assertions, test))]
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct TemplateFragment {
     pub(super) id: String,
@@ -203,6 +204,7 @@ fn ingest_template_patch(
         return;
     }
     for tpl in patch.templates {
+        let _declared_fragment_len = tpl.len;
         by_template_id.insert(tpl.id.clone(), tpl);
     }
 }
