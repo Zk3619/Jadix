@@ -64,6 +64,15 @@ cargo run -p gallery
 cargo test -p rui --lib damage::
 ```
 
+## 滚动与 FullClear（WP-P 审计 · 2026-08-20）
+
+滚动偏移变化时，`state.rs` 比较 `scroll_offset_fingerprint`，不等则 **`mark_full_redraw`**。这是**有意设计**，不是遗漏：
+
+- 若滚动帧仍用 hover / `bind_text` 遗留的局部 scissor PartialLoad，只有脏区内像素会应用新 offset，其余区域保持旧帧 → Gallery 可复现「滚一下再跳变」 corruption。
+- 因此 WP-2.2 策略：**滚动 = 逻辑 FullClear + 默认 GPU FullClear**（见 [`size_and_memory.md`](size_and_memory.md) §7、[AUTHORITY.md](AUTHORITY.md) §5.6 WP-P 架构审计）。
+
+要让滚动也「少画」，须 **B8 全套**：scroll viewport **layer cache** 或 viewport union dirty + **draw-list 按 clip 裁剪** + retain 合成——不能单独开 `RUI_PARTIAL_DAMAGE=1`。
+
 ## 如何把 GPU PartialLoad / retain 做好（B8 设计约束）
 
 要对齐 Solid「完整像素」且真正赢过 FullClear，须同时满足：

@@ -54,6 +54,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │   color · font* · damage · layout_subtree · text_align · box_model
 │   drawing（自绘面规范，亦作手册入口）
 │   glyphon_audit · PUBLISH · size_and_memory · multi_window · tray
+   scroll_cpu（[`size_and_memory.md`](size_and_memory.md) §7 · AUTHORITY §5.6 审计）
 │
 └─ 非执行源
     三份 *_PLAN.md                   冻结展开（历史 WP 细则；勾选作废）
@@ -99,6 +100,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 | 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**WP-R.5 ☑**（I-7/I-11）；**WP-R.3 ☑**（I-8）；**WP-R.9 ☑**（I-12 分相）；**WP-R.7 ☑**（G8 宏漏绑，含 `<Match>` RSX）；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；**北极星：Solid 机制 × 原生 GUI**（§0.2 / §5.10） | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 机制可宣称（G8 ☑）；**不挡** Win-first 0.1；**G7 ☑ / G9 ☑ 2026-08-18** |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io | `cargo add rui` + 文档站 |
+| 性能（WP-P） | P.1 包体 ☑；**P.3 流畅度 ☑**（scroll-only + sibling band cull；滚动仍 FullClear；切复杂页=StructureChanged） | Wave P 退出门；见 §5.6 审计 |
 
 ---
 
@@ -614,8 +616,8 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 |------|------|------|
 | **P.0.1** | `release` 编译：`cargo build -p gallery --release` 产物体积；各 `--features` 组合增量 | ☐ |
 | **P.0.2** | 运行内存基线：空窗口 RSS / Gallery 满载 RSS（Win Task Manager / `process_info`） | ☐ |
-| **P.0.3** | 帧率基线：Gallery ScrollArea 连续滚动 p50/p99 帧时间（`--features devtools` 帧计数或外部工具） | ☐ |
-| **P.0.4** | 数据记入 [`size_and_memory.md`](size_and_memory.md)；后续每项优化前后对比写同一文档 | ☐ |
+| **P.0.3** | 帧率 + **CPU 基线**：Gallery ScrollArea 连续滚动 p50/p99 帧时间；总 CPU % 与单核 %（见 §5.6 审计 P.0.3 补充） | ☐ |
+| **P.0.4** | 数据记入 [`size_and_memory.md`](size_and_memory.md) §7；后续每项优化前后对比写同一文档 | ☐ |
 
 #### WP-P.1 包体瘦身
 
@@ -632,20 +634,65 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 | 子项 | 任务 | 状态 |
 |------|------|------|
-| **P.2.1** | wgpu 显存：ADR-3「Win 默认 GL 降内存」落实检查；纹理 atlas / buffer 池化审计 | ☐ |
-| **P.2.2** | Element 树常驻开销：空闲窗口 `ElementTree` + `LayoutTree` 节点数与 RSS 占比 | ☐ |
-| **P.2.3** | 信号 / Store 注册表：长会话不膨胀（WP-2.4 已签，此处做 Gallery 实测确认） | ☐ |
-| **P.2.4** | 纹理缓存回收策略：不可见纹理 / glyph atlas 是否只增不减 | ☐ |
+| **P.2.1** | wgpu 显存：ADR-3「Win 默认 GL 降内存」落实检查；纹理 atlas / buffer 池化审计 | ☑ 2026-08-20 |
+| **P.2.2** | Element 树常驻开销：空闲窗口 `ElementTree` + `LayoutTree` 节点数与 RSS 占比 | ☑ 2026-08-20 |
+| **P.2.3** | 信号 / Store 注册表：长会话不膨胀（WP-2.4 已签，此处做 Gallery 实测确认） | ☑ 2026-08-20 |
+| **P.2.4** | 纹理缓存回收策略：不可见纹理 / glyph atlas 是否只增不减 | ☑ 2026-08-20 |
 
 #### WP-P.3 流畅度优化
 
 | 子项 | 任务 | 状态 |
 |------|------|------|
-| **P.3.1** | 帧热路径 profile（`cargo flamegraph` 或 Tracy）：定位 Top-3 帧时间瓶颈 | ☐ |
-| **P.3.2** | damage 策略实效：确认滚动/动画只重绘脏区；B8 GPU PartialLoad 关键子集是否可提前开启 | ☐ |
-| **P.3.3** | 布局热路径：滚动时 `compute_layout` 是否触发非必要全树重算；子树布局缓存命中率 | ☐ |
-| **P.3.4** | effect 风暴排查：三档更新纪律（§3 红线）实测；根裸 `get()` 诊断仍为 0 | ☐ |
-| **P.3.5** | 渲染批次：draw call 合并现状；文本 / 矩形是否逐元素提交 | ☐ |
+| **P.3.1** | 帧热路径 profile（`cargo flamegraph` 或 Tracy）：定位 Top-3 帧时间瓶颈 | ☑ 2026-08-20：release 可用 `RUI_RENDER_PROFILE=1`；Top-3 仍为 **collect / text prepare / FullClear encode**（布局 taffy 在 scroll-only 下≈0） |
+| **P.3.2** | damage 策略实效：确认滚动/动画只重绘脏区；B8 GPU PartialLoad 关键子集是否可提前开启 | ☑ 2026-08-20：**paint-only 逻辑 PartialLoad**；滚动/切页仍 **FullClear（有意）**；**不提前开 B8**（无 draw-list 裁剪时 retain 更慢） |
+| **P.3.3** | 布局热路径：滚动时 `compute_layout` 是否触发非必要全树重算；子树布局缓存命中率 | ☑ 2026-08-20：Taffy **scroll-only** + collect **flex sibling band 剪枝**（`NoWrap` 列/行；`Absolute`/`fixed`/`wrap`/`reverse` 不剪） |
+| **P.3.4** | effect 风暴排查：三档更新纪律（§3 红线）实测；根裸 `get()` 诊断仍为 0 | ☑ 2026-08-20：库测 `root_bare_get`（`bind_text` / `show_reactive` 根 dep=0）；切 Gallery 分区走 `isolate_reads` + keyed 重建，非根裸 `get()` 风暴 |
+| **P.3.5** | 渲染批次：draw call 合并现状；文本 / 矩形是否逐元素提交 | ☑ 2026-08-20：同帧 `PaintRecorder` 合并相邻 `Rects`/`Textured`；矩形走 **一次 instanced draw**；文本 glyphon 按层/band prepare；非逐元素 submit |
+
+#### WP-P 架构审计（滚动 CPU · 2026-08-20）
+
+> 对照现代 GUI 滚动性能五维排查（事件驱动 / 布局解耦 / GPU 合成 / 输入节流 / Rust 热路径），对 `crates/rui` 源码的**事实审计**。展开与诊断命令见 [`size_and_memory.md`](size_and_memory.md) §7；damage 语义见 [`damage.md`](damage.md)。
+
+**背景**：Gallery `release` 约 **8.76 MiB**（P.1 ☑），包体控制优秀。开发期观测 ScrollArea 连续滚动 **CPU 5%–7%**（任务管理器「总 CPU」口径；若为 8 核则等效单核约 40%–56%，偏高）。现代原生 GUI 理想态为滚动主要由 GPU 承担、CPU 接近 0%；当前瓶颈在**渲染 collect + 全窗 Clear**，而非 Taffy 重布局。
+
+| 维度 | 现状（代码事实） | 评价 | 映射 WP |
+|------|------------------|------|---------|
+| **1. 渲染循环** | `ControlFlow::Wait` 事件驱动；仅 `RedrawRequested` 走完整 render（`lifecycle.rs`）；VSync 优先 `PresentMode::Fifo` + `desired_maximum_frame_latency: 1`（`state.rs`）；平滑滚动/惯性/动画链式 `request_redraw()` 至活动结束 | ✅ 非持续 Poll；✅ 有帧率上限 | P.3.1 ☑ `RUI_RENDER_PROFILE` / `layout_baseline -- scroll` |
+| **2. 布局 × 滚动** | 纯滚动帧 `scroll_only: true` **跳过** `TaffyTree::compute_layout`；`NoWrap` 列/行在 clip 外 **sibling band 剪枝**（不 `collect` 远离子树）；偏移写入 `Element.scroll_offset`，可见带仍 `scroll_acc` 平移 + clip-cull | ✅ 布局已解耦；✅ 滚动 collect 可跳过 clip 外兄弟；❌ 可见带仍每帧重建实例 | P.3.3 ☑ band cull；跨帧 display list / layer cache 仍为 P1 |
+| **3. GPU 合成** | 滚动偏移变化 → `scroll_offset_fingerprint` 不等 → **`mark_full_redraw`** → 默认 swapchain **FullClear**（`state.rs` / `damage.rs`）；无 scroll viewport **layer cache** / GPU transform-only 重绘；`RUI_PARTIAL_DAMAGE=1` 实验 retain+scissor（B8）；`PaintRecorder` 同帧批相邻 rect，**无跨帧 display list** | ❌ 滚动未走 GPU 平移合成；⚠️ PartialLoad 对滚动帧**故意禁用**（防 hover 残影） | P.3.2 + §7 **B8**；中期 scroll layer offscreen |
+| **4. 输入节流** | Jump：帧内 `scroll_accum` 合并；Smooth：`target_*` 指数逼近（τ≈0.095s，α 上限 20%）；最深 scroll trap 消费 wheel；无 OS 级 wheel 频率 cap | ✅ 帧边界合并；⚠️ 高频 wheel 仍每事件调度 pre-render | P.3 可选：同 rest wheel coalescing |
+| **5. Rust 热路径** | 每帧 collect 新建 `Vec`；GPU instance buffer 复用容量；`shaped_cache` + glyphon `TextAtlas` + `FIT_CACHE`；滚动时 `text_force_fast_mode`；`scroll_signal_key_cache` 避免 `format!` | ✅ 字形缓存齐；❌ collect 分配压力 | P.3.1 / P.3.5 |
+
+**已做好的（不必重复造轮）**
+
+- 事件驱动 + Fifo VSync，非 uncapped Mailbox 持续渲染。
+- `scroll_only` 跳过 Taffy；滚动条 thumb 走 overlay collect（`ViewportsOnly` prepass）。
+- **P.3.3**：`scroll_only` 下对 `flex-wrap: nowrap` 的 Column/Row **sibling band 剪枝**（clip 外兄弟不 `collect`；extent 仍用 Taffy size）。
+- Canvas 叶 dirty 缓存（WP-3.12：滚动不重跑 `paint`）；VirtualList/Masonry 结构虚拟化（experimental）。
+- WP-2.2 damage：paint-only（hover / bind_text）可逻辑 PartialLoad；**滚动强制逻辑 + GPU FullClear 为有意设计**。
+
+**主要瓶颈（解释 5%–7% CPU）**
+
+1. **可见带 `collect_instances` + 文本 prepare**：scroll-only 已跳过 Taffy 与 clip 外 flex 兄弟；切到复杂分区仍是 **StructureChanged 全树 rebuild**。
+2. **滚动帧整窗 FullClear + 全量重绘**：无离屏内容层 blit（B8 / layer cache 未开）。
+3. **嵌套 ScrollArea**：debug `scroll prepass` 计数随 viewport 数线性增（`state.rs`）。
+4. **VirtualList 跨窗**：remount 触发 `StructureChanged`，非纯 offset 路径。
+
+**优化优先级（WP-P.3 执行序）**
+
+| 优先级 | 方向 | 预期收益 | 禁区 |
+|--------|------|----------|------|
+| **P0** | **P.3.1 profile**：debug `render profile` 或 `samply` / flamegraph；区分 collect_ms / text_ms / encode_ms / present | 量化 Top-3，避免盲优化 | — |
+| **P1** | **滚动 viewport layer cache**：`scroll_only` 帧将子树 rasterize 到 offscreen texture，滚动时 GPU translate + 只重绘 chrome/scrollbar；与 `PresentRetainPipeline` / backdrop blur 模式一致 | CPU 占用可降至 ~1% 量级 | 不换 wgpu 主线 |
+| **P1** | **collect 增量化**：复用上一帧 buffer，按 node fingerprint / `LayoutStatus` diff 更新；滚动只改 clip/offset 相关实例 | 降分配 + 遍历 | 不废细粒度 Signal |
+| **P2** | **滚动 viewport union damage**（B8 前置）：offset 变时 dirty = 受影响 viewport 屏幕 rect 并集 + draw-list 按 clip 提交；替代整窗 `mark_full_redraw` | 配合 PartialLoad 才真正少画 | 无 culling 时 retain 更慢（已证实） |
+| **P2** | wheel 同 rest 合并、`element_is_offscreen` 扩大 chrome sync 剪枝 | 边际 | — |
+
+**P.0.3 补充（CPU 基线）**
+
+- 记录 **总 CPU %** 与 **单逻辑处理器 %**（任务管理器 → 详细信息 → 右键列 → CPU）。
+- 同场景记录 debug `render profile` 一行（约 1s 输出：`fps` / `pre` / `layout` / `draw` ms）。
+- Gallery ScrollArea 连续滚动 10s；空窗 idle 对照。
 
 #### Wave P 退出门（量化 · 可判定）
 
@@ -725,7 +772,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI | 工程 |
-| B8 | GPU PartialLoad / retain 默认开 | 工程；见 `damage.md` |
+| B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + draw-list 脏区裁剪**（WP-P 审计 P1） | 工程；见 `damage.md` · [`size_and_memory.md`](size_and_memory.md) §7 |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
 | B10 | 块级 markdown 编辑控件 | 组件 CB3 |
 | B11 | 组件视觉回归（多 DPI / dark） | 组件 CB4 |

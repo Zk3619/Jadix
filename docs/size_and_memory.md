@@ -163,6 +163,12 @@ cargo build --release -p calculator   → calculator.exe 4.42 MB
 # 分阶段看 GPU 驱动的内存地板（GL / Vulkan 可直接比，DX12 需 --features dx12）
 cargo build --release -p gpu_probe
 $env:PROBE_BACKEND = "gl"      # gl | vulkan | dx12
+$env:PROBE_FRAMES = "300"      # 清屏帧数，跑完后自动退出（默认 300）
+.\target\release\gpu_probe.exe
+
+# 只看 device 创建前的 Private（测完自动退出，不会挂死窗口）
+$env:PROBE_STOP = "device"     # instance | surface | adapter | device
+Remove-Item Env:PROBE_FRAMES -ErrorAction SilentlyContinue
 .\target\release\gpu_probe.exe
 
 # 看实际进程占用（对齐任务管理器口径）
@@ -266,12 +272,425 @@ Win11 计算器的精髓在于其流畅的按压缩放动画、主题切换的�
 
 ---
 
+## 7. 滚动与 CPU 占用（架构审计 · 2026-08-20）
+
+对应 [AUTHORITY.md](AUTHORITY.md) **Wave P §5.6**（WP-P.3 流畅度）。本节记录**源码事实**与诊断方法，供 P.0.3 / P.3.1 基线与优化前后对比。
+
+### 7.1 结论摘要
+
+| 问题 | 答案 |
+|------|------|
+| 滚动 CPU 5%–7% 正常吗？ | 对**未做 GPU 层合成**的自研框架常见；相对 Flutter/Qt 等现代标准**偏高**，有明确优化空间 |
+| 是否持续渲染（Poll 循环）？ | **否**。`ControlFlow::Wait` + 按需 `request_redraw()`；平滑滚动/动画期间链式重绘至活动结束 |
+| 滚动是否触发 Taffy 重布局？ | **否**（纯滚动帧 `scroll_only: true` 跳过 `compute_layout`） |
+| 滚动时 CPU 主要做什么？ | **全树 collect**（重建 draw instances / text nodes）+ **整窗 FullClear 重绘** |
+| 是否有 scroll layer cache？ | **否**。偏移仅在 collect 阶段平移坐标；无 offscreen texture GPU blit |
+| 包体是否拖累性能？ | **否**。Gallery release ≈ 8.76 MiB（P.1 ☑），与 CPU 占用无直接因果 |
+
+### 7.2 架构数据流（简图）
+
+```text
+winit 事件 → RedrawRequested?
+  → tick（平滑滚动 / 惯性 / 动画）
+  → update_scroll_offset_in_place（scroll: → Element.scroll_offset）
+  → render
+      → scroll_only? → 跳过 Taffy compute_layout
+      → collect_instances（scroll_acc 平移 + clip-cull）  ← 主要 CPU 成本
+      → prepare_text + glyphon（shaped_cache / text_force_fast_mode）
+      → scroll_fp 变化? → mark_full_redraw → FullClear present  ← 主要 GPU/提交成本
+  → 动画中 → request_redraw() → 下一帧
+VSync: PresentMode::Fifo
+```
+
+关键源码：
+
+- 事件循环：`crates/rui/src/app/lifecycle.rs`（`ControlFlow::Wait`）
+- VSync / present：`crates/rui/src/app/state.rs`（`Fifo`，`desired_maximum_frame_latency: 1`）
+- scroll-only 布局：`crates/rui/src/layout/layout_tree.rs`（`build_and_layout_fast(..., scroll_only, ...)`）
+- 滚动 → FullClear：`crates/rui/src/app/state.rs`（`scroll_offset_fingerprint` → `mark_full_redraw`）
+- damage 策略：`crates/rui/src/app/damage.rs`（滚动帧禁止 PartialLoad scissor）
+
+### 7.3 已实现的优化（勿重复排查）
+
+1. **事件驱动 + VSync**：非 game-loop 式 Poll；Fifo 限制刷新率。
+2. **布局与滚动解耦**：`Element.scroll_offset` 不参与 flex 尺寸；collect 时应用偏移。
+3. **滚动信号 `set_silent`**：避免 reactive 全树 rebuild（见 `scroll_viewport.rs` 契约）。
+4. **文本**：`shaped_cache` + glyphon `TextAtlas`；滚动时 `text_force_fast_mode`。
+5. **滚动条**：`ViewportsOnly` prepass + overlay collect，thumb 几何不每帧写 Taffy style。
+6. **Canvas 叶**：内容 dirty 缓存，滚动不重跑 `paint`（WP-3.12）。
+
+### 7.4 主要瓶颈（对应 5%–7% CPU）
+
+| # | 瓶颈 | 说明 |
+|---|------|------|
+| 1 | 可见带 collect + 文本 prepare；切页全树 rebuild | `scroll_only` 跳过 Taffy 与 clip 外 flex 兄弟；Gallery 分区切换仍是 StructureChanged |
+| 2 | 滚动 FullClear | 有意设计：防止 hover/bind_text 局部 scissor 与滚动 offset 不同步 |
+| 3 | 无 layer cache | 理想态：静态内容 rasterize 一次，滚动时 GPU translate texture |
+| 4 | 每帧 Vec 分配 | collect 新建 `instances` / `text_nodes`；GPU buffer 侧复用容量 |
+| 5 | 嵌套 ScrollArea | prepass 递归随 viewport 数增长 |
+| 6 | VirtualList 跨窗 | 触发 `StructureChanged`，走路径 remount 而非纯 offset |
+
+### 7.5 诊断命令
+
+**CPU 口径（必做）**
+
+任务管理器 → 详细信息 → 右键列 → 勾选「CPU」。同时记录：
+
+- **CPU 使用率**（所有逻辑处理器的平均值 = 总占用）
+- **CPU** 列（当前线程占**单逻辑处理器**的百分比）
+
+8 核机器上总占用 5% ≈ 单核 40%；总占用 7% ≈ 单核 56%。
+
+**帧耗时（debug 构建）**
+
+```powershell
+$env:RUST_LOG = "warn"
+# debug：默认打 render profile
+cargo run -p gallery
+# release：需显式打开
+$env:RUI_RENDER_PROFILE = "1"
+cargo run -p gallery --release
+# 滚动 ScrollArea 时观察 stderr 约 1s 一次：
+# fps≈…, pre=…ms, layout=…ms, draw=…ms [layout_tree: … collect=…]
+```
+
+**Profile（P.3.1 推荐）**
+
+```powershell
+# 安装 samply（Windows 友好）
+cargo install samply
+cargo build -p gallery --release
+samply record .\target\release\gallery.exe
+# 复现：打开 ScrollArea 分区，连续滚轮 10s，停止录制后看火焰图
+```
+
+关注栈顶：`collect_instances`、`prepare_text`、`encode`、`write_buffer`、`queue.submit`。
+
+**damage 计数（逻辑层，非 GPU）**
+
+Gallery → 布局 → WP-2.2：同宽 bind_text 应增 `PartialLoad` 计数；滚动应增 `FullClear` 计数。
+
+### 7.6 优化路线图（与 AUTHORITY WP-P.3 对齐）
+
+| 阶段 | 动作 | 预期 |
+|------|------|------|
+| P0 | P.3.1 profile 定 Top-3 | 数据驱动，避免猜 |
+| P1 | **scroll_only flex sibling band 剪枝**（2026-08-20 已落地） | 长列表滚动少遍历 clip 外兄弟 |
+| P1 | scroll viewport offscreen layer + GPU blit | CPU 滚动 → ~1% 量级 |
+| P1 | collect 增量 / buffer 复用（跨帧 display list） | 降分配与可见带遍历 |
+| P2 | B8：viewport union damage + draw-list 裁剪 + retain | PartialLoad 对滚动真正少画 |
+| P2 | wheel coalescing、扩大 offscreen prune | 边际 |
+
+**禁区**（与 AUTHORITY §5.6 一致）：换 wgpu/Skia；为帧率回 VDOM；无 draw culling 强开 retain（表单连点已证更慢）。
+
+### 7.7 基线记录表（P.0.3 / P.0.4 填写）
+
+| 指标 | 测量值 | 日期 | 环境 |
+|------|--------|------|------|
+| Gallery.exe release 体积 | 9,177,600 B（≈8.76 MiB） | 2026-08-20 | Win, P.1 |
+| 空窗 idle CPU（总 / 单核） | _待测_ | | |
+| ScrollArea 连续滚动 CPU（总 / 单核） | _5–7% 总（开发期观测，待正式复测）_ | | |
+| 滚动 p50 / p99 帧时间 | _待测_ | | devtools 或 profile |
+| collect_ms / draw_ms（profile 行） | `layout_baseline -- scroll`：100 行 clip 列 scroll_only collect 亚毫秒级；Gallery 切页仍受 StructureChanged + 文本 prepare 主导 | 2026-08-20 | `RUI_RENDER_PROFILE=1` + bench |
+
+---
+
+## 8. wgpu 显存与 GPU 资源池化（P.2.1 审计 · 2026-08-20）
+
+对应 [AUTHORITY.md](AUTHORITY.md) **WP-P.2.1**。本节记录 ADR-3「Windows 默认 GL 降内存」的**落实核查**，以及纹理 atlas / GPU buffer 池化的源码事实与后续项映射。
+
+### 8.1 ADR-3 落实核查
+
+| 检查项 | 现状 | 结论 |
+|--------|------|------|
+| Windows 普通窗口后端顺序 | `wgpu_backend.rs`：`GL → (dx12*) → (vulkan*)`；`*` 仅当 `rui/backend-dx12` / `backend-vulkan` feature 开启 | ✅ 已落实 |
+| 工作区 wgpu features | 根 `Cargo.toml` 默认 `gles` + `metal`；**不含** `dx12` / `vulkan` | ✅ 避免多后端链接膨胀 |
+| `RUI_GPU_BACKEND` 覆盖 | 指定后端提到队首，其余仍作兜底；未编译的后端静默跳过 | ✅ |
+| `MemoryHints::MemoryUsage` | `state.rs` / `glass_gpu.rs` device 创建均使用 | ✅ |
+| `PowerPreference::LowPower` | 优先集显，降低工作集 | ✅ |
+| 透明 / 模糊次窗 | `glass_gpu.rs` 独立 Vulkan（或 `backend-dx12` 时 DX12）；主窗仍 GL | ✅ 有意例外（GL 无 PreMultiplied alpha） |
+| macOS | 仅 Metal | ✅ |
+| Linux / 其他 | GL 优先，Vulkan 为 opt-in feature | ✅ |
+
+**本机复测（2026-08-20，`gpu_probe` + `PROBE_BACKEND=gl`，Intel RaptorLake-S 集显）**
+
+| 阶段 | Private |
+|------|---------|
+| 进程启动 | 1.7 MB |
+| `request_adapter`（GL） | 29.9 MB |
+| `request_device`（GL） | **30.4 MB** |
+
+与 §2 历史数据（GL ~35 MB vs DX12 ~117 MB）同量级：**驱动私有堆仍是主因，ADR-3 选型有效**。
+
+诊断命令：
+
+```powershell
+cargo build --release -p gpu_probe
+$env:PROBE_BACKEND = "gl"    # 默认已与 rui 对齐
+$env:PROBE_FRAMES = "300"      # 默认 300 帧后自动退出
+# 或仅测到 device：$env:PROBE_STOP = "device"
+.\target\release\gpu_probe.exe
+# 日志应含 backend: Gl；PROBE_STOP 时最后一行 probe stop=…
+```
+
+### 8.2 纹理与 Atlas
+
+| 资源 | 实现 | 回收 / 上限 | 评价 |
+|------|------|-------------|------|
+| **用户纹理**（Image / Canvas / Path / Scene3d / Capture / Effect） | `TexturePool`（`resources.rs`） | LRU，`DEFAULT_MAX_ENTRIES = 256`；每帧 `begin_frame` + draw 时 `touch` | ✅ 有界 |
+| **字形 atlas** | glyphon `TextAtlas`（`text.rs`） | 由 glyphon/etagere 管理；**每帧 `trim_glyph_atlas()`**（P.2.4 ☑） | ✅ LRU + trim；仍随唯一字形 grow |
+| **Emoji 位图** | `EmojiGlyphCache`（`text.rs`） | raster LRU 默认 64、node LRU 默认 32；`RUI_EMOJI_*_CACHE_MAX` 可调 | ✅ 有界 |
+| **Shaped 文本** | `shaped_cache: Vec<ShapedTextEntry>` | 随 `text_nodes.len()` truncate；key miss 时 reshape | ✅ 与可见文本节点对齐 |
+
+注意：`prepare([])` 在仍有 text nodes 时会** wipe atlas**（`prepare_text.rs` 注释），因此 cull 路径禁止空 prepare。
+
+### 8.3 GPU Buffer 池化
+
+| Buffer | 位置 | 策略 | 评价 |
+|--------|------|------|------|
+| 圆角矩形 instance | `state.rs` `instance_buffer` | 容量 grow-only；未满则 `queue.write_buffer` | ✅ 复用 |
+| 贴图 quad instance | `upload_textured_instance_buffer` | 同上，初始 cap 256 | ✅ 复用 |
+| 下划线 / Input chrome | `state.rs` / `secondary_window.rs` | **每帧** `create_buffer_init`（仅非空时） | ⚠️ 未池化；量小，非 RSS 主因 → 可选 P.3 |
+| Pipeline 静态 VB/IB | `RuiPipeline` / `TexturedQuadPipeline` | 创建后常驻 | ✅ |
+| Swapchain / retain | `present_retain` | 按 surface 尺寸 ensure | ✅ |
+
+### 8.4 结论与后续映射
+
+- **ADR-3 已落实**：默认构建路径在 Windows 上首选 GL，驱动私有内存与 §2 结论一致；透明窗例外路径有文档且与 `multi_window.md` 一致。
+- **纹理池化**：用户侧 `TexturePool` + emoji LRU + glyph atlas 每帧 trim 已到位（§11）；可选 `RUI_TEXTURE_POOL_STALE_FRAMES` 按帧龄 evict。
+- **Buffer 池化**：主 draw instance 已复用；underline/chrome 为每帧临时 buffer，属 CPU 提交开销而非显存膨胀，可与 **P.3.5** 批次优化一并考虑。
+
+---
+
+## 9. Element / LayoutTree 常驻开销（P.2.2 审计 · 2026-08-20）
+
+对应 [AUTHORITY.md](AUTHORITY.md) **WP-P.2.2**。本节量化空闲窗口下 **Element 树 + LayoutTree（Taffy）** 的节点规模及其在进程 RSS 中的占比。
+
+### 9.1 诊断 API
+
+源码：`crates/rui/src/core/tree_stats.rs` + `LayoutTree::stats()`（`layout_tree.rs`）。
+
+```powershell
+$env:RUI_TREE_STATS = "1"
+cargo run -p calculator --release
+# 首帧 stderr 一行，含 Private MiB 与节点计数
+```
+
+输出示例：
+
+```text
+[rui tree stats] private=46.0 MiB elements=74 depth=6 text_bytes=64 attrs=201 handlers=33 signals=0 images=0 | taffy=74 text_measure=33 root=1
+```
+
+字段说明：
+
+| 字段 | 含义 |
+|------|------|
+| `elements` | Element 树 DFS 节点总数 |
+| `depth` | 最大嵌套深度 |
+| `text_bytes` | 所有 `text` / `text_spans` / shape_suffix 字节和 |
+| `attrs` | 全部 `attrs` HashMap 条目数 |
+| `handlers` | 带事件闭包 / `reactive_sync` 的节点数 |
+| `signals` | 挂载 `switch_checked_sync` 等组件信号槽的节点数 |
+| `taffy` | LayoutTree 中 Taffy 节点数（通常与 `elements` 1:1） |
+| `text_measure` | 文本叶 measure 元数据条目（≤ `taffy`） |
+
+### 9.2 本机实测（2026-08-20 · Win · GL · release）
+
+| 场景 | Private | elements | taffy | text_measure | depth | handlers |
+|------|---------|----------|-------|--------------|-------|----------|
+| `gpu_probe`（仅 wgpu 地板，§8） | **30.1 MiB** | — | — | — | — | — |
+| `calculator` 空闲 | **46.0 MiB** | 74 | 74 | 33 | 6 | 33 |
+| `gallery` 空闲（默认「基础」分区） | **47.2 MiB** | 122 | 122 | 60 | 10 | 36 |
+
+**RSS 分解（粗算）**
+
+| 层级 | Calculator | Gallery Δ |
+|------|------------|-----------|
+| GPU 驱动地板（`gpu_probe`） | ~30 MiB | 同左 |
+| 框架 + 字体 + 文本栈 + 应用逻辑 | ~16 MiB | +~1 MiB |
+| Element/Taffy 树（+48 节点） | （含于上） | 边际极小 |
+
+Gallery 比 Calculator 多 **48 个 Element 节点**，Private 仅增 **~1.2 MiB**；**树结构不是 RSS 主因**（与 §2「框架 ~10 MB」结论一致，此处 GL 地板已更新为 ~30 MiB）。
+
+### 9.3 源码事实
+
+| 项 | 现状 | 评价 |
+|----|------|------|
+| Element ↔ Taffy 映射 | 每 Element 一个 `layout_node`；`total_nodes` 与 Element 计数同步 | ✅ 无「幽灵 Taffy 节点」泄漏 |
+| `text_measurements` | 文本叶 layout 元数据；随 rebuild 修剪 | ✅ 规模 ≤ 文本叶数 |
+| `measure_layout_cache` | 单次 `compute_layout` 内 memo，帧末清空 | ✅ 不跨帧膨胀 |
+| Element 单节点体积 | `size_of::<Element>()` ≈ 数百字节 + 堆上 `text`/`attrs`/闭包 | ⚠️ 闭包节点（handlers）重于纯 div |
+| 结构虚拟化 | VirtualList / VirtualMasonry（experimental）减少 **mounted** 节点 | ✅ 大数据场景已走路径 |
+| Portal hoist | Dialog/Toast 子树提升到 portal 层，不复制 Taffy | ✅ 不双倍计数 |
+
+### 9.4 结论
+
+- **空闲窗口 Element + LayoutTree 开销可忽略**：74–122 节点量级，相对 ~46 MiB Private 占比远低于 GPU（~30 MiB）与字体/文本栈（~10–16 MiB）。
+- **无需为 P.2 专门做树瘦身**；内存收敛主战场仍是 P.2.1（后端）、P.2.4（glyph atlas）；信号注册表见 §10（P.2.3 ☑）。
+- 长列表/大表单场景继续依赖 **VirtualList / Masonry** 控制 mounted 节点，而非全量 DOM 式常驻。
+
+---
+
+## 10. 信号 / Store 注册表（P.2.3 审计 · 2026-08-20）
+
+对应 [AUTHORITY.md](AUTHORITY.md) **WP-P.2.3**；机制基线 **WP-2.4 ☑**（Owner dispose → `REGISTERED_*` 清表）。本节确认**长会话不泄漏动态注册表**，并给出 Gallery 空闲快照。
+
+### 10.1 诊断 API
+
+源码：`crates/rui/src/core/registry_stats.rs`；底层计数来自 `app/reactive.rs` + `reactivity_debug_snapshot()`。
+
+```powershell
+$env:RUI_REGISTRY_STATS = "1"
+cargo run -p calculator --release
+# 首帧 stderr 一行
+```
+
+输出示例（Calculator 空闲）：
+
+```text
+[rui registry stats] private=44.9 MiB anchors=2 bindings=2 props=0 children=0 keyed=0 | owners=42 effects=5 memos=0 signals=220 named=130 pending_e=0 pending_m=0 root_deps=0 e_edges=4 m_edges=0
+```
+
+| 字段 | 含义 |
+|------|------|
+| `anchors` | `REGISTERED_ANCHORS`（`reactive_anchor` / `reactive_view`） |
+| `bindings` | `REGISTERED_BINDINGS`（`bind_text` / `bind_*`） |
+| `props` / `children` | `COMPONENT_PROPS` / `COMPONENT_CHILDREN` stash |
+| `keyed` | `for_keyed_reactive` 项级 Owner 数 |
+| `owners` / `effects` / `signals` | 运行时图 live 计数 |
+| `named` | `use_signal("key", …)` 全局命名槽（**有意跨 rebuild 保留**） |
+| `root_deps` | 根 `app_builder` effect 裸订阅数；**应为 0** |
+
+### 10.2 库测（必须）
+
+```powershell
+cargo test -p rui registry
+```
+
+| 测试 | 断言 |
+|------|------|
+| `registry_owner::*` | Owner dispose 后 Anchors/Bindings/COMPONENT_* 归零 |
+| `registry_session::switch_reactive_section_cycles_*` | Gallery 式 `switch_reactive` 切换 40 轮，注册表计数不增长 |
+| `registry_session::named_signals_plateau_*` | 重复 `use_signal` 同 key 不重复注册 |
+
+**2026-08-20：8 passed**（含 image/window/cursor 等含 registry 字样的无关测）。
+
+### 10.3 Gallery 空闲实测（release · GL）
+
+| 指标 | Calculator | Gallery（默认「基础」） |
+|------|------------|-------------------------|
+| `anchors` | 2 | 2 |
+| `bindings` | 2 | 12 |
+| `props` / `keyed` | 0 | 0 |
+| `named` | 130 | 160 |
+| `owners` | 42 | 70 |
+| `effects` | 5 | 15 |
+| `root_deps` | **0** | **0** |
+| Private | ~45 MiB | ~46 MiB |
+
+解读：
+
+- **`anchors` 不随 Gallery 组件数量膨胀**：侧栏 + `switch_reactive` 仅 2 个稳定岛；分区切换走同一 anchor id（`examples/gallery/App:section_body`）。
+- **`named` 较高属预期**：`use_signal("组件id__…")` 全局命名槽刻意保留 Input 焦点 / 滚动状态；**首次访问后 plateau**，不会随切换分区线性增长（库测 `named_signals_plateau`）。
+- **`root_deps=0`**：根 effect 未裸订阅业务 signal，符合 §3 红线。
+- **Store**：无独立全局 Store 注册表；字段路径走 Owner 下 Signal，`Store::field` 不扩大根订阅面（WP-R.3 ☑）。
+
+### 10.4 Gallery 长会话手工（建议 · WP-2.4 卡片）
+
+`cargo run -p gallery` → 侧栏「布局」→ **WP-2.4) Owner 注册表 + scoped ID**：
+
+1. 卸载岛 → 刷新 → 记卸载基线  
+2. 挂载/卸载循环 ≥10 次  
+3. 卸载态 `a/b/p` 均 ≤ 基线  
+
+与 §10.2 库测互补：卡片含 Gallery 全局其它岛的基线偏移，**判「≤ 基线」而非归零**。
+
+### 10.5 结论
+
+- **动态注册表（Anchors/Bindings/COMPONENT_*）**：Owner dispose + unmount 清表，40 轮 mount/dispose 与 Gallery 式分区切换**无泄漏**（WP-2.4 机制有效）。
+- **`named` 全局槽**：数量与 app 中 distinct `use_signal` key 成正比，** idle 后稳定**；不应期望进程级归零。
+- **RSS**：注册表不是 Private 主因（§9）；长会话监控用 `RUI_REGISTRY_STATS=1` + `cargo test -p rui registry` 即可。
+
+---
+
+## 11. 纹理 / Glyph 缓存回收（P.2.4 审计 · 2026-08-20）
+
+对应 [AUTHORITY.md](AUTHORITY.md) **WP-P.2.4**。本节审计用户纹理池、glyphon `TextAtlas`、Emoji 位图与文本 shadow 纹理在长会话中是否只增不减，并记录已落地的回收策略。
+
+### 11.1 诊断 API
+
+源码：`crates/rui/src/core/texture_stats.rs`；纹理池 `crates/rui/src/renderer/resources.rs`；字形 `crates/rui/src/renderer/text.rs`。
+
+```powershell
+$env:RUI_TEXTURE_STATS = "1"
+cargo run -p gallery --release
+# 首帧 stderr 一行（与 §9–§10 相同，仅输出一次）
+```
+
+输出示例：
+
+```text
+[rui texture stats] private=47.0 MiB pool=3/256 frame=42 stale120=0 shadow=0 | page[shaped=18 emoji_n=0 emoji_r=0 emoji_id=0] overlay[shaped=0 emoji_n=0 emoji_r=0 emoji_id=0] obands=0
+```
+
+| 字段 | 含义 |
+|------|------|
+| `pool` / `256` | `TexturePool` 当前条目 / 硬上限 |
+| `frame` | 池内帧计数（每帧 `begin_frame` +1） |
+| `stale120` | 超过 120 帧未 `touch` 的池条目数 |
+| `shadow` | 文本 drop-shadow GPU 纹理（`shadow_tex_cache`） |
+| `page[shaped=…]` | 主层 `shaped_cache` + Emoji LRU 计数 |
+| `overlay[…]` / `obands` | Portal overlay 独立 atlas 与 band 数 |
+
+可选：按帧龄驱逐未 touch 的用户纹理（默认关闭，避免误删仍可能被引用的离屏纹理）：
+
+```powershell
+$env:RUI_TEXTURE_POOL_STALE_FRAMES = "600"   # 约 10s@60fps 未绘制则 evict
+```
+
+### 11.2 源码审计
+
+| 资源 | 实现 | 回收 / 上限 | P.2.4 结论 |
+|------|------|-------------|------------|
+| **用户纹理** `TexturePool` | `resources.rs` | 硬 cap **256**；insert 时 LRU；draw 时 `touch` 更新 `last_frame` | ✅ 有界；**非「不可见即删」**——未 touch 条目可长期驻留直至 cap 或 `RUI_TEXTURE_POOL_STALE_FRAMES` |
+| **glyphon `TextAtlas`** | 每 `RuiTextRenderer` 一对 mask/color atlas | glyphon 内部 **LRU packer** + 可 **2× grow** 至 `max_texture_dimension_2d`；`glyph_cache` 无硬顶 | ⚠️ 随**历史唯一字形**增长；**2026-08-20 起每帧 `trim_glyph_atlas()`**（对齐 glyphon 官方示例），允许下帧 evict 未引用 slot |
+| **`SwashCache`** | cosmic-text CPU 栅格 | `image_cache` / `outline_command_cache` 无 trim API；rui 主路径用 `get_image_uncached` | ✅ prepare 路径不持久写入 cache；风险低于 atlas |
+| **`shaped_cache`** | `Vec<ShapedTextEntry>` | 随 `text_nodes.len()` **truncate** | ✅ 与可见文本节点对齐 |
+| **Emoji** `EmojiGlyphCache` | raster LRU **64** / node LRU **32**（env 可调） | `id_rasters` **永不清**（防 glyphon Some→None panic） | ✅ 有界；`emoji_id` 可缓慢增 |
+| **文本 shadow** `shadow_tex_cache` | `HashMap<u64, GpuImageTexture>` | 仅 insert，**无 evict** | ⚠️ 随唯一 shadow 样式增；通常 << atlas |
+| **多 atlas** | 主窗 + portal overlay 各 band 独立 `RuiTextRenderer` | 各 atlas 独立 grow | ⚠️ 多 Dialog/Toast 叠层时乘性占用；仍受 per-atlas LRU |
+
+**P.2.4 关键发现（已修复）**：glyphon 要求在每帧 prepare+render 后调用 `TextAtlas::trim()` 清空 `glyphs_in_use`，否则 LRU 无法回收本帧未绘制的字形 slot，长会话 atlas **只增不减**。此前 rui **未调用**；现于 `state.rs` / `secondary_window.rs` 在全部 text prepare 完成后统一 `trim_all_glyph_atlases()`。
+
+**不可见纹理**：collect 阶段 clip-cull 跳过离屏 text node 的 prepare，但已上传的 `TexturePool` 条目不会因「本帧未 draw」自动删除——依赖 cap/LRU 或可选 `RUI_TEXTURE_POOL_STALE_FRAMES`。与浏览器「离屏 Image 仍占 GPU 内存」同类，属预期 trade-off。
+
+### 11.3 本机实测（2026-08-20 · Win · GL · release）
+
+| 场景 | Private | pool | shaped (page) | shadow | 备注 |
+|------|---------|------|---------------|--------|------|
+| `gallery` 空闲（「基础」） | ~47 MiB | 0–3 | ~18 | 0 | 无 heavy 图片分区 |
+| `gallery` 滚动 / 切换分区 | ~47 MiB | ≤ cap | ≤ 可见 text 节点 | 0 | Private **plateau**；pool 不随切换线性增 |
+| `calculator` 空闲 | ~46 MiB | 0 | ~12 | 0 | 与 §9 同量级 |
+
+长会话判据：**切换 Gallery 全部分区 + ScrollArea 滚动 2 分钟**后 `RUI_TEXTURE_STATS=1` 复测，`pool` 与 `shaped` 不持续爬升；`private` 波动 ±1 MiB（驱动噪声）。glyph atlas **GPU 侧**无公开计数 API，以 plateau + `trim` 机制为准。
+
+### 11.4 结论与后续映射
+
+- **用户纹理**：`TexturePool` 256 上限 + touch LRU 已足够；可选 `RUI_TEXTURE_POOL_STALE_FRAMES` 供极端 Gallery（大量 Canvas/Path）长会话。
+- **Glyph atlas**：**必须**每帧 `trim()`（已落地）；唯一字形集仍可使 atlas **grow**，属 glyphon 设计——极端多语言/多字号场景监控 Private，后续可考虑 P.3 的字形集预热或 atlas 重建策略。
+- **`shadow_tex_cache`**：当前无回收；若 shadow 样式组合爆炸再补 LRU（低优先级）。
+- **主战场**：运行内存仍由 §8 GPU 地板（~30 MiB GL）主导；P.2.4 收敛的是「缓存无界增长」类缺陷，而非树/注册表（§9–§10 ☑）。
+
+---
+
 ## Release checklist（体积 / 性能）
 
 发布或打 tag 前建议：
 
 1. **体积**：`cargo build -p calculator --release`，记录 exe 大小；对照本节历史表。
-2. **内存**：可选跑 `examples/gpu_probe` + 计算器，确认 GL 默认路径 Private Bytes 未回退。
+2. **内存**：可选跑 `examples/gpu_probe` + 计算器，确认 GL 默认路径 Private Bytes 未回退；`RUI_TREE_STATS=1` / `RUI_REGISTRY_STATS=1` / `RUI_TEXTURE_STATS=1` 核对树、注册表与纹理缓存（§9–§11）。
 3. **布局基线**：`cargo bench -p rui --bench layout_baseline`（见 `crates/rui/benches/layout_baseline.rs`）；可选 `--features tracing`。
-4. **测试**：`cargo test -p rui --lib` + CI `offscreen` job（`RUI_FORCE_SOFTWARE=1`）。
-5. **Features**：默认精简；文档列出 `bundled-*` / `emoji-svg` / `backend-dx12` / `system-tray` 对体积的影响（见 [PUBLISH.md](PUBLISH.md)）。
+4. **滚动 / CPU 基线**（Wave P）：见 §7.5–§7.7；AUTHORITY WP-P.0.3。
+5. **测试**：`cargo test -p rui --lib` + CI `offscreen` job（`RUI_FORCE_SOFTWARE=1`）。
+6. **Features**：默认精简；文档列出 `bundled-*` / `emoji-svg` / `backend-dx12` / `system-tray` 对体积的影响（见 [PUBLISH.md](PUBLISH.md)）。
