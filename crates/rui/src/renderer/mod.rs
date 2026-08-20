@@ -110,34 +110,39 @@ pub(crate) fn color_target_blend(alpha_mode: wgpu::CompositeAlphaMode) -> wgpu::
 
 /// 将逻辑空间实例缩放到物理像素（DPI）。
 pub fn scale_instances(instances: &[InstanceInput], scale: f32) -> Vec<InstanceInput> {
-    instances
-        .iter()
-        .map(|i| {
-            let mut out = *i;
-            out.rect_pos[0] *= scale;
-            out.rect_pos[1] *= scale;
-            out.rect_size[0] *= scale;
-            out.rect_size[1] *= scale;
-            out.radii = [
-                out.radii[0] * scale,
-                out.radii[1] * scale,
-                out.radii[2] * scale,
-                out.radii[3] * scale,
-            ];
-            out.border_width *= scale;
-            out.shadow_offset[0] *= scale;
-            out.shadow_offset[1] *= scale;
-            out.shadow_blur *= scale;
-            out.shadow_spread *= scale;
-            if out.clip_size[0] >= 0.0 && out.clip_size[1] >= 0.0 {
-                out.clip_pos[0] *= scale;
-                out.clip_pos[1] *= scale;
-                out.clip_size[0] *= scale;
-                out.clip_size[1] *= scale;
-            }
-            out
-        })
-        .collect()
+    let mut out = instances.to_vec();
+    scale_instances_in_place(&mut out, scale);
+    out
+}
+
+/// Scale in place. `scale ≈ 1` is a no-op (common 96-DPI path) to avoid per-frame copies.
+pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for out in instances.iter_mut() {
+        out.rect_pos[0] *= scale;
+        out.rect_pos[1] *= scale;
+        out.rect_size[0] *= scale;
+        out.rect_size[1] *= scale;
+        out.radii = [
+            out.radii[0] * scale,
+            out.radii[1] * scale,
+            out.radii[2] * scale,
+            out.radii[3] * scale,
+        ];
+        out.border_width *= scale;
+        out.shadow_offset[0] *= scale;
+        out.shadow_offset[1] *= scale;
+        out.shadow_blur *= scale;
+        out.shadow_spread *= scale;
+        if out.clip_size[0] >= 0.0 && out.clip_size[1] >= 0.0 {
+            out.clip_pos[0] *= scale;
+            out.clip_pos[1] *= scale;
+            out.clip_size[0] *= scale;
+            out.clip_size[1] *= scale;
+        }
+    }
 }
 
 /// 布局收集阶段产出的纹理绘制实例（逻辑像素坐标）。
@@ -241,6 +246,18 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
 #[cfg(test)]
 mod textured_uv_tests {
     use super::{scale_textured_draws, uv_for_subrect, TexturedDraw};
+
+    #[test]
+    fn scale_instances_in_place_noop_at_unity() {
+        use super::{scale_instances_in_place, InstanceInput};
+        use bytemuck::Zeroable;
+        let mut v = vec![InstanceInput::zeroed()];
+        v[0].rect_pos = [10.0, 20.0];
+        v[0].rect_size = [3.0, 4.0];
+        scale_instances_in_place(&mut v, 1.0);
+        assert_eq!(v[0].rect_pos, [10.0, 20.0]);
+        assert_eq!(v[0].rect_size, [3.0, 4.0]);
+    }
 
     #[test]
     fn packed_instances_keep_per_draw_rect_not_last_write() {

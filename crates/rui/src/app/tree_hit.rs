@@ -1248,6 +1248,7 @@ mod drag_select_bounds_tests {
 }
 
 /// Inspector pick: child-index path for the topmost hit target (logical coords).
+#[cfg(feature = "devtools")]
 pub(crate) fn pick_element_path(
     el: &Element,
     x: f32,
@@ -1257,6 +1258,7 @@ pub(crate) fn pick_element_path(
     pick_element_path_acc(el, x, y, scroll_acc, Vec::new())
 }
 
+#[cfg(feature = "devtools")]
 fn pick_element_path_acc(
     el: &Element,
     x: f32,

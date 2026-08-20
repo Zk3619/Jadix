@@ -8,7 +8,8 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
-    cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_textured_draws,
+    cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_instances_in_place,
+    scale_textured_draws,
     BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
     ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline,
 };
@@ -1459,7 +1460,7 @@ impl AppState {
                 self.mark_full_redraw();
             }
         }
-        let mut layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
 
         if matches!(
             pre_chrome_layout_status,
@@ -1667,10 +1668,12 @@ impl AppState {
         let layout_done = Instant::now();
 
         let overlay_split = render_result.overlay_split;
-        let scaled_instances = scale_instances(&render_result.instances, self.ui_scale());
-        let scaled_input_chrome =
-            scale_instances(&render_result.input_chrome_instances, self.ui_scale());
-        self.num_instances = render_result.instances.len() as u32;
+        let ui_scale_now = self.ui_scale();
+        scale_instances_in_place(&mut render_result.instances, ui_scale_now);
+        scale_instances_in_place(&mut render_result.input_chrome_instances, ui_scale_now);
+        let scaled_instances = std::mem::take(&mut render_result.instances);
+        let scaled_input_chrome = std::mem::take(&mut render_result.input_chrome_instances);
+        self.num_instances = scaled_instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
         if self
             .text_nodes
@@ -2071,6 +2074,11 @@ impl AppState {
                 if !self.needs_text_settle {
                     self.layout_status = crate::core::tree::LayoutStatus::Clean;
                 }
+                self.layout_tree.recycle_collect_buffers(
+                    scaled_instances,
+                    std::mem::take(&mut render_result.textured_draws),
+                    scaled_input_chrome,
+                );
                 return Ok(());
             }
             self.last_gpu_frame_fp = frame_fp;
@@ -2645,6 +2653,11 @@ impl AppState {
             }
         }
 
+        self.layout_tree.recycle_collect_buffers(
+            scaled_instances,
+            std::mem::take(&mut render_result.textured_draws),
+            scaled_input_chrome,
+        );
         Ok(())
     }
 }

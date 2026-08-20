@@ -625,14 +625,6 @@ impl super::App {
         super::scroll_support::retain_future_instants(&mut self.scrollbar_visible_until, now)
     }
 
-    fn spring_key(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
-        let a = match axis {
-            super::scroll_support::ScrollAxis::X => "x",
-            super::scroll_support::ScrollAxis::Y => "y",
-        };
-        format!("scrollbar_spring_{rest}:{a}")
-    }
-
     fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
         // Small window to bridge discrete wheel ticks (prevents “move-stop-move”).
         let until = now + std::time::Duration::from_millis(200);
@@ -744,51 +736,6 @@ impl super::App {
             super::scroll_support::ScrollAxis::Y => "y",
         };
         format!("__rui_scroll_hover_{rest}:{a}")
-    }
-
-    fn scroll_axis_enabled_by_overflow(
-        rest: &str,
-        axis: super::scroll_support::ScrollAxis,
-    ) -> bool {
-        let ox = crate::core::reactivity::use_signal(
-            &crate::core::scroll_viewport::scroll_overflow_x_signal_key(rest),
-            || "auto".to_string(),
-        )
-        .peek();
-        let oy = crate::core::reactivity::use_signal(
-            &crate::core::scroll_viewport::scroll_overflow_y_signal_key(rest),
-            || "auto".to_string(),
-        )
-        .peek();
-        let o = match axis {
-            super::scroll_support::ScrollAxis::X => ox.as_str(),
-            super::scroll_support::ScrollAxis::Y => oy.as_str(),
-        };
-        crate::core::scroll_viewport::scroll_overflow_allows_scrollbar(o)
-    }
-
-    fn peek_scrollbar_visibility(rest: &str, axis: super::scroll_support::ScrollAxis) -> String {
-        let a = match axis {
-            super::scroll_support::ScrollAxis::X => "x",
-            super::scroll_support::ScrollAxis::Y => "y",
-        };
-        crate::core::reactivity::use_signal(
-            &crate::components::scrollbar::scrollbar_visibility_signal_key(rest, a),
-            || "auto".to_string(),
-        )
-        .peek()
-        .to_ascii_lowercase()
-    }
-
-    /// Only `auto` scrollbars react to wheel-driven show; axis must allow scrolling via overflow.
-    fn maybe_wheel_bump_scrollbar_spring(rest: &str, axis: super::scroll_support::ScrollAxis) {
-        if !Self::scroll_axis_enabled_by_overflow(rest, axis) {
-            return;
-        }
-        if Self::peek_scrollbar_visibility(rest, axis) != "auto" {
-            return;
-        }
-        crate::style::use_scrollbar_visibility_spring(&Self::spring_key(rest, axis), 0.0).set(1.0);
     }
 
     pub(super) fn update_mouse_buttons(&mut self, button: MouseButton, state: ElementState) {
@@ -911,6 +858,11 @@ impl super::App {
         let scale = state.window.scale_factor() as f32;
         let x = position.x as f32 / scale.max(1.0);
         let y = position.y as f32 / scale.max(1.0);
+        if (x - self.wheel_sticky_cursor[0]).abs() > 2.0
+            || (y - self.wheel_sticky_cursor[1]).abs() > 2.0
+        {
+            self.wheel_sticky_rest = None;
+        }
         let window = state.window.clone();
 
         // Hover-driven overlay scrollbar visibility: pick the topmost scroll area (or scrollbar target)
@@ -1809,6 +1761,55 @@ impl super::App {
             }
         }
     }
+    fn commit_wheel_delta(&mut self, rest: String, dx: f32, dy: f32, max_x: f32, max_y: f32) {
+        let now = std::time::Instant::now();
+        if dx.abs() > 0.1 {
+            self.bump_scrollbar_visible_until_axis(
+                &rest,
+                super::scroll_support::ScrollAxis::X,
+                now,
+            );
+        }
+        if dy.abs() > 0.1 {
+            self.bump_scrollbar_visible_until_axis(
+                &rest,
+                super::scroll_support::ScrollAxis::Y,
+                now,
+            );
+        }
+
+        let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
+            &rest,
+            &mut self.scroll_signal_key_cache,
+        )
+        .clone();
+        let behavior = crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+            crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+        })
+        .peek();
+        let is_smooth_mode = crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
+
+        let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32);
+        let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32);
+        let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
+        let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
+
+        if is_smooth_mode {
+            let next_x = (tx.get() - dx).clamp(0.0, max_x);
+            let next_y = (ty.get() - dy).clamp(0.0, max_y);
+            tx.set_silent(next_x);
+            ty.set_silent(next_y);
+            self.bump_smooth_active_until(&rest, now);
+            crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32).set_silent(1.0);
+        } else {
+            let entry = self.scroll_accum.entry(rest.clone()).or_insert([0.0, 0.0]);
+            entry[0] += dx;
+            entry[1] += dy;
+        }
+        // `auto` 条的弹簧目标只在 post-render 根据 `visible_until` 设置，与退场同一拍：
+        // 若在 tick 之前 set(1)，空闲后首帧 dt 夹紧仍会把 0→1 积成瞬跳。
+    }
+
     pub(super) fn handle_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         #[cfg(debug_assertions)]
         let wheel_start = std::time::Instant::now();
@@ -1839,6 +1840,43 @@ impl super::App {
             [0.0, 0.0],
             &mut target_rests,
         );
+
+        let cursor_stable = (x - self.wheel_sticky_cursor[0]).abs() < 2.0
+            && (y - self.wheel_sticky_cursor[1]).abs() < 2.0;
+        if let Some(sticky) = self.wheel_sticky_rest.clone() {
+            if cursor_stable
+                && super::scroll_support::wheel_sticky_matches_deepest(&sticky, &target_rests)
+            {
+                if let Some((_, [max_x, max_y], _)) = self.scroll_metrics_cache.get(&sticky).copied()
+                {
+                    let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
+                        &sticky,
+                        &mut self.scroll_signal_key_cache,
+                    )
+                    .clone();
+                    let sx =
+                        crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32)
+                            .peek();
+                    let sy =
+                        crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32)
+                            .peek();
+                    let bx =
+                        crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx).peek();
+                    let by =
+                        crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy).peek();
+                    let can_move_x = (dx > 0.0 && bx > 0.0) || (dx < 0.0 && bx < max_x);
+                    let can_move_y = (dy > 0.0 && by > 0.0) || (dy < 0.0 && by < max_y);
+                    if can_move_x || can_move_y {
+                        let window = state.window.clone();
+                        drop(state_borrow);
+                        self.commit_wheel_delta(sticky, dx, dy, max_x, max_y);
+                        window.request_redraw();
+                        return;
+                    }
+                }
+            }
+            self.wheel_sticky_rest = None;
+        }
 
         let metrics_for_rest = |rest: &str| self.scroll_metrics_cache.get(rest).copied();
 
@@ -1913,99 +1951,9 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
         if let Some((rest, dx, dy, max_x, max_y)) = captured {
-            // Show scrollbar immediately and keep it visible for a while.
-            let now = std::time::Instant::now();
-            if dx.abs() > 0.1 {
-                self.bump_scrollbar_visible_until_axis(
-                    &rest,
-                    super::scroll_support::ScrollAxis::X,
-                    now,
-                );
-            }
-            if dy.abs() > 0.1 {
-                self.bump_scrollbar_visible_until_axis(
-                    &rest,
-                    super::scroll_support::ScrollAxis::Y,
-                    now,
-                );
-            }
-
-            // Smooth policy (per requirement): wheel updates target; content animates toward it (no sudden jumps).
-            let (
-                offset_x_key,
-                offset_y_key,
-                target_x_key,
-                target_y_key,
-                behavior_key,
-                activity_key,
-            ) = {
-                let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
-                    &rest,
-                    &mut self.scroll_signal_key_cache,
-                );
-                (
-                    keys.offset_x.clone(),
-                    keys.offset_y.clone(),
-                    keys.target_x.clone(),
-                    keys.target_y.clone(),
-                    keys.behavior.clone(),
-                    keys.activity.clone(),
-                )
-            };
-            let behavior = crate::core::reactivity::use_signal(&behavior_key, || {
-                crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
-            })
-            .peek();
-            let is_smooth_mode = crate::core::scroll_viewport::scroll_behavior_is_smooth(&behavior);
-
-            let sx = crate::core::reactivity::use_signal(&offset_x_key, || 0.0_f32);
-            let sy = crate::core::reactivity::use_signal(&offset_y_key, || 0.0_f32);
-            let tx = crate::core::reactivity::use_signal(&target_x_key, || sx.peek());
-            let ty = crate::core::reactivity::use_signal(&target_y_key, || sy.peek());
-
-            if is_smooth_mode {
-                let next_x = (tx.get() - dx).clamp(0.0, max_x);
-                let next_y = (ty.get() - dy).clamp(0.0, max_y);
-                tx.set_silent(next_x);
-                ty.set_silent(next_y);
-                self.bump_smooth_active_until(&rest, now);
-
-                // Wheel moves `tx`/`ty` only; each frame `sx`/`sy` ease toward targets (exponential).
-                // Do not add wheel impulse to `scroll_velocity`: that fought the old spring and is
-                // unnecessary for the current smoother.
-
-                crate::core::reactivity::use_signal(&activity_key, || 0.0_f32).set_silent(1.0);
-                if dx.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(
-                        &rest,
-                        super::scroll_support::ScrollAxis::X,
-                    );
-                }
-                if dy.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(
-                        &rest,
-                        super::scroll_support::ScrollAxis::Y,
-                    );
-                }
-            } else {
-                // Non-smooth: keep existing target-based accumulation behavior.
-                let rest_str = rest.clone();
-                let entry = self.scroll_accum.entry(rest_str).or_insert([0.0, 0.0]);
-                entry[0] += dx;
-                entry[1] += dy;
-                if dx.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(
-                        &rest,
-                        super::scroll_support::ScrollAxis::X,
-                    );
-                }
-                if dy.abs() > 0.1 {
-                    Self::maybe_wheel_bump_scrollbar_spring(
-                        &rest,
-                        super::scroll_support::ScrollAxis::Y,
-                    );
-                }
-            }
+            self.wheel_sticky_rest = Some(rest.clone());
+            self.wheel_sticky_cursor = [x, y];
+            self.commit_wheel_delta(rest, dx, dy, max_x, max_y);
 
             #[cfg(debug_assertions)]
             {

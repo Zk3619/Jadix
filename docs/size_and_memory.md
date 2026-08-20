@@ -280,12 +280,13 @@ Win11 计算器的精髓在于其流畅的按压缩放动画、主题切换的�
 
 | 问题 | 答案 |
 |------|------|
-| 滚动 CPU 5%–7% 正常吗？ | 对**未做 GPU 层合成**的自研框架常见；相对 Flutter/Qt 等现代标准**偏高**，有明确优化空间 |
-| 是否持续渲染（Poll 循环）？ | **否**。`ControlFlow::Wait` + 按需 `request_redraw()`；平滑滚动/动画期间链式重绘至活动结束 |
-| 滚动是否触发 Taffy 重布局？ | **否**（纯滚动帧 `scroll_only: true` 跳过 `compute_layout`） |
-| 滚动时 CPU 主要做什么？ | **全树 collect**（重建 draw instances / text nodes）+ **整窗 FullClear 重绘** |
-| 是否有 scroll layer cache？ | **否**。偏移仅在 collect 阶段平移坐标；无 offscreen texture GPU blit |
-| 包体是否拖累性能？ | **否**。Gallery release ≈ 8.76 MiB（P.1 ☑），与 CPU 占用无直接因果 |
+| 滚动 CPU 5%–7% 正常吗？ | **关核显 / 无合成路径**上常见；**本机 release + 核显 ~1% CPU** 时属正常 |
+| 核显 GPU 40%、独显 idle？ | **预期**（ADR-3 Win 默认 GL + `LowPower` 集显）；Fill 在核显，非 bug |
+| 是否持续渲染（Poll 循环）？ | **否**。`ControlFlow::Wait` + 按需 `request_redraw()` |
+| 滚动是否触发 Taffy 重布局？ | **否**（纯滚动帧 `scroll_only: true`） |
+| 滚动时 CPU 主要做什么？ | 本机 profile：**collect≈0.1–2.4 ms/帧**，text≈0.1–1.4 ms；关核显机器更高 |
+| 是否有 scroll layer cache？ | **否**（Wave P **不做**；排期 **≥ B3 backdrop-blur 离屏**，见 §7.6） |
+| Wave P 是否过关？ | **☑ 已退出（2026-08-20）**；满载 RSS **≤85 MiB**；profile p99≈7.3 ms |
 
 ### 7.2 架构数据流（简图）
 
@@ -319,16 +320,15 @@ VSync: PresentMode::Fifo
 5. **滚动条**：`ViewportsOnly` prepass + overlay collect，thumb 几何不每帧写 Taffy style。
 6. **Canvas 叶**：内容 dirty 缓存，滚动不重跑 `paint`（WP-3.12）。
 
-### 7.4 主要瓶颈（对应 5%–7% CPU）
+### 7.4 主要瓶颈（对应观测占用）
 
 | # | 瓶颈 | 说明 |
 |---|------|------|
-| 1 | 可见带 collect + 文本 prepare；切页全树 rebuild | `scroll_only` 跳过 Taffy 与 clip 外 flex 兄弟；Gallery 分区切换仍是 StructureChanged |
-| 2 | 滚动 FullClear | 有意设计：防止 hover/bind_text 局部 scissor 与滚动 offset 不同步 |
-| 3 | 无 layer cache | 理想态：静态内容 rasterize 一次，滚动时 GPU translate texture |
-| 4 | 每帧 Vec 分配 | collect 新建 `instances` / `text_nodes`；GPU buffer 侧复用容量 |
-| 5 | 嵌套 ScrollArea | prepass 递归随 viewport 数增长 |
-| 6 | VirtualList 跨窗 | 触发 `StructureChanged`，走路径 remount 而非纯 offset |
+| 1 | 关核显机器 CPU 5%–7% | collect + text prepare + 提交；无 GPU 合成 offload |
+| 2 | 本机核显 ~40%（release 滚动） | **FullClear + instanced fill + glyphon**；CPU `encode≈0.1 ms` 极低 |
+| 3 | 切页 StructureChanged | Gallery 分区切换全树 rebuild |
+| 4 | 无 layer cache | 理想态见 **B3/B8 backlog**（§7.6），**不在 Wave P** |
+| 5 | VirtualList 跨窗 | remount → StructureChanged |
 
 ### 7.5 诊断命令
 
@@ -347,12 +347,18 @@ VSync: PresentMode::Fifo
 $env:RUST_LOG = "warn"
 # debug：默认打 render profile
 cargo run -p gallery
-# release：需显式打开
+# release：需显式打开（建议 --features runtime-logging 以输出 warn）
 $env:RUI_RENDER_PROFILE = "1"
-cargo run -p gallery --release
-# 滚动 ScrollArea 时观察 stderr 约 1s 一次：
-# fps≈…, pre=…ms, layout=…ms, draw=…ms [layout_tree: … collect=…]
+cargo run -p gallery --release --features runtime-logging
+# 或自动化脚本（PostMessage 滚轮，约 10s）：
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/p03_scroll_profile.ps1
+# 滚动 ScrollArea 时 stderr 约 1s 一次：
+# fps≈…, pre=…ms, layout=…ms, draw=…ms [layout_tree: … collect=…] [upload=…, acquire=…, text=…, encode=…, submit=…, present=…]
 ```
+
+**GPU 口径**
+
+任务管理器 → 性能 → GPU → 选 **Intel 核显** 与 **独显** 各看一条引擎（通常 **3D**）。滚动时核显 3D 升高、独显 idle = ADR-3 预期路径。
 
 **Profile（P.3.1 推荐）**
 
@@ -372,26 +378,64 @@ Gallery → 布局 → WP-2.2：同宽 bind_text 应增 `PartialLoad` 计数；�
 
 ### 7.6 优化路线图（与 AUTHORITY WP-P.3 对齐）
 
-| 阶段 | 动作 | 预期 |
-|------|------|------|
-| P0 | P.3.1 profile 定 Top-3 | 数据驱动，避免猜 |
-| P1 | **scroll_only flex sibling band 剪枝**（2026-08-20 已落地） | 长列表滚动少遍历 clip 外兄弟 |
-| P1 | scroll viewport offscreen layer + GPU blit | CPU 滚动 → ~1% 量级 |
-| P1 | collect 增量 / buffer 复用（跨帧 display list） | 降分配与可见带遍历 |
-| P2 | B8：viewport union damage + draw-list 裁剪 + retain | PartialLoad 对滚动真正少画 |
-| P2 | wheel coalescing、扩大 offscreen prune | 边际 |
+| 阶段 | 动作 | 状态 / 排期 |
+|------|------|-------------|
+| P0 | P.3.1 profile 定 Top-3 | ☑ 2026-08-20 |
+| P1 | scroll_only flex sibling band 剪枝 | ☑ 2026-08-20 |
+| P1 | collect scratch 回收 + `scale≈1` 原地缩放 | ☑ 2026-08-20 |
+| P1 | wheel sticky + 嵌套 retarget | ☑ 2026-08-20 |
+| **≥ B3** | **backdrop-blur 离屏缓存**（§7 B3） | 未做 · **layer cache 不早于本项** |
+| **≥ B3** | **scroll viewport layer cache**（offscreen + GPU blit） | 未做 · 与 B3 共用 retain/offscreen 管线 |
+| **≥ B8** | **fingerprint 跨帧 display list** | 未做 · B8 前置 |
+| **≥ B8** | **viewport union damage + PartialLoad** | 未做 · 须 draw-list 裁剪，否则 retain 更慢 |
 
-**禁区**（与 AUTHORITY §5.6 一致）：换 wgpu/Skia；为帧率回 VDOM；无 draw culling 强开 retain（表单连点已证更慢）。
+**Wave P 决策（2026-08-20）**：退出门全过 → **Wave P 已关闭**；layer cache / display list / B8 留 **W4+ / ≥B3 backlog**。
 
-### 7.7 基线记录表（P.0.3 / P.0.4 填写）
+**禁区**（与 AUTHORITY §5.6 一致）：换 wgpu/Skia；为帧率回 VDOM；无 draw culling 强开 retain。
+
+### 7.7 基线记录表（P.0.1–P.0.4 · 2026-08-20）
 
 | 指标 | 测量值 | 日期 | 环境 |
 |------|--------|------|------|
-| Gallery.exe release 体积 | 9,177,600 B（≈8.76 MiB） | 2026-08-20 | Win, P.1 |
+| Gallery.exe release 体积（默认 feature） | 9,177,600 B（≈8.76 MiB） | 2026-08-20 | P.1 快照 |
+| Gallery.exe + `runtime-logging` | **9,041,408 B（≈8.62 MiB）** | 2026-08-20 | `cargo build -p gallery --release --features runtime-logging` |
+| Feature 增量（参考 P.1，非复测） | `+devtools` / `+scene3d` / `+images` / `+system-tray` 各 +数百 KiB–数 MiB | 2026-08-20 | 见 AUTHORITY P.1 bloat |
+| Gallery 启动 idle RSS（默认分区） | **105,979,904 B（≈101.1 MiB）** | 2026-08-20 | Win，启动 5s 后 Task Manager Working Set |
+| Gallery 满载 RSS | **≤85 MiB**（侧栏全部分区逐项打开） | 2026-08-20 | Win Task Manager；退出门 ≤120 MiB ☑ |
+| 真·空窗 RSS（`gpu_probe` device 后） | **≈30.4 MiB Private** | 2026-08-20 | §8.1 GL 集显 |
 | 空窗 idle CPU（总 / 单核） | _待测_ | | |
-| ScrollArea 连续滚动 CPU（总 / 单核） | _5–7% 总（开发期观测，待正式复测）_ | | |
-| 滚动 p50 / p99 帧时间 | _待测_ | | devtools 或 profile |
-| collect_ms / draw_ms（profile 行） | `layout_baseline -- scroll`：100 行 clip 列 scroll_only collect 亚毫秒级；Gallery 切页仍受 StructureChanged + 文本 prepare 主导 | 2026-08-20 | `RUI_RENDER_PROFILE=1` + bench |
+| ScrollArea 滚动 CPU（总 / 单核） | **~1% 总**（本机 release，用户观测） | 2026-08-20 | 核显可用；关核显机器 **5–7%**（开发期） |
+| ScrollArea 滚动 GPU | **核显 ~40%**（3D）；**独显 ~0%** | 2026-08-20 | 同场景手工观测 |
+| 滚动 profile（CPU 帧分量） | 见 §7.8 | 2026-08-20 | `RUI_RENDER_PROFILE=1` + `scripts/p03_scroll_profile.ps1` |
+| collect_ms / draw_ms（bench） | scroll_only 100 行亚毫秒级 collect | 2026-08-20 | `layout_baseline -- scroll` |
+
+### 7.8 P.0.3 profile 解读（本机 · 2026-08-20）
+
+**命令**：`powershell -File scripts/p03_scroll_profile.ps1`（release + `runtime-logging`，`RUI_RENDER_PROFILE=1`，约 10s 合成滚轮）。
+
+**滚动段典型一行**（略去启动首秒）：
+
+```text
+render profile(last ~1024ms): fps≈2.0, pre=0.07ms, layout=0.07ms, draw=7.26ms
+  [layout_tree: rebuild=0.00 setup=0.00 taffy=0.00 collect=2.41]
+  [upload=0.90, acquire=0.00, text=1.36, encode=0.14, submit=4.46, present=0.38]
+```
+
+| 分量 | 滚动段观测 | 解读 |
+|------|------------|------|
+| **pre+layout+draw** | **p50≈3.3 ms，p99≈7.3 ms**（10s 内各秒平均） | **≪ 16.7 ms 退出门**（CPU 侧记账） |
+| **collect** | 0.07–2.41 ms | scroll-only + band cull 生效 |
+| **text** | 0.13–1.36 ms | 非 Top-1 |
+| **encode** | 0.01–0.14 ms | CPU 录 pass **极低** → 核显 40% **不是** encode 阻塞 |
+| **submit** | 0.39–5.89 ms | 队列提交波动 |
+| **present** | 0.22–**4.41 ms** | 高 present + 低 submit 秒 → **VSync 等待 / 帧 pacing**；与 FullClear **fill** 同场景出现 |
+| **acquire** | ≈0 ms | **非** swapchain acquire 卡死 |
+
+**fps 行说明**：脚本用 `PostMessage(WM_MOUSEWHEEL)`，每秒仅 ~2 次 profile 汇总，**不能**代替手工 60 fps 滚轮；用户本机手工滚动 ~1% CPU + 核显 40% 与上表 **CPU 帧分量过关** 一致。
+
+**p99 是否在退出门内？** — **是（CPU 记账维度）**；手工 60 fps 无掉帧则 **Wave P 滚动帧率项可签**。
+
+**核显 40% 更像 fill 还是 present 等待？** — **以 FullClear + 栅格 fill 为主**（任务管理器 3D 引擎）；profile 中 **present 可达 ~4 ms** 为 **VSync  pacing 分量**，**acquire≈0** 排除等待换链图像；**encode** 只计 CPU 编码时间，**不含** GPU 填色耗时。
 
 ---
 

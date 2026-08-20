@@ -66,6 +66,7 @@ pub fn scroll_behavior_is_jump(mode: &str) -> bool {
 
 /// Pre-formatted signal id strings for one viewport `rest` id.
 /// Caching avoids per-frame `format!` when many nested viewports exist.
+#[derive(Clone)]
 pub struct ScrollViewportSignalKeys {
     pub offset_x: String,
     pub offset_y: String,

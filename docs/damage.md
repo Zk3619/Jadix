@@ -71,7 +71,7 @@ cargo test -p rui --lib damage::
 - 若滚动帧仍用 hover / `bind_text` 遗留的局部 scissor PartialLoad，只有脏区内像素会应用新 offset，其余区域保持旧帧 → Gallery 可复现「滚一下再跳变」 corruption。
 - 因此 WP-2.2 策略：**滚动 = 逻辑 FullClear + 默认 GPU FullClear**（见 [`size_and_memory.md`](size_and_memory.md) §7、[AUTHORITY.md](AUTHORITY.md) §5.6 WP-P 架构审计）。
 
-要让滚动也「少画」，须 **B8 全套**：scroll viewport **layer cache** 或 viewport union dirty + **draw-list 按 clip 裁剪** + retain 合成——不能单独开 `RUI_PARTIAL_DAMAGE=1`。
+要让滚动也「少画」，须 **B8 全套**（**≥ B3 backdrop-blur 离屏管线**）：scroll viewport **layer cache** 或 viewport union dirty + **fingerprint display list / draw-list 按 clip 裁剪** + retain 合成——不能单独开 `RUI_PARTIAL_DAMAGE=1`。
 
 ## 如何把 GPU PartialLoad / retain 做好（B8 设计约束）
 
@@ -107,7 +107,7 @@ RUI_PARTIAL_DAMAGE=1
 | 时机 | 建议 |
 |------|------|
 | **现在（WP-2.2）** | ☑ 策略可测 + 默认 FullClear。不阻塞 Wave 2 / Beta。 |
-| **值得开工（B8）** | Wave 2 其余项与 golden（WP-2.6）稳定之后；或单独性能 WP。前置：**实例/文本按脏区剔除**已落地，或 profiling 证明 FullClear 填色是瓶颈（高 DPI / 大窗 / 高频 hover）。 |
+| **值得开工（B8）** | **W4+ / Beta 后**；不早于 **B3** backdrop-blur 离屏缓存。前置：draw-list 按脏区剔除，或 profiling 证 FullClear 填色为瓶颈（本机核显 scroll 已观测 fill，但 **Wave P profile CPU p99 已过关**，非阻塞项）。 |
 | **不要抢做** | 布局/文本/滚动正确性未稳；或没有裁剪却开 retain+blit。 |
 
 跟踪项：[ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) §7 **B8**。

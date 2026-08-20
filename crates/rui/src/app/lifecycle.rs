@@ -949,6 +949,8 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         label_drag_key: None,
         label_drag_anchor: 0,
         scroll_accum: std::collections::HashMap::new(),
+        wheel_sticky_rest: None,
+        wheel_sticky_cursor: [0.0, 0.0],
         hover_scroll_rest: None,
         hover_scroll_axis: None,
         scrollbar_visible_until: std::collections::HashMap::new(),

@@ -352,6 +352,12 @@ pub(super) fn collect_scroll_chain_at(
     child_hit || inside
 }
 
+/// Sticky wheel coalescing must not keep an ancestor rest once a nested viewport is
+/// deepest under the pointer (content scrolled under a stationary cursor).
+pub(crate) fn wheel_sticky_matches_deepest(sticky: &str, chain: &[String]) -> bool {
+    chain.first().map(String::as_str) == Some(sticky)
+}
+
 /// Collect only scroll-area ids on the topmost hit branch (deepest first).
 /// This avoids computing extent/metrics during wheel hit-testing; callers can
 /// resolve metrics lazily (preferably from cache) only for candidate ids.
@@ -565,6 +571,23 @@ mod clamp_scroll_extent_tests {
         // Standard browser-like: stay near bottom when max shrinks.
         let (o, t) = clamp_scroll_offset_and_target(350.0, 350.0, 200.0);
         assert_eq!((o, t), (200.0, 200.0));
+    }
+}
+
+#[cfg(test)]
+mod wheel_sticky_tests {
+    use super::wheel_sticky_matches_deepest;
+
+    #[test]
+    fn nested_deepest_breaks_outer_sticky() {
+        let chain = vec!["inner".into(), "outer".into()];
+        assert!(!wheel_sticky_matches_deepest("outer", &chain));
+        assert!(wheel_sticky_matches_deepest("inner", &chain));
+    }
+
+    #[test]
+    fn empty_chain_does_not_keep_sticky() {
+        assert!(!wheel_sticky_matches_deepest("outer", &[]));
     }
 }
 

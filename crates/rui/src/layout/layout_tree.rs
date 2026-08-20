@@ -2163,6 +2163,27 @@ impl LayoutTree {
         result
     }
 
+    /// Return collect output vecs so the next frame can reuse capacity (WP-P collect 增量).
+    pub(crate) fn recycle_collect_buffers(
+        &mut self,
+        mut instances: Vec<InstanceInput>,
+        mut textured_draws: Vec<TexturedDraw>,
+        mut input_chrome: Vec<InstanceInput>,
+    ) {
+        instances.clear();
+        textured_draws.clear();
+        input_chrome.clear();
+        if instances.capacity() > self.collect_scratch.instances.capacity() {
+            self.collect_scratch.instances = instances;
+        }
+        if textured_draws.capacity() > self.collect_scratch.textured_draws.capacity() {
+            self.collect_scratch.textured_draws = textured_draws;
+        }
+        if input_chrome.capacity() > self.collect_scratch.input_chrome_instances.capacity() {
+            self.collect_scratch.input_chrome_instances = input_chrome;
+        }
+    }
+
     /// Re-bake `vw`/`vh`/`em`/`calc` after viewport or containing-block changes.
     /// Resize uses the fast path (root style only); without this, baked Lengths stay stale.
     fn relayout_deferred_units_if_needed(

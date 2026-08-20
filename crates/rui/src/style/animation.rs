@@ -526,10 +526,11 @@ pub fn tick_element_transitions(
         // Target changed → restart tween from current interpolated value.
         let target_changed = (0..comps as usize).any(|i| (tween.to[i] - target[i]).abs() > 1e-5);
         if target_changed {
+            tween.components = comps;
             if tween.active {
                 let t = ((tween.elapsed - tween.delay_ms).max(0.0) / tween.duration_ms.max(0.001)).min(1.0);
                 let eased = tween.timing.eval(t);
-                tween.from = lerp_arr(&tween.from, &tween.to, eased, comps);
+                tween.from = lerp_arr(&tween.from, &tween.to, eased, tween.components);
             }
             tween.to = target;
             tween.elapsed = 0.0;
@@ -547,7 +548,7 @@ pub fn tick_element_transitions(
         let eff_elapsed = (tween.elapsed - tween.delay_ms).max(0.0);
         let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
         let eased = tween.timing.eval(linear_t);
-        let interpolated = lerp_arr(&tween.from, &tween.to, eased, comps);
+        let interpolated = lerp_arr(&tween.from, &tween.to, eased, tween.components);
         write_prop(style, prop, &interpolated);
 
         if linear_t >= 1.0 - 1e-6 {
@@ -581,6 +582,20 @@ mod tests {
         let _ = tick_animations(1.0 / 60.0);
         assert!(spring.0.borrow().signal.is_alive());
         let _ = spring.peek();
+    }
+
+    #[test]
+    fn scrollbar_fade_in_matches_exit_after_idle_wake() {
+        // 退场：deadline 帧只改 target，下一帧 16ms tick 才积分。
+        // 入场若在「空闲大 dt」那一拍已经 set(1)，会被积成瞬跳。
+        let spring = Spring::new_scrollbar_visibility(0.0);
+        let _ = tick_animations(2.0);
+        assert!((spring.peek()).abs() < 0.001);
+        spring.set(1.0);
+        let _ = tick_animations(1.0 / 60.0);
+        let v = spring.peek();
+        assert!(v > 0.01, "fade-in must start (got {v})");
+        assert!(v < 0.45, "one vsync tick must not pop to opaque (got {v})");
     }
 
     #[test]
