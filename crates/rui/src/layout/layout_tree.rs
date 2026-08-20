@@ -962,6 +962,106 @@ fn scroll_area_signals_cached<'a>(
     }
 }
 
+/// Reused collect buffers — cleared each frame, capacity retained (Wave P P.3.5).
+struct CollectScratch {
+    instances: Vec<InstanceInput>,
+    textured_draws: Vec<TexturedDraw>,
+    text_nodes: Vec<TextLayoutInfo>,
+    input_chrome_instances: Vec<InstanceInput>,
+    scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
+    tex_keys: Vec<String>,
+}
+
+impl Default for CollectScratch {
+    fn default() -> Self {
+        Self {
+            instances: Vec::new(),
+            textured_draws: Vec::new(),
+            text_nodes: Vec::new(),
+            input_chrome_instances: Vec::new(),
+            scroll_metrics: Vec::new(),
+            tex_keys: Vec::new(),
+        }
+    }
+}
+
+impl CollectScratch {
+    fn clear_for_collect(&mut self) {
+        self.instances.clear();
+        self.textured_draws.clear();
+        self.text_nodes.clear();
+        self.input_chrome_instances.clear();
+        self.scroll_metrics.clear();
+    }
+}
+
+/// Flex sibling wholly outside an ancestor overflow clip during `scroll_only` collect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollSiblingBandAction {
+    Visit,
+    SkipBefore,
+    StopAfter,
+}
+
+#[inline]
+fn scroll_sibling_band_action(
+    child_abs: [f32; 2],
+    child_size: [f32; 2],
+    scroll_acc: [f32; 2],
+    clip: [f32; 4],
+    flex_direction: FlexDirection,
+    flex_wrap: FlexWrap,
+) -> ScrollSiblingBandAction {
+    if flex_wrap != FlexWrap::NoWrap {
+        return ScrollSiblingBandAction::Visit;
+    }
+    const PAD: f32 = 32.0;
+    let sx = child_abs[0] - scroll_acc[0];
+    let sy = child_abs[1] - scroll_acc[1];
+    let sw = child_size[0];
+    let sh = child_size[1];
+    let clip_r = clip[0] + clip[2];
+    let clip_b = clip[1] + clip[3];
+
+    match flex_direction {
+        FlexDirection::Column => {
+            if sy + sh < clip[1] - PAD {
+                return ScrollSiblingBandAction::SkipBefore;
+            }
+            if sy > clip_b + PAD {
+                return ScrollSiblingBandAction::StopAfter;
+            }
+        }
+        FlexDirection::Row => {
+            if sx + sw < clip[0] - PAD {
+                return ScrollSiblingBandAction::SkipBefore;
+            }
+            if sx > clip_r + PAD {
+                return ScrollSiblingBandAction::StopAfter;
+            }
+        }
+        // Reverse directions reorder visual stacking; band cull is unsafe.
+        FlexDirection::ColumnReverse | FlexDirection::RowReverse => {}
+    }
+    ScrollSiblingBandAction::Visit
+}
+
+#[inline]
+fn scroll_sibling_extent(child_abs: [f32; 2], child_size: [f32; 2]) -> [f32; 2] {
+    [child_abs[0] + child_size[0], child_abs[1] + child_size[1]]
+}
+
+/// Prefer last full-collect recursive extent so overflowing descendants do not drop out of
+/// `content_h` when this sibling is band-culled (scrollbar thumb jitter).
+#[inline]
+fn skipped_sibling_extent(child: &Element, child_abs: [f32; 2], child_size: [f32; 2]) -> [f32; 2] {
+    if child.collect_extent_valid {
+        child.collect_extent
+    } else {
+        scroll_sibling_extent(child_abs, child_size)
+    }
+}
+
 /// 一次布局+收集?CPU 细分（毫秒）；见 `AppState` debug `render profile`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LayoutProfileMs {
@@ -1234,6 +1334,27 @@ pub struct LayoutTree {
     /// Test spy: last node passed to `compute_layout_with_measure` (app root or subtree parent).
     #[cfg(test)]
     pub(crate) last_compute_root: Option<NodeId>,
+    /// Frame-local collect output; `std::mem::take` hands buffers to [`RenderResult`].
+    collect_scratch: CollectScratch,
+}
+
+/// Layout-side resident structures (Taffy + measure metadata).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutTreeStats {
+    pub taffy_nodes: usize,
+    pub text_measurements: usize,
+    pub has_root: bool,
+}
+
+impl LayoutTree {
+    /// Wave P P.2.2: count Taffy nodes and text-measure metadata retained between frames.
+    pub fn stats(&self) -> LayoutTreeStats {
+        LayoutTreeStats {
+            taffy_nodes: self.total_nodes.len(),
+            text_measurements: self.text_measurements.len(),
+            has_root: self.root_node.is_some(),
+        }
+    }
 }
 
 /// Text leaf measure meta (line-height aligned with TextStyle).
@@ -1516,6 +1637,7 @@ impl LayoutTree {
             mark_dirty_calls: 0,
             #[cfg(test)]
             last_compute_root: None,
+            collect_scratch: CollectScratch::default(),
         }
     }
 
@@ -1803,77 +1925,17 @@ impl LayoutTree {
         let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
         let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
 
-        let mut instances = Vec::new();
-        let mut textured_draws = Vec::new();
-        let mut text_nodes = Vec::new();
-        let mut input_chrome_instances = Vec::new();
-        let mut scroll_metrics = Vec::new();
-        let mut hover_cursor = None;
-        let mut overlay_split = OverlayPaintSplit::default();
-        let mut paint_rec = PaintRecorder::default();
-
-        let t_collect_begin = Instant::now();
-        #[cfg(feature = "devtools")]
-        {
-            crate::app::devtools::begin_highlight_collect();
-            crate::app::devtools::set_highlight_collect_root(root);
-        }
-        self.collect_instances_mut(
+        self.finish_collect(
             root,
             root_node,
-            [0.0, 0.0],
-            [0.0, 0.0],
-            None,
-            None,
             mouse_pos,
-            1.0,
-            &mut instances,
-            &mut textured_draws,
-            &mut text_nodes,
-            &mut input_chrome_instances,
-            &mut scroll_metrics,
-            &mut hover_cursor,
             false,
             false,
-            None,
             &mut None,
-            &mut overlay_split,
-            &mut paint_rec,
-        );
-        #[cfg(feature = "devtools")]
-        crate::app::devtools::clear_highlight_collect_root();
-        let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
-        if !overlay_split.marked {
-            overlay_split.instance_start = instances.len();
-            overlay_split.textured_start = textured_draws.len();
-            overlay_split.text_start = text_nodes.len();
-            overlay_split.chrome_start = input_chrome_instances.len();
-            overlay_split.paint_op_start = paint_rec.ops.len();
-        }
-
-        let tex_keys: Vec<String> = textured_draws
-            .iter()
-            .map(|d| d.texture_key.clone())
-            .collect();
-        let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
-        crate::renderer::enrich_render_graph(&mut render_graph);
-        RenderResult {
-            instances,
-            textured_draws,
-            paint_ops: paint_rec.ops,
-            render_graph,
-            text_nodes,
-            input_chrome_instances,
-            overlay_split,
-            scroll_metrics,
-            hover_cursor,
-            prof: LayoutProfileMs {
-                rebuild_ms,
-                setup_ms: 0.0,
-                taffy_compute_ms,
-                collect_ms,
-            },
-        }
+            rebuild_ms,
+            0.0,
+            taffy_compute_ms,
+        )
     }
 
     /// When `scroll_only` is true, skip [`TaffyTree::compute_layout`]: `Element.scroll_offset` does
@@ -1995,15 +2057,6 @@ impl LayoutTree {
             0.0
         };
 
-        let mut instances = Vec::new();
-        let mut textured_draws = Vec::new();
-        let mut text_nodes = Vec::new();
-        let mut input_chrome_instances = Vec::new();
-        let mut scroll_metrics = Vec::new();
-        let mut hover_cursor = None;
-        let mut overlay_split = OverlayPaintSplit::default();
-        let mut paint_rec = PaintRecorder::default();
-
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
         let mut scroll_cache_slot: Option<&mut HashMap<String, ScrollAreaSignalsCached>> =
             if scroll_only || scrollbar_overlay_collect {
@@ -2011,6 +2064,37 @@ impl LayoutTree {
             } else {
                 None
             };
+
+        self.finish_collect(
+            root,
+            root_node,
+            mouse_pos,
+            scroll_only,
+            scrollbar_overlay_collect,
+            &mut scroll_cache_slot,
+            0.0,
+            setup_ms,
+            taffy_compute_ms,
+        )
+    }
+
+    fn finish_collect(
+        &mut self,
+        root: &mut Element,
+        root_node: NodeId,
+        mouse_pos: [f32; 2],
+        scroll_only: bool,
+        scrollbar_overlay_collect: bool,
+        scroll_cache_slot: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
+        rebuild_ms: f32,
+        setup_ms: f32,
+        taffy_compute_ms: f32,
+    ) -> RenderResult {
+        let mut scratch = std::mem::take(&mut self.collect_scratch);
+        scratch.clear_for_collect();
+        let mut hover_cursor = None;
+        let mut overlay_split = OverlayPaintSplit::default();
+        let mut paint_rec = PaintRecorder::default();
 
         let t_collect_begin = Instant::now();
         #[cfg(feature = "devtools")]
@@ -2027,16 +2111,16 @@ impl LayoutTree {
             None,
             mouse_pos,
             1.0,
-            &mut instances,
-            &mut textured_draws,
-            &mut text_nodes,
-            &mut input_chrome_instances,
-            &mut scroll_metrics,
+            &mut scratch.instances,
+            &mut scratch.textured_draws,
+            &mut scratch.text_nodes,
+            &mut scratch.input_chrome_instances,
+            &mut scratch.scroll_metrics,
             &mut hover_cursor,
             scroll_only,
             scrollbar_overlay_collect,
             None,
-            &mut scroll_cache_slot,
+            scroll_cache_slot,
             &mut overlay_split,
             &mut paint_rec,
         );
@@ -2044,36 +2128,39 @@ impl LayoutTree {
         crate::app::devtools::clear_highlight_collect_root();
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
-            overlay_split.instance_start = instances.len();
-            overlay_split.textured_start = textured_draws.len();
-            overlay_split.text_start = text_nodes.len();
-            overlay_split.chrome_start = input_chrome_instances.len();
+            overlay_split.instance_start = scratch.instances.len();
+            overlay_split.textured_start = scratch.textured_draws.len();
+            overlay_split.text_start = scratch.text_nodes.len();
+            overlay_split.chrome_start = scratch.input_chrome_instances.len();
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
-        let tex_keys: Vec<String> = textured_draws
-            .iter()
-            .map(|d| d.texture_key.clone())
-            .collect();
-        let mut render_graph = crate::renderer::RenderGraph::standard_composite(tex_keys);
+        scratch.tex_keys.clear();
+        scratch
+            .tex_keys
+            .extend(scratch.textured_draws.iter().map(|d| d.texture_key.clone()));
+        let mut render_graph =
+            crate::renderer::RenderGraph::standard_composite(scratch.tex_keys.clone());
         crate::renderer::enrich_render_graph(&mut render_graph);
-        RenderResult {
-            instances,
-            textured_draws,
+        let result = RenderResult {
+            instances: std::mem::take(&mut scratch.instances),
+            textured_draws: std::mem::take(&mut scratch.textured_draws),
             paint_ops: paint_rec.ops,
             render_graph,
-            text_nodes,
-            input_chrome_instances,
+            text_nodes: std::mem::take(&mut scratch.text_nodes),
+            input_chrome_instances: std::mem::take(&mut scratch.input_chrome_instances),
             overlay_split,
-            scroll_metrics,
+            scroll_metrics: std::mem::take(&mut scratch.scroll_metrics),
             hover_cursor,
             prof: LayoutProfileMs {
-                rebuild_ms: 0.0,
+                rebuild_ms,
                 setup_ms,
                 taffy_compute_ms,
                 collect_ms,
             },
-        }
+        };
+        self.collect_scratch = scratch;
+        result
     }
 
     /// Re-bake `vw`/`vh`/`em`/`calc` after viewport or containing-block changes.
@@ -2432,7 +2519,18 @@ impl LayoutTree {
                         ));
                     }
                 }
-                return [abs_x + lay_w, abs_y + lay_h];
+                let own = [abs_x + lay_w, abs_y + lay_h];
+                let extent = if element.collect_extent_valid {
+                    [
+                        element.collect_extent[0].max(own[0]),
+                        element.collect_extent[1].max(own[1]),
+                    ]
+                } else {
+                    own
+                };
+                element.collect_extent = extent;
+                element.collect_extent_valid = true;
+                return extent;
             }
         }
 
@@ -2987,7 +3085,10 @@ impl LayoutTree {
             Ok(c) => c,
             Err(err) => {
                 log::error!("taffy.children({node:?}) failed: {err:?}");
-                return [abs_x + lay_w, abs_y + lay_h];
+                let own = [abs_x + lay_w, abs_y + lay_h];
+                element.collect_extent = own;
+                element.collect_extent_valid = true;
+                return own;
             }
         };
         let any_z = element.children.iter().any(|c| c.style.z_index != 0);
@@ -3030,7 +3131,9 @@ impl LayoutTree {
         };
 
         if !any_z {
-            for (i, child) in element.children.iter_mut().enumerate() {
+            let n = element.children.len();
+            let mut i = 0;
+            while i < n {
                 if i >= child_nodes.len() {
                     log::error!(
                         "layout/taffy child desync: element has {} children, taffy node {:?} has {} — skip (portal hoist must full-rebuild)",
@@ -3040,6 +3143,65 @@ impl LayoutTree {
                     );
                     break;
                 }
+                let child_pass_offset = [
+                    abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
+                    abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
+                ];
+                if _scroll_only {
+                    if let Some(clip_rect) = clip {
+                        let c = &element.children[i];
+                        if !c.style.position_fixed && c.style.position != Position::Absolute {
+                            if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
+                                let child_abs = [
+                                    child_pass_offset[0] + cl.location.x,
+                                    child_pass_offset[1] + cl.location.y,
+                                ];
+                                let child_size = [cl.size.width, cl.size.height];
+                                match scroll_sibling_band_action(
+                                    child_abs,
+                                    child_size,
+                                    next_scroll_acc,
+                                    clip_rect,
+                                    element.style.flex_direction,
+                                    element.style.flex_wrap,
+                                ) {
+                                    ScrollSiblingBandAction::SkipBefore => {
+                                        let extent = skipped_sibling_extent(
+                                            c,
+                                            child_abs,
+                                            child_size,
+                                        );
+                                        max_right = max_right.max(extent[0]);
+                                        max_bottom = max_bottom.max(extent[1]);
+                                        i += 1;
+                                        continue;
+                                    }
+                                    ScrollSiblingBandAction::StopAfter => {
+                                        for j in i..n.min(child_nodes.len()) {
+                                            if let Ok(jl) = self.taffy.layout(child_nodes[j]) {
+                                                let j_abs = [
+                                                    child_pass_offset[0] + jl.location.x,
+                                                    child_pass_offset[1] + jl.location.y,
+                                                ];
+                                                let j_size = [jl.size.width, jl.size.height];
+                                                let extent = skipped_sibling_extent(
+                                                    &element.children[j],
+                                                    j_abs,
+                                                    j_size,
+                                                );
+                                                max_right = max_right.max(extent[0]);
+                                                max_bottom = max_bottom.max(extent[1]);
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    ScrollSiblingBandAction::Visit => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                let child = &mut element.children[i];
                 paint_rec.split_here();
                 push_portal_band(
                     overlay_split,
@@ -3066,10 +3228,7 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     child,
                     child_nodes[i],
-                    [
-                        abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
-                        abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
-                    ],
+                    child_pass_offset,
                     next_scroll_acc,
                     clip,
                     pass_to_children,
@@ -3090,6 +3249,7 @@ impl LayoutTree {
                 );
                 max_right = max_right.max(cr);
                 max_bottom = max_bottom.max(cb);
+                i += 1;
             }
         } else {
             let mut order: Vec<usize> = (0..element.children.len()).collect();
@@ -3224,6 +3384,8 @@ impl LayoutTree {
             }
         }
 
+        element.collect_extent = [extent_r, extent_b];
+        element.collect_extent_valid = true;
         [extent_r, extent_b]
     }
 }

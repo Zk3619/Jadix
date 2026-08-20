@@ -265,6 +265,10 @@ pub struct Element {
     pub text_shape_suffix: Option<String>,
     pub text_style: TextStyle,
     pub layout_bounds: [f32; 4],
+    /// Last fully collected subtree extent (`max_right`, `max_bottom`) in abs layout px.
+    /// `scroll_only` sibling band cull reuses this so content height / thumb geometry stay stable.
+    pub(crate) collect_extent: [f32; 2],
+    pub(crate) collect_extent_valid: bool,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
     /// Per-element CSS transition tween state (persists across frames).
@@ -564,6 +568,8 @@ impl Element {
             text_shape_suffix: None,
             text_style: TextStyle::default(),
             layout_bounds: [0.0, 0.0, 0.0, 0.0],
+            collect_extent: [0.0, 0.0],
+            collect_extent_valid: false,
             sticky_visual_offset: [0.0, 0.0],
             transition_snapshot: Default::default(),
             on_click: None,
