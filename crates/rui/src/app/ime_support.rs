@@ -165,10 +165,17 @@ pub(crate) fn set_ime_allowed_latched(
 /// Bind/release Windows IME HWND drive to the current text-edit focus id.
 /// `None` / empty = no field owns the candidate window.
 pub(crate) fn sync_ime_focus_owner(window: &winit::window::Window, focus_id: Option<&str>) {
+    let next = focus_id.filter(|s| !s.is_empty());
     #[cfg(target_os = "windows")]
-    win_ime::sync_focus_owner(window, focus_id.filter(|s| !s.is_empty()));
+    win_ime::sync_focus_owner(window, next);
     #[cfg(not(target_os = "windows"))]
-    let _ = (window, focus_id);
+    let _ = window;
+    // Field→field keeps `set_ime_allowed(true)`, so winit may never send `Ime::Disabled`
+    // to clear the end-drain started by `finish_composition_preserve_text`. A stuck drain
+    // swallowed KeyEvents after switching DevTools CSSOM textarea ↔ app Input/Textarea.
+    if next.is_some_and(is_text_edit_focus) {
+        clear_ime_end_drain();
+    }
 }
 
 /// OS window deactivated: force-end composition (browser-like cancel). Keeps already
@@ -262,7 +269,9 @@ pub(crate) fn clear_text_edit_compose_state(focus_id: &str) {
 }
 
 /// Cancel in-flight OS composition (candidate / preedit). Safe from UI click handlers.
-/// Enters end-drain so CPS_CANCEL echoes cannot mutate fields until `Ime::Disabled`.
+/// Enters end-drain so CPS_CANCEL echoes cannot mutate fields until `Ime::Disabled` /
+/// `Ime::Enabled`, or until the next text-edit focus owner clears the drain (field→field
+/// switch keeps IME allowed so Disabled may never arrive).
 pub(crate) fn cancel_os_ime_composition() {
     begin_ime_end_drain();
     #[cfg(target_os = "windows")]
@@ -1081,6 +1090,31 @@ mod tests {
             assert!(ime_end_drain_active());
             clear_ime_end_drain();
         });
+    }
+
+    #[test]
+    fn field_to_field_focus_must_clear_end_drain() {
+        // Mirrors `sync_ime_focus_owner`: after finish_* starts drain, landing on another
+        // Input/Textarea (DevTools CSSOM ↔ app form) must clear it — IME stays allowed so
+        // `Ime::Disabled` may never arrive.
+        begin_ime_end_drain();
+        assert!(ime_end_drain_active());
+        let next = Some("input:gallery-name");
+        if next.is_some_and(is_text_edit_focus) {
+            clear_ime_end_drain();
+        }
+        assert!(!ime_end_drain_active());
+
+        begin_ime_end_drain();
+        let blur: Option<&str> = None;
+        if blur.is_some_and(is_text_edit_focus) {
+            clear_ime_end_drain();
+        }
+        assert!(
+            ime_end_drain_active(),
+            "blur to none must leave drain for Disabled to clear"
+        );
+        clear_ime_end_drain();
     }
 
     #[test]

@@ -142,7 +142,13 @@ impl super::App {
                 }
             }
             Ime::Commit(s) => {
-                if let Some(rest) = text_edit_rest(&fid) {
+                if s.is_empty() {
+                    // CPS_CANCEL / teardown often echoes an empty Commit after in-app
+                    // focus switch (drain already cleared so typing works).
+                    if let Some(rest) = text_edit_rest(&fid) {
+                        Self::clear_ime_compose_state(rest);
+                    }
+                } else if let Some(rest) = text_edit_rest(&fid) {
                     let vk = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
                     let v = val_sig.get();
@@ -697,15 +703,25 @@ impl super::App {
                         // Esc 等 Named 键：不要把 `event.text`（U+001B）写进字段。
                     } else if let Some(t) = event.text.as_ref() {
                         if ime_support::ime_end_drain_active() {
-                            if ime_support::ime_diag_enabled() {
-                                log::info!("RUI_IME_DIAG drop text during end-drain rest={}", rest);
-                            }
-                            if allow_primary_tree {
-                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                    st.window.request_redraw();
+                            // Field→field switch keeps IME allowed, so `Disabled` may never
+                            // clear the drain. Still drop control/teardown echoes; allow
+                            // printable typing on the newly focused field.
+                            let printable = t.chars().any(|c| !c.is_control());
+                            if !printable {
+                                if ime_support::ime_diag_enabled() {
+                                    log::info!(
+                                        "RUI_IME_DIAG drop control text during end-drain rest={}",
+                                        rest
+                                    );
                                 }
+                                if allow_primary_tree {
+                                    if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                                        st.window.request_redraw();
+                                    }
+                                }
+                                return true;
                             }
-                            return true;
+                            ime_support::clear_ime_end_drain();
                         }
                         let is_nl = t.as_str() == "\r" || t.as_str() == "\n";
                         let allow = !ime_active.get()

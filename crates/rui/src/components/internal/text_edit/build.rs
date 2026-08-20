@@ -237,8 +237,16 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .flex_shrink(1.0);
     }
     if multiline {
+        // Caret / hit-test / Up-Down nav are hard-`\n` indexed. Soft-wrap at the leaf
+        // width made glyphs occupy more visual rows than hard lines → caret lands on the
+        // wrong declaration and typing looks like “串行” (devtools CSSOM). Keep nowrap;
+        // long lines clip in the scrollport until soft-wrap-aware caret exists.
+        // Do not set TextOverflow::Hidden here — that changes leaf clip_to_box / scissor
+        // vs the absolute scrollport region (gallery clip-height regressions).
+        text_el = text_el.white_space("nowrap");
         // Content-driven leaf (field-sizing-content). Do NOT use viewport/chrome height —
         // that coupled glyph soft_h to textarea resize. Ink only at content bottom.
+        // Unbounded avail → height = hard lines only (matches nowrap paint + caret).
         let content_h = crate::utils::text_field::text_edit_content_height_px(
             &display_text,
             text_size_px,

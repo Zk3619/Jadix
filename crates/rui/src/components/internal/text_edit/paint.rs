@@ -272,6 +272,16 @@ fn sync_one_text_edit_paint(
             text_el.text_style.color = text_color;
             text_style = true;
         }
+        if desc.multiline {
+            use crate::style::WhiteSpace;
+            if text_el.text_style.white_space != WhiteSpace::Nowrap {
+                text_el.text_style.white_space = WhiteSpace::Nowrap;
+                text_el
+                    .attrs
+                    .insert("white_space".to_string(), "nowrap".to_string());
+                text_layout = true;
+            }
+        }
 
         let caret_draw = if is_focused {
             let mut pc = parse_color("primary");
@@ -394,18 +404,15 @@ fn sync_one_text_edit_paint(
         }
         // Leaf height: multiline = content (+ bottom ink); single-line = one line box
         // (centering in Input). Never track ScrollArea/Textarea chrome height.
+        // Multiline: unbounded avail so soft-wrap at leaf width cannot inflate height past
+        // hard-`\n` rows (caret / hit-test are hard-line indexed).
         let want_h = if desc.multiline {
-            let avail = if text_el.layout_bounds[2] > 8.0 {
-                text_el.layout_bounds[2]
-            } else {
-                10_000.0
-            };
             crate::utils::text_field::text_edit_content_height_px(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_box,
-                avail,
+                10_000.0,
             )
         } else {
             line_box
@@ -494,23 +501,19 @@ fn sync_one_text_edit_paint(
                 }
             }
             let text_tid = input_text_template_id(&desc.base_id);
-            let (text_h_layout, text_w_layout) = find_descendant_by_template_id_ref(el, &text_tid)
-                .map(|t| (t.layout_bounds[3], t.layout_bounds[2]))
-                .unwrap_or((0.0, 0.0));
+            let text_h_layout = find_descendant_by_template_id_ref(el, &text_tid)
+                .map(|t| t.layout_bounds[3])
+                .unwrap_or(0.0);
             // Content height from the string — do NOT trust a short leaf box alone.
             // A flex/clip-sized leaf (≈ viewport) made content_fits=true and zeroed sy every
             // frame while the store still held N hard lines (gallery: only ~5 lines visible).
-            let avail = if text_w_layout > 8.0 {
-                text_w_layout
-            } else {
-                10_000.0
-            };
+            // Unbounded avail: hard-`\n` height only (matches nowrap paint + caret model).
             let content_h_text = crate::utils::text_field::text_edit_content_height_px(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_height,
-                avail,
+                10_000.0,
             );
             // Prefer the live scrollport box. Avoid `vh.max(...)` — a stale huge viewport
             // signal would make content_fits=true and clear sy every frame.

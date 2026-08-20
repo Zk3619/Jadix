@@ -200,6 +200,25 @@ mod tests {
     }
 
     #[test]
+    fn textarea_multiline_leaf_is_nowrap() {
+        use crate::style::WhiteSpace;
+        use crate::utils::text_field::input_text_template_id;
+
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+
+        let id = "ta-nowrap";
+        let el: Element = textarea(id).rows(3).into();
+        let tid = input_text_template_id(id);
+        let leaf = find_tid(&el, &tid).expect("text leaf");
+        assert_eq!(leaf.text_style.white_space, WhiteSpace::Nowrap);
+    }
+
+    #[test]
     fn textarea_value_signal_keys() {
         let _ = use_signal(&input_value_signal_key("t1"), String::new);
         let _ = use_signal(&input_caret_signal_key("t1"), || None::<usize>);
