@@ -615,68 +615,116 @@ fn FormValidateShowcase() -> rui::core::tree::Element {
 #[component]
 fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
     ui! {
-        <MyCard title="2b) Pickers (file dialog · color · date · time)">
-            <VStack w="100%" gap="0.75rem">
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "WP-3.3：Calendar 内联（sidebar-12）+ Date/Time/Color 键盘（Enter/Esc/方向键）。格式 ISO YYYY-MM-DD / HH:MM / #RRGGBB。"
-                </Label>
-                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        flex_grow="1"
-                        on_click={move || {
-                            let _ = rui::utils::pick_files_into("gal-file", "image/*", false);
-                        }}
-                    >
-                        "Choose image…"
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        flex_grow="1"
-                        on_click={move || {
-                            let _ = rui::utils::pick_folder_into("gal-dir");
-                        }}
-                    >
-                        "Choose folder…"
-                    </Button>
-                    <ColorPicker id="gal-color" value="#3b82f6" flex_grow="1" />
-                </HStack>
-                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <DatePicker id="gal-date" kind="date" captionLayout="dropdown" flex_grow="1" />
-                    <DatePicker id="gal-dt" kind="datetime-local" flex_grow="1" />
-                    <TimePicker id="gal-time" flex_grow="1" />
-                </HStack>
-                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <DatePicker id="gal-month" kind="month" flex_grow="1" />
-                    <DatePicker id="gal-week" kind="week" flex_grow="1" />
-                </HStack>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground">
-                    "Inline Calendar（captionLayout=dropdown）· ColorPicker inline HSV"
-                </Label>
-                <HStack gap="1rem" items="start" wrap="wrap" w="100%">
-                    <Calendar id="gal-cal" captionLayout="dropdown" />
-                    <ColorPicker id="gal-color-inline" variant="inline" format="hsla" />
-                </HStack>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground">
-                    "ColorPicker 变体（solid-color：sketch / chrome / github / twitter / material / block / circle / slider / compact）"
-                </Label>
-                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <ColorPicker id="gal-cp-sketch" variant="sketch" value="#f47373" />
-                    <ColorPicker id="gal-cp-chrome" variant="chrome" value="#0693E3" />
-                    <ColorPicker id="gal-cp-github" variant="github" value="#1273DE" />
-                    <ColorPicker id="gal-cp-twitter" variant="twitter" value="#FF6900" />
-                </HStack>
-                <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
-                    <ColorPicker id="gal-cp-material" variant="material" value="#9C27B0" />
-                    <ColorPicker id="gal-cp-block" variant="block" value="#37D67A" />
-                    <ColorPicker id="gal-cp-circle" variant="circle" value="#BA68C8" />
-                    <ColorPicker id="gal-cp-slider" variant="slider" value="#2CCCE4" />
-                    <ColorPicker id="gal-cp-compact" variant="compact" value="#3b82f6" />
-                </HStack>
-            </VStack>
-        </MyCard>
+        <VStack w="100%" gap="1rem">
+            <MyCard title="2b) Pickers (file · color · date/time)">
+                <VStack w="100%" gap="0.75rem">
+                    <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "WP-3.3：触发器行 + Date/Time Tabs（仅挂载当前项，避免 forms 滚入时一次冷启动整排 picker）。"
+                    </Label>
+                    <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            flex_grow="1"
+                            on_click={move || {
+                                let _ = rui::utils::pick_files_into("gal-file", "image/*", false);
+                            }}
+                        >
+                            "Choose image…"
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            flex_grow="1"
+                            on_click={move || {
+                                let _ = rui::utils::pick_folder_into("gal-dir");
+                            }}
+                        >
+                            "Choose folder…"
+                        </Button>
+                        <ColorPicker id="gal-color" value="#3b82f6" flex_grow="1" />
+                    </HStack>
+                    <Tabs id="gal-dp-kinds" default_value="date">
+                        <TabsList>
+                            <TabsTrigger value="date">"Date"</TabsTrigger>
+                            <TabsTrigger value="datetime">"DateTime"</TabsTrigger>
+                            <TabsTrigger value="time">"Time"</TabsTrigger>
+                            <TabsTrigger value="month">"Month"</TabsTrigger>
+                            <TabsTrigger value="week">"Week"</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="date">
+                            <DatePicker id="gal-date" kind="date" captionLayout="dropdown" />
+                        </TabsContent>
+                        <TabsContent value="datetime">
+                            <DatePicker id="gal-dt" kind="datetime-local" />
+                        </TabsContent>
+                        <TabsContent value="time">
+                            <TimePicker id="gal-time" />
+                        </TabsContent>
+                        <TabsContent value="month">
+                            <DatePicker id="gal-month" kind="month" />
+                        </TabsContent>
+                        <TabsContent value="week">
+                            <DatePicker id="gal-week" kind="week" />
+                        </TabsContent>
+                    </Tabs>
+                </VStack>
+            </MyCard>
+            <MyCard title="2c) Inline Calendar · ColorPicker">
+                <VStack w="100%" gap="0.75rem">
+                    <Label w="100%" text_size="0.75rem" color="muted-foreground">
+                        "独立卡片：滚入 2b 上半时不连带着 Calendar / 内联 HSV。"
+                    </Label>
+                    <HStack gap="1rem" items="start" wrap="wrap" w="100%">
+                        <Calendar id="gal-cal" captionLayout="dropdown" />
+                        <ColorPicker id="gal-color-inline" variant="inline" format="hsla" />
+                    </HStack>
+                    <Label w="100%" text_size="0.75rem" color="muted-foreground">
+                        "ColorPicker 变体（Tabs 仅挂载当前项）"
+                    </Label>
+                    <Tabs id="gal-cp-variants" default_value="sketch">
+                        <TabsList>
+                            <TabsTrigger value="sketch">"Sketch"</TabsTrigger>
+                            <TabsTrigger value="chrome">"Chrome"</TabsTrigger>
+                            <TabsTrigger value="github">"GitHub"</TabsTrigger>
+                            <TabsTrigger value="twitter">"Twitter"</TabsTrigger>
+                            <TabsTrigger value="material">"Material"</TabsTrigger>
+                            <TabsTrigger value="block">"Block"</TabsTrigger>
+                            <TabsTrigger value="circle">"Circle"</TabsTrigger>
+                            <TabsTrigger value="slider">"Slider"</TabsTrigger>
+                            <TabsTrigger value="compact">"Compact"</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="sketch">
+                            <ColorPicker id="gal-cp-sketch" variant="sketch" value="#f47373" />
+                        </TabsContent>
+                        <TabsContent value="chrome">
+                            <ColorPicker id="gal-cp-chrome" variant="chrome" value="#0693E3" />
+                        </TabsContent>
+                        <TabsContent value="github">
+                            <ColorPicker id="gal-cp-github" variant="github" value="#1273DE" />
+                        </TabsContent>
+                        <TabsContent value="twitter">
+                            <ColorPicker id="gal-cp-twitter" variant="twitter" value="#FF6900" />
+                        </TabsContent>
+                        <TabsContent value="material">
+                            <ColorPicker id="gal-cp-material" variant="material" value="#9C27B0" />
+                        </TabsContent>
+                        <TabsContent value="block">
+                            <ColorPicker id="gal-cp-block" variant="block" value="#37D67A" />
+                        </TabsContent>
+                        <TabsContent value="circle">
+                            <ColorPicker id="gal-cp-circle" variant="circle" value="#BA68C8" />
+                        </TabsContent>
+                        <TabsContent value="slider">
+                            <ColorPicker id="gal-cp-slider" variant="slider" value="#2CCCE4" />
+                        </TabsContent>
+                        <TabsContent value="compact">
+                            <ColorPicker id="gal-cp-compact" variant="compact" value="#3b82f6" />
+                        </TabsContent>
+                    </Tabs>
+                </VStack>
+            </MyCard>
+        </VStack>
     }
 }
 
@@ -5301,49 +5349,124 @@ mod mount_tests {
 
     #[test]
     fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
-        let (_handle, _) = create_root(|| {
-            create_effect(|| {
-                // Match App: `switch_reactive` body builds under `isolate_reads`.
-                let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
-                fn find_btn<'a>(
-                    el: &'a rui::core::tree::Element,
-                ) -> Option<&'a rui::core::tree::Element> {
-                    if el.template_id.as_deref() == Some("gal-s2-mark-invalid") {
-                        return Some(el);
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    // Match App: `switch_reactive` body builds under `isolate_reads`.
+                    let mut tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    fn find_btn<'a>(
+                        el: &'a rui::core::tree::Element,
+                    ) -> Option<&'a rui::core::tree::Element> {
+                        if el.template_id.as_deref() == Some("gal-s2-mark-invalid") {
+                            return Some(el);
+                        }
+                        el.children.iter().find_map(find_btn)
                     }
-                    el.children.iter().find_map(find_btn)
-                }
-                let btn = find_btn(&tree).expect("gal-s2-mark-invalid button");
-                assert!(
-                    btn.children
+                    let btn = find_btn(&tree).expect("gal-s2-mark-invalid button");
+                    assert!(
+                        btn.children
+                            .iter()
+                            .any(|c| c.text.as_deref() == Some("Mark invalid")),
+                        "button children={:?}",
+                        btn.children
+                            .iter()
+                            .map(|c| (c.template_id.clone(), c.text.clone(), c.text_style.size))
+                            .collect::<Vec<_>>()
+                    );
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
+                    let node = result
+                        .text_nodes
                         .iter()
-                        .any(|c| c.text.as_deref() == Some("Mark invalid")),
-                    "button children={:?}",
-                    btn.children
-                        .iter()
-                        .map(|c| (c.template_id.clone(), c.text.clone(), c.text_style.size))
-                        .collect::<Vec<_>>()
-                );
-                let mut layout = rui::core::tree::LayoutTree::new();
-                let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
-                let node = result
-                    .text_nodes
-                    .iter()
-                    .find(|n| n.text == "Mark invalid")
-                    .expect("forms section must layout Mark invalid");
-                assert!(
-                    node.width > 40.0,
-                    "caption width too small: {} (likely empty outline button)",
-                    node.width
-                );
+                        .find(|n| n.text == "Mark invalid")
+                        .expect("forms section must layout Mark invalid");
+                    assert!(
+                        node.width > 40.0,
+                        "caption width too small: {} (likely empty outline button)",
+                        node.width
+                    );
+                });
             });
+            rui::app::reactive::reset_registered_anchors();
         });
-        rui::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn forms_color_picker_variants_tabs_mount_only_active() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    fn find_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
+                        el.template_id
+                            .as_deref()
+                            .is_some_and(|id| id.contains(needle))
+                            || el.children.iter().any(|c| find_contains(c, needle))
+                    }
+                    assert!(
+                        find_contains(&tree, "gal-cp-variants"),
+                        "forms pickers must host ColorPicker variants under Tabs"
+                    );
+                    assert!(
+                        find_contains(&tree, "gal-cp-variants:content:sketch"),
+                        "TabsContent placeholder for default sketch tab"
+                    );
+                    // Before: nine ColorPicker reactive placeholders were siblings in the
+                    // declarative forms tree. TabsContent keeps them out of that tree
+                    // (mounted only via show_reactive into the live reconcile slot).
+                    assert!(
+                        !find_contains(&tree, "gal-cp-chrome__cp_view"),
+                        "inactive variant must not be an eager declarative sibling"
+                    );
+                    assert!(
+                        !find_contains(&tree, "gal-cp-compact__cp_view"),
+                        "inactive variant must not be an eager declarative sibling"
+                    );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
+
+    #[test]
+    fn forms_date_time_pickers_tabs_mount_only_active() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    fn find_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
+                        el.template_id
+                            .as_deref()
+                            .is_some_and(|id| id.contains(needle))
+                            || el.children.iter().any(|c| find_contains(c, needle))
+                    }
+                    assert!(
+                        find_contains(&tree, "gal-dp-kinds"),
+                        "forms must host Date/Time kinds under Tabs"
+                    );
+                    assert!(
+                        find_contains(&tree, "gal-dp-kinds:content:date"),
+                        "default date tab content placeholder"
+                    );
+                    assert!(
+                        !find_contains(&tree, "gal-dt__dp_view"),
+                        "inactive DateTime picker must not be an eager declarative sibling"
+                    );
+                    assert!(
+                        !find_contains(&tree, "gal-time__tp_view"),
+                        "inactive TimePicker must not be an eager declarative sibling"
+                    );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
     }
 
     #[test]

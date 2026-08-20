@@ -20,17 +20,57 @@ use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, focus_id_for_text_edit, input_scroll_x_signal_key,
     pull_controlled_into_store,
 };
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static INPUT_SCROLL_PREPARE_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Test hook: how many `text::prepare` calls the single-line caret-scroll path made.
+#[cfg(test)]
+pub(crate) fn take_input_scroll_prepare_calls() -> usize {
+    INPUT_SCROLL_PREPARE_CALLS.with(|c| c.replace(0))
+}
+
 /// 每帧将 Input/Textarea 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
+/// 测试 / 无视口场景：不裁剪（等价于超大 viewport）。
+#[cfg(test)]
 pub(crate) fn sync_text_edit_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
+    sync_text_edit_paint_subtree_in_viewport(el, layout_tree, impact, 10_000.0, 10_000.0, [0.0, 0.0]);
+}
+
+/// 与 `sync_reactive_elements_subtree` 相同：完全离屏子树跳过（forms 页多 Input 滚动热路径）。
+pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+    viewport_w: f32,
+    viewport_h: f32,
+    scroll_acc: [f32; 2],
+) {
+    if crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h) {
+        return;
+    }
     if let Some(desc) = el.input_paint_sync.clone() {
         sync_one_text_edit_paint(el, &desc, layout_tree, impact);
     }
+    let child_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
     for child in &mut el.children {
-        sync_text_edit_paint_subtree(child, layout_tree, impact);
+        sync_text_edit_paint_subtree_in_viewport(
+            child,
+            layout_tree,
+            impact,
+            viewport_w,
+            viewport_h,
+            child_acc,
+        );
     }
 }
 
@@ -343,18 +383,28 @@ fn sync_one_text_edit_paint(
 
         let want_scroll_x = if !desc.multiline && text_el.text_style.overflow.allows_caret_scroll()
         {
-            let viewport_w = text_el.layout_bounds[2];
-            let lh = crate::utils::text_field::text_edit_line_box_px(
-                desc.text_size_px,
-                desc.line_height_px,
-                desc.leading_scale,
-            );
-            let prepared =
-                crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, lh);
-            let content_w = crate::text::intrinsic_width(&prepared);
             let sx_sig = use_signal(&input_scroll_x_signal_key(&desc.base_id), || 0.0_f32);
             let current = sx_sig.peek();
-            let next = if is_focused && !show_placeholder {
+            // Unfocused / empty placeholder: caret scroll is idle. Skip `text::prepare`
+            // (gallery forms has ~10 on-screen Inputs — shaping every chrome frame caused
+            // hitch while Textarea multiline never entered this path).
+            if !is_focused || show_placeholder {
+                if current.abs() > 0.05 {
+                    sx_sig.set(0.0);
+                }
+                0.0
+            } else {
+                #[cfg(test)]
+                INPUT_SCROLL_PREPARE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+                let viewport_w = text_el.layout_bounds[2];
+                let lh = crate::utils::text_field::text_edit_line_box_px(
+                    desc.text_size_px,
+                    desc.line_height_px,
+                    desc.leading_scale,
+                );
+                let prepared =
+                    crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, lh);
+                let content_w = crate::text::intrinsic_width(&prepared);
                 let raw_anchor = caret_sig.peek().unwrap_or(caret_in_real);
                 let mut anchor_byte = if mask {
                     map_byte_index_to_masked(&real_display, raw_anchor, &display_text)
@@ -362,6 +412,8 @@ fn sync_one_text_edit_paint(
                     raw_anchor.min(display_text.len())
                 };
                 anchor_byte = display_text.floor_char_boundary(anchor_byte.min(display_text.len()));
+                #[cfg(test)]
+                INPUT_SCROLL_PREPARE_CALLS.with(|c| c.set(c.get().saturating_add(1)));
                 let prefix = crate::text::prepare(
                     &display_text[..anchor_byte.min(display_text.len())],
                     desc.text_size_px,
@@ -369,16 +421,13 @@ fn sync_one_text_edit_paint(
                     lh,
                 );
                 let anchor_x = crate::text::intrinsic_width(&prefix);
-                ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current)
-            } else if viewport_w < 4.0 {
-                current.max(0.0)
-            } else {
-                current.clamp(0.0, (content_w + 2.0 - viewport_w).max(0.0))
-            };
-            if (next - current).abs() > 0.05 {
-                sx_sig.set(next);
+                let next =
+                    ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current);
+                if (next - current).abs() > 0.05 {
+                    sx_sig.set(next);
+                }
+                next
             }
-            next
         } else {
             0.0
         };

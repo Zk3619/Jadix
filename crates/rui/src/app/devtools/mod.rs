@@ -22,11 +22,13 @@ pub(crate) use style_edit::{
 };
 
 pub(crate) use overlay::{
-    begin_highlight_collect, clear_highlight_collect_root, refresh_highlight, refresh_highlight_slot,
-    reset_tree_row_hover_cache, scroll_elements_tree_row_into_center, set_highlight_collect_root,
-    stamped_highlight_abs_rect, sync_box_model_visuals, sync_tree_row_hovers, HIGHLIGHT_SLOT_ID,
+    begin_highlight_collect, clear_highlight_collect_root, finalize_highlight_after_collect,
+    highlight_paint_gen, note_element_paint_visual, note_element_paint_visual_from_abs,
+    refresh_highlight, refresh_highlight_slot, reset_tree_row_hover_cache,
+    scroll_elements_tree_row_into_center, set_highlight_collect_root, stamped_highlight_abs_rect,
+    sync_box_model_visuals, sync_tree_row_hovers, HIGHLIGHT_SLOT_ID,
 };
-pub(crate) use panel::{sync_inspector_editor_stores, sync_overlay, wrap_app};
+pub(crate) use panel::{sync_inspector_applied_cssom, sync_overlay, wrap_app};
 
 pub(crate) fn try_toggle_from_key(
     event: &winit::event::KeyEvent,
@@ -68,7 +70,13 @@ pub(crate) fn try_pick_click(root: &crate::core::tree::Element, x: f32, y: f32) 
     };
     DevToolsState::set_highlight_layer(HighlightLayer::All);
     DevToolsState::set_tab(DevToolsTab::Elements);
-    DevToolsState::set_selected_path(path.clone());
+    let (identity, size_hint) = find_element_by_path(root, &path)
+        .map(|el| {
+            let b = el.layout_bounds;
+            (snapshot::element_hover_identity(el), (b[2].max(0.0), b[3].max(0.0)))
+        })
+        .unwrap_or_default();
+    DevToolsState::set_selected(path.clone(), identity, Vec::new(), size_hint);
     let _ = scroll_elements_tree_row_into_center(root, &path_to_key(&path));
     DevToolsState::set_pick(false);
     true
@@ -102,7 +110,16 @@ pub(crate) fn try_pick_hover(root: &crate::core::tree::Element, x: f32, y: f32) 
             if DevToolsState::active_tab() != DevToolsTab::Elements {
                 DevToolsState::set_tab(DevToolsTab::Elements);
             }
-            DevToolsState::set_hover_highlight_path(path);
+            let (identity, size_hint) = find_element_by_path(root, &path)
+                .map(|el| {
+                    let b = el.layout_bounds;
+                    (
+                        snapshot::element_hover_identity(el),
+                        (b[2].max(0.0), b[3].max(0.0)),
+                    )
+                })
+                .unwrap_or_default();
+            DevToolsState::set_hover_highlight(path, identity, Vec::new(), size_hint);
         }
         None => DevToolsState::clear_hover_highlight(),
     }
@@ -221,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_commit_clears_page_hover_overlay() {
+    fn pick_commit_keeps_overlay_on_selected_node() {
         use super::overlay::{refresh_highlight, stamped_highlight_abs_rect, HIGHLIGHT_SLOT_ID};
         use super::snapshot::find_element_by_template_mut;
 
@@ -255,10 +272,16 @@ mod tests {
 
         assert!(try_pick_click(&root, 15.0, 15.0));
         assert!(!DevToolsState::is_pick());
-        assert!(!DevToolsState::has_hover_highlight());
-        assert!(sync_highlight_after_pick_commit(&mut root));
+        // Commit pins the overlay to the selection (Chrome-style), not a blank page.
+        assert!(!DevToolsState::selected_path_key().is_empty());
+        assert_eq!(
+            DevToolsState::overlay_path_key(),
+            DevToolsState::selected_path_key()
+        );
+        let _ = sync_highlight_after_pick_commit(&mut root);
+        let _ = refresh_highlight(&mut root);
         let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
-        assert!(stamped_highlight_abs_rect(&slot.children[4]).is_none());
+        assert!(stamped_highlight_abs_rect(&slot.children[4]).is_some());
     }
 
     #[test]
@@ -335,5 +358,77 @@ mod tests {
         // Over inspector chrome: must not clear pick hover (tree-row hover owns that region).
         assert!(!try_pick_hover(&root, 250.0, 50.0));
         assert_eq!(DevToolsState::hover_path_key(), kept);
+    }
+
+    #[test]
+    fn pick_uses_paint_visual_and_ignores_host_overflow_hidden_scroll() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+        use super::overlay::highlight_paint_gen;
+        use super::panel::wrap_app;
+
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+        DevToolsState::set_pick(true);
+
+        create_root(|| {
+            let target = Element::new()
+                .w(100.0)
+                .h(40.0)
+                .bg([0.1, 0.5, 0.9, 1.0])
+                .focus_id("pick-btn")
+                .template_id("pick-btn");
+            let spacer = Element::new().w(100.0).h(250.0).flex_shrink(0.0);
+            let col = Element::new()
+                .flex_col()
+                .w(200.0)
+                .flex_shrink(0.0)
+                .children(vec![spacer, target]);
+
+            let mut viewport = Element::new()
+                .w("100%")
+                .h("100%")
+                .overflow_y("scroll")
+                .focus_id("scroll:pick-main")
+                .child(col);
+            viewport.scroll_offset = [0.0, 200.0];
+
+            let app = Element::new().w("100%").h("100%").child(viewport);
+            let mut root = wrap_app(app);
+            if let Some(host) = root.children.get_mut(0) {
+                host.scroll_offset = [0.0, 90.0];
+            }
+
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 900.0, 600.0, [-1.0, -1.0]);
+
+            let path = vec![0, 0, 0, 0, 1];
+            let el = find_element_by_path(&root, &path).expect("target");
+            assert_eq!(el.focus_id.as_deref(), Some("pick-btn"));
+            let pb = el.paint_visual_bounds;
+            assert_eq!(
+                el.paint_visual_gen,
+                highlight_paint_gen(),
+                "collect must stamp paint visual"
+            );
+            let hx = pb[0] + pb[2] * 0.5;
+            let hy = pb[1] + pb[3] * 0.5;
+            assert!(
+                try_pick_hover(&root, hx, hy),
+                "pick must hit painted button at ({hx},{hy})"
+            );
+            let hover = DevToolsState::highlight_path();
+            let hit = find_element_by_path(&root, &hover).expect("hover");
+            assert_eq!(hit.focus_id.as_deref(), Some("pick-btn"));
+
+            let abs_y = el.layout_bounds[1] + el.layout_bounds[3] * 0.5;
+            assert!(
+                (abs_y - hy).abs() > 50.0,
+                "sanity: paint y must differ from abs y under scroll"
+            );
+        });
+
+        DevToolsState::set_pick(false);
+        DevToolsState::clear_hover_highlight();
     }
 }

@@ -1015,7 +1015,7 @@ fn scroll_sibling_band_action(
     if flex_wrap != FlexWrap::NoWrap {
         return ScrollSiblingBandAction::Visit;
     }
-    const PAD: f32 = 32.0;
+    const PAD: f32 = 64.0;
     let sx = child_abs[0] - scroll_acc[0];
     let sy = child_abs[1] - scroll_acc[1];
     let sw = child_size[0];
@@ -1060,6 +1060,26 @@ fn skipped_sibling_extent(child: &Element, child_abs: [f32; 2], child_size: [f32
     } else {
         scroll_sibling_extent(child_abs, child_size)
     }
+}
+
+#[cfg(feature = "devtools")]
+fn next_scroll_acc_for_children(element: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    let mut next = scroll_acc;
+    let is_scroll_viewport = element
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
+    if is_scroll_viewport
+        || matches!(element.style.overflow.x, taffy::style::Overflow::Scroll)
+    {
+        next[0] += element.scroll_offset[0];
+    }
+    if is_scroll_viewport
+        || matches!(element.style.overflow.y, taffy::style::Overflow::Scroll)
+    {
+        next[1] += element.scroll_offset[1];
+    }
+    next
 }
 
 /// 一次布局+收集?CPU 细分（毫秒）；见 `AppState` debug `render profile`.
@@ -2125,7 +2145,10 @@ impl LayoutTree {
             &mut paint_rec,
         );
         #[cfg(feature = "devtools")]
-        crate::app::devtools::clear_highlight_collect_root();
+        {
+            crate::app::devtools::finalize_highlight_after_collect(root);
+            crate::app::devtools::clear_highlight_collect_root();
+        }
         let collect_ms = t_collect_begin.elapsed().as_secs_f32() * 1000.0;
         if !overlay_split.marked {
             overlay_split.instance_start = scratch.instances.len();
@@ -2297,6 +2320,58 @@ impl LayoutTree {
         node_id
     }
 
+    /// Refresh abs + paint-visual for a collect-skipped subtree from live Taffy geometry.
+    ///
+    /// Band-cull / clip-cull used to stamp descendants from retained `layout_bounds`. After a
+    /// narrow wrap reflow those coords are the *previous* flex line; combining them with the
+    /// current `scroll_acc` mixed old and new layout in the Inspector highlight.
+    #[cfg(feature = "devtools")]
+    fn sync_devtools_subtree_from_taffy(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        abs: [f32; 2],
+        size: [f32; 2],
+        scroll_acc: [f32; 2],
+    ) {
+        crate::app::devtools::note_element_paint_visual_from_abs(element, abs, size, scroll_acc);
+        self.sync_devtools_descendants_from_taffy(element, node, abs, size, scroll_acc);
+    }
+
+    #[cfg(feature = "devtools")]
+    fn sync_devtools_descendants_from_taffy(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        abs: [f32; 2],
+        size: [f32; 2],
+        scroll_acc: [f32; 2],
+    ) {
+        let Ok(child_nodes) = self.taffy.children(node) else {
+            return;
+        };
+        let child_scroll = next_scroll_acc_for_children(element, scroll_acc);
+        let pass = [
+            abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
+            abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
+        ];
+        let n = element.children.len().min(child_nodes.len());
+        for i in 0..n {
+            let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+                continue;
+            };
+            let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
+            let child_size = [cl.size.width, cl.size.height];
+            self.sync_devtools_subtree_from_taffy(
+                &mut element.children[i],
+                child_nodes[i],
+                child_abs,
+                child_size,
+                child_scroll,
+            );
+        }
+    }
+
     /// `ancestor_scroll_viewport_rest`: nearest ancestor `scroll:{id}` viewport id for this subtree.
     /// Used so nested ScrollAreas do not inflate parent content extents (matches
     /// `scroll_support::collect_descendant_extent`); fixes thumb math for middle layers in 3+ nesting.
@@ -2434,7 +2509,10 @@ impl LayoutTree {
         }
 
         let opacity = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
-        let scroll_for_render = if element.style.position_fixed {
+        // Stamped Inspector highlight rects are already in paint/visual space — never
+        // subtract ancestor scroll again (that shifts the overlay upward).
+        let scroll_for_render = if element.style.position_fixed || devtools_highlight_rect.is_some()
+        {
             [0.0_f32, 0.0_f32]
         } else {
             scroll_acc
@@ -2498,6 +2576,8 @@ impl LayoutTree {
                 (lay_w, lay_h, render_x, render_y)
             };
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
+        #[cfg(feature = "devtools")]
+        crate::app::devtools::note_element_paint_visual(element, render_rect);
         let resolved_translate = [
             element.style.translate[0] + lay_w * element.style.translate_pct[0],
             element.style.translate[1] + lay_h * element.style.translate_pct[1],
@@ -2541,7 +2621,12 @@ impl LayoutTree {
                     }
                 }
                 let own = [abs_x + lay_w, abs_y + lay_h];
-                let extent = if element.collect_extent_valid {
+                // scroll_only: keep last full-collect overflow extent so band-culled cards
+                // with overflow:visible children do not shrink content_h (thumb jitter).
+                // Full collect after layout/resize: never max with a stale taller extent —
+                // wrap reflow shortens cards; keeping the old max left blank scroll range
+                // at the bottom (gallery text page: scroll then widen window).
+                let extent = if _scroll_only && element.collect_extent_valid {
                     [
                         element.collect_extent[0].max(own[0]),
                         element.collect_extent[1].max(own[1]),
@@ -2551,6 +2636,16 @@ impl LayoutTree {
                 };
                 element.collect_extent = extent;
                 element.collect_extent_valid = true;
+                // Parent already has fresh layout_bounds + paint_visual; refresh descendants
+                // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
+                #[cfg(feature = "devtools")]
+                self.sync_devtools_descendants_from_taffy(
+                    element,
+                    node,
+                    [abs_x, abs_y],
+                    [lay_w, lay_h],
+                    scroll_for_render,
+                );
                 return extent;
             }
         }
@@ -3085,14 +3180,19 @@ impl LayoutTree {
         // Recurse children
         let mut next_scroll_acc = scroll_acc;
         // `scroll:` viewports always contribute offset (even if overflow was cleared to Visible).
+        // `overflow: hidden`/`clip` clip but do not scroll — match hit-test `next_hit_scroll_acc`.
         let is_scroll_viewport = element
             .focus_id
             .as_deref()
             .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
-        if is_scroll_viewport || element.style.overflow.x != taffy::style::Overflow::Visible {
+        let scroll_x = is_scroll_viewport
+            || matches!(element.style.overflow.x, taffy::style::Overflow::Scroll);
+        let scroll_y = is_scroll_viewport
+            || matches!(element.style.overflow.y, taffy::style::Overflow::Scroll);
+        if scroll_x {
             next_scroll_acc[0] += element.scroll_offset[0];
         }
-        if is_scroll_viewport || element.style.overflow.y != taffy::style::Overflow::Visible {
+        if scroll_y {
             next_scroll_acc[1] += element.scroll_offset[1];
         }
 
@@ -3170,8 +3270,9 @@ impl LayoutTree {
                 ];
                 if _scroll_only {
                     if let Some(clip_rect) = clip {
-                        let c = &element.children[i];
-                        if !c.style.position_fixed && c.style.position != Position::Absolute {
+                        if !element.children[i].style.position_fixed
+                            && element.children[i].style.position != Position::Absolute
+                        {
                             if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
                                 let child_abs = [
                                     child_pass_offset[0] + cl.location.x,
@@ -3187,8 +3288,18 @@ impl LayoutTree {
                                     element.style.flex_wrap,
                                 ) {
                                     ScrollSiblingBandAction::SkipBefore => {
+                                        #[cfg(feature = "devtools")]
+                                        {
+                                            self.sync_devtools_subtree_from_taffy(
+                                                &mut element.children[i],
+                                                child_nodes[i],
+                                                child_abs,
+                                                child_size,
+                                                next_scroll_acc,
+                                            );
+                                        }
                                         let extent = skipped_sibling_extent(
-                                            c,
+                                            &element.children[i],
                                             child_abs,
                                             child_size,
                                         );
@@ -3205,6 +3316,16 @@ impl LayoutTree {
                                                     child_pass_offset[1] + jl.location.y,
                                                 ];
                                                 let j_size = [jl.size.width, jl.size.height];
+                                                #[cfg(feature = "devtools")]
+                                                {
+                                                    self.sync_devtools_subtree_from_taffy(
+                                                        &mut element.children[j],
+                                                        child_nodes[j],
+                                                        j_abs,
+                                                        j_size,
+                                                        next_scroll_acc,
+                                                    );
+                                                }
                                                 let extent = skipped_sibling_extent(
                                                     &element.children[j],
                                                     j_abs,

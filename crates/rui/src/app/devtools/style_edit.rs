@@ -67,6 +67,18 @@ pub(crate) fn commit_inspector_cssom(path: &[usize], css: String) {
     });
 }
 
+/// Last CSSOM text applied via Inspector for `path`, if any this session.
+pub(crate) fn committed_inspector_cssom(path: &[usize]) -> Option<String> {
+    let key = path_key(path);
+    COMMITTED_INSPECTOR_EDITS.with(|m| {
+        m.borrow().get(&key).and_then(|ops| {
+            ops.iter().rev().find_map(|op| match op {
+                CommittedInspectorOp::Cssom(css) => Some(css.clone()),
+            })
+        })
+    })
+}
+
 /// Re-apply session Inspector edits after chrome sync or `rebuild_ui`.
 pub(crate) fn reapply_inspector_overrides(
     root: &mut Element,

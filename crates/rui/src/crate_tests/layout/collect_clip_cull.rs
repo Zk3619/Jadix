@@ -168,3 +168,74 @@ fn overflow_clip_cull_keeps_full_column_extent() {
         "cull must still assign Taffy bounds for off-screen rows (bottom={bottom})"
     );
 }
+
+#[test]
+fn full_collect_after_reflow_shrink_drops_stale_clip_cull_extent() {
+    // Gallery text page: scroll to bottom (clip-cull stamps tall collect_extent on upper
+    // cards), then widen so wrapped labels reflow shorter. Full collect must not keep
+    // max(stale_extent, own) or max_scroll leaves blank space below the last card.
+    let mut col = Element::new().flex_col().flex_shrink(0.0).w("100%");
+    for i in 0..8 {
+        // Wrap-sensitive block: narrow → tall, wide → short.
+        col = col.child(
+            Element::new()
+                .w("100%")
+                .flex_shrink(0.0)
+                .bg([0.9, 0.9, 0.9, 1.0])
+                .child(
+                    Element::new()
+                        .w("100%")
+                        .text(format!(
+                            "row {i:02} hello world from rui text measure alignment soft wrap block"
+                        ))
+                        .text_size(14.0),
+                ),
+        );
+    }
+    let mut root = Element::new()
+        .w(120.0)
+        .h(160.0)
+        .overflow_y("hidden")
+        .focus_id("scroll:diag-reflow-blank")
+        .child(col);
+
+    let mut tree = LayoutTree::new();
+    let narrow = tree.build_and_layout(&mut root, 120.0, 160.0, [-1.0, -1.0]);
+    let (_id, _vp, max_n, content_n) = narrow
+        .scroll_metrics
+        .iter()
+        .find(|(id, ..)| id == "diag-reflow-blank")
+        .expect("narrow scroll metrics");
+    assert!(
+        max_n[1] > 1.0,
+        "narrow layout must scroll (max_y={})",
+        max_n[1]
+    );
+
+    // Simulate scrolled deep: stamp large collect_extent on upper siblings via scroll_only.
+    root.scroll_offset = [0.0, max_n[1]];
+    let _ = tree.build_and_layout_fast(&mut root, 120.0, 160.0, [-1.0, -1.0], true, false);
+
+    // Widen: same tree, full collect (resize path). Content must shrink; max must follow.
+    root.style.size.width = taffy::style::Dimension::length(360.0);
+    let wide = tree.build_and_layout(&mut root, 360.0, 160.0, [-1.0, -1.0]);
+    let (_id, _vp, max_w, content_w) = wide
+        .scroll_metrics
+        .iter()
+        .find(|(id, ..)| id == "diag-reflow-blank")
+        .expect("wide scroll metrics");
+
+    assert!(
+        content_w[1] + 1.0 < content_n[1],
+        "wider reflow must shorten content (narrow_h={} wide_h={})",
+        content_n[1],
+        content_w[1]
+    );
+    assert!(
+        max_w[1] + 1.0 < max_n[1],
+        "max_scroll must shrink with content (narrow_max={} wide_max={}); \
+         stale clip-cull extent left blank range after resize",
+        max_n[1],
+        max_w[1]
+    );
+}

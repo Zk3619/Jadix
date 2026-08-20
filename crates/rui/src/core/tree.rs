@@ -271,6 +271,12 @@ pub struct Element {
     pub(crate) collect_extent_valid: bool,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
+    /// Last collect `render_rect` (paint space). DevTools highlight prefers this over abs−scroll.
+    #[cfg(feature = "devtools")]
+    pub(crate) paint_visual_bounds: [f32; 4],
+    /// Generation of [`Self::paint_visual_bounds`] (matches current highlight collect gen).
+    #[cfg(feature = "devtools")]
+    pub(crate) paint_visual_gen: u32,
     /// Per-element CSS transition tween state (persists across frames).
     pub transition_snapshot: crate::style::TransitionSnapshot,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
@@ -571,6 +577,10 @@ impl Element {
             collect_extent: [0.0, 0.0],
             collect_extent_valid: false,
             sticky_visual_offset: [0.0, 0.0],
+            #[cfg(feature = "devtools")]
+            paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
+            #[cfg(feature = "devtools")]
+            paint_visual_gen: 0,
             transition_snapshot: Default::default(),
             on_click: None,
             on_hover: None,

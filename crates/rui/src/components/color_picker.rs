@@ -1904,8 +1904,9 @@ impl From<ColorPickerBuilder> for Element {
         let fmt_str = use_signal(format!("{id}__cp_fmt_str").as_str(), move || fmt0.clone());
         let open = use_signal(format!("{id}__cp_open").as_str(), || false);
         follow_hue_into_rgba(rgba, hue, sat, val, out, fmt_sig);
-        let _ = ensure_sv_texture(&id, hue0);
-        ensure_hue_texture();
+        // Defer SV/hue CPU ramps until the panel mounts (`sv_area` /
+        // `sync_sv_visuals`). Eager generation here made every closed Gallery
+        // ColorPicker pay 192×144 RGBA on forms scroll (10+ pickers → hitch).
         let view_id = format!("{id}__cp_view");
         let props = ColorPickerRenderProps {
             id,
@@ -1923,6 +1924,30 @@ impl From<ColorPickerBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closed_color_picker_defers_sv_texture_until_panel() {
+        use crate::core::reactivity::create_root;
+        let before = TEX_KEYS.with(|s| {
+            s.borrow()
+                .iter()
+                .filter(|k| k.starts_with("rui_cp_sv:"))
+                .count()
+        });
+        let (_h, _el) = create_root(|| {
+            let _: Element = color_picker("defer-sv-closed").into();
+        });
+        let after = TEX_KEYS.with(|s| {
+            s.borrow()
+                .iter()
+                .filter(|k| k.starts_with("rui_cp_sv:"))
+                .count()
+        });
+        assert_eq!(
+            before, after,
+            "closed ColorPicker must not generate SV texture at mount"
+        );
+    }
 
     #[test]
     fn hex_roundtrip() {

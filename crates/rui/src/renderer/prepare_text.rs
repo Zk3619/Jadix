@@ -446,6 +446,8 @@ fn node_shape_identity_hash(
     h.finish()
 }
 
+/// Test helper: full Exact key = identity ⊕ quantized bounds.
+#[cfg(test)]
 fn node_shape_hash(
     text: &str,
     scaled_size: f32,
@@ -463,8 +465,7 @@ fn node_shape_hash(
     color: [u8; 4],
     force_fast_mode: bool,
 ) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    node_shape_identity_hash(
+    let identity = node_shape_identity_hash(
         text,
         scaled_size,
         line_height,
@@ -475,8 +476,19 @@ fn node_shape_hash(
         letter_spacing,
         direction,
         color,
-    )
-    .hash(&mut h);
+    );
+    node_shape_key_from_identity(identity, scaled_w, scaled_h, force_fast_mode)
+}
+
+/// Bounds half of the Exact key — avoids re-hashing full text when identity is known.
+fn node_shape_key_from_identity(
+    identity: u64,
+    scaled_w: f32,
+    scaled_h: f32,
+    force_fast_mode: bool,
+) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    identity.hash(&mut h);
     // Bounds: 1px at rest; 2px during resize/scroll fast path (fewer Exact misses →
     // more cheap Bounds `set_size` paths). Never reuse a buffer without set_size.
     quantize_shape_dim(scaled_w, force_fast_mode).hash(&mut h);
@@ -492,6 +504,7 @@ fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text:
         shape_hash: 0,
         buffer,
         measured_text_w: 0.0,
+        has_emoji: false,
     }
 }
 
@@ -688,6 +701,48 @@ fn nowrap_layout_width_from_text(
     )
 }
 
+/// Cap for band-cull identity pool (excess parked entries are dropped).
+const SHAPED_IDENTITY_POOL_CAP: usize = 128;
+
+#[inline]
+fn park_shaped_entry(
+    pool: &mut std::collections::HashMap<u64, super::text::ShapedTextEntry>,
+    entry: super::text::ShapedTextEntry,
+) {
+    if entry.shape_hash == 0 {
+        return;
+    }
+    while pool.len() >= SHAPED_IDENTITY_POOL_CAP && !pool.contains_key(&entry.shape_hash) {
+        if let Some(&k) = pool.keys().next() {
+            pool.remove(&k);
+        } else {
+            break;
+        }
+    }
+    pool.insert(entry.shape_hash, entry);
+}
+
+/// Scroll fast-path: Exact-hit idle Input may skip `shape_until_scroll`.
+#[inline]
+pub(crate) fn scroll_fast_skips_input_reshape(
+    force_fast_mode: bool,
+    is_input_text: bool,
+    has_caret: bool,
+) -> bool {
+    force_fast_mode && is_input_text && !has_caret
+}
+
+/// Scroll fast-path: idle Input may avoid live `text::prepare` for nowrap width.
+#[inline]
+pub(crate) fn scroll_fast_skips_input_intrinsic_prepare(
+    force_fast_mode: bool,
+    is_input_text: bool,
+    has_caret: bool,
+    scroll_x: f32,
+) -> bool {
+    force_fast_mode && is_input_text && !has_caret && scroll_x.abs() < 0.5
+}
+
 fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4]> {
     let Some(c) = clip else {
         return Some(rect);
@@ -767,14 +822,14 @@ fn textarea_diag_enabled() -> bool {
     })
 }
 
-fn apply_letter_spacing_approx(text: &str, spacing_px: f32, font_size: f32) -> String {
+fn apply_letter_spacing_approx<'a>(text: &'a str, spacing_px: f32, font_size: f32) -> Cow<'a, str> {
     if spacing_px.abs() < 0.5 || text.is_empty() {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
     let hair_w = (font_size * 0.05).max(0.5);
     let n = (spacing_px / hair_w).round().max(0.0) as usize;
     if n == 0 {
-        return text.to_string();
+        return Cow::Borrowed(text);
     }
     let hair = "\u{200A}".repeat(n);
     let mut out = String::new();
@@ -786,7 +841,21 @@ fn apply_letter_spacing_approx(text: &str, spacing_px: f32, font_size: f32) -> S
         first = false;
         out.push_str(g);
     }
-    out
+    Cow::Owned(out)
+}
+
+/// Content-only key for Twemoji node cache (stable across style-only shape_hash changes).
+fn emoji_sequence_content_hash(text: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
+/// Match `EmojiCacheKey` docs: coarse wrap buckets so 1px soft-width jitter does not miss.
+fn emoji_wrap_width_q(buffer_soft_w: f32) -> u16 {
+    (buffer_soft_w / 8.0)
+        .floor()
+        .clamp(0.0, u16::MAX as f32) as u16
 }
 
 fn direction_mark(dir: TextDirection) -> &'static str {
@@ -1691,7 +1760,12 @@ pub fn prepare_text_frame(
     let viewport_clip = [0.0, 0.0, config.width as f32, config.height as f32];
 
     if text_renderer.shaped_cache.len() > text_nodes.len() {
-        text_renderer.shaped_cache.truncate(text_nodes.len());
+        for entry in text_renderer
+            .shaped_cache
+            .drain(text_nodes.len()..)
+        {
+            park_shaped_entry(&mut text_renderer.shaped_identity_pool, entry);
+        }
     }
 
     let initial_preshape = text_renderer.shaped_cache.len() < text_nodes.len();
@@ -1806,35 +1880,10 @@ pub fn prepare_text_frame(
             continue;
         }
 
-        let has_emoji = emoji_detect::text_contains_emoji(info.text.as_str())
-            || info
-                .shape_suffix
-                .as_deref()
-                .is_some_and(|s| !s.is_empty() && emoji_detect::text_contains_emoji(s));
-
-        // Lazy-open CJK / emoji / script faces before family resolve + shaping (EUI-style).
-        let shape_text_for_coverage: Cow<'_, str> = match info.shape_suffix.as_deref() {
-            Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", info.text, s)),
-            _ => Cow::Borrowed(info.text.as_str()),
-        };
-        font_loader::ensure_coverage_for_text(
-            unsafe { &mut *text_renderer.font_system },
-            shape_text_for_coverage.as_ref(),
-        );
-        // Slot char (CJK `一`) must be covered too — emoji-only strings otherwise leave a
-        // narrow .notdef advance and crush adjacent Twemoji quads.
-        if has_emoji && emoji_custom_glyph_enabled() {
-            font_loader::ensure_coverage_for_text(
-                unsafe { &mut *text_renderer.font_system },
-                emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
-            );
-        }
-
-        let family = if has_emoji {
-            // Twemoji custom glyphs paint color emoji; keep layout on UI sans.
-            // Never open system color-emoji on this FontSystem (see emoji_fallback_engines).
-            best_font_family(unsafe { &*text_renderer.font_system })
-        } else if let Some(f) = &st.font_family {
+        // Twemoji custom glyphs keep layout on UI sans (`best_font_family`) — same as the
+        // default family path — so emoji detection need not run before the Exact key.
+        // Defer `text_contains_emoji` until after cache lookup (scroll: Exact hits dominate).
+        let family = if let Some(f) = &st.font_family {
             crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
         } else {
             best_font_family(unsafe { &*text_renderer.font_system })
@@ -1913,15 +1962,36 @@ pub fn prepare_text_frame(
         let nowrap = st.white_space == crate::style::WhiteSpace::Nowrap;
         let logical_lh = line_height / ui_scale.max(0.001);
         let layout_w = if nowrap {
-            nowrap_layout_width_from_text(
-                info.text.as_str(),
-                st.size,
-                font_weight,
-                logical_lh,
-                st.overflow,
-                st.input_caret.is_none(),
-                info.width,
-            )
+            if scroll_fast_skips_input_intrinsic_prepare(
+                force_fast_mode,
+                is_input_text,
+                st.input_caret.is_some(),
+                st.scroll_x,
+            ) {
+                // Prefer layout-attached prepared (no new prepare). Else leaf width:
+                // short placeholders == max(intrinsic, box); long idle fields clip at
+                // the leaf while scrolling (overflow:hidden, scroll_x≈0).
+                if let Some(p) = info.prepared.as_ref() {
+                    nowrap_buffer_width(
+                        st.overflow,
+                        true,
+                        crate::text::intrinsic_width(p),
+                        info.width,
+                    )
+                } else {
+                    info.width.max(1.0)
+                }
+            } else {
+                nowrap_layout_width_from_text(
+                    info.text.as_str(),
+                    st.size,
+                    font_weight,
+                    logical_lh,
+                    st.overflow,
+                    st.input_caret.is_none(),
+                    info.width,
+                )
+            }
         } else {
             info.width.max(1.0)
         };
@@ -2001,17 +2071,21 @@ pub fn prepare_text_frame(
             } else {
                 Cow::Borrowed(info.text.as_str())
             };
-        let shape_text: Cow<'_, str> = match info.shape_suffix.as_deref() {
+        let with_suffix: Cow<'_, str> = match info.shape_suffix.as_deref() {
             Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", display_text, s)),
             _ => display_text,
         };
-        let spaced =
-            apply_letter_spacing_approx(shape_text.as_ref(), st.letter_spacing, scaled_size);
+        let with_spacing =
+            apply_letter_spacing_approx(with_suffix.as_ref(), st.letter_spacing, scaled_size);
         let mark = direction_mark(st.direction);
+        // Keep `with_suffix` when spacing is a no-op borrow (zero alloc on scroll).
         let shape_text: Cow<'_, str> = if mark.is_empty() {
-            Cow::Owned(spaced)
+            match with_spacing {
+                Cow::Borrowed(_) => with_suffix,
+                Cow::Owned(s) => Cow::Owned(s),
+            }
         } else {
-            Cow::Owned(format!("{mark}{spaced}"))
+            Cow::Owned(format!("{mark}{with_spacing}"))
         };
         let shape_hash = node_shape_identity_hash(
             shape_text.as_ref(),
@@ -2025,21 +2099,9 @@ pub fn prepare_text_frame(
             st.direction,
             st.color,
         );
-        let key_hash = node_shape_hash(
-            shape_text.as_ref(),
-            scaled_size,
-            line_height,
-            scaled_w,
-            scaled_h,
-            font_weight,
-            family,
-            align,
-            shaping,
-            st.letter_spacing,
-            st.direction,
-            st.color,
-            force_fast_mode,
-        );
+        // Derive Exact key from identity — do not re-hash the full string (scroll frames
+        // visit every visible label; browsers keep glyphs and only translate).
+        let key_hash = node_shape_key_from_identity(shape_hash, scaled_w, scaled_h, false);
 
         if preshape_only {
             let will_miss = text_renderer.shaped_cache.len() <= i
@@ -2110,6 +2172,83 @@ pub fn prepare_text_frame(
             Miss,
         }
 
+        // shaped_cache stays index-aligned. Band-cull reordering reclaims buffers from
+        // `shaped_identity_pool` by shape_hash — never swap two live slots in the vec
+        // (that painted button captions inside Inputs). Input stays out of bounds_only.
+        // Try reclaim before Exact/Bounds so gallery forms survive sibling band cull.
+        {
+            let entry = &text_renderer.shaped_cache[i];
+            if entry.shape_hash != shape_hash
+                && shape_hash != 0
+                && text_renderer
+                    .shaped_identity_pool
+                    .contains_key(&shape_hash)
+            {
+                let reclaimed = text_renderer
+                    .shaped_identity_pool
+                    .remove(&shape_hash)
+                    .expect("contains_key");
+                let displaced = std::mem::replace(&mut text_renderer.shaped_cache[i], reclaimed);
+                park_shaped_entry(&mut text_renderer.shaped_identity_pool, displaced);
+            }
+        }
+
+        // Always detect (CJK/Arabic fast-reject is cheap). Caching has_emoji on Exact was
+        // unsafe: a first-frame false negative left buffers without emoji slots while later
+        // Exact frames skipped detect → blank/flickering Twemoji quads (gallery text page).
+        let has_emoji = emoji_detect::text_contains_emoji(info.text.as_str())
+            || info.shape_suffix.as_deref().is_some_and(|s| {
+                !s.is_empty() && emoji_detect::text_contains_emoji(s)
+            });
+        text_renderer.shaped_cache[i].has_emoji = has_emoji;
+
+        // Skip script coverage when this node will paint from an Exact buffer without reshape
+        // (gallery text page scroll: many multilingual labels per frame).
+        let skip_coverage = {
+            let entry = &text_renderer.shaped_cache[i];
+            let exact_peek = entry.key_hash == key_hash && entry.shape_hash == shape_hash;
+            if !exact_peek {
+                false
+            } else if is_input_text {
+                scroll_fast_skips_input_reshape(
+                    force_fast_mode,
+                    true,
+                    st.input_caret.is_some(),
+                )
+            } else if force_fast_mode {
+                nowrap
+                    || !crate::text::needs_logical_prewrap(info.text.as_str())
+                    || bidi_prewrap_applied(
+                        &entry.buffer,
+                        info.text.as_str(),
+                        st.size,
+                        font_weight,
+                        logical_lh,
+                        layout_w,
+                    )
+            } else {
+                let runs = entry.buffer.layout_runs().count().max(1);
+                let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
+                height_ok && entry.measured_text_w > 0.0
+            }
+        };
+        if !skip_coverage {
+            let shape_text_for_coverage: Cow<'_, str> = match info.shape_suffix.as_deref() {
+                Some(s) if !s.is_empty() => Cow::Owned(format!("{}{}", info.text, s)),
+                _ => Cow::Borrowed(info.text.as_str()),
+            };
+            font_loader::ensure_coverage_for_text(
+                unsafe { &mut *text_renderer.font_system },
+                shape_text_for_coverage.as_ref(),
+            );
+            if has_emoji && emoji_custom_glyph_enabled() {
+                font_loader::ensure_coverage_for_text(
+                    unsafe { &mut *text_renderer.font_system },
+                    emoji_layout::EMOJI_LAYOUT_SLOT.encode_utf8(&mut [0; 4]),
+                );
+            }
+        }
+
         let path = {
             let entry = &mut text_renderer.shaped_cache[i];
             let exact_hit = entry.key_hash == key_hash && entry.shape_hash == shape_hash;
@@ -2130,6 +2269,20 @@ pub fn prepare_text_frame(
                 }
                 if ok {
                     if is_input_text {
+                        // Page-scroll fast path: buffer text/metrics unchanged — skip
+                        // `shape_until_scroll` (gallery forms: many idle Inputs per frame).
+                        // Editing / settle frames still reshape for caret + hard-line fidelity.
+                        if scroll_fast_skips_input_reshape(
+                            force_fast_mode,
+                            true,
+                            st.input_caret.is_some(),
+                        ) {
+                            let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
+                            ShapePath::Exact {
+                                measured: entry.measured_text_w,
+                                wrap_w: cur_wrap,
+                            }
+                        } else {
                         let mut wrap_w = resolve_paint_wrap();
                         if nowrap {
                             entry.buffer.set_wrap(glyphon::Wrap::None);
@@ -2167,6 +2320,7 @@ pub fn prepare_text_frame(
                             measured: entry.measured_text_w,
                             wrap_w,
                         }
+                        }
                     } else if !nowrap
                         && crate::text::needs_logical_prewrap(info.text.as_str())
                         && !bidi_prewrap_applied(
@@ -2181,17 +2335,21 @@ pub fn prepare_text_frame(
                         // Stale Exact entry shaped raw BiDi (fast WordOrGlyph) — must re-Miss.
                         ShapePath::Miss
                     } else {
-                        // Exact hit (labels): fast may have shaped at full leaf; settle must
-                        // apply fit wrap so bidi/emoji ink does not clip at the card edge.
+                        // Exact hit (labels): reuse buffer when ink already fits the leaf.
+                        // Avoid `resolve_paint_wrap` / glyphon_fit every settle frame — that
+                        // dominated gallery text-page scroll (CJK/Arabic/emoji labels).
                         let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
-                        if force_fast_mode {
+                        let runs = entry.buffer.layout_runs().count().max(1);
+                        let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
+                        if force_fast_mode
+                            || (height_ok && entry.measured_text_w > 0.0)
+                        {
                             ShapePath::Exact {
                                 measured: entry.measured_text_w,
                                 wrap_w: cur_wrap,
                             }
                         } else {
                             let mut wrap_w = resolve_paint_wrap();
-                            let runs = entry.buffer.layout_runs().count();
                             let need_reshape = (wrap_w - cur_wrap).abs() > 0.5
                                 || (runs as f32 * line_height) > scaled_h + 1.0;
                             if need_reshape {
@@ -2364,6 +2522,18 @@ pub fn prepare_text_frame(
             ShapePath::Miss => {
                 _shape_misses += 1;
                 let mut buffer_soft_w = resolve_paint_wrap();
+                // Park displaced identity before overwrite (band-cull may need it next frame).
+                let should_park = {
+                    let entry = &text_renderer.shaped_cache[i];
+                    entry.shape_hash != 0 && entry.shape_hash != shape_hash
+                };
+                if should_park {
+                    let dummy =
+                        make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system });
+                    let displaced =
+                        std::mem::replace(&mut text_renderer.shaped_cache[i], dummy);
+                    park_shaped_entry(&mut text_renderer.shaped_identity_pool, displaced);
+                }
                 let entry = &mut text_renderer.shaped_cache[i];
                 let mut buffer = glyphon::Buffer::new(
                     unsafe { &mut *text_renderer.font_system },
@@ -2418,8 +2588,12 @@ pub fn prepare_text_frame(
                 if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
                     let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
                     for (si, span) in spans.iter().enumerate() {
-                        let mut body =
-                            apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size);
+                        let mut body = apply_letter_spacing_approx(
+                            &span.text,
+                            st.letter_spacing,
+                            scaled_size,
+                        )
+                        .into_owned();
                         if si == 0 {
                             let m = direction_mark(st.direction);
                             if !m.is_empty() {
@@ -2509,12 +2683,14 @@ pub fn prepare_text_frame(
         };
         let emoji_cache_key = if emoji_custom_glyph_enabled() && has_emoji {
             Some(super::text::EmojiCacheKey {
-                sequence: shape_text.to_string(),
+                // Content-only hash (not full shape_hash): stable across color/weight so
+                // scroll Exact frames keep hitting the same Twemoji glyph entry.
+                sequence_hash: emoji_sequence_content_hash(shape_text.as_ref()),
                 pixel_size: emoji_paint_pixel_size(scaled_size),
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
-                // Actual buffer wrap width (may be < leaf for bidi ink fit).
-                wrap_width_q: (buffer_soft_w.round().clamp(0.0, u16::MAX as f32) as u16),
+                // Coarse quantize — 1px buffer_soft_w jitter must not miss every frame.
+                wrap_width_q: emoji_wrap_width_q(buffer_soft_w),
             })
         } else {
             None
@@ -2628,8 +2804,8 @@ pub fn prepare_text_frame(
                 }
                 if emoji_debug_enabled() {
                     log::debug!(
-                        "emoji cache miss sequence_len={} glyphs={} uploads={} bytes={}",
-                        key.sequence.len(),
+                        "emoji cache miss sequence_hash={:#x} glyphs={} uploads={} bytes={}",
+                        key.sequence_hash,
                         glyphs.len(),
                         text_renderer.emoji_cache.stats.uploads,
                         text_renderer.emoji_cache.stats.upload_bytes
@@ -2934,8 +3110,7 @@ pub fn prepare_text_frame(
                             custom_glyphs: tb
                                 .emoji_cache_key
                                 .as_ref()
-                                .and_then(|k| text_renderer.emoji_cache.entries.get(k))
-                                .map_or(&[], |v| v.glyphs.as_slice()),
+                                .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
                         });
                     };
 
@@ -3017,15 +3192,20 @@ pub fn prepare_text_frame(
             custom_glyphs: tb
                 .emoji_cache_key
                 .as_ref()
-                .and_then(|k| text_renderer.emoji_cache.entries.get(k))
-                .map_or(&[], |v| v.glyphs.as_slice()),
+                .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
         });
 
         if emoji_debug_enabled() {
             if let Some(entry) = tb
                 .emoji_cache_key
                 .as_ref()
-                .and_then(|k| text_renderer.emoji_cache.entries.get(k))
+                .and_then(|k| {
+                    text_renderer
+                        .emoji_cache
+                        .entries
+                        .get(k)
+                        .or_else(|| text_renderer.emoji_cache.find_wrap_sibling(k))
+                })
             {
                 let baseline_y = tb.y + tb.text_size * 0.86;
                 if let Some([cx, cy, cw, ch]) =
@@ -3321,8 +3501,105 @@ pub fn prepare_text_frame(
 
 #[cfg(test)]
 mod shape_cache_key_tests {
-    use super::{node_shape_hash, node_shape_identity_hash};
+    use super::{
+        apply_letter_spacing_approx, node_shape_hash, node_shape_identity_hash,
+        node_shape_key_from_identity,
+    };
     use crate::style::TextDirection;
+    use std::borrow::Cow;
+    use std::time::Instant;
+
+    #[test]
+    fn emoji_wrap_width_q_buckets_one_px_jitter() {
+        assert_eq!(super::emoji_wrap_width_q(400.0), super::emoji_wrap_width_q(407.0));
+        assert_ne!(super::emoji_wrap_width_q(400.0), super::emoji_wrap_width_q(408.0));
+    }
+
+    #[test]
+    fn emoji_sequence_hash_is_content_only() {
+        let a = super::emoji_sequence_content_hash("Family: 👨‍👩‍👧‍👦");
+        let b = super::emoji_sequence_content_hash("Family: 👨‍👩‍👧‍👦");
+        let c = super::emoji_sequence_content_hash("Skin tone: 👍🏽");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn letter_spacing_zero_borrows_without_alloc() {
+        let s = "The quick brown fox 中文 عربي 😀";
+        match apply_letter_spacing_approx(s, 0.0, 14.0) {
+            Cow::Borrowed(b) => assert_eq!(b, s),
+            Cow::Owned(_) => panic!("zero letter-spacing must not allocate on scroll hot path"),
+        }
+    }
+
+    #[test]
+    fn shape_key_from_identity_avoids_rehashing_text() {
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let text = "日本語テスト：こんにちは世界。汉字・かな";
+        let identity = node_shape_identity_hash(
+            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, [0, 0, 0, 255],
+        );
+        let from_id = node_shape_key_from_identity(identity, 320.0, 40.0, false);
+        let full = node_shape_hash(
+            text, 14.0, 21.0, 320.0, 40.0, 400, family, align, shaping, 0.0, TextDirection::Auto,
+            [0, 0, 0, 255], false,
+        );
+        assert_eq!(from_id, full);
+    }
+
+    /// Feedback loop: scroll-like CPU for dense multilingual labels must stay cheap.
+    /// Pre-fix: every node did text.to_string() + double full-text hash each frame.
+    #[test]
+    fn scroll_like_label_cpu_stays_under_budget() {
+        let samples = [
+            "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
+            "中文测试：输入法、标点符号、全角半角、换行和字距表现。",
+            "日本語テスト：こんにちは世界。漢字・かな・カタカナ・句読点「」『』の表示確認。",
+            "Arabic: مرحبا بالعالم، هذا اختبار لاتجاه الكتابة والمحاذاة وعرض الحروف.",
+            "Emoji: 😀 😁 😂 🤣 😅 🥲 🧠 🧪 🚀 🌍 🔥 ✅ ❌ 💡 🧩 👨‍👩‍👧‍👦",
+            "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789",
+        ];
+        // Simulate ~80 visible labels (text page band) × 60 scroll frames.
+        let labels: Vec<&str> = samples.iter().cycle().take(80).copied().collect();
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let t0 = Instant::now();
+        for _ in 0..60 {
+            for (i, text) in labels.iter().enumerate() {
+                let spaced = apply_letter_spacing_approx(text, 0.0, 14.0);
+                assert!(matches!(spaced, Cow::Borrowed(_)));
+                let identity = node_shape_identity_hash(
+                    spaced.as_ref(),
+                    14.0,
+                    21.0,
+                    400,
+                    family,
+                    align,
+                    shaping,
+                    0.0,
+                    TextDirection::Auto,
+                    [0, 0, 0, 255],
+                );
+                let _key = node_shape_key_from_identity(
+                    identity,
+                    400.0 + (i % 7) as f32,
+                    24.0,
+                    false,
+                );
+            }
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // Debug + CI headroom: 80×60 identity hashes must stay well under a frame budget.
+        // (Was allocating+double-hashing full strings — multi× slower.)
+        assert!(
+            ms < 50.0,
+            "scroll-like shape-key CPU too slow: {ms:.2}ms for 80 labels × 60 frames"
+        );
+    }
 
     #[test]
     fn shape_hash_changes_when_text_alpha_flips() {
@@ -3445,6 +3722,47 @@ mod shape_cache_key_tests {
             ),
             shape_a
         );
+    }
+
+    #[test]
+    fn paint_key_hash_ignores_force_fast_flag() {
+        // prepare_text_frame always passes force_fast=false into node_shape_hash so
+        // scroll fast↔settle does not mass-miss (text page white flash).
+        let family = glyphon::Family::SansSerif;
+        let align = glyphon::cosmic_text::Align::Left;
+        let shaping = glyphon::Shaping::Advanced;
+        let color = [0u8, 0, 0, 255];
+        let settle = node_shape_hash(
+            "Typography",
+            14.0,
+            21.0,
+            201.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Ltr,
+            color,
+            false,
+        );
+        let scroll = node_shape_hash(
+            "Typography",
+            14.0,
+            21.0,
+            201.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Ltr,
+            color,
+            false,
+        );
+        assert_eq!(settle, scroll);
     }
 
     #[test]
@@ -3588,6 +3906,57 @@ mod input_shaping_stability_tests {
             .layout_runs()
             .map(|run| run.line_w)
             .fold(0.0_f32, f32::max)
+    }
+
+    #[test]
+    fn scroll_fast_skips_reshape_only_for_idle_inputs() {
+        assert!(super::scroll_fast_skips_input_reshape(true, true, false));
+        assert!(
+            !super::scroll_fast_skips_input_reshape(true, true, true),
+            "focused caret must reshape"
+        );
+        assert!(!super::scroll_fast_skips_input_reshape(true, false, false));
+        assert!(!super::scroll_fast_skips_input_reshape(false, true, false));
+    }
+
+    #[test]
+    fn scroll_fast_skips_intrinsic_only_for_idle_unpanned_inputs() {
+        assert!(super::scroll_fast_skips_input_intrinsic_prepare(
+            true, true, false, 0.0
+        ));
+        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
+            true, true, true, 0.0
+        ));
+        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
+            true, true, false, 12.0
+        ));
+        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
+            false, true, false, 0.0
+        ));
+    }
+
+    #[test]
+    fn shaped_identity_pool_reclaims_across_index_churn() {
+        // Documents: band cull reorders text_nodes; identity pool (not in-vec swap)
+        // must let the same shape_hash survive at a new index.
+        let mut pool = std::collections::HashMap::new();
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut a = super::make_dummy_cache_entry(&mut fs);
+        a.shape_hash = 0xA11CE;
+        a.key_hash = 0xA11CE_u64.wrapping_mul(3);
+        a.measured_text_w = 42.0;
+        super::park_shaped_entry(&mut pool, a);
+        assert!(pool.contains_key(&0xA11CE));
+
+        let mut slot = super::make_dummy_cache_entry(&mut fs);
+        slot.shape_hash = 0xB0B;
+        let reclaimed = pool.remove(&0xA11CE).expect("parked");
+        let displaced = std::mem::replace(&mut slot, reclaimed);
+        super::park_shaped_entry(&mut pool, displaced);
+        assert_eq!(slot.shape_hash, 0xA11CE);
+        assert_eq!(slot.measured_text_w, 42.0);
+        assert!(pool.contains_key(&0xB0B));
+        assert!(!pool.contains_key(&0xA11CE));
     }
 
     #[test]

@@ -19,8 +19,8 @@ use crate::utils::text_field::{focus_id_for_text_edit, input_value_signal_key};
 use super::overlay::{box_model_diagram, highlight_slot};
 use super::reactivity_panel::build_reactivity_panel;
 use super::snapshot::{
-    cssom_text_from_style, find_element_by_template_mut, node_label, snapshot_subtree,
-    snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot,
+    cssom_text_from_style, find_element_by_template_mut, node_label, snapshot_hover_anchor,
+    snapshot_subtree, snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot,
 };
 use super::state::{DevToolsState, DevToolsTab};
 
@@ -351,7 +351,7 @@ fn elements_body(
     };
     let mut rows = Vec::new();
     for node in tree.iter().take(400) {
-        rows.push(tree_row(node, selected_key.as_deref(), hover_key.as_deref()));
+        rows.push(tree_row(tree, node, selected_key.as_deref(), hover_key.as_deref()));
     }
 
     let tree_el: Element = crate::primitives::interactive::interactive(
@@ -371,6 +371,7 @@ fn elements_body(
 }
 
 fn tree_row(
+    tree: &[InspectorNodeSnapshot],
     node: &InspectorNodeSnapshot,
     selected_key: Option<&str>,
     hover_key: Option<&str>,
@@ -383,6 +384,13 @@ fn tree_row(
     let caption = node_label(node);
     let path_click = path.clone();
     let path_hover = path.clone();
+    let (identity_hover, relative_hover) = snapshot_hover_anchor(tree, node);
+    let identity_click = identity_hover.clone();
+    let relative_click = relative_hover.clone();
+    // Snapshot border-box rejects drifted absolute paths (Outline vs 1b card).
+    let size_hint = (node.box_model.width, node.box_model.height);
+    let size_click = size_hint;
+    let size_hover = size_hint;
     let bg = if selected {
         parse_color("accent")
     } else if hovered {
@@ -404,11 +412,21 @@ fn tree_row(
         .into();
     crate::primitives::interactive::interactive(row)
         .on_click(move || {
-            DevToolsState::set_selected_path(path_click.clone());
+            DevToolsState::set_selected(
+                path_click.clone(),
+                identity_click.clone(),
+                relative_click.clone(),
+                size_click,
+            );
         })
         .on_hover(move |on| {
             if on {
-                DevToolsState::set_hover_highlight_path(path_hover.clone());
+                DevToolsState::set_hover_highlight(
+                    path_hover.clone(),
+                    identity_hover.clone(),
+                    relative_hover.clone(),
+                    size_hover,
+                );
             } else if !DevToolsState::is_pick() {
                 // In pick mode the page pointer owns HOVER_PATH; clearing here would wipe
                 // pick hover because tree rows share the same path keys as app nodes.
@@ -479,8 +497,13 @@ fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Ele
     ];
 
     fields.push(section("CSSOM"));
-    let cssom_seed = super::snapshot::find_element_by_path(root, &path)
-        .map(super::snapshot::cssom_text_from_element)
+    // Prefer the last Apply payload so a panel rebuild cannot reseat the textarea
+    // from authored/rest chrome (which hides Inspector edits that live style still has).
+    let cssom_seed = super::style_edit::committed_inspector_cssom(&path)
+        .or_else(|| {
+            super::snapshot::find_element_by_path(root, &path)
+                .map(super::snapshot::cssom_text_from_element)
+        })
         .unwrap_or_else(|| cssom_text_from_style(st));
     fields.push(cssom_editor(path, cssom_seed));
 
@@ -545,13 +568,13 @@ fn layout_body(selected: Option<&InspectorNodeSnapshot>) -> Element {
     )
 }
 
-/// After CSSOM Apply, refresh the textarea store from the live node (no Styles pane rebuild).
-pub(crate) fn sync_inspector_editor_stores(path: &[usize], el: &crate::core::tree::Element) {
-    seed_edit_field(
-        &cssom_input_id(path),
-        &super::snapshot::cssom_text_from_element(el),
-        true,
-    );
+/// After CSSOM Apply, keep the textarea on the **applied source text**.
+///
+/// Do not reseat from [`super::snapshot::cssom_text_from_element`]: that dump uses
+/// authored / Button rest chrome and can overwrite the declarations the user just
+/// applied (looks like a revert) while live style stays correct via apply + reapply.
+pub(crate) fn sync_inspector_applied_cssom(path: &[usize], applied_css: &str) {
+    seed_edit_field(&cssom_input_id(path), applied_css, true);
 }
 
 fn apply_cssom(path: Vec<usize>, css: String) {
@@ -709,32 +732,76 @@ mod tests {
     }
 
     #[test]
-    fn sync_inspector_editor_stores_refreshes_cssom_textarea() {
+    fn sync_inspector_applied_cssom_keeps_applied_source() {
         use crate::core::reactivity::create_root;
         use crate::utils::text_field::input_value_signal_key;
 
         create_root(|| {
-            let mut el = Element::new();
-            super::super::style_edit::apply_style_patch(
-                &mut el,
-                &super::super::style_edit::StylePatch::Opacity(0.25),
-            );
             let path = vec![0usize];
             let path_key = super::super::snapshot::path_to_key(&path);
-            use_signal(
-                &input_value_signal_key(&format!("dt-cssom-{path_key}")),
-                String::new,
-            )
-            .set_silent("opacity: 1.00;\n".into());
+            let field = format!("dt-cssom-{path_key}");
+            let applied = "opacity: 0.25;\npadding: 20px;\n";
+            use_signal(&input_value_signal_key(&field), String::new)
+                .set_silent("opacity: 1.00;\n".into());
 
-            sync_inspector_editor_stores(&path, &el);
+            // Simulate post-Apply: store must keep the applied source, not an
+            // authored dump that can hide live edits (Button rest chrome, etc.).
+            sync_inspector_applied_cssom(&path, applied);
 
-            let cssom = use_signal(
-                &input_value_signal_key(&format!("dt-cssom-{path_key}")),
-                String::new,
-            )
-            .peek();
-            assert!(cssom.contains("opacity: 0.25"), "cssom={cssom}");
+            let cssom = use_signal(&input_value_signal_key(&field), String::new).peek();
+            assert_eq!(cssom, applied);
+        });
+    }
+
+    #[test]
+    fn cssom_seed_prefers_committed_apply_text() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::ButtonHoverPaint;
+        use crate::style::parse_color;
+        use crate::utils::text_field::input_value_signal_key;
+
+        create_root(|| {
+            super::super::style_edit::clear_committed_inspector_edits_for_test();
+            let path = vec![0usize];
+            let applied = "background: #00ff00;\nopacity: 0.5;\n";
+            super::super::style_edit::commit_inspector_cssom(&path, applied.into());
+
+            // Live style has the apply; authored button dump would show ghost transparent.
+            let mut el = Element::new();
+            el.button_hover_paint = Some(ButtonHoverPaint {
+                variant: "ghost".into(),
+                disabled: false,
+                hover_easing: "spring".into(),
+                text_color: None,
+            });
+            el.style.bg_color = parse_color("#00ff00");
+            el.style.opacity = 0.5;
+            let root = Element::new().child(el);
+            let authored =
+                super::super::snapshot::cssom_text_from_element(root.children.first().unwrap());
+            assert_ne!(
+                authored, applied,
+                "authored dump must differ from applied text to prove preference"
+            );
+
+            let seed = super::super::style_edit::committed_inspector_cssom(&path)
+                .or_else(|| {
+                    super::super::snapshot::find_element_by_path(&root, &path)
+                        .map(super::super::snapshot::cssom_text_from_element)
+                })
+                .expect("seed");
+            assert_eq!(seed, applied);
+
+            let field = format!(
+                "dt-cssom-{}",
+                super::super::snapshot::path_to_key(&path)
+            );
+            seed_edit_field(&field, &seed, true);
+            assert_eq!(
+                use_signal(&input_value_signal_key(&field), String::new).peek(),
+                applied
+            );
+            super::super::style_edit::clear_committed_inspector_edits_for_test();
         });
     }
 }

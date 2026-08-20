@@ -18,11 +18,14 @@ pub(crate) struct ShapedTextEntry {
     pub shape_hash: u64,
     pub buffer: glyphon::Buffer,
     pub measured_text_w: f32,
+    /// Cached from last Miss/reshape so Exact scroll frames skip `text_contains_emoji`.
+    pub has_emoji: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct EmojiCacheKey {
-    pub sequence: String,
+    /// Content/style identity (`shape_hash`) — avoids cloning full emoji strings every scroll frame.
+    pub sequence_hash: u64,
     pub pixel_size: u16,
     pub scale_bits: u32,
     pub color_mode: u8,
@@ -121,10 +124,18 @@ impl EmojiGlyphCache {
         self.entries.insert(key, entry);
     }
 
+    /// Resolve glyphs for paint: exact wrap key, else any wrap-width sibling (same text/size).
+    pub(crate) fn glyphs_for(&self, key: &EmojiCacheKey) -> &[glyphon::CustomGlyph] {
+        self.entries
+            .get(key)
+            .or_else(|| self.find_wrap_sibling(key))
+            .map_or(&[], |e| e.glyphs.as_slice())
+    }
+
     /// Reuse custom-glyph ids/rasters from any wrap-width sibling of `key` (same text/size).
     pub(crate) fn find_wrap_sibling(&self, key: &EmojiCacheKey) -> Option<&EmojiGlyphEntry> {
         self.entries.iter().find_map(|(k, entry)| {
-            (k.sequence == key.sequence
+            (k.sequence_hash == key.sequence_hash
                 && k.pixel_size == key.pixel_size
                 && k.scale_bits == key.scale_bits
                 && k.color_mode == key.color_mode
@@ -261,6 +272,9 @@ pub struct RuiTextRenderer {
     pub text_renderer: TextRenderer,
     pub viewport: Viewport,
     pub(crate) shaped_cache: Vec<ShapedTextEntry>,
+    /// Band-cull safe reuse: entries keyed by `shape_hash`, never swapped inside
+    /// `shaped_cache` (in-vec swap painted wrong glyphs on gallery Inputs).
+    pub(crate) shaped_identity_pool: HashMap<u64, ShapedTextEntry>,
     pub(crate) text_area_capacity_hint: usize,
     pub(crate) emoji_cache: EmojiGlyphCache,
     pub(crate) pending_warmup: Vec<usize>,
@@ -335,6 +349,7 @@ impl RuiTextRenderer {
             text_renderer,
             viewport,
             shaped_cache: Vec::new(),
+            shaped_identity_pool: HashMap::new(),
             text_area_capacity_hint: 0,
             emoji_cache: EmojiGlyphCache::default(),
             pending_warmup: Vec::new(),
@@ -397,11 +412,58 @@ mod tests {
     }
 
     #[test]
+    fn glyphs_for_falls_back_to_wrap_sibling() {
+        std::env::set_var("RUI_EMOJI_NODE_CACHE_MAX", "8");
+        let mut cache = EmojiGlyphCache::default();
+        let key_a = EmojiCacheKey {
+            sequence_hash: 0xE111,
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 10,
+        };
+        let mut rasters = HashMap::new();
+        rasters.insert(3, sample_raster(16, 16));
+        cache.insert_emoji_node(
+            key_a.clone(),
+            EmojiGlyphEntry {
+                glyphs: vec![glyphon::CustomGlyph {
+                    id: 3,
+                    left: 0.0,
+                    top: 0.0,
+                    width: 16.0,
+                    height: 16.0,
+                    color: None,
+                    snap_to_physical_pixel: true,
+                    metadata: 0,
+                }],
+                rasters,
+            },
+        );
+        let key_b = EmojiCacheKey {
+            sequence_hash: 0xE111,
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 11, // different wrap bucket
+        };
+        assert!(
+            cache.entries.get(&key_b).is_none(),
+            "exact wrap miss expected"
+        );
+        assert_eq!(
+            cache.glyphs_for(&key_b).len(),
+            1,
+            "paint must reuse wrap sibling glyphs (else emoji blanks on soft-width jitter)"
+        );
+    }
+
+    #[test]
     fn rasterize_survives_node_lru_eviction() {
         std::env::set_var("RUI_EMOJI_NODE_CACHE_MAX", "1");
         let mut cache = EmojiGlyphCache::default();
         let key_a = EmojiCacheKey {
-            sequence: "a".into(),
+            sequence_hash: 0xA,
             pixel_size: 16,
             scale_bits: 1.0f32.to_bits(),
             color_mode: 1,
@@ -418,7 +480,7 @@ mod tests {
         );
         // Evict A by inserting B (max=1).
         let key_b = EmojiCacheKey {
-            sequence: "b".into(),
+            sequence_hash: 0xB,
             pixel_size: 16,
             scale_bits: 1.0f32.to_bits(),
             color_mode: 1,
@@ -432,7 +494,7 @@ mod tests {
             },
         );
         assert!(!cache.entries.contains_key(&EmojiCacheKey {
-            sequence: "a".into(),
+            sequence_hash: 0xA,
             pixel_size: 16,
             scale_bits: 1.0f32.to_bits(),
             color_mode: 1,

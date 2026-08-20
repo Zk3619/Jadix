@@ -9,8 +9,9 @@ use crate::primitives::r#box;
 use crate::style::{parse_color, parse_text_color, LineStyle};
 
 use super::snapshot::{
-    box_model_snapshot, find_element_by_path, find_element_by_template, find_element_by_template_mut,
-    is_inspector_chrome, BoxModelSnapshot,
+    border_box_size_matches, box_model_snapshot, find_element_by_identity_near_size,
+    find_element_by_path, find_element_by_size_near, find_element_by_template,
+    find_element_by_template_mut, is_inspector_chrome, BoxModelSnapshot,
 };
 use super::state::{DevToolsState, HighlightLayer};
 
@@ -41,6 +42,8 @@ thread_local! {
 thread_local! {
     /// Set for the duration of layout collect so highlight sync can resolve paths.
     static HIGHLIGHT_COLLECT_ROOT: Cell<*const Element> = const { Cell::new(std::ptr::null()) };
+    /// Bumped each collect; elements stamp [`Element::paint_visual_gen`] with this value.
+    static HIGHLIGHT_PAINT_GEN: Cell<u32> = const { Cell::new(1) };
     /// Per-collect stamped geometry — paint reads this, not stale `Element.layout_bounds`.
     static HIGHLIGHT_COLLECT_CACHE: RefCell<HighlightCollectCache> =
         RefCell::new(HighlightCollectCache::default());
@@ -62,6 +65,12 @@ impl HighlightCollectCache {
 /// Clear cached highlight geometry at the start of each layout collect pass.
 pub(crate) fn begin_highlight_collect() {
     HIGHLIGHT_COLLECT_CACHE.with(|c| c.borrow_mut().clear());
+    HIGHLIGHT_PAINT_GEN.set(HIGHLIGHT_PAINT_GEN.get().wrapping_add(1).max(1));
+}
+
+/// Generation of the in-progress / last collect paint-visual stamp.
+pub(crate) fn highlight_paint_gen() -> u32 {
+    HIGHLIGHT_PAINT_GEN.get()
 }
 
 /// Set for the duration of layout collect so highlight sync can resolve paths.
@@ -71,7 +80,47 @@ pub(crate) fn set_highlight_collect_root(root: &Element) {
 
 pub(crate) fn clear_highlight_collect_root() {
     HIGHLIGHT_COLLECT_ROOT.set(std::ptr::null());
-    begin_highlight_collect();
+    // Keep layer cache until the next `begin_highlight_collect` so post-collect
+    // readers (tests / same-frame refresh) still see the stamped rects.
+}
+
+/// Record the paint-space border box for this node (same space as instances).
+pub(crate) fn note_element_paint_visual(el: &mut Element, visual_border: [f32; 4]) {
+    el.paint_visual_bounds = visual_border;
+    el.paint_visual_gen = HIGHLIGHT_PAINT_GEN.get();
+}
+
+/// Synthesize paint-space bounds for one node from abs layout − `scroll_acc`.
+///
+/// Callers that skip a whole subtree (band-cull / clip-cull) must also refresh
+/// descendants via Taffy — do **not** reuse stored `layout_bounds` after wrap reflow
+/// (that mixed old abs with new scroll and stamped the highlight in the wrong place).
+pub(crate) fn note_element_paint_visual_from_abs(
+    el: &mut Element,
+    abs: [f32; 2],
+    size: [f32; 2],
+    scroll_acc: [f32; 2],
+) {
+    let w = size[0].max(0.0);
+    let h = size[1].max(0.0);
+    let tx = el.style.translate[0] + w * el.style.translate_pct[0];
+    let ty = el.style.translate[1] + h * el.style.translate_pct[1];
+    let vx = abs[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
+    let vy = abs[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
+    note_element_paint_visual(el, [vx, vy, w, h]);
+    // Keep abs layout in sync so size-hint matching sees the same border box.
+    el.layout_bounds = [abs[0], abs[1], w, h];
+}
+
+/// After layout collect finishes, re-stamp the highlight using final paint_visual / abs−scroll.
+///
+/// Mid-collect `refresh_highlight_slot` may have run before a scrolled target's paint_visual was
+/// corrected (band-skip synthesize, wrap reflow). One post-pass removes the narrow+scroll drift.
+pub(crate) fn finalize_highlight_after_collect(root: &mut Element) {
+    if !DevToolsState::is_open() || DevToolsState::overlay_path_key().is_empty() {
+        return;
+    }
+    let _ = refresh_highlight(root);
 }
 
 fn highlight_collect_root() -> Option<&'static Element> {
@@ -81,6 +130,109 @@ fn highlight_collect_root() -> Option<&'static Element> {
     } else {
         // SAFETY: pointer set for one collect pass on the UI thread; cleared before return.
         Some(unsafe { &*ptr })
+    }
+}
+
+fn box_model_at_visual_border(el: &Element, border: [f32; 4]) -> BoxModelSnapshot {
+    let mut bm = box_model_snapshot(el);
+    bm.x = border[0];
+    bm.y = border[1];
+    bm.width = border[2].max(0.0);
+    bm.height = border[3].max(0.0);
+    bm
+}
+
+fn highlight_box_model(tree_root: &Element, path: &[usize]) -> Option<BoxModelSnapshot> {
+    let el = resolve_highlight_element(tree_root, path)?;
+    // Always compute abs−scroll along the *live* path (identity may outlive a stale snapshot path).
+    let live_path = path_of_element(tree_root, el).unwrap_or_else(|| path.to_vec());
+    let acc = crate::app::devtools::snapshot::scroll_acc_along_path(tree_root, &live_path);
+    let from_scroll = crate::app::devtools::snapshot::box_model_snapshot_visual(el, acc);
+
+    if el.paint_visual_gen == HIGHLIGHT_PAINT_GEN.get() && HIGHLIGHT_PAINT_GEN.get() != 0 {
+        let from_paint = box_model_at_visual_border(el, el.paint_visual_bounds);
+        // Narrow+scroll repro: paint_visual sometimes equals raw abs (forgot scroll_acc).
+        // Prefer abs−scroll when paint looks unscrolled but ancestors actually scrolled.
+        let abs_y = el.layout_bounds[1]
+            + el.style.translate[1]
+            + el.layout_bounds[3] * el.style.translate_pct[1]
+            + el.sticky_visual_offset[1];
+        let paint_y = el.paint_visual_bounds[1];
+        let scrolled = acc[0].abs() > 1.0 || acc[1].abs() > 1.0;
+        let paint_forgot_scroll = scrolled
+            && (paint_y - abs_y).abs() < 2.0
+            && (paint_y - from_scroll.y).abs() > 2.0;
+        let paint_forgot_scroll_x = scrolled
+            && (el.paint_visual_bounds[0]
+                - (el.layout_bounds[0]
+                    + el.style.translate[0]
+                    + el.layout_bounds[2] * el.style.translate_pct[0]
+                    + el.sticky_visual_offset[0]))
+                .abs()
+                < 2.0
+            && (el.paint_visual_bounds[0] - from_scroll.x).abs() > 2.0;
+        // Wrap reflow mix: paint size/pos from an old flex line while layout_bounds are new
+        // (or the reverse). Trust abs−scroll whenever paint and layout visual disagree and
+        // the node is not scaled (scale is the main reason paint may legitimately differ).
+        let scaled = (el.style.scale[0] - 1.0).abs() > 0.01
+            || (el.style.scale[1] - 1.0).abs() > 0.01;
+        let paint_layout_mismatch = !scaled
+            && ((from_paint.x - from_scroll.x).abs() > 2.0
+                || (from_paint.y - from_scroll.y).abs() > 2.0
+                || (from_paint.width - from_scroll.width).abs() > 2.0
+                || (from_paint.height - from_scroll.height).abs() > 2.0);
+        if paint_forgot_scroll || paint_forgot_scroll_x || paint_layout_mismatch {
+            return Some(from_scroll);
+        }
+        return Some(from_paint);
+    }
+    Some(from_scroll)
+}
+
+/// Resolve the live node for the page overlay.
+/// Prefer identity (+ relative) with snapshot size gate; absolute path is last resort.
+fn resolve_highlight_element<'a>(tree_root: &'a Element, path: &[usize]) -> Option<&'a Element> {
+    let identity = DevToolsState::overlay_identity();
+    let relative = DevToolsState::overlay_relative_path();
+    let hint = DevToolsState::overlay_size_hint();
+
+    if !identity.is_empty() {
+        if let Some(el) =
+            find_element_by_identity_near_size(tree_root, &identity, path, &relative, hint)
+                .filter(|n| !is_inspector_chrome(n))
+        {
+            return Some(el);
+        }
+    }
+
+    if let Some(el) = find_element_by_path(tree_root, path).filter(|n| !is_inspector_chrome(n)) {
+        if border_box_size_matches(el, hint) {
+            return Some(el);
+        }
+    }
+
+    find_element_by_size_near(tree_root, hint, path).filter(|n| !is_inspector_chrome(n))
+}
+
+fn path_of_element(root: &Element, target: &Element) -> Option<Vec<usize>> {
+    fn walk(el: &Element, target: &Element, acc: &mut Vec<usize>) -> bool {
+        if std::ptr::eq(el, target) {
+            return true;
+        }
+        for (i, child) in el.children.iter().enumerate() {
+            acc.push(i);
+            if walk(child, target, acc) {
+                return true;
+            }
+            acc.pop();
+        }
+        false
+    }
+    let mut path = Vec::new();
+    if walk(root, target, &mut path) {
+        Some(path)
+    } else {
+        None
     }
 }
 
@@ -117,12 +269,11 @@ fn empty_rect(id: &str) -> Element {
 /// Also fills [`HIGHLIGHT_COLLECT_CACHE`] so paint via [`stamped_highlight_abs_rect`]
 /// works even when this is called outside layout collect (e.g. pick hover).
 pub fn refresh_highlight(root: &mut Element) -> bool {
-    let selection_key = DevToolsState::hover_path_key();
+    let selection_key = DevToolsState::overlay_path_key();
     let bm = if DevToolsState::is_open() && !selection_key.is_empty() {
         let path = DevToolsState::highlight_path();
-        find_element_by_path(root, &path)
-            .filter(|n| !is_inspector_chrome(n))
-            .map(box_model_snapshot)
+        // Prefer last-collect paint rect when still current (avoids abs−scroll drift).
+        highlight_box_model(root, &path)
     } else {
         None
     };
@@ -153,12 +304,11 @@ pub fn refresh_highlight_slot(slot: &mut Element) -> bool {
 
 fn refresh_highlight_slot_with_root(tree_root: &Element, slot: &mut Element) -> bool {
     let origin = [slot.layout_bounds[0], slot.layout_bounds[1]];
-    let selection_key = DevToolsState::hover_path_key();
+    let selection_key = DevToolsState::overlay_path_key();
     let bm = if DevToolsState::is_open() && !selection_key.is_empty() {
         let path = DevToolsState::highlight_path();
-        find_element_by_path(tree_root, &path)
-            .filter(|n| !is_inspector_chrome(n))
-            .map(box_model_snapshot)
+        // Prefer paint-space rect captured while collecting the target (translate/sticky/scale).
+        highlight_box_model(tree_root, &path)
     } else {
         None
     };
@@ -328,7 +478,7 @@ pub(crate) fn stamped_highlight_abs_rect(el: &Element) -> Option<[f32; 4]> {
     if !id.starts_with("__rui_devtools_hl_") {
         return None;
     }
-    let want_key = DevToolsState::hover_path_key();
+    let want_key = DevToolsState::overlay_path_key();
     HIGHLIGHT_COLLECT_CACHE.with(|c| {
         let cache = c.borrow();
         if cache.selection_key != want_key {
@@ -805,6 +955,7 @@ fn wrap_ring_interactive(el: Element, layer: HighlightLayer) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::devtools::snapshot::find_element_by_path_mut;
     use crate::app::devtools::state::DevToolsState;
 
     fn test_tree() -> Element {
@@ -850,6 +1001,814 @@ mod tests {
         assert!(stamped_highlight_abs_rect(&slot.children[4]).is_none());
 
         clear_highlight_collect_root();
+    }
+
+    #[test]
+    fn highlight_slot_prefers_noted_paint_visual_over_abs_scroll() {
+        use taffy::style::Overflow;
+
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut target = Element::new().template_id("btn");
+        target.layout_bounds = [10.0, 250.0, 80.0, 40.0];
+        // Paint uses abs − scroll + translate; reconstruction historically omitted translate.
+        target.style.translate = [0.0, 12.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 100.0];
+        viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        viewport = viewport.child(target);
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        let mut root = Element::new().child(host);
+        root.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+
+        let path = vec![0, 0, 0];
+        DevToolsState::set_hover_highlight_path(path.clone());
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        // Same space as collect `render_rect` (250 − 100 + 12).
+        {
+            let target_ref = find_element_by_path_mut(&mut root, &path).expect("target");
+            note_element_paint_visual(target_ref, [10.0, 162.0, 80.0, 40.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border layer");
+        assert!(
+            (border[1] - 162.0).abs() < 0.5,
+            "noted paint visual must win over abs−scroll, got y={}",
+            border[1]
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn stamped_highlight_prefers_element_paint_visual_bounds() {
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut target = Element::new().template_id("card");
+        target.layout_bounds = [20.0, 400.0, 128.0, 302.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 180.0];
+        viewport = viewport.child(target);
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.style.overflow.y = taffy::style::Overflow::Hidden;
+        host.scroll_offset = [0.0, 80.0];
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+
+        let mut root = Element::new().child(host);
+        let path = vec![0, 0, 0];
+        DevToolsState::set_hover_highlight_path(path.clone());
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let t = find_element_by_path_mut(&mut root, &path).unwrap();
+            // Paint space (already scrolled); must win over abs−(viewport+host) reconstruction.
+            note_element_paint_visual(t, [20.0, 220.0, 128.0, 302.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 220.0).abs() < 0.5,
+            "must keep paint visual y=220, got {}",
+            border[1]
+        );
+        // Reconstruction that wrongly includes host overflow:hidden offset would land at 140.
+        assert!(
+            (border[1] - 140.0).abs() > 10.0,
+            "must not double-subtract host scroll"
+        );
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_resolves_by_template_id_when_child_index_path_is_stale() {
+        // Gallery repro: Elements row still shows card caption/tid, but live child indices
+        // shifted so the snapshotted path now points at a button (Outline-sized).
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut card = Element::new()
+            .template_id("examples/gallery/src/main.rs:191:5")
+            .p(16.0);
+        card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
+
+        let mut outline = Element::new().template_id("outline-btn").focus_id("btn-outline");
+        outline.layout_bounds = [40.0, 80.0, 72.0, 36.0];
+
+        // Live tree: viewport[outline, card] — path [0,0,0] is Outline.
+        let mut viewport = Element::new().children(vec![outline, card]);
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 40.0];
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut root = Element::new().child(host);
+
+        // Stale path → Outline; identity → 1b card (what the tree row still labels).
+        let stale_path = vec![0, 0, 0];
+        DevToolsState::set_hover_highlight(
+            stale_path,
+            "examples/gallery/src/main.rs:191:5".to_string(),
+            Vec::new(),
+            (164.0, 334.0),
+        );
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let outline = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            note_element_paint_visual(outline, [40.0, 40.0, 72.0, 36.0]);
+            let card = find_element_by_path_mut(&mut root, &[0, 0, 1]).unwrap();
+            note_element_paint_visual(card, [20.0, 320.0, 164.0, 334.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 320.0).abs() < 0.5 && (border[3] - 334.0).abs() < 0.5,
+            "identity must win over stale path (Outline); got {:?}",
+            border
+        );
+        assert!(
+            (border[3] - 36.0).abs() > 10.0,
+            "must not stamp the Outline-sized rect"
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_resolves_anonymous_child_via_identity_relative_path() {
+        // Screenshot repro: hover the description Label under 1b card (no tid). Absolute
+        // path drifted to Outline; anchor tid + relative [1,0] must still hit the label.
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut title = Element::new().text("1b) Hover");
+        title.layout_bounds = [28.0, 370.0, 120.0, 24.0];
+        let mut desc = Element::new().text("默认 hover_easing");
+        desc.layout_bounds = [28.0, 400.0, 120.0, 36.0];
+        let inner = Element::new().children(vec![desc]);
+        let mut card = Element::new()
+            .template_id("examples/gallery/src/main.rs:191:5")
+            .children(vec![title, inner]);
+        card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
+
+        let mut outline = Element::new().template_id("outline-btn");
+        outline.layout_bounds = [40.0, 80.0, 72.0, 36.0];
+
+        let mut viewport = Element::new().children(vec![outline, card]);
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 40.0];
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut root = Element::new().child(host);
+
+        // Absolute path points at Outline; relative [1,0] under card is the description.
+        DevToolsState::set_hover_highlight(
+            vec![0, 0, 0],
+            "examples/gallery/src/main.rs:191:5".to_string(),
+            vec![1, 0],
+            (120.0, 36.0),
+        );
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let outline = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            note_element_paint_visual(outline, [40.0, 40.0, 72.0, 36.0]);
+            let desc = find_element_by_path_mut(&mut root, &[0, 0, 1, 1, 0]).unwrap();
+            note_element_paint_visual(desc, [28.0, 360.0, 120.0, 36.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 360.0).abs() < 0.5 && (border[3] - 36.0).abs() < 0.5,
+            "must highlight description label via relative path, got {:?}",
+            border
+        );
+        assert!(
+            (border[0] - 40.0).abs() > 1.0 || (border[2] - 72.0).abs() > 1.0,
+            "must not stamp Outline geometry"
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn selecting_node_replaces_stale_pick_hover_on_overlay() {
+        // Repro: Styles shows the clicked 1b card (128×298) while the page overlay still
+        // stamps a leftover Ghost/Outline hover from pick / a previous tree row.
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut card = Element::new()
+            .template_id(r"examples\gallery\src\main.rs:191:5")
+            .p(16.0);
+        card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
+
+        let mut ghost = Element::new().template_id("ghost-btn").focus_id("btn-ghost");
+        ghost.layout_bounds = [40.0, 120.0, 72.0, 36.0];
+
+        let mut viewport = Element::new().children(vec![ghost, card]);
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 40.0];
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut root = Element::new().child(host);
+
+        // Leftover pick hover on Ghost (absolute path, no useful identity).
+        DevToolsState::set_hover_highlight_path(vec![0, 0, 0]);
+        // Click the 1b card in the Elements tree (backslash tid as on Windows `file!()`).
+        DevToolsState::set_selected(
+            vec![0, 0, 1],
+            r"examples\gallery\src\main.rs:191:5".to_string(),
+            Vec::new(),
+            (164.0, 334.0),
+        );
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let ghost = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            note_element_paint_visual(ghost, [40.0, 80.0, 72.0, 36.0]);
+            let card = find_element_by_path_mut(&mut root, &[0, 0, 1]).unwrap();
+            note_element_paint_visual(card, [20.0, 320.0, 164.0, 334.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 320.0).abs() < 0.5 && (border[3] - 334.0).abs() < 0.5,
+            "selection must replace stale Ghost hover; got {:?}",
+            border
+        );
+        assert!(
+            (border[3] - 36.0).abs() > 10.0,
+            "must not keep the Ghost-sized overlay"
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn identity_match_normalizes_path_separators() {
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut card = Element::new()
+            .template_id("examples/gallery/src/main.rs:191:5")
+            .p(16.0);
+        card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
+        let mut outline = Element::new().template_id("outline-btn");
+        outline.layout_bounds = [40.0, 80.0, 72.0, 36.0];
+        let viewport = Element::new().children(vec![outline, card]);
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut root = Element::new().child(host);
+
+        // Snapshot / UI shows Windows separators; live tree keeps forward slashes.
+        DevToolsState::set_hover_highlight(
+            vec![0, 0, 0],
+            r"examples\gallery\src\main.rs:191:5".to_string(),
+            Vec::new(),
+            (164.0, 334.0),
+        );
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let outline = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            note_element_paint_visual(outline, [40.0, 80.0, 72.0, 36.0]);
+            let card = find_element_by_path_mut(&mut root, &[0, 0, 1]).unwrap();
+            note_element_paint_visual(card, [20.0, 320.0, 164.0, 334.0]);
+        }
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[3] - 334.0).abs() < 0.5,
+            "backslash identity must match slash tid; got {:?}",
+            border
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_size_hint_rejects_stale_path_without_identity() {
+        // Screenshot: Styles shows 1b card 164×334 while absolute path drifted to Outline.
+        // No usable identity — size hint must still find the card.
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut card = Element::new().p(16.0);
+        card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
+        let mut outline = Element::new().template_id("outline-btn");
+        outline.layout_bounds = [40.0, 80.0, 72.0, 36.0];
+
+        let mut viewport = Element::new().children(vec![outline, card]);
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 40.0];
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut root = Element::new().child(host);
+
+        DevToolsState::set_hover_highlight(vec![0, 0, 0], String::new(), Vec::new(), (164.0, 334.0));
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let outline = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            note_element_paint_visual(outline, [40.0, 40.0, 72.0, 36.0]);
+            let card = find_element_by_path_mut(&mut root, &[0, 0, 1]).unwrap();
+            note_element_paint_visual(card, [20.0, 320.0, 164.0, 334.0]);
+        }
+
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 320.0).abs() < 0.5 && (border[3] - 334.0).abs() < 0.5,
+            "size hint must reject Outline path; got {:?}",
+            border
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_rejects_unscrolled_paint_visual_when_ancestors_scrolled() {
+        // Narrow+scroll repro: paint_visual_gen is current but bounds equal raw abs
+        // (scroll_acc was 0 when noted). Stamp must use abs−scroll, not the stale paint.
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        let mut target = Element::new().focus_id("btn-default").template_id("btn-default");
+        target.layout_bounds = [20.0, 280.0, 140.0, 36.0];
+
+        let mut viewport = Element::new().child(target);
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 120.0];
+        viewport.layout_bounds = [0.0, 0.0, 400.0, 500.0];
+
+        let mut host = Element::new().children(vec![viewport, highlight_slot()]);
+        host.template_id = Some("__rui_app_host".into());
+        host.layout_bounds = [0.0, 0.0, 400.0, 500.0];
+        let mut root = Element::new().child(host);
+
+        DevToolsState::set_hover_highlight(
+            vec![0, 0, 0],
+            "btn-default".to_string(),
+            Vec::new(),
+            (140.0, 36.0),
+        );
+
+        begin_highlight_collect();
+        set_highlight_collect_root(&root);
+        {
+            let t = find_element_by_path_mut(&mut root, &[0, 0, 0]).unwrap();
+            // Bug shape: gen current, but Y is raw abs (280) instead of visual (160).
+            note_element_paint_visual(t, [20.0, 280.0, 140.0, 36.0]);
+        }
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        slot.layout_bounds = [0.0, 0.0, 400.0, 500.0];
+        assert!(refresh_highlight_slot(slot));
+        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
+        assert!(
+            (border[1] - 160.0).abs() < 0.5,
+            "must prefer abs−scroll (160) over unscrolled paint (280); got {:?}",
+            border
+        );
+
+        clear_highlight_collect_root();
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_matches_paint_under_narrow_wrap_and_scroll() {
+        // Gallery repro (user-confirmed): docked Inspector squeezes host → HStack wrap
+        // stacks buttons; ScrollArea offset > 0. Highlight of the first button must track
+        // its painted instance — not drift toward lower siblings (Disabled / "Selected variant").
+        use crate::app::devtools::panel::wrap_app;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+        DevToolsState::set_panel_width(360.0);
+
+        create_root(|| {
+            let mk_btn = |id: &str, label: &str, color: [f32; 4]| {
+                Element::new()
+                    .focus_id(id)
+                    .template_id(id)
+                    .w(140.0)
+                    .h(36.0)
+                    .flex_shrink(0.0)
+                    .bg(color)
+                    .text(label)
+            };
+            let row = Element::new()
+                .w("100%")
+                .min_w(0.0)
+                .flex_row()
+                .flex_wrap_kw("wrap")
+                .gap(8.0)
+                .children(vec![
+                    mk_btn("btn-default", "Default", [0.1, 0.1, 0.1, 1.0]),
+                    mk_btn("btn-secondary", "Secondary", [0.3, 0.3, 0.3, 1.0]),
+                    mk_btn("btn-outline", "Outline", [0.5, 0.5, 0.5, 1.0]),
+                    mk_btn("btn-ghost", "Ghost", [0.6, 0.6, 0.6, 1.0]),
+                    mk_btn("btn-destructive", "Destructive", [0.8, 0.2, 0.2, 1.0]),
+                    mk_btn("btn-link", "Link", [0.2, 0.4, 0.8, 1.0]),
+                    mk_btn("btn-disabled", "Disabled", [0.7, 0.7, 0.7, 1.0]),
+                ]);
+            let label = Element::new()
+                .w("100%")
+                .h(20.0)
+                .flex_shrink(0.0)
+                .text("Selected variant: default");
+            let spacer = Element::new().w("100%").h(400.0).flex_shrink(0.0);
+            let col = Element::new()
+                .flex_col()
+                .w("100%")
+                .flex_shrink(0.0)
+                .gap(8.0)
+                .p(16.0)
+                .children(vec![row, label, spacer]);
+
+            // Real ScrollArea (signal-backed offset) — gallery uses this, not a bare overflow node.
+            let scroll: Element = crate::components::scroll_area("gallery-narrow")
+                .w("100%")
+                .h("100%")
+                .overflow_x("auto")
+                .overflow_y("auto")
+                .child(col)
+                .into();
+
+            let app = Element::new().w("100%").h("100%").min_w(0.0).child(scroll);
+            let mut root = wrap_app(app);
+            let _ = crate::app::devtools::panel::sync_overlay(&mut root);
+
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 1200.0, 700.0, [-1.0, -1.0]);
+            let _ = layout.build_and_layout(&mut root, 520.0, 420.0, [-1.0, -1.0]);
+
+            // Drive scroll like the runtime prepass (signal → element).
+            let sy_key =
+                crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-narrow");
+            crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).set(120.0);
+            fn apply_sy(el: &mut Element) {
+                if el.focus_id.as_deref() == Some("scroll:gallery-narrow") {
+                    el.scroll_offset[1] = 120.0;
+                }
+                for c in &mut el.children {
+                    apply_sy(c);
+                }
+            }
+            apply_sy(&mut root);
+
+            // Stale snapshot identity (remounted auto btn-id) + size of a button.
+            DevToolsState::set_hover_highlight(
+                vec![0, 0, 0, 0, 0, 0, 0],
+                "btn-default".to_string(),
+                Vec::new(),
+                (140.0, 36.0),
+            );
+
+            let result = layout.build_and_layout_fast(
+                &mut root,
+                520.0,
+                420.0,
+                [-1.0, -1.0],
+                true,
+                false,
+            );
+
+            let btn = crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
+                .expect("btn-default");
+            let btn_path = path_of_element(&root, btn).expect("path of btn-default");
+            let paint = result.instances.iter().find(|i| {
+                (i.rect_size[0] - btn.layout_bounds[2]).abs() < 2.0
+                    && (i.rect_size[1] - btn.layout_bounds[3]).abs() < 2.0
+                    && (i.color[0] - 0.1).abs() < 0.05
+            });
+            let paint_y = paint.map(|i| i.rect_pos[1]);
+            let paint_x = paint.map(|i| i.rect_pos[0]);
+
+            let slot = find_element_by_template(&root, HIGHLIGHT_SLOT_ID).expect("slot");
+            let border = &slot.children[2];
+            let got_y = border.layout_bounds[1];
+            let got_x = border.layout_bounds[0];
+
+            let acc = crate::app::devtools::snapshot::scroll_acc_along_path(&root, &btn_path);
+            let expect_y = btn.layout_bounds[1] - acc[1];
+            let expect_x = btn.layout_bounds[0] - acc[0];
+
+            assert!(
+                (got_y - expect_y).abs() < 2.0,
+                "narrow+wrap+scroll: highlight y={got_y} expect abs-scroll={expect_y} abs={} acc={:?} paint_y={paint_y:?} path={btn_path:?}",
+                btn.layout_bounds[1],
+                acc,
+            );
+            if let Some(py) = paint_y {
+                assert!(
+                    (got_y - py).abs() < 2.0,
+                    "highlight y={got_y} must match first-button paint y={py} (got_x={got_x}, paint_x={paint_x:?})"
+                );
+            }
+            assert!(
+                (got_x - expect_x).abs() < 2.0,
+                "highlight x={got_x} expect {expect_x}"
+            );
+        });
+
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn clip_cull_after_narrow_wrap_refreshes_descendant_bounds_for_highlight() {
+        // User report: after content squeeze, highlight mixed new wrap layout with old abs.
+        // Clip-cull used to leave nested buttons at pre-wrap layout_bounds; a later
+        // scroll_only band-skip then stamped paint_visual = old_abs − new_scroll.
+        use crate::app::devtools::panel::wrap_app;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+        DevToolsState::set_panel_width(360.0);
+
+        create_root(|| {
+            let mk_btn = |id: &str, color: [f32; 4]| {
+                Element::new()
+                    .focus_id(id)
+                    .template_id(id)
+                    .w(140.0)
+                    .h(36.0)
+                    .flex_shrink(0.0)
+                    .bg(color)
+            };
+            let row = Element::new()
+                .w("100%")
+                .min_w(0.0)
+                .flex_row()
+                .flex_wrap_kw("wrap")
+                .gap(8.0)
+                .children(vec![
+                    mk_btn("btn-default", [0.1, 0.1, 0.1, 1.0]),
+                    mk_btn("btn-second", [0.3, 0.3, 0.3, 1.0]),
+                ]);
+            // Push the wrap row far below the short viewport so full collect clip-culls it.
+            let spacer = Element::new().w("100%").h(500.0).flex_shrink(0.0);
+            let col = Element::new()
+                .flex_col()
+                .w("100%")
+                .flex_shrink(0.0)
+                .gap(8.0)
+                .p(8.0)
+                .children(vec![spacer, row]);
+
+            let scroll: Element = crate::components::scroll_area("gallery-cull")
+                .w("100%")
+                .h("100%")
+                .overflow_x("auto")
+                .overflow_y("auto")
+                .child(col)
+                .into();
+
+            let app = Element::new().w("100%").h("100%").min_w(0.0).child(scroll);
+            let mut root = wrap_app(app);
+            let _ = crate::app::devtools::panel::sync_overlay(&mut root);
+
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 1200.0, 700.0, [-1.0, -1.0]);
+
+            let wide_second = crate::app::devtools::snapshot::find_element_by_identity(
+                &root,
+                "btn-second",
+            )
+            .expect("btn-second wide");
+            let wide_x = wide_second.layout_bounds[0];
+            assert!(
+                wide_x > 100.0,
+                "precondition: wide layout places second button to the right (x={wide_x})"
+            );
+
+            // Squeeze + short host: row wraps AND sits below the clip → clip-cull path.
+            let _ = layout.build_and_layout(&mut root, 520.0, 200.0, [-1.0, -1.0]);
+
+            let second = crate::app::devtools::snapshot::find_element_by_identity(
+                &root,
+                "btn-second",
+            )
+            .expect("btn-second narrow");
+            let default = crate::app::devtools::snapshot::find_element_by_identity(
+                &root,
+                "btn-default",
+            )
+            .expect("btn-default narrow");
+            assert!(
+                (second.layout_bounds[0] - default.layout_bounds[0]).abs() < 4.0,
+                "clip-cull after wrap must refresh descendant abs from Taffy (stacked), \
+                 not keep wide-row x (default={:?} second={:?} wide_x={wide_x})",
+                default.layout_bounds,
+                second.layout_bounds,
+            );
+            assert!(
+                second.layout_bounds[1] > default.layout_bounds[1] + 20.0,
+                "wrapped second button must sit below default after cull sync"
+            );
+
+            // scroll_only band-skip while deep scrolled: highlight must track abs−scroll.
+            let sy_key =
+                crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-cull");
+            crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).set(480.0);
+            fn apply_sy(el: &mut Element) {
+                if el.focus_id.as_deref() == Some("scroll:gallery-cull") {
+                    el.scroll_offset[1] = 480.0;
+                }
+                for c in &mut el.children {
+                    apply_sy(c);
+                }
+            }
+            apply_sy(&mut root);
+
+            DevToolsState::set_hover_highlight(
+                vec![0, 0, 0, 0, 0, 0, 0],
+                "btn-default".to_string(),
+                Vec::new(),
+                (140.0, 36.0),
+            );
+
+            let _ = layout.build_and_layout_fast(
+                &mut root,
+                520.0,
+                200.0,
+                [-1.0, -1.0],
+                true,
+                false,
+            );
+
+            let btn = crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
+                .expect("btn-default");
+            let btn_path = path_of_element(&root, btn).expect("path");
+            let acc = crate::app::devtools::snapshot::scroll_acc_along_path(&root, &btn_path);
+            let expect_y = btn.layout_bounds[1] - acc[1];
+            let expect_x = btn.layout_bounds[0] - acc[0];
+
+            let slot = find_element_by_template(&root, HIGHLIGHT_SLOT_ID).expect("slot");
+            let border = &slot.children[2];
+            assert!(
+                (border.layout_bounds[1] - expect_y).abs() < 2.0,
+                "highlight y={} expect abs-scroll {} (abs={} acc={:?})",
+                border.layout_bounds[1],
+                expect_y,
+                btn.layout_bounds[1],
+                acc,
+            );
+            assert!(
+                (border.layout_bounds[0] - expect_x).abs() < 2.0,
+                "highlight x={} expect {}",
+                border.layout_bounds[0],
+                expect_x,
+            );
+        });
+
+        DevToolsState::clear_hover_highlight();
+    }
+
+    #[test]
+    fn highlight_collect_matches_target_instance_under_docked_scroll() {
+        use crate::app::devtools::panel::wrap_app;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+
+        create_root(|| {
+            // wrap_app: host[app, highlight] + panel. App is a tall scrolled column.
+            let target = Element::new()
+                .w(120.0)
+                .h(40.0)
+                .bg([0.2, 0.4, 0.8, 1.0])
+                .template_id("target-btn")
+                .focus_id("target-btn");
+            // Leave room above so scrolling moves the button.
+            let spacer = Element::new().w(120.0).h(300.0).flex_shrink(0.0);
+            let col = Element::new()
+                .flex_col()
+                .w(200.0)
+                .flex_shrink(0.0)
+                .children(vec![spacer, target]);
+
+            let mut viewport = Element::new()
+                .w("100%")
+                .h("100%")
+                .overflow_y("scroll")
+                .focus_id("scroll:gallery-main")
+                .child(col);
+            viewport.scroll_offset = [0.0, 180.0];
+
+            let app = Element::new().w("100%").h("100%").child(viewport);
+            let mut root = wrap_app(app);
+
+            // Path: host(0) → app(0) → viewport(0) → col(0) → target(1)
+            let path = vec![0, 0, 0, 0, 1];
+            DevToolsState::set_hover_highlight_path(path.clone());
+
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut root, 1000.0, 600.0, [-1.0, -1.0]);
+
+            let target_el = find_element_by_path(&root, &path).expect("target");
+            let target_bounds = target_el.layout_bounds;
+            let acc = crate::app::devtools::snapshot::scroll_acc_along_path(&root, &path);
+            let expect_y = target_bounds[1] - acc[1];
+
+            // Highlight content layer should have been stamped during collect.
+            let slot = find_element_by_template(&root, HIGHLIGHT_SLOT_ID).expect("slot");
+            let content = &slot.children[4];
+            let stamped = stamped_highlight_abs_rect(content);
+            // Cache is cleared after collect — read layout_bounds stamped onto the layer instead.
+            let got_y = content.layout_bounds[1];
+            let got_h = content.layout_bounds[3];
+
+            // Also find a painted instance near the target color / size.
+            let target_inst = result.instances.iter().find(|i| {
+                (i.rect_size[0] - 120.0).abs() < 1.0
+                    && (i.rect_size[1] - 40.0).abs() < 1.0
+                    && i.color[2] > 0.5
+            });
+            let paint_y = target_inst.map(|i| i.rect_pos[1]);
+
+            assert!(
+                (got_y - expect_y).abs() < 1.5,
+                "highlight y={got_y} expect visual y={expect_y} (abs={}, acc={:?}, stamped={:?}, paint_y={paint_y:?})",
+                target_bounds[1],
+                acc,
+                stamped,
+            );
+            if let Some(py) = paint_y {
+                assert!(
+                    (got_y - py).abs() < 1.5,
+                    "highlight y={got_y} must match target paint y={py} (h={got_h})"
+                );
+            }
+        });
+
+        DevToolsState::clear_hover_highlight();
     }
 
     #[test]

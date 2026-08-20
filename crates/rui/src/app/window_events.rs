@@ -1210,15 +1210,17 @@ impl super::App {
                     let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
                     let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
                 }
-                // Retry center-scroll every move while pick-hover is active: the Elements
-                // panel may appear one frame later after an auto tab switch.
+                // Center the Elements row only when the hovered path changes. Doing this on
+                // every move fights smooth metrics and used to feedback into scroll→re-pick.
                 let mut scrolled = false;
-                let key = crate::app::devtools::DevToolsState::hover_path_key();
-                if !key.is_empty() {
-                    scrolled = crate::app::devtools::scroll_elements_tree_row_into_center(
-                        &state.root_element,
-                        &key,
-                    );
+                if hover_changed {
+                    let key = crate::app::devtools::DevToolsState::hover_path_key();
+                    if !key.is_empty() {
+                        scrolled = crate::app::devtools::scroll_elements_tree_row_into_center(
+                            &state.root_element,
+                            &key,
+                        );
+                    }
                 }
                 if hover_changed || scrolled {
                     window.request_redraw();
@@ -1676,6 +1678,8 @@ impl super::App {
                 self.input_drag_anchor = caret_ix;
                 self.label_drag_key = None;
                 self.content_scroll_drag = None;
+                // End wheel-bridge so the focus frame is not stuck in text_force_fast.
+                self.smooth_active_until.clear();
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
             } else if let Some((key, caret_ix)) = label_drag {
@@ -2371,11 +2375,15 @@ impl super::App {
         }
 
         let mut signal_updates = Vec::new();
+        let mut rests_offset_moved = Vec::new();
         {
             let mut state_borrow = self.state.borrow_mut();
             if let Some(state) = state_borrow.as_mut() {
                 for (rest, old_sx, old_sy, new_sx, new_sy, sx_sig, sy_sig) in pre_render_data {
                     state.update_scroll_offset_in_place(&rest, [new_sx, new_sy]);
+                    if (new_sx - old_sx).abs() > 0.01 || (new_sy - old_sy).abs() > 0.01 {
+                        rests_offset_moved.push(rest);
+                    }
                     signal_updates.push((sx_sig, sy_sig, old_sx, old_sy, new_sx, new_sy));
                 }
             }
@@ -2385,6 +2393,11 @@ impl super::App {
         for (sx, sy, _old_sx, _old_sy, new_sx, new_sy) in signal_updates {
             sx.set_silent(new_sx);
             sy.set_silent(new_sy);
+        }
+        // Bridge discrete wheel ticks + settle frame: keep paint-only / text-fast for 200ms after
+        // any offset move so Input chrome + nowrap prepare do not hitch on every notch.
+        for rest in &rests_offset_moved {
+            self.bump_smooth_active_until(rest, now);
         }
 
         let mut re_borrow = match self.state.try_borrow_mut() {
@@ -2426,7 +2439,10 @@ impl super::App {
         } else {
             ScrollbarUpdateMode::ViewportsOnly
         };
-        // `scrollbar_overlay` 与 Full 滚动条预更新同帧时，文本用 Fast 路径降低 prepare/GPU 压力。
+        // Live scroll / drag / wheel coalescing only — do NOT keep force_fast for the
+        // 200ms `smooth_active_until` bridge. That flip invalidates non-input keys and,
+        // with miss deferral, blanked Input placeholders right when the user starts
+        // clicking fields after scroll stops.
         let text_force_fast_mode = self.scrollbar_drag.is_some()
             || smooth_scroll_animating
             || !self.scroll_accum.is_empty()
@@ -2434,6 +2450,10 @@ impl super::App {
 
         let scrollbar_skip_flex_layout =
             self.scrollbar_drag.is_none() && anim_tick.scrollbar_overlay;
+        // Do NOT fold `smooth_active_until` into paint-only: the 200ms wheel bridge would skip
+        // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
+        // but the caret does not install until the bridge expires.
+        // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
         let scroll_paint_only = smooth_scroll_animating || anim_tick.scrollbar_overlay;
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());

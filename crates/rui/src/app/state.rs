@@ -1382,11 +1382,7 @@ impl AppState {
                     .patch_devtools_cssom_at_path(&edit.path, &edit.css)
                     .is_some()
                 {
-                    if let Some(el) =
-                        crate::app::devtools::find_element_by_path(&self.root_element, &edit.path)
-                    {
-                        crate::app::devtools::sync_inspector_editor_stores(&edit.path, el);
-                    }
+                    crate::app::devtools::sync_inspector_applied_cssom(&edit.path, &edit.css);
                 }
             }
         }
@@ -1460,10 +1456,13 @@ impl AppState {
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect. Offset-only scroll frames keep last paint.
         if !scroll_paint_only {
-            crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+            crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
                 &mut self.root_element,
                 &mut self.layout_tree,
                 &mut sync_impact,
+                viewport_w,
+                viewport_h,
+                [0.0, 0.0],
             );
             crate::components::label::sync_label_selection_paint_subtree(
                 &mut self.root_element,
@@ -1543,10 +1542,15 @@ impl AppState {
             // leftover hover/bind_text scissor, only that rect shows the new scroll offset
             // (gallery: hover then wheel → corruption, then FullClear jump).
             let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
-            if self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp {
+            let scroll_changed =
+                self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp;
+            if scroll_changed {
                 self.mark_full_redraw();
             }
             self.last_scroll_offset_fp = scroll_fp;
+            // Highlight geometry is restamped during layout collect from paint_visual_bounds.
+            // Do **not** refresh_highlight here: it raced collect (stale abs−scroll vs paint
+            // rect) and flickered the overlay during / after smooth scroll + pick hover.
         }
         let pre_done = Instant::now();
         #[cfg(debug_assertions)]

@@ -62,6 +62,18 @@ pub fn text_contains_emoji(text: &str) -> bool {
     if text.is_ascii() {
         return false;
     }
+    // Fast reject for CJK / Arabic / Cyrillic / etc.: no emoji-capable codepoints →
+    // skip grapheme segmentation (gallery text-page scroll: dozens of labels / frame).
+    if !text.chars().any(|c| {
+        let cp = c as u32;
+        char_is_emoji_codepoint(cp)
+            || char_is_extended_pictographic(c)
+            || cp == 0x200D // ZWJ
+            || cp == 0x20E3 // combining keycap
+            || cp == 0xFE0F // VS16
+    }) {
+        return false;
+    }
     text.graphemes(true).any(grapheme_is_emoji)
 }
 
@@ -108,6 +120,17 @@ mod tests {
     fn keycap() {
         assert!(grapheme_is_emoji("1️⃣"));
         assert!(text_contains_emoji("9️⃣"));
+    }
+
+    #[test]
+    fn plain_cjk_skips_grapheme_walk() {
+        assert!(!text_contains_emoji("abc 中文"));
+        assert!(!text_contains_emoji(
+            "中文测试：输入法、标点符号、全角半角、换行和字距表现。"
+        ));
+        assert!(!text_contains_emoji(
+            "Arabic: مرحبا بالعالم — without emoji codepoints"
+        ));
     }
 
     #[test]

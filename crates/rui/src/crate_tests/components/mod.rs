@@ -3,6 +3,7 @@ mod button_caption;
 mod cv_stable_layout;
 mod input_adornments;
 mod input_caret;
+mod input_scroll_prepare;
 mod input_shape_suffix;
 mod label_emoji_clip;
 mod textarea_empty_scroll;

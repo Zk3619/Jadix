@@ -102,7 +102,7 @@ impl<T> LayerHit<T> {
 }
 
 #[inline]
-pub(super) fn escape_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+pub(crate) fn escape_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
     if el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
         || el.style.position_fixed
     {
@@ -112,14 +112,57 @@ pub(super) fn escape_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] 
     }
 }
 
-/// Compute the visual top-left of an element for hit testing, accounting for sticky offset.
+/// Compute the visual top-left of an element for hit testing, accounting for sticky offset
+/// and CSS translate (same contributions as layout collect `render_*`).
 #[inline]
 pub(super) fn visual_xy(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
     let b = el.layout_bounds;
+    let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0];
+    let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1];
     [
-        b[0] - scroll_acc[0] + el.sticky_visual_offset[0],
-        b[1] - scroll_acc[1] + el.sticky_visual_offset[1],
+        b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx,
+        b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty,
     ]
+}
+
+/// Visual border box for hit-testing / inspector pick.
+/// Prefers the last collect paint rect when it is still current (translate/sticky/scale).
+#[cfg(feature = "devtools")]
+#[inline]
+pub(super) fn visual_border_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    if el.paint_visual_gen != 0
+        && el.paint_visual_gen == crate::app::devtools::highlight_paint_gen()
+    {
+        return el.paint_visual_bounds;
+    }
+    let [vx, vy] = visual_xy(el, scroll_acc);
+    let b = el.layout_bounds;
+    [vx, vy, b[2], b[3]]
+}
+
+/// Same scroll contribution rule as layout collect: `scroll:` viewports always
+/// add offset even when overflow was cleared to Visible.
+/// `overflow: hidden`/`clip` do **not** scroll — only Scroll/Auto (and `scroll:` ids).
+#[inline]
+pub(crate) fn next_hit_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    let is_scroll_viewport = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
+    let mut next = scroll_acc;
+    let ox = el.style.overflow.x;
+    let oy = el.style.overflow.y;
+    let scroll_x = is_scroll_viewport
+        || matches!(ox, taffy::style::Overflow::Scroll);
+    let scroll_y = is_scroll_viewport
+        || matches!(oy, taffy::style::Overflow::Scroll);
+    if scroll_x {
+        next[0] += el.scroll_offset[0];
+    }
+    if scroll_y {
+        next[1] += el.scroll_offset[1];
+    }
+    next
 }
 
 pub(super) fn pick_cursor(
@@ -226,17 +269,7 @@ fn find_bounds_by_focus_id_best(
             *best = Some((el.layout_bounds, scroll_acc));
         }
     }
-    let mut next_acc = scroll_acc;
-    let is_scroll_viewport = el
-        .focus_id
-        .as_deref()
-        .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
-    if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
+    let next_acc = next_hit_scroll_acc(el, scroll_acc);
     for c in &el.children {
         find_bounds_by_focus_id_best(c, focus_id, next_acc, best);
     }
@@ -1271,10 +1304,19 @@ fn pick_element_path_acc(
     if pointer_events_blocked(el) {
         return None;
     }
+    // Overlay must never win the pick — even if pointer-events attrs were dropped —
+    // otherwise try_pick_hover treats it as chrome and freezes the last hover path.
+    if el.template_id.as_deref() == Some(crate::app::devtools::HIGHLIGHT_SLOT_ID)
+        || el
+            .template_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("__rui_devtools_hl_"))
+    {
+        return None;
+    }
     let scroll_acc = escape_scroll_acc(el, scroll_acc);
-    let b = el.layout_bounds;
-    let [vx, vy] = visual_xy(el, scroll_acc);
-    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
+    let vb = visual_border_box(el, scroll_acc);
+    let inside = x >= vb[0] && x <= vb[0] + vb[2] && y >= vb[1] && y <= vb[1] + vb[3];
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
@@ -1286,15 +1328,11 @@ fn pick_element_path_acc(
         return None;
     }
 
-    let mut next_acc = scroll_acc;
-    if !is_body_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
-        }
-    }
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     let order = if children_share_same_z_index(el) {
         (0..el.children.len()).collect::<Vec<_>>()
@@ -1315,7 +1353,7 @@ fn pick_element_path_acc(
     // even when they do not `claims_own_bounds`; normalization promotes class parents).
     // Portal / box-none stacking shells must not steal the pick from content underneath
     // (same rule as normal hit-testing via `portal_hit_passthrough`).
-    if inside && b[2] > 0.0 && b[3] > 0.0 && !portal_hit_passthrough(el) {
+    if inside && vb[2] > 0.0 && vb[3] > 0.0 && !portal_hit_passthrough(el) {
         Some(path)
     } else {
         None

@@ -359,10 +359,13 @@ impl SecondaryWindowState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
-        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
+            logical_w,
+            logical_h,
+            [0.0, 0.0],
         );
         crate::components::label::sync_label_selection_paint_subtree(
             &mut self.root_element,

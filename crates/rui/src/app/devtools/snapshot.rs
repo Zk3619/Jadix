@@ -126,6 +126,247 @@ pub fn find_element_by_path_mut<'a>(
     Some(el)
 }
 
+/// Match `template_id`, `focus_id`, or reactive `rui_ui_template_id` (source before overwrite).
+pub fn element_identity_matches(el: &Element, identity: &str) -> bool {
+    if identity.is_empty() {
+        return false;
+    }
+    let want = normalize_identity_key(identity);
+    el.template_id
+        .as_deref()
+        .is_some_and(|t| normalize_identity_key(t) == want)
+        || el
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| normalize_identity_key(f) == want)
+        || el
+            .attrs
+            .get(crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID)
+            .is_some_and(|s| normalize_identity_key(s) == want)
+}
+
+fn normalize_identity_key(id: &str) -> String {
+    id.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn path_prefix_distance(a: &[usize], b: &[usize]) -> usize {
+    let common = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    a.len().saturating_sub(common) + b.len().saturating_sub(common)
+}
+
+/// DFS lookup by stable inspector identity (preferred over child-index paths).
+#[allow(dead_code)]
+pub fn find_element_by_identity<'a>(root: &'a Element, identity: &str) -> Option<&'a Element> {
+    find_element_by_identity_near(root, identity, &[])
+}
+
+/// Prefer the match whose border-box is closest to `hint_size` (and near `hint_path`).
+pub fn find_element_by_identity_near_size<'a>(
+    root: &'a Element,
+    identity: &str,
+    hint_path: &[usize],
+    relative: &[usize],
+    hint_size: (f32, f32),
+) -> Option<&'a Element> {
+    if identity.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, usize, &'a Element)> = None;
+    fn walk<'a>(
+        el: &'a Element,
+        identity: &str,
+        path: &mut ElementPath,
+        hint_path: &[usize],
+        relative: &[usize],
+        hint_size: (f32, f32),
+        best: &mut Option<(usize, usize, &'a Element)>,
+    ) {
+        if element_identity_matches(el, identity) {
+            let candidate = if relative.is_empty() {
+                Some(el)
+            } else {
+                find_element_by_path(el, relative)
+            };
+            if let Some(cand) = candidate {
+                if border_box_size_matches(cand, hint_size) {
+                    let dist = path_prefix_distance(path, hint_path);
+                    let size_pen = size_mismatch_score(cand, hint_size);
+                    if best
+                        .as_ref()
+                        .is_none_or(|(d, s, _)| dist < *d || (dist == *d && size_pen < *s))
+                    {
+                        *best = Some((dist, size_pen, cand));
+                    }
+                } else if !relative.is_empty() {
+                    // Relative child drifted; still try the identity anchor itself.
+                    if border_box_size_matches(el, hint_size) {
+                        let dist = path_prefix_distance(path, hint_path);
+                        let size_pen = size_mismatch_score(el, hint_size);
+                        if best
+                            .as_ref()
+                            .is_none_or(|(d, s, _)| dist < *d || (dist == *d && size_pen < *s))
+                        {
+                            *best = Some((dist, size_pen, el));
+                        }
+                    }
+                }
+            }
+            // Shared tid (e.g. MyCard body): search descendants for the snapshot size.
+            if hint_size.0 > 1.0 || hint_size.1 > 1.0 {
+                if let Some(desc) = find_size_in_subtree(el, hint_size, path, hint_path) {
+                    let dist = path_prefix_distance(path, hint_path);
+                    let size_pen = size_mismatch_score(desc, hint_size);
+                    if best
+                        .as_ref()
+                        .is_none_or(|(d, s, _)| dist < *d || (dist == *d && size_pen < *s))
+                    {
+                        *best = Some((dist, size_pen, desc));
+                    }
+                }
+            }
+        }
+        for (i, child) in el.children.iter().enumerate() {
+            path.push(i);
+            walk(
+                child, identity, path, hint_path, relative, hint_size, best,
+            );
+            path.pop();
+        }
+    }
+    walk(
+        root,
+        identity,
+        &mut Vec::new(),
+        hint_path,
+        relative,
+        hint_size,
+        &mut best,
+    );
+    best.map(|(_, _, el)| el)
+}
+
+fn find_size_in_subtree<'a>(
+    root: &'a Element,
+    hint_size: (f32, f32),
+    anchor_path: &[usize],
+    hint_path: &[usize],
+) -> Option<&'a Element> {
+    let mut best: Option<(usize, usize, &'a Element)> = None;
+    fn walk<'a>(
+        el: &'a Element,
+        path: &mut ElementPath,
+        hint_size: (f32, f32),
+        hint_path: &[usize],
+        best: &mut Option<(usize, usize, &'a Element)>,
+    ) {
+        if border_box_size_matches(el, hint_size) {
+            let dist = path_prefix_distance(path, hint_path);
+            let size_pen = size_mismatch_score(el, hint_size);
+            if best
+                .as_ref()
+                .is_none_or(|(d, s, _)| dist < *d || (dist == *d && size_pen < *s))
+            {
+                *best = Some((dist, size_pen, el));
+            }
+        }
+        for (i, child) in el.children.iter().enumerate() {
+            path.push(i);
+            walk(child, path, hint_size, hint_path, best);
+            path.pop();
+        }
+    }
+    let mut path = anchor_path.to_vec();
+    walk(root, &mut path, hint_size, hint_path, &mut best);
+    best.map(|(_, _, el)| el)
+}
+
+/// Absolute-path fallback when identity is missing: nearest node matching snapshot size.
+pub fn find_element_by_size_near<'a>(
+    root: &'a Element,
+    hint_size: (f32, f32),
+    hint_path: &[usize],
+) -> Option<&'a Element> {
+    if hint_size.0 <= 1.0 && hint_size.1 <= 1.0 {
+        return None;
+    }
+    find_size_in_subtree(root, hint_size, &[], hint_path)
+}
+
+/// Snapshot / live border-box `[w,h]` agreement (rejects Outline vs card).
+pub fn border_box_size_matches(el: &Element, hint: (f32, f32)) -> bool {
+    if hint.0 <= 1.0 && hint.1 <= 1.0 {
+        return true;
+    }
+    let w = el.layout_bounds[2].max(0.0);
+    let h = el.layout_bounds[3].max(0.0);
+    size_close(w, hint.0) && size_close(h, hint.1)
+}
+
+fn size_close(a: f32, b: f32) -> bool {
+    let tol = (b.abs() * 0.2).max(12.0);
+    (a - b).abs() <= tol
+}
+
+fn size_mismatch_score(el: &Element, hint: (f32, f32)) -> usize {
+    let w = el.layout_bounds[2].max(0.0);
+    let h = el.layout_bounds[3].max(0.0);
+    (((w - hint.0).abs() + (h - hint.1).abs()) * 10.0) as usize
+}
+
+/// Like [`find_element_by_identity`], but when several nodes share an id (e.g. `MyCard`
+/// body `template_id`), prefer the match closest to `hint_path`.
+pub fn find_element_by_identity_near<'a>(
+    root: &'a Element,
+    identity: &str,
+    hint_path: &[usize],
+) -> Option<&'a Element> {
+    find_element_by_identity_near_size(root, identity, hint_path, &[], (0.0, 0.0))
+}
+
+/// Best stable identity string for hover / pick (`template_id`, else `focus_id`).
+pub fn element_hover_identity(el: &Element) -> String {
+    el.template_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| el.focus_id.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Snapshot-row identity for hover (same priority as [`element_hover_identity`]).
+pub fn snapshot_hover_identity(node: &InspectorNodeSnapshot) -> String {
+    node.template_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or_else(|| node.focus_id.as_deref().filter(|s| !s.is_empty()))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Nearest stable ancestor identity + relative child path to `node`.
+///
+/// Anonymous labels under a `ui!` / component root keep working after absolute
+/// child-index paths drift (portal hoist, scrollbar insert, reactive rebuild).
+pub fn snapshot_hover_anchor(
+    tree: &[InspectorNodeSnapshot],
+    node: &InspectorNodeSnapshot,
+) -> (String, ElementPath) {
+    let self_id = snapshot_hover_identity(node);
+    if !self_id.is_empty() {
+        return (self_id, Vec::new());
+    }
+    for len in (0..node.path.len()).rev() {
+        let prefix = &node.path[..len];
+        if let Some(anc) = tree.iter().find(|n| n.path.as_slice() == prefix) {
+            let id = snapshot_hover_identity(anc);
+            if !id.is_empty() {
+                return (id, node.path[len..].to_vec());
+            }
+        }
+    }
+    (String::new(), Vec::new())
+}
+
 #[allow(dead_code)]
 pub fn find_element_by_template<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
     if root.template_id.as_deref() == Some(id) {
@@ -330,6 +571,46 @@ pub fn box_model_snapshot(el: &Element) -> BoxModelSnapshot {
         position_bottom: length_pct_auto_to_px(el.style.inset.bottom, h),
         position_left: length_pct_auto_to_px(el.style.inset.left, w),
     }
+}
+
+/// Ancestor scroll accumulation along `path` (same rules as layout / hit-test).
+///
+/// Highlight overlays sit outside scroll viewports, so box-model stamps must use
+/// **visual** coordinates (`layout_bounds − scroll_acc`), not raw abs layout.
+pub fn scroll_acc_along_path(root: &Element, path: &[usize]) -> [f32; 2] {
+    let mut el = root;
+    let mut acc = [0.0_f32, 0.0_f32];
+    for &idx in path {
+        // Match `pick_element_path_acc`: fixed / portal escape ancestor scroll.
+        acc = crate::app::tree_hit::escape_scroll_acc(el, acc);
+        acc = crate::app::tree_hit::next_hit_scroll_acc(el, acc);
+        el = match el.children.get(idx) {
+            Some(c) => c,
+            None => break,
+        };
+    }
+    acc
+}
+
+/// Box model in window/visual space for Inspector highlight overlays.
+pub fn box_model_snapshot_visual(el: &Element, scroll_acc: [f32; 2]) -> BoxModelSnapshot {
+    let mut bm = box_model_snapshot(el);
+    let tx = el.style.translate[0] + bm.width * el.style.translate_pct[0];
+    let ty = el.style.translate[1] + bm.height * el.style.translate_pct[1];
+    bm.x = bm.x - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
+    bm.y = bm.y - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
+    bm
+}
+
+/// Test helper: path → visual box model (production uses `overlay::highlight_box_model`).
+#[cfg(test)]
+pub(crate) fn box_model_for_highlight(root: &Element, path: &[usize]) -> Option<BoxModelSnapshot> {
+    let el = find_element_by_path(root, path)?;
+    if is_inspector_chrome(el) {
+        return None;
+    }
+    let acc = scroll_acc_along_path(root, path);
+    Some(box_model_snapshot_visual(el, acc))
 }
 
 fn tag_hint_from(el: &Element) -> Option<String> {
@@ -992,6 +1273,22 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_hover_anchor_uses_nearest_identity_ancestor() {
+        let root = Element::new().template_id("card-root").children(vec![
+            Element::new().text("title"),
+            Element::new().children(vec![Element::new().text("desc")]),
+        ]);
+        let nodes = snapshot_tree(&root);
+        let desc = nodes
+            .iter()
+            .find(|n| n.text_preview.as_deref() == Some("desc"))
+            .expect("desc");
+        let (id, rel) = snapshot_hover_anchor(&nodes, desc);
+        assert_eq!(id, "card-root");
+        assert_eq!(rel, vec![1, 0]);
+    }
+
+    #[test]
     fn normalize_promotes_class_parent_over_text_leaf() {
         let mut label_el = Element::new().text("Nav");
         label_el.layout_bounds = [12.0, 12.0, 40.0, 16.0];
@@ -1013,6 +1310,146 @@ mod tests {
             pick_element_path(&parent, 15.0, 15.0, [0.0, 0.0]),
             Some(vec![0])
         );
+    }
+
+    #[test]
+    fn pick_and_highlight_use_visual_coords_under_scroll() {
+        use taffy::style::Overflow;
+
+        let mut target = Element::new().focus_id("btn").template_id("btn");
+        target.layout_bounds = [10.0, 250.0, 80.0, 40.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 100.0];
+        viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
+        viewport = viewport.child(target);
+
+        // Visual y = 250 − 100 = 150
+        assert_eq!(
+            pick_element_path(&viewport, 40.0, 150.0, [0.0, 0.0]),
+            Some(vec![0]),
+            "pick must hit scrolled visual position"
+        );
+        assert!(
+            pick_element_path(&viewport, 40.0, 250.0, [0.0, 0.0]) != Some(vec![0]),
+            "abs layout y must not win after scroll"
+        );
+
+        let acc = scroll_acc_along_path(&viewport, &[0]);
+        assert!(
+            (acc[1] - 100.0).abs() < 0.5,
+            "scroll_acc along path={acc:?}"
+        );
+        let bm = box_model_for_highlight(&viewport, &[0]).expect("bm");
+        assert!(
+            (bm.y - 150.0).abs() < 0.5,
+            "highlight must stamp visual y, got {}",
+            bm.y
+        );
+
+        // Translate is part of paint-space geometry (collect `render_*`).
+        viewport.children[0].style.translate = [0.0, 12.0];
+        let bm_tx = box_model_for_highlight(&viewport, &[0]).expect("bm+translate");
+        assert!(
+            (bm_tx.y - 162.0).abs() < 0.5,
+            "highlight must include translate, got {}",
+            bm_tx.y
+        );
+        assert_eq!(
+            pick_element_path(&viewport, 40.0, 162.0, [0.0, 0.0]),
+            Some(vec![0]),
+            "pick must include translate like paint"
+        );
+
+        // `scroll:` still contributes when overflow was cleared to Visible (layout rule).
+        viewport.children[0].style.translate = [0.0, 0.0];
+        viewport.style.overflow.y = Overflow::Visible;
+        assert_eq!(
+            pick_element_path(&viewport, 40.0, 150.0, [0.0, 0.0]),
+            Some(vec![0]),
+            "scroll: viewport must contribute offset even if overflow is Visible"
+        );
+    }
+
+    #[test]
+    fn pick_and_highlight_align_under_docked_host_and_scroll() {
+        use taffy::style::Overflow;
+
+        // wrap_app shape: host (overflow hidden, squeezed) + panel slot.
+        let mut target = Element::new().focus_id("card").template_id("card");
+        target.layout_bounds = [20.0, 300.0, 100.0, 40.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:gallery".into());
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.scroll_offset = [0.0, 120.0];
+        viewport.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        viewport = viewport.child(target);
+
+        let mut host = Element::new();
+        host.template_id = Some("__rui_app_host".into());
+        host.style.overflow.x = Overflow::Hidden;
+        host.style.overflow.y = Overflow::Hidden;
+        host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        let mut hl = Element::new();
+        hl.template_id = Some(crate::app::devtools::HIGHLIGHT_SLOT_ID.into());
+        hl.layout_bounds = [0.0, 0.0, 680.0, 800.0];
+        host = host.children(vec![viewport, hl]);
+
+        let mut panel = Element::new();
+        panel.template_id = Some("__rui_devtools_panel_slot".into());
+        panel.layout_bounds = [680.0, 0.0, 320.0, 800.0];
+
+        let mut root = Element::new().children(vec![host, panel]);
+        root.layout_bounds = [0.0, 0.0, 1000.0, 800.0];
+
+        // Visual y = 300 − 120 = 180
+        let path = pick_element_path(&root, 50.0, 180.0, [0.0, 0.0]).expect("pick");
+        let hit = find_element_by_path(&root, &path).expect("resolve");
+        assert_eq!(hit.focus_id.as_deref(), Some("card"));
+        assert!(
+            !path_is_devtools_chrome_for_test(&root, &path),
+            "must not pick highlight/panel chrome"
+        );
+
+        let bm = box_model_for_highlight(&root, &path).expect("bm");
+        assert!(
+            (bm.y - 180.0).abs() < 0.5,
+            "docked+scrolled highlight must match pick visual y, got {}",
+            bm.y
+        );
+        assert!(
+            (bm.x - 20.0).abs() < 0.5,
+            "highlight x must stay in squeezed host, got {}",
+            bm.x
+        );
+    }
+
+    fn path_is_devtools_chrome_for_test(root: &Element, path: &[usize]) -> bool {
+        let mut el = root;
+        if el
+            .template_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("__rui_devtools"))
+        {
+            return true;
+        }
+        for &idx in path {
+            el = match el.children.get(idx) {
+                Some(c) => c,
+                None => return false,
+            };
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("__rui_devtools"))
+            {
+                return true;
+            }
+        }
+        false
     }
 
     #[test]
