@@ -1249,6 +1249,7 @@ mod drag_select_bounds_tests {
 
 /// Inspector pick: child-index path for the topmost hit target (logical coords).
 #[cfg(feature = "devtools")]
+#[allow(dead_code)]
 pub(crate) fn pick_element_path(
     el: &Element,
     x: f32,
@@ -1259,6 +1260,7 @@ pub(crate) fn pick_element_path(
 }
 
 #[cfg(feature = "devtools")]
+#[allow(dead_code)]
 fn pick_element_path_acc(
     el: &Element,
     x: f32,
@@ -1311,7 +1313,9 @@ fn pick_element_path_acc(
 
     // Inspector pick: deepest layout box at the point (text leaves may be selected
     // even when they do not `claims_own_bounds`; normalization promotes class parents).
-    if inside && b[2] > 0.0 && b[3] > 0.0 {
+    // Portal / box-none stacking shells must not steal the pick from content underneath
+    // (same rule as normal hit-testing via `portal_hit_passthrough`).
+    if inside && b[2] > 0.0 && b[3] > 0.0 && !portal_hit_passthrough(el) {
         Some(path)
     } else {
         None

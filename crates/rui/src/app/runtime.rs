@@ -221,27 +221,31 @@ where
     })
 }
 
-/// Apply an Inspector style patch to a node by child-index path (P1).
+/// Apply Inspector style patch to a node by child-index path (P1).
+/// Returns whether the patch was applied (false if runtime/state busy or path missing).
 #[cfg(feature = "devtools")]
-pub fn patch_devtools_style(path: &[usize], patch: crate::app::devtools::StylePatch) {
+pub fn patch_devtools_style(path: &[usize], patch: crate::app::devtools::StylePatch) -> bool {
     APP_RUNTIME.with(|c| {
         let guard = c.borrow();
         let Some(rt) = guard.as_ref() else {
-            return;
+            return false;
         };
         let Some(state_rc) = rt.state.upgrade() else {
-            return;
+            return false;
         };
         let Ok(mut opt) = state_rc.try_borrow_mut() else {
-            return;
+            return false;
         };
         let Some(state) = opt.as_mut() else {
-            return;
+            return false;
         };
         if state.patch_devtools_element_at_path(path, patch) {
             state.window.request_redraw();
+            true
+        } else {
+            false
         }
-    });
+    })
 }
 
 /// Apply Inspector CSSOM text to a node by child-index path (P2).

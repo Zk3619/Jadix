@@ -388,6 +388,14 @@ pub fn bind_controlled_value(field_id: &str, external: Signal<String>) {
     });
 }
 
+/// Drop controlled pairing so paint sync stops pulling an external Signal into the store.
+/// Used by Inspector editors that switched to uncontrolled stores.
+pub fn unbind_controlled_value(field_id: &str) {
+    CONTROLLED_VALUES.with(|m| {
+        m.borrow_mut().remove(field_id);
+    });
+}
+
 fn mirror_store_to_controlled(field_id: &str, value: &str) {
     let Some(ext) = controlled_of(field_id) else {
         return;

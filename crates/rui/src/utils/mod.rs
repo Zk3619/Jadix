@@ -42,8 +42,9 @@ pub use text_field::{
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y, focus_id_for_text_edit,
     input_focus_id, input_scroll_x_signal_key, input_value_signal_key, pull_controlled_into_store,
     text_edit_rest, textarea_default_height, textarea_focus_id, textarea_height_signal_key,
-    textarea_resize_focus_id, textarea_scroll_rest, TextareaCaretScrollInsets, INPUT_FOCUS_PREFIX,
-    TEXTAREA_FOCUS_PREFIX, TEXTAREA_RESIZE_FOCUS_PREFIX,
+    textarea_resize_focus_id, textarea_scroll_rest, unbind_controlled_value,
+    TextareaCaretScrollInsets, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
+    TEXTAREA_RESIZE_FOCUS_PREFIX,
 };
 pub use text_node::{apply_label_defaults, build_icon_text_node, build_text_node, TextNodeConfig};
 pub use toggle_state::{

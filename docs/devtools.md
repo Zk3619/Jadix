@@ -61,7 +61,7 @@ Gallery：`cargo run -p gallery --features devtools`
 | `snapshot_subtree(root: &Element, path: &[usize]) -> Option<InspectorNodeSnapshot>` | 按子索引路径 |
 | `pick_element_path(root, x, y) -> Option<Vec<usize>>` | 命中测路径（与 `tree_hit` 同空间） |
 | `source_location_from_template_id` | 从热重载 `template_id` 解析 `file:line:col` |
-| `cssom_text_from_style` / `apply_cssom_text` | 声明列表往返 |
+| `cssom_text_from_element` / `cssom_text_from_style` / `apply_cssom_text` | 完整 authored 声明列表往返（editor 用 element 版） |
 | `reactivity_debug_snapshot()` | 复用 WP-R.8（crate 根 re-export） |
 
 **身份键**：优先 `focus_id`；无则 `template_id`；展示用 `path` 作稳定选取键（见 [`element_identity.md`](element_identity.md)）。
@@ -102,7 +102,18 @@ AppState::render → sync_overlay（世代变化时注入 Dock）
 
 ### P2 声明列表（CSSOM textarea）
 
-另支持：`min-width` / `min-height`、`gap`、`display`、`flex-direction`、`overflow` / `overflow-x` / `overflow-y`、`position`、`z-index`、`border-color`、`class`（走 `apply_class_list`）。
+编辑器展示 **完整 authored 组件样式声明列表**（layout / visual / class / text），优先读
+`class_set.base_style` 与 Button rest chrome，**不含**瞬时 hover/focus paint。
+
+Apply 写回 retained `Element.style`（及可识别的 text / class 字段）。另支持：
+`min/max-width/height`、`top/right/bottom/left`、`gap`、`display`、`flex-direction`、
+`overflow*`、`position`、`z-index`、`border*`、`color` / `font-size` / `font-weight`、
+`class`（走 `apply_class_list`）。
+
+**未启用热重载时**：Apply **不会**因此无效——会立刻改当前 retained 树并刷新画面。
+但改动只活在内存里的节点上：若根 effect / `reactive_view` 重建该子树，节点被重新构造，
+Inspector 补丁会被冲掉；热重载的 `hot_reload_overrides` 才负责跨重建保留模板级覆盖。
+**不会**写回源码。
 
 **禁止**在 Inspector 内改：`template_id`、handler 回调、完整 `grid-template` 语法、选择器级联。
 

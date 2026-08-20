@@ -9,8 +9,8 @@ use crate::primitives::r#box;
 use crate::style::{parse_color, parse_text_color, LineStyle};
 
 use super::snapshot::{
-    box_model_snapshot, find_element_by_path, find_element_by_template_mut, is_inspector_chrome,
-    BoxModelSnapshot, ROOT_PATH_KEY,
+    box_model_snapshot, find_element_by_path, find_element_by_template, find_element_by_template_mut,
+    is_inspector_chrome, BoxModelSnapshot,
 };
 use super::state::{DevToolsState, HighlightLayer};
 
@@ -113,9 +113,12 @@ fn empty_rect(id: &str) -> Element {
 }
 
 /// Stamp highlight rects from the selected node's box model (fallback / tests).
-#[allow(dead_code)]
+///
+/// Also fills [`HIGHLIGHT_COLLECT_CACHE`] so paint via [`stamped_highlight_abs_rect`]
+/// works even when this is called outside layout collect (e.g. pick hover).
 pub fn refresh_highlight(root: &mut Element) -> bool {
-    let bm = if DevToolsState::is_open() && DevToolsState::has_hover_highlight() {
+    let selection_key = DevToolsState::hover_path_key();
+    let bm = if DevToolsState::is_open() && !selection_key.is_empty() {
         let path = DevToolsState::highlight_path();
         find_element_by_path(root, &path)
             .filter(|n| !is_inspector_chrome(n))
@@ -129,6 +132,11 @@ pub fn refresh_highlight(root: &mut Element) -> bool {
     let origin = [slot.layout_bounds[0], slot.layout_bounds[1]];
     match bm {
         Some(bm) if bm.width > 0.0 || bm.height > 0.0 => {
+            HIGHLIGHT_COLLECT_CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                cache.selection_key = selection_key;
+                cache.layers.clear();
+            });
             apply_layers(slot, &bm, origin, DevToolsState::highlight_layer())
         }
         _ => clear_rects(slot),
@@ -385,6 +393,92 @@ fn patch_row_bgs(
         changed |= patch_row_bgs(child, hover_key, selected_key, muted, accent, transparent);
     }
     changed
+}
+
+/// Scroll id for the Elements-tree card (`inspector_card("Elements")`).
+pub(crate) const ELEMENTS_TREE_SCROLL_ID: &str = "devtools-card-elements";
+
+/// Target scroll offset that centers `[item_top, item_top+item_h)` in the viewport.
+pub(crate) fn scroll_offset_to_center_rect(
+    item_top: f32,
+    item_h: f32,
+    viewport_h: f32,
+    content_h: f32,
+) -> f32 {
+    let max_sy = (content_h - viewport_h).max(0.0);
+    let center = item_top + item_h * 0.5;
+    (center - viewport_h * 0.5).clamp(0.0, max_sy)
+}
+
+/// Scroll the Elements tree so the row for `path_key` sits near the viewport center.
+///
+/// Uses laid-out bounds + scroll metrics signals. Returns `true` when the scroll
+/// target changed (caller should request a paint frame).
+pub(crate) fn scroll_elements_tree_row_into_center(
+    root: &Element,
+    path_key: &str,
+) -> bool {
+    if path_key.is_empty() {
+        return false;
+    }
+    let row_id = format!("dt-row-{path_key}");
+    let Some(row) = find_element_by_template(root, &row_id) else {
+        return false;
+    };
+    let focus = crate::core::scroll_viewport::focus_id_for_scroll_viewport(ELEMENTS_TREE_SCROLL_ID);
+    let Some(viewport) = find_element_by_focus_id(root, &focus) else {
+        return false;
+    };
+
+    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(ELEMENTS_TREE_SCROLL_ID);
+    let vh_sig = crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek();
+    let ch_sig = crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32).peek();
+    let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32).peek();
+    let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
+
+    let viewport_h = if vh_sig > 1.0 {
+        vh_sig
+    } else {
+        viewport.layout_bounds[3]
+    };
+    let content_h = if ch_sig > 1.0 {
+        ch_sig
+    } else {
+        // Fallback before metrics settle: at least cover the hovered row.
+        (row.layout_bounds[1] - viewport.layout_bounds[1] + row.layout_bounds[3] + viewport_h)
+            .max(viewport_h)
+    };
+    if viewport_h <= 1.0 {
+        return false;
+    }
+
+    // layout_bounds are unscrolled absolute; content Y is relative to the viewport top.
+    let item_top = row.layout_bounds[1] - viewport.layout_bounds[1];
+    let item_h = row.layout_bounds[3].max(1.0);
+    let target = scroll_offset_to_center_rect(item_top, item_h, viewport_h, content_h);
+    if (sy - target).abs() < 1.0 {
+        return false;
+    }
+    // Immediate jump so pick hover can track the pointer without lagging smooth scroll.
+    crate::app::scroll_support::set_scroll_offset_with_behavior(
+        ELEMENTS_TREE_SCROLL_ID,
+        sx,
+        target,
+        true,
+    );
+    true
+}
+
+fn find_element_by_focus_id<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
+    if root.focus_id.as_deref() == Some(id) {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(found) = find_element_by_focus_id(child, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// Invalidate cached box-model ring fills after the inspector panel rebuilds.
@@ -770,7 +864,7 @@ mod tests {
         let muted = parse_color("muted");
         let accent = parse_color("accent");
         let transparent = [0.0_f32; 4];
-        let root_id = format!("dt-row-{ROOT_PATH_KEY}");
+        let root_id = format!("dt-row-{}", crate::app::devtools::snapshot::ROOT_PATH_KEY);
         let mut root = Element::new().children(vec![
             Element::new().template_id(root_id.as_str()),
             Element::new().template_id("dt-row-0,1"),
@@ -801,5 +895,16 @@ mod tests {
         assert!(sync_tree_row_hovers(&mut root));
         assert_eq!(root.children[0].style.bg_color, transparent);
         assert_eq!(root.children[1].style.bg_color, transparent);
+    }
+
+    #[test]
+    fn scroll_offset_centers_row_and_clamps() {
+        // Viewport 100, content 400, row at 200..220 → center at 210 → scroll 160.
+        assert!((scroll_offset_to_center_rect(200.0, 20.0, 100.0, 400.0) - 160.0).abs() < 0.01);
+        // Near top clamps to 0.
+        assert_eq!(scroll_offset_to_center_rect(0.0, 20.0, 100.0, 400.0), 0.0);
+        // Near bottom clamps to max.
+        let max = 300.0;
+        assert!((scroll_offset_to_center_rect(380.0, 20.0, 100.0, 400.0) - max).abs() < 0.01);
     }
 }

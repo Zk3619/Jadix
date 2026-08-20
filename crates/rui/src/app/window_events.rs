@@ -858,6 +858,7 @@ impl super::App {
         let scale = state.window.scale_factor() as f32;
         let x = position.x as f32 / scale.max(1.0);
         let y = position.y as f32 / scale.max(1.0);
+
         if (x - self.wheel_sticky_cursor[0]).abs() > 2.0
             || (y - self.wheel_sticky_cursor[1]).abs() > 2.0
         {
@@ -1194,6 +1195,37 @@ impl super::App {
         for (cb, is_hover) in to_run {
             (*cb.borrow_mut())(is_hover);
         }
+
+        // Pick hover must run after tree-row on_hover callbacks (see try_pick_hover docs).
+        #[cfg(feature = "devtools")]
+        if crate::app::devtools::DevToolsState::is_pick() {
+            let mut state_borrow = self.state.borrow_mut();
+            if let Some(state) = (*state_borrow).as_mut() {
+                let scale = state.window.scale_factor() as f32;
+                let px = self.cursor_pos.x as f32 / scale.max(1.0);
+                let py = self.cursor_pos.y as f32 / scale.max(1.0);
+                let hover_changed =
+                    crate::app::devtools::try_pick_hover(&state.root_element, px, py);
+                if hover_changed {
+                    let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
+                    let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
+                }
+                // Retry center-scroll every move while pick-hover is active: the Elements
+                // panel may appear one frame later after an auto tab switch.
+                let mut scrolled = false;
+                let key = crate::app::devtools::DevToolsState::hover_path_key();
+                if !key.is_empty() {
+                    scrolled = crate::app::devtools::scroll_elements_tree_row_into_center(
+                        &state.root_element,
+                        &key,
+                    );
+                }
+                if hover_changed || scrolled {
+                    window.request_redraw();
+                }
+            }
+        }
+
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
         }
@@ -1229,6 +1261,16 @@ impl super::App {
         };
         let window = state.window.clone();
         drop(state_borrow);
+
+        #[cfg(feature = "devtools")]
+        if crate::app::devtools::DevToolsState::is_pick() {
+            crate::app::devtools::DevToolsState::clear_hover_highlight();
+            if let Some(state) = (*self.state.borrow_mut()).as_mut() {
+                let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
+                let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
+                window.request_redraw();
+            }
+        }
 
         if let Some(old_path) = self.last_mouse_path.take() {
             let [x, y] = self.last_client_pos.unwrap_or([0.0, 0.0]);
@@ -1287,6 +1329,7 @@ impl super::App {
         if element_state == ElementState::Pressed
             && crate::app::devtools::try_pick_click(&state.root_element, x, y)
         {
+            let _ = crate::app::devtools::sync_highlight_after_pick_commit(&mut state.root_element);
             state.window.request_redraw();
             return;
         }

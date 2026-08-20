@@ -1394,6 +1394,13 @@ pub struct SignalMemoEdge {
     pub memo_ids: Vec<usize>,
 }
 
+/// WP-R.8 debug entry: one named signal key and its id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedSignalDebugEntry {
+    pub key: String,
+    pub signal_id: usize,
+}
+
 /// WP-R.8 snapshot hook (non-DevTools UI): runtime graph counts + adjacency edges.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReactivityDebugSnapshot {
@@ -1405,6 +1412,7 @@ pub struct ReactivityDebugSnapshot {
     pub pending_effects: usize,
     pub pending_memos: usize,
     pub ui_root_dep_count: usize,
+    pub named_signal_entries: Vec<NamedSignalDebugEntry>,
     pub signal_effect_edges: Vec<SignalEffectEdge>,
     pub signal_memo_edges: Vec<SignalMemoEdge>,
 }
@@ -1421,6 +1429,16 @@ pub fn reactivity_debug_snapshot() -> ReactivityDebugSnapshot {
         let pending_effects = rt.pending_effects.borrow().len();
         let pending_memos = rt.pending_memos.borrow().len();
         let ui_root_dep_count = ui_root_effect_dep_count();
+        let mut named_signal_entries: Vec<NamedSignalDebugEntry> = rt
+            .named_signals
+            .borrow()
+            .iter()
+            .map(|(key, signal_id)| NamedSignalDebugEntry {
+                key: key.clone(),
+                signal_id: signal_id.0,
+            })
+            .collect();
+        named_signal_entries.sort_by(|a, b| a.key.cmp(&b.key).then(a.signal_id.cmp(&b.signal_id)));
 
         let mut signal_effect_edges: Vec<SignalEffectEdge> = rt
             .signal_subscribers
@@ -1461,6 +1479,7 @@ pub fn reactivity_debug_snapshot() -> ReactivityDebugSnapshot {
             pending_effects,
             pending_memos,
             ui_root_dep_count,
+            named_signal_entries,
             signal_effect_edges,
             signal_memo_edges,
         }
@@ -2677,7 +2696,7 @@ mod tests {
         clear_effects();
         let (_root, src) = create_root(|| {
             let src = Signal::new(1_i32);
-            let _memo = create_memo({ move || src.get() + 1 });
+            let _memo = create_memo(move || src.get() + 1);
             create_effect({
                 move || {
                     let _ = src.get();

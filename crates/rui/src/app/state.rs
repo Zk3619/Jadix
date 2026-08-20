@@ -783,6 +783,13 @@ impl AppState {
         log::debug!("[rebuild_ui] END status={:?}", status);
         self.root_element = root_element;
         recompute_scroll_viewport_flags(&mut self.root_element);
+        #[cfg(feature = "devtools")]
+        {
+            let _ = crate::app::devtools::reapply_inspector_overrides(
+                &mut self.root_element,
+                &mut self.layout_tree,
+            );
+        }
         self.layout_status = status;
         // Route / gallery page swaps must not PartialLoad over a stale retain buffer
         // (progressive unordered patches + scissor from off-screen old bounds).
@@ -1022,14 +1029,14 @@ impl AppState {
         css: &str,
     ) -> Option<String> {
         use crate::app::devtools::{
-            apply_cssom_text, cssom_text_from_style, find_element_by_path_mut, style_snapshot,
+            apply_cssom_text, cssom_text_from_element, find_element_by_path_mut,
         };
         let Some(el) = find_element_by_path_mut(&mut self.root_element, path) else {
             return None;
         };
         let bounds = el.layout_bounds;
         let status = apply_cssom_text(el, css);
-        let dump = cssom_text_from_style(&style_snapshot(&el.style));
+        let dump = cssom_text_from_element(el);
         if let Some(n) = el.layout_node {
             self.pending_layout_dirty.push(n);
             self.layout_tree.update_taffy_node_style(el);
@@ -1366,6 +1373,24 @@ impl AppState {
         // scrollbar styles/springs and broke auto hide + caused flicker.
         let pre_chrome_layout_status = self.layout_status;
 
+        #[cfg(feature = "devtools")]
+        {
+            // Apply queued CSSOM edits before chrome sync; committed map is reasserted after.
+            for edit in crate::app::devtools::take_pending_inspector_edits() {
+                crate::app::devtools::commit_inspector_cssom(&edit.path, edit.css.clone());
+                if self
+                    .patch_devtools_cssom_at_path(&edit.path, &edit.css)
+                    .is_some()
+                {
+                    if let Some(el) =
+                        crate::app::devtools::find_element_by_path(&self.root_element, &edit.path)
+                    {
+                        crate::app::devtools::sync_inspector_editor_stores(&edit.path, el);
+                    }
+                }
+            }
+        }
+
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
         let (viewport_w, viewport_h) = self.logical_size();
         crate::core::tree::sync_reactive_elements_subtree(
@@ -1446,6 +1471,17 @@ impl AppState {
             );
         }
 
+        #[cfg(feature = "devtools")]
+        {
+            // Chrome sync (button hover / class variants) restores authored snapshots and
+            // would wipe live Inspector Set/Apply edits — reassert committed overrides.
+            let ovr = crate::app::devtools::reapply_inspector_overrides(
+                &mut self.root_element,
+                &mut self.layout_tree,
+            );
+            sync_impact = Self::merge_layout_status(sync_impact, ovr);
+        }
+
         use crate::core::tree::LayoutStatus;
         // Merge local chrome dirty rects (button hover, etc.) before deciding Clear vs Load.
         if let Some(local) = super::damage::take_frame_paint_damage() {
@@ -1460,7 +1496,13 @@ impl AppState {
                 self.mark_full_redraw();
             }
         }
-        let layout_for_build = Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+        let layout_for_build_base =
+            Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+        // `layout_for_build` 仅在 `devtools` 时会被额外合并一次；非 devtools 构建无需 mut。
+        #[cfg(feature = "devtools")]
+        let mut layout_for_build = layout_for_build_base;
+        #[cfg(not(feature = "devtools"))]
+        let layout_for_build = layout_for_build_base;
 
         if matches!(
             pre_chrome_layout_status,

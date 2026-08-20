@@ -118,6 +118,9 @@ impl DevToolsState {
     pub fn set_pick(on: bool) {
         if PICK.get() != on {
             PICK.set(on);
+            if !on {
+                Self::clear_hover_highlight();
+            }
             Self::bump();
         }
     }

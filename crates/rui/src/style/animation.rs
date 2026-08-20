@@ -304,7 +304,10 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
     });
 
     for (sig, val) in signals_to_update {
-        if !sig.try_set(val) {
+        // Silent: UI chrome reads springs via `peek` + per-frame sync. Notifying here
+        // flushed effects / risked root rebuild and wiped live Inspector style edits
+        // whenever a Button hover spring settled (e.g. leaving Set/Apply).
+        if !sig.try_set_silent(val) {
             // Creating effect disposed a legacy owned signal; drop stale Weak next pass.
             continue;
         }
@@ -338,7 +341,7 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
         }
     });
     for (sig, val) in cubic_updates {
-        let _ = sig.try_set(val);
+        let _ = sig.try_set_silent(val);
     }
 
     let timeline_any = super::timeline::tick_timelines(dt);

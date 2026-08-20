@@ -1051,7 +1051,10 @@ fn paint_button_root_from_hover(
         }
     }
     if layout_hit {
-        *impact = impact.merge(LayoutStatus::LayoutChanged);
+        // Border/underline chrome still updates Taffy above, but report StyleChanged so
+        // WP-2.2 keeps a local damage rect. LayoutChanged here forced FullClear on every
+        // Button hover leave (including Inspector Set/Apply).
+        *impact = impact.merge(LayoutStatus::StyleChanged);
         push_button_paint_damage(el);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);

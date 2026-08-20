@@ -126,6 +126,7 @@ pub fn find_element_by_path_mut<'a>(
     Some(el)
 }
 
+#[allow(dead_code)]
 pub fn find_element_by_template<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
     if root.template_id.as_deref() == Some(id) {
         return Some(root);
@@ -263,6 +264,46 @@ pub fn style_snapshot(style: &Style) -> StyleSnapshot {
     }
 }
 
+/// Retained [`Style`] for Inspector readouts — excludes transient hover/focus paint.
+pub fn inspector_authored_style(el: &Element) -> Style {
+    if let Some(cs) = el.class_set.as_ref() {
+        if let Some(base) = cs.base_style.as_ref() {
+            return base.clone();
+        }
+    }
+    if let Some(desc) = el.button_hover_paint.as_ref() {
+        let mut style = el.style.clone();
+        let (bg, _, border) =
+            crate::components::button::button_chrome_for_variant(&desc.variant, 0.0);
+        style.bg_color = bg;
+        match border {
+            Some(b) => {
+                style.border_color = b;
+                style.border_width = 1.0;
+            }
+            None => {
+                style.border_width = 0.0;
+            }
+        }
+        return style;
+    }
+    if el
+        .template_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("dt-row-"))
+    {
+        let mut style = el.style.clone();
+        style.bg_color = [0.0, 0.0, 0.0, 0.0];
+        return style;
+    }
+    el.style.clone()
+}
+
+/// Like [`style_snapshot`] but reads authored/rest chrome, not live hover paint.
+pub fn style_snapshot_for_element(el: &Element) -> StyleSnapshot {
+    style_snapshot(&inspector_authored_style(el))
+}
+
 pub fn box_model_snapshot(el: &Element) -> BoxModelSnapshot {
     let b = el.layout_bounds;
     let w = b[2].max(0.0);
@@ -326,7 +367,7 @@ pub fn snapshot_node(el: &Element, path: ElementPath, depth: usize) -> Inspector
         layout_bounds: el.layout_bounds,
         scroll_offset: el.scroll_offset,
         box_model: box_model_snapshot(el),
-        style: style_snapshot(&el.style),
+        style: style_snapshot_for_element(el),
         child_count: el.children.len(),
     }
 }
@@ -502,10 +543,13 @@ fn parse_template_id_parts(id: &str) -> SourceLocation {
     }
 }
 
-/// Reconstruct a CSS-like declaration list from a style snapshot (P2 editor seed).
+/// Reconstruct a CSS-like declaration list from a style snapshot (compat / summary seed).
+///
+/// Prefer [`cssom_text_from_element`] for the Inspector editor — it dumps the full
+/// authored component style (layout + visual + class + text), not this summary subset.
 pub fn cssom_text_from_style(st: &StyleSnapshot) -> String {
     format!(
-        "display: {};\nflex-direction: {};\nposition: {};\nwidth: {};\nheight: {};\nmin-width: {};\nmin-height: {};\npadding: {};\nmargin: {};\ngap: {};\nbackground: {};\nborder-width: {}px;\nborder-color: {};\nborder-style: {};\nborder-radius: {};\nopacity: {:.2};\nflex-grow: {};\nflex-shrink: {};\nz-index: {};\noverflow-x: {};\noverflow-y: {};\n",
+        "display: {};\nflex-direction: {};\nposition: {};\nwidth: {};\nheight: {};\nmin-width: {};\nmin-height: {};\npadding: {};\nmargin: {};\ngap: {};\nbackground: {};\nborder-width: {}px;\nborder-color: {};\nborder-style: {};\nborder-radius: {};\nborder-collapse: {};\nborder-spacing: {};\nborder-image-source: {};\ncorner-shape: {};\nopacity: {:.2};\nflex-grow: {};\nflex-shrink: {};\nz-index: {};\noverflow-x: {};\noverflow-y: {};\n",
         css_ident(&st.display),
         css_ident(&st.flex_direction),
         css_ident(&st.position),
@@ -521,6 +565,14 @@ pub fn cssom_text_from_style(st: &StyleSnapshot) -> String {
         st.border_color,
         css_ident(&st.border_style),
         st.border_radius,
+        if st.border_collapse { "collapse" } else { "separate" },
+        st.border_spacing,
+        if st.border_image_source.is_empty() {
+            "none".into()
+        } else {
+            st.border_image_source.clone()
+        },
+        css_ident(&st.corner_shape),
         st.opacity,
         st.flex_grow,
         st.flex_shrink,
@@ -528,6 +580,375 @@ pub fn cssom_text_from_style(st: &StyleSnapshot) -> String {
         css_ident(&st.overflow_x),
         css_ident(&st.overflow_y),
     )
+}
+
+/// Full authored CSSOM dump for Inspector — layout, visual, class list, and text chrome.
+///
+/// Uses [`inspector_authored_style`] so transient hover/focus paint is not shown as
+/// `background-color`. Every declaration is listed (including defaults) so the editor
+/// is a complete component style checklist, not a sparse summary.
+pub fn cssom_text_from_element(el: &Element) -> String {
+    let style = inspector_authored_style(el);
+    let mut lines: Vec<String> = Vec::with_capacity(64);
+    push_decl(&mut lines, "display", &css_dbg(&style.display));
+    push_decl(&mut lines, "box-sizing", &css_dbg(&style.box_sizing));
+    push_decl(&mut lines, "flex-direction", &css_dbg(&style.flex_direction));
+    push_decl(&mut lines, "flex-wrap", &css_dbg(&style.flex_wrap));
+    push_decl(
+        &mut lines,
+        "justify-content",
+        &opt_css_dbg(style.justify_content.as_ref()),
+    );
+    push_decl(
+        &mut lines,
+        "align-items",
+        &opt_css_dbg(style.align_items.as_ref()),
+    );
+    push_decl(
+        &mut lines,
+        "align-self",
+        &opt_css_dbg(style.align_self.as_ref()),
+    );
+    push_decl(
+        &mut lines,
+        "align-content",
+        &opt_css_dbg(style.align_content.as_ref()),
+    );
+    push_decl(
+        &mut lines,
+        "justify-self",
+        &opt_css_dbg(style.justify_self.as_ref()),
+    );
+    push_decl(
+        &mut lines,
+        "justify-items",
+        &opt_css_dbg(style.justify_items.as_ref()),
+    );
+    push_decl(&mut lines, "position", &position_css(&style));
+    push_decl(&mut lines, "top", &format_lpa(style.inset.top));
+    push_decl(&mut lines, "right", &format_lpa(style.inset.right));
+    push_decl(&mut lines, "bottom", &format_lpa(style.inset.bottom));
+    push_decl(&mut lines, "left", &format_lpa(style.inset.left));
+    push_decl(&mut lines, "z-index", &style.z_index.to_string());
+    push_decl(&mut lines, "width", &format_dim(&style.size.width));
+    push_decl(&mut lines, "height", &format_dim(&style.size.height));
+    push_decl(&mut lines, "min-width", &format_dim(&style.min_size.width));
+    push_decl(&mut lines, "min-height", &format_dim(&style.min_size.height));
+    push_decl(&mut lines, "max-width", &format_dim(&style.max_size.width));
+    push_decl(&mut lines, "max-height", &format_dim(&style.max_size.height));
+    push_decl(&mut lines, "flex-grow", &format_num(style.flex_grow));
+    push_decl(&mut lines, "flex-shrink", &format_num(style.flex_shrink));
+    push_decl(&mut lines, "flex-basis", &format_dim(&style.flex_basis));
+    push_decl(&mut lines, "padding", &format_lp_rect(&style.padding));
+    push_decl(&mut lines, "margin", &format_lpa_rect(&style.margin));
+    push_decl(&mut lines, "gap", &{
+        let gw = lp_length_px(style.gap.width).unwrap_or(0.0);
+        let gh = lp_length_px(style.gap.height).unwrap_or(0.0);
+        if (gw - gh).abs() < 0.05 {
+            format!("{:.0}px", gw)
+        } else {
+            format!("{:.0}px {:.0}px", gh, gw)
+        }
+    });
+    push_decl(&mut lines, "overflow-x", &overflow_css(style.overflow.x));
+    push_decl(&mut lines, "overflow-y", &overflow_css(style.overflow.y));
+    push_decl(&mut lines, "background", &format_rgba(style.bg_color));
+    push_decl(&mut lines, "opacity", &format!("{:.2}", style.opacity));
+    push_decl(
+        &mut lines,
+        "border-width",
+        &border_width_css(&style),
+    );
+    push_decl(
+        &mut lines,
+        "border-style",
+        &line_style_css(style.border_style),
+    );
+    push_decl(&mut lines, "border-color", &format_rgba(style.border_color));
+    push_decl(
+        &mut lines,
+        "border-radius",
+        &format!(
+            "{:.0}px {:.0}px {:.0}px {:.0}px",
+            style.radii[2], style.radii[0], style.radii[1], style.radii[3]
+        ),
+    );
+    push_decl(
+        &mut lines,
+        "border-collapse",
+        if style.border_collapse {
+            "collapse"
+        } else {
+            "separate"
+        },
+    );
+    push_decl(
+        &mut lines,
+        "border-spacing",
+        &format!(
+            "{:.0}px {:.0}px",
+            style.border_spacing[0], style.border_spacing[1]
+        ),
+    );
+    push_decl(
+        &mut lines,
+        "border-image-source",
+        style
+            .border_image_source
+            .as_deref()
+            .unwrap_or("none"),
+    );
+    push_decl(&mut lines, "corner-shape", &css_dbg(&style.corner_shape));
+    push_decl(
+        &mut lines,
+        "outline-width",
+        &format!("{:.0}px", style.outline_width),
+    );
+    push_decl(
+        &mut lines,
+        "outline-style",
+        &line_style_css(style.outline_style),
+    );
+    push_decl(&mut lines, "outline-color", &format_rgba(style.outline_color));
+    push_decl(
+        &mut lines,
+        "outline-offset",
+        &format!("{:.0}px", style.outline_offset),
+    );
+    push_decl(&mut lines, "box-shadow", &box_shadow_css(&style));
+    push_decl(
+        &mut lines,
+        "translate",
+        &format!("{:.1}px {:.1}px", style.translate[0], style.translate[1]),
+    );
+    if style.translate_pct[0].abs() > 0.0001 || style.translate_pct[1].abs() > 0.0001 {
+        push_decl(
+            &mut lines,
+            "translate-percent",
+            &format!(
+                "{:.0}% {:.0}%",
+                style.translate_pct[0] * 100.0,
+                style.translate_pct[1] * 100.0
+            ),
+        );
+    }
+    push_decl(
+        &mut lines,
+        "rotate",
+        &format!("{:.1}deg", style.rotate_deg),
+    );
+    push_decl(
+        &mut lines,
+        "scale",
+        &format!("{:.3} {:.3}", style.scale[0], style.scale[1]),
+    );
+    push_decl(&mut lines, "zoom", &format_num(style.zoom));
+    if let Some(ar) = style.aspect_ratio {
+        push_decl(&mut lines, "aspect-ratio", &format!("{ar:.4}"));
+    } else {
+        push_decl(&mut lines, "aspect-ratio", "auto");
+    }
+    let backdrop = if style.backdrop_blur > 0.01 {
+        format!("blur({:.1}px)", style.backdrop_blur)
+    } else {
+        "none".into()
+    };
+    push_decl(&mut lines, "backdrop-filter", &backdrop);
+
+    if let Some(class) = authored_class_list(el) {
+        push_decl(&mut lines, "class", &class);
+    }
+
+    // Text chrome (authored base when class_set has text snapshot).
+    let text = el
+        .class_set
+        .as_ref()
+        .and_then(|cs| cs.base_text_style.as_ref())
+        .unwrap_or(&el.text_style);
+    push_decl(&mut lines, "color", &format_text_rgba(text.color));
+    push_decl(&mut lines, "font-size", &format!("{:.0}px", text.size));
+    push_decl(&mut lines, "font-weight", &text.weight.to_string());
+    if let Some(family) = text.font_family.as_deref() {
+        push_decl(&mut lines, "font-family", family);
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+fn push_decl(lines: &mut Vec<String>, prop: &str, value: &str) {
+    lines.push(format!("{prop}: {value};"));
+}
+
+fn css_dbg<T: std::fmt::Debug>(v: &T) -> String {
+    css_ident(&format!("{v:?}"))
+}
+
+fn opt_css_dbg<T: std::fmt::Debug>(v: Option<&T>) -> String {
+    match v {
+        Some(v) => css_dbg(v),
+        None => "normal".into(),
+    }
+}
+
+fn position_css(style: &Style) -> String {
+    if style.position_fixed {
+        "fixed".into()
+    } else if style.position_sticky {
+        "sticky".into()
+    } else {
+        css_dbg(&style.position)
+    }
+}
+
+fn overflow_css(o: taffy::style::Overflow) -> String {
+    match o {
+        taffy::style::Overflow::Visible => "visible".into(),
+        taffy::style::Overflow::Hidden => "hidden".into(),
+        taffy::style::Overflow::Clip => "clip".into(),
+        taffy::style::Overflow::Scroll => "scroll".into(),
+    }
+}
+
+fn line_style_css(s: crate::style::LineStyle) -> String {
+    match s {
+        crate::style::LineStyle::None => "none",
+        crate::style::LineStyle::Hidden => "hidden",
+        crate::style::LineStyle::Solid => "solid",
+        crate::style::LineStyle::Dotted => "dotted",
+        crate::style::LineStyle::Dashed => "dashed",
+        crate::style::LineStyle::Double => "double",
+        crate::style::LineStyle::Groove => "groove",
+        crate::style::LineStyle::Ridge => "ridge",
+        crate::style::LineStyle::Inset => "inset",
+        crate::style::LineStyle::Outset => "outset",
+    }
+    .into()
+}
+
+fn border_width_css(style: &Style) -> String {
+    if let Some(sides) = style.border_width_sides {
+        format!(
+            "{:.0}px {:.0}px {:.0}px {:.0}px",
+            sides[0], sides[1], sides[2], sides[3]
+        )
+    } else {
+        format!("{:.0}px", style.border_width)
+    }
+}
+
+fn box_shadow_css(style: &Style) -> String {
+    let has = style.shadow_blur > 0.01
+        || style.shadow_spread.abs() > 0.01
+        || style.shadow_offset[0].abs() > 0.01
+        || style.shadow_offset[1].abs() > 0.01
+        || style.shadow_color[3] > 0.001
+        || !style.extra_shadows.is_empty();
+    if !has {
+        return "none".into();
+    }
+    let inset = if style.shadow_inset { "inset " } else { "" };
+    format!(
+        "{}{:.0}px {:.0}px {:.0}px {:.0}px {}",
+        inset,
+        style.shadow_offset[0],
+        style.shadow_offset[1],
+        style.shadow_blur,
+        style.shadow_spread,
+        format_rgba(style.shadow_color)
+    )
+}
+
+fn format_lpa(v: LengthPercentageAuto) -> String {
+    if let Some(px) = lpa_length_px(v) {
+        format!("{px:.0}px")
+    } else {
+        "auto".into()
+    }
+}
+
+fn format_num(v: f32) -> String {
+    if (v - v.round()).abs() < 0.001 {
+        format!("{:.0}", v)
+    } else {
+        format!("{:.3}", v)
+    }
+}
+
+fn format_text_rgba(c: [u8; 4]) -> String {
+    if c[3] == 0 {
+        return "transparent".into();
+    }
+    if c[3] == 255 {
+        format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+    } else {
+        format!(
+            "rgba({},{},{},{:.2})",
+            c[0],
+            c[1],
+            c[2],
+            c[3] as f32 / 255.0
+        )
+    }
+}
+
+fn authored_class_list(el: &Element) -> Option<String> {
+    if let Some(raw) = el.attrs.get("rui_utility_class") {
+        if !raw.trim().is_empty() {
+            return Some(raw.clone());
+        }
+    }
+    let cs = el.class_set.as_ref()?;
+    let mut parts = cs.base.clone();
+    for (sels, util) in &cs.variants {
+        let prefix = sels
+            .iter()
+            .map(variant_selector_css)
+            .collect::<Vec<_>>()
+            .join(":");
+        if prefix.is_empty() {
+            parts.push(util.clone());
+        } else {
+            parts.push(format!("{prefix}:{util}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
+fn variant_selector_css(sel: &rui_style_tokens::VariantSelector) -> String {
+    use rui_style_tokens::VariantSelector;
+    match sel {
+        VariantSelector::Hover => "hover".into(),
+        VariantSelector::Focus => "focus".into(),
+        VariantSelector::FocusVisible => "focus-visible".into(),
+        VariantSelector::Active => "active".into(),
+        VariantSelector::Disabled => "disabled".into(),
+        VariantSelector::Dark => "dark".into(),
+        VariantSelector::Breakpoint { min_width } => match *min_width {
+            640 => "sm".into(),
+            768 => "md".into(),
+            1024 => "lg".into(),
+            1280 => "xl".into(),
+            1536 => "2xl".into(),
+            w => format!("min-w-{w}"),
+        },
+        VariantSelector::GroupHover { name: None } => "group-hover".into(),
+        VariantSelector::GroupHover { name: Some(n) } => format!("group-hover/{n}"),
+        VariantSelector::PeerHover { name: None } => "peer-hover".into(),
+        VariantSelector::PeerHover { name: Some(n) } => format!("peer-hover/{n}"),
+        VariantSelector::Data { key, value } => {
+            if value == "true" {
+                format!("data-[{key}]")
+            } else {
+                format!("data-[{key}={value}]")
+            }
+        }
+    }
 }
 
 fn css_ident(dbg: &str) -> String {
@@ -575,10 +996,7 @@ mod tests {
         let mut label_el = Element::new().text("Nav");
         label_el.layout_bounds = [12.0, 12.0, 40.0, 16.0];
         let mut host = Element::new();
-        host.class_set = Some(crate::style::ClassSet {
-            base: vec!["gal-nav-text".into()],
-            ..Default::default()
-        });
+        let _ = crate::style::apply_class_list(&mut host, "gal-nav-text");
         host.layout_bounds = [10.0, 10.0, 60.0, 20.0];
         host = host.child(label_el);
         let path = normalize_devtools_pick(&host, vec![0]);
@@ -595,6 +1013,93 @@ mod tests {
             pick_element_path(&parent, 15.0, 15.0, [0.0, 0.0]),
             Some(vec![0])
         );
+    }
+
+    #[test]
+    fn pick_skips_portal_layer_shell() {
+        let mut leaf = Element::new().focus_id("leaf");
+        leaf.layout_bounds = [10.0, 10.0, 20.0, 20.0];
+        let mut content = Element::new().focus_id("content").child(leaf);
+        content.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        let mut portal = Element::new();
+        portal.template_id = Some(crate::layout::layout_tree::PORTAL_LAYER_ID.into());
+        portal.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        let mut root = Element::new().children(vec![content, portal]);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        assert_eq!(
+            pick_element_path(&root, 15.0, 15.0, [0.0, 0.0]),
+            Some(vec![0, 0]),
+            "portal shell must not steal the pick"
+        );
+    }
+
+    #[test]
+    fn cssom_full_element_dump_lists_layout_and_text() {
+        let mut el = Element::new().focus_id("btn");
+        el.style.bg_color = [0.0, 0.0, 0.0, 0.0];
+        el.text_style.size = 14.0;
+        el.text_style.weight = 600;
+        let css = cssom_text_from_element(&el);
+        for needle in [
+            "display:",
+            "flex-direction:",
+            "position:",
+            "width:",
+            "height:",
+            "padding:",
+            "margin:",
+            "background:",
+            "border-width:",
+            "opacity:",
+            "box-shadow:",
+            "color:",
+            "font-size:",
+            "font-weight:",
+            "z-index:",
+            "overflow-x:",
+        ] {
+            assert!(css.contains(needle), "missing {needle} in:\n{css}");
+        }
+        assert!(css.contains("background: transparent;"));
+    }
+
+    #[test]
+    fn cssom_uses_button_rest_chrome_not_hover_paint() {
+        use crate::core::tree::ButtonHoverPaint;
+        use crate::style::parse_color;
+
+        let mut el = Element::new().focus_id("gal-nav-data");
+        el.button_hover_paint = Some(ButtonHoverPaint {
+            variant: "ghost".into(),
+            disabled: false,
+            hover_easing: "spring".into(),
+            text_color: None,
+        });
+        // Live paint after hover: accent fill (what the bug was dumping into CSSOM).
+        el.style.bg_color = parse_color("accent");
+        el.style.border_width = 0.0;
+
+        let live = style_snapshot(&el.style);
+        assert_ne!(live.bg, "transparent");
+
+        let authored = style_snapshot_for_element(&el);
+        assert_eq!(authored.bg, "transparent");
+        let css = cssom_text_from_style(&authored);
+        assert!(
+            css.contains("background: transparent;"),
+            "cssom must dump rest chrome, got:\n{css}"
+        );
+    }
+
+    #[test]
+    fn cssom_prefers_class_set_base_style_over_live_hover() {
+        let mut el = Element::new();
+        let _ = crate::style::apply_class_list(&mut el, "bg-transparent hover:bg-accent");
+        // Simulate resolved hover variant writing into live style.
+        el.style.bg_color = crate::style::parse_color("accent");
+
+        let snap = style_snapshot_for_element(&el);
+        assert_eq!(snap.bg, "transparent");
     }
 
     #[test]

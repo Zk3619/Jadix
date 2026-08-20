@@ -1,5 +1,8 @@
 //! P1: live Style patches for Inspector whitelist fields.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::parse_color;
 
@@ -18,9 +21,90 @@ pub enum StylePatch {
     FlexShrink(f32),
 }
 
+/// Queued from Apply CSS; drained in `AppState::render` while the tree is already
+/// mutably borrowed — avoids silent `try_borrow_mut` failures mid-click.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingInspectorCssom {
+    pub path: Vec<usize>,
+    pub css: String,
+}
+
+thread_local! {
+    static PENDING_INSPECTOR_EDITS: RefCell<Vec<PendingInspectorCssom>> =
+        const { RefCell::new(Vec::new()) };
+    /// Session-lived Inspector edits, re-applied after chrome sync / rebuild so hover
+    /// paint and class-variant restore cannot wipe live CSSOM Apply changes.
+    static COMMITTED_INSPECTOR_EDITS: RefCell<HashMap<String, Vec<CommittedInspectorOp>>> =
+        RefCell::new(HashMap::new());
+}
+
+#[derive(Clone, Debug)]
+enum CommittedInspectorOp {
+    Cssom(String),
+}
+
+pub(crate) fn queue_inspector_cssom(path: Vec<usize>, css: String) {
+    PENDING_INSPECTOR_EDITS.with(|q| {
+        q.borrow_mut()
+            .push(PendingInspectorCssom { path, css });
+    });
+    crate::app::runtime::request_redraw();
+}
+
+pub(crate) fn take_pending_inspector_edits() -> Vec<PendingInspectorCssom> {
+    PENDING_INSPECTOR_EDITS.with(|q| std::mem::take(&mut *q.borrow_mut()))
+}
+
+fn path_key(path: &[usize]) -> String {
+    super::snapshot::path_to_key(path)
+}
+
+pub(crate) fn commit_inspector_cssom(path: &[usize], css: String) {
+    let key = path_key(path);
+    COMMITTED_INSPECTOR_EDITS.with(|m| {
+        m.borrow_mut()
+            .insert(key, vec![CommittedInspectorOp::Cssom(css)]);
+    });
+}
+
+/// Re-apply session Inspector edits after chrome sync or `rebuild_ui`.
+pub(crate) fn reapply_inspector_overrides(
+    root: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+) -> LayoutStatus {
+    let committed = COMMITTED_INSPECTOR_EDITS.with(|m| m.borrow().clone());
+    if committed.is_empty() {
+        return LayoutStatus::Clean;
+    }
+    let mut impact = LayoutStatus::Clean;
+    for (key, ops) in committed {
+        let path = super::snapshot::key_to_path(&key);
+        let Some(el) = find_element_by_path_mut(root, &path) else {
+            continue;
+        };
+        for op in ops {
+            match op {
+                CommittedInspectorOp::Cssom(css) => {
+                    impact = impact.merge(apply_cssom_text(el, &css));
+                }
+            }
+        }
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+    }
+    impact
+}
+
+#[cfg(test)]
+pub(crate) fn clear_committed_inspector_edits_for_test() {
+    COMMITTED_INSPECTOR_EDITS.with(|m| m.borrow_mut().clear());
+    let _ = take_pending_inspector_edits();
+}
+
 pub fn apply_style_patch(el: &mut Element, patch: &StylePatch) -> LayoutStatus {
     use taffy::prelude::*;
-    match patch {
+    let status = match patch {
         StylePatch::PaddingUniform(v) => {
             let lp = LengthPercentage::length(*v);
             el.style.padding = Rect {
@@ -72,6 +156,20 @@ pub fn apply_style_patch(el: &mut Element, patch: &StylePatch) -> LayoutStatus {
             el.style.flex_shrink = *v;
             LayoutStatus::LayoutChanged
         }
+    };
+    sync_class_set_base_from_live(el);
+    status
+}
+
+/// Keep utility-class base snapshots aligned with live style after Inspector edits.
+fn sync_class_set_base_from_live(el: &mut Element) {
+    if let Some(cs) = el.class_set.as_mut() {
+        if cs.base_style.is_some() {
+            cs.base_style = Some(el.style.clone());
+        }
+        if cs.base_text_style.is_some() {
+            cs.base_text_style = Some(el.text_style.clone());
+        }
     }
 }
 
@@ -89,11 +187,17 @@ pub fn patch_element_at_path(
 /// Supported properties: padding/margin (1 or 4 values), width/height/min-width/min-height,
 /// background, opacity, border-width, border-color, flex-grow/flex-shrink, z-index, gap,
 /// display, flex-direction, overflow/overflow-x/overflow-y, position, class (utility list).
+///
+/// When the node has a [`ClassSet`](crate::style::ClassSet), also refreshes
+/// `base_style` / `base_text_style` so the next `resolve_class_variants` pass and
+/// Inspector authored dump keep the applied values (otherwise live `el.style`
+/// edits are wiped or hidden behind the stale base snapshot).
 pub fn apply_cssom_text(el: &mut Element, css: &str) -> LayoutStatus {
     let mut impact = LayoutStatus::Clean;
     for (prop, value) in parse_declarations(css) {
         impact = impact.merge(apply_cssom_decl(el, &prop, &value));
     }
+    sync_class_set_base_from_live(el);
     impact
 }
 
@@ -465,6 +569,56 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             LayoutStatus::LayoutChanged
         }
         "position" => apply_position(el, value),
+        "top" => dim_to_lpa(value).map(|d| {
+            el.style.inset.top = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "right" => dim_to_lpa(value).map(|d| {
+            el.style.inset.right = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "bottom" => dim_to_lpa(value).map(|d| {
+            el.style.inset.bottom = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "left" => dim_to_lpa(value).map(|d| {
+            el.style.inset.left = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "max-width" | "max_width" => dim_to_size(value).map(|d| {
+            el.style.max_size.width = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "max-height" | "max_height" => dim_to_size(value).map(|d| {
+            el.style.max_size.height = d;
+            LayoutStatus::LayoutChanged
+        }).unwrap_or(LayoutStatus::Clean),
+        "color" => {
+            let c = parse_cssom_color(value);
+            el.text_style.color = [
+                (c[0] * 255.0).round() as u8,
+                (c[1] * 255.0).round() as u8,
+                (c[2] * 255.0).round() as u8,
+                (c[3] * 255.0).round() as u8,
+            ];
+            LayoutStatus::StyleChanged
+        }
+        "font-size" | "font_size" => {
+            if let Ok(v) = parse_f32(value) {
+                el.text_style.size = v.max(1.0);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        "font-weight" | "font_weight" => {
+            if let Ok(v) = value.trim().parse::<u16>() {
+                el.text_style.weight = v;
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
         "class" | "class-name" | "class_name" => crate::style::apply_class_list(el, value),
         "border-image-source" | "border_image_source" => {
             let src = value.trim();
@@ -979,6 +1133,39 @@ mod tests {
     use crate::layout::dimension::{lp_length_px, dim_length_px};
 
     #[test]
+    fn pending_inspector_edits_queue_and_take() {
+        let _ = take_pending_inspector_edits(); // clear
+        queue_inspector_cssom(vec![2], "padding: 8px;".into());
+        let edits = take_pending_inspector_edits();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].path, vec![2]);
+        assert_eq!(edits[0].css, "padding: 8px;");
+        assert!(take_pending_inspector_edits().is_empty());
+    }
+
+    #[test]
+    fn committed_overrides_reapply_after_style_wipe() {
+        clear_committed_inspector_edits_for_test();
+        let mut child = Element::new();
+        let _ = crate::style::apply_class_list(&mut child, "p-2");
+        let mut root = Element::new().child(child);
+        commit_inspector_cssom(&[0], "padding: 20px;".into());
+        // Simulate chrome / variant restore wiping live style back to class base.
+        if let Some(cs) = root.children[0].class_set.as_ref() {
+            if let Some(base) = cs.base_style.as_ref() {
+                root.children[0].style = base.clone();
+            }
+        }
+        let mut layout = crate::layout::layout_tree::LayoutTree::new();
+        let _ = reapply_inspector_overrides(&mut root, &mut layout);
+        assert_eq!(
+            crate::layout::dimension::lp_length_px(root.children[0].style.padding.top),
+            Some(20.0)
+        );
+        clear_committed_inspector_edits_for_test();
+    }
+
+    #[test]
     fn padding_and_bg_patch() {
         let mut el = Element::new();
         apply_style_patch(&mut el, &StylePatch::PaddingUniform(8.0));
@@ -996,6 +1183,33 @@ mod tests {
         let mut root = Element::new().child(Element::new().focus_id("a"));
         assert!(patch_element_at_path(&mut root, &vec![0], StylePatch::FlexGrow(2.0)).is_some());
         assert!((root.children[0].style.flex_grow - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn cssom_updates_class_set_base_style() {
+        let mut el = Element::new();
+        let _ = crate::style::apply_class_list(&mut el, "p-2 bg-red-500");
+        let before = el
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.base_style.as_ref())
+            .map(|s| s.bg_color)
+            .expect("base_style");
+        apply_cssom_text(&mut el, "background: #00ff00; padding: 20px;");
+        let after = el
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.base_style.as_ref())
+            .expect("base_style after");
+        assert!((after.bg_color[1] - 1.0).abs() < 0.02, "base bg should be green");
+        assert_ne!(before, after.bg_color);
+        assert_eq!(lp_length_px(after.padding.top), Some(20.0));
+        // Authored dump must reflect the applied base (not a stale snapshot).
+        let dump = crate::app::devtools::cssom_text_from_element(&el);
+        assert!(
+            dump.contains("background: #00ff00"),
+            "dump={dump}"
+        );
     }
 
     #[test]
@@ -1026,9 +1240,7 @@ mod tests {
     fn cssom_roundtrip_dump() {
         let mut el = Element::new();
         apply_cssom_text(&mut el, "padding: 8px; background: #ff0000; width: 100px;");
-        let dump = crate::app::devtools::cssom_text_from_style(&crate::app::devtools::style_snapshot(
-            &el.style,
-        ));
+        let dump = crate::app::devtools::cssom_text_from_element(&el);
         let mut el2 = Element::new();
         apply_cssom_text(&mut el2, &dump);
         assert_eq!(lp_length_px(el2.style.padding.top), Some(8.0));

@@ -6,7 +6,7 @@
 
 use crate::app::runtime;
 use crate::components::{
-    button, input, label, scroll_area, textarea, Card, CardContent, CardContentProps, CardHeader,
+    button, label, scroll_area, textarea, Card, CardContent, CardContentProps, CardHeader,
     CardHeaderProps, CardProps, CardTitle, CardTitleProps,
 };
 use crate::core::reactivity::use_signal;
@@ -20,10 +20,9 @@ use super::overlay::{box_model_diagram, highlight_slot};
 use super::reactivity_panel::build_reactivity_panel;
 use super::snapshot::{
     cssom_text_from_style, find_element_by_template_mut, node_label, snapshot_subtree,
-    snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot, StyleSnapshot,
+    snapshot_tree, source_location_from_template_id, InspectorNodeSnapshot,
 };
 use super::state::{DevToolsState, DevToolsTab};
-use super::style_edit::StylePatch;
 
 const PANEL_ID: &str = "__rui_devtools_panel";
 pub(crate) const PANEL_SLOT_ID: &str = "__rui_devtools_panel_slot";
@@ -193,7 +192,7 @@ fn dock_panel(
         .into();
 
     let mut body: Element = match tab {
-        DevToolsTab::Elements => elements_body(tree, selected),
+        DevToolsTab::Elements => elements_body(tree, selected, root),
         DevToolsTab::Layout => card_stack([layout_body(selected)]),
         DevToolsTab::Reactivity => card_stack([inspector_card(
             "Reactivity",
@@ -338,7 +337,11 @@ fn card_stack(cards: impl IntoIterator<Item = Element>) -> Element {
     )
 }
 
-fn elements_body(tree: &[InspectorNodeSnapshot], selected: Option<&InspectorNodeSnapshot>) -> Element {
+fn elements_body(
+    tree: &[InspectorNodeSnapshot],
+    selected: Option<&InspectorNodeSnapshot>,
+    root: &Element,
+) -> Element {
     let selected_key = selected.map(|n| super::snapshot::path_to_key(&n.path));
     let hover_key_str = DevToolsState::hover_path_key();
     let hover_key = if hover_key_str.is_empty() {
@@ -359,7 +362,7 @@ fn elements_body(tree: &[InspectorNodeSnapshot], selected: Option<&InspectorNode
     )
     .into();
 
-    let details = details_pane(selected);
+    let details = details_pane(selected, root);
 
     card_stack([
         inspector_card("Elements", tree_el),
@@ -406,14 +409,16 @@ fn tree_row(
         .on_hover(move |on| {
             if on {
                 DevToolsState::set_hover_highlight_path(path_hover.clone());
-            } else {
+            } else if !DevToolsState::is_pick() {
+                // In pick mode the page pointer owns HOVER_PATH; clearing here would wipe
+                // pick hover because tree rows share the same path keys as app nodes.
                 DevToolsState::clear_hover_highlight_if_path(&path_hover);
             }
         })
         .into()
 }
 
-fn details_pane(selected: Option<&InspectorNodeSnapshot>) -> Element {
+fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Element {
     let Some(node) = selected else {
         return Element::from(
             r#box()
@@ -473,51 +478,11 @@ fn details_pane(selected: Option<&InspectorNodeSnapshot>) -> Element {
         ),
     ];
 
-    fields.push(section("Live edit (whitelist)"));
-    let path_key = super::snapshot::path_to_key(&path);
-    fields.push(edit_row(
-        "pad",
-        &path_key,
-        "padding px",
-        format!("{:.0}", bm.padding_top),
-        {
-            let path = path.clone();
-            move |v| apply_patch(path.clone(), StylePatch::PaddingUniform(v))
-        },
-    ));
-    fields.push(edit_row(
-        "w",
-        &path_key,
-        "width px",
-        parse_px_hint(&st.width),
-        {
-            let path = path.clone();
-            move |v| apply_patch(path.clone(), StylePatch::WidthPx(v))
-        },
-    ));
-    fields.push(edit_row(
-        "h",
-        &path_key,
-        "height px",
-        parse_px_hint(&st.height),
-        {
-            let path = path.clone();
-            move |v| apply_patch(path.clone(), StylePatch::HeightPx(v))
-        },
-    ));
-    fields.push(edit_row(
-        "op",
-        &path_key,
-        "opacity 0–1",
-        format!("{:.2}", st.opacity),
-        {
-            let path = path.clone();
-            move |v| apply_patch(path.clone(), StylePatch::Opacity(v))
-        },
-    ));
-    fields.push(token_row(path.clone(), &path_key, st));
     fields.push(section("CSSOM"));
-    fields.push(cssom_editor(path, st));
+    let cssom_seed = super::snapshot::find_element_by_path(root, &path)
+        .map(super::snapshot::cssom_text_from_element)
+        .unwrap_or_else(|| cssom_text_from_style(st));
+    fields.push(cssom_editor(path, cssom_seed));
 
     Element::from(
         vstack()
@@ -580,36 +545,17 @@ fn layout_body(selected: Option<&InspectorNodeSnapshot>) -> Element {
     )
 }
 
-fn parse_px_hint(s: &str) -> String {
-    s.trim_end_matches("px").trim().to_string()
-}
-
-fn apply_patch(path: Vec<usize>, patch: StylePatch) {
-    runtime::patch_devtools_style(&path, patch);
-    runtime::request_redraw();
+/// After CSSOM Apply, refresh the textarea store from the live node (no Styles pane rebuild).
+pub(crate) fn sync_inspector_editor_stores(path: &[usize], el: &crate::core::tree::Element) {
+    seed_edit_field(
+        &cssom_input_id(path),
+        &super::snapshot::cssom_text_from_element(el),
+        true,
+    );
 }
 
 fn apply_cssom(path: Vec<usize>, css: String) {
-    if let Some(dump) = runtime::patch_devtools_cssom(&path, &css) {
-        let key = cssom_signal_key(&path);
-        use_signal(&key, String::new).set(dump);
-    }
-    runtime::request_redraw();
-}
-
-fn edit_signal_key(id: &str, path_key: &str) -> String {
-    format!("__rui_dt_edit_{id}_{path_key}")
-}
-
-fn edit_input_id(id: &str, path_key: &str) -> String {
-    format!("dt-in-{id}-{path_key}")
-}
-
-fn cssom_signal_key(path: &[usize]) -> String {
-    format!(
-        "__rui_dt_cssom_{}",
-        super::snapshot::path_to_key(path)
-    )
+    super::queue_inspector_cssom(path, css);
 }
 
 fn cssom_input_id(path: &[usize]) -> String {
@@ -619,20 +565,24 @@ fn cssom_input_id(path: &[usize]) -> String {
     )
 }
 
-/// Keep inspector edit fields in sync with the selected node without stealing focus.
-fn seed_edit_field(signal_key: &str, field_id: &str, current: &str) {
-    let buf = use_signal(signal_key, || current.to_string());
+fn field_store_value(field_id: &str) -> String {
+    use_signal(&input_value_signal_key(field_id), String::new).peek()
+}
+
+/// Seed the CSSOM textarea value **store** from the selected node.
+///
+/// Uncontrolled (no `value_signal`): only `set_silent` — panel build runs under
+/// `AppState` borrow, so `Signal::set` must not flush effects.
+fn seed_edit_field(field_id: &str, current: &str, multiline: bool) {
+    crate::utils::text_field::unbind_controlled_value(field_id);
     let focused = use_signal("__rui_button_focus_id", String::new);
-    let fid = focus_id_for_text_edit(field_id, false);
+    let fid = focus_id_for_text_edit(field_id, multiline);
     if focused.peek() == fid {
         return;
     }
-    if buf.peek() != current {
-        buf.set(current.to_string());
-        let store = use_signal(&input_value_signal_key(field_id), String::new);
-        if store.peek() != current {
-            store.set_silent(current.to_string());
-        }
+    let store = use_signal(&input_value_signal_key(field_id), String::new);
+    if store.peek() != current {
+        store.set_silent(current.to_string());
     }
 }
 
@@ -673,85 +623,10 @@ fn section(title: &str) -> Element {
     )
 }
 
-fn edit_row(
-    id: &str,
-    path_key: &str,
-    caption: &str,
-    current: String,
-    on_apply: impl Fn(f32) + Clone + 'static,
-) -> Element {
-    let signal_key = edit_signal_key(id, path_key);
-    let field_id = edit_input_id(id, path_key);
-    seed_edit_field(&signal_key, &field_id, &current);
-    let buf = use_signal(&signal_key, move || current.clone());
-    let apply = on_apply.clone();
-    Element::from(
-        hstack()
-            .w("100%")
-            .px("0.75rem")
-            .py("0.2rem")
-            .gap("0.25rem")
-            .items("center")
-            .children([
-                label(format!("dt-ed-{id}-{path_key}"))
-                    .text(caption)
-                    .text_size("0.6875rem")
-                    .w("6.5rem")
-                    .into(),
-                input(&field_id)
-                    .value_signal(buf)
-                    .w("100%")
-                    .into(),
-                button(format!("dt-apply-{id}-{path_key}"))
-                    .size("sm")
-                    .text("Set")
-                    .on_click(move || {
-                        if let Ok(v) = buf.peek().trim().parse::<f32>() {
-                            apply(v);
-                        }
-                    })
-                    .into(),
-            ]),
-    )
-}
-
-fn token_row(path: Vec<usize>, path_key: &str, st: &StyleSnapshot) -> Element {
-    let signal_key = edit_signal_key("bg", path_key);
-    let field_id = edit_input_id("bg", path_key);
-    seed_edit_field(&signal_key, &field_id, &st.bg);
-    let buf = use_signal(&signal_key, || st.bg.clone());
-    Element::from(
-        hstack()
-            .w("100%")
-            .px("0.75rem")
-            .py("0.2rem")
-            .gap("0.25rem")
-            .items("center")
-            .children([
-                label(format!("dt-ed-bg-{path_key}"))
-                    .text("bg token")
-                    .text_size("0.6875rem")
-                    .w("6.5rem")
-                    .into(),
-                input(&field_id).value_signal(buf).w("100%").into(),
-                button(format!("dt-apply-bg-{path_key}"))
-                    .size("sm")
-                    .text("Set")
-                    .on_click(move || {
-                        let token = buf.peek();
-                        apply_patch(path.clone(), StylePatch::BackgroundToken(token));
-                    })
-                    .into(),
-            ]),
-    )
-}
-
-fn cssom_editor(path: Vec<usize>, st: &StyleSnapshot) -> Element {
-    let seed = cssom_text_from_style(st);
-    let key = cssom_signal_key(&path);
+fn cssom_editor(path: Vec<usize>, seed: String) -> Element {
     let field_id = cssom_input_id(&path);
-    seed_edit_field(&key, &field_id, &seed);
-    let buf = use_signal(&key, move || seed.clone());
+    seed_edit_field(&field_id, &seed, true);
+    let field_id_click = field_id.clone();
     Element::from(
         vstack()
             .w("100%")
@@ -761,9 +636,8 @@ fn cssom_editor(path: Vec<usize>, st: &StyleSnapshot) -> Element {
             .children([
                 {
                     let mut editor: Element = textarea(&field_id)
-                        .rows(10)
+                        .rows(18)
                         .resizable(false)
-                        .value_signal(buf)
                         .into();
                     editor = editor.w("100%");
                     editor
@@ -772,7 +646,7 @@ fn cssom_editor(path: Vec<usize>, st: &StyleSnapshot) -> Element {
                     .size("sm")
                     .text("Apply CSS")
                     .on_click(move || {
-                        apply_cssom(path.clone(), buf.peek());
+                        apply_cssom(path.clone(), field_store_value(&field_id_click));
                     })
                     .into(),
             ]),
@@ -783,6 +657,38 @@ fn cssom_editor(path: Vec<usize>, st: &StyleSnapshot) -> Element {
 mod tests {
     use super::*;
     use crate::core::tree::Element;
+
+    #[test]
+    fn inspector_seed_unbinds_stale_controlled_pairing() {
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::utils::text_field::{
+            bind_controlled_value, input_value_signal_key, pull_controlled_into_store,
+            unbind_controlled_value,
+        };
+
+        create_root(|| {
+            let id = "dt-cssom-test-unbind";
+            let external = use_signal("__rui_dt_cssom_test_unbind", || "from-external".into());
+            bind_controlled_value(id, external);
+            assert_eq!(
+                use_signal(&input_value_signal_key(id), String::new).peek(),
+                "from-external"
+            );
+
+            // Simulate Inspector switching to uncontrolled: drop pairing, seed store.
+            unbind_controlled_value(id);
+            use_signal(&input_value_signal_key(id), String::new)
+                .set_silent("from-store".into());
+
+            // Paint sync must NOT pull the old external back over the store.
+            let pulled = pull_controlled_into_store(id, "from-store", false);
+            assert!(pulled.is_none());
+            assert_eq!(
+                use_signal(&input_value_signal_key(id), String::new).peek(),
+                "from-store"
+            );
+        });
+    }
 
     #[test]
     fn wrap_app_inserts_docked_panel_slot() {
@@ -800,5 +706,35 @@ mod tests {
         assert!(host.children.iter().any(|c| {
             c.template_id.as_deref() == Some("__rui_devtools_highlight")
         }));
+    }
+
+    #[test]
+    fn sync_inspector_editor_stores_refreshes_cssom_textarea() {
+        use crate::core::reactivity::create_root;
+        use crate::utils::text_field::input_value_signal_key;
+
+        create_root(|| {
+            let mut el = Element::new();
+            super::super::style_edit::apply_style_patch(
+                &mut el,
+                &super::super::style_edit::StylePatch::Opacity(0.25),
+            );
+            let path = vec![0usize];
+            let path_key = super::super::snapshot::path_to_key(&path);
+            use_signal(
+                &input_value_signal_key(&format!("dt-cssom-{path_key}")),
+                String::new,
+            )
+            .set_silent("opacity: 1.00;\n".into());
+
+            sync_inspector_editor_stores(&path, &el);
+
+            let cssom = use_signal(
+                &input_value_signal_key(&format!("dt-cssom-{path_key}")),
+                String::new,
+            )
+            .peek();
+            assert!(cssom.contains("opacity: 0.25"), "cssom={cssom}");
+        });
     }
 }
