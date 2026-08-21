@@ -144,7 +144,7 @@ pub fn shutdown_layout_text() {
     });
 }
 
-fn with_layout_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
+pub(crate) fn with_layout_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
     LAYOUT_FONT_SYSTEM.with(|cell| {
         let mut slot = cell.borrow_mut();
         match &mut *slot {
@@ -164,6 +164,27 @@ fn with_layout_font_system<R>(f: impl FnOnce(&mut FontSystem) -> R) -> R {
                 }
             }
         }
+    })
+}
+
+/// Single-line glyph advance for a UTF-8 prefix (caret / selection chrome).
+pub fn measure_prefix_advance(text: &str, size: f32, weight: u16, line_height: f32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    with_layout_font_system(|font_system| {
+        let family = crate::renderer::text_hit::best_font_family(font_system);
+        let weight =
+            crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+        crate::renderer::text_hit::measure_prefix_width(
+            font_system,
+            text,
+            size.max(1.0),
+            line_height.max(1.0),
+            weight,
+            family,
+            1.0e6,
+        )
     })
 }
 
@@ -211,6 +232,10 @@ fn split_segments(text: &str) -> Vec<(String, bool)> {
         } else if c.is_whitespace() || is_cjk(c) {
             flush_word(&mut buf, &mut out);
             out.push((c.to_string(), true));
+        } else if matches!(c, '-' | '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}') {
+            // UAX#14 BA: break *after* hyphen — matches glyphon `Wrap::Word` ("border-│radius").
+            buf.push(c);
+            out.push((std::mem::take(&mut buf), true));
         } else {
             buf.push(c);
         }
@@ -822,6 +847,159 @@ pub fn layout_lines(prepared: &PreparedText, avail_width: f32) -> Vec<PreparedLi
         );
     }
     lines
+}
+
+/// Soft-wrap (and hard-`\n`) visual lines as `[start, end)` UTF-8 byte ranges into `text`.
+///
+/// Prefer **glyphon `Wrap::Word` layout runs** (same breaks as textarea paint) so caret /
+/// hit-test / ↑↓ sit on the painted rows — segment `layout_lines` alone misses hyphen
+/// breaks and mid-word wrap.
+///
+/// Empty `text` yields a single `(0, 0)` range. Hard `\n` is not included in either
+/// adjacent range body.
+pub fn soft_visual_line_byte_ranges(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    avail_width: f32,
+) -> Vec<(usize, usize)> {
+    if text.is_empty() {
+        return vec![(0, 0)];
+    }
+    let avail = avail_width.max(1.0);
+    let lh = line_height.max(1.0);
+    let mut ranges = with_layout_font_system(|font_system| {
+        soft_visual_line_byte_ranges_glyphon(font_system, text, size, weight, lh, avail)
+    });
+    if ranges.is_empty() {
+        ranges = soft_visual_line_byte_ranges_segments(text, size, weight, lh, avail);
+    }
+    if text.ends_with('\n') {
+        let n = text.len();
+        if ranges.last() != Some(&(n, n)) {
+            ranges.push((n, n));
+        }
+    }
+    ranges
+}
+
+fn soft_visual_line_byte_ranges_glyphon(
+    font_system: &mut FontSystem,
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    avail: f32,
+) -> Vec<(usize, usize)> {
+    let family = crate::renderer::text_hit::best_font_family(font_system);
+    let weight =
+        crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+    ensure_coverage_for_text(font_system, text);
+    let shaping = if text.is_ascii() {
+        Shaping::Basic
+    } else {
+        Shaping::Advanced
+    };
+    let mut buffer = Buffer::new(font_system, Metrics::new(size.max(1.0), line_height));
+    // Match input soft-wrap paint: default Word wrap at the live leaf width (no fit-shrink).
+    buffer.set_wrap(Wrap::Word);
+    buffer.set_text(
+        text,
+        &Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight)),
+        shaping,
+        None,
+    );
+    let tall = (line_height * (text.lines().count().max(1) as f32 + 4.0)).max(line_height + 2.0);
+    buffer.set_size(Some(avail), Some(tall));
+    buffer.shape_until_scroll(font_system, false);
+
+    // Byte start of each hard buffer line inside `text`.
+    let mut hard_starts: Vec<usize> = Vec::with_capacity(buffer.lines.len().max(1));
+    let mut byte = 0usize;
+    for (li, line) in buffer.lines.iter().enumerate() {
+        hard_starts.push(byte);
+        let line_len = line.text().len();
+        byte = byte.saturating_add(line_len);
+        if li + 1 < buffer.lines.len() {
+            // Buffer lines omit the `\n` separator that still exists in `text`.
+            if text.as_bytes().get(byte) == Some(&b'\n') {
+                byte += 1;
+            }
+        }
+    }
+
+    let mut ranges = Vec::new();
+    for run in buffer.layout_runs() {
+        let base = hard_starts.get(run.line_i).copied().unwrap_or(text.len());
+        if run.glyphs.is_empty() {
+            ranges.push((base.min(text.len()), base.min(text.len())));
+            continue;
+        }
+        let start = base.saturating_add(run.glyphs[0].start).min(text.len());
+        let end = base
+            .saturating_add(run.glyphs[run.glyphs.len() - 1].end)
+            .min(text.len());
+        ranges.push((start, end.max(start)));
+    }
+    ranges
+}
+
+fn soft_visual_line_byte_ranges_segments(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    avail_width: f32,
+) -> Vec<(usize, usize)> {
+    let prepared = prepare(text, size, weight, line_height);
+    let mut seg_byte_start = Vec::with_capacity(prepared.segments.len());
+    let mut byte = 0usize;
+    for seg in &prepared.segments {
+        seg_byte_start.push(byte);
+        byte = byte.saturating_add(seg.text.len()).min(text.len());
+    }
+    let lines = layout_lines(&prepared, avail_width.max(1.0));
+    let mut ranges = Vec::with_capacity(lines.len());
+    for line in &lines {
+        if line.start_seg >= line.end_seg {
+            let start = seg_byte_start
+                .get(line.start_seg)
+                .copied()
+                .unwrap_or(text.len());
+            ranges.push((start, start));
+            continue;
+        }
+        let start = seg_byte_start[line.start_seg];
+        let last = line.end_seg - 1;
+        let end = seg_byte_start[last] + prepared.segments[last].text.len();
+        ranges.push((start.min(text.len()), end.min(text.len())));
+    }
+    if ranges.is_empty() {
+        ranges.push((0, text.len()));
+    }
+    ranges
+}
+
+/// Index of the visual line that owns `caret` within [`soft_visual_line_byte_ranges`].
+pub fn caret_visual_line_index(ranges: &[(usize, usize)], caret: usize) -> usize {
+    if ranges.is_empty() {
+        return 0;
+    }
+    let caret = caret.min(ranges.last().map(|(_, e)| *e).unwrap_or(0));
+    // Prefer the last range that still contains caret (wrap point → end of prior soft line).
+    let mut best = 0usize;
+    for (i, &(s, e)) in ranges.iter().enumerate() {
+        if caret >= s && caret <= e {
+            best = i;
+        }
+        if caret < s {
+            break;
+        }
+    }
+    best
 }
 
 /// Pure arithmetic wrap over prepared segment widths.

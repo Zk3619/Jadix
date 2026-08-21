@@ -7,8 +7,7 @@
 ///   **Default for Input and Combobox.** Not for static captions.
 /// - [`Self::Clip`]: static single-line crop (no `…`, no pan). Label / Button.
 /// - [`Self::Ellipsis`]: static single-line trailing `…` (`truncate`). Label / Button.
-/// - [`Self::Newline`]: soft-wrap. Label. (Textarea keeps hard-`\n` + `whitespace-nowrap`
-///   until caret/hit-test are soft-wrap aware.)
+/// - [`Self::Newline`]: soft-wrap (Label / Textarea default).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextOverflow {
     #[default]

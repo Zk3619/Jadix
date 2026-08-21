@@ -293,7 +293,9 @@ pub fn hit_test_input_text_index(
     let y = bounds[1];
     let w = bounds[2];
     let h = bounds[3];
-    let mx = if style.overflow.allows_caret_scroll() {
+    let mx = if style.overflow.allows_caret_scroll()
+        || style.white_space == crate::style::WhiteSpace::Nowrap
+    {
         mx
     } else {
         mx.clamp(x, x + w.max(0.0))
@@ -312,19 +314,46 @@ pub fn hit_test_input_text_index(
     let font_weight =
         crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
-    let lines = hard_line_slices(display);
-    let line_i = if lines.len() > 1 {
-        ((my - y) / line_height_logical)
+    let soft_wrap = style.white_space != crate::style::WhiteSpace::Nowrap
+        && !style.overflow.allows_caret_scroll();
+    let (line_start, line_body, wrap_limit) = if soft_wrap {
+        let avail = (w.max(1.0)).max(1.0);
+        let ranges = crate::text::soft_visual_line_byte_ranges(
+            display,
+            style.size,
+            style.weight,
+            line_height_for_style(style, 1.0).max(1.0),
+            avail,
+        );
+        let line_i = ((my - y) / line_height_logical)
             .floor()
-            .clamp(0.0, (lines.len() - 1) as f32) as usize
+            .clamp(0.0, (ranges.len().saturating_sub(1)) as f32) as usize;
+        let (start, end) = ranges[line_i];
+        let body = &display[start..end];
+        (start, body, box_w)
     } else {
-        0
+        let lines = hard_line_slices(display);
+        let line_i = if lines.len() > 1 {
+            ((my - y) / line_height_logical)
+                .floor()
+                .clamp(0.0, (lines.len() - 1) as f32) as usize
+        } else {
+            0
+        };
+        let (line_start, line_body) = lines[line_i];
+        let wrap_limit = if style.overflow.allows_caret_scroll() {
+            UNBOUNDED_WRAP
+        } else {
+            box_w
+        };
+        (line_start, line_body, wrap_limit)
     };
-    let (line_start, line_body) = lines[line_i];
     // Padding / chrome just outside the leaf: native `<input>` jumps to that
     // line's start or end (and lets caret-scroll reveal it). Mapping through
     // `scroll_x` would land on a mid-glyph at the clip edge instead.
-    if style.overflow.allows_caret_scroll() {
+    let pan_or_nowrap = style.overflow.allows_caret_scroll()
+        || style.white_space == crate::style::WhiteSpace::Nowrap;
+    if pan_or_nowrap {
         if mx < x {
             return line_start;
         }
@@ -333,11 +362,6 @@ pub fn hit_test_input_text_index(
         }
     }
     let rel_in_box = (mx - x + style.scroll_x.max(0.0)) * ui_scale;
-    let wrap_limit = if style.overflow.allows_caret_scroll() {
-        UNBOUNDED_WRAP
-    } else {
-        box_w
-    };
     let measured = measure_prefix_width(
         font_system,
         line_body,
@@ -347,7 +371,7 @@ pub fn hit_test_input_text_index(
         family,
         wrap_limit,
     );
-    let content_w = if style.overflow.allows_caret_scroll() {
+    let content_w = if pan_or_nowrap {
         measured
     } else {
         measured.min(box_w)
@@ -369,6 +393,104 @@ pub fn hit_test_input_text_index(
         wrap_limit,
     );
     line_start + local
+}
+
+/// True when `(mx, my)` is in the horizontal blank beside a hard line's ink
+/// (left/right of glyphs, including padding outside the text leaf).
+///
+/// Used for double-click → select whole line. Empty line bodies are never blank
+/// hits (there is no non-empty range to select).
+pub fn hit_test_input_is_line_side_blank(
+    font_system: &mut glyphon::FontSystem,
+    display: &str,
+    mx: f32,
+    my: f32,
+    bounds: [f32; 4],
+    style: &TextStyle,
+    ui_scale: f32,
+) -> bool {
+    let x = bounds[0];
+    let y = bounds[1];
+    let w = bounds[2];
+    let h = bounds[3];
+    // Do not clamp into the leaf: chrome padding outside the box is the blank
+    // area we care about (textarea Clip path would otherwise collapse it onto ink).
+    let my = my.clamp(y, y + h.max(0.0));
+    let scaled_size = style.size * ui_scale;
+    let line_height = line_height_for_style(style, ui_scale);
+    let line_height_logical = line_height_for_style(style, 1.0).max(1.0);
+    let family = if let Some(ref f) = style.font_family {
+        crate::utils::font::resolve_family(font_system.db(), f)
+    } else {
+        best_font_family(font_system)
+    };
+    let is_icon = style.font_family.as_deref() == Some("lucide");
+    let requested_weight = if is_icon { 400 } else { style.weight };
+    let font_weight =
+        crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
+    let box_w = w * ui_scale;
+    let soft_wrap = style.white_space != crate::style::WhiteSpace::Nowrap
+        && !style.overflow.allows_caret_scroll();
+    let (line_body, wrap_limit) = if soft_wrap {
+        let avail = w.max(1.0);
+        let ranges = crate::text::soft_visual_line_byte_ranges(
+            display,
+            style.size,
+            style.weight,
+            line_height_logical,
+            avail,
+        );
+        let line_i = ((my - y) / line_height_logical)
+            .floor()
+            .clamp(0.0, (ranges.len().saturating_sub(1)) as f32) as usize;
+        let (start, end) = ranges[line_i];
+        (&display[start..end], box_w)
+    } else {
+        let lines = hard_line_slices(display);
+        let line_i = if lines.len() > 1 {
+            ((my - y) / line_height_logical)
+                .floor()
+                .clamp(0.0, (lines.len() - 1) as f32) as usize
+        } else {
+            0
+        };
+        let (_line_start, line_body) = lines[line_i];
+        let wrap_limit = if style.overflow.allows_caret_scroll() {
+            UNBOUNDED_WRAP
+        } else {
+            box_w
+        };
+        (line_body, wrap_limit)
+    };
+    if line_body.is_empty() {
+        return false;
+    }
+    if mx < x || mx > x + w.max(0.0) {
+        return true;
+    }
+    let measured = measure_prefix_width(
+        font_system,
+        line_body,
+        scaled_size,
+        line_height,
+        font_weight,
+        family,
+        wrap_limit,
+    );
+    let content_w = if style.overflow.allows_caret_scroll() {
+        measured
+    } else {
+        measured.min(box_w)
+    };
+    let offset = match style.align {
+        glyphon::cosmic_text::Align::Center => (box_w - content_w) * 0.5,
+        glyphon::cosmic_text::Align::Right => box_w - content_w,
+        _ => 0.0,
+    };
+    let rel_in_box = (mx - x + style.scroll_x.max(0.0)) * ui_scale;
+    // Half-px slack so sitting on the first/last glyph edge is not treated as blank.
+    const EPS: f32 = 0.5;
+    rel_in_box < offset - EPS || rel_in_box > offset + content_w + EPS
 }
 
 fn line_height_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
@@ -495,5 +617,51 @@ mod tests {
             ix > line0.len(),
             "must not land inside hard line 0 when clicking the second row"
         );
+    }
+
+    #[test]
+    fn line_side_blank_detects_padding_and_ink_gap() {
+        let mut fs = test_font_system();
+        let text = "hi";
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.overflow = TextOverflow::Hidden;
+        // Wide leaf so the right side past "hi" is blank.
+        let bounds = [10.0, 0.0, 200.0, 21.0];
+        assert!(
+            hit_test_input_is_line_side_blank(&mut fs, text, 0.0, 10.0, bounds, &style, 1.0),
+            "left of leaf is blank"
+        );
+        assert!(
+            hit_test_input_is_line_side_blank(&mut fs, text, 180.0, 10.0, bounds, &style, 1.0),
+            "right of ink inside leaf is blank"
+        );
+        assert!(
+            !hit_test_input_is_line_side_blank(&mut fs, text, 12.0, 10.0, bounds, &style, 1.0),
+            "over the first glyphs must not count as blank"
+        );
+    }
+
+    #[test]
+    fn line_side_blank_multiline_uses_hard_line() {
+        let mut fs = test_font_system();
+        let text = "short\nxy";
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.overflow = TextOverflow::Clip;
+        style.white_space = crate::style::WhiteSpace::Nowrap;
+        let bounds = [0.0, 0.0, 200.0, 42.0];
+        // Second hard line, far to the right of "xy".
+        assert!(hit_test_input_is_line_side_blank(
+            &mut fs, text, 150.0, 30.0, bounds, &style, 1.0
+        ));
+        // Over "xy" on line 1.
+        assert!(!hit_test_input_is_line_side_blank(
+            &mut fs, text, 2.0, 30.0, bounds, &style, 1.0
+        ));
     }
 }

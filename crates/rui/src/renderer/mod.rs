@@ -50,8 +50,8 @@ pub use present_retain::PresentRetainPipeline;
 pub use resources::{ResourceKind, TextureMeta, TexturePool};
 pub use text::RuiTextRenderer;
 pub use text_hit::{
-    best_font_family, hit_test_input_text_index, is_single_line_text_box, measure_prefix_width,
-    truncate_with_ellipsis,
+    best_font_family, hit_test_input_is_line_side_blank, hit_test_input_text_index,
+    is_single_line_text_box, measure_prefix_width, truncate_with_ellipsis,
 };
 pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 

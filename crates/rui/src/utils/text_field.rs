@@ -7,7 +7,7 @@
 //! **非 paint** 路径上通知订阅者；paint sync 仅允许 [`pull_controlled_into_store`]
 //!（`set_silent`），避免 `AppState` RefCell 重入。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::core::reactivity::{use_signal, Signal};
@@ -33,6 +33,56 @@ pub fn textarea_scroll_rest(id: &str) -> String {
 /// 多行高度信号（resize / 固定可视区）。
 pub fn textarea_height_signal_key(id: &str) -> String {
     format!("__rui_textarea_h_{id}")
+}
+
+/// Soft-wrap 可用宽度（逻辑 px）；↑/↓ / Home/End 视觉行导航读取。
+pub fn textarea_wrap_width_signal_key(id: &str) -> String {
+    format!("__rui_textarea_wrap_w_{id}")
+}
+
+/// Textarea 单行溢出：软换行（默认）或横向滚动；不用 clip 裁切长行。
+///
+/// 对齐 HTML `wrap="soft"` / `wrap="off"`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextareaWrapMode {
+    /// 无回车软换行（默认）。
+    #[default]
+    Soft,
+    /// `whitespace-nowrap` + `overflow-x: auto` 横向滚动。
+    Scroll,
+}
+
+impl TextareaWrapMode {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "scroll" | "nowrap" | "no-wrap" => Self::Scroll,
+            _ => Self::Soft,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Soft => "soft",
+            Self::Scroll => "scroll",
+        }
+    }
+
+    #[inline]
+    pub fn soft_wrap(self) -> bool {
+        matches!(self, Self::Soft)
+    }
+}
+
+impl From<&str> for TextareaWrapMode {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for TextareaWrapMode {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
 }
 
 /// 右下角 resize grip 的 `focus_id` 前缀。
@@ -226,9 +276,34 @@ pub struct TextareaCaretScrollInsets {
 ///   陈旧 sy 把多行裁成顶上一薄条，看起来像「字形被压扁」）。
 /// - `max_scroll_y`（通常 `max(0, content_h - viewport_h)`）用于钳制，避免把内容顶出裁切区。
 /// - `insets`：textarea 内部 `py` 与末行 ink；单行 Input 用 [`Default::default()`]。
+/// - `visual_line_i`：软换行时传视觉行下标；`None` 则按 hard-`\n` 行。
 pub fn ensure_caret_visible_scroll_y(
     text: &str,
     caret_byte: usize,
+    line_height: f32,
+    viewport_h: f32,
+    scroll_y: f32,
+    max_scroll_y: f32,
+    insets: TextareaCaretScrollInsets,
+) -> Option<f32> {
+    ensure_caret_visible_scroll_y_at_line(
+        text,
+        caret_byte,
+        None,
+        line_height,
+        viewport_h,
+        scroll_y,
+        max_scroll_y,
+        insets,
+    )
+}
+
+/// Like [`ensure_caret_visible_scroll_y`], but `visual_line` is `(line_i, line_count)`
+/// for soft-wrap visual rows; `None` uses hard-`\n` indexing.
+pub fn ensure_caret_visible_scroll_y_at_line(
+    text: &str,
+    caret_byte: usize,
+    visual_line: Option<(usize, usize)>,
     line_height: f32,
     viewport_h: f32,
     scroll_y: f32,
@@ -245,8 +320,12 @@ pub fn ensure_caret_visible_scroll_y(
         // Content fits: any stale sy must clear.
         return if scroll_y > 0.5 { Some(0.0) } else { None };
     }
-    let (line_i, _) = caret_line_and_local(text, caret_byte);
-    let line_count = text.split('\n').count().max(1);
+    let (line_i, line_count) = if let Some((i, n)) = visual_line {
+        (i, n.max(1))
+    } else {
+        let (hard_i, _) = caret_line_and_local(text, caret_byte);
+        (hard_i, text.split('\n').count().max(1))
+    };
     let on_last_line = line_i + 1 >= line_count;
     let ink = if on_last_line {
         insets.ink_bottom.max(0.0)
@@ -370,6 +449,18 @@ pub(crate) fn input_reveal_template_id(id: &str) -> String {
 thread_local! {
     static CONTROLLED_VALUES: RefCell<HashMap<String, Signal<String>>> =
         RefCell::new(HashMap::new());
+    /// True while an input/textarea text drag-select is active. Paint must not run
+    /// `ensure_caret_visible_scroll_x` in this window — it fights edge auto-scroll.
+    static TEXT_DRAG_SELECT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Mark / clear text drag-select (window mouse down/up on input caret drag).
+pub(crate) fn set_text_drag_select_active(active: bool) {
+    TEXT_DRAG_SELECT.with(|c| c.set(active));
+}
+
+pub(crate) fn text_drag_select_active() -> bool {
+    TEXT_DRAG_SELECT.with(|c| c.get())
 }
 
 fn controlled_of(field_id: &str) -> Option<Signal<String>> {

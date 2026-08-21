@@ -3843,11 +3843,9 @@ fn prefix_width_logical(
     if ix == 0 {
         return 0.0;
     }
-    // `max_segment_width` is min-content (longest unbreakable segment), NOT the
-    // single-line advance. Latin+CJK prefixes like "1是" split into two segments;
-    // using max() places the caret roughly mid-"是". Use intrinsic (sum) instead.
-    let prepared = crate::text::prepare(&text[..ix], size, weight, line_height);
-    crate::text::intrinsic_width(&prepared)
+    // Prefer glyphon advance (matches paint + hit-test). Segment `prepare` under-counts
+    // vs shaped ink and left soft-wrap carets sitting on the last glyph.
+    crate::text::measure_prefix_advance(&text[..ix], size, weight, line_height.max(1.0))
 }
 
 /// Hard-`\n` lines as `(byte_start, line_body)` — trailing empty line after final `\n` included.
@@ -3929,10 +3927,28 @@ fn push_input_chrome_instances(
     } else {
         style.size * crate::style::tailwind_default_leading_scale(style.size)
     };
-    let lines = hard_line_slices(text);
-    let line_count = lines.len().max(1);
-    // Only hard/soft multi-line text — never infer from leaf box_h (ink pad would
-    // false-trigger and make single-line Input caret look "full field height").
+    let soft_wrap = style.white_space == crate::style::WhiteSpace::Normal
+        && !style.overflow.allows_caret_scroll();
+    // Soft-wrap: visual rows from measure layout (matches glyphon soft paint).
+    // Nowrap / single-line Hidden: hard-`\n` rows only.
+    let soft_ranges: Vec<(usize, usize)> = if soft_wrap {
+        crate::text::soft_visual_line_byte_ranges(
+            text,
+            style.size,
+            style.weight,
+            line_height.max(1.0),
+            box_w.max(1.0),
+        )
+    } else {
+        Vec::new()
+    };
+    let hard_lines = hard_line_slices(text);
+    let line_count = if soft_wrap {
+        soft_ranges.len().max(1)
+    } else {
+        hard_lines.len().max(1)
+    };
+    // Soft-wrap of one hard line still stacks visual rows — never center in the tall box.
     let multi_line_layout = line_count > 1;
     let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, style.size);
     let sel_h = if multi_line_layout {
@@ -3949,6 +3965,29 @@ fn push_input_chrome_instances(
     };
     let line_top_y = |line_i: usize| -> f32 { line_origin_y(line_i) };
     let caret_y = |line_i: usize| -> f32 { line_origin_y(line_i) + (line_height - caret_h) * 0.5 };
+
+    let line_body_at = |line_i: usize| -> (usize, &str) {
+        if soft_wrap {
+            soft_ranges
+                .get(line_i)
+                .map(|&(s, e)| (s, &text[s..e]))
+                .unwrap_or((0, ""))
+        } else {
+            hard_lines
+                .get(line_i)
+                .copied()
+                .unwrap_or((0, ""))
+        }
+    };
+    let line_and_local = |byte: usize| -> (usize, usize) {
+        if soft_wrap {
+            let i = crate::text::caret_visual_line_index(&soft_ranges, byte);
+            let (s, _) = soft_ranges.get(i).copied().unwrap_or((0, 0));
+            (i, byte.saturating_sub(s))
+        } else {
+            caret_line_and_local(text, byte)
+        }
+    };
 
     let range_opt: Option<(usize, usize)> = if let Some((sa, sb)) = caret.selection {
         let mut s = sa.min(sb).min(text.len());
@@ -3986,12 +4025,10 @@ fn push_input_chrome_instances(
             bg[2] as f32 / 255.0,
             (bg[3] as f32 / 255.0) * opacity,
         ];
-        let (start_line, start_local) = caret_line_and_local(text, s);
-        let (end_line, end_local) = caret_line_and_local(text, e);
+        let (start_line, start_local) = line_and_local(s);
+        let (end_line, end_local) = line_and_local(e);
         for line_i in start_line..=end_line.min(line_count.saturating_sub(1)) {
-            let Some((_, line_body)) = lines.get(line_i) else {
-                continue;
-            };
+            let (_line_start, line_body) = line_body_at(line_i);
             let from = if line_i == start_line { start_local } else { 0 };
             let to = if line_i == end_line {
                 end_local.min(line_body.len())
@@ -4046,16 +4083,16 @@ fn push_input_chrome_instances(
     }
     let mut ix = caret.caret_byte_index.min(text.len());
     ix = text.floor_char_boundary(ix);
-    let (line_i, local) = caret_line_and_local(text, ix);
-    let line_body = lines.get(line_i).map(|(_, body)| *body).unwrap_or("");
+    let (line_i, local) = line_and_local(ix);
+    let (_line_start, line_body) = line_body_at(line_i);
     let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
     let caret_w = 2.0_f32;
-    let mut caret_x = if style.overflow.allows_caret_scroll() {
-        x + prefix_w
-    } else {
-        x + prefix_w.min(box_w)
-    };
-    if !style.overflow.allows_caret_scroll() {
+    let mut caret_x = x + prefix_w;
+    if soft_wrap {
+        // Soft-wrap: do not clamp to `box_w - caret_w` — that parked the hairline on the
+        // last glyph when a visual line filled the leaf (gallery soft-wrap caret bug).
+        caret_x = caret_x.max(x);
+    } else if !style.overflow.allows_caret_scroll() {
         caret_x = caret_x.min(x + box_w - caret_w).max(x);
     }
     let c = style.color;
@@ -4180,6 +4217,83 @@ mod prepared_text_attach_tests {
                 r.rect_size[0]
             );
         }
+    }
+
+    #[test]
+    fn soft_wrap_caret_sits_on_visual_line_not_box_center() {
+        // One hard line soft-wrapped into several visual rows: caret must track the
+        // visual line (not vertically center in the tall leaf — gallery symptom).
+        let text =
+            "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px";
+        let lh = 21.0_f32;
+        let box_w = 160.0_f32;
+        let ranges = crate::text::soft_visual_line_byte_ranges(text, 14.0, 400, lh, box_w);
+        assert!(
+            ranges.len() >= 2,
+            "fixture must soft-wrap under {box_w}px, got {} lines",
+            ranges.len()
+        );
+        let caret_byte = text.len();
+        let visual_i = crate::text::caret_visual_line_index(&ranges, caret_byte);
+        let expected_y = visual_i as f32 * lh; // multi-line origin (no half-box center)
+
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.white_space = crate::style::WhiteSpace::Normal;
+        style.color = [0, 0, 0, 255];
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: caret_byte,
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+
+        let tall_h = lh * ranges.len() as f32 + 8.0;
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        let mut saw = false;
+        for _ in 0..8 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                0.0,
+                0.0,
+                box_w,
+                tall_h,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "caret must draw within blink window");
+        let caret_y = chrome[0].rect_pos[1];
+        let caret_x = chrome[0].rect_pos[0];
+        let centered = (tall_h - lh).max(0.0) * 0.5;
+        assert!(
+            (caret_y - expected_y).abs() < lh * 0.6,
+            "soft-wrap caret y={caret_y} should sit near visual line {visual_i} (≈{expected_y}), \
+             not box-center {centered}"
+        );
+        assert!(
+            (caret_y - centered).abs() > lh * 0.4 || visual_i == ranges.len() / 2,
+            "must not use single-line box centering for soft-wrapped tall leaf \
+             (y={caret_y} center={centered})"
+        );
+        let (s, e) = ranges[visual_i];
+        let body = &text[s..e];
+        let full_w = prefix_width_logical(body, body.len(), 14.0, 400, lh);
+        assert!(
+            (caret_x - full_w).abs() < 3.0,
+            "caret x={caret_x} should sit at end of visual line (prefix≈{full_w}), not mid-glyph"
+        );
     }
 
     #[test]

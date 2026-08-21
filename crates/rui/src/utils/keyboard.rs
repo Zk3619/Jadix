@@ -60,6 +60,18 @@ pub fn caret_line_end(s: &str, caret: usize) -> usize {
         .unwrap_or_else(|| s.len())
 }
 
+/// Soft-wrap visual-line Home（`ranges` from [`crate::text::soft_visual_line_byte_ranges`]).
+pub fn caret_visual_line_home(ranges: &[(usize, usize)], caret: usize) -> usize {
+    let i = crate::text::caret_visual_line_index(ranges, caret);
+    ranges.get(i).map(|(s, _)| *s).unwrap_or(0)
+}
+
+/// Soft-wrap visual-line End.
+pub fn caret_visual_line_end(ranges: &[(usize, usize)], caret: usize) -> usize {
+    let i = crate::text::caret_visual_line_index(ranges, caret);
+    ranges.get(i).map(|(_, e)| *e).unwrap_or(0)
+}
+
 /// ↑/↓：按 hard 行上下移动，尽量保持字符列；已在首/末行则原地不动。
 pub fn caret_move_vertical(s: &str, caret: usize, delta_lines: i32) -> usize {
     if delta_lines == 0 || s.is_empty() {
@@ -90,6 +102,40 @@ pub fn caret_move_vertical(s: &str, caret: usize, delta_lines: i32) -> usize {
     t_start + t_body.len()
 }
 
+/// ↑/↓ along soft-wrap visual lines; preserves character column within the visual row.
+pub fn caret_move_vertical_visual(
+    s: &str,
+    ranges: &[(usize, usize)],
+    caret: usize,
+    delta_lines: i32,
+) -> usize {
+    if delta_lines == 0 || s.is_empty() || ranges.is_empty() {
+        return s.floor_char_boundary(caret.min(s.len()));
+    }
+    let line_i = crate::text::caret_visual_line_index(ranges, caret);
+    let (start, end) = ranges[line_i];
+    let local = caret.saturating_sub(start).min(end.saturating_sub(start));
+    let col = s[start..start + local].chars().count();
+    let target = if delta_lines < 0 {
+        line_i.saturating_sub((-delta_lines) as usize)
+    } else {
+        (line_i + delta_lines as usize).min(ranges.len().saturating_sub(1))
+    };
+    if target == line_i {
+        return s.floor_char_boundary(caret.min(s.len()));
+    }
+    let (t_start, t_end) = ranges[target];
+    let t_body = &s[t_start..t_end];
+    let mut n = 0usize;
+    for (i, _) in t_body.char_indices() {
+        if n == col {
+            return t_start + i;
+        }
+        n += 1;
+    }
+    t_end
+}
+
 /// 展示串：`preedit` 插入 `committed` 的 `ime_anchor`。
 pub fn input_display_text(committed: &str, preedit: &str, ime_anchor: Option<usize>) -> String {
     if preedit.is_empty() {
@@ -117,6 +163,17 @@ pub fn select_all_range(s: &str) -> Option<(usize, usize)> {
         return None;
     }
     Some((0, s.len()))
+}
+
+/// Hard-`\n` line containing `caret`: `(home, end)` with `home < end`, or `None` if empty.
+pub fn select_line_range(s: &str, caret: usize) -> Option<(usize, usize)> {
+    let home = caret_line_home(s, caret);
+    let end = caret_line_end(s, caret);
+    if home < end {
+        Some((home, end))
+    } else {
+        None
+    }
 }
 
 /// Shift-extend: keep the fixed anchor, move the active end to `new_caret`.
@@ -174,6 +231,19 @@ mod tests {
         assert_eq!(extend_selection(2, Some((2, 5)), 0), (5, 0));
         assert_eq!(normalized_selection("abcd", Some((3, 1))), Some((1, 3)));
         assert_eq!(normalized_selection("abcd", Some((2, 2))), None);
+    }
+
+    #[test]
+    fn select_line_range_covers_hard_line_only() {
+        let s = "ab\n你好\ncd";
+        let on_mid = "ab\n".len() + "你".len();
+        assert_eq!(
+            select_line_range(s, on_mid),
+            Some(("ab\n".len(), "ab\n你好".len()))
+        );
+        assert_eq!(select_line_range(s, 0), Some((0, 2)));
+        assert_eq!(select_line_range("", 0), None);
+        assert_eq!(select_line_range("\n", 0), None);
     }
 
     #[test]
