@@ -67,6 +67,10 @@ pub enum PopupPlacement {
     TopEnd,
     /// Prefer above; align panel center with trigger center (edge-clamped).
     TopCenter,
+    /// Prefer to the right of the trigger; top-aligned (submenu).
+    RightStart,
+    /// Prefer to the left of the trigger; top-aligned.
+    LeftStart,
 }
 
 impl PopupPlacement {
@@ -78,6 +82,8 @@ impl PopupPlacement {
             Self::TopStart => "top-start",
             Self::TopEnd => "top-end",
             Self::TopCenter => "top",
+            Self::RightStart => "right-start",
+            Self::LeftStart => "left-start",
         }
     }
 
@@ -88,8 +94,14 @@ impl PopupPlacement {
             "top-start" => Self::TopStart,
             "top-end" => Self::TopEnd,
             "top" | "top-center" => Self::TopCenter,
+            "right" | "right-start" => Self::RightStart,
+            "left" | "left-start" => Self::LeftStart,
             _ => Self::BottomStart,
         }
+    }
+
+    fn is_horizontal(self) -> bool {
+        matches!(self, Self::RightStart | Self::LeftStart)
     }
 }
 
@@ -113,6 +125,8 @@ pub const ATTR_FLOATING_MIN_W: &str = "rui_floating_min_w";
 pub const ATTR_FLOATING_GAP: &str = "rui_floating_gap";
 /// `flip`（默认）：视口内翻转并按剩余空间夹 `max_h`。`fixed`：钉在触发器首选侧，尺寸不随滚动挤压（可溢出视口）。
 pub const ATTR_FLOATING_STRATEGY: &str = "rui_floating_strategy";
+/// Cursor / point anchor `"x,y"`（逻辑像素）。有值时忽略触发器几何，走 [`compute_cursor_menu_placement`]。
+pub const ATTR_FLOATING_POINT: &str = "rui_floating_point";
 
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
@@ -132,6 +146,9 @@ pub fn mark_floating(
 }
 
 /// Like [`mark_floating`], with an explicit trigger–panel gap in px (e.g. tooltip `sideOffset`/`gutter` ≈ 4).
+///
+/// Negative `gap_px` overlaps the panel onto the trigger. Prefer a transparent hit pad when you
+/// want a **visible** gap without pointer fall-through (see ContextMenu SubContent).
 pub fn mark_floating_with_gap(
     el: &mut Element,
     id: &str,
@@ -140,7 +157,91 @@ pub fn mark_floating_with_gap(
     gap_px: f32,
 ) {
     mark_floating(el, id, trigger_focus_id, placement);
+    let g = gap_px.clamp(-32.0, 64.0);
+    el.set_attr(ATTR_FLOATING_GAP, format!("{g}"));
+}
+
+/// Context-menu style: expand from a viewport point (typically the cursor).
+///
+/// Still records `trigger_focus_id` for outside-press / path hit helpers.
+pub fn mark_floating_at_point(
+    el: &mut Element,
+    id: &str,
+    trigger_focus_id: &str,
+    x: f32,
+    y: f32,
+    gap_px: f32,
+) {
+    mark_floating(el, id, trigger_focus_id, PopupPlacement::BottomStart);
+    el.set_attr(ATTR_FLOATING_POINT, format!("{x},{y}"));
     el.set_attr(ATTR_FLOATING_GAP, format!("{}", gap_px.max(0.0)));
+}
+
+fn floating_point_of(el: &Element) -> Option<[f32; 2]> {
+    let raw = el.attrs.get(ATTR_FLOATING_POINT)?;
+    let (xs, ys) = raw.split_once(',')?;
+    let x: f32 = xs.trim().parse().ok()?;
+    let y: f32 = ys.trim().parse().ok()?;
+    if x.is_finite() && y.is_finite() {
+        Some([x, y])
+    } else {
+        None
+    }
+}
+
+/// 以光标点为原点向右下展开。策略顺序：首选位置 → **换向** → **视口内平移** → 夹 `max_h`（内部滚动）。
+///
+/// 返回 `(x, y, max_h)`；`max_h` 为该位置下可用高度，供面板内 ScrollArea 使用。
+pub fn compute_cursor_menu_placement(
+    cursor: [f32; 2],
+    viewport: [f32; 2],
+    menu_w: f32,
+    menu_h: f32,
+    gap: f32,
+) -> (f32, f32, f32) {
+    let [px, py] = cursor;
+    let [vw, vh] = viewport;
+    let margin = FLOATING_VIEWPORT_MARGIN;
+    let gap = gap.max(0.0);
+    let w = menu_w.max(1.0);
+    let h = menu_h.max(1.0);
+    let avail_h = (vh - 2.0 * margin).max(1.0);
+
+    let space_right = (vw - margin - (px + gap)).max(0.0);
+    let space_left = (px - gap - margin).max(0.0);
+    let space_below = (vh - margin - (py + gap)).max(0.0);
+    let space_above = (py - gap - margin).max(0.0);
+
+    // Preferred: grow bottom-right from the cursor.
+    let mut x = px + gap;
+    let mut y = py + gap;
+
+    // 1) Flip when the preferred side of the cursor cannot hold the menu and the
+    //    opposite side has more room (keep the menu attached to the cursor).
+    if space_right + 0.5 < w && space_left > space_right {
+        x = px - gap - w;
+    }
+    if space_below + 0.5 < h && space_above > space_below {
+        y = py - gap - h;
+    }
+
+    // 2) Translate into the viewport (full size when possible).
+    if x + w > vw - margin {
+        x = (vw - margin - w).max(margin);
+    }
+    if x < margin {
+        x = margin;
+    }
+    if y + h > vh - margin {
+        y = (vh - margin - h).max(margin);
+    }
+    if y < margin {
+        y = margin;
+    }
+
+    // 3) Clamp height for internal scrolling.
+    let max_h = (vh - margin - y).max(48.0).min(avail_h).max(1.0);
+    (x, y, max_h)
 }
 
 /// 根据触发器矩形与视口，计算浮层左上角与可用高度（优先下方/上方，空间不足则翻转）。
@@ -160,8 +261,49 @@ pub fn compute_anchored_placement(
     let [tx, ty, tw, th] = trigger;
     let [vw, vh] = viewport;
     let margin = FLOATING_VIEWPORT_MARGIN;
-    let gap = gap.max(0.0);
+    // Negative gap = overlap (submenu seam); keep a sane clamp.
+    let gap = gap.clamp(-32.0, 64.0);
     let w = if menu_w > 0.0 { menu_w } else { tw };
+    let h = menu_h_estimate.max(1.0);
+
+    // Horizontal primary axis (submenu): flip → translate → clamp max_h.
+    if preferred.is_horizontal() {
+        let space_right = (vw - margin - (tx + tw) - gap).max(0.0);
+        let space_left = (tx - margin - gap).max(0.0);
+        let prefer_right = matches!(preferred, PopupPlacement::RightStart);
+        let mut place_right = if prefer_right {
+            space_right + 0.5 >= w.min(80.0) || space_right >= space_left
+        } else {
+            !(space_left + 0.5 >= w.min(80.0) || space_left >= space_right)
+        };
+        // Flip when preferred side cannot hold the panel and the opposite has more room.
+        if prefer_right && space_right + 0.5 < w && space_left > space_right {
+            place_right = false;
+        } else if !prefer_right && space_left + 0.5 < w && space_right > space_left {
+            place_right = true;
+        }
+        let mut x = if place_right {
+            tx + tw + gap
+        } else {
+            tx - gap - w
+        };
+        let mut y = ty;
+        if x + w > vw - margin {
+            x = (vw - margin - w).max(margin);
+        }
+        if x < margin {
+            x = margin;
+        }
+        if y + h > vh - margin {
+            y = (vh - margin - h).max(margin);
+        }
+        if y < margin {
+            y = margin;
+        }
+        let max_h = (vh - margin - y).max(48.0);
+        return (x, y, max_h, !place_right);
+    }
+
     let prefer_bottom = matches!(
         preferred,
         PopupPlacement::BottomStart | PopupPlacement::BottomEnd | PopupPlacement::BottomCenter
@@ -535,8 +677,24 @@ fn apply_floating_menus(
     viewport: [f32; 2],
     changed: &mut bool,
 ) {
-    if let (Some(id), Some(trigger_fid)) = (floating_id_of(el), floating_trigger_of(el)) {
-        if let Some((_, tb)) = triggers.iter().find(|(f, _)| *f == trigger_fid) {
+    let Some(id) = floating_id_of(el) else {
+        for c in &mut el.children {
+            apply_floating_menus(c, triggers, viewport, changed);
+        }
+        return;
+    };
+
+    let point = floating_point_of(el);
+    let trigger_fid = floating_trigger_of(el);
+    let tb = if let Some(pt) = point {
+        Some([pt[0], pt[1], 0.0, 0.0])
+    } else if let Some(ref fid) = trigger_fid {
+        triggers.iter().find(|(f, _)| f == fid).map(|(_, b)| *b)
+    } else {
+        None
+    };
+
+    if let Some(tb) = tb {
             let match_trigger = el
                 .attrs
                 .get(ATTR_FLOATING_MATCH_TRIGGER)
@@ -555,6 +713,10 @@ fn apply_floating_menus(
             // Geometry knobs only — product defaults (8rem / max-h-96 / …) live on components.
             let (menu_w, width_auto, min_w) = if let Some(w) = explicit_w {
                 (w.max(0.0), false, attr_min_w.unwrap_or(0.0))
+            } else if point.is_some() {
+                // Cursor menus are content-sized; min-width from attr (e.g. 8rem).
+                let floor = attr_min_w.unwrap_or(0.0).max(0.0);
+                (floor, true, floor)
             } else if match_trigger {
                 let w = tb[2].max(0.0);
                 (w, false, attr_min_w.unwrap_or(w).max(w))
@@ -589,16 +751,36 @@ fn apply_floating_menus(
                 .attrs
                 .get(ATTR_FLOATING_GAP)
                 .and_then(|s| s.parse::<f32>().ok())
-                .unwrap_or(FLOATING_TRIGGER_GAP)
-                .max(0.0);
+                .unwrap_or(if point.is_some() {
+                    0.0
+                } else {
+                    FLOATING_TRIGGER_GAP
+                })
+                .clamp(-32.0, 64.0);
             let strategy_fixed = el
                 .attrs
                 .get(ATTR_FLOATING_STRATEGY)
                 .map(|s| s.eq_ignore_ascii_case("fixed"))
                 .unwrap_or(false);
-            let (x, y, max_h) = if strategy_fixed {
+            let (x, y, max_h) = if point.is_some() && !strategy_fixed {
+                let (x, y, available_max_h) = compute_cursor_menu_placement(
+                    [tb[0], tb[1]],
+                    viewport,
+                    estimate_w,
+                    estimate_h,
+                    gap,
+                );
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                    .unwrap_or(available_max_h)
+                    .max(1.0);
+                (x, y, max_h)
+            } else if strategy_fixed {
                 let (x, y) =
-                    compute_fixed_anchor(*tb, viewport, estimate_w, estimate_h, preferred, gap);
+                    compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
                 let max_h = el
                     .attrs
                     .get(ATTR_FLOATING_MAX_H)
@@ -609,7 +791,7 @@ fn apply_floating_menus(
                 (x, y, max_h)
             } else {
                 let (x, y, available_max_h, _) = compute_anchored_placement(
-                    *tb, viewport, estimate_w, estimate_h, preferred, gap,
+                    tb, viewport, estimate_w, estimate_h, preferred, gap,
                 );
                 let max_h = el
                     .attrs
@@ -645,8 +827,8 @@ fn apply_floating_menus(
             if write_floating_place(el, next) {
                 *changed = true;
             }
-        }
     }
+
     for c in &mut el.children {
         apply_floating_menus(c, triggers, viewport, changed);
     }
@@ -1386,6 +1568,63 @@ mod tests {
             return true;
         }
         el.children.iter().any(portal_nests_portal)
+    }
+
+    #[test]
+    fn compute_cursor_menu_prefers_bottom_right() {
+        let (x, y, max_h) =
+            compute_cursor_menu_placement([100.0, 80.0], [800.0, 600.0], 160.0, 120.0, 2.0);
+        assert!((x - 102.0).abs() < 0.5, "x={x}");
+        assert!((y - 82.0).abs() < 0.5, "y={y}");
+        assert!(max_h >= 120.0, "max_h={max_h}");
+    }
+
+    #[test]
+    fn compute_cursor_menu_flips_before_translate() {
+        // Near bottom-right: preferred side can't hold the menu; opposite can → flip
+        // (stay attached to the cursor) instead of sliding to the viewport edge.
+        let (x, y, _) =
+            compute_cursor_menu_placement([740.0, 520.0], [800.0, 600.0], 160.0, 120.0, 0.0);
+        assert!(
+            (x - (740.0 - 160.0)).abs() < 0.5,
+            "must flip left of cursor, x={x}"
+        );
+        assert!(
+            (y - (520.0 - 120.0)).abs() < 0.5,
+            "must flip above cursor, y={y}"
+        );
+    }
+
+    #[test]
+    fn compute_cursor_menu_translates_when_flip_still_overflows() {
+        // Menu wider than space on either side of the cursor → flip left, then translate.
+        let (x, y, _) =
+            compute_cursor_menu_placement([100.0, 40.0], [800.0, 600.0], 400.0, 80.0, 0.0);
+        // Right of cursor has 692px (>400) so no horizontal flip; stays at x=100.
+        assert!((x - 100.0).abs() < 0.5, "x={x}");
+        assert!((y - 40.0).abs() < 0.5, "y={y}");
+
+        // Cursor near left with a menu wider than remaining right space → translate.
+        let (x2, _, _) =
+            compute_cursor_menu_placement([50.0, 40.0], [800.0, 600.0], 760.0, 80.0, 0.0);
+        assert!(
+            (x2 - (800.0 - 8.0 - 760.0)).abs() < 0.5,
+            "must translate after flip fails, x={x2}"
+        );
+    }
+
+    #[test]
+    fn compute_cursor_menu_caps_height_when_taller_than_viewport() {
+        let (x, y, max_h) =
+            compute_cursor_menu_placement([40.0, 500.0], [800.0, 600.0], 160.0, 900.0, 0.0);
+        assert!((x - 40.0).abs() < 0.5, "x={x}");
+        // Flip above first, then translate up to the margin, then clamp max_h.
+        assert!(y <= 8.0 + 0.5, "should end near top after flip+translate, y={y}");
+        assert!(
+            max_h <= 600.0 - 16.0 + 0.5,
+            "max_h must fit viewport, max_h={max_h}"
+        );
+        assert!(max_h >= 48.0);
     }
 
     #[test]

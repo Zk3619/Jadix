@@ -590,18 +590,13 @@ pub fn SelectItem(
 
 /// ShadCN / solid-ui 菜单分割线：`-mx-1 my-1 h-px bg-border`。
 ///
-/// Content 为 `p-1` 时 `-mx-1` 抵消内边距，线贴面板左右缘且两侧等距。
-/// `w(auto)` 配合交叉轴 stretch，避免默认 `w-full` + `mx` 左右溢出不对称。
+/// 经 [`Element::menu_bleed`] 抵消 Content `p-1`；勿手写 `w-full` + 负 `mx`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SelectSeparator(children: Option<Element>) -> Element {
     let _ = children;
     let _ = require_select("SelectSeparator");
-    Element::from(separator())
-        .w("auto")
-        .mx("-0.25rem")
-        .my("0.25rem")
-        .pointer_events_none()
+    separator().menu_bleed().pointer_events_none()
 }
 
 /// 项内容对齐。

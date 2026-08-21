@@ -20,7 +20,9 @@
 //! - 有状态控件若用全局 `use_signal("{id}__…")`，多实例必须稳定唯一键（空 id 撞键会串状态）。
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
+//! - ContextMenu：`<ContextMenu>` / Trigger / Content / Item / Label / Separator / Shortcut / Group（宏 `context_menu_scope`）；Builder [`context_menu`]。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
+//! - Carousel：`<Carousel>` / `<CarouselMulti>` / `<CarouselStack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
 //!   页面栈宿主在 [`crate::app::navigator::navigation_host`]（非本层、非 NavigationMenu）。
@@ -89,7 +91,13 @@ pub use card::{
     CardDescriptionProps, CardFooter, CardFooterProps, CardHeader, CardHeaderProps, CardProps,
     CardTitle, CardTitleProps,
 };
-pub use carousel::{carousel, CarouselBuilder};
+pub use carousel::{
+    carousel, carousel_multi, carousel_scope, carousel_stack, use_carousel, CarouselBuilder,
+    CarouselContent, CarouselContentProps, CarouselControls, CarouselCtx, CarouselDots,
+    CarouselDotsProps, CarouselEndAlign, CarouselItem, CarouselItemProps, CarouselKind, CarouselNext,
+    CarouselNextProps, CarouselOrientation, CarouselPrevious, CarouselPreviousProps,
+    CarouselScrollBy,
+};
 pub use chart::{
     area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, dot, format_time_label,
     line_chart, line_y, pie, pie_chart, pie_layout, pie_layout_span, radial_area, radial_bar,
@@ -121,7 +129,15 @@ pub use command::{
     CommandSeparatorProps, CommandShortcut, CommandShortcutProps, CommandSurface,
     CommandVisibleItem,
 };
-pub use context_menu::{context_menu, ContextMenuBuilder, ContextMenuItem};
+pub use context_menu::{
+    context_menu, context_menu_content, context_menu_scope, context_menu_sub,
+    context_menu_sub_content, use_context_menu, ContextMenuAction, ContextMenuBuilder,
+    ContextMenuContentOpts, ContextMenuCtx, ContextMenuGroup, ContextMenuGroupProps,
+    ContextMenuItem, ContextMenuItemProps, ContextMenuLabel, ContextMenuLabelProps,
+    ContextMenuSeparator, ContextMenuSeparatorProps, ContextMenuShortcut,
+    ContextMenuShortcutProps, ContextMenuSubCtx, ContextMenuSubTrigger,
+    ContextMenuSubTriggerProps, ContextMenuTrigger, ContextMenuTriggerProps,
+};
 pub use date_picker::{
     date_picker, time_picker, DatePicker, DatePickerBuilder, DatePickerKind, DatePickerProps,
     TimePicker, TimePickerBuilder, TimePickerProps,

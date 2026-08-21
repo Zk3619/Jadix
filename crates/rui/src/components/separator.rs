@@ -3,8 +3,15 @@
 //! 1px 分割线：默认水平满宽；`.vertical(true)` 时垂直满高。颜色取 [`crate::tokens::border`]。
 //!
 //! 对齐 solid-ui / ShadCN：`shrink-0 bg-border` + 水平 `h-px w-full` / 垂直 `w-px h-full`。
-//! 菜单内分割线（Select / Combobox / DropdownMenu）的 `-mx-1 my-1` 由各组件自行叠加，
-//! 不要在本模块扩展菜单专用变体。
+//!
+//! 菜单 / popover（父级 `p-1`）要贴边出血时，用框架级 [`Element::menu_bleed`] /
+//! [`Element::bleed_x`]（任意节点），或本模块 [`SeparatorBuilder::menu_bleed`]：
+//! ```ignore
+//! Element::from(separator()).menu_bleed()
+//! separator().menu_bleed()
+//! some_row.bleed_x("0.25rem") // 任意组件取消父级水平 padding
+//! ```
+//! 不要写 `w("100%").mx("-…")` — 百分比宽 + 负 `mx` 在 flex 下会左右不对称。
 //!
 //! ## 用法
 //! ```ignore
@@ -58,6 +65,11 @@ impl SeparatorBuilder {
         self.children.extend(c);
         self
     }
+
+    /// ShadCN 菜单分割线：默认满宽线 + [`Element::menu_bleed`]（`-mx-1 my-1`）。
+    pub fn menu_bleed(self) -> Element {
+        Element::from(self).menu_bleed()
+    }
 }
 
 impl crate::core::tree::IntoElementList for SeparatorBuilder {
@@ -75,6 +87,7 @@ impl From<SeparatorBuilder> for Element {
             r#box().h("1px").w("100%").min_w("1rem").into()
         };
         el = el.bg(tokens::border()).flex_shrink(0.0);
+        let _ = builder.children;
         el
     }
 }

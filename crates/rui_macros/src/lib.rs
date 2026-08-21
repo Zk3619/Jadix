@@ -205,6 +205,12 @@ impl Parse for RsxNode {
                     syn::Error::new(e.span(), format!("Failed at keyword attr ref: {}", e))
                 })?;
                 syn::Ident::new("ref", proc_macro2::Span::call_site())
+            } else if input.peek(Token![loop]) {
+                // Carousel `loop={true}`；`loop` 是关键字。
+                input.parse::<Token![loop]>().map_err(|e| {
+                    syn::Error::new(e.span(), format!("Failed at keyword attr loop: {}", e))
+                })?;
+                syn::Ident::new("loop", proc_macro2::Span::call_site())
             } else if input.peek(Token![for]) {
                 // Solid `for={id}` → Label prop `r#for`。
                 input.parse::<Token![for]>().map_err(|e| {
@@ -768,6 +774,10 @@ fn expand_node(
                 name_str == "RadioGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
             let tabs_is_compound =
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
+            let carousel_is_compound = matches!(
+                name_str.as_str(),
+                "Carousel" | "CarouselMulti" | "CarouselStack"
+            );
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -778,6 +788,10 @@ fn expand_node(
                 || command_is_compound
                 || name_str == "Tooltip"
                 || name_str == "TooltipContent"
+                || name_str == "ContextMenu"
+                || name_str == "ContextMenuContent"
+                || name_str == "ContextMenuSub"
+                || name_str == "ContextMenuSubContent"
                 || select_is_compound
                 || name_str == "SelectContent"
                 || combobox_is_compound
@@ -785,6 +799,7 @@ fn expand_node(
                 || radio_group_is_compound
                 || tabs_is_compound
                 || name_str == "TabsContent"
+                || carousel_is_compound
                 || name_str == "ForKeyed"
                 || name_str == "For"
                 || name_str == "Match"
@@ -1053,6 +1068,49 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "ContextMenu" {
+                    // Provide context *before* Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:ContextMenu#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::context_menu_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
                 if select_is_compound {
                     // ShadCN compound Select: provide context before Trigger/Content.
                     let id_expr = get_attr("id");
@@ -1276,6 +1334,157 @@ fn expand_node(
                     };
                 }
 
+                if carousel_is_compound {
+                    // solid-ui / ShadCN compound Carousel：先 provide context 再构建 Content/Item/Prev/Next。
+                    let id_expr = get_attr("id");
+                    let index_expr = get_attr("index")
+                        .or_else(|| get_attr("index_signal"))
+                        .or_else(|| get_attr("indexSignal"));
+                    let orientation_expr = get_attr("orientation");
+                    let loop_expr = get_attr("loop")
+                        .or_else(|| get_attr("loop_slides"))
+                        .or_else(|| get_attr("loopSlides"));
+                    let per_view_expr = get_attr("per_view")
+                        .or_else(|| get_attr("perView"))
+                        .or_else(|| get_attr("slides_per_view"))
+                        .or_else(|| get_attr("slidesPerView"));
+                    let autoplay_expr = get_attr("autoplay")
+                        .or_else(|| get_attr("autoplay_ms"))
+                        .or_else(|| get_attr("autoplayMs"));
+                    let controls_expr = get_attr("controls")
+                        .or_else(|| get_attr("controls_placement"))
+                        .or_else(|| get_attr("controlsPlacement"));
+                    let scroll_by_expr = get_attr("scroll_by")
+                        .or_else(|| get_attr("scrollBy"))
+                        .or_else(|| get_attr("step"));
+                    let end_align_expr = get_attr("end_align")
+                        .or_else(|| get_attr("endAlign"))
+                        .or_else(|| get_attr("page_end"))
+                        .or_else(|| get_attr("pageEnd"));
+                    let dots_expr = get_attr("dots").or_else(|| get_attr("show_dots")).or_else(|| get_attr("showDots"));
+                    let stack_sides_expr = get_attr("stack_sides")
+                        .or_else(|| get_attr("stackSides"))
+                        .or_else(|| get_attr("stack_depth"))
+                        .or_else(|| get_attr("stackDepth"));
+                    let kind_default = match name_str.as_str() {
+                        "CarouselMulti" => "multi",
+                        "CarouselStack" => "stack",
+                        _ => "single",
+                    };
+                    let default_per_view = if name_str == "CarouselMulti" {
+                        quote! { 2.2f32 }
+                    } else {
+                        quote! { 1.0f32 }
+                    };
+                    let default_dots = name_str != "CarouselMulti";
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Carousel#{}", file!(), line!(), #idx) }
+                    };
+                    let index_ts = if let Some(index) = index_expr {
+                        quote! { Some(#index) }
+                    } else {
+                        quote! { None }
+                    };
+                    let orientation_ts = if let Some(o) = orientation_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
+                    let loop_ts = if let Some(d) = loop_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { true }
+                    };
+                    let per_view_ts = if let Some(p) = per_view_expr {
+                        quote! { (#p) as f32 }
+                    } else {
+                        default_per_view
+                    };
+                    let autoplay_ts = if let Some(a) = autoplay_expr {
+                        quote! { (#a) as u64 }
+                    } else {
+                        quote! { 0u64 }
+                    };
+                    let controls_ts = if let Some(c) = controls_expr {
+                        quote! { (#c).to_string() }
+                    } else {
+                        quote! { "outside".to_string() }
+                    };
+                    let scroll_by_ts = if let Some(s) = scroll_by_expr {
+                        quote! { (#s).to_string() }
+                    } else {
+                        quote! { "slide".to_string() }
+                    };
+                    let kind_ts = quote! { #kind_default.to_string() };
+                    let end_align_ts = if let Some(e) = end_align_expr {
+                        quote! { (#e).to_string() }
+                    } else {
+                        quote! { "flush".to_string() }
+                    };
+                    let dots_ts = if let Some(d) = dots_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { Some(#b) }
+                        } else {
+                            quote! { Some(rui::core::tree::parse_bool_like(#d)) }
+                        }
+                    } else {
+                        quote! { None }
+                    };
+                    let stack_sides_ts = if let Some(s) = stack_sides_expr {
+                        quote! { (#s) as u32 }
+                    } else {
+                        quote! { 1u32 }
+                    };
+                    let _ = default_dots; // kind default applied inside carousel_scope when dots=None
+                    return quote! {
+                        rui::components::carousel_scope(
+                            #id_ts,
+                            #index_ts,
+                            #orientation_ts,
+                            #loop_ts,
+                            #per_view_ts,
+                            #autoplay_ts,
+                            #controls_ts,
+                            #scroll_by_ts,
+                            #kind_ts,
+                            #end_align_ts,
+                            #dots_ts,
+                            #stack_sides_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "TabsContent" {
                     let Some(value_expr) = get_attr("value") else {
                         return quote! { compile_error!("<TabsContent> requires `value={...}`"); };
@@ -1408,6 +1617,121 @@ fn expand_node(
                                 side: #side,
                                 class: #class,
                             },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "ContextMenuSub" {
+                    // Provide sub context *before* SubTrigger / SubContent (eager props order).
+                    let id_expr = get_attr("id");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __frag = rui::core::tree::Element::new();
+                                    __frag.set_attr("rui_fragment", "1");
+                                    __frag.children(__list)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { Some((#id).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::context_menu_sub(#id_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "ContextMenuContent" {
+                    let placement = get_attr("placement")
+                        .or_else(|| get_attr("side"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom-start".to_string() });
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rebuilt inside context_menu_content's reactive_anchor.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::context_menu_content(
+                            rui::components::ContextMenuContentOpts {
+                                placement: #placement,
+                                class: #class,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "ContextMenuSubContent" {
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::context_menu_sub_content(
+                            #class,
                             move || #child_el,
                         )
                     };
@@ -2383,6 +2707,7 @@ fn expand_node(
                                 | "boxShadowBlur"
                                 | "backdrop_blur"
                                 | "backdropBlur"
+                                | "filter"
                                 | "box_shadow_offset_x"
                                 | "boxShadowOffsetX"
                                 | "box_shadow_offset_y"
@@ -2704,7 +3029,7 @@ fn expand_node(
                                         quote! { #value }
                                     }
                                 }
-                                "box_shadow" | "text_shadow" | "border_style" | "outline_style" => {
+                                "box_shadow" | "text_shadow" | "filter" | "border_style" | "outline_style" => {
                                     quote! { #value }
                                 }
                                 "absolute" | "relative" | "underline" | "box_shadow_inset" => {
@@ -3606,6 +3931,9 @@ fn expand_node(
                     }
                     "backdrop_blur" | "backdropBlur" => {
                         element = quote! { #element.backdrop_blur(rui::core::tree::IntoF32::into_f32(#value)) }
+                    }
+                    "filter" => {
+                        element = quote! { #element.filter(#value) }
                     }
                     "box_shadow_offset_x" | "boxShadowOffsetX" => {
                         element = quote! { #element.box_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }

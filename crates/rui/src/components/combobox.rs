@@ -815,11 +815,7 @@ pub fn ComboboxItem(
 pub fn ComboboxSeparator(children: Option<Element>) -> Element {
     let _ = children;
     let _ = require_combobox("ComboboxSeparator");
-    Element::from(separator())
-        .w("auto")
-        .mx("-0.25rem")
-        .my("0.25rem")
-        .pointer_events_none()
+    separator().menu_bleed().pointer_events_none()
 }
 
 /// ShadCN Aria `ComboboxEmpty`：请放在 List **之后**，以便可见项已登记。

@@ -157,6 +157,13 @@ pub fn portal_sync(
                             if l.id == id {
                                 return true;
                             }
+                            // Nested context-menu submenu (`{parent}__sub…`) must not dismiss parent.
+                            if kind == OverlayKind::Menu
+                                && l.kind == OverlayKind::Menu
+                                && id.starts_with(&format!("{}__sub", l.id))
+                            {
+                                return true;
+                            }
                             if should_dismiss_for_incoming(l.kind, kind) {
                                 to_close.push(l.open);
                                 false
@@ -166,7 +173,16 @@ pub fn portal_sync(
                         });
                         // New stack entry = overlay just opened; ignore underlay closes until
                         // primary-button release (see `disarm_underlay_close` / `arm_underlay_close`).
-                        crate::utils::popup::disarm_underlay_close();
+                        // Nested context-menu subs must NOT disarm — parent already armed after
+                        // the opening right-click, and disarm would require an extra click.
+                        let nested_sub = kind == OverlayKind::Menu
+                            && stack.iter().any(|l| {
+                                l.kind == OverlayKind::Menu
+                                    && id.starts_with(&format!("{}__sub", l.id))
+                            });
+                        if !nested_sub {
+                            crate::utils::popup::disarm_underlay_close();
+                        }
                         stack.push(OverlayLayer { id, open, kind });
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
@@ -252,6 +268,10 @@ pub fn try_close_top() -> bool {
 ///
 /// Modals keep a blocking underlay; this path must not close them.
 ///
+/// When the top surface is a **Menu**, also pops any Menu stacked under it (context-menu
+/// root + submenu close together on one outside click). Stops before Popover/Modal so a
+/// Select Menu inside a DatePicker Popover only dismisses the Select.
+///
 /// Respects [`crate::utils::popup::underlay_close_is_armed`] so the opening gesture
 /// cannot instantly dismiss. `open.set` runs **after** the stack borrow is dropped.
 pub fn try_dismiss_outside_press() -> bool {
@@ -261,29 +281,44 @@ pub fn try_dismiss_outside_press() -> bool {
     let (to_close, pruned) = with_stack_mut(|stack| {
         let pruned = prune_closed(stack);
         let Some(top) = stack.last() else {
-            return (None, pruned);
+            return (Vec::new(), pruned);
         };
         match top.kind {
             OverlayKind::Popover | OverlayKind::Menu | OverlayKind::Tooltip => {}
-            OverlayKind::Modal => return (None, pruned),
+            OverlayKind::Modal => return (Vec::new(), pruned),
         }
-        let open = top.open;
-        stack.pop();
-        (Some(open), pruned)
+        let mut closing = Vec::new();
+        // Always pop the top exclusive surface.
+        if let Some(l) = stack.pop() {
+            let close_menus_below = matches!(l.kind, OverlayKind::Menu);
+            closing.push(l.open);
+            if close_menus_below {
+                while stack
+                    .last()
+                    .is_some_and(|l| matches!(l.kind, OverlayKind::Menu))
+                {
+                    if let Some(l) = stack.pop() {
+                        closing.push(l.open);
+                    }
+                }
+            }
+        }
+        (closing, pruned)
     });
     for other in pruned {
         other.try_set(false);
     }
-    let Some(open) = to_close else {
+    if to_close.is_empty() {
         return false;
-    };
-    if open.peek() {
-        // Prefer try_set: stack may briefly hold a disposed handle across teardown.
-        open.try_set(false);
-        true
-    } else {
-        false
     }
+    let mut any = false;
+    for open in to_close {
+        if open.peek() {
+            open.try_set(false);
+            any = true;
+        }
+    }
+    any
 }
 
 /// True when the hit path intersects a hoisted portal surface (`rui_hoisted_portal`).
@@ -308,19 +343,48 @@ pub fn top_stacked_exclusive_id() -> Option<String> {
     })
 }
 
-/// True when the press is on the **top** exclusive overlay panel (Select / Popover / …).
+/// True when the press is on the **top** exclusive overlay panel (Select / Popover / …),
+/// or on a **parent Menu** of a nested context-menu submenu (`{parent}__sub…`).
 ///
 /// Unlike [`hit_path_on_hoisted_portal`], this ignores other hoisted surfaces (e.g. Dialog
 /// stage) so clicking Dialog chrome outside the menu still dismisses the menu.
 pub fn hit_path_on_top_exclusive_surface(path: &[super::pointer_events::HitPathEntry]) -> bool {
-    let Some(id) = top_stacked_exclusive_id() else {
-        return false;
-    };
-    let panel_key = format!("panel:{id}");
-    path.iter().any(|e| {
-        e.floating_id.as_deref() == Some(id.as_str())
-            || e.portal_key.as_deref() == Some(id.as_str())
-            || e.portal_key.as_deref() == Some(panel_key.as_str())
+    fn path_hits_id(path: &[super::pointer_events::HitPathEntry], id: &str) -> bool {
+        let panel_key = format!("panel:{id}");
+        path.iter().any(|e| {
+            e.floating_id.as_deref() == Some(id)
+                || e.portal_key.as_deref() == Some(id)
+                || e.portal_key.as_deref() == Some(panel_key.as_str())
+        })
+    }
+
+    with_stack_mut(|stack| {
+        let Some(top_pos) = stack.iter().rposition(|l| {
+            l.open.peek()
+                && matches!(
+                    l.kind,
+                    OverlayKind::Menu | OverlayKind::Popover | OverlayKind::Tooltip
+                )
+        }) else {
+            return false;
+        };
+        let top_id = stack[top_pos].id.clone();
+        let top_kind = stack[top_pos].kind;
+        if path_hits_id(path, &top_id) {
+            return true;
+        }
+        // Context-menu submenu open: clicks on the parent Menu still count as inside.
+        if matches!(top_kind, OverlayKind::Menu) {
+            for l in stack[..top_pos].iter().rev() {
+                if !l.open.peek() || !matches!(l.kind, OverlayKind::Menu) {
+                    continue;
+                }
+                if top_id.starts_with(&format!("{}__sub", l.id)) && path_hits_id(path, &l.id) {
+                    return true;
+                }
+            }
+        }
+        false
     })
 }
 
