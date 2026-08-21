@@ -191,6 +191,26 @@ pub enum KnownUtility<'a> {
     OutlineOffset(f32),
     /// `outline-<color>` (color token).
     OutlineColor(&'a str),
+    /// Tailwind `blur-*` → CSS `filter: blur(...)`.
+    FilterBlur(f32),
+    /// Tailwind `brightness-*` → CSS `filter: brightness(...)`.
+    FilterBrightness(f32),
+    /// Tailwind `contrast-*` → CSS `filter: contrast(...)`.
+    FilterContrast(f32),
+    /// Tailwind `grayscale` / `grayscale-*` → CSS `filter: grayscale(...)`.
+    FilterGrayscale(f32),
+    /// Tailwind `sepia` / `sepia-*` → CSS `filter: sepia(...)`.
+    FilterSepia(f32),
+    /// Tailwind `invert` / `invert-*` → CSS `filter: invert(...)`.
+    FilterInvert(f32),
+    /// Tailwind `saturate-*` → CSS `filter: saturate(...)`.
+    FilterSaturate(f32),
+    /// Tailwind `hue-rotate-*` → CSS `filter: hue-rotate(...)` (degrees).
+    FilterHueRotate(f32),
+    /// Tailwind `drop-shadow` / `drop-shadow-*` / `drop-shadow-[...]`.
+    FilterDropShadow(&'a str),
+    /// Tailwind `filter-none` → clear CSS `filter`.
+    FilterNone,
 }
 
 pub fn spacing_token_to_px(token: &str) -> Option<f32> {
@@ -746,6 +766,90 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         return Some(KnownUtility::LetterSpacing(px));
     }
 
+    // CSS `filter` utilities (Tailwind v3)
+    if token == "filter-none" {
+        return Some(KnownUtility::FilterNone);
+    }
+    if token == "blur" {
+        return Some(KnownUtility::FilterBlur(8.0));
+    }
+    if let Some(rest) = token.strip_prefix("blur-") {
+        let px = match rest {
+            "none" => 0.0,
+            "sm" => 4.0,
+            "md" => 12.0,
+            "lg" => 16.0,
+            "xl" => 24.0,
+            "2xl" => 40.0,
+            "3xl" => 64.0,
+            _ => {
+                if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                    let inner = inner.trim();
+                    let raw = inner.strip_suffix("px").unwrap_or(inner);
+                    raw.parse().ok()?
+                } else {
+                    return None;
+                }
+            }
+        };
+        return Some(KnownUtility::FilterBlur(px));
+    }
+    if let Some(rest) = token.strip_prefix("brightness-") {
+        return parse_filter_factor_token(rest).map(KnownUtility::FilterBrightness);
+    }
+    if let Some(rest) = token.strip_prefix("contrast-") {
+        return parse_filter_factor_token(rest).map(KnownUtility::FilterContrast);
+    }
+    if let Some(rest) = token.strip_prefix("saturate-") {
+        return parse_filter_factor_token(rest).map(KnownUtility::FilterSaturate);
+    }
+    if token == "grayscale" {
+        return Some(KnownUtility::FilterGrayscale(1.0));
+    }
+    if let Some(rest) = token.strip_prefix("grayscale-") {
+        return parse_filter_amount_token(rest).map(KnownUtility::FilterGrayscale);
+    }
+    if token == "sepia" {
+        return Some(KnownUtility::FilterSepia(1.0));
+    }
+    if let Some(rest) = token.strip_prefix("sepia-") {
+        return parse_filter_amount_token(rest).map(KnownUtility::FilterSepia);
+    }
+    if token == "invert" {
+        return Some(KnownUtility::FilterInvert(1.0));
+    }
+    if let Some(rest) = token.strip_prefix("invert-") {
+        return parse_filter_amount_token(rest).map(KnownUtility::FilterInvert);
+    }
+    if let Some(rest) = token.strip_prefix("hue-rotate-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            return parse_angle_value(inner.trim()).map(KnownUtility::FilterHueRotate);
+        }
+        let deg: f32 = match rest {
+            "0" => 0.0,
+            "15" => 15.0,
+            "30" => 30.0,
+            "60" => 60.0,
+            "90" => 90.0,
+            "180" => 180.0,
+            _ => return None,
+        };
+        return Some(KnownUtility::FilterHueRotate(deg));
+    }
+    if token == "drop-shadow" {
+        return Some(KnownUtility::FilterDropShadow(""));
+    }
+    if let Some(rest) = token.strip_prefix("drop-shadow-") {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let inner = inner.trim();
+            if !inner.is_empty() {
+                return Some(KnownUtility::FilterDropShadow(inner));
+            }
+        } else if matches!(rest, "sm" | "md" | "lg" | "xl" | "2xl" | "none") {
+            return Some(KnownUtility::FilterDropShadow(rest));
+        }
+    }
+
     None
 }
 
@@ -851,6 +955,50 @@ fn parse_opacity_token(rest: &str) -> Option<f32> {
             }
             None
         }
+    }
+}
+
+/// Tailwind filter factor tokens (`brightness-*` / `contrast-*` / `saturate-*`):
+/// `100` → 1.0, `50` → 0.5, `[1.25]` → 1.25, `[50%]` → 0.5.
+fn parse_filter_factor_token(rest: &str) -> Option<f32> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            return pct.trim().parse::<f32>().ok().map(|v| v / 100.0);
+        }
+        return inner.parse().ok();
+    }
+    match rest {
+        "0" => Some(0.0),
+        "50" => Some(0.5),
+        "75" => Some(0.75),
+        "90" => Some(0.9),
+        "95" => Some(0.95),
+        "100" => Some(1.0),
+        "105" => Some(1.05),
+        "110" => Some(1.1),
+        "125" => Some(1.25),
+        "150" => Some(1.5),
+        "200" => Some(2.0),
+        _ => rest.parse::<f32>().ok().map(|v| v / 100.0),
+    }
+}
+
+/// Tailwind amount tokens (`grayscale-*` / `sepia-*` / `invert-*`):
+/// `0` → 0.0, `[0.5]` → 0.5, `[50%]` → 0.5.
+fn parse_filter_amount_token(rest: &str) -> Option<f32> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            return pct.trim().parse::<f32>().ok().map(|v| (v / 100.0).clamp(0.0, 1.0));
+        }
+        return inner.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0));
+    }
+    match rest {
+        "0" => Some(0.0),
+        "50" => Some(0.5),
+        "100" => Some(1.0),
+        _ => None,
     }
 }
 
@@ -1054,6 +1202,70 @@ mod tests {
         assert!(matches!(
             classify_utility("-translate-y-2"),
             Some(KnownUtility::TranslateY(px)) if (px - (-8.0)).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn filter_utilities_classify() {
+        assert!(matches!(
+            classify_utility("blur"),
+            Some(KnownUtility::FilterBlur(8.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-lg"),
+            Some(KnownUtility::FilterBlur(16.0))
+        ));
+        assert!(matches!(
+            classify_utility("blur-[10px]"),
+            Some(KnownUtility::FilterBlur(10.0))
+        ));
+        assert!(matches!(
+            classify_utility("brightness-50"),
+            Some(KnownUtility::FilterBrightness(v)) if (v - 0.5).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("contrast-150"),
+            Some(KnownUtility::FilterContrast(v)) if (v - 1.5).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("grayscale"),
+            Some(KnownUtility::FilterGrayscale(1.0))
+        ));
+        assert!(matches!(
+            classify_utility("grayscale-0"),
+            Some(KnownUtility::FilterGrayscale(0.0))
+        ));
+        assert!(matches!(
+            classify_utility("sepia"),
+            Some(KnownUtility::FilterSepia(1.0))
+        ));
+        assert!(matches!(
+            classify_utility("invert-0"),
+            Some(KnownUtility::FilterInvert(0.0))
+        ));
+        assert!(matches!(
+            classify_utility("saturate-200"),
+            Some(KnownUtility::FilterSaturate(v)) if (v - 2.0).abs() < f32::EPSILON
+        ));
+        assert!(matches!(
+            classify_utility("hue-rotate-90"),
+            Some(KnownUtility::FilterHueRotate(90.0))
+        ));
+        assert!(matches!(
+            classify_utility("hue-rotate-[45deg]"),
+            Some(KnownUtility::FilterHueRotate(45.0))
+        ));
+        assert!(matches!(
+            classify_utility("drop-shadow"),
+            Some(KnownUtility::FilterDropShadow(""))
+        ));
+        assert!(matches!(
+            classify_utility("drop-shadow-md"),
+            Some(KnownUtility::FilterDropShadow("md"))
+        ));
+        assert!(matches!(
+            classify_utility("filter-none"),
+            Some(KnownUtility::FilterNone)
         ));
     }
 
