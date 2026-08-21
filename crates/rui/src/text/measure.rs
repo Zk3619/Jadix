@@ -105,6 +105,7 @@ enum LayoutFsSlot {
 pub fn invalidate_prepare_cache() {
     PREPARE_CACHE.with(|c| c.borrow_mut().clear());
     FIT_CACHE.with(|c| c.borrow_mut().clear());
+    crate::text::visual_lines::invalidate_visual_line_cache();
 }
 
 /// Point layout measure at the renderer's [`FontSystem`] so fontdb / coverage stay single-sourced.
@@ -516,6 +517,7 @@ thread_local! {
 
 /// Advance FIT_CACHE generation and trim stale entries (call once per prepare frame).
 pub fn fit_cache_frame_tick() {
+    crate::text::visual_lines::visual_line_cache_frame_tick();
     let cur = FIT_GEN.with(|g| {
         let n = g.get().wrapping_add(1).max(1);
         g.set(n);
@@ -849,105 +851,10 @@ pub fn layout_lines(prepared: &PreparedText, avail_width: f32) -> Vec<PreparedLi
     lines
 }
 
-/// Soft-wrap (and hard-`\n`) visual lines as `[start, end)` UTF-8 byte ranges into `text`.
-///
-/// Prefer **glyphon `Wrap::Word` layout runs** (same breaks as textarea paint) so caret /
-/// hit-test / ↑↓ sit on the painted rows — segment `layout_lines` alone misses hyphen
-/// breaks and mid-word wrap.
-///
-/// Empty `text` yields a single `(0, 0)` range. Hard `\n` is not included in either
-/// adjacent range body.
-pub fn soft_visual_line_byte_ranges(
-    text: &str,
-    size: f32,
-    weight: u16,
-    line_height: f32,
-    avail_width: f32,
-) -> Vec<(usize, usize)> {
-    if text.is_empty() {
-        return vec![(0, 0)];
-    }
-    let avail = avail_width.max(1.0);
-    let lh = line_height.max(1.0);
-    let mut ranges = with_layout_font_system(|font_system| {
-        soft_visual_line_byte_ranges_glyphon(font_system, text, size, weight, lh, avail)
-    });
-    if ranges.is_empty() {
-        ranges = soft_visual_line_byte_ranges_segments(text, size, weight, lh, avail);
-    }
-    if text.ends_with('\n') {
-        let n = text.len();
-        if ranges.last() != Some(&(n, n)) {
-            ranges.push((n, n));
-        }
-    }
-    ranges
-}
+// Soft visual lines live in `visual_lines` (official LineBreakSource). Re-export via `text::mod`.
 
-fn soft_visual_line_byte_ranges_glyphon(
-    font_system: &mut FontSystem,
-    text: &str,
-    size: f32,
-    weight: u16,
-    line_height: f32,
-    avail: f32,
-) -> Vec<(usize, usize)> {
-    let family = crate::renderer::text_hit::best_font_family(font_system);
-    let weight =
-        crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
-    ensure_coverage_for_text(font_system, text);
-    let shaping = if text.is_ascii() {
-        Shaping::Basic
-    } else {
-        Shaping::Advanced
-    };
-    let mut buffer = Buffer::new(font_system, Metrics::new(size.max(1.0), line_height));
-    // Match input soft-wrap paint: default Word wrap at the live leaf width (no fit-shrink).
-    buffer.set_wrap(Wrap::Word);
-    buffer.set_text(
-        text,
-        &Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(weight)),
-        shaping,
-        None,
-    );
-    let tall = (line_height * (text.lines().count().max(1) as f32 + 4.0)).max(line_height + 2.0);
-    buffer.set_size(Some(avail), Some(tall));
-    buffer.shape_until_scroll(font_system, false);
-
-    // Byte start of each hard buffer line inside `text`.
-    let mut hard_starts: Vec<usize> = Vec::with_capacity(buffer.lines.len().max(1));
-    let mut byte = 0usize;
-    for (li, line) in buffer.lines.iter().enumerate() {
-        hard_starts.push(byte);
-        let line_len = line.text().len();
-        byte = byte.saturating_add(line_len);
-        if li + 1 < buffer.lines.len() {
-            // Buffer lines omit the `\n` separator that still exists in `text`.
-            if text.as_bytes().get(byte) == Some(&b'\n') {
-                byte += 1;
-            }
-        }
-    }
-
-    let mut ranges = Vec::new();
-    for run in buffer.layout_runs() {
-        let base = hard_starts.get(run.line_i).copied().unwrap_or(text.len());
-        if run.glyphs.is_empty() {
-            ranges.push((base.min(text.len()), base.min(text.len())));
-            continue;
-        }
-        let start = base.saturating_add(run.glyphs[0].start).min(text.len());
-        let end = base
-            .saturating_add(run.glyphs[run.glyphs.len() - 1].end)
-            .min(text.len());
-        ranges.push((start, end.max(start)));
-    }
-    ranges
-}
-
-fn soft_visual_line_byte_ranges_segments(
+/// Segment-layout fallback for visual lines when glyphon returns empty runs (rich chips / edge cases).
+pub(crate) fn visual_line_ranges_from_segments(
     text: &str,
     size: f32,
     weight: u16,
@@ -981,25 +888,6 @@ fn soft_visual_line_byte_ranges_segments(
         ranges.push((0, text.len()));
     }
     ranges
-}
-
-/// Index of the visual line that owns `caret` within [`soft_visual_line_byte_ranges`].
-pub fn caret_visual_line_index(ranges: &[(usize, usize)], caret: usize) -> usize {
-    if ranges.is_empty() {
-        return 0;
-    }
-    let caret = caret.min(ranges.last().map(|(_, e)| *e).unwrap_or(0));
-    // Prefer the last range that still contains caret (wrap point → end of prior soft line).
-    let mut best = 0usize;
-    for (i, &(s, e)) in ranges.iter().enumerate() {
-        if caret >= s && caret <= e {
-            best = i;
-        }
-        if caret < s {
-            break;
-        }
-    }
-    best
 }
 
 /// Pure arithmetic wrap over prepared segment widths.
@@ -1327,6 +1215,17 @@ mod tests {
         );
         set_layout_text_fast_mode(false);
         shutdown_layout_text();
+    }
+
+    #[test]
+    fn fit_needs_relayout_flag_can_be_rearmed_after_take() {
+        // scroll_paint_only defers LayoutChanged by take()+note(); flag must survive that.
+        let _ = take_fit_needs_relayout();
+        note_fit_needs_relayout();
+        assert!(take_fit_needs_relayout());
+        assert!(!take_fit_needs_relayout());
+        note_fit_needs_relayout();
+        assert!(take_fit_needs_relayout());
     }
 
     #[test]

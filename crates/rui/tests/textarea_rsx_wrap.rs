@@ -29,6 +29,21 @@ fn textarea_rsx_wrap_off_reaches_leaf_nowrap() {
 }
 
 #[test]
+fn textarea_rsx_wrap_char_stays_soft_whitespace() {
+    let id = "ta-rsx-wrap-char";
+    let el = ui! {
+        <Textarea id={id} rows={3} wrap="char" resizable={false} />
+    };
+    let tid = format!("__rui_input:{id}:text");
+    let leaf = find_tid(&el, &tid).expect("text leaf");
+    assert_eq!(
+        leaf.text_style.white_space,
+        WhiteSpace::Normal,
+        "RSX wrap=\"char\" must soft-wrap (normal white_space)"
+    );
+}
+
+#[test]
 fn textarea_rsx_rows_reaches_builder() {
     // Smoke: integer literal rows={5} must type-check as Textarea prop (i32 → u32).
     let el = ui! {

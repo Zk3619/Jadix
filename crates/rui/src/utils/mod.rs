@@ -27,14 +27,15 @@ pub use instance_id::resolve_instance_id;
 pub use lucide::{apply_bound_icon_name, lucide_glyph};
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
-    disarm_underlay_close, floating_portal_anchor, mark_floating, mark_portal, mark_portal_mount,
+    compute_cursor_menu_placement, disarm_underlay_close, floating_portal_anchor, mark_floating,
+    mark_floating_at_point, mark_floating_with_gap, mark_portal, mark_portal_mount,
     mount_anchored_overlay, mount_modal_layer, mount_viewport_portal_stage, panel_block_clicks,
     path_hits_floating_trigger, portal_panel, portal_panel_mount, swallow_clicks,
     sync_floating_placement, underlay_close_is_armed, underlay_close_on_click,
     visit_floating_panels, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_H,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W,
-    ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W,
-    FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
+    ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
+    ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
 };
 pub use roving::{roving_edge, roving_move};
 pub use text_field::{
@@ -43,9 +44,10 @@ pub use text_field::{
     ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit, input_focus_id,
     input_scroll_x_signal_key, input_value_signal_key, pull_controlled_into_store, text_edit_rest,
     textarea_default_height, textarea_focus_id, textarea_height_signal_key,
-    textarea_resize_focus_id, textarea_scroll_rest, textarea_wrap_width_signal_key,
-    unbind_controlled_value, TextareaCaretScrollInsets, TextareaWrapMode, INPUT_FOCUS_PREFIX,
-    TEXTAREA_FOCUS_PREFIX, TEXTAREA_RESIZE_FOCUS_PREFIX,
+    textarea_resize_focus_id, textarea_scroll_rest, textarea_wrap_mode_signal_key,
+    textarea_wrap_width_signal_key, unbind_controlled_value, TextareaCaretScrollInsets,
+    TextareaWrapMode, WrapMode, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
+    TEXTAREA_RESIZE_FOCUS_PREFIX,
 };
 pub use text_node::{apply_label_defaults, build_icon_text_node, build_text_node, TextNodeConfig};
 pub use toggle_state::{

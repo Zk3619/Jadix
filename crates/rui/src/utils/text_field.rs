@@ -40,50 +40,20 @@ pub fn textarea_wrap_width_signal_key(id: &str) -> String {
     format!("__rui_textarea_wrap_w_{id}")
 }
 
-/// Textarea 单行溢出：软换行（默认）或横向滚动；不用 clip 裁切长行。
+/// Active [`WrapMode`] for a textarea (Word / Char / None).
+pub fn textarea_wrap_mode_signal_key(id: &str) -> String {
+    format!("__rui_textarea_wrap_mode_{id}")
+}
+
+/// Textarea / text soft-wrap mode ([`crate::text::WrapMode`]).
 ///
-/// 对齐 HTML `wrap="soft"` / `wrap="off"`。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum TextareaWrapMode {
-    /// 无回车软换行（默认）。
-    #[default]
-    Soft,
-    /// `whitespace-nowrap` + `overflow-x: auto` 横向滚动。
-    Scroll,
-}
+/// Soft wrap never inserts `\n` into the value — only visual rows.
+///
+/// HTML: `wrap="soft"` → Word; `wrap="off"` → None; plus `char` mid-word break.
+pub use crate::text::visual_lines::WrapMode;
 
-impl TextareaWrapMode {
-    pub fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "off" | "scroll" | "nowrap" | "no-wrap" => Self::Scroll,
-            _ => Self::Soft,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Soft => "soft",
-            Self::Scroll => "scroll",
-        }
-    }
-
-    #[inline]
-    pub fn soft_wrap(self) -> bool {
-        matches!(self, Self::Soft)
-    }
-}
-
-impl From<&str> for TextareaWrapMode {
-    fn from(s: &str) -> Self {
-        Self::parse(s)
-    }
-}
-
-impl From<String> for TextareaWrapMode {
-    fn from(s: String) -> Self {
-        Self::parse(&s)
-    }
-}
+/// Historical alias — prefer [`WrapMode`].
+pub type TextareaWrapMode = WrapMode;
 
 /// 右下角 resize grip 的 `focus_id` 前缀。
 pub const TEXTAREA_RESIZE_FOCUS_PREFIX: &str = "textarea-resize:";
@@ -217,7 +187,7 @@ pub fn text_edit_ink_pad_px(font_size_px: f32) -> f32 {
 }
 
 /// 编辑叶内容块高度：`layout(text).height + bottom_ink`。
-/// 多行对齐 ShadCN `field-sizing-content`：叶高由内容驱动。
+/// 多行对齐 ShadCN `field-sizing-content`：叶高由内容驱动（与 VisualLineModel 同源）。
 pub fn text_edit_content_height_px(
     text: &str,
     size_px: f32,
@@ -225,10 +195,37 @@ pub fn text_edit_content_height_px(
     line_height_px: f32,
     avail_width_px: f32,
 ) -> f32 {
+    text_edit_content_height_px_wrap(
+        text,
+        size_px,
+        weight,
+        line_height_px,
+        avail_width_px,
+        WrapMode::Word,
+    )
+}
+
+/// Like [`text_edit_content_height_px`] but respects [`WrapMode`].
+pub fn text_edit_content_height_px_wrap(
+    text: &str,
+    size_px: f32,
+    weight: u16,
+    line_height_px: f32,
+    avail_width_px: f32,
+    wrap: WrapMode,
+) -> f32 {
     let lh = line_height_px.max(1.0);
-    let prepared = crate::text::prepare(text, size_px, weight, lh);
-    let metrics = crate::text::layout(&prepared, avail_width_px.max(1.0));
-    metrics.height.max(lh) + text_edit_ink_pad_px(size_px)
+    let ink = text_edit_ink_pad_px(size_px);
+    let est = crate::text::textarea_visual_content_height(
+        text,
+        size_px,
+        weight,
+        lh,
+        avail_width_px.max(1.0),
+        wrap,
+        ink,
+    );
+    est.content_height.max(lh + ink)
 }
 
 /// 光标高度：略高于行盒（+1px），行内居中；避免再抬到 lh+4 / 1.2×lh 显得顶满。
@@ -434,6 +431,11 @@ pub fn input_password_reveal_signal_key(id: &str) -> String {
 }
 pub fn input_scroll_x_signal_key(id: &str) -> String {
     format!("__rui_input_scroll_x_{id}")
+}
+
+/// Preferred caret X (px from visual-line start) for ↑↓ navigation.
+pub fn input_caret_preferred_x_signal_key(id: &str) -> String {
+    format!("__rui_input_caret_pref_x_{id}")
 }
 
 pub(crate) fn input_text_template_id(id: &str) -> String {

@@ -3,8 +3,17 @@
 //! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
 //! 共享 chrome 构建/绘制在 [`crate::components::internal::text_edit`]。
 //! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
-//! 单行溢出默认软换行（[`TextareaBuilder::wrap`]`("soft")`）；`wrap("off")` 横向滚动，不用 clip。
+//!
+//! ## Wrap modes ([`crate::text::WrapMode`])
+//!
+//! Soft wrap **never** inserts `\n` into the value — only visual rows
+//! ([`crate::text::VisualLineModel`]). Default is [`WrapMode::Word`].
+//! - `wrap("word"|"soft")` — word-boundary soft wrap (default)
+//! - `wrap("char")` — mid-word when needed; falls back to Word under BiDi/WJ
+//! - `wrap("off"|"none"|"scroll")` — no soft wrap; horizontal scroll (not clip)
+//!
 //! 内容超出可视区时在内部滚动视口滚动；默认右下角可拖拽改高（斜线手柄）。
+//! 超长文档（≥64KB / ≥2048 视觉行）自动启用高度估算虚拟化 MVP。
 //! [`TextareaBuilder::resizable`] 为 `false` 时禁止改高并隐藏手柄。
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,7 +42,7 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         value: None,
         resizable: true,
         resize_max_h: None,
-        wrap_mode: TextareaWrapMode::Soft,
+        wrap_mode: TextareaWrapMode::Word,
     }
 }
 
@@ -81,7 +90,7 @@ impl TextareaBuilder {
         self
     }
 
-    /// 单行溢出：`soft`（默认软换行）| `off` / `scroll`（横向滚动，不 clip）。
+    /// 单行溢出：`word`/`soft`（默认软换行）| `char`（中词断开）| `off`/`none`/`scroll`（横向滚动）。
     pub fn wrap(mut self, mode: impl Into<TextareaWrapMode>) -> Self {
         self.wrap_mode = mode.into();
         self

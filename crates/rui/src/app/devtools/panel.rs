@@ -72,6 +72,9 @@ pub fn sync_overlay(root: &mut Element) -> bool {
     let open = DevToolsState::is_open();
     let panel_w = DevToolsState::panel_width();
     let dock = if open {
+        // Named button hover / spring keys outlive the previous dock element. Reset so a rebuild
+        // cannot paint every Inspector chrome control as hovered until the pointer moves.
+        reset_inspector_button_hover_state();
         Some(dock_panel_from_root(root))
     } else {
         None
@@ -92,6 +95,20 @@ pub fn sync_overlay(root: &mut Element) -> bool {
     super::overlay::reset_box_model_visual_cache();
     super::overlay::reset_tree_row_hover_cache();
     changed
+}
+
+fn reset_inspector_button_hover_state() {
+    use crate::core::reactivity::use_signal;
+    use crate::style::use_ui_transition_spring;
+    const IDS: &[&str] = &["dt-pick", "dt-close", "dt-tab-el", "dt-tab-lay", "dt-tab-rx"];
+    for id in IDS {
+        let hover = use_signal(&format!("{id}_hover"), || false);
+        if hover.peek() {
+            hover.set_silent(false);
+        }
+        // Inspector buttons use the default spring hover easing.
+        use_ui_transition_spring(&format!("rui:btn_hover_blend:{id}"), 0.0).snap(0.0);
+    }
 }
 
 fn dock_panel_from_root(root: &Element) -> Element {
@@ -658,12 +675,14 @@ fn cssom_editor(path: Vec<usize>, seed: String) -> Element {
             .gap("0.25rem")
             .children([
                 {
+                    // Long declarations stay on hard `\n` lines and scroll horizontally
+                    // (wrap=off) — same path as gallery wrap=off + drag edge follow.
                     let mut editor: Element = textarea(&field_id)
                         .rows(18)
                         .resizable(false)
                         .wrap("off")
                         .into();
-                    editor = editor.w("100%");
+                    editor = editor.w("100%").min_w("0");
                     editor
                 },
                 button(format!("dt-cssom-apply-{}", super::snapshot::path_to_key(&path)))
@@ -751,6 +770,35 @@ mod tests {
 
             let cssom = use_signal(&input_value_signal_key(&field), String::new).peek();
             assert_eq!(cssom, applied);
+        });
+    }
+
+    #[test]
+    fn cssom_editor_uses_nowrap_horizontal_scroll() {
+        use crate::components::input::input_text_template_id;
+        use crate::core::reactivity::create_root;
+        use crate::style::WhiteSpace;
+
+        create_root(|| {
+            let path = vec![0usize];
+            let field = cssom_input_id(&path);
+            let tid = input_text_template_id(&field);
+            let el = cssom_editor(
+                path,
+                "padding: 8px 16px; background: #ffffff; border-radius: 6px".into(),
+            );
+            fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+                if el.template_id.as_deref() == Some(tid) {
+                    return Some(el);
+                }
+                el.children.iter().find_map(|c| find_tid(c, tid))
+            }
+            let text = find_tid(&el, &tid).expect("cssom text leaf");
+            assert_eq!(
+                text.text_style.white_space,
+                WhiteSpace::Nowrap,
+                "CSSOM editor must wrap=off (horizontal scroll, not soft wrap)"
+            );
         });
     }
 

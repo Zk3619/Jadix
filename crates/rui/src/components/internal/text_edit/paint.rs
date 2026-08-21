@@ -481,12 +481,13 @@ fn sync_one_text_edit_paint(
                 use_signal(&textarea_wrap_width_signal_key(&desc.base_id), || 0.0_f32)
                     .set_silent(avail);
             }
-            crate::utils::text_field::text_edit_content_height_px(
+            crate::utils::text_field::text_edit_content_height_px_wrap(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_box,
                 avail,
+                desc.wrap_mode,
             )
         } else {
             line_box
@@ -603,12 +604,13 @@ fn sync_one_text_edit_paint(
             } else {
                 10_000.0
             };
-            let content_h_text = crate::utils::text_field::text_edit_content_height_px(
+            let content_h_text = crate::utils::text_field::text_edit_content_height_px_wrap(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_height,
                 measure_avail,
+                desc.wrap_mode,
             );
             // Prefer the live scrollport box. Avoid `vh.max(...)` — a stale huge viewport
             // signal would make content_fits=true and clear sy every frame.
@@ -718,17 +720,22 @@ fn sync_one_text_edit_paint(
                 Some(0.0)
             } else if sy > max_sy + 0.5 {
                 Some(max_sy)
-            } else if is_focused && caret_moved && vh_eff >= line_height * 0.5 {
+            } else if is_focused
+                && caret_moved
+                && vh_eff >= line_height * 0.5
+                && !crate::utils::text_field::text_drag_select_active()
+            {
                 let visual = if soft {
-                    let ranges = crate::text::soft_visual_line_byte_ranges(
+                    let model = crate::text::build_visual_lines(
                         &display_text,
                         desc.text_size_px,
                         desc.font_weight,
                         line_height,
                         measure_avail,
+                        desc.wrap_mode.to_line_break_source(),
                     );
-                    let i = crate::text::caret_visual_line_index(&ranges, caret_byte);
-                    Some((i, ranges.len().max(1)))
+                    let i = crate::text::caret_visual_line_index(&model.ranges, caret_byte);
+                    Some((i, model.ranges.len().max(1)))
                 } else {
                     None
                 };

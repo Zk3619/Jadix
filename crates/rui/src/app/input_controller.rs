@@ -12,8 +12,8 @@ use crate::utils::clipboard::{
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{
     caret_line_end, caret_line_home, caret_move_left, caret_move_right, caret_move_vertical,
-    caret_move_vertical_visual, caret_visual_line_end, caret_visual_line_home, delete_char_forward,
-    extend_selection, normalized_selection, select_all_range,
+    caret_move_vertical_visual_pref, caret_visual_line_end, caret_visual_line_home,
+    delete_char_forward, extend_selection, normalized_selection, select_all_range,
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
@@ -386,6 +386,52 @@ impl super::App {
                     } else {
                         0.0
                     };
+                    // Live leaf metrics (avoid hardcoded 0.875×16).
+                    let (nav_size, nav_weight, nav_lh, nav_wrap) = if allow_primary_tree {
+                        (*self.state.borrow()).as_ref().map_or(
+                            (14.0_f32, 400_u16, 21.0_f32, crate::text::WrapMode::Word),
+                            |st| {
+                                super::tree_hit::find_input_text_leaf_for_rest(
+                                    &st.root_element,
+                                    None,
+                                    rest,
+                                )
+                                .map(|(_, _, style, _)| {
+                                    let sz = style.size.max(1.0);
+                                    let w = style.weight.max(100);
+                                    let lh = style
+                                        .line_height_px
+                                        .unwrap_or_else(|| {
+                                            crate::utils::text_field::text_edit_line_box_px(
+                                                sz, None, None,
+                                            )
+                                        })
+                                        .max(1.0);
+                                    let wrap = if style.white_space
+                                        == crate::style::WhiteSpace::Nowrap
+                                    {
+                                        crate::text::WrapMode::None
+                                    } else {
+                                        crate::core::reactivity::use_signal(
+                                            &crate::utils::text_field::textarea_wrap_mode_signal_key(
+                                                rest,
+                                            ),
+                                            || crate::text::WrapMode::Word,
+                                        )
+                                        .peek()
+                                    };
+                                    (sz, w, lh, wrap)
+                                })
+                                .unwrap_or((14.0, 400, 21.0, crate::text::WrapMode::Word))
+                            },
+                        )
+                    } else {
+                        (14.0, 400, 21.0, crate::text::WrapMode::Word)
+                    };
+                    let pref_x_key =
+                        crate::utils::text_field::input_caret_preferred_x_signal_key(rest);
+                    let pref_x_sig =
+                        crate::core::reactivity::use_signal(&pref_x_key, || None::<f32>);
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
                     let password_field = input_type_for(rest).is_password();
@@ -487,12 +533,15 @@ impl super::App {
                         let caret = caret_sig.get().unwrap_or(s.len()).min(s.len());
                         let caret = s.floor_char_boundary(caret);
                         let shift = self.modifiers.shift_key();
-                        let soft_visual_ranges = if multiline && wrap_w > 1.0 {
-                            let size = 0.875 * 16.0;
-                            let lh =
-                                crate::utils::text_field::text_edit_line_box_px(size, None, None);
-                            Some(crate::text::soft_visual_line_byte_ranges(
-                                &s, size, 400, lh, wrap_w,
+                        let soft_visual_model = if multiline && wrap_w > 1.0 && nav_wrap.soft_wrap()
+                        {
+                            Some(crate::text::build_visual_lines(
+                                &s,
+                                nav_size,
+                                nav_weight,
+                                nav_lh,
+                                wrap_w,
+                                nav_wrap.to_line_break_source(),
                             ))
                         } else {
                             None
@@ -525,6 +574,9 @@ impl super::App {
                                     text_sel_sig.set(None);
                                 }
                                 caret_sig.set(Some(dest));
+                                if let Some(ref model) = soft_visual_model {
+                                    pref_x_sig.set_silent(Some(model.caret_x_on_line(dest)));
+                                }
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::ArrowRight) => {
@@ -553,13 +605,16 @@ impl super::App {
                                     text_sel_sig.set(None);
                                 }
                                 caret_sig.set(Some(dest));
+                                if let Some(ref model) = soft_visual_model {
+                                    pref_x_sig.set_silent(Some(model.caret_x_on_line(dest)));
+                                }
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::Home) => {
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     0
-                                } else if let Some(ref ranges) = soft_visual_ranges {
-                                    caret_visual_line_home(ranges, caret)
+                                } else if let Some(ref model) = soft_visual_model {
+                                    caret_visual_line_home(&model.ranges, caret)
                                 } else {
                                     caret_line_home(&s, caret)
                                 };
@@ -573,13 +628,16 @@ impl super::App {
                                     text_sel_sig.set(None);
                                 }
                                 caret_sig.set(Some(dest));
+                                if let Some(ref model) = soft_visual_model {
+                                    pref_x_sig.set_silent(Some(model.caret_x_on_line(dest)));
+                                }
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::End) => {
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     s.len()
-                                } else if let Some(ref ranges) = soft_visual_ranges {
-                                    caret_visual_line_end(ranges, caret)
+                                } else if let Some(ref model) = soft_visual_model {
+                                    caret_visual_line_end(&model.ranges, caret)
                                 } else {
                                     caret_line_end(&s, caret)
                                 };
@@ -593,12 +651,28 @@ impl super::App {
                                     text_sel_sig.set(None);
                                 }
                                 caret_sig.set(Some(dest));
+                                if let Some(ref model) = soft_visual_model {
+                                    pref_x_sig.set_silent(Some(model.caret_x_on_line(dest)));
+                                }
                                 nav_handled = true;
                             }
                             Key::Named(NamedKey::ArrowUp) => {
                                 let dest = if multiline {
-                                    if let Some(ref ranges) = soft_visual_ranges {
-                                        caret_move_vertical_visual(&s, ranges, caret, -1)
+                                    if let Some(ref model) = soft_visual_model {
+                                        let px = pref_x_sig.peek().unwrap_or_else(|| {
+                                            model.caret_x_on_line(caret)
+                                        });
+                                        if pref_x_sig.peek().is_none() {
+                                            pref_x_sig.set_silent(Some(px));
+                                        }
+                                        caret_move_vertical_visual_pref(
+                                            &s,
+                                            &model.ranges,
+                                            Some(&model.caret_xs),
+                                            caret,
+                                            -1,
+                                            Some(px),
+                                        )
                                     } else {
                                         caret_move_vertical(&s, caret, -1)
                                     }
@@ -620,8 +694,21 @@ impl super::App {
                             }
                             Key::Named(NamedKey::ArrowDown) => {
                                 let dest = if multiline {
-                                    if let Some(ref ranges) = soft_visual_ranges {
-                                        caret_move_vertical_visual(&s, ranges, caret, 1)
+                                    if let Some(ref model) = soft_visual_model {
+                                        let px = pref_x_sig.peek().unwrap_or_else(|| {
+                                            model.caret_x_on_line(caret)
+                                        });
+                                        if pref_x_sig.peek().is_none() {
+                                            pref_x_sig.set_silent(Some(px));
+                                        }
+                                        caret_move_vertical_visual_pref(
+                                            &s,
+                                            &model.ranges,
+                                            Some(&model.caret_xs),
+                                            caret,
+                                            1,
+                                            Some(px),
+                                        )
                                     } else {
                                         caret_move_vertical(&s, caret, 1)
                                     }

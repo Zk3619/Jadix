@@ -248,6 +248,12 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             // Horizontal scroll (wrap=off): nowrap + scrollport overflow-x auto.
             text_el = text_el.white_space("nowrap");
         }
+        text_el = text_el.text_wrap(wrap_mode);
+        crate::core::reactivity::use_signal(
+            &crate::utils::text_field::textarea_wrap_mode_signal_key(&field_id),
+            || crate::text::WrapMode::Word,
+        )
+        .set_silent(wrap_mode);
         // Content-driven leaf (field-sizing-content). Do NOT use viewport/chrome height —
         // that coupled glyph soft_h to textarea resize. Ink only at content bottom.
         let avail_w = if soft {
@@ -257,12 +263,13 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         } else {
             10_000.0
         };
-        let content_h = crate::utils::text_field::text_edit_content_height_px(
+        let content_h = crate::utils::text_field::text_edit_content_height_px_wrap(
             &display_text,
             text_size_px,
             font_weight,
             line_box,
             avail_w,
+            wrap_mode,
         );
         text_el = text_el.h(content_h).min_h(content_h);
         if !soft {

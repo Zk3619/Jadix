@@ -109,6 +109,18 @@ pub fn caret_move_vertical_visual(
     caret: usize,
     delta_lines: i32,
 ) -> usize {
+    caret_move_vertical_visual_pref(s, ranges, None, caret, delta_lines, None)
+}
+
+/// ↑/↓ using Preferred X (px from line start) when provided; else character column.
+pub fn caret_move_vertical_visual_pref(
+    s: &str,
+    ranges: &[(usize, usize)],
+    caret_xs: Option<&[Vec<(usize, f32)>]>,
+    caret: usize,
+    delta_lines: i32,
+    preferred_x: Option<f32>,
+) -> usize {
     if delta_lines == 0 || s.is_empty() || ranges.is_empty() {
         return s.floor_char_boundary(caret.min(s.len()));
     }
@@ -125,6 +137,22 @@ pub fn caret_move_vertical_visual(
         return s.floor_char_boundary(caret.min(s.len()));
     }
     let (t_start, t_end) = ranges[target];
+    if let (Some(px), Some(xs_rows)) = (preferred_x, caret_xs) {
+        if let Some(xs) = xs_rows.get(target) {
+            if !xs.is_empty() {
+                let mut best = t_start;
+                let mut best_d = f32::MAX;
+                for &(b, x) in xs {
+                    let d = (x - px).abs();
+                    if d < best_d {
+                        best_d = d;
+                        best = b;
+                    }
+                }
+                return best.clamp(t_start, t_end);
+            }
+        }
+    }
     let t_body = &s[t_start..t_end];
     let mut n = 0usize;
     for (i, _) in t_body.char_indices() {
