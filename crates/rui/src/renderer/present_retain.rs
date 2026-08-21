@@ -108,7 +108,7 @@ impl PresentRetainPipeline {
             ..Default::default()
         });
 
-        // Same UV orientation as backdrop blur capture (not TexturedQuad Y-flip).
+        // Same UV orientation as backdrop blur capture / TexturedQuadPipeline.
         let verts: &[VertexInput] = &[
             VertexInput {
                 position: [-1.0, -1.0],

@@ -2,6 +2,7 @@
 
 pub mod backdrop_blur;
 pub mod cpu_text;
+pub mod css_filter;
 pub mod effect;
 pub mod effect_pass;
 pub mod emoji_detect;
@@ -31,6 +32,9 @@ pub(crate) mod wgpu_compat;
 pub mod scene3d;
 
 pub use backdrop_blur::BackdropBlurPipeline;
+pub use css_filter::{
+    queue_css_filter_wrap, take_filter_jobs, CssFilterPassGpu, FilterJob, FilterUniforms,
+};
 pub use effect::{
     enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
     queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob, EffectJob, EffectKind,
@@ -192,7 +196,7 @@ fn aabb_intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
 }
 
-/// `textured_rect` 顶点 Y 翻转：rect 顶 → `uv.y=1`。子矩形 UV 必须同一约定。
+/// `textured_rect` 顶点：rect 顶 → `uv.y=0`（与上传图 / 离屏 RT 行序一致）。
 pub fn uv_for_subrect(full: [f32; 4], sub: [f32; 4]) -> ([f32; 2], [f32; 2]) {
     let fw = full[2].max(1e-6);
     let fh = full[3].max(1e-6);
@@ -200,7 +204,7 @@ pub fn uv_for_subrect(full: [f32; 4], sub: [f32; 4]) -> ([f32; 2], [f32; 2]) {
     let v0 = ((sub[1] - full[1]) / fh).clamp(0.0, 1.0);
     let us = (sub[2] / fw).clamp(0.0, 1.0);
     let vs = (sub[3] / fh).clamp(0.0, 1.0);
-    ([u0, 1.0 - v0 - vs], [us, vs])
+    ([u0, v0], [us, vs])
 }
 
 /// 缩放至物理像素后的纹理绘制矩形。
@@ -306,8 +310,9 @@ mod textured_uv_tests {
         let (off, scale) = uv_for_subrect([0.0, 0.0, 100.0, 80.0], [0.0, 0.0, 100.0, 40.0]);
         assert!((scale[1] - 0.5).abs() < 1e-5);
         assert!(
-            (off[1] - 0.5).abs() < 1e-5,
-            "top half → uv.y starts at 0.5 (Y-flip)"
+            off[1].abs() < 1e-5,
+            "top half → uv.y starts at 0 (no Y-flip), got {}",
+            off[1]
         );
     }
 

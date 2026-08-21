@@ -99,6 +99,17 @@ impl Spring {
     pub fn peek(&self) -> f32 {
         self.0.borrow().signal.peek()
     }
+
+    /// 当前弹簧目标（不订阅）。用于判断是否仍在过渡、避免误重启动画。
+    pub fn peek_target(&self) -> f32 {
+        self.0.borrow().target
+    }
+
+    /// 是否仍在向目标积分（含过冲回摆）。
+    pub fn is_moving(&self) -> bool {
+        let s = self.0.borrow();
+        (s.current - s.target).abs() > 0.5 || s.velocity.abs() > 1.0
+    }
 }
 
 pub fn use_spring(id_str: &str, initial: f32) -> Spring {
@@ -381,18 +392,91 @@ pub fn any_ui_animation_active() -> bool {
 }
 
 // ─── CSS Transition engine ───────────────────────────────────────────────
+//
+// CSS-like model: progress = (timeline_now − start) / duration.
+// Timeline source is a **monotonic** clock (`std::time::Instant`), never
+// `SystemTime` / wall clock (NTP jumps must not seek animations).
+// Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
 
 use super::element_style::{TimingFunction, TransitionEntry, TransitionProperty};
+use super::filter::{interpolate_filter_lists, FilterList};
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::time::Instant;
 
-/// Per-property in-flight tween state.
+thread_local! {
+    /// Monotonic origin for the document CSS-transition timeline (`performance.now()`-like).
+    static CSS_TIMELINE_ORIGIN: RefCell<Option<Instant>> = const { RefCell::new(None) };
+    /// When `Some`, overrides [`css_timeline_now_ms`] (unit tests / virtual clock).
+    static CSS_TIMELINE_VIRTUAL_MS: Cell<Option<f64>> = const { Cell::new(None) };
+}
+
+fn css_timeline_now_ms() -> f64 {
+    if let Some(ms) = CSS_TIMELINE_VIRTUAL_MS.get() {
+        return ms.max(0.0);
+    }
+    CSS_TIMELINE_ORIGIN.with(|slot| {
+        let mut g = slot.borrow_mut();
+        let origin = *g.get_or_insert_with(Instant::now);
+        origin.elapsed().as_secs_f64() * 1000.0
+    })
+}
+
+/// Drive CSS transitions from a virtual monotonic timeline (unit tests).
+///
+/// When enabled, time only moves via [`set_css_transition_timeline_ms`] /
+/// [`advance_css_transition_timeline_ms`] — not via wall `SystemTime` and not by
+/// inventing progress from frame `dt` storms.
+pub fn set_css_transition_virtual_timeline(on: bool) {
+    if on {
+        CSS_TIMELINE_VIRTUAL_MS.set(Some(
+            CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0).max(0.0),
+        ));
+    } else {
+        CSS_TIMELINE_VIRTUAL_MS.set(None);
+    }
+}
+
+/// Seek the virtual CSS timeline to an absolute monotonic time (ms since origin).
+pub fn set_css_transition_timeline_ms(ms: f64) {
+    CSS_TIMELINE_VIRTUAL_MS.set(Some(ms.max(0.0)));
+}
+
+/// Advance the virtual CSS timeline by `delta_ms` (tests / scripted frames).
+pub fn advance_css_transition_timeline_ms(delta_ms: f64) {
+    let cur = CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0);
+    CSS_TIMELINE_VIRTUAL_MS.set(Some((cur + delta_ms).max(0.0)));
+}
+
+/// Compatibility alias: enable virtual timeline at `t = 0` (or disable).
+pub fn set_css_transition_synthetic_clock(on: bool) {
+    set_css_transition_virtual_timeline(on);
+    if on {
+        set_css_transition_timeline_ms(0.0);
+    }
+}
+
+/// Per-property in-flight tween state (CSS transition segment).
 #[derive(Clone, Debug)]
 struct PropertyTween {
     from: [f32; 4],
     to: [f32; 4],
     /// Number of meaningful components (1 for scalar, 4 for color).
     components: u8,
-    elapsed: f32,
+    /// Monotonic timeline time (ms) when this segment started.
+    start_ms: f64,
+    duration_ms: f32,
+    delay_ms: f32,
+    timing: TimingFunction,
+    active: bool,
+}
+
+/// Filter list tween (cannot fit in `[f32; 4]`).
+#[derive(Clone, Debug)]
+struct FilterTween {
+    from: Option<FilterList>,
+    to: Option<FilterList>,
+    start_ms: f64,
     duration_ms: f32,
     delay_ms: f32,
     timing: TimingFunction,
@@ -403,11 +487,14 @@ struct PropertyTween {
 #[derive(Clone, Debug, Default)]
 pub struct TransitionSnapshot {
     tweens: HashMap<TransitionProperty, PropertyTween>,
+    filter_tween: Option<FilterTween>,
 }
 
 impl TransitionSnapshot {
-    pub(crate) fn has_tweens(&self) -> bool {
-        !self.tweens.is_empty()
+    /// True while at least one property tween is still interpolating.
+    pub(crate) fn has_active_tweens(&self) -> bool {
+        self.tweens.values().any(|t| t.active)
+            || self.filter_tween.as_ref().is_some_and(|t| t.active)
     }
 }
 
@@ -426,6 +513,8 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 4], u8
         TransitionProperty::Transform => {
             ([style.scale[0], style.scale[1], style.rotate_deg, 0.0], 3)
         }
+        // Handled via [`FilterTween`] + [`interpolate_filter_lists`].
+        TransitionProperty::Filter => ([0.0; 4], 0),
         TransitionProperty::All => ([0.0; 4], 0),
     }
 }
@@ -444,6 +533,7 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 4]
             style.scale = [val[0], val[1]];
             style.rotate_deg = val[2];
         }
+        TransitionProperty::Filter => {}
         TransitionProperty::All => {}
     }
 }
@@ -471,25 +561,71 @@ const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::BoxShadow,
     TransitionProperty::Color,
     TransitionProperty::Transform,
+    TransitionProperty::Filter,
 ];
+
+fn tween_elapsed_ms(tween: &PropertyTween, now_ms: f64) -> f32 {
+    (now_ms - tween.start_ms).max(0.0) as f32
+}
+
+fn tween_sample(tween: &PropertyTween, now_ms: f64) -> ([f32; 4], f32) {
+    let elapsed_ms = tween_elapsed_ms(tween, now_ms);
+    let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
+    let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
+    let eased = tween.timing.eval(linear_t);
+    (
+        lerp_arr(&tween.from, &tween.to, eased, tween.components),
+        linear_t,
+    )
+}
+
+fn filter_tween_sample(tween: &FilterTween, now_ms: f64) -> (Option<FilterList>, f32) {
+    let elapsed_ms = (now_ms - tween.start_ms).max(0.0) as f32;
+    let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
+    let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
+    let eased = tween.timing.eval(linear_t);
+    let list = match interpolate_filter_lists(tween.from.as_ref(), tween.to.as_ref(), eased) {
+        Some(list) => {
+            if list.is_empty() {
+                None
+            } else {
+                Some(list)
+            }
+        }
+        // Discrete: hold start until finished, then snap to end.
+        None => {
+            if linear_t >= 1.0 - 1e-6 {
+                tween.to.clone()
+            } else {
+                tween.from.clone()
+            }
+        }
+    };
+    (list, linear_t)
+}
 
 /// Tick CSS transitions for a single element. Returns `true` if any tween is still active.
 ///
 /// Call this **after** class-variant resolution has written the target style.
 /// `snapshot` is mutable storage that persists across frames on the element.
+///
+/// Progress is sampled from the **monotonic CSS timeline** (`Instant`, or a virtual
+/// clock in tests). `dt_secs` is ignored for progress (kept for call-site compatibility);
+/// dense CursorMoved redraws therefore cannot accelerate `transition-*`.
 pub fn tick_element_transitions(
     style: &mut super::Style,
     snapshot: &mut TransitionSnapshot,
-    dt_secs: f32,
+    _dt_secs: f32,
 ) -> bool {
     if style.transition.is_empty() {
         if !snapshot.tweens.is_empty() {
             snapshot.tweens.clear();
         }
+        snapshot.filter_tween = None;
         return false;
     }
 
-    let dt_ms = dt_secs * 1000.0;
+    let now_ms = css_timeline_now_ms();
 
     // Clone transition config to avoid borrow conflict with style mutation.
     let transition_entries: Vec<TransitionEntry> = style.transition.clone();
@@ -508,7 +644,53 @@ pub fn tick_element_transitions(
 
     let mut any_active = false;
 
+    // Filter uses list interpolation (or discrete when kinds don't align).
+    if let Some(&cfg_idx) = config_map.get(&TransitionProperty::Filter) {
+        let cfg = &transition_entries[cfg_idx];
+        let target = style.filter.clone();
+        let tween = snapshot.filter_tween.get_or_insert_with(|| FilterTween {
+            from: target.clone(),
+            to: target.clone(),
+            start_ms: now_ms,
+            duration_ms: cfg.duration_ms,
+            delay_ms: cfg.delay_ms,
+            timing: cfg.timing,
+            active: false,
+        });
+
+        let target_changed = tween.to != target;
+        if target_changed {
+            if tween.active {
+                let (current, _) = filter_tween_sample(tween, now_ms);
+                tween.from = current;
+            }
+            tween.to = target;
+            tween.duration_ms = cfg.duration_ms;
+            tween.delay_ms = cfg.delay_ms;
+            tween.timing = cfg.timing;
+            tween.active = true;
+            tween.start_ms = now_ms;
+        }
+
+        if tween.active {
+            let (interpolated, linear_t) = filter_tween_sample(tween, now_ms);
+            style.filter = interpolated;
+            if linear_t >= 1.0 - 1e-6 {
+                tween.active = false;
+                tween.from = tween.to.clone();
+                style.filter = tween.to.clone();
+            } else {
+                any_active = true;
+            }
+        }
+    } else {
+        snapshot.filter_tween = None;
+    }
+
     for (&prop, &cfg_idx) in &config_map {
+        if prop == TransitionProperty::Filter {
+            continue;
+        }
         let cfg = &transition_entries[cfg_idx];
         let (target, comps) = extract_prop(style, prop);
         if comps == 0 {
@@ -519,39 +701,35 @@ pub fn tick_element_transitions(
             from: target,
             to: target,
             components: comps,
-            elapsed: 0.0,
+            start_ms: now_ms,
             duration_ms: cfg.duration_ms,
             delay_ms: cfg.delay_ms,
             timing: cfg.timing,
             active: false,
         });
 
-        // Target changed → restart tween from current interpolated value.
+        // Target changed → retarget from the **current computed value** (CSS transition).
         let target_changed = (0..comps as usize).any(|i| (tween.to[i] - target[i]).abs() > 1e-5);
         if target_changed {
             tween.components = comps;
             if tween.active {
-                let t = ((tween.elapsed - tween.delay_ms).max(0.0) / tween.duration_ms.max(0.001)).min(1.0);
-                let eased = tween.timing.eval(t);
-                tween.from = lerp_arr(&tween.from, &tween.to, eased, tween.components);
+                let (current, _) = tween_sample(tween, now_ms);
+                tween.from = current;
             }
+            // Inactive: `from` already equals last settled `to`.
             tween.to = target;
-            tween.elapsed = 0.0;
             tween.duration_ms = cfg.duration_ms;
             tween.delay_ms = cfg.delay_ms;
             tween.timing = cfg.timing;
             tween.active = true;
+            tween.start_ms = now_ms;
         }
 
         if !tween.active {
             continue;
         }
 
-        tween.elapsed += dt_ms;
-        let eff_elapsed = (tween.elapsed - tween.delay_ms).max(0.0);
-        let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
-        let eased = tween.timing.eval(linear_t);
-        let interpolated = lerp_arr(&tween.from, &tween.to, eased, tween.components);
+        let (interpolated, linear_t) = tween_sample(tween, now_ms);
         write_prop(style, prop, &interpolated);
 
         if linear_t >= 1.0 - 1e-6 {
@@ -566,6 +744,118 @@ pub fn tick_element_transitions(
     snapshot.tweens.retain(|p, _| config_map.contains_key(p));
 
     any_active
+}
+
+#[cfg(test)]
+mod css_transition_dt_tests {
+    use super::*;
+    use crate::style::element_style::{Style, TransitionEntry, TransitionProperty};
+    use crate::style::TimingFunction;
+
+    #[test]
+    fn monotonic_timeline_ignores_dt_storm() {
+        set_css_transition_virtual_timeline(false);
+        let mut style = Style::default();
+        style.scale = [1.0, 1.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 150.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Ease,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.scale = [1.5, 1.0];
+        let t0 = Instant::now();
+        assert!(tick_element_transitions(&mut style, &mut snap, 1.0));
+        // Invented 1s dt × many ticks must not finish the tween — progress is Instant-based.
+        for _ in 0..20 {
+            style.scale = [1.5, 1.0];
+            let _ = tick_element_transitions(&mut style, &mut snap, 1.0);
+        }
+        let mono_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        assert!(
+            snap.has_active_tweens() || mono_ms >= 140.0,
+            "monotonic tween must stay active unless real Instant covered the duration"
+        );
+        if mono_ms < 40.0 {
+            assert!(
+                style.scale[0] < 1.35,
+                "invented dt must not finish a 150ms tween in {mono_ms}ms (scale={})",
+                style.scale[0]
+            );
+        }
+    }
+
+    #[test]
+    fn virtual_timeline_advances_only_when_seeked() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = Style::default();
+        style.scale = [1.0, 1.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 150.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Ease,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.scale = [1.5, 1.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(16.0);
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        let after_one = style.scale[0];
+        assert!(after_one > 1.0 && after_one < 1.5, "got {after_one}");
+        for _ in 0..40 {
+            style.scale = [1.5, 1.0];
+            let _ = tick_element_transitions(&mut style, &mut snap, 1.0);
+        }
+        assert!(
+            (style.scale[0] - after_one).abs() < 0.02,
+            "passing dt must not invent progress; only timeline seeks move time"
+        );
+        advance_css_transition_timeline_ms(200.0);
+        style.scale = [1.5, 1.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(!snap.has_active_tweens(), "virtual 150ms+ tween should settle");
+        assert!((style.scale[0] - 1.5).abs() < 0.01);
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn retarget_continues_from_current_computed_value() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = Style::default();
+        style.opacity = 0.5;
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        style.opacity = 1.0;
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(100.0); // mid-way → 0.75 on linear
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = style.opacity;
+        assert!((mid - 0.75).abs() < 0.02, "expected ~0.75 at 100ms, got {mid}");
+        // Leave: retarget to 0.5 from current (~0.75), not from 1.0.
+        style.opacity = 0.5;
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        assert!((snap.tweens.get(&TransitionProperty::Opacity).unwrap().from[0] - mid).abs() < 0.02);
+        set_css_transition_timeline_ms(100.0); // same now — just retargeted, elapsed≈0
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.opacity - mid).abs() < 0.05,
+            "right after leave retarget, value should stay near mid ({mid}), got {}",
+            style.opacity
+        );
+        set_css_transition_virtual_timeline(false);
+    }
 }
 
 #[cfg(test)]

@@ -888,23 +888,21 @@ impl From<ButtonBuilder> for Element {
             .focus_id(builder.id)
             .focusable(!disabled)
             .on_hover(move |h| {
-                let v = if disabled {
-                    0.0
-                } else if h {
-                    1.0
-                } else {
-                    0.0
-                };
+                let want = if disabled { false } else { h };
+                // Only retarget spring / mark dirty when the boolean actually changes.
+                // Re-assert enter after handler rebuild must be a no-op while already hovered,
+                // otherwise spring.set(1) every invalidate frame keeps the redraw pump alive.
+                if hovered.peek() == want {
+                    return;
+                }
+                let t = if want { 1.0 } else { 0.0 };
                 if hover_easing == "cubic" {
-                    cubic_cb.set(v);
+                    cubic_cb.set(t);
                 } else {
-                    hover_spring_cb.set(v);
+                    hover_spring_cb.set(t);
                 }
-                let v = if disabled { false } else { h };
-                if hovered.peek() != v {
-                    hovered.set_silent(v);
-                    mark_hover_paint_dirty();
-                }
+                hovered.set_silent(want);
+                mark_hover_paint_dirty();
             })
             .on_click(move || {
                 if !disabled {
@@ -1159,7 +1157,14 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
         return LayoutStatus::Clean;
     }
     desc.variant = variant.to_string();
-    let (bg, variant_text_color, border) = button_chrome_for_variant(variant, 0.0);
+    // Preserve live hover blend — painting rest chrome (t=0) while the pointer is down
+    // on the active nav item flashes secondary↔hover every bind/rebuild.
+    let hover_t = el
+        .focus_id
+        .as_deref()
+        .map(|fid| hover_t_for_id(fid, &desc.hover_easing))
+        .unwrap_or(0.0);
+    let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);
     let text_color = desc.text_color.unwrap_or(variant_text_color);
     el.style.bg_color = bg;
     match border {

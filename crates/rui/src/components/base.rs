@@ -127,6 +127,11 @@ impl BaseComponentBuilder {
         self
     }
 
+    pub fn filter(mut self, spec: impl AsRef<str>) -> Self {
+        self.el = self.el.filter(spec);
+        self
+    }
+
     pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {
         self.el = self.el.text_shadow(spec);
         self

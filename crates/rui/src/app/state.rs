@@ -86,6 +86,7 @@ pub(super) struct AppState {
     scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
     backdrop_blur: BackdropBlurPipeline,
     effect_pass: crate::renderer::EffectPassGpu,
+    css_filter_pass: crate::renderer::CssFilterPassGpu,
     /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
     present_retain: PresentRetainPipeline,
     image_textures: crate::renderer::TexturePool,
@@ -553,6 +554,7 @@ impl AppState {
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
+        let css_filter_pass = crate::renderer::CssFilterPassGpu::new(&device, config.format);
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
@@ -604,6 +606,7 @@ impl AppState {
             scene3d: None,
             backdrop_blur,
             effect_pass,
+            css_filter_pass,
             present_retain,
             image_textures: crate::renderer::TexturePool::new(),
             textured_instance_buffer,
@@ -1330,7 +1333,9 @@ impl AppState {
         // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
         scrollbar_skip_flex_layout: bool,
         // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
-        // caret paint). Hover/class variants still run because content slides under a still cursor.
+        // caret paint). Class `:hover` is **frozen** here — content sliding under a still cursor
+        // must not enter/leave every `transition-transform` tile (gallery layout WP area jank +
+        // sidebar hover flash). Active CSS tweens still advance via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         // Scroll/drag fast path for prepare perf. Layout fit skip applies only during live
@@ -1373,6 +1378,14 @@ impl AppState {
         // scrollbar styles/springs and broke auto hide + caused flicker.
         let pre_chrome_layout_status = self.layout_status;
 
+        // Pull live scroll offsets **before** class-variant / button hover sync so `:hover` and
+        // hit-adjacent chrome see the same `Element.scroll_offset` as this frame's paint. Doing
+        // this only in the later scrollbar prepass left chrome one frame behind smooth scroll —
+        // content slid under a still cursor with stale offset, thrashing hover + sidebar flash.
+        if self.root_element.contains_scroll_viewport {
+            sync_viewport_scroll_offsets_from_signals(&mut self.root_element);
+        }
+
         #[cfg(feature = "devtools")]
         {
             // Apply queued CSSOM edits before chrome sync; committed map is reasserted after.
@@ -1397,16 +1410,25 @@ impl AppState {
             viewport_h,
             [0.0, 0.0],
         );
-        crate::components::button::sync_button_hover_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-            viewport_w,
-            viewport_h,
-            [0.0, 0.0],
-        );
+        // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; spring
+        // paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
+        if !scroll_paint_only {
+            crate::components::button::sync_button_hover_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+                viewport_w,
+                viewport_h,
+                [0.0, 0.0],
+            );
+        }
         if !scroll_paint_only {
             crate::components::command::sync_command_item_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::context_menu::sync_context_menu_item_paint_subtree(
                 &mut self.root_element,
                 &mut self.layout_tree,
                 &mut sync_impact,
@@ -1442,16 +1464,51 @@ impl AppState {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
             let dark = crate::style::is_dark_theme();
-            crate::style::sync_class_variants_subtree(
-                &mut self.root_element,
-                mouse_pos,
-                focused.as_str(),
-                dark,
-                viewport_w,
-                viewport_h,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
+            // Class-variant `:hover` uses last-frame layout_bounds. After StructureChanged (or
+            // while the Inspector dock is about to insert/remove), those bounds still cover the
+            // pre-rebuild geometry — dozens of nodes falsely report hovered and flash together.
+            let variant_mouse = {
+                let structure_dirty = matches!(
+                    pre_chrome_layout_status,
+                    crate::core::tree::LayoutStatus::StructureChanged
+                );
+                // Only suppress class-hover while the dock is open *and* waiting for sync.
+                // `is_enabled()` alone (feature on, panel closed) must not pin the mouse to a
+                // sentinel — that interacted badly with layout-page CSS transitions.
+                #[cfg(feature = "devtools")]
+                let panel_pending = crate::app::devtools::DevToolsState::is_enabled()
+                    && crate::app::devtools::DevToolsState::is_open()
+                    && crate::app::devtools::DevToolsState::generation()
+                        != crate::app::devtools::DevToolsState::last_sync_gen();
+                #[cfg(not(feature = "devtools"))]
+                let panel_pending = false;
+                if structure_dirty || panel_pending {
+                    [-1.0e9_f32, -1.0e9_f32]
+                } else {
+                    mouse_pos
+                }
+            };
+            if scroll_paint_only {
+                crate::style::tick_active_css_transitions_subtree(
+                    &mut self.root_element,
+                    viewport_w,
+                    viewport_h,
+                    [0.0, 0.0],
+                    &mut self.layout_tree,
+                    &mut sync_impact,
+                );
+            } else {
+                crate::style::sync_class_variants_subtree(
+                    &mut self.root_element,
+                    variant_mouse,
+                    focused.as_str(),
+                    dark,
+                    viewport_w,
+                    viewport_h,
+                    &mut self.layout_tree,
+                    &mut sync_impact,
+                );
+            }
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect. Offset-only scroll frames keep last paint.
@@ -1581,12 +1638,30 @@ impl AppState {
 
         #[cfg(feature = "devtools")]
         {
+            // App tree StructureChanged (route / reactive_view) does not bump Inspector GEN by
+            // itself — without this the Elements panel keeps a stale snapshot after page switches.
+            // Skip during scroll_paint_only so VirtualList window moves do not rebuild the dock
+            // every frame.
+            if !scroll_paint_only
+                && crate::app::devtools::DevToolsState::is_open()
+                && matches!(
+                    pre_chrome_layout_status,
+                    crate::core::tree::LayoutStatus::StructureChanged
+                )
+            {
+                crate::app::devtools::DevToolsState::bump();
+                // Stale pick/tree hover paths refer to the previous page.
+                crate::app::devtools::DevToolsState::clear_hover_highlight();
+            }
             if crate::app::devtools::sync_overlay(&mut self.root_element) {
                 layout_for_build = Self::merge_layout_status(
                     layout_for_build,
                     crate::core::tree::LayoutStatus::StructureChanged,
                 );
                 self.mark_full_redraw();
+                // Panel rebuild replaces every `on_hover` Rc. Soft-invalidate so the next
+                // post-render hover pass re-asserts by focus_id without leave→spring(0) thrash.
+                crate::app::tree_hit::invalidate_hover_handlers();
             }
             let _ = crate::app::devtools::sync_box_model_visuals(&mut self.root_element);
             let _ = crate::app::devtools::sync_tree_row_hovers(&mut self.root_element);
@@ -1649,6 +1724,11 @@ impl AppState {
         // `StyleChanged` from per-frame chrome（颜色/阴影等）不改变 flex 几何时可与 `Clean` 一样走
         // scroll-only；`LayoutChanged`（如边框宽度、下划线开关）仍必须跑 `compute_layout`。
         // Full + overlay 淡入淡出 / 平滑滚：预更新已写滚动条样式，flex 树在 Clean 下与上一帧同构。
+        //
+        // Mid-scroll exception: after entering a huge page (gallery layout WP), glyphon_fit spill
+        // keeps promoting `LayoutChanged` for several frames. Forcing full `compute_layout` on
+        // every smooth-scroll frame janks the whole window (sidebar + scrollbar flash together).
+        // Defer that remeasure until scroll settles (`take_fit_needs_relayout` re-arms below).
         let scroll_only = (scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
             && matches!(
                 layout_for_build,
@@ -1661,6 +1741,15 @@ impl AppState {
                     layout_for_build,
                     crate::core::tree::LayoutStatus::Clean
                         | crate::core::tree::LayoutStatus::StyleChanged
+                ))
+            || (scroll_paint_only
+                && !matches!(
+                    layout_for_build,
+                    crate::core::tree::LayoutStatus::StructureChanged
+                )
+                && !matches!(
+                    pre_chrome_layout_status,
+                    crate::core::tree::LayoutStatus::StructureChanged
                 ));
         // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
         // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
@@ -1838,6 +1927,8 @@ impl AppState {
         }
         let captures = crate::renderer::take_capture_jobs();
         let effects = crate::renderer::take_effect_jobs();
+        let filters = crate::renderer::take_filter_jobs();
+        let mut fx_dirty = false;
         if self.effect_pass.flush(
             &self.device,
             &self.queue,
@@ -1850,6 +1941,20 @@ impl AppState {
             ui_scale,
             &self.pipeline,
         ) {
+            fx_dirty = true;
+        }
+        // Captures already live in `image_textures`; filter pass only runs graphs.
+        if self.css_filter_pass.flush_filter_jobs(
+            &self.device,
+            &self.queue,
+            &self.textured_pipeline,
+            &mut self.image_textures,
+            &filters,
+            ui_scale,
+        ) {
+            fx_dirty = true;
+        }
+        if fx_dirty {
             self.window.request_redraw();
         }
         // Capture/effect passes rewrite pipeline globals.resolution to RT size.
@@ -1961,8 +2066,14 @@ impl AppState {
                     self.window.request_redraw();
                 }
                 if crate::text::take_fit_needs_relayout() {
-                    self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
-                    self.window.request_redraw();
+                    if scroll_paint_only {
+                        // Keep the flag armed; apply LayoutChanged after scroll settles so mid-scroll
+                        // frames stay on the scroll_only collect path (gallery layout WP enter+scroll).
+                        crate::text::note_fit_needs_relayout();
+                    } else {
+                        self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                        self.window.request_redraw();
+                    }
                 }
                 (
                     prep_out.underline_instances,
@@ -2037,8 +2148,12 @@ impl AppState {
             self.window.request_redraw();
         }
         if crate::text::take_fit_needs_relayout() {
-            self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
-            self.window.request_redraw();
+            if scroll_paint_only {
+                crate::text::note_fit_needs_relayout();
+            } else {
+                self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                self.window.request_redraw();
+            }
         }
         self.trim_all_glyph_atlases();
         if crate::core::texture_stats::texture_stats_enabled()
@@ -2329,7 +2444,7 @@ impl AppState {
                     &mut encoder,
                     max_backdrop_blur_logical * ui_scale,
                 );
-                // Same UV space as capture — not TexturedQuadPipeline (Y-flipped for images).
+                // Same UV space as capture / TexturedQuadPipeline (rect top → uv.y = 0).
                 let blur_dst = if draw_to_retain {
                     self.present_retain.color_view()
                 } else {
@@ -2774,6 +2889,29 @@ fn find_reactive_subtree_by_anchor_id_mut<'a>(
         }
     }
     None
+}
+
+/// Copy scroll-offset signals onto every `scroll:` viewport **before** chrome sync.
+///
+/// Cheap walk (flags prune non-scroll subtrees). The later scrollbar prepass still runs for
+/// track/thumb styling; this only keeps `Element.scroll_offset` current for `:hover` / paint.
+fn sync_viewport_scroll_offsets_from_signals(el: &mut Element) {
+    if !el.contains_scroll_viewport {
+        return;
+    }
+    if let Some(fid) = el.focus_id.as_deref() {
+        if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+            let sx = use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
+            let sy = use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+            el.scroll_offset = [sx, sy];
+            if el.scroll_viewport_subtree_count <= 1 {
+                return;
+            }
+        }
+    }
+    for child in &mut el.children {
+        sync_viewport_scroll_offsets_from_signals(child);
+    }
 }
 
 fn update_scrollbar_elements(

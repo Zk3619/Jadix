@@ -1252,16 +1252,15 @@ pub fn ensure_raster_texture(
         }
     });
     if miss {
-        let mut rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
-        // TexturedQuadPipeline 顶点 uv：rect 顶 → uv.y=1。上传前竖直翻转，使逻辑 y=0
-        //（叶顶、图表高值）显示在屏幕上方，与命中坐标一致。
-        flip_rgba_vertical(&mut rgba, width, height);
+        let rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
+        // TexturedQuadPipeline: rect top → uv.y=0, matching this buffer's y-down row order.
         crate::queue_image_rgba8(tex_id.clone(), width, height, rgba);
     }
     Some(tex_id)
 }
 
-/// RGBA8 行互换：缓冲顶行 ↔ 底行。
+/// RGBA8 行互换：缓冲顶行 ↔ 底行（仅测试 / 调试用；上传路径不再翻转）。
+#[cfg(test)]
 pub(crate) fn flip_rgba_vertical(rgba: &mut [u8], width: u32, height: u32) {
     let stride = width as usize * 4;
     let h = height as usize;

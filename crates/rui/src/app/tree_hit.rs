@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
@@ -8,9 +10,54 @@ use crate::core::tree::{
 };
 use crate::layout::layout_tree::portal_hit_passthrough;
 
+type HoverCb = Rc<RefCell<dyn FnMut(bool)>>;
+
+/// Stable identity for exclusive hover tracking across tree rebuilds that replace handler `Rc`s.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HoverKey {
+    Focus(String),
+    Template(String),
+    /// No focus_id / template_id — fall back to handler pointer (rebuild still looks like a change).
+    Anon(usize),
+}
+
+#[derive(Clone)]
+struct HoverSlot {
+    key: HoverKey,
+    cb: HoverCb,
+}
+
+fn hover_key_for(el: &Element, cb: &HoverCb) -> HoverKey {
+    if let Some(fid) = el.focus_id.as_ref() {
+        if !fid.is_empty() {
+            return HoverKey::Focus(fid.clone());
+        }
+    }
+    if let Some(tid) = el.template_id.as_ref() {
+        if !tid.is_empty() {
+            return HoverKey::Template(tid.clone());
+        }
+    }
+    HoverKey::Anon(Rc::as_ptr(cb) as *const () as usize)
+}
+
+fn hover_slot_for(el: &Element) -> Option<HoverSlot> {
+    let cb = el.on_hover.clone()?;
+    Some(HoverSlot {
+        key: hover_key_for(el, &cb),
+        cb,
+    })
+}
+
 thread_local! {
-    static HOVER_HANDLERS_SCRATCH: RefCell<Vec<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>> =
-        RefCell::new(Vec::new());
+    /// Last exclusive `on_hover` target per window signal-key scope.
+    /// Diff-based enter/leave avoids O(n) false callbacks every redraw (DevTools tree rows).
+    static LAST_HOVER_BY_SCOPE: RefCell<HashMap<u64, Option<HoverSlot>>> =
+        RefCell::new(HashMap::new());
+    /// Set by [`invalidate_hover_handlers`]: next [`update_hovers`] must not assume `Rc` identity.
+    static HOVER_NEEDS_RESYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Consecutive hover misses while a previous target was active (1-frame hit-test jitter).
+    static HOVER_MISS_STREAK: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 #[inline]
@@ -125,6 +172,37 @@ pub(super) fn visual_xy(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
     ]
 }
 
+/// Paint-space hit box after CSS `scale` (center origin), matching layout collect.
+///
+/// Pointer / `:hover` must use the scaled box. Unscaled layout hit + `hover:scale-*`
+/// leaves a ring where enter/leave oscillates and CSS tweens never settle.
+#[inline]
+pub(super) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    let b = el.layout_bounds;
+    let [vx, vy] = visual_xy(el, scroll_acc);
+    let sx = if el.style.scale[0].is_finite() && el.style.scale[0] > 0.0 {
+        el.style.scale[0]
+    } else {
+        1.0
+    };
+    let sy = if el.style.scale[1].is_finite() && el.style.scale[1] > 0.0 {
+        el.style.scale[1]
+    } else {
+        1.0
+    };
+    if (sx - 1.0).abs() <= f32::EPSILON && (sy - 1.0).abs() <= f32::EPSILON {
+        return [vx, vy, b[2], b[3]];
+    }
+    let sw = b[2] * sx;
+    let sh = b[3] * sy;
+    [
+        vx + (b[2] - sw) * 0.5,
+        vy + (b[3] - sh) * 0.5,
+        sw,
+        sh,
+    ]
+}
+
 /// Visual border box for hit-testing / inspector pick.
 /// Prefers the last collect paint rect when it is still current (translate/sticky/scale).
 #[cfg(feature = "devtools")]
@@ -185,23 +263,15 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    if !is_body_portal
-        && (el.style.overflow.x != taffy::style::Overflow::Visible
-            || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && !inside
-    {
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
         return LayerHit::Miss;
     }
 
-    let mut next_acc = scroll_acc;
-    if !is_body_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
-        }
-    }
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
@@ -295,23 +365,15 @@ fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> L
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    if !is_body_portal
-        && (el.style.overflow.x != taffy::style::Overflow::Visible
-            || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && !inside
-    {
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
         return LayerHit::Miss;
     }
 
-    let mut next_acc = scroll_acc;
-    if !is_body_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
-        }
-    }
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
@@ -362,13 +424,7 @@ fn find_input_text_leaf_for_rest_acc(
     rest: &str,
     scroll_acc: [f32; 2],
 ) -> Option<([f32; 4], String, crate::style::TextStyle, [f32; 2])> {
-    let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
+    let next_acc = next_hit_scroll_acc(el, scroll_acc);
     let child_text_edit_fid = inherit_text_edit_focus_id(el, text_edit_fid);
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
@@ -434,20 +490,13 @@ pub(super) fn find_input_text_at(
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    if crate::core::tree::element_clips_overflow(el)
         && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
     {
         return None;
     }
 
-    let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
+    let next_acc = next_hit_scroll_acc(el, scroll_acc);
 
     let child_text_edit_fid = inherit_text_edit_focus_id(el, text_edit_fid);
     if children_share_same_z_index(el) {
@@ -628,20 +677,13 @@ pub(super) fn find_selectable_text_at(
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    if crate::core::tree::element_clips_overflow(el)
         && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
     {
         return None;
     }
 
-    let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
+    let next_acc = next_hit_scroll_acc(el, scroll_acc);
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
@@ -679,32 +721,101 @@ pub(super) fn update_hovers(
     x: f32,
     y: f32,
     scroll_offset: [f32; 2],
-    cbs: &mut Vec<(std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>, bool)>,
+    cbs: &mut Vec<(HoverCb, bool)>,
 ) {
-    HOVER_HANDLERS_SCRATCH.with(|scratch| {
-        let mut all = scratch.borrow_mut();
-        all.clear();
-        collect_hover_handlers(el, &mut all);
-        let target = match pick_hover_target(el, x, y, scroll_offset) {
-            HoverHit::Hit(cb) => cb,
-            HoverHit::Miss => None,
-        };
-        for cb in all.iter() {
-            let is_target = target.as_ref().is_some_and(|t| std::rc::Rc::ptr_eq(t, cb));
-            cbs.push((cb.clone(), is_target));
+    let target = match pick_hover_target(el, x, y, scroll_offset) {
+        HoverHit::Hit(slot) => slot,
+        HoverHit::Miss => None,
+    };
+    let force = HOVER_NEEDS_RESYNC.replace(false);
+    let scope = crate::core::reactivity::signal_key_scope();
+    let prev = LAST_HOVER_BY_SCOPE.with(|map| {
+        map.borrow_mut()
+            .entry(scope)
+            .or_insert(None)
+            .clone()
+    });
+    let same_identity = match (&prev, &target) {
+        (Some(a), Some(b)) => a.key == b.key,
+        (None, None) => true,
+        _ => false,
+    };
+    if same_identity {
+        if let Some(next) = target {
+            let rc_changed = prev
+                .as_ref()
+                .is_some_and(|p| !Rc::ptr_eq(&p.cb, &next.cb));
+            // Quiet Rc refresh after rebuild. Re-fire enter when soft-invalidated, or when the
+            // handler Rc was replaced while `{focus_id}_hover` is still false (desync after
+            // jank/rebuild — otherwise chrome stays dead until a click forces a leave/enter).
+            let mut reenter = force;
+            if !reenter && rc_changed {
+                if let HoverKey::Focus(fid) = &next.key {
+                    let key = format!("{fid}_hover");
+                    if !crate::core::reactivity::use_signal(&key, || false).peek() {
+                        reenter = true;
+                    }
+                }
+            }
+            if rc_changed || reenter {
+                LAST_HOVER_BY_SCOPE.with(|map| {
+                    *map.borrow_mut().entry(scope).or_insert(None) = Some(next.clone());
+                });
+            }
+            if reenter {
+                cbs.push((next.cb, true));
+            }
         }
+        HOVER_MISS_STREAK.set(0);
+        return;
+    }
+    // Different hoverable under the pointer — leave/enter immediately.
+    if let Some(new) = target.clone() {
+        HOVER_MISS_STREAK.set(0);
+        if let Some(old) = prev {
+            cbs.push((old.cb, false));
+        }
+        cbs.push((new.cb, true));
+        LAST_HOVER_BY_SCOPE.with(|map| {
+            *map.borrow_mut().entry(scope).or_insert(None) = target;
+        });
+        return;
+    }
+    // Miss while we had a target: tolerate one-frame hit-test jitter (spring/layout chrome).
+    // Without this, leave→spring(0) + next-frame enter→spring(1) flashes sidebar items.
+    let streak = HOVER_MISS_STREAK.get().saturating_add(1);
+    HOVER_MISS_STREAK.set(streak);
+    if streak < 2 {
+        return;
+    }
+    HOVER_MISS_STREAK.set(0);
+    if let Some(old) = prev {
+        cbs.push((old.cb, false));
+    }
+    LAST_HOVER_BY_SCOPE.with(|map| {
+        *map.borrow_mut().entry(scope).or_insert(None) = None;
     });
 }
 
-fn collect_hover_handlers(
-    el: &Element,
-    out: &mut Vec<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
-) {
-    if let Some(cb) = &el.on_hover {
-        out.push(cb.clone());
-    }
-    for child in &el.children {
-        collect_hover_handlers(child, out);
+/// Soft-invalidate after handler `Rc`s are replaced (DevTools dock / `reactive_view`).
+///
+/// Does **not** fire leave. The next [`update_hovers`] re-resolves by [`HoverKey`]: same
+/// `focus_id` only re-asserts enter (no spring 0→1 thrash); pointer moved away emits leave.
+pub(crate) fn invalidate_hover_handlers() {
+    HOVER_NEEDS_RESYNC.set(true);
+}
+
+/// Hard reset: fire leave and drop the cached slot (tests / teardown).
+///
+/// Prefer [`invalidate_hover_handlers`] on live rebuild paths — hard leave here races with
+/// same-frame re-enter and spring ticks, which flickered gallery sidebar hover.
+pub(super) fn clear_hover_tracking() {
+    HOVER_NEEDS_RESYNC.set(true);
+    HOVER_MISS_STREAK.set(0);
+    let scope = crate::core::reactivity::signal_key_scope();
+    let prev = LAST_HOVER_BY_SCOPE.with(|map| map.borrow_mut().insert(scope, None).flatten());
+    if let Some(old) = prev {
+        (*old.cb.borrow_mut())(false);
     }
 }
 
@@ -715,7 +826,7 @@ fn collect_hover_handlers(
 ///   below, e.g. modal underlay) but ancestors may still supply `on_hover`.
 enum HoverHit {
     Miss,
-    Hit(Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>),
+    Hit(Option<HoverSlot>),
 }
 
 fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> HoverHit {
@@ -734,36 +845,38 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
     };
 
     let b = el.layout_bounds;
-    let [vx, vy] = visual_xy(el, scroll_acc);
-    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
+    let hit = visual_hit_box(el, scroll_acc);
+    let inside = x >= hit[0]
+        && x <= hit[0] + hit[2]
+        && y >= hit[1]
+        && y <= hit[1] + hit[3];
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
 
-    // Respect overflow clipping as a hard boundary (portal layer is a stacking shell).
-    if !is_body_portal
-        && (el.style.overflow.x != taffy::style::Overflow::Visible
-            || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && !inside
-    {
-        return HoverHit::Miss;
+    // Respect overflow / `scroll:` clipping as a hard boundary (portal layer is a stacking shell).
+    // Clip uses the **layout** border box (CSS: transforms do not expand overflow).
+    // `scroll:` must clip even when overflow was cleared to Visible — otherwise scrolled
+    // content can absorb sibling chrome (sidebar) hits while the main pane scrolls.
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) {
+        let [vx, vy] = visual_xy(el, scroll_acc);
+        let in_layout = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
+        if !in_layout {
+            return HoverHit::Miss;
+        }
     }
 
-    let mut next_acc = scroll_acc;
-    if !is_body_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
-        }
-    }
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     // Topmost child wins; bubble `on_hover` so Button > label still highlights.
     let bubble = |child_hit: HoverHit| -> HoverHit {
         match child_hit {
             HoverHit::Miss => HoverHit::Miss,
-            HoverHit::Hit(cb) => HoverHit::Hit(cb.or_else(|| el.on_hover.clone())),
+            HoverHit::Hit(slot) => HoverHit::Hit(slot.or_else(|| hover_slot_for(el))),
         }
     };
 
@@ -790,7 +903,7 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
             return HoverHit::Miss;
         }
         // Claiming bounds absorbs sibling search even without `on_hover` (modal underlay).
-        HoverHit::Hit(el.on_hover.clone())
+        HoverHit::Hit(hover_slot_for(el))
     } else {
         HoverHit::Miss
     }
@@ -808,20 +921,13 @@ pub(crate) fn find_click(
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
 
-    if (el.style.overflow.x != taffy::style::Overflow::Visible
-        || el.style.overflow.y != taffy::style::Overflow::Visible)
+    if crate::core::tree::element_clips_overflow(el)
         && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
     {
         return None;
     }
 
-    let mut next_acc = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
-    }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
-    }
+    let next_acc = next_hit_scroll_acc(el, scroll_acc);
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
@@ -887,8 +993,44 @@ pub(super) enum TextDragHScrollTick {
     AtLimit,
 }
 
+/// Visual clip of a textarea scrollport: `[x, y, w, h]` in logical screen space.
+///
+/// Used to clamp drag-select hit-testing to the visible edge (avoids selection
+/// jumping ahead along a wide nowrap leaf when the pointer is outside the clip).
+pub(super) fn textarea_scrollport_visual_clip(
+    root: &Element,
+    field_id: &str,
+) -> Option<[f32; 4]> {
+    use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+    use crate::utils::text_field::textarea_scroll_rest;
+
+    let scroll_rest = textarea_scroll_rest(field_id);
+    let vp_fid = focus_id_for_scroll_viewport(&scroll_rest);
+    let (vp_layout, vp_scroll) = find_bounds_by_focus_id(root, &vp_fid, [0.0, 0.0])?;
+    let left = vp_layout[0] - vp_scroll[0];
+    let top = vp_layout[1] - vp_scroll[1];
+    Some([left, top, vp_layout[2].max(1.0), vp_layout[3].max(1.0)])
+}
+
+/// Clamp a pointer into the textarea scrollport so drag-select tracks the visible
+/// edge while edge auto-scroll runs (wrap=off horizontal / soft vertical).
+pub(super) fn clamp_pointer_to_textarea_scrollport(
+    root: &Element,
+    field_id: &str,
+    x: f32,
+    y: f32,
+) -> (f32, f32) {
+    let Some(clip) = textarea_scrollport_visual_clip(root, field_id) else {
+        return (x, y);
+    };
+    (
+        x.clamp(clip[0], clip[0] + clip[2]),
+        y.clamp(clip[1], clip[1] + clip[3]),
+    )
+}
+
 /// While drag-selecting in a `wrap=off` textarea, scroll horizontally when the pointer
-/// is past the scrollport on X. `dt` is frame delta so holding still still scrolls.
+/// is near/past the scrollport on X. `dt` is frame delta so holding still still scrolls.
 ///
 /// Paint must not run `ensure_caret_visible_scroll_x` during text drag (see
 /// [`crate::utils::text_field::text_drag_select_active`]).
@@ -906,7 +1048,8 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     use crate::style::WhiteSpace;
     use crate::utils::text_field::textarea_scroll_rest;
 
-    let Some((_, _, style, _)) = find_input_text_leaf_for_rest(root, None, field_id) else {
+    let Some((leaf_bounds, _, style, _)) = find_input_text_leaf_for_rest(root, None, field_id)
+    else {
         return TextDragHScrollTick::Idle;
     };
     if style.white_space != WhiteSpace::Nowrap {
@@ -923,9 +1066,9 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     let right = left + vp_layout[2];
     let vw_layout = vp_layout[2].max(1.0);
 
-    // Slight inner slop so “parked on the border” still auto-scrolls; paint ensure is off
-    // during text drag so this does not bounce.
-    const EDGE_SLOP: f32 = 2.0;
+    // Inner hot-zone: paint ensure is skipped during text drag, so this no longer
+    // fights `ensure_caret_visible_scroll_x` (that pair caused bounce before).
+    const EDGE_SLOP: f32 = 16.0;
     let outside_right = pointer_x > right - EDGE_SLOP;
     let outside_left = pointer_x < left + EDGE_SLOP;
     if !outside_left && !outside_right {
@@ -942,7 +1085,12 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
         .peek()
         .max(vw_layout)
         .max(1.0);
-    let cw = use_signal(&cw_key, || 0.0_f32).peek().max(vw);
+    // Prefer live leaf width when the content-w signal is still one frame stale
+    // (CSSOM / wrap=off long lines would otherwise report max_sx≈0 → no follow).
+    let cw = use_signal(&cw_key, || 0.0_f32)
+        .peek()
+        .max(leaf_bounds[2])
+        .max(vw);
     let max_sx = (cw - vw).max(0.0);
     if max_sx < 0.5 {
         return TextDragHScrollTick::AtLimit;
@@ -956,7 +1104,7 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     } else {
         ((left + EDGE_SLOP) - pointer_x).max(0.0)
     };
-    let speed = (220.0 + over * 12.0).min(720.0);
+    let speed = (280.0 + over * 14.0).min(900.0);
     let step = speed * dt;
     let next = if outside_right {
         (sx + step).min(max_sx)
@@ -972,6 +1120,88 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
         vp.scroll_offset[0] = next;
     }
     TextDragHScrollTick::Scrolled
+}
+
+/// Vertical edge auto-scroll while drag-selecting soft-wrapped textarea text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextDragVScrollTick {
+    Idle,
+    Scrolled,
+    AtLimit,
+}
+
+pub(super) fn nudge_textarea_vscroll_for_drag(
+    root: &mut Element,
+    field_id: &str,
+    pointer_y: f32,
+    dt: f32,
+) -> TextDragVScrollTick {
+    use crate::core::reactivity::use_signal;
+    use crate::core::scroll_viewport::{
+        focus_id_for_scroll_viewport, scroll_content_h_signal_key, scroll_offset_x_signal_key,
+        scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
+    };
+    use crate::utils::text_field::textarea_scroll_rest;
+
+    let Some((_, _, _style, _)) = find_input_text_leaf_for_rest(root, None, field_id) else {
+        return TextDragVScrollTick::Idle;
+    };
+
+    let scroll_rest = textarea_scroll_rest(field_id);
+    let vp_fid = focus_id_for_scroll_viewport(&scroll_rest);
+    let Some((vp_layout, vp_scroll)) = find_bounds_by_focus_id(root, &vp_fid, [0.0, 0.0]) else {
+        return TextDragVScrollTick::Idle;
+    };
+    let top = vp_layout[1] - vp_scroll[1];
+    let bottom = top + vp_layout[3];
+    let vh_layout = vp_layout[3].max(1.0);
+
+    // Match horizontal drag: inner hot-zone (paint ensure skipped during text drag).
+    const EDGE_SLOP: f32 = 16.0;
+    let outside_bottom = pointer_y > bottom - EDGE_SLOP;
+    let outside_top = pointer_y < top + EDGE_SLOP;
+    if !outside_top && !outside_bottom {
+        return TextDragVScrollTick::Idle;
+    }
+
+    let sx_key = scroll_offset_x_signal_key(&scroll_rest);
+    let sy_key = scroll_offset_y_signal_key(&scroll_rest);
+    let vh_key = scroll_viewport_h_signal_key(&scroll_rest);
+    let ch_key = scroll_content_h_signal_key(&scroll_rest);
+    let sx = use_signal(&sx_key, || 0.0_f32).peek();
+    let sy_sig = use_signal(&sy_key, || 0.0_f32);
+    let vh = use_signal(&vh_key, || 0.0_f32)
+        .peek()
+        .max(vh_layout)
+        .max(1.0);
+    let ch = use_signal(&ch_key, || 0.0_f32).peek().max(vh);
+    let max_sy = (ch - vh).max(0.0);
+    if max_sy < 0.5 {
+        return TextDragVScrollTick::AtLimit;
+    }
+
+    let sy = sy_sig.peek().clamp(0.0, max_sy);
+    let dt = dt.clamp(1.0 / 240.0, 0.05);
+    let over = if outside_bottom {
+        (pointer_y - (bottom - EDGE_SLOP)).max(0.0)
+    } else {
+        ((top + EDGE_SLOP) - pointer_y).max(0.0)
+    };
+    let speed = (280.0 + over * 14.0).min(900.0);
+    let step = speed * dt;
+    let next = if outside_bottom {
+        (sy + step).min(max_sy)
+    } else {
+        (sy - step).max(0.0)
+    };
+    if (next - sy).abs() < 0.05 {
+        return TextDragVScrollTick::AtLimit;
+    }
+    super::scroll_support::set_scroll_offset_with_behavior(&scroll_rest, sx, next, true);
+    if let Some(vp) = find_element_by_focus_id_mut(root, &vp_fid) {
+        vp.scroll_offset[1] = next;
+    }
+    TextDragVScrollTick::Scrolled
 }
 
 /// Handlers cloned off the focused node so callers can drop `AppState` borrows before running them.
@@ -1033,6 +1263,7 @@ mod hover_occlusion_tests {
 
     #[test]
     fn claiming_underlay_blocks_hover_on_content_below() {
+        clear_hover_tracking();
         let below_hits = Rc::new(Cell::new(0u32));
         let below_hits_cb = below_hits.clone();
         let mut below: Element = interactive(Element::new().w(100.0).h(100.0))
@@ -1126,6 +1357,7 @@ mod hover_occlusion_tests {
 
     #[test]
     fn button_hover_bubbles_from_child_label() {
+        clear_hover_tracking();
         let hovered = Rc::new(Cell::new(false));
         let hovered_cb = hovered.clone();
         let mut label = Element::new().w(80.0).h(20.0);
@@ -1150,10 +1382,280 @@ mod hover_occlusion_tests {
             "Button on_hover must fire when pointer is over a non-hover child"
         );
     }
+
+    #[test]
+    fn update_hovers_is_diff_based_not_broadcast() {
+        clear_hover_tracking();
+        let a_hits = Rc::new(Cell::new(0u32));
+        let b_hits = Rc::new(Cell::new(0u32));
+        let a_hits_cb = a_hits.clone();
+        let b_hits_cb = b_hits.clone();
+
+        let mut a: Element = interactive(Element::new().w(40.0).h(40.0))
+            .on_hover(move |h| {
+                if h {
+                    a_hits_cb.set(a_hits_cb.get() + 1);
+                }
+            })
+            .into();
+        a.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+
+        let mut b: Element = interactive(Element::new().w(40.0).h(40.0))
+            .on_hover(move |h| {
+                if h {
+                    b_hits_cb.set(b_hits_cb.get() + 1);
+                }
+            })
+            .into();
+        b.layout_bounds = [50.0, 0.0, 40.0, 40.0];
+
+        let mut root = Element::new().child(a).child(b);
+        root.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+
+        let mut to_run = Vec::new();
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(a_hits.get(), 1);
+        assert_eq!(b_hits.get(), 0);
+
+        // Same target again: no callbacks (diff-based).
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        assert!(to_run.is_empty());
+        assert_eq!(a_hits.get(), 1);
+
+        // Move to B: leave A + enter B only.
+        update_hovers(&root, 70.0, 20.0, [0.0, 0.0], &mut to_run);
+        assert_eq!(to_run.len(), 2);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(a_hits.get(), 1);
+        assert_eq!(b_hits.get(), 1);
+    }
+
+    #[test]
+    fn hover_identity_survives_handler_rc_rebuild() {
+        clear_hover_tracking();
+        let enters = Rc::new(Cell::new(0u32));
+        let leaves = Rc::new(Cell::new(0u32));
+        let enters_cb = enters.clone();
+        let leaves_cb = leaves.clone();
+
+        let mut btn: Element = interactive(Element::new().w(40.0).h(40.0))
+            .focus_id("stable-btn")
+            .on_hover(move |h| {
+                if h {
+                    enters_cb.set(enters_cb.get() + 1);
+                } else {
+                    leaves_cb.set(leaves_cb.get() + 1);
+                }
+            })
+            .into();
+        btn.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        let mut root = Element::new().child(btn);
+        root.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+
+        let mut to_run = Vec::new();
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(enters.get(), 1);
+        assert_eq!(leaves.get(), 0);
+
+        // Simulate reactive_view rebuild: new on_hover Rc, same focus_id.
+        let enters_cb2 = enters.clone();
+        let leaves_cb2 = leaves.clone();
+        let mut btn2: Element = interactive(Element::new().w(40.0).h(40.0))
+            .focus_id("stable-btn")
+            .on_hover(move |h| {
+                if h {
+                    enters_cb2.set(enters_cb2.get() + 1);
+                } else {
+                    leaves_cb2.set(leaves_cb2.get() + 1);
+                }
+            })
+            .into();
+        btn2.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        root.children[0] = btn2;
+
+        invalidate_hover_handlers();
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        // Soft-invalidate + same focus_id: re-assert enter only (no leave).
+        assert_eq!(to_run.len(), 1);
+        assert!(to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(leaves.get(), 0);
+        assert_eq!(enters.get(), 2);
+
+        // Simulate button chrome: `{focus_id}_hover` stays true while the pointer rests.
+        crate::core::reactivity::use_signal("stable-btn_hover", || false).set_silent(true);
+
+        // Quiet Rc swap without invalidate must not re-fire when the hover signal is still true.
+        let enters_cb3 = enters.clone();
+        let leaves_cb3 = leaves.clone();
+        let mut btn3: Element = interactive(Element::new().w(40.0).h(40.0))
+            .focus_id("stable-btn")
+            .on_hover(move |h| {
+                if h {
+                    enters_cb3.set(enters_cb3.get() + 1);
+                } else {
+                    leaves_cb3.set(leaves_cb3.get() + 1);
+                }
+            })
+            .into();
+        btn3.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        root.children[0] = btn3;
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        assert!(to_run.is_empty());
+        assert_eq!(enters.get(), 2);
+        assert_eq!(leaves.get(), 0);
+
+        // Rc swap + cleared hover signal: re-assert enter (post-jank heal).
+        crate::core::reactivity::use_signal("stable-btn_hover", || false).set_silent(false);
+        let enters_cb4 = enters.clone();
+        let leaves_cb4 = leaves.clone();
+        let mut btn4: Element = interactive(Element::new().w(40.0).h(40.0))
+            .focus_id("stable-btn")
+            .on_hover(move |h| {
+                if h {
+                    enters_cb4.set(enters_cb4.get() + 1);
+                } else {
+                    leaves_cb4.set(leaves_cb4.get() + 1);
+                }
+            })
+            .into();
+        btn4.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        root.children[0] = btn4;
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        assert_eq!(to_run.len(), 1);
+        assert!(to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(enters.get(), 3);
+        assert_eq!(leaves.get(), 0);
+    }
+
+    #[test]
+    fn hover_miss_uses_one_frame_hysteresis() {
+        clear_hover_tracking();
+        let leaves = Rc::new(Cell::new(0u32));
+        let leaves_cb = leaves.clone();
+        let mut btn: Element = interactive(Element::new().w(40.0).h(40.0))
+            .focus_id("hyst-btn")
+            .on_hover(move |h| {
+                if !h {
+                    leaves_cb.set(leaves_cb.get() + 1);
+                }
+            })
+            .into();
+        btn.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+        let mut root = Element::new().child(btn);
+        root.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+
+        let mut to_run = Vec::new();
+        update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+
+        // First miss: hold hover.
+        update_hovers(&root, 100.0, 100.0, [0.0, 0.0], &mut to_run);
+        assert!(to_run.is_empty());
+        assert_eq!(leaves.get(), 0);
+
+        // Second miss: leave.
+        update_hovers(&root, 100.0, 100.0, [0.0, 0.0], &mut to_run);
+        assert_eq!(to_run.len(), 1);
+        assert!(!to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(leaves.get(), 1);
+    }
+
+    #[test]
+    fn scroll_viewport_visible_overflow_does_not_steal_sidebar_hover() {
+        // Gallery shell: main ScrollArea is painted after the sidebar (later sibling = topmost).
+        // If `scroll:` viewports with overflow cleared to Visible skip clip, a claiming content
+        // tile whose abs box overlaps the sidebar coords absorbs the hit → sidebar leave/enter
+        // thrash while the main pane scrolls under a still pointer.
+        clear_hover_tracking();
+        let enters = Rc::new(Cell::new(0u32));
+        let leaves = Rc::new(Cell::new(0u32));
+        let enters_cb = enters.clone();
+        let leaves_cb = leaves.clone();
+
+        let mut side: Element = interactive(Element::new().w(180.0).h(32.0))
+            .focus_id("gal-nav-layout")
+            .on_hover(move |h| {
+                if h {
+                    enters_cb.set(enters_cb.get() + 1);
+                } else {
+                    leaves_cb.set(leaves_cb.get() + 1);
+                }
+            })
+            .into();
+        side.layout_bounds = [8.0, 100.0, 180.0, 32.0];
+        // Claiming paint so Hit(None) would absorb if tested without clip.
+        side.style.bg_color = [0.2, 0.2, 0.2, 1.0];
+
+        let mut tile = Element::new();
+        tile.layout_bounds = [8.0, 100.0, 64.0, 64.0];
+        tile.style.bg_color = [1.0, 0.0, 0.0, 1.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:gal-layout".into());
+        viewport.style.overflow.x = taffy::style::Overflow::Visible;
+        viewport.style.overflow.y = taffy::style::Overflow::Visible;
+        viewport.layout_bounds = [208.0, 0.0, 600.0, 800.0];
+        viewport.scroll_offset = [0.0, 120.0];
+        viewport = viewport.child(tile);
+
+        let mut root = Element::new().child(side).child(viewport);
+        root.layout_bounds = [0.0, 0.0, 808.0, 800.0];
+
+        let mut to_run = Vec::new();
+        update_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run);
+        assert_eq!(to_run.len(), 1, "sidebar button must win hover");
+        assert!(to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(enters.get(), 1);
+        assert_eq!(leaves.get(), 0);
+
+        // Scroll offset changes every frame — hover identity must stay on the sidebar item.
+        viewport_scroll_bump(&mut root, 180.0);
+        update_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run);
+        assert!(
+            to_run.is_empty(),
+            "scroll must not leave/enter sidebar hover, got {} cbs",
+            to_run.len()
+        );
+        assert_eq!(enters.get(), 1);
+        assert_eq!(leaves.get(), 0);
+
+        viewport_scroll_bump(&mut root, 240.0);
+        update_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run);
+        assert!(to_run.is_empty());
+        assert_eq!(leaves.get(), 0);
+    }
+
+    fn viewport_scroll_bump(root: &mut Element, sy: f32) {
+        if let Some(vp) = root.children.get_mut(1) {
+            vp.scroll_offset[1] = sy;
+        }
+    }
 }
 
-#[cfg(test)]
-mod focused_key_dispatch_tests {
+    #[cfg(test)]
+    mod focused_key_dispatch_tests {
     use super::*;
     use crate::core::reactivity::use_signal;
     use crate::primitives::interactive::interactive;
@@ -1391,6 +1893,85 @@ mod drag_select_bounds_tests {
             "bounds={bounds:?}"
         );
     }
+
+    #[test]
+    fn clamp_pointer_to_textarea_scrollport_pins_outside_hits_to_clip_edge() {
+        use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
+        use crate::utils::text_field::textarea_scroll_rest;
+
+        let id = "ta-clamp-hit";
+        let rest = textarea_scroll_rest(id);
+        let vp_fid = focus_id_for_scroll_viewport(&rest);
+
+        let mut leaf = Element::new();
+        leaf.layout_bounds = [20.0, 40.0, 800.0, 40.0];
+        leaf.text = Some("padding: 8px 16px; background: #ffffff; border-radius: 6px".into());
+        leaf.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+        leaf.focus_id = Some(format!("textarea:{id}"));
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some(vp_fid);
+        viewport.style.overflow.x = Overflow::Scroll;
+        viewport.style.overflow.y = Overflow::Scroll;
+        viewport.layout_bounds = [20.0, 40.0, 200.0, 120.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(leaf);
+
+        let (cx, cy) = clamp_pointer_to_textarea_scrollport(&viewport, id, 500.0, 80.0);
+        assert!(
+            (cx - 220.0).abs() < 0.5,
+            "outside-right pointer must clamp to clip right edge, got {cx}"
+        );
+        assert!((cy - 80.0).abs() < 0.5);
+
+        let (cx2, _) = clamp_pointer_to_textarea_scrollport(&viewport, id, 0.0, 80.0);
+        assert!(
+            (cx2 - 20.0).abs() < 0.5,
+            "outside-left pointer must clamp to clip left edge, got {cx2}"
+        );
+    }
+
+    #[test]
+    fn nudge_hscroll_uses_inner_edge_hot_zone_and_leaf_width() {
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::core::scroll_viewport::{
+            focus_id_for_scroll_viewport, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+            scroll_offset_y_signal_key, scroll_viewport_w_signal_key,
+        };
+        use crate::utils::text_field::textarea_scroll_rest;
+
+        create_root(|| {
+            let id = "ta-hscroll-edge";
+            let rest = textarea_scroll_rest(id);
+            let vp_fid = focus_id_for_scroll_viewport(&rest);
+
+            use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).set_silent(0.0);
+            use_signal(&scroll_offset_y_signal_key(&rest), || 0.0_f32).set_silent(0.0);
+            use_signal(&scroll_viewport_w_signal_key(&rest), || 0.0_f32).set_silent(0.0);
+            // Stale/zero content-w: nudge must fall back to leaf layout width.
+            use_signal(&scroll_content_w_signal_key(&rest), || 0.0_f32).set_silent(0.0);
+
+            let mut leaf = Element::new();
+            leaf.layout_bounds = [0.0, 0.0, 600.0, 40.0];
+            leaf.text = Some("x".repeat(80));
+            leaf.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+            leaf.focus_id = Some(format!("textarea:{id}"));
+
+            let mut viewport = Element::new();
+            viewport.focus_id = Some(vp_fid);
+            viewport.style.overflow.x = Overflow::Scroll;
+            viewport.style.overflow.y = Overflow::Scroll;
+            viewport.layout_bounds = [0.0, 0.0, 200.0, 80.0];
+            viewport.scroll_offset = [0.0, 0.0];
+            viewport = viewport.child(leaf);
+
+            // Pointer inside clip but within 16px of the right edge.
+            let tick = nudge_textarea_hscroll_for_drag(&mut viewport, id, 190.0, 1.0 / 60.0);
+            assert_eq!(tick, TextDragHScrollTick::Scrolled);
+            let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
+            assert!(sx > 0.5, "inner edge hot-zone must advance sx, got {sx}");
+        });
+    }
 }
 
 /// Inspector pick: child-index path for the topmost hit target (logical coords).
@@ -1433,11 +2014,7 @@ fn pick_element_path_acc(
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-    if !is_body_portal
-        && (el.style.overflow.x != taffy::style::Overflow::Visible
-            || el.style.overflow.y != taffy::style::Overflow::Visible)
-        && !inside
-    {
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
         return None;
     }
 

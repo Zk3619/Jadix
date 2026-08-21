@@ -11,7 +11,9 @@ mod color_space;
 mod cursor;
 pub(crate) mod cursor_image;
 mod element_style;
+pub mod filter;
 mod focus_ring;
+pub mod svg_filter;
 mod tailwind_leading;
 mod text_style;
 mod theme;
@@ -20,7 +22,9 @@ pub mod transform;
 pub(crate) mod utility;
 
 pub use animation::{
-    any_ui_animation_active, cubic_bezier_y_at_x, tick_animations, use_scrollbar_visibility_spring,
+    advance_css_transition_timeline_ms, any_ui_animation_active, cubic_bezier_y_at_x,
+    set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
+    set_css_transition_virtual_timeline, tick_animations, use_scrollbar_visibility_spring,
     use_spring, use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween,
     CubicTweenState, Spring, SpringState, TransitionSnapshot,
 };
@@ -37,6 +41,13 @@ pub(crate) use cursor_image::CustomCursorCache;
 pub use element_style::{
     parse_box_shadow, parse_box_shadows, BorderImageRepeat, BoxShadow, CornerShape, LineStyle,
     LinearGradient, Style, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
+};
+pub use filter::{
+    filter_list_to_css, interpolate_filter_lists, parse_filter, FilterFunction, FilterList,
+};
+pub use svg_filter::{
+    lookup_svg_filter, register_svg_filter, register_svg_filter_graph, resolve_filter_list_to_graph,
+    resolve_svg_filter_url, FilterGraph, FilterParseError,
 };
 pub use focus_ring::{
     apply_focus_ring_shadow, apply_focus_ring_shadow_color, control_focus_ring_active,
@@ -69,6 +80,7 @@ pub use transform::{
     TransformOrigin, TransformOriginX, TransformOriginY, TransformStyle, MAT2D_IDENTITY,
 };
 pub use utility::{
-    apply_class_list, apply_utility_classes, resolve_class_variants, sync_class_variants_subtree,
+    apply_class_list, apply_utility_classes, class_variant_hover_needs_frame,
+    resolve_class_variants, sync_class_variants_subtree, tick_active_css_transitions_subtree,
     with_class_list, ClassSet, VariantContext,
 };

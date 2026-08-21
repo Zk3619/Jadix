@@ -179,6 +179,24 @@ impl BoxBuilder {
         self
     }
 
+    /// See [`Element::bleed_x`].
+    pub fn bleed_x(mut self, pad: impl IntoCssDim) -> Self {
+        self.el = self.el.bleed_x(pad);
+        self
+    }
+
+    /// See [`Element::bleed_y`].
+    pub fn bleed_y(mut self, pad: impl IntoCssDim) -> Self {
+        self.el = self.el.bleed_y(pad);
+        self
+    }
+
+    /// See [`Element::menu_bleed`].
+    pub fn menu_bleed(mut self) -> Self {
+        self.el = self.el.menu_bleed();
+        self
+    }
+
     pub fn mt(mut self, m: impl IntoCssDim) -> Self {
         self.el = self.el.mt(m);
         self
@@ -584,6 +602,10 @@ impl BoxBuilder {
 
     pub fn backdrop_blur(mut self, blur: impl crate::core::tree::IntoF32) -> Self {
         self.el = self.el.backdrop_blur(blur);
+        self
+    }
+    pub fn filter(mut self, spec: impl AsRef<str>) -> Self {
+        self.el = self.el.filter(spec);
         self
     }
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {

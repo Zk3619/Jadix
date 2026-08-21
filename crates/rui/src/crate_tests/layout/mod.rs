@@ -1,4 +1,5 @@
 mod box_model_contract;
+mod scale_paint_hit;
 mod collect_clip_cull;
 mod canvas_scene;
 mod headless_smoke;

@@ -500,6 +500,22 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Carousel 自动轮播。
+        if crate::components::carousel::tick_carousel_autoplay() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+        if let Some(wake) = crate::components::carousel::carousel_next_wake_at() {
+            if wake <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
         for sec in self.secondaries.borrow().values() {
             if let Some(at) = sec.ime_os_blur_at {
                 if at <= now {
@@ -921,6 +937,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         force_redraw_count: 0,
         app_builder: std::rc::Rc::new(std::cell::RefCell::new(app_builder)),
         cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+        cursor_inside_window: false,
         last_frame_time: std::time::Instant::now(),
         modifiers: ModifiersState::default(),
         left_button_down: false,

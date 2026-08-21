@@ -21,12 +21,18 @@ pub(super) fn tick_input_drag_select_at(
     anchor: usize,
 ) -> bool {
     let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, dt);
+    let vscroll = super::tree_hit::nudge_textarea_vscroll_for_drag(root, rest, y, dt);
 
     let Some((bounds, display_el, style, leaf_scroll)) =
         super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
     else {
-        return matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled);
+        return matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
+            || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
     };
+    // Clamp into the scrollport before hit-test. A wrap=off leaf is often wider than
+    // the clip; using the raw pointer X maps selection far ahead of the visible edge
+    // ("落差") and feels disconnected from edge auto-scroll.
+    let (hx, hy) = super::tree_hit::clamp_pointer_to_textarea_scrollport(root, rest, x, y);
     let vk = crate::components::input::input_value_signal_key(rest);
     let pk = crate::components::input::input_preedit_signal_key(rest);
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
@@ -35,11 +41,12 @@ pub(super) fn tick_input_drag_select_at(
     let mx = if style.overflow.allows_caret_scroll()
         || style.white_space == crate::style::WhiteSpace::Nowrap
     {
-        x + leaf_scroll[0]
+        hx + leaf_scroll[0]
     } else {
-        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
+        (hx + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
     };
-    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+    // Y already clamped to the scrollport; leaf_scroll keeps content-space alignment.
+    let my = hy + leaf_scroll[1];
     let ix = crate::renderer::hit_test_input_text_index(
         font_system,
         &display_el,
@@ -57,12 +64,12 @@ pub(super) fn tick_input_drag_select_at(
     let lo = anchor.min(caret_ix);
     let hi = anchor.max(caret_ix);
     let sk = crate::components::input::input_selection_signal_key(rest);
-    // Silent: may run under `AppState` / secondaries borrow.
     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set_silent(Some((lo, hi)));
     let ck = crate::components::input::input_caret_signal_key(rest);
     crate::core::reactivity::use_signal(&ck, || None::<usize>).set_silent(Some(caret_ix));
 
     matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
+        || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled)
 }
 
 impl super::App {
@@ -941,6 +948,7 @@ impl super::App {
         };
 
         self.cursor_pos = position;
+        self.cursor_inside_window = true;
         let phys_x = position.x as f32;
         let phys_y = position.y as f32;
         let scale = state.window.scale_factor() as f32;
@@ -1132,9 +1140,11 @@ impl super::App {
         let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
         let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
+        let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
         if slider_dragging
             || toast_dragging
             || color_dragging
+            || carousel_dragging
             || crate::primitives::canvas::take_canvas_wants_redraw()
         {
             window.request_redraw();
@@ -1262,6 +1272,15 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
 
+        // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
+        // Wake a frame when pointer geometry would change those samples — otherwise enter
+        // waits for scrollbar auto-hide redraws and leave sticks until another chrome hover.
+        if let Some(st) = (*self.state.borrow()).as_ref() {
+            if crate::style::class_variant_hover_needs_frame(&st.root_element, [x, y]) {
+                window.request_redraw();
+            }
+        }
+
         // Pick hover must run after tree-row on_hover callbacks (see try_pick_hover docs).
         #[cfg(feature = "devtools")]
         if crate::app::devtools::DevToolsState::is_pick() {
@@ -1330,6 +1349,8 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
 
+        self.cursor_inside_window = false;
+
         #[cfg(feature = "devtools")]
         if crate::app::devtools::DevToolsState::is_pick() {
             crate::app::devtools::DevToolsState::clear_hover_highlight();
@@ -1355,20 +1376,17 @@ impl super::App {
             self.last_mouse_target = None;
         }
 
-        let mut changed = false;
         if let Some((prev_rest, prev_axis)) = self.hover_scroll_axis.take() {
             let k = Self::hover_key(&prev_rest, prev_axis);
             crate::core::reactivity::use_signal(&k, || false).set(false);
-            changed = true;
         }
         if let Some(prev) = self.hover_scroll_rest.take() {
             let k = format!("__rui_scroll_hover_{}", prev);
             crate::core::reactivity::use_signal(&k, || false).set(false);
-            changed = true;
         }
-        if changed {
-            window.request_redraw();
-        }
+        // Always wake a frame: utility-class `:hover` must clear when the pointer leaves
+        // the window, even if no scroll-area hover latch was set.
+        window.request_redraw();
         super::tree_hit::apply_cursor(&window, Some(event_loop), &mut self.custom_cursors, None);
     }
 
@@ -1857,6 +1875,7 @@ impl super::App {
             crate::components::slider::clear_slider_drag_if_any();
             crate::components::toast::clear_toast_drag_if_any();
             crate::components::color_picker::clear_color_drag_if_any();
+            crate::components::carousel::clear_carousel_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -2201,9 +2220,9 @@ impl super::App {
         let dt = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
         self.smooth_active_until.retain(|_, until| *until > now);
-        // Avoid α→0 on duplicate redraws / timer quirks; cap so a long pause does not “teleport”.
+        // Scroll / spring paths still clamp so a long pause does not teleport inertia.
+        // CSS `transition-*` samples a monotonic Instant timeline (not this floored dt).
         let scroll_dt = dt.clamp(1.0 / 240.0, 0.08);
-        // UI spring/cubic 与滚动共用夹紧口径（`tick_animations` 内部亦会再夹一次）。
         let anim_dt = scroll_dt;
 
         // Continuous wrap=off edge auto-scroll while text drag-select is held still.
@@ -2237,7 +2256,7 @@ impl super::App {
             window.request_redraw();
         }
 
-        crate::style::utility::set_frame_dt(anim_dt);
+        crate::style::utility::set_frame_dt(dt.max(0.0));
         let anim_tick = crate::style::tick_animations(anim_dt);
         let nav_animating = crate::app::navigator::tick_active(anim_dt);
         if anim_tick.any || nav_animating {
@@ -2537,7 +2556,7 @@ impl super::App {
         // never hit-test with another window's client coords — that re-hovers Command/etc.
         // (secondary Input Y → "Show toast", Select Y → "Calendar").
         let pointer_on_primary = self.pointer_window == Some(state.window.id());
-        let (hx, hy) = if pointer_on_primary {
+        let (hx, hy) = if pointer_on_primary && self.cursor_inside_window {
             (
                 self.cursor_pos.x as f32 / state.window.scale_factor() as f32,
                 self.cursor_pos.y as f32 / state.window.scale_factor() as f32,
@@ -2704,13 +2723,18 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let hover_cursor_pick =
                     super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
-                super::tree_hit::update_hovers(
-                    &state.root_element,
-                    hx,
-                    hy,
-                    [0.0, 0.0],
-                    &mut hover_to_run,
-                );
+                // Skip exclusive `on_hover` diff on scroll-only frames: hit-test jitter under the
+                // layout-page tween/redraw storm was leave/enter thrashing sidebar springs.
+                // CursorMoved still runs `update_hovers`; the first non-scroll frame resyncs.
+                if !scroll_paint_only {
+                    super::tree_hit::update_hovers(
+                        &state.root_element,
+                        hx,
+                        hy,
+                        [0.0, 0.0],
+                        &mut hover_to_run,
+                    );
+                }
 
                 // Never reset the OS cursor from a primary redraw while the pointer lives on
                 // another window — that would wipe secondary I-beam / Pointer mid-hover.
@@ -3560,6 +3584,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         &mut up,
                         super::pointer_events::PointerKind::Up,
                     );
+                    // ContextMenu opens on right-press; arm dismiss so the next outside
+                    // left-click can close (primary mouseup is the usual arm path).
+                    crate::utils::popup::arm_underlay_close();
                 }
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();

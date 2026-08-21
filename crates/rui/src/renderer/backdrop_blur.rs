@@ -519,9 +519,8 @@ impl BackdropBlurPipeline {
 
     /// Blit the blurred full-res result onto `dst` with the same UV orientation as capture.
     ///
-    /// Do **not** composite via [`crate::renderer::TexturedQuadPipeline`] — its unit-quad UVs
-    /// are Y-flipped for uploaded images, which mirrors the page and makes the mask look
-    /// unrelated to the UI underneath.
+    /// Prefer this path over [`crate::renderer::TexturedQuadPipeline`] for fullscreen page
+    /// composites (dedicated blit UVs, no instance path).
     pub fn blit_to(
         &self,
         queue: &wgpu::Queue,

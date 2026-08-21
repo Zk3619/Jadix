@@ -143,6 +143,9 @@ struct App {
     force_redraw_count: u32,
     app_builder: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Element>>,
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
+    /// False after `CursorLeft` until the next `CursorMoved` / enter.
+    /// Render then samples class-variant `:hover` at an offscreen point so leave clears.
+    cursor_inside_window: bool,
     last_frame_time: std::time::Instant,
     modifiers: ModifiersState,
     left_button_down: bool,

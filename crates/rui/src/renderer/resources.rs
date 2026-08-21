@@ -49,9 +49,9 @@ impl ResourceKind {
             Self::Canvas
         } else if key.starts_with("rui_scene3d:") {
             Self::Scene3d
-        } else if key.starts_with("rui_capture:") {
+        } else if key.starts_with("rui_capture:") || key.starts_with("rui_filter_cap:") {
             Self::Capture
-        } else if key.starts_with("rui_fx:") {
+        } else if key.starts_with("rui_fx:") || key.starts_with("rui_filter:") {
             Self::Effect
         } else if key.starts_with("rui-src:") || key.starts_with("rui_src:") {
             Self::Image
@@ -246,7 +246,15 @@ mod tests {
             ResourceKind::from_key("rui_capture:x"),
             ResourceKind::Capture
         );
+        assert_eq!(
+            ResourceKind::from_key("rui_filter_cap:x"),
+            ResourceKind::Capture
+        );
         assert_eq!(ResourceKind::from_key("rui_fx:blur"), ResourceKind::Effect);
+        assert_eq!(
+            ResourceKind::from_key("rui_filter:1x1"),
+            ResourceKind::Effect
+        );
         assert_eq!(ResourceKind::from_key("rui-src:a.png"), ResourceKind::Image);
     }
 }

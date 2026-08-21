@@ -486,6 +486,8 @@ pub struct Style {
     /// CSS-like `backdrop-filter: blur(Npx)` radius in logical px. `0` = off.
     /// Consumed by fullscreen modal underlays ([`crate::primitives::overlay`]); general elements TBD.
     pub backdrop_blur: f32,
+    /// CSS `filter`: ordered filter functions. `None` = `none`.
+    pub filter: Option<super::filter::FilterList>,
     /// CSS `transition` entries. Each entry specifies which property to animate,
     /// duration, delay, and timing function.
     pub transition: Vec<TransitionEntry>,
@@ -497,6 +499,7 @@ pub enum TransitionProperty {
     All,
     Opacity,
     Transform,
+    Filter,
     BackgroundColor,
     BorderColor,
     OutlineColor,
@@ -512,6 +515,7 @@ impl TransitionProperty {
             "all" => Self::All,
             "opacity" => Self::Opacity,
             "transform" => Self::Transform,
+            "filter" => Self::Filter,
             "background-color" | "background" | "bg" => Self::BackgroundColor,
             "border-color" => Self::BorderColor,
             "outline-color" => Self::OutlineColor,
@@ -686,6 +690,7 @@ impl Default for Style {
             position_fixed: false,
             position_sticky: false,
             backdrop_blur: 0.0,
+            filter: None,
             transition: Vec::new(),
         }
     }

@@ -377,22 +377,17 @@ fn hit_path_rec(
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     if !is_body_portal
-        && (el.style.overflow.x != taffy::style::Overflow::Visible
-            || el.style.overflow.y != taffy::style::Overflow::Visible)
+        && crate::core::tree::element_clips_overflow(el)
         && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
     {
         return false;
     }
 
-    let mut next_acc = scroll_acc;
-    if !is_body_portal {
-        if el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
-        }
-        if el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
-        }
-    }
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        super::tree_hit::next_hit_scroll_acc(el, scroll_acc)
+    };
 
     // Record this node before descending (root → leaf order).
     let entry_index = out.len();

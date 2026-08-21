@@ -394,6 +394,22 @@ impl CssDim {
     ) -> LengthPercentageAuto {
         dimension_to_lpa(self.to_dimension_axis(ctx, axis))
     }
+
+    /// Unary minus for length-like dims (used by [`crate::core::tree::Element::bleed_x`]).
+    pub fn negated(self) -> Self {
+        match self {
+            Self::Auto => Self::Auto,
+            Self::Px(v) => Self::Px(-v),
+            Self::Percent(p) => Self::Percent(-p),
+            Self::Em(v) => Self::Em(-v),
+            Self::Rem(v) => Self::Rem(-v),
+            Self::Vw(p) => Self::Vw(-p),
+            Self::Vh(p) => Self::Vh(-p),
+            // -(a + b) = (-a) + (-b); -(a - b) = (-a) + b
+            Self::CalcAdd(a, b) => Self::CalcAdd(Box::new(a.negated()), Box::new(b.negated())),
+            Self::CalcSub(a, b) => Self::CalcAdd(Box::new(a.negated()), b),
+        }
+    }
 }
 
 pub fn parse_css_dim(s: &str) -> Option<CssDim> {
@@ -604,6 +620,21 @@ mod tests {
             IntoBorderWidths::into_border_widths("1px 2px 3px 4px"),
             [1.0, 2.0, 3.0, 4.0]
         );
+    }
+
+    #[test]
+    fn css_dim_negated() {
+        assert!(matches!(CssDim::Rem(0.25).negated(), CssDim::Rem(v) if (v + 0.25).abs() < 1e-6));
+        assert!(matches!(CssDim::Px(4.0).negated(), CssDim::Px(v) if (v + 4.0).abs() < 1e-6));
+        assert!(matches!(CssDim::Auto.negated(), CssDim::Auto));
+        let add = CssDim::CalcAdd(Box::new(CssDim::Px(1.0)), Box::new(CssDim::Px(2.0)));
+        match add.negated() {
+            CssDim::CalcAdd(a, b) => {
+                assert!(matches!(*a, CssDim::Px(v) if (v + 1.0).abs() < 1e-6));
+                assert!(matches!(*b, CssDim::Px(v) if (v + 2.0).abs() < 1e-6));
+            }
+            other => panic!("expected CalcAdd, got {other:?}"),
+        }
     }
 
     #[test]

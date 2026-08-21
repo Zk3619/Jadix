@@ -1167,6 +1167,28 @@ impl Element {
         self.attrs.insert("white_space".to_string(), s);
         self
     }
+
+    /// Text soft-wrap mode ([`crate::text::WrapMode`]): `word` / `char` / `none`.
+    /// Also updates `white_space` (None → nowrap; Word/Char → normal).
+    pub fn text_wrap(mut self, mode: impl Into<crate::text::WrapMode>) -> Self {
+        let mode = mode.into();
+        self.attrs
+            .insert("text_wrap".to_string(), mode.as_str().to_string());
+        match mode {
+            crate::text::WrapMode::None => {
+                self.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+                self.attrs
+                    .insert("white_space".to_string(), "nowrap".to_string());
+            }
+            crate::text::WrapMode::Word | crate::text::WrapMode::Char => {
+                self.text_style.white_space = crate::style::WhiteSpace::Normal;
+                self.attrs
+                    .insert("white_space".to_string(), "normal".to_string());
+            }
+        }
+        self
+    }
+
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.text_style.selectable = selectable;
         if selectable {
@@ -1531,6 +1553,11 @@ impl Element {
         self.style.backdrop_blur = blur.into_f32().max(0.0);
         self
     }
+    /// CSS `filter` property — parse a CSS filter string (e.g. `"blur(5px) grayscale(0.4)"`).
+    pub fn filter(mut self, s: impl AsRef<str>) -> Self {
+        self.style.filter = crate::style::parse_filter(s.as_ref());
+        self
+    }
     /// Parse CSS `transition` shorthand, e.g. `"opacity 300ms ease-in-out 100ms"`.
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
@@ -1799,6 +1826,32 @@ impl Element {
         self.set_css(UnitSlot::MarginT, d.clone())
             .set_css(UnitSlot::MarginB, d)
     }
+
+    /// Cancel parent **horizontal** padding by applying the negated margin, with
+    /// `width: auto` so flex/column cross-axis stretch keeps left/right symmetric.
+    ///
+    /// Prefer this over `w("100%").mx(...)` — percentage width + negative `mx` overflows
+    /// asymmetrically under Taffy/CSS flex (same footgun as browsers).
+    ///
+    /// Pass the parent padding value (positive), e.g. `bleed_x("0.25rem")` for `p-1`.
+    /// Parent should stretch children on the cross axis (column `align-items: stretch`).
+    pub fn bleed_x(self, pad: impl IntoCssDim) -> Self {
+        self.w("auto").mx(pad.into_css_dim().negated())
+    }
+
+    /// Cancel parent **vertical** padding via negated `my`, with `height: auto` for
+    /// row-direction stretch. Pass the parent padding value (positive).
+    pub fn bleed_y(self, pad: impl IntoCssDim) -> Self {
+        self.h("auto").my(pad.into_css_dim().negated())
+    }
+
+    /// ShadCN / solid-ui menu / popover chrome (`p-1`): `-mx-1 my-1` with safe width.
+    ///
+    /// Works on **any** node (separator, banner, full-bleed row) — not separator-only.
+    pub fn menu_bleed(self) -> Self {
+        self.bleed_x("0.25rem").my("0.25rem")
+    }
+
     pub fn mt(self, margin: impl IntoCssDim) -> Self {
         self.set_css(UnitSlot::MarginT, margin)
     }
@@ -2236,13 +2289,76 @@ pub(crate) fn element_is_offscreen(
     vx + b[2] < -PAD || vy + b[3] < -PAD || vx > viewport_w + PAD || vy > viewport_h + PAD
 }
 
+/// Axis-aligned point-in-rect (`[x, y, w, h]`).
+#[inline]
+pub(crate) fn point_in_aabb(pos: [f32; 2], rect: [f32; 4]) -> bool {
+    pos[0] >= rect[0]
+        && pos[1] >= rect[1]
+        && pos[0] < rect[0] + rect[2]
+        && pos[1] < rect[1] + rect[3]
+}
+
+/// Paint-space border box after CSS `translate` + `scale` (center origin).
+///
+/// Matches layout collect / hit-test so `:hover` stays active on scaled ink.
+#[inline]
+pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    let b = el.layout_bounds;
+    let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0];
+    let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1];
+    let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
+    let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
+    let sx = if el.style.scale[0].is_finite() && el.style.scale[0] > 0.0 {
+        el.style.scale[0]
+    } else {
+        1.0
+    };
+    let sy = if el.style.scale[1].is_finite() && el.style.scale[1] > 0.0 {
+        el.style.scale[1]
+    } else {
+        1.0
+    };
+    if (sx - 1.0).abs() <= f32::EPSILON && (sy - 1.0).abs() <= f32::EPSILON {
+        return [vx, vy, b[2], b[3]];
+    }
+    let sw = b[2] * sx;
+    let sh = b[3] * sy;
+    [
+        vx + (b[2] - sw) * 0.5,
+        vy + (b[3] - sh) * 0.5,
+        sw,
+        sh,
+    ]
+}
+
+/// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
+///
+/// `scroll:` ids still clip when overflow was cleared to `Visible` (ScrollArea outer shells and
+/// some viewport rebuilds). Without this, scrolled content can absorb hits that belong to
+/// sibling chrome (gallery sidebar) while the main pane scrolls.
+#[inline]
+pub(crate) fn element_clips_overflow(el: &Element) -> bool {
+    el.style.overflow.x != taffy::style::Overflow::Visible
+        || el.style.overflow.y != taffy::style::Overflow::Visible
+        || el
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
+}
+
 #[inline]
 pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
+    // Match collect / `next_hit_scroll_acc`: `scroll:` viewports still contribute offset
+    // when overflow was cleared to Visible.
+    let is_scroll_viewport = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
     let mut next = scroll_acc;
-    if el.style.overflow.x != taffy::style::Overflow::Visible {
+    if is_scroll_viewport || matches!(el.style.overflow.x, taffy::style::Overflow::Scroll) {
         next[0] += el.scroll_offset[0];
     }
-    if el.style.overflow.y != taffy::style::Overflow::Visible {
+    if is_scroll_viewport || matches!(el.style.overflow.y, taffy::style::Overflow::Scroll) {
         next[1] += el.scroll_offset[1];
     }
     next

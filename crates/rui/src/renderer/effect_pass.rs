@@ -1,6 +1,6 @@
 //! GPU effect + subtree capture pass (B16). Consumes pooled textures, writes `rui_fx:` / `rui_capture:`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wgpu::util::DeviceExt;
 
@@ -18,6 +18,8 @@ pub struct EffectPassGpu {
     index_buffer: wgpu::Buffer,
     num_indices: u32,
     target_size: HashMap<String, (u32, u32)>,
+    /// CSS filter captures whose SourceGraphic textures were ready at capture time.
+    completed_filter_caps: HashSet<String>,
 }
 
 impl EffectPassGpu {
@@ -151,6 +153,7 @@ impl EffectPassGpu {
             index_buffer,
             num_indices: 6,
             target_size: HashMap::new(),
+            completed_filter_caps: HashSet::new(),
         }
     }
 
@@ -176,8 +179,22 @@ impl EffectPassGpu {
             if cap.instances.is_empty() && cap.textured_draws.is_empty() {
                 continue;
             }
-            let w = cap.bounds[2].round().max(2.0) as u32;
-            let h = cap.bounds[3].round().max(2.0) as u32;
+            let w = (cap.bounds[2] * ui_scale).round().max(2.0) as u32;
+            let h = (cap.bounds[3] * ui_scale).round().max(2.0) as u32;
+            // CSS filter captures are content-keyed (no screen x/y). Reuse across scroll.
+            let filter_cap = cap.key.starts_with("rui_filter_cap:");
+            let sources_ready = cap
+                .textured_draws
+                .iter()
+                .all(|d| images.contains_key(&d.texture_key));
+            if filter_cap
+                && sources_ready
+                && self.completed_filter_caps.contains(&cap.key)
+                && images.contains_key(&cap.key)
+                && self.target_size.get(&cap.key) == Some(&(w, h))
+            {
+                continue;
+            }
             self.ensure_target(device, textured, images, &cap.key, w, h);
             if self.render_capture(
                 device,
@@ -191,6 +208,9 @@ impl EffectPassGpu {
                 ui_scale,
             ) {
                 any = true;
+                if filter_cap && sources_ready {
+                    self.completed_filter_caps.insert(cap.key.clone());
+                }
             }
         }
         for job in effects {
@@ -281,6 +301,24 @@ impl EffectPassGpu {
                 out.rect_pos[1] = (out.rect_pos[1] - oy) * ui_scale;
                 out.rect_size[0] *= ui_scale;
                 out.rect_size[1] *= ui_scale;
+                // Clip rects are authored in page space; remap into the capture RT or the
+                // SDF clip test rejects every fragment (empty / black SourceGraphic).
+                if out.clip_size[0] >= 0.0 && out.clip_size[1] >= 0.0 {
+                    out.clip_pos[0] = (out.clip_pos[0] - ox) * ui_scale;
+                    out.clip_pos[1] = (out.clip_pos[1] - oy) * ui_scale;
+                    out.clip_size[0] *= ui_scale;
+                    out.clip_size[1] *= ui_scale;
+                }
+                // Shadow / blur offsets are in logical px.
+                out.shadow_offset[0] *= ui_scale;
+                out.shadow_offset[1] *= ui_scale;
+                out.shadow_blur *= ui_scale;
+                out.shadow_spread *= ui_scale;
+                out.border_width *= ui_scale;
+                out.radii[0] *= ui_scale;
+                out.radii[1] *= ui_scale;
+                out.radii[2] *= ui_scale;
+                out.radii[3] *= ui_scale;
                 out
             })
             .collect();

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::core::reactivity::untrack;
 use crate::core::tree::{Element, IntoCssDim, IntoElementList, LayoutStatus};
 use crate::primitives::path::{
-    filled_rect, flip_rgba_vertical, paint_path_premul, polygon, premul_to_straight_rgba,
+    filled_rect, paint_path_premul, polygon, premul_to_straight_rgba,
     src_over_premul, PathCommand, PathStyle, Point2,
 };
 use crate::style::parse_color;
@@ -698,8 +698,7 @@ pub fn canvas_raster_from_element_attrs(
             g.remove(&id);
         }
     });
-    let mut rgba = premul_to_straight_rgba(&premul, w, h);
-    flip_rgba_vertical(&mut rgba, w, h);
+    let rgba = premul_to_straight_rgba(&premul, w, h);
     let tex_id = format!("rui_canvas:{id:016x}");
     crate::queue_image_rgba8(tex_id.clone(), w, h, rgba);
     RASTER_HIT.with(|c| {

@@ -775,9 +775,9 @@ fn push_border_image_draws(
         let sub_v = if rect[3] > 0.0 { (draw[1] - rect[1]) / rect[3] } else { 0.0 };
         let sub_uw = if rect[2] > 0.0 { draw[2] / rect[2] } else { 1.0 };
         let sub_vh = if rect[3] > 0.0 { draw[3] / rect[3] } else { 1.0 };
-        // Map to source UV (Y flipped: top of rect → uv_y + uv_h)
+        // Map to source UV (rect top → smaller v, matching textured_rect vertices).
         let final_u = uv_x + sub_u * uv_w;
-        let final_v = (uv_y + uv_h) - sub_v * uv_h - sub_vh * uv_h;
+        let final_v = uv_y + sub_v * uv_h;
         textured_draws.push(TexturedDraw {
             rect: draw,
             uv_offset: [final_u, final_v],
@@ -2562,6 +2562,11 @@ impl LayoutTree {
         } else {
             1.0
         };
+        // Bake CSS independent `scale` into the instance rect so placement matches
+        // `visual_paint_aabb` (hover / leave). The SDF shader also applies the affine
+        // **linear** part about the rect center — passing `style.scale` again made paint
+        // ~scale² while hit-testing stayed at scale¹ (gallery red `hover:scale-x-150`:
+        // pointer still on the painted overhang counted as leave).
         let (vis_w, vis_h, vis_x, vis_y) =
             if (scale_x - 1.0).abs() > f32::EPSILON || (scale_y - 1.0).abs() > f32::EPSILON {
                 let sw = lay_w * scale_x;
@@ -2585,7 +2590,7 @@ impl LayoutTree {
         let transform = crate::style::compute_combined_transform(
             &resolved_translate,
             element.style.rotate_deg,
-            &element.style.scale,
+            &[1.0, 1.0],
             element.style.transform.as_ref(),
             &element.style.transform_origin,
             vis_w,
@@ -2595,11 +2600,16 @@ impl LayoutTree {
         let self_tex0 = textured_draws.len();
 
         // Clipping & Visibility
+        // Overflow clips the **layout** border box, not the scaled/rotated paint rect.
+        // Using `render_rect` (CSS scale/rotate visual) made gallery `hover:scale-*` /
+        // `hover:rotate-*` tiles grow/shrink the scroll clip every tween frame, which
+        // jittered hit-test and flashed sidebar hover while those tiles were on screen.
+        let layout_border = [render_x, render_y, lay_w, lay_h];
         let mut clip = parent_clip;
         if element.style.overflow.x != taffy::style::Overflow::Visible
             || element.style.overflow.y != taffy::style::Overflow::Visible
         {
-            clip = Some(intersect_rect(clip, render_rect));
+            clip = Some(intersect_rect(clip, layout_border));
         }
         let visible_rect = intersect_rect(clip, render_rect);
 
@@ -2660,6 +2670,24 @@ impl LayoutTree {
                 *hover_cursor = Some(c);
             }
         }
+
+        // CSS `filter` must capture this node's own paint (bg/border/shadow) + descendants.
+        // Record buffer indices *before* own paint; `rui_fx` still captures children only.
+        let filter_capture = element
+            .style
+            .filter
+            .as_ref()
+            .is_some_and(|l| !l.is_empty());
+        let filter_cap_inst0 = if filter_capture {
+            instances.len()
+        } else {
+            0
+        };
+        let filter_cap_tex0 = if filter_capture {
+            textured_draws.len()
+        } else {
+            0
+        };
 
         // Collect main instance (solid / gradient strips + shadows).
         // Geometry stays full `render_rect`. CSS overflow clips *descendants* only — the
@@ -3221,15 +3249,24 @@ impl LayoutTree {
             .get(crate::renderer::ATTR_EFFECT_CAPTURE_CHILDREN)
             .map(|s| s.as_str())
             == Some("1");
-        let cap_inst0 = if fx_capture_children {
+        // `rui_fx` captures children only (own chrome stays on the main pass).
+        // CSS filter already recorded `filter_cap_*` before own paint.
+        let fx_cap_inst0 = if fx_capture_children && !filter_capture {
             instances.len()
         } else {
             0
         };
-        let cap_tex0 = if fx_capture_children {
+        let fx_cap_tex0 = if fx_capture_children && !filter_capture {
             textured_draws.len()
         } else {
             0
+        };
+        let (cap_inst0, cap_tex0, cap_children) = if filter_capture {
+            (filter_cap_inst0, filter_cap_tex0, true)
+        } else if fx_capture_children {
+            (fx_cap_inst0, fx_cap_tex0, true)
+        } else {
+            (0, 0, false)
         };
 
         let push_portal_band = |overlay_split: &mut OverlayPaintSplit,
@@ -3465,7 +3502,7 @@ impl LayoutTree {
             }
         }
 
-        if fx_capture_children
+        if cap_children
             && visible_rect[2] > 0.0
             && visible_rect[3] > 0.0
             && (instances.len() > cap_inst0 || textured_draws.len() > cap_tex0)
@@ -3475,14 +3512,51 @@ impl LayoutTree {
             instances.truncate(cap_inst0);
             textured_draws.truncate(cap_tex0);
             paint_rec.truncate_from(cap_inst0, cap_tex0);
-            if let Some(out_key) = crate::renderer::queue_subtree_wrap(
-                &element.attrs,
-                visible_rect,
-                child_insts,
-                child_tex,
-            ) {
-                if let Some(draw) = TexturedDraw::clipped(visible_rect, clip, out_key, opacity) {
+            // Filter SourceGraphic should cover the element's paint box (not only the
+            // clip-intersected visible slice), so leaf `bg` rects are not empty.
+            let filter_bounds = if filter_capture {
+                [
+                    render_rect[0],
+                    render_rect[1],
+                    render_rect[2].max(1.0),
+                    render_rect[3].max(1.0),
+                ]
+            } else {
+                visible_rect
+            };
+            let out_key = if filter_capture {
+                element
+                    .style
+                    .filter
+                    .as_ref()
+                    .and_then(|list| {
+                        crate::renderer::queue_css_filter_wrap(
+                            list,
+                            filter_bounds,
+                            child_insts,
+                            child_tex,
+                        )
+                    })
+            } else {
+                crate::renderer::queue_subtree_wrap(
+                    &element.attrs,
+                    visible_rect,
+                    child_insts,
+                    child_tex,
+                )
+            };
+            if let Some(out_key) = out_key {
+                let draw_rect = if filter_capture {
+                    filter_bounds
+                } else {
+                    visible_rect
+                };
+                if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity) {
+                    let tex_i = textured_draws.len();
                     textured_draws.push(draw);
+                    // Capture truncated prior ops; re-register the filtered/fx textured result
+                    // or `draw_paint_ops` never paints it (empty slots / all-white).
+                    paint_rec.push_textured(tex_i, 1);
                 }
             }
         }
