@@ -909,6 +909,117 @@ fn ShadowShowcase() -> rui::core::tree::Element {
     }
 }
 
+/// MDN-style filter demo subject (downloaded into `examples/gallery/assets/`).
+const FILTER_DEMO_LOGO: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/firefox-logo.svg");
+
+fn filter_demo_tile(label: &str, logo: Element) -> Element {
+    ui! {
+        <VStack gap="0.25rem" items="center">
+            { logo }
+            <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+        </VStack>
+    }
+}
+
+fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Element {
+    // Padding gives drop-shadow / blur room inside the capture bounds.
+    let mut wrap: Element = r#box()
+        .p("0.5rem")
+        .w("5.5rem")
+        .h("5.5rem")
+        .items_center()
+        .justify_center()
+        .into();
+    if let Some(f) = filter {
+        wrap = wrap.filter(f);
+    }
+    if let Some(c) = class {
+        wrap = rui::style::with_class_list(wrap, c);
+    }
+    wrap.child(ui! {
+        <Image src={FILTER_DEMO_LOGO} w="4.5rem" h="4.5rem" />
+    })
+}
+
+#[component]
+fn FilterShowcase() -> rui::core::tree::Element {
+    // Register a sample SVG filter for url(#galleryBlurSepia)
+    let _ = rui::style::register_svg_filter(
+        "galleryBlurSepia",
+        r##"<filter id="galleryBlurSepia">
+  <feGaussianBlur stdDeviation="2"/>
+  <feColorMatrix type="matrix" values="
+    0.393 0.769 0.189 0 0
+    0.349 0.686 0.168 0 0
+    0.272 0.534 0.131 0 0
+    0 0 0 1 0"/>
+</filter>"##,
+    );
+
+    let original = filter_demo_tile(
+        "原图",
+        filter_demo_logo(None, None),
+    );
+    let tiles_fn: Vec<Element> = [
+        ("blur(4px)", Some("blur(4px)"), None),
+        ("brightness(1.5)", Some("brightness(1.5)"), None),
+        ("contrast(200%)", Some("contrast(200%)"), None),
+        ("grayscale(1)", Some("grayscale(1)"), None),
+        ("hue-rotate(90deg)", Some("hue-rotate(90deg)"), None),
+        ("invert(1)", Some("invert(1)"), None),
+        ("opacity(0.4)", Some("opacity(0.4)"), None),
+        ("saturate(0.2)", Some("saturate(0.2)"), None),
+        ("sepia(1)", Some("sepia(1)"), None),
+        (
+            "drop-shadow",
+            Some("drop-shadow(0.25rem 0.25rem 0.5rem rgba(0,0,0,0.55))"),
+            None,
+        ),
+    ]
+    .into_iter()
+    .map(|(label, filter, class)| filter_demo_tile(label, filter_demo_logo(filter, class)))
+    .collect();
+
+    let tiles_combo: Vec<Element> = [
+        (
+            "grayscale+blur",
+            Some("grayscale(0.4) blur(3px)"),
+            None,
+        ),
+        ("class blur-md", None, Some("blur-md brightness-110")),
+        ("grayscale+shadow", None, Some("grayscale drop-shadow-lg")),
+        ("url(#…)", Some("url(#galleryBlurSepia)"), None),
+        (
+            "三函数链",
+            Some("contrast(1.2) brightness(1.05) saturate(1.3)"),
+            None,
+        ),
+    ]
+    .into_iter()
+    .map(|(label, filter, class)| filter_demo_tile(label, filter_demo_logo(filter, class)))
+    .collect();
+
+    ui! {
+        <MyCard title="12b) CSS filter">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对齐 MDN：以彩色 Firefox logo（assets/firefox-logo.svg）为 SourceGraphic，子树捕获后按序应用 filter。支持函数列表、Tailwind（blur-md / grayscale…）与 url(#id)。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"函数"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { original }
+                    { tiles_fn }
+                </HStack>
+                <Label font_weight="700" text_size="0.875rem">"组合 / Tailwind / url()"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { tiles_combo }
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 #[component]
 fn BorderStyleShowcase() -> rui::core::tree::Element {
     use rui::style::CornerShape;
@@ -3949,6 +4060,14 @@ fn TextareaComboboxShowcase() -> Element {
         "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px — wrap=off scrolls horizontally (no clip)."
             .to_string()
     });
+    let wrap_char = use_signal("gal_textarea_wrap_char", || {
+        "Supercalifragilisticexpialidocious_unbreakable_token_plus_中文emoji😀 — char may mid-break."
+            .to_string()
+    });
+    let wrap_bidi = use_signal("gal_textarea_wrap_bidi", || {
+        "Hello עברית\u{2060}789 and العربية — soft wrap keeps WJ pairs."
+            .to_string()
+    });
     let combo = use_signal("gal_combo_city", || "sh".to_string());
     let tab_view = use_signal("gal_tabs_list_view", || "list".to_string());
     let align = use_signal("gal_toggle_align", || "left".to_string());
@@ -3963,20 +4082,30 @@ fn TextareaComboboxShowcase() -> Element {
                 <Textarea id="gal-textarea-fixed" placeholder="固定高度（resizable=false）" rows={3} resizable={false} />
                 <Label text_size="0.875rem" leading="normal">{ format!("Textarea: {}", notes.get()) }</Label>
                 <Label text_size="0.75rem" font_weight="600" leading="normal">
-                    "Textarea wrap · soft（默认） vs off（横向滚动）"
+                    "Textarea wrap · word（默认） / char / off + BiDi"
                 </Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "窄栏对照：soft 折行增高；off 保持单行并横向滚动（不 clip）。可改字观察 caret / 滚动条。"
+                    "窄栏对照：word 按词折行；char 可中词断开；off 横向滚动。BiDi 样例验证 WJ。拖选出视口应持续跟手滚。"
                 </Label>
                 <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
                     <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
-                        <Label font_weight="700" text_size="0.75rem">"wrap=\"soft\"（默认）"</Label>
+                        <Label font_weight="700" text_size="0.75rem">"wrap=\"word\"（默认）"</Label>
                         <Textarea
                             id="gal-ta-wrap-soft"
-                            wrap="soft"
+                            wrap="word"
                             rows={5}
                             resizable={false}
                             value={wrap_soft}
+                        />
+                    </VStack>
+                    <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
+                        <Label font_weight="700" text_size="0.75rem">"wrap=\"char\""</Label>
+                        <Textarea
+                            id="gal-ta-wrap-char"
+                            wrap="char"
+                            rows={5}
+                            resizable={false}
+                            value={wrap_char}
                         />
                     </VStack>
                     <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
@@ -3987,6 +4116,16 @@ fn TextareaComboboxShowcase() -> Element {
                             rows={5}
                             resizable={false}
                             value={wrap_off}
+                        />
+                    </VStack>
+                    <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
+                        <Label font_weight="700" text_size="0.75rem">"BiDi + WJ（word）"</Label>
+                        <Textarea
+                            id="gal-ta-wrap-bidi"
+                            wrap="word"
+                            rows={5}
+                            resizable={false}
+                            value={wrap_bidi}
                         />
                     </VStack>
                 </HStack>
@@ -4338,20 +4477,71 @@ fn OverlayFeedbackShowcase() -> Element {
             </TooltipContent>
         </Tooltip>
     };
-    let ctx: Element = context_menu("gal-ctx")
-        .item("Copy", || {
-            toast_push("Copy", 1500);
-        })
-        .item("Paste", || {
-            toast_push("Paste", 1500);
-        })
-        .trigger(|| {
-            ui! {
+    let ctx: Element = ui! {
+        <ContextMenu id="gal-ctx">
+            <ContextMenuTrigger>
                 <Rect p="0.75rem" bg="muted" class="rounded-md" w="100%">
                     <Label text_size="0.875rem">{ "右键此区域打开 ContextMenu" }</Label>
                 </Rect>
-            }
-        });
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+                <ContextMenuLabel>"Actions"</ContextMenuLabel>
+                <ContextMenuItem on_click={|| {
+                    toast_push("Copy", 1500);
+                }}>
+                    "Copy"
+                    <ContextMenuShortcut>"⌘C"</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem on_click={|| {
+                    toast_push("Paste", 1500);
+                }}>
+                    "Paste"
+                    <ContextMenuShortcut>"⌘V"</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuSub>
+                    <ContextMenuSubTrigger>"More Tools"</ContextMenuSubTrigger>
+                    <ContextMenuSubContent>
+                        <ContextMenuItem on_click={|| {
+                            toast_push("Save Page As…", 1500);
+                        }}>
+                            "Save Page As…"
+                            <ContextMenuShortcut>"⇧⌘S"</ContextMenuShortcut>
+                        </ContextMenuItem>
+                        <ContextMenuItem on_click={|| {
+                            toast_push("Create Shortcut…", 1500);
+                        }}>
+                            "Create Shortcut…"
+                        </ContextMenuItem>
+                        <ContextMenuItem on_click={|| {
+                            toast_push("Name Window…", 1500);
+                        }}>
+                            "Name Window…"
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem on_click={|| {
+                            toast_push("Developer Tools", 1500);
+                        }}>
+                            "Developer Tools"
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" on_click={|| {
+                            toast_push("Delete", 1500);
+                        }}>
+                            "Delete"
+                            <ContextMenuShortcut>"⌘⌫"</ContextMenuShortcut>
+                        </ContextMenuItem>
+                    </ContextMenuSubContent>
+                </ContextMenuSub>
+                <ContextMenuSeparator />
+                <ContextMenuItem variant="destructive" on_click={|| {
+                    toast_push("Delete", 1500);
+                }}>
+                    "Delete"
+                </ContextMenuItem>
+            </ContextMenuContent>
+        </ContextMenu>
+    };
     let progress_el: Element = progress().value_signal(progress_val).into();
 
     ui! {
@@ -4871,29 +5061,212 @@ fn DataChartShowcase() -> Element {
         .on_select(move |i| chart_sel.set(Some(i)))
         .size(180.0)
         .into();
-    let carousel_el: Element = carousel("gal-carousel")
-        .slide(|| {
-            ui! {
-                <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="5rem" items="center" justify="center">
-                    <Label font_weight="600">{ "Slide A" }</Label>
-                </Rect>
-            }
-        })
-        .slide(|| {
-            ui! {
-                <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="5rem" items="center" justify="center">
-                    <Label font_weight="600">{ "Slide B" }</Label>
-                </Rect>
-            }
-        })
-        .slide(|| {
-            ui! {
-                <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="5rem" items="center" justify="center">
-                    <Label font_weight="600">{ "Slide C" }</Label>
-                </Rect>
-            }
-        })
-        .into();
+    let carousel_el = ui! {
+        <VStack w="100%" max_w="36rem" mx="auto" gap="1.25rem">
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "Carousel · 单页" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "单页满幅 · 默认底部进度点 · 无缝循环 · controls=outside"
+                </Label>
+                <Carousel id="gal-carousel-single" controls="outside">
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Slide A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Slide B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Slide C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </Carousel>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · 多列 slide" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "perView=2.2 · scrollBy=slide · 无缝环形 · autoplay · 默认无进度点"
+                </Label>
+                <CarouselMulti id="gal-carousel-multi-slide" perView={2.2} scrollBy="slide" autoplay={4000}>
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselMulti>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · page + flush" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "scrollBy=page · endAlign=flush（末项贴右）"
+                </Label>
+                <CarouselMulti id="gal-carousel-multi-flush" perView={2.2} scrollBy="page" endAlign="flush">
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselMulti>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · page + pad" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "scrollBy=page · endAlign=pad（尾部空白翻页）"
+                </Label>
+                <CarouselMulti id="gal-carousel-multi-pad" perView={2.2} scrollBy="page" endAlign="pad">
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselMulti>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselStack · 两侧堆叠" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "默认左右各 1 张（stackSides=1）· 中间项顶层不透明"
+                </Label>
+                <CarouselStack id="gal-carousel-stack" controls="outside" stackSides={1}>
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Stack A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Stack B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Stack C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "Stack D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "Stack E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselStack>
+            </VStack>
+        </VStack>
+    };
 
     ui! {
         <MyCard title="Table · TreeView · Chart · Carousel">
@@ -4956,7 +5329,10 @@ fn DataChartShowcase() -> Element {
                         None => "Chart 未选中".into(),
                     } }
                 </Label>
-                <Label font_weight="600" text_size="0.875rem">{ "Carousel" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "Carousel / Multi / Stack" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "复合 Content / Item / Previous / Next / Dots；←→ 或拖拽；弹簧动画。"
+                </Label>
                 { carousel_el }
             </VStack>
         </MyCard>
@@ -5226,6 +5602,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <UtilityClassShowcase />
                     <GridAndDragShowcase />
                     <ShadowShowcase />
+                    <FilterShowcase />
                     <BorderStyleShowcase />
                     <OutlineShowcase />
                     <TransitionShowcase />

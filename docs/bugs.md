@@ -13,10 +13,9 @@
 - 跨平台文件读写深化（选择器已有 `utils/file_dialog`）
 - 网络能力
 - ~~无边框窗口~~（`WindowOptions::frameless` + 自定义标题栏 `start_window_drag`）
-- ~~透明 / 模糊窗口~~（`transparent` / `blur`；Win11 Acrylic）
+- ~~透明 / 模糊窗口~~ 参考 DWMBlurGlass 优化
+- tailwindcss 全量语法支持
+- 并考虑：增加 popup_window 能力，为桌面端实现可超出视口的独立菜单/弹窗/通知等能力
+- 平台能力特化
 
 ## Bugs
-
-所以：不是「环要每帧闪」，而是 Input 选了「不 rebuild + 每帧 peek 对齐整段 chrome」；环只是这条 pass 里的一项；闪烁光标才是需要周期性 redraw 的那部分。
-
-若以后要拆，可以把「环/边框」改成 focus 变化时局部 dirty，但那是架构优化，不是当前 bug。

@@ -937,6 +937,11 @@ pub fn cssom_text_from_element(el: &Element) -> String {
     push_decl(&mut lines, "opacity", &format!("{:.2}", style.opacity));
     push_decl(
         &mut lines,
+        "filter",
+        &crate::style::filter_list_to_css(style.filter.as_ref()),
+    );
+    push_decl(
+        &mut lines,
         "border-width",
         &border_width_css(&style),
     );
