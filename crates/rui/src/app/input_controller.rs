@@ -12,7 +12,8 @@ use crate::utils::clipboard::{
 use crate::utils::input_hit::collect_focusable_ids;
 use crate::utils::keyboard::{
     caret_line_end, caret_line_home, caret_move_left, caret_move_right, caret_move_vertical,
-    delete_char_forward, extend_selection, normalized_selection, select_all_range,
+    caret_move_vertical_visual, caret_visual_line_end, caret_visual_line_home, delete_char_forward,
+    extend_selection, normalized_selection, select_all_range,
 };
 
 use super::ime_support::{self, apply_ime_commit, prepare_compose_anchor, text_edit_rest};
@@ -376,6 +377,15 @@ impl super::App {
                     let tsk = crate::components::input::input_selection_signal_key(rest);
                     let text_sel_sig =
                         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
+                    let wrap_w = if multiline {
+                        crate::core::reactivity::use_signal(
+                            &crate::utils::text_field::textarea_wrap_width_signal_key(rest),
+                            || 0.0_f32,
+                        )
+                        .peek()
+                    } else {
+                        0.0
+                    };
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
                     let password_field = input_type_for(rest).is_password();
@@ -477,6 +487,16 @@ impl super::App {
                         let caret = caret_sig.get().unwrap_or(s.len()).min(s.len());
                         let caret = s.floor_char_boundary(caret);
                         let shift = self.modifiers.shift_key();
+                        let soft_visual_ranges = if multiline && wrap_w > 1.0 {
+                            let size = 0.875 * 16.0;
+                            let lh =
+                                crate::utils::text_field::text_edit_line_box_px(size, None, None);
+                            Some(crate::text::soft_visual_line_byte_ranges(
+                                &s, size, 400, lh, wrap_w,
+                            ))
+                        } else {
+                            None
+                        };
                         let mut nav_handled = false;
                         match &event.logical_key {
                             Key::Named(NamedKey::ArrowLeft) => {
@@ -538,6 +558,8 @@ impl super::App {
                             Key::Named(NamedKey::Home) => {
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     0
+                                } else if let Some(ref ranges) = soft_visual_ranges {
+                                    caret_visual_line_home(ranges, caret)
                                 } else {
                                     caret_line_home(&s, caret)
                                 };
@@ -556,6 +578,8 @@ impl super::App {
                             Key::Named(NamedKey::End) => {
                                 let dest = if self.modifiers.control_key() || !multiline {
                                     s.len()
+                                } else if let Some(ref ranges) = soft_visual_ranges {
+                                    caret_visual_line_end(ranges, caret)
                                 } else {
                                     caret_line_end(&s, caret)
                                 };
@@ -573,7 +597,11 @@ impl super::App {
                             }
                             Key::Named(NamedKey::ArrowUp) => {
                                 let dest = if multiline {
-                                    caret_move_vertical(&s, caret, -1)
+                                    if let Some(ref ranges) = soft_visual_ranges {
+                                        caret_move_vertical_visual(&s, ranges, caret, -1)
+                                    } else {
+                                        caret_move_vertical(&s, caret, -1)
+                                    }
                                 } else {
                                     // Single-line: Up jumps to start (common field behavior).
                                     0
@@ -592,7 +620,11 @@ impl super::App {
                             }
                             Key::Named(NamedKey::ArrowDown) => {
                                 let dest = if multiline {
-                                    caret_move_vertical(&s, caret, 1)
+                                    if let Some(ref ranges) = soft_visual_ranges {
+                                        caret_move_vertical_visual(&s, ranges, caret, 1)
+                                    } else {
+                                        caret_move_vertical(&s, caret, 1)
+                                    }
                                 } else {
                                     s.len()
                                 };

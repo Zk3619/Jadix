@@ -661,6 +661,7 @@ fn cssom_editor(path: Vec<usize>, seed: String) -> Element {
                     let mut editor: Element = textarea(&field_id)
                         .rows(18)
                         .resizable(false)
+                        .wrap("off")
                         .into();
                     editor = editor.w("100%");
                     editor

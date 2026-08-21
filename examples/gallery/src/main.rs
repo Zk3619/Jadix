@@ -3941,6 +3941,14 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
 #[component]
 fn TextareaComboboxShowcase() -> Element {
     let notes = use_signal("gal_textarea_notes", String::new);
+    let wrap_soft = use_signal("gal_textarea_wrap_soft", || {
+        "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px — soft wrap folds this long hard line."
+            .to_string()
+    });
+    let wrap_off = use_signal("gal_textarea_wrap_off", || {
+        "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px — wrap=off scrolls horizontally (no clip)."
+            .to_string()
+    });
     let combo = use_signal("gal_combo_city", || "sh".to_string());
     let tab_view = use_signal("gal_tabs_list_view", || "list".to_string());
     let align = use_signal("gal_toggle_align", || "left".to_string());
@@ -3954,6 +3962,34 @@ fn TextareaComboboxShowcase() -> Element {
                 <Textarea id="gal-textarea" placeholder="多行备注…（可拖右下角改高）" rows={4} value={notes} />
                 <Textarea id="gal-textarea-fixed" placeholder="固定高度（resizable=false）" rows={3} resizable={false} />
                 <Label text_size="0.875rem" leading="normal">{ format!("Textarea: {}", notes.get()) }</Label>
+                <Label text_size="0.75rem" font_weight="600" leading="normal">
+                    "Textarea wrap · soft（默认） vs off（横向滚动）"
+                </Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "窄栏对照：soft 折行增高；off 保持单行并横向滚动（不 clip）。可改字观察 caret / 滚动条。"
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
+                    <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
+                        <Label font_weight="700" text_size="0.75rem">"wrap=\"soft\"（默认）"</Label>
+                        <Textarea
+                            id="gal-ta-wrap-soft"
+                            wrap="soft"
+                            rows={5}
+                            resizable={false}
+                            value={wrap_soft}
+                        />
+                    </VStack>
+                    <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
+                        <Label font_weight="700" text_size="0.75rem">"wrap=\"off\"（横向滚动）"</Label>
+                        <Textarea
+                            id="gal-ta-wrap-off"
+                            wrap="off"
+                            rows={5}
+                            resizable={false}
+                            value={wrap_off}
+                        />
+                    </VStack>
+                </HStack>
                                 <Combobox id="gal-combo" value={combo} placeholder="搜索城市…" clearable={true} class="w-full">
                     <ComboboxInput />
                     <ComboboxContent max_h="16rem">

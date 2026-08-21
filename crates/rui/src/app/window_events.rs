@@ -8,6 +8,63 @@ use super::state::ScrollbarUpdateMode;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 use crate::renderer::wgpu_compat::SurfaceAcquireError;
 
+/// Edge auto-scroll + selection update for an active input text drag.
+/// Free function so secondary paths can call it while `secondaries` is borrowed.
+pub(super) fn tick_input_drag_select_at(
+    root: &mut crate::core::tree::Element,
+    font_system: &mut glyphon::FontSystem,
+    scale: f32,
+    dt: f32,
+    x: f32,
+    y: f32,
+    rest: &str,
+    anchor: usize,
+) -> bool {
+    let hscroll = super::tree_hit::nudge_textarea_hscroll_for_drag(root, rest, x, dt);
+
+    let Some((bounds, display_el, style, leaf_scroll)) =
+        super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
+    else {
+        return matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled);
+    };
+    let vk = crate::components::input::input_value_signal_key(rest);
+    let pk = crate::components::input::input_preedit_signal_key(rest);
+    let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
+    let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
+    let ui_scale = scale.max(1.0);
+    let mx = if style.overflow.allows_caret_scroll()
+        || style.white_space == crate::style::WhiteSpace::Nowrap
+    {
+        x + leaf_scroll[0]
+    } else {
+        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
+    };
+    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+    let ix = crate::renderer::hit_test_input_text_index(
+        font_system,
+        &display_el,
+        mx,
+        my,
+        bounds,
+        &style,
+        ui_scale,
+    );
+    let caret_ix = if committed.is_empty() && pre.is_empty() {
+        0
+    } else {
+        crate::components::input::caret_index_from_display_hit(rest, ix)
+    };
+    let lo = anchor.min(caret_ix);
+    let hi = anchor.max(caret_ix);
+    let sk = crate::components::input::input_selection_signal_key(rest);
+    // Silent: may run under `AppState` / secondaries borrow.
+    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set_silent(Some((lo, hi)));
+    let ck = crate::components::input::input_caret_signal_key(rest);
+    crate::core::reactivity::use_signal(&ck, || None::<usize>).set_silent(Some(caret_ix));
+
+    matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
+}
+
 impl super::App {
     pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
         if self.pointer_window == Some(id) {
@@ -22,6 +79,7 @@ impl super::App {
         self.content_scroll_drag = None;
         self.textarea_resize_drag = None;
         self.input_drag_rest = None;
+        crate::utils::text_field::set_text_drag_select_active(false);
         self.label_drag_key = None;
         self.drag_reorder = None;
         self.left_button_down = false;
@@ -180,6 +238,36 @@ impl super::App {
                     sec.window.request_redraw();
                 }
                 return;
+            }
+            // Continuous wrap=off edge auto-scroll while text drag-select is held still.
+            let scale = sec.window.scale_factor() as f32;
+            let scroll_dt = std::time::Instant::now()
+                .duration_since(self.last_frame_time)
+                .as_secs_f32()
+                .clamp(1.0 / 240.0, 0.05);
+            let input_drag_keep = if self.left_button_down {
+                if let Some(rest) = self.input_drag_rest.as_deref() {
+                    let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                    let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                    let anchor = self.input_drag_anchor;
+                    tick_input_drag_select_at(
+                        &mut sec.root_element,
+                        sec.text_renderer.font_system_mut(),
+                        scale,
+                        scroll_dt,
+                        x,
+                        y,
+                        rest,
+                        anchor,
+                    )
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if input_drag_keep {
+                sec.window.request_redraw();
             }
             let render_ok = match sec.render() {
                 Ok(()) => true,
@@ -917,45 +1005,31 @@ impl super::App {
         // try_update_element_by_template_id 与本处 borrow_mut 重入。
         let slider_drag_x = x;
 
+        let mut input_drag_keep_redraw = false;
         let drag_sel_update: Option<(String, usize, usize, usize)> = if self.left_button_down
             && self.scrollbar_drag.is_none()
         {
-            if let Some(rest) = self.input_drag_rest.as_ref() {
-                if let Some((bounds, display_el, style, leaf_scroll)) =
-                    super::tree_hit::find_input_text_leaf_for_rest(&state.root_element, None, rest)
-                {
-                    let vk = crate::components::input::input_value_signal_key(rest);
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
-                    let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
-                    let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
-                    let ui_scale = scale.max(1.0);
-                    let mx = if style.overflow.allows_caret_scroll() {
-                        x + leaf_scroll[0]
-                    } else {
-                        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
-                    };
-                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                    // Hit against the painted leaf text (password may be masked `•`).
-                    let ix = crate::renderer::hit_test_input_text_index(
-                        state.text_renderer.font_system_mut(),
-                        &display_el,
-                        mx,
-                        my,
-                        bounds,
-                        &style,
-                        ui_scale,
-                    );
-                    let caret_ix = if committed.is_empty() && pre.is_empty() {
-                        0
-                    } else {
-                        crate::components::input::caret_index_from_display_hit(rest, ix)
-                    };
-                    let lo = self.input_drag_anchor.min(caret_ix);
-                    let hi = self.input_drag_anchor.max(caret_ix);
-                    Some((rest.clone(), lo, hi, caret_ix))
-                } else {
-                    None
-                }
+            if self.input_drag_rest.is_some() {
+                let now = std::time::Instant::now();
+                let dt = now
+                    .duration_since(self.last_frame_time)
+                    .as_secs_f32()
+                    .clamp(1.0 / 240.0, 0.05);
+                let rest = self.input_drag_rest.as_deref().unwrap();
+                let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                let anchor = self.input_drag_anchor;
+                input_drag_keep_redraw = tick_input_drag_select_at(
+                    &mut state.root_element,
+                    state.text_renderer.font_system_mut(),
+                    scale,
+                    dt,
+                    x,
+                    y,
+                    rest,
+                    anchor,
+                );
+                None
             } else if let Some(key) = self.label_drag_key.as_ref() {
                 if let Some((bounds, display_el, style, leaf_scroll)) =
                     super::tree_hit::find_selectable_text_leaf_for_key(&state.root_element, key)
@@ -992,13 +1066,8 @@ impl super::App {
                 None
             }
         });
-        let input_drag_sel_update = drag_sel_update.and_then(|(key, lo, hi, caret)| {
-            if self.input_drag_rest.as_deref() == Some(key.as_str()) {
-                Some((key, lo, hi, caret))
-            } else {
-                None
-            }
-        });
+        let input_drag_needs_redraw =
+            self.input_drag_rest.is_some() && self.left_button_down;
 
         if self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
@@ -1174,13 +1243,10 @@ impl super::App {
         {
             self.tick_content_scroll_drag(x, y);
         }
-        if let Some((rest, lo, hi, caret)) = input_drag_sel_update {
-            let sk = crate::components::input::input_selection_signal_key(&rest);
-            crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
-            let ck = crate::components::input::input_caret_signal_key(&rest);
-            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
-            // Selection chrome is paint-synced via peek — must request a frame or the
-            // highlight never appears until an unrelated redraw.
+        if input_drag_needs_redraw || input_drag_keep_redraw {
+            // Selection chrome is paint-synced via peek — must request a frame.
+            // `input_drag_keep_redraw` keeps the loop alive while edge auto-scroll runs
+            // with a stationary pointer.
             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
             }
@@ -1336,18 +1402,20 @@ impl super::App {
             return;
         }
 
-        let mut input_drag: Option<(String, usize, String)> = None;
+        let mut input_drag: Option<(String, usize, String, Option<(usize, usize)>)> = None;
         let mut label_drag: Option<(String, usize)> = None;
         if element_state == ElementState::Pressed {
             if let Some((rest, bounds, display_el, style, leaf_scroll, focus_id)) =
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
+                let mx = x + leaf_scroll[0];
+                let my = y + leaf_scroll[1];
                 let ix = crate::renderer::hit_test_input_text_index(
                     state.text_renderer.font_system_mut(),
                     &display_el,
-                    x + leaf_scroll[0],
-                    y + leaf_scroll[1],
+                    mx,
+                    my,
                     bounds,
                     &style,
                     ui_scale,
@@ -1361,7 +1429,22 @@ impl super::App {
                 } else {
                     crate::components::input::caret_index_from_display_hit(&rest, ix)
                 };
-                input_drag = Some((rest, caret_ix, focus_id));
+                // Double-click in the blank beside the line ink → select that hard line.
+                let line_sel = if self.click_count >= 2
+                    && crate::renderer::hit_test_input_is_line_side_blank(
+                        state.text_renderer.font_system_mut(),
+                        &display_el,
+                        mx,
+                        my,
+                        bounds,
+                        &style,
+                        ui_scale,
+                    ) {
+                    crate::utils::keyboard::select_line_range(&committed, caret_ix)
+                } else {
+                    None
+                };
+                input_drag = Some((rest, caret_ix, focus_id, line_sel));
             } else if let Some((key, bounds, display_el, style, leaf_scroll)) =
                 super::tree_hit::find_selectable_text_at(&state.root_element, x, y, [0.0, 0.0])
             {
@@ -1552,6 +1635,7 @@ impl super::App {
                         });
                         self.content_scroll_drag = None;
                         self.input_drag_rest = None;
+                        crate::utils::text_field::set_text_drag_select_active(false);
                         self.label_drag_key = None;
                         let focus_visible =
                             crate::core::reactivity::use_signal("__rui_focus_visible", || false);
@@ -1663,19 +1747,27 @@ impl super::App {
             }
             // `on_click` / Label `for` 在 pointer up（抬起）时触发，对标 DOM click。
 
-            let input_drag_fid = input_drag.as_ref().map(|(_, _, fid)| fid.clone());
-            if let Some((rest, caret_ix, focus_id)) = input_drag {
+            let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
+            if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
                 // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
                     .set(focus_id);
                 let ck = crate::components::input::input_caret_signal_key(&rest);
                 let sk = crate::components::input::input_selection_signal_key(&rest);
-                crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret_ix));
-                crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                    .set(Some((caret_ix, caret_ix)));
+                if let Some((lo, hi)) = line_sel {
+                    crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
+                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                        .set(Some((lo, hi)));
+                    self.input_drag_anchor = lo;
+                } else {
+                    crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret_ix));
+                    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                        .set(Some((caret_ix, caret_ix)));
+                    self.input_drag_anchor = caret_ix;
+                }
                 self.input_drag_rest = Some(rest);
-                self.input_drag_anchor = caret_ix;
+                crate::utils::text_field::set_text_drag_select_active(true);
                 self.label_drag_key = None;
                 self.content_scroll_drag = None;
                 // End wheel-bridge so the focus frame is not stuck in text_force_fast.
@@ -1689,6 +1781,7 @@ impl super::App {
                 self.label_drag_key = Some(key);
                 self.label_drag_anchor = caret_ix;
                 self.input_drag_rest = None;
+                crate::utils::text_field::set_text_drag_select_active(false);
                 self.content_scroll_drag = None;
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
@@ -1779,6 +1872,7 @@ impl super::App {
                 }
             }
             if let Some(rest) = self.input_drag_rest.take() {
+                crate::utils::text_field::set_text_drag_select_active(false);
                 let sk = crate::components::input::input_selection_signal_key(&rest);
                 let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
                 if let Some((a, b)) = sel {
@@ -2112,8 +2206,36 @@ impl super::App {
         // UI spring/cubic 与滚动共用夹紧口径（`tick_animations` 内部亦会再夹一次）。
         let anim_dt = scroll_dt;
 
+        // Continuous wrap=off edge auto-scroll while text drag-select is held still.
+        let scale = state.window.scale_factor() as f32;
+        let input_drag_keep = if self.left_button_down && self.scrollbar_drag.is_none() {
+            if let Some(rest) = self.input_drag_rest.as_deref() {
+                let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                let anchor = self.input_drag_anchor;
+                tick_input_drag_select_at(
+                    &mut state.root_element,
+                    state.text_renderer.font_system_mut(),
+                    scale,
+                    scroll_dt.min(0.05),
+                    x,
+                    y,
+                    rest,
+                    anchor,
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let window = state.window.clone();
         drop(state_borrow);
+
+        if input_drag_keep {
+            window.request_redraw();
+        }
 
         crate::style::utility::set_frame_dt(anim_dt);
         let anim_tick = crate::style::tick_animations(anim_dt);

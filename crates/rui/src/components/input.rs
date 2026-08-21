@@ -714,6 +714,7 @@ impl From<InputBuilder> for Element {
             rows: 1,
             resizable: false,
             resize_max_h: 0.0,
+            wrap_mode: crate::utils::text_field::TextareaWrapMode::Soft,
         })
     }
 }

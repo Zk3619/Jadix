@@ -17,8 +17,8 @@ use crate::style::{
     focus_ring_style, InputCaretDraw,
 };
 use crate::utils::text_field::{
-    ensure_caret_visible_scroll_x, focus_id_for_text_edit, input_scroll_x_signal_key,
-    pull_controlled_into_store,
+    ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit,
+    input_scroll_x_signal_key, pull_controlled_into_store, textarea_wrap_width_signal_key,
 };
 
 #[cfg(test)]
@@ -314,11 +314,21 @@ fn sync_one_text_edit_paint(
         }
         if desc.multiline {
             use crate::style::WhiteSpace;
-            if text_el.text_style.white_space != WhiteSpace::Nowrap {
-                text_el.text_style.white_space = WhiteSpace::Nowrap;
-                text_el
-                    .attrs
-                    .insert("white_space".to_string(), "nowrap".to_string());
+            let want_ws = if desc.wrap_mode.soft_wrap() {
+                WhiteSpace::Normal
+            } else {
+                WhiteSpace::Nowrap
+            };
+            if text_el.text_style.white_space != want_ws {
+                text_el.text_style.white_space = want_ws;
+                text_el.attrs.insert(
+                    "white_space".to_string(),
+                    if want_ws == WhiteSpace::Nowrap {
+                        "nowrap".to_string()
+                    } else {
+                        "normal".to_string()
+                    },
+                );
                 text_layout = true;
             }
         }
@@ -453,15 +463,30 @@ fn sync_one_text_edit_paint(
         }
         // Leaf height: multiline = content (+ bottom ink); single-line = one line box
         // (centering in Input). Never track ScrollArea/Textarea chrome height.
-        // Multiline: unbounded avail so soft-wrap at leaf width cannot inflate height past
-        // hard-`\n` rows (caret / hit-test are hard-line indexed).
+        // Soft-wrap: measure at live leaf / content width. Scroll wrap: unbounded avail
+        // so height stays hard-`\n` only.
         let want_h = if desc.multiline {
+            let soft = desc.wrap_mode.soft_wrap();
+            let avail = if soft {
+                let w = text_el.layout_bounds[2];
+                if w > 1.0 {
+                    w
+                } else {
+                    320.0
+                }
+            } else {
+                10_000.0
+            };
+            if soft {
+                use_signal(&textarea_wrap_width_signal_key(&desc.base_id), || 0.0_f32)
+                    .set_silent(avail);
+            }
             crate::utils::text_field::text_edit_content_height_px(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_box,
-                10_000.0,
+                avail,
             )
         } else {
             line_box
@@ -474,6 +499,20 @@ fn sync_one_text_edit_paint(
                 text_el.style.flex_shrink = 0.0;
             }
             text_layout = true;
+        }
+        if desc.multiline && !desc.wrap_mode.soft_wrap() {
+            let prepared = crate::text::prepare(
+                &display_text,
+                desc.text_size_px,
+                desc.font_weight,
+                line_box,
+            );
+            let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            let cur_w = crate::layout::dim_length_px(text_el.style.size.width).unwrap_or(-1.0);
+            if (cur_w - content_w).abs() > 0.5 {
+                text_el.style.size.width = taffy::style::Dimension::length(content_w);
+                text_layout = true;
+            }
         }
         if !desc.multiline && text_el.text_style.overflow.nowrap() {
             if (text_el.style.flex_shrink - 1.0).abs() > f32::EPSILON {
@@ -554,15 +593,22 @@ fn sync_one_text_edit_paint(
                 .map(|t| t.layout_bounds[3])
                 .unwrap_or(0.0);
             // Content height from the string — do NOT trust a short leaf box alone.
-            // A flex/clip-sized leaf (≈ viewport) made content_fits=true and zeroed sy every
-            // frame while the store still held N hard lines (gallery: only ~5 lines visible).
-            // Unbounded avail: hard-`\n` height only (matches nowrap paint + caret model).
+            // Soft-wrap uses live leaf width; scroll-wrap stays hard-`\n` only.
+            let soft = desc.wrap_mode.soft_wrap();
+            let measure_avail = if soft {
+                find_descendant_by_template_id_ref(el, &text_tid)
+                    .map(|t| t.layout_bounds[2])
+                    .filter(|w| *w > 1.0)
+                    .unwrap_or(320.0)
+            } else {
+                10_000.0
+            };
             let content_h_text = crate::utils::text_field::text_edit_content_height_px(
                 &display_text,
                 desc.text_size_px,
                 desc.font_weight,
                 line_height,
-                10_000.0,
+                measure_avail,
             );
             // Prefer the live scrollport box. Avoid `vh.max(...)` — a stale huge viewport
             // signal would make content_fits=true and clear sy every frame.
@@ -622,14 +668,74 @@ fn sync_one_text_edit_paint(
             if caret_moved {
                 use_signal(&last_caret_key, || None::<usize>).set_silent(Some(caret_byte));
             }
+
+            // wrap=off: keep the caret in the horizontal viewport — but never while
+            // drag-select edge auto-scroll owns `sx` (that pair caused scroll bounce).
+            let mut want_sx = sx;
+            if !soft
+                && is_focused
+                && caret_moved
+                && !crate::utils::text_field::text_drag_select_active()
+            {
+                let cw_key = crate::core::scroll_viewport::scroll_content_w_signal_key(rest);
+                let vw_key = crate::core::scroll_viewport::scroll_viewport_w_signal_key(rest);
+                let mut vp_w_layout = 0.0_f32;
+                let mut content_w_layout = 0.0_f32;
+                for child in el.children.iter() {
+                    if child.focus_id.as_deref() == Some(vp_fid.as_str()) {
+                        vp_w_layout = child.layout_bounds[2];
+                        break;
+                    }
+                }
+                if let Some(text_leaf) = find_descendant_by_template_id_ref(el, &text_tid) {
+                    content_w_layout = text_leaf.layout_bounds[2];
+                }
+                let vw_sig = use_signal(&vw_key, || 0.0_f32).peek();
+                let cw_sig = use_signal(&cw_key, || 0.0_f32).peek();
+                let viewport_w = if vp_w_layout > 1.0 {
+                    vp_w_layout
+                } else {
+                    vw_sig
+                };
+                let content_w = content_w_layout.max(cw_sig).max(1.0);
+                if viewport_w > 4.0 && content_w > viewport_w + 0.5 {
+                    let (_, local) =
+                        crate::utils::text_field::caret_line_and_local(&display_text, caret_byte);
+                    let line_start = caret_byte.saturating_sub(local);
+                    let prefix = &display_text[line_start..caret_byte.min(display_text.len())];
+                    let anchor_x = crate::text::measure_prefix_advance(
+                        prefix,
+                        desc.text_size_px,
+                        desc.font_weight,
+                        line_height,
+                    );
+                    want_sx =
+                        ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, sx);
+                }
+            }
+
             let new_sy = if content_fits && sy > 0.5 {
                 Some(0.0)
             } else if sy > max_sy + 0.5 {
                 Some(max_sy)
             } else if is_focused && caret_moved && vh_eff >= line_height * 0.5 {
-                crate::utils::text_field::ensure_caret_visible_scroll_y(
+                let visual = if soft {
+                    let ranges = crate::text::soft_visual_line_byte_ranges(
+                        &display_text,
+                        desc.text_size_px,
+                        desc.font_weight,
+                        line_height,
+                        measure_avail,
+                    );
+                    let i = crate::text::caret_visual_line_index(&ranges, caret_byte);
+                    Some((i, ranges.len().max(1)))
+                } else {
+                    None
+                };
+                ensure_caret_visible_scroll_y_at_line(
                     &display_text,
                     caret_byte,
+                    visual,
                     line_height,
                     vh_eff,
                     sy,
@@ -641,11 +747,16 @@ fn sync_one_text_edit_paint(
             } else {
                 None
             };
-            if let Some(new_sy) = new_sy {
-                crate::app::scroll_support::set_scroll_offset_with_behavior(rest, sx, new_sy, true);
+            let sx_changed = (want_sx - sx).abs() > 0.05;
+            if new_sy.is_some() || sx_changed {
+                let apply_sy = new_sy.unwrap_or(sy);
+                let apply_sx = if sx_changed { want_sx } else { sx };
+                crate::app::scroll_support::set_scroll_offset_with_behavior(
+                    rest, apply_sx, apply_sy, true,
+                );
                 for child in &mut el.children {
                     if child.focus_id.as_deref() == Some(vp_fid.as_str()) {
-                        child.scroll_offset = [sx, new_sy];
+                        child.scroll_offset = [apply_sx, apply_sy];
                         break;
                     }
                 }

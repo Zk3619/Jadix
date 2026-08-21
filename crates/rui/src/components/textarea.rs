@@ -3,7 +3,8 @@
 //! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
 //! 共享 chrome 构建/绘制在 [`crate::components::internal::text_edit`]。
 //! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
-//! 内容溢出时在内部滚动视口滚动；默认右下角可拖拽改高（斜线手柄）。
+//! 单行溢出默认软换行（[`TextareaBuilder::wrap`]`("soft")`）；`wrap("off")` 横向滚动，不用 clip。
+//! 内容超出可视区时在内部滚动视口滚动；默认右下角可拖拽改高（斜线手柄）。
 //! [`TextareaBuilder::resizable`] 为 `false` 时禁止改高并隐藏手柄。
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,7 @@ use crate::components::input::InputType;
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
+use crate::utils::text_field::TextareaWrapMode;
 use rui_macros::component;
 
 pub use crate::utils::text_field::{textarea_focus_id, TEXTAREA_FOCUS_PREFIX};
@@ -31,6 +33,7 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         value: None,
         resizable: true,
         resize_max_h: None,
+        wrap_mode: TextareaWrapMode::Soft,
     }
 }
 
@@ -43,6 +46,7 @@ pub struct TextareaBuilder {
     value: Option<Signal<String>>,
     resizable: bool,
     resize_max_h: Option<f32>,
+    wrap_mode: TextareaWrapMode,
 }
 
 impl TextareaBuilder {
@@ -77,6 +81,12 @@ impl TextareaBuilder {
         self
     }
 
+    /// 单行溢出：`soft`（默认软换行）| `off` / `scroll`（横向滚动，不 clip）。
+    pub fn wrap(mut self, mode: impl Into<TextareaWrapMode>) -> Self {
+        self.wrap_mode = mode.into();
+        self
+    }
+
     /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
@@ -95,6 +105,7 @@ impl From<TextareaBuilder> for Element {
             value,
             resizable,
             resize_max_h,
+            wrap_mode,
         } = b;
 
         let field_id = if id.is_empty() {
@@ -127,6 +138,7 @@ impl From<TextareaBuilder> for Element {
             rows,
             resizable,
             resize_max_h,
+            wrap_mode,
         })
     }
 }
@@ -136,11 +148,13 @@ impl From<TextareaBuilder> for Element {
 pub fn Textarea(
     id: String,
     placeholder: String,
-    rows: Option<u32>,
+    /// RSX `rows={4}` 是 `i32` 字面量；宏对 Option 走 `.into()`，故用 i32 承接。
+    rows: Option<i32>,
     disabled: bool,
     invalid: bool,
     resizable: Option<bool>,
     resize_max_h: Option<f32>,
+    wrap: Option<String>,
     value: Option<Signal<String>>,
     children: Option<Element>,
 ) -> Element {
@@ -150,13 +164,16 @@ pub fn Textarea(
         .disabled(disabled)
         .invalid(invalid);
     if let Some(r) = rows {
-        b = b.rows(r);
+        b = b.rows(r.max(1) as u32);
     }
     if let Some(r) = resizable {
         b = b.resizable(r);
     }
     if let Some(h) = resize_max_h {
         b = b.resize_max_h(h);
+    }
+    if let Some(w) = wrap {
+        b = b.wrap(w);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);
@@ -200,7 +217,26 @@ mod tests {
     }
 
     #[test]
-    fn textarea_multiline_leaf_is_nowrap() {
+    fn textarea_default_leaf_soft_wraps() {
+        use crate::style::WhiteSpace;
+        use crate::utils::text_field::input_text_template_id;
+
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+
+        let id = "ta-soft";
+        let el: Element = textarea(id).rows(3).into();
+        let tid = input_text_template_id(id);
+        let leaf = find_tid(&el, &tid).expect("text leaf");
+        assert_eq!(leaf.text_style.white_space, WhiteSpace::Normal);
+    }
+
+    #[test]
+    fn textarea_wrap_off_is_nowrap() {
         use crate::style::WhiteSpace;
         use crate::utils::text_field::input_text_template_id;
 
@@ -212,7 +248,7 @@ mod tests {
         }
 
         let id = "ta-nowrap";
-        let el: Element = textarea(id).rows(3).into();
+        let el: Element = textarea(id).rows(3).wrap("off").into();
         let tid = input_text_template_id(id);
         let leaf = find_tid(&el, &tid).expect("text leaf");
         assert_eq!(leaf.text_style.white_space, WhiteSpace::Nowrap);

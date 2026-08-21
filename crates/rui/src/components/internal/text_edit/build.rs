@@ -35,6 +35,8 @@ pub(crate) struct TextEditBuildParams {
     pub rows: u32,
     pub resizable: bool,
     pub resize_max_h: f32,
+    /// Multiline only: soft-wrap (default) or horizontal scroll.
+    pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
 }
 pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let TextEditBuildParams {
@@ -55,6 +57,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         rows,
         resizable,
         resize_max_h,
+        wrap_mode,
     } = params;
 
     if let Some(sig) = value {
@@ -237,24 +240,38 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .flex_shrink(1.0);
     }
     if multiline {
-        // Caret / hit-test / Up-Down nav are hard-`\n` indexed. Soft-wrap at the leaf
-        // width made glyphs occupy more visual rows than hard lines → caret lands on the
-        // wrong declaration and typing looks like “串行” (devtools CSSOM). Keep nowrap;
-        // long lines clip in the scrollport until soft-wrap-aware caret exists.
-        // Do not set TextOverflow::Hidden here — that changes leaf clip_to_box / scissor
-        // vs the absolute scrollport region (gallery clip-height regressions).
-        text_el = text_el.white_space("nowrap");
+        let soft = wrap_mode.soft_wrap();
+        if soft {
+            // Soft-wrap long hard lines (HTML wrap=soft). Preserve hard `\n`.
+            text_el = text_el.white_space("normal");
+        } else {
+            // Horizontal scroll (wrap=off): nowrap + scrollport overflow-x auto.
+            text_el = text_el.white_space("nowrap");
+        }
         // Content-driven leaf (field-sizing-content). Do NOT use viewport/chrome height —
         // that coupled glyph soft_h to textarea resize. Ink only at content bottom.
-        // Unbounded avail → height = hard lines only (matches nowrap paint + caret).
+        let avail_w = if soft {
+            // Build-time width unknown; paint sync remeasures with live leaf width.
+            // Use a modest placeholder so first layout is not unbounded-tall.
+            320.0
+        } else {
+            10_000.0
+        };
         let content_h = crate::utils::text_field::text_edit_content_height_px(
             &display_text,
             text_size_px,
             font_weight,
             line_box,
-            10_000.0,
+            avail_w,
         );
         text_el = text_el.h(content_h).min_h(content_h);
+        if !soft {
+            // Grow with the longest hard line so overflow-x can scroll (never clip).
+            let prepared =
+                crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
+            let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            text_el = text_el.w(content_w).min_w("100%");
+        }
     } else {
         // Single-line: pin one line box so Input `items_center` centers the row.
         // Extra bottom ink lives in glyphon soft_h, not leaf height (else glyphs sit high).
@@ -330,8 +347,15 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .px("0.75rem")
             .py("0.5rem")
             .child(text_el);
+        let ox = if wrap_mode.soft_wrap() {
+            // Soft-wrap: no horizontal overflow of ink; hidden (not clip) on x is fine.
+            "hidden"
+        } else {
+            // wrap=off: scroll long lines — never clip.
+            "auto"
+        };
         region = crate::core::scroll_viewport::activate_scroll_viewport(
-            region, rest, "hidden", "scroll", "smooth", "area",
+            region, rest, ox, "scroll", "smooth", "area",
         );
         region.template_id = Some(format!("__rui_textarea:{field_id}:region"));
         region
@@ -390,6 +414,25 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .right(2.0)
             .into();
         el = el.child(vbar);
+        if !wrap_mode.soft_wrap() {
+            use crate::core::scroll_viewport::scroll_scrollbar_inset_x_signal_key;
+            use_signal(&scroll_scrollbar_inset_x_signal_key(rest), || {
+                "inside".to_string()
+            })
+            .set("inside".to_string());
+            let hbar: Element = scrollbar(&format!("__rui_h_scrollbar_{rest}"))
+                .target(rest.to_string())
+                .orientation(ScrollbarOrientation::Horizontal)
+                .visibility("auto")
+                .thickness(8.0)
+                .overlay(true)
+                .z_index(1000)
+                .left(4.0)
+                .right(10.0)
+                .bottom(2.0)
+                .into();
+            el = el.child(hbar);
+        }
     }
 
     if resizable {
@@ -530,6 +573,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resize_min_h,
         resize_max_h,
         plain_chrome: false,
+        wrap_mode,
     };
 
     let id_for_click = fid.clone();

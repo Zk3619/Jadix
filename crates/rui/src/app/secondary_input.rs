@@ -40,40 +40,27 @@ impl super::App {
                 return;
             };
             let ui_scale = scale.max(1.0);
-            if let Some(rest) = self.input_drag_rest.as_ref() {
-                if let Some((bounds, display_el, style, leaf_scroll)) =
-                    super::tree_hit::find_input_text_leaf_for_rest(&sec.root_element, None, rest)
-                {
-                    let vk = crate::components::input::input_value_signal_key(rest);
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
-                    let committed = use_signal(&vk, String::new).get();
-                    let pre = use_signal(&pk, String::new).get();
-                    let mx = if style.overflow.allows_caret_scroll() {
-                        x + leaf_scroll[0]
-                    } else {
-                        (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
-                    };
-                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                    let ix = crate::renderer::hit_test_input_text_index(
-                        sec.text_renderer.font_system_mut(),
-                        &display_el,
-                        mx,
-                        my,
-                        bounds,
-                        &style,
-                        ui_scale,
-                    );
-                    let caret_ix = if committed.is_empty() && pre.is_empty() {
-                        0
-                    } else {
-                        crate::components::input::caret_index_from_display_hit(rest, ix)
-                    };
-                    let lo = self.input_drag_anchor.min(caret_ix);
-                    let hi = self.input_drag_anchor.max(caret_ix);
-                    Some((rest.clone(), lo, hi, caret_ix, true))
-                } else {
-                    None
+            if let Some(rest) = self.input_drag_rest.clone() {
+                let now = std::time::Instant::now();
+                let dt = now
+                    .duration_since(self.last_frame_time)
+                    .as_secs_f32()
+                    .clamp(1.0 / 240.0, 0.05);
+                let anchor = self.input_drag_anchor;
+                let keep = super::window_events::tick_input_drag_select_at(
+                    &mut sec.root_element,
+                    sec.text_renderer.font_system_mut(),
+                    scale,
+                    dt,
+                    x,
+                    y,
+                    &rest,
+                    anchor,
+                );
+                if keep {
+                    sec.window.request_redraw();
                 }
+                None
             } else if let Some(key) = self.label_drag_key.as_ref() {
                 if let Some((bounds, display_el, style, leaf_scroll)) =
                     super::tree_hit::find_selectable_text_leaf_for_key(&sec.root_element, key)
@@ -101,6 +88,8 @@ impl super::App {
         } else {
             None
         };
+
+        let input_drag_active = self.input_drag_rest.is_some() && self.left_button_down;
 
         let (x, y, path, cursor_pick, hover_cbs, window) = {
             let mut secs = self.secondaries.borrow_mut();
@@ -134,7 +123,7 @@ impl super::App {
         );
         self.last_client_pos = Some([x, y]);
 
-        let mut need_redraw = false;
+        let mut need_redraw = input_drag_active;
         if let Some((key, lo, hi, caret, is_input)) = drag_sel_update {
             if is_input {
                 if self.input_drag_rest.as_deref() == Some(key.as_str()) {
@@ -231,6 +220,7 @@ impl super::App {
                     self.last_click_at = Some(now);
                     self.last_click_pos = [px, py];
 
+                    let click_count = self.click_count;
                     let (path, input_drag, label_drag) = {
                         let mut secs = self.secondaries.borrow_mut();
                         let sec = secs.get_mut(&id).unwrap();
@@ -245,11 +235,13 @@ impl super::App {
                         .map(
                             |(rest, bounds, display_el, style, leaf_scroll, focus_id)| {
                                 let ui_scale = scale.max(1.0);
+                                let mx = x + leaf_scroll[0];
+                                let my = y + leaf_scroll[1];
                                 let ix = crate::renderer::hit_test_input_text_index(
                                     sec.text_renderer.font_system_mut(),
                                     &display_el,
-                                    x + leaf_scroll[0],
-                                    y + leaf_scroll[1],
+                                    mx,
+                                    my,
                                     bounds,
                                     &style,
                                     ui_scale,
@@ -265,7 +257,21 @@ impl super::App {
                                         &rest, ix,
                                     )
                                 };
-                                (rest, caret_ix, focus_id)
+                                let line_sel = if click_count >= 2
+                                    && crate::renderer::hit_test_input_is_line_side_blank(
+                                        sec.text_renderer.font_system_mut(),
+                                        &display_el,
+                                        mx,
+                                        my,
+                                        bounds,
+                                        &style,
+                                        ui_scale,
+                                    ) {
+                                    crate::utils::keyboard::select_line_range(&committed, caret_ix)
+                                } else {
+                                    None
+                                };
+                                (rest, caret_ix, focus_id, line_sel)
                             },
                         );
                         let label_drag = if input_drag.is_none() {
@@ -307,15 +313,23 @@ impl super::App {
 
                     use_signal("__rui_focus_visible", || false).set(false);
 
-                    let input_drag_fid = input_drag.as_ref().map(|(_, _, fid)| fid.clone());
-                    if let Some((rest, caret_ix, focus_id)) = input_drag {
+                    let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
+                    if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
                         use_signal("__rui_button_focus_id", String::new).set(focus_id);
                         let ck = crate::components::input::input_caret_signal_key(&rest);
                         let sk = crate::components::input::input_selection_signal_key(&rest);
-                        use_signal(&ck, || None::<usize>).set(Some(caret_ix));
-                        use_signal(&sk, || None::<(usize, usize)>).set(Some((caret_ix, caret_ix)));
+                        if let Some((lo, hi)) = line_sel {
+                            use_signal(&ck, || None::<usize>).set(Some(hi));
+                            use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
+                            self.input_drag_anchor = lo;
+                        } else {
+                            use_signal(&ck, || None::<usize>).set(Some(caret_ix));
+                            use_signal(&sk, || None::<(usize, usize)>)
+                                .set(Some((caret_ix, caret_ix)));
+                            self.input_drag_anchor = caret_ix;
+                        }
                         self.input_drag_rest = Some(rest);
-                        self.input_drag_anchor = caret_ix;
+                        crate::utils::text_field::set_text_drag_select_active(true);
                         self.label_drag_key = None;
                         self.left_button_down = true;
                     } else if let Some((key, caret_ix)) = label_drag {
@@ -324,6 +338,7 @@ impl super::App {
                         self.label_drag_key = Some(key);
                         self.label_drag_anchor = caret_ix;
                         self.input_drag_rest = None;
+                        crate::utils::text_field::set_text_drag_select_active(false);
                         self.left_button_down = true;
                     } else if let Some(fid) = path.iter().rev().find_map(|e| e.focus_id.clone()) {
                         use_signal("__rui_button_focus_id", String::new).set(fid);
@@ -424,6 +439,7 @@ impl super::App {
                     }
                     crate::utils::popup::arm_underlay_close();
                     if let Some(rest) = self.input_drag_rest.take() {
+                        crate::utils::text_field::set_text_drag_select_active(false);
                         let sk = crate::components::input::input_selection_signal_key(&rest);
                         let sel = use_signal(&sk, || None::<(usize, usize)>).get();
                         if let Some((a, b)) = sel {

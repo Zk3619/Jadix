@@ -2221,7 +2221,13 @@ fn expand_node(
                         "BarChart" | "LineChart" | "AreaChart" | "Chart"
                     ) && matches!(attr_name, "h" | "height");
 
+                    // Textarea: `wrap` = soft|off（单行溢出），不是 flex-wrap；
+                    // `rows` = 可视行数，不是 grid-template-rows。
+                    let textarea_own_prop = name_str == "Textarea"
+                        && matches!(attr_name, "wrap" | "rows");
+
                     let is_base = !chart_plot_height
+                        && !textarea_own_prop
                         && matches!(
                             attr_name,
                             "w" | "width"

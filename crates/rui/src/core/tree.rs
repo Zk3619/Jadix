@@ -151,6 +151,8 @@ pub struct TextEditPaintSync {
     pub resize_max_h: f32,
     /// Command 过滤框等：无边框/阴影/焦点环，视觉壳由外层提供。
     pub plain_chrome: bool,
+    /// Textarea 单行溢出：软换行（默认）或横向滚动。
+    pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
 }
 
 /// 兼容旧名：与 [`TextEditPaintSync`] 相同。

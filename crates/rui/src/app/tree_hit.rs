@@ -861,6 +861,119 @@ pub(super) fn find_element_by_focus_id<'a>(el: &'a Element, focus_id: &str) -> O
     None
 }
 
+pub(super) fn find_element_by_focus_id_mut<'a>(
+    el: &'a mut Element,
+    focus_id: &str,
+) -> Option<&'a mut Element> {
+    if el.focus_id.as_deref() == Some(focus_id) {
+        return Some(el);
+    }
+    for c in &mut el.children {
+        if let Some(n) = find_element_by_focus_id_mut(c, focus_id) {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Result of edge auto-scroll while drag-selecting `wrap=off` text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TextDragHScrollTick {
+    /// Pointer inside the clip — no auto-scroll.
+    Idle,
+    /// Scrolled this frame; keep requesting redraws while the pointer stays past the edge.
+    Scrolled,
+    /// Pointer still past the edge but scroll is already at min/max.
+    AtLimit,
+}
+
+/// While drag-selecting in a `wrap=off` textarea, scroll horizontally when the pointer
+/// is past the scrollport on X. `dt` is frame delta so holding still still scrolls.
+///
+/// Paint must not run `ensure_caret_visible_scroll_x` during text drag (see
+/// [`crate::utils::text_field::text_drag_select_active`]).
+pub(super) fn nudge_textarea_hscroll_for_drag(
+    root: &mut Element,
+    field_id: &str,
+    pointer_x: f32,
+    dt: f32,
+) -> TextDragHScrollTick {
+    use crate::core::reactivity::use_signal;
+    use crate::core::scroll_viewport::{
+        focus_id_for_scroll_viewport, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+        scroll_offset_y_signal_key, scroll_viewport_w_signal_key,
+    };
+    use crate::style::WhiteSpace;
+    use crate::utils::text_field::textarea_scroll_rest;
+
+    let Some((_, _, style, _)) = find_input_text_leaf_for_rest(root, None, field_id) else {
+        return TextDragHScrollTick::Idle;
+    };
+    if style.white_space != WhiteSpace::Nowrap {
+        return TextDragHScrollTick::Idle;
+    }
+
+    let scroll_rest = textarea_scroll_rest(field_id);
+    let vp_fid = focus_id_for_scroll_viewport(&scroll_rest);
+    let Some((vp_layout, vp_scroll)) = find_bounds_by_focus_id(root, &vp_fid, [0.0, 0.0]) else {
+        return TextDragHScrollTick::Idle;
+    };
+    // Viewport chrome visual rect (layout − ancestor scroll). Own scroll does not move the clip.
+    let left = vp_layout[0] - vp_scroll[0];
+    let right = left + vp_layout[2];
+    let vw_layout = vp_layout[2].max(1.0);
+
+    // Slight inner slop so “parked on the border” still auto-scrolls; paint ensure is off
+    // during text drag so this does not bounce.
+    const EDGE_SLOP: f32 = 2.0;
+    let outside_right = pointer_x > right - EDGE_SLOP;
+    let outside_left = pointer_x < left + EDGE_SLOP;
+    if !outside_left && !outside_right {
+        return TextDragHScrollTick::Idle;
+    }
+
+    let sx_key = scroll_offset_x_signal_key(&scroll_rest);
+    let sy_key = scroll_offset_y_signal_key(&scroll_rest);
+    let vw_key = scroll_viewport_w_signal_key(&scroll_rest);
+    let cw_key = scroll_content_w_signal_key(&scroll_rest);
+    let sx_sig = use_signal(&sx_key, || 0.0_f32);
+    let sy = use_signal(&sy_key, || 0.0_f32).peek();
+    let vw = use_signal(&vw_key, || 0.0_f32)
+        .peek()
+        .max(vw_layout)
+        .max(1.0);
+    let cw = use_signal(&cw_key, || 0.0_f32).peek().max(vw);
+    let max_sx = (cw - vw).max(0.0);
+    if max_sx < 0.5 {
+        return TextDragHScrollTick::AtLimit;
+    }
+
+    let sx = sx_sig.peek().clamp(0.0, max_sx);
+    let dt = dt.clamp(1.0 / 240.0, 0.05);
+    // px/s — base rate + boost by how far past the edge the pointer is.
+    let over = if outside_right {
+        (pointer_x - (right - EDGE_SLOP)).max(0.0)
+    } else {
+        ((left + EDGE_SLOP) - pointer_x).max(0.0)
+    };
+    let speed = (220.0 + over * 12.0).min(720.0);
+    let step = speed * dt;
+    let next = if outside_right {
+        (sx + step).min(max_sx)
+    } else {
+        (sx - step).max(0.0)
+    };
+    if (next - sx).abs() < 0.05 {
+        return TextDragHScrollTick::AtLimit;
+    }
+    // Silent + sync target: avoid reactive rebuild / spring fighting the drag.
+    super::scroll_support::set_scroll_offset_with_behavior(&scroll_rest, next, sy, true);
+    if let Some(vp) = find_element_by_focus_id_mut(root, &vp_fid) {
+        vp.scroll_offset[0] = next;
+    }
+    TextDragHScrollTick::Scrolled
+}
+
 /// Handlers cloned off the focused node so callers can drop `AppState` borrows before running them.
 ///
 /// Running `on_key_down` / `on_click` while `AppState` is borrowed is unsafe: handlers often

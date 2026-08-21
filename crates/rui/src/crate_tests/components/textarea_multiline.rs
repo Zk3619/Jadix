@@ -1433,9 +1433,8 @@ fn textarea_paint_sync_does_not_clamp_scroll_below_padding_inclusive_max() {
 }
 
 #[test]
-fn textarea_multiline_nowrap_keeps_hard_line_height_under_narrow_width() {
-    // DevTools CSSOM: long ASCII declarations under a narrow panel used to soft-wrap.
-    // Caret/hit-test are hard-`\n` indexed → typing landed on the wrong line (“串行”).
+fn textarea_multiline_scroll_wrap_keeps_hard_line_height_under_narrow_width() {
+    // wrap=off (DevTools CSSOM): long ASCII stays one hard line; height must not soft-inflate.
     let mut fs = font_loader::create_font_system();
     font_loader::apply_default_families(fs.db_mut());
     install_shared_font_system(&mut fs);
@@ -1455,7 +1454,7 @@ border-radius: 6px 6px 6px 6px";
     use_signal("__rui_button_focus_id", String::new).set(format!("textarea:{id}"));
     use_signal(&input_value_signal_key(id), String::new).set(css.into());
 
-    let el: Element = textarea(id).rows(8).resizable(false).into();
+    let el: Element = textarea(id).rows(8).resizable(false).wrap("off").into();
     let mut tree = LayoutTree::new();
     // Narrow like a docked Inspector Styles pane.
     let mut root = Element::new().w(160.0).h(400.0).child(el);
@@ -1465,7 +1464,7 @@ border-radius: 6px 6px 6px 6px";
     assert_eq!(
         text_el.text_style.white_space,
         crate::style::WhiteSpace::Nowrap,
-        "multiline textarea must nowrap so soft-wrap cannot desync caret"
+        "wrap=off textarea must nowrap"
     );
     let hard_n = css.split('\n').count().max(1) as f32;
     let h = text_el.layout_bounds[3];
@@ -1494,5 +1493,41 @@ border-radius: 6px 6px 6px 6px";
     assert!(
         h2 < lh * (hard_n + 0.75) + ink,
         "paint sync must not re-inflate height via soft-wrap avail; lh={lh} got {h2}"
+    );
+}
+
+#[test]
+fn textarea_default_soft_wrap_inflates_height_under_narrow_width() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "ta-ml-soft-wrap";
+    let tid = input_text_template_id(id);
+    let size = 14.0_f32;
+    let lh = text_edit_line_box_px(size, None, None);
+
+    let long = "padding: 8px 16px 8px 16px; background: #ffffff; border-width: 1px";
+    use_signal(&input_value_signal_key(id), String::new).set(long.into());
+
+    let el: Element = textarea(id).rows(8).resizable(false).into();
+    let mut tree = LayoutTree::new();
+    let mut root = Element::new().w(160.0).h(400.0).child(el);
+    let _ = tree.build_and_layout(&mut root, 160.0, 400.0, [-1.0, -1.0]);
+
+    let text_el = find_tid(&root, &tid).expect("text leaf");
+    assert_eq!(
+        text_el.text_style.white_space,
+        crate::style::WhiteSpace::Normal,
+        "default textarea soft-wraps"
+    );
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
+    let _ = tree.build_and_layout_fast(&mut root, 160.0, 400.0, [-1.0, -1.0], false, false);
+    let text_el = find_tid(&root, &tid).expect("text leaf after sync");
+    let h = text_el.layout_bounds[3];
+    assert!(
+        h > lh * 1.5,
+        "soft-wrap under narrow width must grow past one line; lh={lh} got {h}"
     );
 }
