@@ -2567,14 +2567,13 @@ impl super::App {
 
         // Idle frames use ViewportsOnly so `update_scrollbar_elements` only syncs `scroll:` offsets
         // (plus subtree pruning via `Element::contains_scroll_viewport`). Full pass is needed while
-        // dragging, smoothing scroll, coalescing wheel delta, or — crucially — spring-animating
-        // scrollbar fade-in/out (hover show / auto-hide). Without this, ViewportsOnly skips the
-        // alpha/color multiplication and tracks stay frozen (invisible on hover, opaque after idle).
+        // dragging, smoothing scroll, coalescing wheel delta, or fading auto-scrollbar alpha.
         // Smooth scroll moves thumbs via overlay collect (live offset signals). Full prepass is
         // only required while dragging, fading auto-scrollbar alpha, or coalescing wheel.
+        let scrollbar_fade_busy = self.scrollbar_fade_active;
         let scrollbar_pass = if self.scrollbar_drag.is_some()
             || !self.scroll_accum.is_empty()
-            || anim_tick.scrollbar_overlay
+            || scrollbar_fade_busy
         {
             ScrollbarUpdateMode::Full
         } else {
@@ -2587,15 +2586,15 @@ impl super::App {
         let text_force_fast_mode = self.scrollbar_drag.is_some()
             || smooth_scroll_animating
             || !self.scroll_accum.is_empty()
-            || anim_tick.scrollbar_overlay;
+            || scrollbar_fade_busy;
 
         let scrollbar_skip_flex_layout =
-            self.scrollbar_drag.is_none() && anim_tick.scrollbar_overlay;
+            self.scrollbar_drag.is_none() && scrollbar_fade_busy;
         // Do NOT fold `smooth_active_until` into paint-only: the 200ms wheel bridge would skip
         // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
         // but the caret does not install until the bridge expires.
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
-        let scroll_paint_only = smooth_scroll_animating || anim_tick.scrollbar_overlay;
+        let scroll_paint_only = smooth_scroll_animating || scrollbar_fade_busy;
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(
@@ -3065,12 +3064,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .to_ascii_lowercase();
 
                     if axis_x_enabled {
-                        let spring_x = crate::style::use_scrollbar_visibility_spring(
+                        let fade_x = crate::style::use_ui_transition_cubic(
                             keys.spring_x.as_str(),
                             0.0,
                         );
                         // `raw_max_*` can sit at 0 briefly (stale metrics / sub-pixel) while the axis is
-                        // still hoverable. Never force the spring to 0 when that axis is actively hovered,
+                        // still hoverable. Never force fade to 0 when that axis is actively hovered,
                         // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
                         // appear after scrolling bumps `raw_max` above the threshold.
                         let spring_eligible_x =
@@ -3087,24 +3086,22 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             }
                         };
                         match vis_x.as_str() {
-                            "never" => spring_x.set(0.0),
-                            "always" => spring_x.set(1.0),
+                            "never" => fade_x.set(0.0),
+                            "always" => fade_x.set(1.0),
                             _ => {
                                 if spring_eligible_x {
-                                    spring_x.set(if keep_visible_x { 1.0 } else { 0.0 });
+                                    fade_x.set(if keep_visible_x { 1.0 } else { 0.0 });
                                 } else {
-                                    spring_x.set(0.0);
+                                    fade_x.set(0.0);
                                 }
                             }
                         }
-                        // Match spring settle tolerance (~0.01): smaller eps misses near-end frames and
-                        // can stop requesting redraws while `v` is still slightly > 0.
-                        if (spring_x.peek() - target_x_vis).abs() > 0.002 {
+                        if (fade_x.peek() - target_x_vis).abs() > 0.002 {
                             scrollbar_fade_animating = true;
                         }
                     }
                     if axis_y_enabled {
-                        let spring_y = crate::style::use_scrollbar_visibility_spring(
+                        let fade_y = crate::style::use_ui_transition_cubic(
                             keys.spring_y.as_str(),
                             0.0,
                         );
@@ -3122,17 +3119,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             }
                         };
                         match vis_y.as_str() {
-                            "never" => spring_y.set(0.0),
-                            "always" => spring_y.set(1.0),
+                            "never" => fade_y.set(0.0),
+                            "always" => fade_y.set(1.0),
                             _ => {
                                 if spring_eligible_y {
-                                    spring_y.set(if keep_visible_y { 1.0 } else { 0.0 });
+                                    fade_y.set(if keep_visible_y { 1.0 } else { 0.0 });
                                 } else {
-                                    spring_y.set(0.0);
+                                    fade_y.set(0.0);
                                 }
                             }
                         }
-                        if (spring_y.peek() - target_y_vis).abs() > 0.002 {
+                        if (fade_y.peek() - target_y_vis).abs() > 0.002 {
                             scrollbar_fade_animating = true;
                         }
                     }
@@ -3200,6 +3197,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(until));
                     }
                 }
+                self.scrollbar_fade_active = scrollbar_fade_animating;
 
                 for (cb, is_hover) in hover_to_run {
                     (*cb.borrow_mut())(is_hover);

@@ -161,6 +161,8 @@ struct App {
     last_click_pos: [f32; 2],
     click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
+    /// Previous-frame auto-scrollbar fade still running (drives Full scrollbar prepass).
+    scrollbar_fade_active: bool,
     /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
     content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
     /// Textarea 右下角拖拽改高。

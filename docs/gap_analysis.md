@@ -98,7 +98,7 @@
 变体引擎已落地：`hover:` / `focus:` / `focus-visible:` / `active:` / `disabled:` / `dark:` / `data-[key=value]:`。  
 静态 `class=` 与动态 `bind_class` 走同一 [`apply_class_list`](../crates/rui/src/style/utility.rs)；每帧 chrome sync 调用 [`sync_class_variants_subtree`](../crates/rui/src/style/utility.rs)。
 
-**仍开放**：无（断点 / `group-hover:` / `peer-*` / `transition-*` spring 入口已 MVP）。
+**仍开放**：无（断点 / `group-hover:` / `peer-*` / `transition-*` CSS 入口已 MVP）。
 
 ### 3.4 质量门禁 — ✅ 基础已落地（阶段一 + 三骨架）
 
@@ -148,7 +148,7 @@
 | ~~P1~~ | 无 dark mode / 运行时换肤 | ✅ | `set_theme_mode` / `toggle_theme_mode` + dark tokens |
 | ~~P1~~ | Tailwind 色板不完整 | ✅ | 常见 family × 50–950；`try_parse_color` 可区分未知 |
 | ~~P2~~ | 缺断点、负值、任意值覆盖不全 | ✅ MVP | `sm:`–`2xl:` 断点 + `-m-*`/`-translate-*` + `group-hover:`/`peer-*`（含命名）；任意值间距已有 |
-| ~~P2~~ | `transition-*` / `animate-*` 无类名入口 | ✅ MVP | `transition-opacity`/`transition-transform` → spring tick；`animate-spin` 旋转 |
+| ~~P2~~ | `transition-*` / `animate-*` 无类名入口 | ✅ MVP | `transition-opacity`/`transition-transform` → CSS `tick_element_transitions`；`animate-spin` 旋转 |
 
 ### 4.3 渲染与布局
 
@@ -330,7 +330,7 @@
 - [x] 断点 `sm:`–`2xl:` + 负间距 + `transition-*` / `animate-spin`；`group-hover:` / `peer-*`
 - [x] AccessKit name/description/live region
 - [x] `<Fragment>` / spreading / `ref` / `<Dynamic>`
-- [x] 触摸主键 + 滚动惯性；长按 + pinch；`transition-*` spring tick
+- [x] 触摸主键 + 滚动惯性；长按 + pinch；`transition-*` CSS tween
 - [x] `tracing` feature + `layout_baseline` bench
 - [x] 多窗口：`OpenWindow` + [`open_secondary_window`](../crates/rui/src/app/multi_window.rs) + 次窗完整 UI 树
 - [x] FontSystem 共享（measure + 主/次窗 shaping）：`install_shared_font_system` / `new_sharing_font_system`

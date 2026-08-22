@@ -99,15 +99,12 @@ pub fn sync_overlay(root: &mut Element) -> bool {
 
 fn reset_inspector_button_hover_state() {
     use crate::core::reactivity::use_signal;
-    use crate::style::use_ui_transition_spring;
     const IDS: &[&str] = &["dt-pick", "dt-close", "dt-tab-el", "dt-tab-lay", "dt-tab-rx"];
     for id in IDS {
         let hover = use_signal(&format!("{id}_hover"), || false);
         if hover.peek() {
             hover.set_silent(false);
         }
-        // Inspector buttons use the default spring hover easing.
-        use_ui_transition_spring(&format!("rui:btn_hover_blend:{id}"), 0.0).snap(0.0);
     }
 }
 

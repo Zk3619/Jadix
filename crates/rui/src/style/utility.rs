@@ -347,18 +347,11 @@ pub fn tick_active_css_transitions_subtree(
 
     let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
     let has_active_css = el.transition_snapshot.has_active_tweens();
-    let has_rui_tr =
-        el.attrs.contains_key("rui_transition") && el.style.transition.is_empty();
     let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
 
-    if has_spin || has_active_css || has_rui_tr || css_needs {
+    if has_spin || has_active_css || css_needs {
         let before = el.style.clone();
         let spun = tick_animate_spin(el);
-        let sprung = if has_rui_tr {
-            tick_rui_transition_spring(el)
-        } else {
-            false
-        };
         let css_trans = if has_active_css || css_needs || !el.style.transition.is_empty() {
             super::animation::tick_element_transitions(
                 &mut el.style,
@@ -368,7 +361,7 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             false
         };
-        if spun || sprung || css_trans || el.style != before {
+        if spun || css_trans || el.style != before {
             *impact = impact.merge(LayoutStatus::StyleChanged);
             mark_hover_paint_dirty();
             let need_taffy = style_needs_taffy_sync(&before, &el.style);
@@ -528,14 +521,13 @@ fn sync_class_variants_subtree_inner(
         .as_ref()
         .is_some_and(|cs| !cs.variants.is_empty());
     let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
-    let has_rui_tr = el.attrs.contains_key("rui_transition");
     // Only wake the per-frame resolve/tick path while a tween is actually running,
-    // variants may match, or spin/rui springs need a tick.
+    // variants may match, or spin needs a tick.
     // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
     // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    if has_variants || has_spin || has_rui_tr || has_active_css || css_needs {
+    if has_variants || has_spin || has_active_css || css_needs {
         let hovered = inside;
         if has_variants {
             if let Some(cs) = el.class_set.as_mut() {
@@ -563,12 +555,8 @@ fn sync_class_variants_subtree_inner(
             .as_ref()
             .and_then(|cs| cs.last_ctx_fp)
             .is_some_and(|fp| fp == ctx_fp);
-        // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or
-        // spin still need a tick. Do **not** wake every `rui_transition` attr frame —
-        // `transition-transform` used to set that attr and dual-drive springs+tweens.
-        if !ctx_unchanged || has_spin || has_active_css || css_needs
-            || (has_rui_tr && el.style.transition.is_empty())
-        {
+        // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or spin still need a tick.
+        if !ctx_unchanged || has_spin || has_active_css || css_needs {
             let attrs_snapshot = el.attrs.clone();
             let ctx = VariantContext {
                 hovered,
@@ -585,13 +573,6 @@ fn sync_class_variants_subtree_inner(
             let before_text = el.text_style.clone();
             let local = resolve_class_variants(el, &ctx);
             let spun = tick_animate_spin(el);
-            // CSS `transition-*` owns interpolation. Running UI springs on the same
-            // scale/rotate fields restarted the tween every frame (sidebar flash).
-            let sprung = if el.style.transition.is_empty() {
-                tick_rui_transition_spring(el)
-            } else {
-                false
-            };
             let css_trans = super::animation::tick_element_transitions(
                 &mut el.style,
                 &mut el.transition_snapshot,
@@ -602,12 +583,11 @@ fn sync_class_variants_subtree_inner(
             }
             if local != LayoutStatus::Clean
                 || spun
-                || sprung
                 || css_trans
                 || el.style != before
                 || el.text_style != before_text
             {
-                *impact = impact.merge(if spun || sprung || css_trans {
+                *impact = impact.merge(if spun || css_trans {
                     local.merge(LayoutStatus::StyleChanged)
                 } else {
                     local
@@ -701,78 +681,6 @@ fn tick_animate_spin(el: &mut Element) -> bool {
     }
     el.style.rotate_deg = (el.style.rotate_deg + 6.0) % 360.0;
     true
-}
-
-/// Drive `rui_transition=opacity|transform` toward current style targets via UI springs.
-///
-/// Targets are the values already resolved by class variants this frame; springs smooth the
-/// displayed fields when those targets change (hover / group-hover / etc.).
-fn tick_rui_transition_spring(el: &mut Element) -> bool {
-    let Some(kind) = el.attrs.get("rui_transition").cloned() else {
-        return false;
-    };
-    let key = el
-        .template_id
-        .clone()
-        .unwrap_or_else(|| format!("rui:tr:{}", el.layout_bounds[0] as i32));
-    match kind.as_str() {
-        "opacity" => {
-            let spring =
-                crate::style::use_ui_transition_spring(&format!("{key}:opacity"), el.style.opacity);
-            let target = el.style.opacity;
-            // Seed target each frame from resolved style; spring value overwrites display.
-            spring.set(target);
-            let next = spring.peek();
-            if (el.style.opacity - next).abs() > 0.001 {
-                el.style.opacity = next;
-                true
-            } else {
-                el.style.opacity = next;
-                false
-            }
-        }
-        "transform" => {
-            let sx =
-                crate::style::use_ui_transition_spring(&format!("{key}:tx"), el.style.translate[0]);
-            let sy =
-                crate::style::use_ui_transition_spring(&format!("{key}:ty"), el.style.translate[1]);
-            let spx =
-                crate::style::use_ui_transition_spring(&format!("{key}:tpx"), el.style.translate_pct[0]);
-            let spy =
-                crate::style::use_ui_transition_spring(&format!("{key}:tpy"), el.style.translate_pct[1]);
-            let sr =
-                crate::style::use_ui_transition_spring(&format!("{key}:rot"), el.style.rotate_deg);
-            let ssx = crate::style::use_ui_transition_spring(&format!("{key}:sx"), el.style.scale[0]);
-            let ssy = crate::style::use_ui_transition_spring(&format!("{key}:sy"), el.style.scale[1]);
-            sx.set(el.style.translate[0]);
-            sy.set(el.style.translate[1]);
-            spx.set(el.style.translate_pct[0]);
-            spy.set(el.style.translate_pct[1]);
-            sr.set(el.style.rotate_deg);
-            ssx.set(el.style.scale[0]);
-            ssy.set(el.style.scale[1]);
-            let nx = sx.peek();
-            let ny = sy.peek();
-            let npx = spx.peek();
-            let npy = spy.peek();
-            let nr = sr.peek();
-            let nsx = ssx.peek();
-            let nsy = ssy.peek();
-            let changed = (el.style.translate[0] - nx).abs() > 0.01
-                || (el.style.translate[1] - ny).abs() > 0.01
-                || (el.style.translate_pct[0] - npx).abs() > 0.001
-                || (el.style.translate_pct[1] - npy).abs() > 0.001
-                || (el.style.rotate_deg - nr).abs() > 0.01
-                || (el.style.scale[0] - nsx).abs() > 0.001
-                || (el.style.scale[1] - nsy).abs() > 0.001;
-            el.style.translate = [nx, ny];
-            el.style.translate_pct = [npx, npy];
-            el.style.rotate_deg = nr;
-            el.style.scale = [nsx, nsy];
-            changed
-        }
-        _ => false,
-    }
 }
 
 

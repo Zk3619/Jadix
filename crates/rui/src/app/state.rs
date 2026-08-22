@@ -888,6 +888,28 @@ impl AppState {
             if new_el.on_unmount.is_none() {
                 new_el.on_unmount = old_el.on_unmount.clone();
             }
+            // Toast 等带 CSS transition 的稳定 template：始终保留上一帧的
+            // translate/opacity/scale + snapshot。否则 idle 卡被挤到新 lift/scale 时
+            // new.style 已是终点、snapshot 空 → from=to 瞬跳（堆叠「啪」一下）。
+            let preserve_motion = !new_el.style.transition.is_empty()
+                && (new_el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("toast-card-"))
+                    || old_el.transition_snapshot.has_active_tweens()
+                    || crate::style::css_transition_needs_frame(
+                        &old_el.style,
+                        &old_el.transition_snapshot,
+                    ));
+            if preserve_motion {
+                new_el.transition_snapshot = old_el.transition_snapshot.clone();
+                new_el.style.translate = old_el.style.translate;
+                new_el.style.opacity = old_el.style.opacity;
+                new_el.style.scale = old_el.style.scale;
+                new_el.style.rotate_deg = old_el.style.rotate_deg;
+                // 堆叠阴影淡出同样靠 mid 保留；否则 new 目标 alpha=0 会瞬跳。
+                new_el.style.shadow_color = old_el.style.shadow_color;
+            }
             let is_reactive_placeholder = new_el.template_hash.as_deref()
                 == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
             if is_reactive_placeholder {
@@ -1433,8 +1455,8 @@ impl AppState {
             viewport_h,
             [0.0, 0.0],
         );
-        // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; spring
-        // paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
+        // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; CSS
+        // transition paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
         if !scroll_paint_only {
             crate::components::button::sync_button_hover_paint_subtree(
                 &mut self.root_element,
@@ -1452,6 +1474,11 @@ impl AppState {
                 &mut sync_impact,
             );
             crate::components::context_menu::sync_context_menu_item_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::dropdown_menu::sync_dropdown_menu_item_paint_subtree(
                 &mut self.root_element,
                 &mut self.layout_tree,
                 &mut sync_impact,
@@ -2222,6 +2249,10 @@ impl AppState {
         for (band_i, band) in overlay_band_ranges.iter().enumerate() {
             let text_lo = band.text.0;
             let text_hi = band.text.1;
+            if text_lo >= text_hi {
+                overlay_band_underlines.push(Vec::new());
+                continue;
+            }
             let shadow_cached_keys: std::collections::HashSet<u64> =
                 self.shadow_tex_cache.keys().copied().collect();
             let overlay_prep = if band_i == 0 {
@@ -3363,7 +3394,7 @@ fn update_scrollbar_elements(
         can_scroll_y
     };
 
-    // Visibility mode: only Auto uses spring-driven show/hide.
+    // Visibility mode: only Auto uses cubic fade show/hide (CSS opacity on track).
     let vis = use_signal(&scrollbar_visibility_signal_key(&rest, axis), || {
         "auto".to_string()
     })
@@ -3374,7 +3405,7 @@ fn update_scrollbar_elements(
     } else if vis == "always" {
         1.0
     } else {
-        crate::style::use_scrollbar_visibility_spring(
+        crate::style::use_ui_transition_cubic(
             &format!("scrollbar_spring_{rest}:{axis}"),
             0.0,
         )
@@ -3460,8 +3491,8 @@ fn update_scrollbar_elements(
     // Subtracting edge pads here causes inside lanes to be 4px shorter than equivalent outside lanes.
     let edge_pad_main = 0.0_f32;
 
-    // Keep constant cross-size; show/hide is alpha-only (`v` = scrollbar spring current).
-    // Do not clamp alpha to 0 while 0 < v < 0.01: during spring fade-in `v` stays tiny for several
+    // Keep constant cross-size; show/hide is alpha-only (`v` = visibility cubic current).
+    // Do not clamp alpha to 0 while 0 < v < 0.01: during fade-in `v` stays tiny for several
     // frames — forcing zero here made `auto` scrollbars look like hover never worked. Hit testing
     // uses `layout_bounds`, not multiplied alpha.
     let inset = 1.0_f32;

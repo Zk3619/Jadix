@@ -950,6 +950,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         last_click_pos: [0.0, 0.0],
         click_count: 0,
         scrollbar_drag: None,
+        scrollbar_fade_active: false,
         content_scroll_drag: None,
         textarea_resize_drag: None,
         primary_touch_id: None,

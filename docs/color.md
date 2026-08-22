@@ -61,7 +61,8 @@
 ## `transition` 与按钮 hover（RUI）
 
 - 浏览器里 `transition-all` 多为 **ease + 固定时长** 的插值。
-- RUI 在 **Button** 上用 **`use_ui_transition_spring` + `lerp_display_srgb_linear`**：目标值 0/1 表示「未悬停 / 悬停」，每帧由 `style::animation::tick_animations` 推进弹簧，颜色在 **线性 sRGB** 下插值，观感接近短 **`transition`**；曲线为 **欠阻尼弹簧**，与 CSS 默认 `ease` 不完全相同，但避免生硬跳变。
+- RUI **Button** hover 色直接写目标 `bg` / `border`，由 CSS **`transition-colors`**（~150ms `cubic-bezier(0.4, 0, 0.2, 1)`）插值；**Switch** 拇指位移 / 轨道色同理用 `transition-transform` / `transition-colors`。
+- Gallery / 类名上的 **`transition-transform` / `transition-opacity`** 走同一套 `tick_element_transitions`。
 - 变体 utility 对齐文档站 Aria Button 采样：`primary/80`、`secondary` + `foreground 5%` mix、destructive `/10`→`/20` + 不透明 `destructive` 字色。
 
 ---
@@ -88,5 +89,5 @@ Gallery 切 **dark** 后抽查：
 | `style/color_space.rs` | OKLCH 转 display sRGB、线性化/编码、linear lerp、Oklab mix |
 | `style/theme.rs` | `DesignTokens` 默认值（OKLCH 源） |
 | `style/color.rs` | 语义名解析为 `get_theme()` 中的 sRGB |
-| `style/animation.rs` | `Spring`、`use_ui_transition_spring`、`tick_animations` |
-| `components/button.rs` | hover 弹簧 + 与 shadcn 对齐的边框/阴影分工 |
+| `style/animation.rs` | CSS `tick_element_transitions`；`CubicTween`（Slider 等少数路径） |
+| `components/button.rs` | hover CSS transition-colors + 与 shadcn 对齐的边框/阴影分工 |

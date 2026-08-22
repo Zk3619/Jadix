@@ -6,7 +6,7 @@
 //! ## 用法
 //! ```ignore
 //! <Button variant="outline" size="sm" on_click={move |_| { … }}>"保存"</Button>
-//! <Button id="hw-hover" variant="ghost" hover_easing="cubic">"悬停"</Button>
+//! <Button id="hw-hover" variant="ghost">"悬停"</Button>
 //! // 或：Element::from(button("ok").variant("default").on_click(…))
 //! ```
 //!
@@ -16,7 +16,7 @@
 //!  Lucide 图标叶不加 nowrap，避免方按钮内图标偏右。
 //! - **`id` 非必填心智**：无稳定焦点/测试需求时可省略；空 `id` → 自动 `btn-N`（会话内递增，**不**保证跨 rebuild 同一逻辑实例）。
 //! - 多实例非受控、稳定焦点、冒烟选择器：请显式稳定 `id`（见 `docs/COMPONENT_LIBRARY.md` §4.2）。
-//! - hover / focus 用 `peek` + 每帧 paint sync，避免整树 rebuild。
+//! - hover / focus 用 `peek` + 每帧 paint sync；hover 色走 CSS `transition-colors`（~150ms）。
 //! - 子节点可为文字或图标；Lucide 图标会保留自身 `text_size`。
 
 use crate::core::reactivity::use_signal;
@@ -28,8 +28,8 @@ use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
-    focus_ring_style, is_dark_theme, lerp_display_srgb_linear, lerp_premultiplied_display_srgba,
-    mix_display_srgb_in_oklab, use_ui_transition_cubic, use_ui_transition_spring,
+    focus_ring_style, is_dark_theme, lerp_display_srgb_linear,
+    mix_display_srgb_in_oklab, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -71,17 +71,40 @@ fn button_shadow_style_for_sync(
     (0.0, [0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 0.0)
 }
 
-/// 与 `From` / `paint` 共用，保证与 [`use_ui_transition_spring`] 同一 key。
-fn btn_hover_spring_key(id: &str) -> String {
-    format!("rui:btn_hover_blend:{id}")
+/// CSS hover chrome duration（对标短 `transition-colors`）。
+const BUTTON_HOVER_TRANSITION_MS: f32 = 150.0;
+
+fn ensure_button_css_transition(el: &mut Element) {
+    let timing = TimingFunction::CubicBezier(0.4, 0.0, 0.2, 1.0);
+    for prop in [
+        TransitionProperty::BackgroundColor,
+        TransitionProperty::BorderColor,
+        TransitionProperty::BoxShadow,
+    ] {
+        if let Some(entry) = el.style.transition.iter_mut().find(|e| e.property == prop) {
+            entry.duration_ms = BUTTON_HOVER_TRANSITION_MS;
+            entry.timing = timing;
+        } else {
+            el.style.transition.push(TransitionEntry {
+                property: prop,
+                duration_ms: BUTTON_HOVER_TRANSITION_MS,
+                delay_ms: 0.0,
+                timing,
+            });
+        }
+    }
 }
 
-fn btn_hover_cubic_key(id: &str) -> String {
-    format!("rui:btn_hover_cubic:{id}")
+fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
+    if disabled || !hovered {
+        0.0
+    } else {
+        1.0
+    }
 }
 
-fn btn_focus_spring_key(id: &str) -> String {
-    format!("rui:btn_focus_blend:{id}")
+fn color4_near(a: [f32; 4], b: [f32; 4]) -> bool {
+    (0..4).all(|i| (a[i] - b[i]).abs() <= 1e-4)
 }
 
 fn lerp_shadow_params(
@@ -98,15 +121,6 @@ fn lerp_shadow_params(
     ];
     let spread = a.3 * (1.0 - t) + b.3 * t;
     (blur, col, off, spread)
-}
-
-fn hover_t_for_id(id: &str, easing: &str) -> f32 {
-    let t = if easing == "cubic" {
-        use_ui_transition_cubic(&btn_hover_cubic_key(id), 0.0).peek()
-    } else {
-        use_ui_transition_spring(&btn_hover_spring_key(id), 0.0).peek()
-    };
-    t.clamp(0.0, 1.0)
 }
 
 fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
@@ -202,13 +216,15 @@ pub(crate) fn button_chrome_for_variant(
             (bg, tc, Some(border))
         }
         "ghost" => {
-            let rest_bg = [0.0, 0.0, 0.0, 0.0];
             let hover_bg = if dark {
                 parse_color("accent").with_alpha(0.5)
             } else {
                 parse_color("accent")
             };
-            let bg = lerp_premultiplied_display_srgba(rest_bg, hover_bg, t);
+            // 与 hover 同 RGB、α=0：CSS 非预乘插值只动 alpha，避免透明黑→有色脏闪。
+            // 勿走 `lerp_premultiplied`（α≈0 时会折成黑），端点必须保留 RGB。
+            let rest_bg = [hover_bg[0], hover_bg[1], hover_bg[2], 0.0];
+            let bg = if t >= 0.5 { hover_bg } else { rest_bg };
             let tc = lerp_text_rgba(
                 parse_text_color("foreground"),
                 parse_text_color("accent-foreground"),
@@ -393,7 +409,7 @@ pub struct ButtonBuilder {
     id: String,
     variant: ButtonVariant,
     size: ButtonSize,
-    /// `"spring"` 或 `"cubic"`（`cubic-bezier` 时长过渡）。
+    /// 保留字段：历史 `hover_easing`；hover 现由 CSS `transition-colors` 驱动，此值忽略。
     hover_easing: String,
     disabled: bool,
     on_click: Option<Box<dyn FnMut()>>,
@@ -429,8 +445,8 @@ pub fn Button(
     text_overflow: Option<String>,
 ) -> Element {
     let hover_easing =
-        if hover_easing.is_empty() || (hover_easing != "spring" && hover_easing != "cubic") {
-            "spring".to_string()
+        if hover_easing.is_empty() || hover_easing == "spring" {
+            "cubic".to_string()
         } else {
             hover_easing
         };
@@ -501,7 +517,7 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
         id,
         variant: ButtonVariant::Default,
         size,
-        hover_easing: "spring".to_string(),
+        hover_easing: "cubic".to_string(),
         disabled: false,
         on_click: None,
         container: hstack()
@@ -723,18 +739,8 @@ impl From<ButtonBuilder> for Element {
         let is_hovered = hovered.peek() && !builder.disabled;
         let is_focused = focused.peek() == builder.id && focus_visible.peek() && !builder.disabled;
 
-        let hover_t = if builder.disabled {
-            0.0
-        } else {
-            hover_t_for_id(&builder.id, &builder.hover_easing)
-        };
-        let t = hover_t;
-        // Focus ring is snapped (not sprung): keyboard focus must paint the same frame as Tab.
-        let focus_spring = use_ui_transition_spring(
-            &btn_focus_spring_key(&builder.id),
-            if is_focused { 1.0 } else { 0.0 },
-        );
-        focus_spring.snap(if is_focused { 1.0 } else { 0.0 });
+        let t = hover_t_from_bool(is_hovered, builder.disabled);
+        // Focus ring is instantaneous (same frame as Tab); do not tween.
         let focus_t = if is_focused { 1.0 } else { 0.0 };
 
         // Apply size-based padding if not specified
@@ -880,26 +886,15 @@ impl From<ButtonBuilder> for Element {
         let mut on_click = builder.on_click;
         let disabled = builder.disabled;
         let focus_id = builder.id.clone();
-        let hover_spring_cb = use_ui_transition_spring(&btn_hover_spring_key(&builder.id), 0.0);
-        let cubic_cb = use_ui_transition_cubic(&btn_hover_cubic_key(&builder.id), 0.0);
-        let hover_easing = builder.hover_easing.clone();
+        ensure_button_css_transition(&mut el);
 
         let mut el: Element = interactive(el)
             .focus_id(builder.id)
             .focusable(!disabled)
             .on_hover(move |h| {
                 let want = if disabled { false } else { h };
-                // Only retarget spring / mark dirty when the boolean actually changes.
-                // Re-assert enter after handler rebuild must be a no-op while already hovered,
-                // otherwise spring.set(1) every invalidate frame keeps the redraw pump alive.
                 if hovered.peek() == want {
                     return;
-                }
-                let t = if want { 1.0 } else { 0.0 };
-                if hover_easing == "cubic" {
-                    cubic_cb.set(t);
-                } else {
-                    hover_spring_cb.set(t);
                 }
                 hovered.set_silent(want);
                 mark_hover_paint_dirty();
@@ -928,13 +923,13 @@ fn paint_button_root_from_hover(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     desc: &ButtonHoverPaint,
-    focus_id: &str,
+    _focus_id: &str,
     is_hovered: bool,
     is_focused: bool,
     impact: &mut LayoutStatus,
 ) {
-    let hover_t = hover_t_for_id(focus_id, &desc.hover_easing);
-    let t = if desc.disabled { 0.0 } else { hover_t };
+    ensure_button_css_transition(el);
+    let t = hover_t_from_bool(is_hovered, desc.disabled);
     let (mut bg, variant_text_color, border) = button_chrome_for_variant(&desc.variant, t);
     let text_color = desc.text_color.unwrap_or(variant_text_color);
     if desc.disabled {
@@ -955,10 +950,11 @@ fn paint_button_root_from_hover(
     let underline = desc.variant == "link" && is_hovered;
     let target_bw = if border.is_some() { 1.0_f32 } else { 0.0_f32 };
     let root_color_ok = match border {
-        Some(b_color) => el.style.border_color == b_color,
+        Some(b_color) => color4_near(el.style.border_color, b_color),
         None => true,
     };
-    let root_ok = el.style.bg_color == bg && el.style.border_width == target_bw && root_color_ok;
+    let root_ok =
+        color4_near(el.style.bg_color, bg) && el.style.border_width == target_bw && root_color_ok;
     let mut text_children_ok = true;
     for child in &el.children {
         if child.text.is_none() {
@@ -991,6 +987,7 @@ fn paint_button_root_from_hover(
     let old_bg = el.style.bg_color;
     let old_bc = el.style.border_color;
 
+    // 每帧写目标色；`tick_element_transitions` 再插回 mid（与 Carousel/Toast 同口径）。
     el.style.bg_color = bg;
     match border {
         Some(b_color) => {
@@ -1004,7 +1001,10 @@ fn paint_button_root_from_hover(
     let mut layout_hit = el.style.border_width != old_bw;
     let mut style_hit =
         !layout_hit && (el.style.bg_color != old_bg || el.style.border_color != old_bc);
-    layout_tree.update_taffy_node_style(el);
+    // 仅边框宽度影响布局；色值变化不必每帧刷 Taffy。
+    if layout_hit {
+        layout_tree.update_taffy_node_style(el);
+    }
 
     for child in &mut el.children {
         if child.text.is_none() {
@@ -1081,17 +1081,10 @@ fn sync_button_focus_ring_shadow(
     disabled: bool,
     is_focused: bool,
     variant: &str,
-    focus_id: &str,
+    _focus_id: &str,
     impact: &mut LayoutStatus,
 ) {
-    // Instant focus-visible ring. Spring blending lagged behind Tab when `tick_animations`
-    // ran before this sync: after idle, target flipped but no further redraw → missed move,
-    // then dual rings when springs finally caught up on the next key.
-    let focus_spring = use_ui_transition_spring(
-        &btn_focus_spring_key(focus_id),
-        if is_focused { 1.0 } else { 0.0 },
-    );
-    focus_spring.snap(if is_focused { 1.0 } else { 0.0 });
+    // Instant focus-visible ring (same frame as Tab).
     let focus_t = if is_focused { 1.0 } else { 0.0 };
     let rest_sh = button_shadow_style_for_sync(false, disabled, variant);
     let ring_sh = button_shadow_style_for_sync(true, disabled, variant);
@@ -1157,13 +1150,16 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
         return LayoutStatus::Clean;
     }
     desc.variant = variant.to_string();
-    // Preserve live hover blend — painting rest chrome (t=0) while the pointer is down
+    // Preserve live hover — painting rest chrome (t=0) while the pointer is down
     // on the active nav item flashes secondary↔hover every bind/rebuild.
-    let hover_t = el
+    let hovered = el
         .focus_id
         .as_deref()
-        .map(|fid| hover_t_for_id(fid, &desc.hover_easing))
-        .unwrap_or(0.0);
+        .map(|fid| {
+            use_signal(&format!("{fid}_hover"), || false).peek() && !desc.disabled
+        })
+        .unwrap_or(false);
+    let hover_t = hover_t_from_bool(hovered, desc.disabled);
     let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);
     let text_color = desc.text_color.unwrap_or(variant_text_color);
     el.style.bg_color = bg;
@@ -1291,6 +1287,21 @@ mod chrome_tests {
         assert_eq!(hex(rest), "#F5F5F5");
         assert_eq!(hex(hover), "#E5E5E5");
         assert!(luminance(hover) < luminance(rest));
+    }
+
+    #[test]
+    fn ghost_rest_keeps_hover_rgb_at_zero_alpha() {
+        set_theme_mode(ThemeMode::Light);
+        let (rest, _, _) = button_chrome_for_variant("ghost", 0.0);
+        let (hover, _, _) = button_chrome_for_variant("ghost", 1.0);
+        assert!(
+            (rest[0] - hover[0]).abs() < 1e-5
+                && (rest[1] - hover[1]).abs() < 1e-5
+                && (rest[2] - hover[2]).abs() < 1e-5,
+            "ghost rest must share hover RGB so CSS alpha-only fade stays clean"
+        );
+        assert!(rest[3] < 0.01);
+        assert!(hover[3] > 0.9);
     }
 
     #[test]

@@ -266,7 +266,7 @@ impl Runtime {
     /// Like [`Self::create_signal`], but the value is **not** disposed with any owner.
     ///
     /// Use for long-lived animation values stored inside a [`use_signal`]-backed handle
-    /// (`Spring` / `CubicTween`): the creating effect may dispose while ticks still write.
+    /// (`CubicTween`): the creating effect may dispose while ticks still write.
     pub fn create_unowned_signal<T: 'static>(&self, initial_value: T) -> Signal<T> {
         let id = SignalId(NEXT_SIGNAL_ID.fetch_add(1, Ordering::Relaxed));
         self.signals
@@ -2097,9 +2097,8 @@ where
 }
 
 pub use crate::style::{
-    any_ui_animation_active, tick_animations, use_scrollbar_visibility_spring, use_spring,
-    use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState,
-    Spring, SpringState,
+    any_ui_animation_active, tick_animations, use_ui_transition_cubic, AnimationTick, CubicTween,
+    CubicTweenState,
 };
 
 #[cfg(test)]

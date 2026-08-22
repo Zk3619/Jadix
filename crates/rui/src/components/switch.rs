@@ -35,7 +35,8 @@
 //!
 //! ## 注意
 //! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__switch`）；多实例请保证 `id` 唯一或依赖自动 id。
-//! - 状态用 `peek` + 每帧 style sync；拇指位移 / 轨道色走 [`use_ui_transition_cubic`](~150ms)。
+//! - 状态用 `peek` + 每帧 style sync；拇指位移 / 轨道色走 CSS
+//!   `transition-transform` / `transition-colors`（~150ms）。
 //! - 可聚焦；Space / Enter 切换与按钮同路径；内嵌文案 / Label `for` 点击转发到本控件。
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
@@ -44,7 +45,7 @@ use crate::core::tree::{parse_color, Element, IntoCssDim, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
-use crate::style::{lerp_display_srgb_linear, use_ui_transition_cubic};
+use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::resolve_instance_id;
 use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_SWITCH};
 use rui_macros::component;
@@ -59,6 +60,7 @@ const THUMB_PX: f32 = 20.0;
 /// 轨道内边距 2px ×2 + 拇指 20 → 行程 20（对标 `data-[checked]:translate-x-5`）。
 const THUMB_TRAVEL: f32 = 20.0;
 const TRACK_PAD: f32 = 2.0;
+const SWITCH_TRANSITION_MS: f32 = 150.0;
 
 fn track_off_bg() -> [f32; 4] {
     parse_color("input")
@@ -72,12 +74,44 @@ fn thumb_bg() -> [f32; 4] {
     parse_color("background")
 }
 
-fn switch_anim_thumb_key(id: &str) -> String {
-    format!("{id}__switch_thumb_tx")
+fn ensure_switch_track_css_transition(el: &mut Element) {
+    let timing = TimingFunction::CubicBezier(0.4, 0.0, 0.2, 1.0);
+    if let Some(entry) = el
+        .style
+        .transition
+        .iter_mut()
+        .find(|e| e.property == TransitionProperty::BackgroundColor)
+    {
+        entry.duration_ms = SWITCH_TRANSITION_MS;
+        entry.timing = timing;
+    } else {
+        el.style.transition.push(TransitionEntry {
+            property: TransitionProperty::BackgroundColor,
+            duration_ms: SWITCH_TRANSITION_MS,
+            delay_ms: 0.0,
+            timing,
+        });
+    }
 }
 
-fn switch_anim_bg_key(id: &str) -> String {
-    format!("{id}__switch_bg_t")
+fn ensure_switch_thumb_css_transition(el: &mut Element) {
+    let timing = TimingFunction::CubicBezier(0.4, 0.0, 0.2, 1.0);
+    if let Some(entry) = el
+        .style
+        .transition
+        .iter_mut()
+        .find(|e| e.property == TransitionProperty::Transform)
+    {
+        entry.duration_ms = SWITCH_TRANSITION_MS;
+        entry.timing = timing;
+    } else {
+        el.style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: SWITCH_TRANSITION_MS,
+            delay_ms: 0.0,
+            timing,
+        });
+    }
 }
 
 fn unpack_switch_children(mut children: Vec<Element>) -> Vec<Element> {
@@ -180,6 +214,7 @@ fn build_thumb(translate_x: f32) -> Element {
         .flex_shrink(0.0)
         .into();
     thumb = thumb.translate(translate_x, 0.0);
+    ensure_switch_thumb_css_transition(&mut thumb);
     thumb
         .attrs
         .insert(ATTR_THUMB.to_string(), SLOT_THUMB.to_string());
@@ -328,13 +363,8 @@ impl From<SwitchBuilder> for Element {
 
         // `peek`：不把 checked 订阅到根 effect；轨道/拇指由 `sync_switch_checked_subtree` 每帧对齐。
         let on = sig.peek();
-        let t0 = if on { 1.0 } else { 0.0 };
         let tx0 = if on { THUMB_TRAVEL } else { 0.0 };
-        // 预热动画句柄，保证首次 sync 与 Builder 共用同一 key。
-        let _ = use_ui_transition_cubic(&switch_anim_thumb_key(&id), tx0);
-        let _ = use_ui_transition_cubic(&switch_anim_bg_key(&id), t0);
-
-        let track_bg = lerp_display_srgb_linear(track_off_bg(), track_on_bg(), t0);
+        let track_bg = if on { track_on_bg() } else { track_off_bg() };
         let thumb = build_thumb(tx0);
 
         // solid-ui Control: `inline-flex h-6 w-11 … rounded-full border-2 border-transparent`
@@ -350,6 +380,7 @@ impl From<SwitchBuilder> for Element {
             .bg(track_bg)
             .child(thumb)
             .into();
+        ensure_switch_track_css_transition(&mut track);
         track.switch_checked_sync = Some(sig);
 
         let mut track: Element = interactive(track)
@@ -409,23 +440,10 @@ pub(crate) fn sync_switch_checked_subtree(
 ) {
     if let Some(sig) = el.switch_checked_sync {
         let on = sig.peek();
-        let want_t = if on { 1.0 } else { 0.0 };
         let want_tx = if on { THUMB_TRAVEL } else { 0.0 };
-        let anim_id = el
-            .focus_id
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .or(el.template_id.as_deref())
-            .unwrap_or("__rui_switch");
+        let want_bg = if on { track_on_bg() } else { track_off_bg() };
 
-        let thumb_tween = use_ui_transition_cubic(&switch_anim_thumb_key(anim_id), want_tx);
-        thumb_tween.set(want_tx);
-        let tx = thumb_tween.peek();
-
-        let bg_tween = use_ui_transition_cubic(&switch_anim_bg_key(anim_id), want_t);
-        bg_tween.set(want_t);
-        let t = bg_tween.peek().clamp(0.0, 1.0);
-        let want_bg = lerp_display_srgb_linear(track_off_bg(), track_on_bg(), t);
+        ensure_switch_track_css_transition(el);
 
         let bg_changed = (el.style.bg_color[0] - want_bg[0]).abs() > 0.001
             || (el.style.bg_color[1] - want_bg[1]).abs() > 0.001
@@ -436,21 +454,22 @@ pub(crate) fn sync_switch_checked_subtree(
         }
 
         let thumb_changed = if let Some(thumb) = find_thumb_mut(el) {
+            ensure_switch_thumb_css_transition(thumb);
             let want_thumb_bg = thumb_bg();
-            let tx_hit = (thumb.style.translate[0] - tx).abs() > 0.01;
+            let tx_hit = (thumb.style.translate[0] - want_tx).abs() > 0.01;
             let bg_hit = (thumb.style.bg_color[0] - want_thumb_bg[0]).abs() > 0.001
                 || (thumb.style.bg_color[1] - want_thumb_bg[1]).abs() > 0.001
                 || (thumb.style.bg_color[2] - want_thumb_bg[2]).abs() > 0.001
                 || (thumb.style.bg_color[3] - want_thumb_bg[3]).abs() > 0.001;
             if tx_hit {
-                thumb.style.translate[0] = tx;
+                thumb.style.translate[0] = want_tx;
             }
             if bg_hit {
                 thumb.style.bg_color = want_thumb_bg;
             }
             tx_hit || bg_hit
         } else {
-            el.children.insert(0, build_thumb(tx));
+            el.children.insert(0, build_thumb(want_tx));
             true
         };
 
@@ -464,6 +483,11 @@ pub(crate) fn sync_switch_checked_subtree(
                 }
             }
             // translate 不改布局几何，但仍需局部重绘；StyleChanged 避免 FullClear。
+            push_switch_paint_damage(el);
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+        } else if el.transition_snapshot.has_active_tweens()
+            || find_thumb_mut(el).is_some_and(|t| t.transition_snapshot.has_active_tweens())
+        {
             push_switch_paint_damage(el);
             *impact = impact.merge(LayoutStatus::StyleChanged);
         }
