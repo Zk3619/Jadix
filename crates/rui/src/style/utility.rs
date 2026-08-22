@@ -349,8 +349,9 @@ pub fn tick_active_css_transitions_subtree(
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let has_rui_tr =
         el.attrs.contains_key("rui_transition") && el.style.transition.is_empty();
+    let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
 
-    if has_spin || has_active_css || has_rui_tr {
+    if has_spin || has_active_css || has_rui_tr || css_needs {
         let before = el.style.clone();
         let spun = tick_animate_spin(el);
         let sprung = if has_rui_tr {
@@ -358,7 +359,7 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             false
         };
-        let css_trans = if has_active_css || !el.style.transition.is_empty() {
+        let css_trans = if has_active_css || css_needs || !el.style.transition.is_empty() {
             super::animation::tick_element_transitions(
                 &mut el.style,
                 &mut el.transition_snapshot,
@@ -533,7 +534,8 @@ fn sync_class_variants_subtree_inner(
     // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
     // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
     let has_active_css = el.transition_snapshot.has_active_tweens();
-    if has_variants || has_spin || has_rui_tr || has_active_css {
+    let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+    if has_variants || has_spin || has_rui_tr || has_active_css || css_needs {
         let hovered = inside;
         if has_variants {
             if let Some(cs) = el.class_set.as_mut() {
@@ -564,7 +566,7 @@ fn sync_class_variants_subtree_inner(
         // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or
         // spin still need a tick. Do **not** wake every `rui_transition` attr frame —
         // `transition-transform` used to set that attr and dual-drive springs+tweens.
-        if !ctx_unchanged || has_spin || has_active_css
+        if !ctx_unchanged || has_spin || has_active_css || css_needs
             || (has_rui_tr && el.style.transition.is_empty())
         {
             let attrs_snapshot = el.attrs.clone();

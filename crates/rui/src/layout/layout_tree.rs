@@ -1104,6 +1104,10 @@ pub struct LayoutProfileMs {
 /// Within the overlay suffix, each direct child of the portal layer is a **paint band**
 /// (underlay / panel). Bands are drawn as `rects → text → next band` so a higher-z
 /// panel’s background correctly occludes lower panels’ glyphs.
+///
+/// [`Self::page_stack_bands`] applies the same band model to **in-page** stacking contexts
+/// (e.g. CarouselStack cards with `z-index`): without it, page glyphs from lower cards
+/// paint after every card rect and bleed through the top card.
 #[derive(Clone, Debug, Default)]
 pub struct OverlayPaintSplit {
     pub instance_start: usize,
@@ -1114,6 +1118,9 @@ pub struct OverlayPaintSplit {
     /// Starts of each portal-layer child paint band (z / tree order). Empty → treat the
     /// whole overlay suffix as a single band.
     pub bands: Vec<OverlayPaintBand>,
+    /// In-page z-index stacking contexts: one band per z-ordered child (same draw model
+    /// as [`Self::bands`], but within the page layer before the portal suffix).
+    pub page_stack_bands: Vec<OverlayPaintBand>,
     marked: bool,
 }
 
@@ -1198,6 +1205,46 @@ impl OverlayPaintSplit {
                     next.map(|n| n.paint_op_start.min(paint_op_len))
                         .unwrap_or(paint_op_len),
                 ),
+            });
+        }
+        out
+    }
+
+    /// Expand [`Self::page_stack_bands`] into `[start, end)` ranges ending at the portal
+    /// overlay split ([`Self::instance_start`] etc.). Prepends a synthetic band from buffer
+    /// origin when the first stack child is not at index 0 (page chrome before the context).
+    pub fn page_stack_band_ranges(&self) -> Vec<OverlayBandRange> {
+        if self.page_stack_bands.is_empty() {
+            return Vec::new();
+        }
+        let page_end = OverlayPaintBand {
+            instance_start: self.instance_start,
+            textured_start: self.textured_start,
+            text_start: self.text_start,
+            chrome_start: self.chrome_start,
+            paint_op_start: self.paint_op_start,
+            backdrop_blur: 0.0,
+        };
+        let mut starts = Vec::with_capacity(self.page_stack_bands.len() + 1);
+        let first = self.page_stack_bands[0];
+        if first.instance_start > 0
+            || first.textured_start > 0
+            || first.text_start > 0
+            || first.chrome_start > 0
+            || first.paint_op_start > 0
+        {
+            starts.push(OverlayPaintBand::default());
+        }
+        starts.extend_from_slice(&self.page_stack_bands);
+        let mut out = Vec::with_capacity(starts.len());
+        for (i, b) in starts.iter().enumerate() {
+            let next = starts.get(i + 1).copied().unwrap_or(page_end);
+            out.push(OverlayBandRange {
+                instance: (b.instance_start, next.instance_start),
+                textured: (b.textured_start, next.textured_start),
+                text: (b.text_start, next.text_start),
+                chrome: (b.chrome_start, next.chrome_start),
+                paint_ops: (b.paint_op_start, next.paint_op_start),
             });
         }
         out
@@ -1333,6 +1380,9 @@ pub struct TextLayoutInfo {
     pub prepared: Option<crate::text::PreparedText>,
     /// B17 glyph/cluster motion (`rui_glyph_fx` attr).
     pub glyph_fx: Option<String>,
+    /// CSS/`ancestor_scale` paint scale for glyphon `TextArea.scale` (default 1).
+    /// Keep [`Self::style`] font size at layout size so drag/coverflow does not reshape every frame.
+    pub paint_scale: f32,
 }
 
 /// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集.
@@ -2131,6 +2181,7 @@ impl LayoutTree {
             None,
             mouse_pos,
             1.0,
+            [1.0, 1.0],
             &mut scratch.instances,
             &mut scratch.textured_draws,
             &mut scratch.text_nodes,
@@ -2385,6 +2436,8 @@ impl LayoutTree {
         ancestor_scroll_viewport_rest: Option<&str>,
         mouse_pos: [f32; 2],
         ancestor_opacity: f32,
+        // Parent CSS `scale` product (CarouselStack shell → children). Default `[1,1]`.
+        ancestor_scale: [f32; 2],
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
@@ -2562,15 +2615,18 @@ impl LayoutTree {
         } else {
             1.0
         };
+        // Include ancestor scale (CarouselStack: scale lives on the shell; children stay at 1).
+        let paint_sx = (ancestor_scale[0] * scale_x).clamp(0.01, 8.0);
+        let paint_sy = (ancestor_scale[1] * scale_y).clamp(0.01, 8.0);
         // Bake CSS independent `scale` into the instance rect so placement matches
         // `visual_paint_aabb` (hover / leave). The SDF shader also applies the affine
         // **linear** part about the rect center — passing `style.scale` again made paint
         // ~scale² while hit-testing stayed at scale¹ (gallery red `hover:scale-x-150`:
         // pointer still on the painted overhang counted as leave).
         let (vis_w, vis_h, vis_x, vis_y) =
-            if (scale_x - 1.0).abs() > f32::EPSILON || (scale_y - 1.0).abs() > f32::EPSILON {
-                let sw = lay_w * scale_x;
-                let sh = lay_h * scale_y;
+            if (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON {
+                let sw = lay_w * paint_sx;
+                let sh = lay_h * paint_sy;
                 (
                     sw,
                     sh,
@@ -3123,6 +3179,28 @@ impl LayoutTree {
                 let a = ((f32::from(text_style.color[3]) * opacity).round() as u16).min(255) as u8;
                 text_style.color[3] = a;
             }
+            // CSS `scale` must paint like a transform: same visual box as SDF rects, **no
+            // soft-wrap reflow**, and **no per-frame font-size reshape** (that lagged behind
+            // continuous rect scale during CarouselStack drag). Shape at layout size; place
+            // at the scaled top-left; glyphon `TextArea.scale` applies the CSS scale.
+            let text_scale = if (paint_sx - 1.0).abs() > f32::EPSILON
+                || (paint_sy - 1.0).abs() > f32::EPSILON
+            {
+                paint_sx.min(paint_sy)
+            } else {
+                1.0
+            };
+            let scaled_paint = (text_scale - 1.0).abs() > f32::EPSILON;
+            if scaled_paint {
+                text_style.white_space = crate::style::WhiteSpace::Nowrap;
+            }
+            let (text_x0, text_y0, text_w, text_h) = if scaled_paint {
+                // vis_* = layout box scaled about center; width/height stay layout for shaping.
+                (vis_x, vis_y, lay_w, lay_h)
+            } else {
+                (render_x, render_y, lay_w, lay_h)
+            };
+            let text_x = text_x0 - text_style.scroll_x.max(0.0) * text_scale;
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
             let prepared = if is_icon {
                 None
@@ -3162,10 +3240,10 @@ impl LayoutTree {
                 shape_suffix: element.text_shape_suffix.clone(),
                 spans: element.text_spans.clone(),
                 template_id: element.template_id.clone(),
-                x: render_x - text_style.scroll_x.max(0.0),
-                y: render_y,
-                width: lay_w,
-                height: lay_h,
+                x: text_x,
+                y: text_y0,
+                width: text_w,
+                height: text_h,
                 // Clip/hidden/ellipsis nowrap must scissor to the field. Growing the leaf to
                 // intrinsic (button nowrap) used to make `clip == leaf`, so glyphs and
                 // selection painted past the input border.
@@ -3181,6 +3259,7 @@ impl LayoutTree {
                 style: text_style.clone(),
                 prepared,
                 glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
+                paint_scale: text_scale,
             });
             let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                 hidden_input_text_clip(parent_clip, render_rect)
@@ -3194,10 +3273,10 @@ impl LayoutTree {
                 input_chrome_instances,
                 text,
                 &text_style,
-                render_x - text_style.scroll_x.max(0.0),
-                render_y,
-                lay_w,
-                lay_h,
+                text_x,
+                text_y0,
+                text_w,
+                text_h,
                 chrome_clip,
                 opacity,
             );
@@ -3276,17 +3355,52 @@ impl LayoutTree {
                                 input_chrome_instances: &Vec<InstanceInput>,
                                 paint_ops_len: usize,
                                 band_root: &Element| {
+            let band = OverlayPaintBand {
+                instance_start: instances.len(),
+                textured_start: textured_draws.len(),
+                text_start: text_nodes.len(),
+                chrome_start: input_chrome_instances.len(),
+                paint_op_start: paint_ops_len,
+                backdrop_blur: band_root.style.backdrop_blur.max(0.0),
+            };
             if is_body_portal_layer {
-                overlay_split.bands.push(OverlayPaintBand {
-                    instance_start: instances.len(),
-                    textured_start: textured_draws.len(),
-                    text_start: text_nodes.len(),
-                    chrome_start: input_chrome_instances.len(),
-                    paint_op_start: paint_ops_len,
-                    backdrop_blur: band_root.style.backdrop_blur.max(0.0),
-                });
+                overlay_split.bands.push(band);
+            } else if element
+                .attrs
+                .get("data-stacking-context")
+                .map(|s| s.as_str())
+                == Some("1")
+            {
+                // Opt-in in-page stacking (CarouselStack): band per z-ordered child.
+                overlay_split.page_stack_bands.push(band);
             }
         };
+
+        let parent_tl = [
+            abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
+            abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
+        ];
+        let child_ancestor_scale = [paint_sx, paint_sy];
+        let parent_scales = (paint_sx - 1.0).abs() > 1e-4 || (paint_sy - 1.0).abs() > 1e-4;
+        // Parent CSS scale about center: place each child's layout box so its center
+        // lands on the transformed point (then child bakes paint_sx via ancestor_scale).
+        //
+        // Must use `parent_tl` (pre-scroll layout space), NOT `render_x`/`render_y`.
+        // `abs_offset` is always pre-scroll; children subtract `scroll_acc` when computing
+        // their own `render_*`. Using post-scroll coords here double-subtracts scroll and
+        // shoves scaled subtrees (CarouselStack side cards / mid-tween) off the stage clip
+        // — blank autoplay + missing stack sides once the page is scrolled.
+        let child_pass_offset_for = |clx: f32, cly: f32, cw: f32, ch: f32| -> [f32; 2] {
+            if !parent_scales {
+                return parent_tl;
+            }
+            let pcx = parent_tl[0] + lay_w * 0.5;
+            let pcy = parent_tl[1] + lay_h * 0.5;
+            let ccx = pcx + (clx + cw * 0.5 - lay_w * 0.5) * paint_sx;
+            let ccy = pcy + (cly + ch * 0.5 - lay_h * 0.5) * paint_sy;
+            [ccx - cw * 0.5 - clx, ccy - ch * 0.5 - cly]
+        };
+        let child_pass_offset = parent_tl;
 
         if !any_z {
             let n = element.children.len();
@@ -3301,11 +3415,20 @@ impl LayoutTree {
                     );
                     break;
                 }
-                let child_pass_offset = [
-                    abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
-                    abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
-                ];
-                if _scroll_only {
+                // Carousel 等「父级 translate 带动整轨」：后卡会滑入视口。scroll_only 的
+                // StopAfter 会跳过尚未入屏的兄弟，留下陈旧 layout_bounds/实例，表现为前卡
+                // 消失后后卡突然以完整态出现再跟弹簧滑（而非前后卡同时对向擦肩）。
+                let parent_translates = element.style.translate[0].abs() > 0.05
+                    || element.style.translate[1].abs() > 0.05
+                    || element.style.translate_pct[0].abs() > 0.001
+                    || element.style.translate_pct[1].abs() > 0.001
+                    || parent_scales;
+                let is_carousel_track = element
+                    .attrs
+                    .get("data-carousel-track")
+                    .map(|s| s.as_str())
+                    == Some("1");
+                if _scroll_only && !parent_translates && !is_carousel_track {
                     if let Some(clip_rect) = clip {
                         if !element.children[i].style.position_fixed
                             && element.children[i].style.position != Position::Absolute
@@ -3407,12 +3530,24 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     child,
                     child_nodes[i],
-                    child_pass_offset,
+                    {
+                        if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
+                            child_pass_offset_for(
+                                cl.location.x,
+                                cl.location.y,
+                                cl.size.width,
+                                cl.size.height,
+                            )
+                        } else {
+                            child_pass_offset
+                        }
+                    },
                     next_scroll_acc,
                     clip,
                     pass_to_children,
                     mouse_pos,
                     opacity,
+                    child_ancestor_scale,
                     instances,
                     textured_draws,
                     text_nodes,
@@ -3475,15 +3610,24 @@ impl LayoutTree {
                 let [cr, cb] = self.collect_instances_mut(
                     &mut element.children[i],
                     child_nodes[i],
-                    [
-                        abs_x + element.style.translate[0] + lay_w * element.style.translate_pct[0],
-                        abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
-                    ],
+                    {
+                        if let Ok(cl) = self.taffy.layout(child_nodes[i]) {
+                            child_pass_offset_for(
+                                cl.location.x,
+                                cl.location.y,
+                                cl.size.width,
+                                cl.size.height,
+                            )
+                        } else {
+                            child_pass_offset
+                        }
+                    },
                     next_scroll_acc,
                     clip,
                     pass_to_children,
                     mouse_pos,
                     opacity,
+                    child_ancestor_scale,
                     instances,
                     textured_draws,
                     text_nodes,
@@ -4208,6 +4352,7 @@ mod prepared_text_attach_tests {
             style: TextStyle::default(),
             prepared: Some(prepared.clone()),
             glyph_fx: None,
+            paint_scale: 1.0,
         };
         let attached = info.prepared.as_ref().expect("prepared attached");
         assert_eq!(attached.segment_count(), prepared.segment_count());
@@ -4813,6 +4958,127 @@ mod portal_hoist_tests {
         assert!(result.text_nodes[b.text.0..b.text.1]
             .iter()
             .any(|t| t.text == "upper-glyph"));
+    }
+
+    #[test]
+    fn page_stack_bands_interleave_rects_and_text() {
+        let lower = Element::new()
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .w(120.0)
+            .h(80.0)
+            .absolute()
+            .left(10.0)
+            .top(10.0)
+            .z_index(1)
+            .child(Element::new().text("stack-low"));
+        let upper = Element::new()
+            .bg([0.0, 0.0, 1.0, 1.0])
+            .w(120.0)
+            .h(80.0)
+            .absolute()
+            .left(40.0)
+            .top(30.0)
+            .z_index(2)
+            .child(Element::new().text("stack-high"));
+        let mut stage = Element::new()
+            .w(400.0)
+            .h(200.0)
+            .relative()
+            .child(lower)
+            .child(upper);
+        stage
+            .attrs
+            .insert("data-stacking-context".to_string(), "1".to_string());
+        let mut root = Element::new().w(400.0).h(200.0).child(stage);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.page_stack_bands.len() >= 2,
+            "expected page_stack_bands, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        let ranges = result.overlay_split.page_stack_band_ranges();
+        assert!(ranges.len() >= 2);
+        // Highest z is last band; its text must not be in an earlier band.
+        let last = ranges.last().unwrap();
+        assert!(
+            result.text_nodes[last.text.0..last.text.1]
+                .iter()
+                .any(|t| t.text == "stack-high"),
+            "top card text belongs to last page stack band"
+        );
+        let earlier_has_high = ranges[..ranges.len() - 1].iter().any(|r| {
+            result.text_nodes[r.text.0..r.text.1]
+                .iter()
+                .any(|t| t.text == "stack-high")
+        });
+        assert!(!earlier_has_high);
+    }
+
+    /// Scaled parent under scroll must pass pre-scroll `abs_offset` to children.
+    /// Using post-scroll `render_*` double-subtracted scroll and culled CarouselStack sides.
+    #[test]
+    fn scaled_parent_under_scroll_keeps_child_paint_aligned() {
+        let mut child = Element::new()
+            .w(100.0)
+            .h(100.0)
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .template_id("scaled-child");
+        child = child.child(Element::new().text("scale-me"));
+        let mut shell = Element::new()
+            .w(100.0)
+            .h(100.0)
+            .bg([0.0, 0.0, 0.0, 0.0])
+            .child(child);
+        shell.style.scale = [0.8, 0.8];
+        // `overflow: scroll` (not hidden) contributes `scroll_offset` into child `scroll_acc`.
+        let mut root = Element::new()
+            .w(200.0)
+            .h(200.0)
+            .overflow_y("scroll")
+            .overflow_x("scroll")
+            .child(shell);
+        root.scroll_offset = [0.0, 50.0];
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+
+        let red = result
+            .instances
+            .iter()
+            .find(|i| i.color[0] > 0.9 && i.color[1] < 0.1 && i.rect_size[0] > 1.0)
+            .expect("scaled red child instance");
+        // Layout top 0 − scroll 50 = −50; scale 0.8 about center → visual top −50 + 10 = −40.
+        assert!(
+            (red.rect_pos[1] - (-40.0)).abs() < 2.0,
+            "child visual top must be ~-40 after one scroll subtract (not -90); got {}",
+            red.rect_pos[1]
+        );
+        assert!(
+            (red.rect_size[0] - 80.0).abs() < 2.0,
+            "child width must bake ancestor scale 0.8 → 80; got {}",
+            red.rect_size[0]
+        );
+        assert!(
+            result.text_nodes.iter().any(|t| t.text == "scale-me"),
+            "text under scaled+scrolled parent must still collect"
+        );
+        let label = result
+            .text_nodes
+            .iter()
+            .find(|t| t.text == "scale-me")
+            .expect("scale-me text");
+        assert!(
+            (label.paint_scale - 0.8).abs() < 0.02,
+            "CSS scale must go to paint_scale (not font size); got {}",
+            label.paint_scale
+        );
+        // Default text size is not multiplied by 0.8 (that was the drag-lag path).
+        assert!(
+            label.style.size > 10.0,
+            "layout font size must stay unscaled for stable reshape; got {}",
+            label.style.size
+        );
     }
 
     #[test]

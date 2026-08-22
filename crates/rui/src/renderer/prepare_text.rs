@@ -131,6 +131,8 @@ struct FrameTextNodeMeta {
     box_h: f32,
     dy: f32,
     text_size: f32,
+    /// CSS/`ancestor_scale` → glyphon `TextArea.scale` (1 = identity).
+    paint_scale: f32,
     align: glyphon::cosmic_text::Align,
     measured_text_w: f32,
     underline: bool,
@@ -2944,6 +2946,11 @@ pub fn prepare_text_frame(
             box_h: scaled_h,
             dy: glyph_dy,
             text_size: scaled_size,
+            paint_scale: if info.paint_scale.is_finite() && info.paint_scale > 0.0 {
+                info.paint_scale
+            } else {
+                1.0
+            },
             align: st.align,
             measured_text_w,
             underline: st.underline,
@@ -2998,11 +3005,16 @@ pub fn prepare_text_frame(
                         return;
                     }
                     let pad = span.padding_x * ui_scale;
-                    let bx = tb.x + min_x - pad;
-                    let by = tb.y + line_top;
-                    let bw = (max_x - min_x) + 2.0 * pad;
-                    let bh = line_height.max(1.0);
-                    let radius = (bh * 0.25).min(6.0 * ui_scale);
+                    let ps = if tb.paint_scale.is_finite() && tb.paint_scale > 0.0 {
+                        tb.paint_scale
+                    } else {
+                        1.0
+                    };
+                    let bx = tb.x + (min_x - pad) * ps;
+                    let by = tb.y + line_top * ps;
+                    let bw = ((max_x - min_x) + 2.0 * pad) * ps;
+                    let bh = line_height.max(1.0) * ps;
+                    let radius = (bh * 0.25).min(6.0 * ui_scale * ps);
                     let Some([cx, cy, cw, ch]) =
                         clip_rect_to_bounds([bx, by, bw, bh], tb.clip_bounds)
                     else {
@@ -3104,7 +3116,7 @@ pub fn prepare_text_frame(
                             buffer: &entry.buffer,
                             left,
                             top,
-                            scale: 1.0,
+                            scale: tb.paint_scale,
                             bounds,
                             default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], layer_alpha),
                             custom_glyphs: tb
@@ -3186,7 +3198,7 @@ pub fn prepare_text_frame(
             buffer: &entry.buffer,
             left: tb.x,
             top: tb.y + tb.dy,
-            scale: 1.0,
+            scale: tb.paint_scale,
             bounds,
             default_color: glyphon::Color::rgba(tb.color[0], tb.color[1], tb.color[2], tb.color[3]),
             custom_glyphs: tb
@@ -3270,15 +3282,23 @@ pub fn prepare_text_frame(
             continue;
         };
         if tb.underline || tb.overline || tb.line_through {
+            let ps = if tb.paint_scale.is_finite() && tb.paint_scale > 0.0 {
+                tb.paint_scale
+            } else {
+                1.0
+            };
             let ul_h = if tb.decoration_thickness > 0.0 {
                 tb.decoration_thickness
             } else {
                 (tb.text_size * 0.07).max(1.0)
-            };
-            let ul_w = tb.measured_text_w.min(tb.box_w);
+            } * ps;
+            let layout_ul_w = tb.measured_text_w.min(tb.box_w);
+            let ul_w = layout_ul_w * ps;
             let ul_x = match tb.align {
-                glyphon::cosmic_text::Align::Center => tb.x + (tb.box_w - ul_w) * 0.5,
-                glyphon::cosmic_text::Align::Right => tb.x + (tb.box_w - ul_w),
+                glyphon::cosmic_text::Align::Center => {
+                    tb.x + (tb.box_w - layout_ul_w) * 0.5 * ps
+                }
+                glyphon::cosmic_text::Align::Right => tb.x + (tb.box_w - layout_ul_w) * ps,
                 _ => tb.x,
             };
             let dc = tb.decoration_color.unwrap_or(tb.color);
@@ -3363,15 +3383,17 @@ pub fn prepare_text_frame(
             };
             if tb.underline {
                 // Keep underline visually closer to the text bottom edge.
-                let y = tb.y + tb.box_h - (ul_h * 0.45) - (tb.underline_offset * ui_scale);
+                let y = tb.y + tb.box_h * ps
+                    - (ul_h * 0.45)
+                    - (tb.underline_offset * ui_scale * ps);
                 draw_at(y);
             }
             if tb.overline {
-                let y = tb.y + (tb.underline_offset * ui_scale);
+                let y = tb.y + (tb.underline_offset * ui_scale * ps);
                 draw_at(y);
             }
             if tb.line_through {
-                let y = tb.y + (tb.box_h - ul_h) * 0.5;
+                let y = tb.y + (tb.box_h * ps - ul_h) * 0.5;
                 draw_at(y);
             }
         }

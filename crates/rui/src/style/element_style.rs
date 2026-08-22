@@ -499,6 +499,8 @@ pub enum TransitionProperty {
     All,
     Opacity,
     Transform,
+    /// CSS 独立 `translate` 属性（也包含在 `transform` 过渡中）。
+    Translate,
     Filter,
     BackgroundColor,
     BorderColor,
@@ -515,6 +517,7 @@ impl TransitionProperty {
             "all" => Self::All,
             "opacity" => Self::Opacity,
             "transform" => Self::Transform,
+            "translate" => Self::Translate,
             "filter" => Self::Filter,
             "background-color" | "background" | "bg" => Self::BackgroundColor,
             "border-color" => Self::BorderColor,

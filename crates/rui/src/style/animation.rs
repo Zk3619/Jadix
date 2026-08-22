@@ -459,9 +459,10 @@ pub fn set_css_transition_synthetic_clock(on: bool) {
 /// Per-property in-flight tween state (CSS transition segment).
 #[derive(Clone, Debug)]
 struct PropertyTween {
-    from: [f32; 4],
-    to: [f32; 4],
-    /// Number of meaningful components (1 for scalar, 4 for color).
+    /// Packed components (opacity=1, color=4, transform=5: tx/ty/sx/sy/rotate).
+    from: [f32; 8],
+    to: [f32; 8],
+    /// Number of meaningful components (1 for scalar, 4 for color, 5 for transform).
     components: u8,
     /// Monotonic timeline time (ms) when this segment started.
     start_ms: f64,
@@ -498,40 +499,73 @@ impl TransitionSnapshot {
     }
 }
 
-fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 4], u8) {
+fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8) {
     match prop {
-        TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0], 1),
-        TransitionProperty::BackgroundColor => (style.bg_color, 4),
-        TransitionProperty::BorderColor => (style.border_color, 4),
-        TransitionProperty::OutlineColor => (style.outline_color, 4),
-        TransitionProperty::Color => ([0.0; 4], 0), // text color is on TextStyle, not Style
-        TransitionProperty::OutlineWidth => ([style.outline_width, 0.0, 0.0, 0.0], 1),
-        TransitionProperty::OutlineOffset => ([style.outline_offset, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1),
+        TransitionProperty::BackgroundColor => {
+            let c = style.bg_color;
+            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+        }
+        TransitionProperty::BorderColor => {
+            let c = style.border_color;
+            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+        }
+        TransitionProperty::OutlineColor => {
+            let c = style.outline_color;
+            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
+        }
+        TransitionProperty::Color => ([0.0; 8], 0), // text color is on TextStyle, not Style
+        TransitionProperty::OutlineWidth => {
+            ([style.outline_width, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        }
+        TransitionProperty::OutlineOffset => {
+            ([style.outline_offset, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        }
         TransitionProperty::BoxShadow => {
-            ([style.shadow_color[0], style.shadow_color[1], style.shadow_color[2], style.shadow_color[3]], 4)
+            let c = style.shadow_color;
+            ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
         }
-        TransitionProperty::Transform => {
-            ([style.scale[0], style.scale[1], style.rotate_deg, 0.0], 3)
-        }
+        // Independent transform props: translate → rotate → scale（与 resolve 顺序一致）。
+        TransitionProperty::Transform | TransitionProperty::Translate => (
+            [
+                style.translate[0],
+                style.translate[1],
+                style.scale[0],
+                style.scale[1],
+                style.rotate_deg,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            if matches!(prop, TransitionProperty::Translate) {
+                2
+            } else {
+                5
+            },
+        ),
         // Handled via [`FilterTween`] + [`interpolate_filter_lists`].
-        TransitionProperty::Filter => ([0.0; 4], 0),
-        TransitionProperty::All => ([0.0; 4], 0),
+        TransitionProperty::Filter => ([0.0; 8], 0),
+        TransitionProperty::All => ([0.0; 8], 0),
     }
 }
 
-fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 4]) {
+fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]) {
     match prop {
         TransitionProperty::Opacity => style.opacity = val[0],
-        TransitionProperty::BackgroundColor => style.bg_color = *val,
-        TransitionProperty::BorderColor => style.border_color = *val,
-        TransitionProperty::OutlineColor => style.outline_color = *val,
+        TransitionProperty::BackgroundColor => style.bg_color = [val[0], val[1], val[2], val[3]],
+        TransitionProperty::BorderColor => style.border_color = [val[0], val[1], val[2], val[3]],
+        TransitionProperty::OutlineColor => style.outline_color = [val[0], val[1], val[2], val[3]],
         TransitionProperty::Color => {} // text color is on TextStyle
         TransitionProperty::OutlineWidth => style.outline_width = val[0],
         TransitionProperty::OutlineOffset => style.outline_offset = val[0],
-        TransitionProperty::BoxShadow => style.shadow_color = *val,
+        TransitionProperty::BoxShadow => style.shadow_color = [val[0], val[1], val[2], val[3]],
         TransitionProperty::Transform => {
-            style.scale = [val[0], val[1]];
-            style.rotate_deg = val[2];
+            style.translate = [val[0], val[1]];
+            style.scale = [val[2], val[3]];
+            style.rotate_deg = val[4];
+        }
+        TransitionProperty::Translate => {
+            style.translate = [val[0], val[1]];
         }
         TransitionProperty::Filter => {}
         TransitionProperty::All => {}
@@ -542,8 +576,8 @@ fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn lerp_arr(a: &[f32; 4], b: &[f32; 4], t: f32, n: u8) -> [f32; 4] {
-    let mut out = [0.0; 4];
+fn lerp_arr(a: &[f32; 8], b: &[f32; 8], t: f32, n: u8) -> [f32; 8] {
+    let mut out = [0.0; 8];
     for i in 0..n as usize {
         out[i] = lerp_f32(a[i], b[i], t);
     }
@@ -560,15 +594,67 @@ const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::OutlineOffset,
     TransitionProperty::BoxShadow,
     TransitionProperty::Color,
+    // Transform 已含 translate；勿再单独扩 Translate，避免同帧双写。
     TransitionProperty::Transform,
     TransitionProperty::Filter,
 ];
+
+/// 无 class 变体的节点也要能推进 CSS transition（如 Carousel 轨道）。
+/// 有活跃 tween，或目标相对已记录的 `to` 已变，或尚未建档需要 seed。
+pub fn css_transition_needs_frame(
+    style: &super::Style,
+    snapshot: &TransitionSnapshot,
+) -> bool {
+    if style.transition.is_empty() {
+        return false;
+    }
+    if snapshot.has_active_tweens() {
+        return true;
+    }
+    let mut config_map: HashMap<TransitionProperty, usize> = HashMap::new();
+    for (idx, entry) in style.transition.iter().enumerate() {
+        if entry.property == TransitionProperty::All {
+            for &p in ALL_PROPS {
+                config_map.entry(p).or_insert(idx);
+            }
+        } else {
+            config_map.insert(entry.property, idx);
+        }
+    }
+    for &prop in config_map.keys() {
+        if prop == TransitionProperty::Filter {
+            let target = style.filter.clone();
+            match &snapshot.filter_tween {
+                Some(t) => {
+                    if t.to != target {
+                        return true;
+                    }
+                }
+                None => return true,
+            }
+            continue;
+        }
+        let (target, comps) = extract_prop(style, prop);
+        if comps == 0 {
+            continue;
+        }
+        match snapshot.tweens.get(&prop) {
+            Some(t) => {
+                if (0..comps as usize).any(|i| (t.to[i] - target[i]).abs() > 1e-5) {
+                    return true;
+                }
+            }
+            None => return true,
+        }
+    }
+    false
+}
 
 fn tween_elapsed_ms(tween: &PropertyTween, now_ms: f64) -> f32 {
     (now_ms - tween.start_ms).max(0.0) as f32
 }
 
-fn tween_sample(tween: &PropertyTween, now_ms: f64) -> ([f32; 4], f32) {
+fn tween_sample(tween: &PropertyTween, now_ms: f64) -> ([f32; 8], f32) {
     let elapsed_ms = tween_elapsed_ms(tween, now_ms);
     let eff_elapsed = (elapsed_ms - tween.delay_ms).max(0.0);
     let linear_t = (eff_elapsed / tween.duration_ms.max(0.001)).min(1.0);
@@ -602,6 +688,64 @@ fn filter_tween_sample(tween: &FilterTween, now_ms: f64) -> (Option<FilterList>,
         }
     };
     (list, linear_t)
+}
+
+/// 把当前 style 值记为已 settle 的 transition 基线（`from=to=current`，inactive）。
+/// 用于 Carousel 无缝瞬移等：清 snapshot 后若直接写入新目标，首帧 seed 会 `from=to=新目标` 而跳过动画。
+pub fn snap_element_transitions_to_current(
+    style: &super::Style,
+    snapshot: &mut TransitionSnapshot,
+) {
+    if style.transition.is_empty() {
+        snapshot.tweens.clear();
+        snapshot.filter_tween = None;
+        return;
+    }
+    let now_ms = css_timeline_now_ms();
+    let mut config_map: HashMap<TransitionProperty, usize> = HashMap::new();
+    for (idx, entry) in style.transition.iter().enumerate() {
+        if entry.property == TransitionProperty::All {
+            for &p in ALL_PROPS {
+                config_map.entry(p).or_insert(idx);
+            }
+        } else {
+            config_map.insert(entry.property, idx);
+        }
+    }
+    snapshot.tweens.retain(|p, _| config_map.contains_key(p));
+    for (&prop, &cfg_idx) in &config_map {
+        if prop == TransitionProperty::Filter {
+            let cur = style.filter.clone();
+            snapshot.filter_tween = Some(FilterTween {
+                from: cur.clone(),
+                to: cur,
+                start_ms: now_ms,
+                duration_ms: style.transition[cfg_idx].duration_ms,
+                delay_ms: style.transition[cfg_idx].delay_ms,
+                timing: style.transition[cfg_idx].timing,
+                active: false,
+            });
+            continue;
+        }
+        let (val, comps) = extract_prop(style, prop);
+        if comps == 0 {
+            continue;
+        }
+        let cfg = &style.transition[cfg_idx];
+        snapshot.tweens.insert(
+            prop,
+            PropertyTween {
+                from: val,
+                to: val,
+                components: comps,
+                start_ms: now_ms,
+                duration_ms: cfg.duration_ms,
+                delay_ms: cfg.delay_ms,
+                timing: cfg.timing,
+                active: false,
+            },
+        );
+    }
 }
 
 /// Tick CSS transitions for a single element. Returns `true` if any tween is still active.
@@ -853,6 +997,72 @@ mod css_transition_dt_tests {
             (style.opacity - mid).abs() < 0.05,
             "right after leave retarget, value should stay near mid ({mid}), got {}",
             style.opacity
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn transform_transition_includes_translate() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = Style::default();
+        style.translate = [0.0, 0.0];
+        style.scale = [1.0, 1.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        assert!(!tick_element_transitions(&mut style, &mut snap, 0.0));
+        style.translate = [-200.0, 0.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(50.0);
+        style.translate = [-200.0, 0.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate[0] + 100.0).abs() < 1.0,
+            "mid translate should be ~-100, got {}",
+            style.translate[0]
+        );
+        set_css_transition_timeline_ms(100.0);
+        style.translate = [-200.0, 0.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate[0] + 200.0).abs() < 0.01,
+            "settled translate should be -200, got {}",
+            style.translate[0]
+        );
+        assert!(!snap.has_active_tweens());
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn snap_baseline_then_new_target_still_animates() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = Style::default();
+        style.translate = [-100.0, 0.0];
+        style.scale = [1.0, 1.0];
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 100.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        // 模拟 Carousel 无缝瞬移：钉在 -100 并 seed，再写新目标 -300。
+        snap_element_transitions_to_current(&style, &mut snap);
+        style.translate = [-300.0, 0.0];
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(50.0);
+        style.translate = [-300.0, 0.0];
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.translate[0] + 200.0).abs() < 1.0,
+            "should animate from -100 toward -300, mid≈-200, got {}",
+            style.translate[0]
         );
         set_css_transition_virtual_timeline(false);
     }

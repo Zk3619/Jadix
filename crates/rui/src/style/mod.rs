@@ -23,10 +23,11 @@ pub(crate) mod utility;
 
 pub use animation::{
     advance_css_transition_timeline_ms, any_ui_animation_active, cubic_bezier_y_at_x,
-    set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
-    set_css_transition_virtual_timeline, tick_animations, use_scrollbar_visibility_spring,
-    use_spring, use_ui_transition_cubic, use_ui_transition_spring, AnimationTick, CubicTween,
-    CubicTweenState, Spring, SpringState, TransitionSnapshot,
+    css_transition_needs_frame, set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
+    set_css_transition_virtual_timeline, snap_element_transitions_to_current, tick_animations,
+    tick_element_transitions, use_scrollbar_visibility_spring, use_spring, use_ui_transition_cubic,
+    use_ui_transition_spring, AnimationTick, CubicTween, CubicTweenState, Spring, SpringState,
+    TransitionSnapshot,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
