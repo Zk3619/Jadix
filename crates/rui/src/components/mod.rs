@@ -3,7 +3,7 @@
 //! 面向 `ui!` **与** 纯 Rust Builder 的可组合控件：按钮、输入、滚动区、浮层等。
 //! 多数以 `#[component]` 暴露 PascalCase 标签（如 `<Button>`），并导出等价的
 //! `fn` / `*Builder`（如 [`button`]、[`ButtonBuilder`]）；少数暂仅函数 / Builder
-//! （如 [`toast`]、[`dropdown`]）。Dialog 为复合标签 + [`dialog`] Builder。两种写法互嵌兼容，见
+//! （如 [`toast`]）。Dialog / DropdownMenu 为复合标签 + Builder。两种写法互嵌兼容，见
 //! `docs/COMPONENT_LIBRARY.md` §3（ADR-9）。
 //!
 //! 布局原语（`Box` / `HStack` / `VStack` / `GStack` / [`crate::primitives::Portal`]）在
@@ -20,7 +20,8 @@
 //! - 有状态控件若用全局 `use_signal("{id}__…")`，多实例必须稳定唯一键（空 id 撞键会串状态）。
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
-//! - ContextMenu：`<ContextMenu>` / Trigger / Content / Item / Label / Separator / Shortcut / Group（宏 `context_menu_scope`）；Builder [`context_menu`]。
+//! - ContextMenu：`<ContextMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group（宏 `context_menu_scope`）；Builder [`context_menu`]。
+//! - DropdownMenu：`<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub（宏 `dropdown_menu_scope`）；Builder [`dropdown_menu`]。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
@@ -44,7 +45,7 @@ pub mod command;
 pub mod context_menu;
 pub mod date_picker;
 pub mod dialog;
-pub mod dropdown;
+pub mod dropdown_menu;
 pub mod form;
 pub mod image;
 pub mod input;
@@ -130,10 +131,12 @@ pub use command::{
     CommandVisibleItem,
 };
 pub use context_menu::{
-    context_menu, context_menu_content, context_menu_scope, context_menu_sub,
-    context_menu_sub_content, use_context_menu, ContextMenuAction, ContextMenuBuilder,
+    context_menu, context_menu_content, context_menu_radio_group, context_menu_scope,
+    context_menu_sub, context_menu_sub_content, use_context_menu, ContextMenuAction,
+    ContextMenuBuilder, ContextMenuCheckboxItem, ContextMenuCheckboxItemProps,
     ContextMenuContentOpts, ContextMenuCtx, ContextMenuGroup, ContextMenuGroupProps,
     ContextMenuItem, ContextMenuItemProps, ContextMenuLabel, ContextMenuLabelProps,
+    ContextMenuRadioGroupCtx, ContextMenuRadioItem, ContextMenuRadioItemProps,
     ContextMenuSeparator, ContextMenuSeparatorProps, ContextMenuShortcut,
     ContextMenuShortcutProps, ContextMenuSubCtx, ContextMenuSubTrigger,
     ContextMenuSubTriggerProps, ContextMenuTrigger, ContextMenuTriggerProps,
@@ -148,12 +151,22 @@ pub use dialog::{
     DialogDescriptionProps, DialogFooter, DialogFooterProps, DialogHeader, DialogHeaderProps,
     DialogTitle, DialogTitleProps, DialogTrigger, DialogTriggerProps,
 };
-pub use dropdown::{dropdown, DropdownBuilder};
+pub use dropdown_menu::{
+    dropdown, dropdown_menu, dropdown_menu_content, dropdown_menu_radio_group, dropdown_menu_scope,
+    dropdown_menu_sub, dropdown_menu_sub_content, use_dropdown_menu, DropdownBuilder,
+    DropdownMenuBuilder, DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps,
+    DropdownMenuContentOpts, DropdownMenuCtx, DropdownMenuGroup, DropdownMenuGroupProps,
+    DropdownMenuItem, DropdownMenuItemProps, DropdownMenuLabel, DropdownMenuLabelProps,
+    DropdownMenuRadioGroupCtx, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
+    DropdownMenuSeparator, DropdownMenuSeparatorProps, DropdownMenuShortcut,
+    DropdownMenuShortcutProps, DropdownMenuSubCtx, DropdownMenuSubTrigger,
+    DropdownMenuSubTriggerProps, DropdownMenuTrigger, DropdownMenuTriggerProps,
+};
 pub use form::{
     clear_all_errors, clear_field_error, field_error, field_invalid, form_errors_signal,
     form_field, form_provider, form_validate, set_field_error, use_form, FormState,
 };
-pub use image::{Image, ImageProps};
+pub use image::{Image, ImageProps, Img, ImgProps};
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,
@@ -201,7 +214,13 @@ pub use sidebar::{sidebar, SidebarBuilder};
 pub use slider::{slider, Slider, SliderBuilder, SliderProps};
 pub use stepper::{stepper, StepperBuilder};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
-pub use table::{table, TableBuilder, TableColumn, TableSortDir, TableSortState};
+pub use table::{
+    data_table, table, table_comfortable, table_compact, DataTable, DataTableProps, Table,
+    TableAlign, TableBody, TableBodyProps, TableBuilder, TableCaption, TableCaptionProps, TableCell,
+    TableCellProps, TableColumn, TableDensity, TableFooter, TableFooterProps, TableHead,
+    TableHeader, TableHeaderProps, TableHeadProps, TablePaginationState, TableProps, TableRow,
+    TableRowProps, TableSortDir, TableSortState,
+};
 pub use tabs::{
     tabs_content, tabs_headless, tabs_headless_root, tabs_list, tabs_scope, use_tabs, Tabs,
     TabsContent, TabsContentProps, TabsCtx, TabsHeadlessBuilder, TabsList, TabsListBuilder,

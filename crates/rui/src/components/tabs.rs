@@ -6,7 +6,7 @@
 //! Tabs                      // Root；horizontal=column / vertical=row
 //! ├── TabsList              // default：bg-muted 圆角条；line：透明 + 底边指示
 //! │   └── TabsTrigger       // 选中：bg-background + shadow-sm（default）
-//! └── TabsContent           // 仅当前 value 挂载（宏走 show_reactive）
+//! └── TabsContent           // 仅当前 value 挂载（宏走 tabs_content：0×0 + Display::None）
 //! ```
 //!
 //! 另保留：
@@ -55,7 +55,7 @@
 //! - Trigger `focus_id = "{tabs_id}:{value}"`；方向键只移焦点环，点击 / Enter / Space 改选中。
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
-use crate::app::reactive::{reactive_view, show_reactive};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
 use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -466,13 +466,28 @@ pub fn tabs_scope(
 }
 
 /// 宏 `<TabsContent>`：仅在选中时挂载子树。
+///
+/// 不用 `show_reactive`（其占位默认 `100%×100%`，隐藏分支是裸 `Element::new()`）：
+/// 多个 Content 并排在带 `gap` 的 Tabs 列里时，未选中槽若仍参与 flex / 残留叶测高，
+/// 会在芯片条与当前面板文案之间挤出一整块空白。这里用 `0×0` 壳 + `Display::None`，
+/// 与非宏 [`TabsContent`] 的显隐策略对齐。
 pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tabs("TabsContent");
     let value = value.into();
     let selected = ctx.value;
     let want = value.clone();
     let anchor = format!("{}:content:{value}", ctx.id);
-    let mut panel = show_reactive(anchor, move || selected.get() == want, body);
+    let effect_anchor = anchor.clone();
+    reactive_anchor(effect_anchor, move || {
+        if selected.get() == want {
+            body()
+        } else {
+            let mut hidden = Element::new();
+            hidden.style.display = Display::None;
+            hidden
+        }
+    });
+    let mut panel = reactive_placeholder_sized(anchor, 0.0, 0.0);
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
@@ -1055,5 +1070,61 @@ mod tests {
             .into();
         assert_eq!(el.attrs.get("rui_tabs_list").map(|s| s.as_str()), Some("1"));
         assert!(el.children.len() >= 2);
+    }
+
+    #[test]
+    fn tabs_content_hidden_slot_is_display_none_zero_shell() {
+        let value = use_signal("tabs_hidden_slot_value", || "list".to_string());
+        let el = tabs_scope(
+            "hidden-slot",
+            Some(value),
+            "list",
+            "horizontal",
+            false,
+            || {
+                let list = TabsList(TabsListProps {
+                    id: String::new(),
+                    variant: None,
+                    value: None,
+                    default_value: None,
+                    options: None,
+                    children: Some({
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("list".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("List")),
+                                base: None,
+                            }),
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("grid".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("Grid")),
+                                base: None,
+                            }),
+                        ])
+                    }),
+                    base: None,
+                });
+                let list_panel = tabs_content("list", || Element::new().text("List panel"));
+                let grid_panel = tabs_content("grid", || Element::new().text("Grid panel"));
+                let mut root = Element::new();
+                root.set_attr("rui_fragment", "1");
+                root.children(vec![list, list_panel, grid_panel])
+            },
+        );
+        let contents: Vec<_> = el
+            .children
+            .iter()
+            .filter(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_CONTENT))
+            .collect();
+        assert_eq!(contents.len(), 2);
+        for panel in &contents {
+            // 初始壳：0×0，避免未跑 effect 前就按 100% 撑开列高。
+            assert_eq!(panel.style.size.width, taffy::style::Dimension::length(0.0));
+            assert_eq!(panel.style.size.height, taffy::style::Dimension::length(0.0));
+        }
     }
 }

@@ -8,6 +8,8 @@
 //! └── ContextMenuContent      // Portal + floating；bg-popover / border / shadow
 //!     ├── ContextMenuLabel
 //!     ├── ContextMenuItem     // hover/focus:bg-accent；可选 inset / destructive
+//!     ├── ContextMenuCheckboxItem
+//!     ├── ContextMenuRadioGroup / ContextMenuRadioItem
 //!     ├── ContextMenuShortcut // ml-auto text-xs tracking-widest
 //!     ├── ContextMenuSeparator
 //!     ├── ContextMenuGroup
@@ -16,7 +18,7 @@
 //!         └── ContextMenuSubContent  // 右侧嵌套菜单
 //! ```
 //!
-//! `ui!` 中 `<ContextMenu>` / `<ContextMenuContent>` 由宏展开。Builder
+//! `ui!` 中 `<ContextMenu>` / `<ContextMenuContent>` / `<ContextMenuRadioGroup>` 由宏展开。Builder
 //! [`context_menu`] / [`ContextMenuBuilder::trigger`] 仍可用（内部接到同一套实现）。
 //!
 //! ## 用法（双写法）
@@ -65,6 +67,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::menu_checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -88,15 +91,19 @@ use crate::utils::popup::{
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{roving_edge, roving_move};
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::toggle_state::write_bool_toggle;
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_TRIGGER: &str = "context-menu-trigger";
 const SLOT_CONTENT: &str = "context-menu-content";
 const SLOT_ITEM: &str = "context-menu-item";
+const SLOT_CHECKBOX_ITEM: &str = "context-menu-checkbox-item";
+const SLOT_RADIO_ITEM: &str = "context-menu-radio-item";
 const SLOT_LABEL: &str = "context-menu-label";
 const SLOT_SEPARATOR: &str = "context-menu-separator";
 const SLOT_SHORTCUT: &str = "context-menu-shortcut";
 const SLOT_GROUP: &str = "context-menu-group";
+const SLOT_RADIO_GROUP: &str = "context-menu-radio-group";
 const SLOT_SUB_TRIGGER: &str = "context-menu-sub-trigger";
 const SLOT_SUB_CONTENT: &str = "context-menu-sub-content";
 
@@ -132,6 +139,7 @@ fn context_menu_context() -> Context<ContextMenuCtx> {
 thread_local! {
     static CTX_ACTIVATES: RefCell<HashMap<String, Vec<Rc<dyn Fn()>>>> = RefCell::new(HashMap::new());
     static SUB_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
+    static RADIO_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
 }
 
 fn reset_activates(id: &str) {
@@ -160,8 +168,24 @@ fn reset_sub_seq(parent_id: &str) {
     });
 }
 
+fn reset_radio_seq(parent_id: &str) {
+    RADIO_SEQ.with(|m| {
+        m.borrow_mut().insert(parent_id.to_string(), 0);
+    });
+}
+
 fn next_sub_seq(parent_id: &str) -> usize {
     SUB_SEQ.with(|m| {
+        let mut map = m.borrow_mut();
+        let e = map.entry(parent_id.to_string()).or_insert(0);
+        let i = *e;
+        *e += 1;
+        i
+    })
+}
+
+fn next_radio_seq(parent_id: &str) -> usize {
+    RADIO_SEQ.with(|m| {
         let mut map = m.borrow_mut();
         let e = map.entry(parent_id.to_string()).or_insert(0);
         let i = *e;
@@ -377,8 +401,8 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                     return false;
                 }
                 if let Some(cb) = take_activate(&menu_id, ix) {
+                    // Close is owned by each activate (Item/Radio)；Checkbox 不关。
                     cb();
-                    open_keys.set(false);
                     return true;
                 }
                 false
@@ -510,6 +534,7 @@ pub fn context_menu_content(
 
         reset_activates(&menu_id);
         reset_sub_seq(&menu_id);
+        reset_radio_seq(&menu_id);
         // isolate_reads：嵌套 SubContent 的 reactive_anchor 必须能注册；勿订阅 sub open
         //（否则整棵 Content 重建会拆掉悬停目标，子菜单 hover 不跟手）。
         let rows = isolate_reads(|| body());
@@ -599,9 +624,11 @@ pub fn ContextMenuItem(
     let on_click = Rc::new(RefCell::new(on_click));
     let activate = {
         let on_click = on_click.clone();
+        let open = open;
         Rc::new(move || {
             if !disabled {
                 on_click.borrow_mut().call(());
+                open.set(false);
             }
         }) as Rc<dyn Fn()>
     };
@@ -656,7 +683,6 @@ pub fn ContextMenuItem(
             }
             set_ctx_active(active, ix);
             activate_click();
-            open.set(false);
         })
         .cursor_kind(if disabled {
             CursorKind::NotAllowed
@@ -679,6 +705,277 @@ pub fn ContextMenuItem(
         hit.set_attr("rui_ctx_disabled", "1");
     }
     hit.accesskit_role("menuitem")
+}
+
+/// solid-ui / shadcn `ContextMenuCheckboxItem`：左侧对齐 Checkbox 控制面；点击切换，**不**关闭菜单。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn ContextMenuCheckboxItem(
+    checked: Option<Signal<bool>>,
+    default_checked: bool,
+    disabled: bool,
+    inset: bool,
+    class: Option<String>,
+    #[prop(default = "Handler::default()")] mut on_click: Handler,
+    children: Option<Element>,
+) -> Element {
+    let ctx = require_context_menu("ContextMenuCheckboxItem");
+    let active = ctx.active;
+    let menu_id = ctx.id.clone();
+    let ix = activate_count(&ctx.id);
+    // 全局键：跨 Content 开关存活。勿用 use_scoped_signal——关菜单 dispose 后 paint sync 仍可能 peek。
+    let check = checked.unwrap_or_else(|| {
+        use_signal(
+            format!("{}__cbox{}__menu_cbox", ctx.id, ix).as_str(),
+            || default_checked,
+        )
+    });
+
+    let on_click = Rc::new(RefCell::new(on_click));
+    let activate = {
+        let on_click = on_click.clone();
+        let check = check;
+        Rc::new(move || {
+            if disabled {
+                return;
+            }
+            if check.is_alive() {
+                write_bool_toggle(check, false);
+            }
+            on_click.borrow_mut().call(());
+        }) as Rc<dyn Fn()>
+    };
+    let activate_click = activate.clone();
+    push_activate(&ctx.id, activate);
+
+    let mut kids = children
+        .map(take_packed)
+        .unwrap_or_else(|| vec![Element::new().text("Item")]);
+    let fg = parse_text_color("popover-foreground");
+    for k in &mut kids {
+        if !has_shortcut_slot(k) {
+            style_item_text(k, fg);
+        }
+    }
+
+    let control = menu_checkbox_control(check);
+    let mut row = item_row_chrome(inset)
+        .bg([0.0, 0.0, 0.0, 0.0])
+        .text_color(fg)
+        .child(control);
+    for k in kids {
+        row = row.child(k);
+    }
+    let mut row: Element = row.into();
+    if disabled {
+        row = row.opacity(0.5);
+    }
+    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+        row = with_class_list(row, &c);
+    }
+
+    let mut hit: Element = interactive(row)
+        .on_hover(move |h| {
+            if disabled {
+                return;
+            }
+            if !h {
+                clear_ctx_active_if(active, ix);
+                return;
+            }
+            close_open_subs(&menu_id);
+            set_ctx_active(active, ix);
+        })
+        .on_click(move || {
+            if disabled {
+                return;
+            }
+            set_ctx_active(active, ix);
+            activate_click();
+        })
+        .cursor_kind(if disabled {
+            CursorKind::NotAllowed
+        } else {
+            CursorKind::Default
+        })
+        .into();
+    hit = hit.rounded("0.25rem");
+    hit.set_attr(ATTR_SLOT, SLOT_CHECKBOX_ITEM);
+    hit.set_attr("rui_ctx_id", &ctx.id);
+    hit.set_attr("rui_ctx_ix", ix.to_string());
+    hit.set_attr("data-inset", if inset { "true" } else { "false" });
+    if disabled {
+        hit.set_attr("data-disabled", "true");
+        hit.set_attr("rui_ctx_disabled", "1");
+    }
+    hit.accesskit_role("menuitemcheckbox")
+}
+
+// ---------------------------------------------------------------------------
+// RadioGroup / RadioItem
+// ---------------------------------------------------------------------------
+
+/// Nested radio-group context (under a root [`ContextMenuCtx`]).
+#[derive(Clone)]
+pub struct ContextMenuRadioGroupCtx {
+    pub value: Signal<String>,
+    pub id: String,
+}
+
+fn context_menu_radio_group_context() -> Context<ContextMenuRadioGroupCtx> {
+    static CTX: OnceLock<Context<ContextMenuRadioGroupCtx>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<ContextMenuRadioGroupCtx>)
+}
+
+fn use_context_menu_radio_group() -> Option<ContextMenuRadioGroupCtx> {
+    use_context(context_menu_radio_group_context())
+}
+
+fn require_context_menu_radio_group(part: &str) -> ContextMenuRadioGroupCtx {
+    use_context_menu_radio_group().unwrap_or_else(|| {
+        panic!("{part} must be used within <ContextMenuRadioGroup>");
+    })
+}
+
+/// solid-ui / shadcn `ContextMenuRadioGroup`：包裹一组 [`ContextMenuRadioItem`]。
+/// `ui!` 中由宏编成此函数（子树在 `provide_context` **之后**求值）。
+pub fn context_menu_radio_group(
+    id: Option<String>,
+    value: Option<Signal<String>>,
+    default_value: Option<String>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    let parent = require_context_menu("ContextMenuRadioGroup");
+    let seq = next_radio_seq(&parent.id);
+    let rid = match id {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => format!("{}__radio{seq}", parent.id),
+    };
+    let default_value = default_value.unwrap_or_default();
+    let value = value.unwrap_or_else(|| {
+        use_signal(format!("{rid}__value").as_str(), move || default_value.clone())
+    });
+    let kids = with_child_owner(|| {
+        provide_context(
+            context_menu_radio_group_context(),
+            ContextMenuRadioGroupCtx {
+                value,
+                id: rid.clone(),
+            },
+        );
+        take_packed(body())
+    });
+    let mut col = vstack().w("100%").gap("0");
+    for k in kids {
+        col = col.child(k);
+    }
+    let mut el: Element = col.into();
+    el.set_attr(ATTR_SLOT, SLOT_RADIO_GROUP);
+    el.set_attr("data-slot", SLOT_RADIO_GROUP);
+    el
+}
+
+/// solid-ui / shadcn `ContextMenuRadioItem`：左侧圆点指示；选中后关闭菜单。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn ContextMenuRadioItem(
+    value: String,
+    disabled: bool,
+    inset: bool,
+    class: Option<String>,
+    #[prop(default = "Handler::default()")] mut on_click: Handler,
+    children: Option<Element>,
+) -> Element {
+    let ctx = require_context_menu("ContextMenuRadioItem");
+    let group = require_context_menu_radio_group("ContextMenuRadioItem");
+    let open = ctx.open;
+    let active = ctx.active;
+    let menu_id = ctx.id.clone();
+    let item_value = value.clone();
+    let group_value = group.value;
+
+    let on_click = Rc::new(RefCell::new(on_click));
+    let activate = {
+        let on_click = on_click.clone();
+        let item_value = item_value.clone();
+        let group_value = group_value;
+        let open = open;
+        Rc::new(move || {
+            if disabled {
+                return;
+            }
+            // 先写值再关：全局 radio 信号跨 Content 存活；try_set 防极端 dispose 竞态。
+            let _ = group_value.try_set(item_value.clone());
+            open.set(false);
+            on_click.borrow_mut().call(());
+        }) as Rc<dyn Fn()>
+    };
+    let activate_click = activate.clone();
+    let ix = activate_count(&ctx.id);
+    push_activate(&ctx.id, activate);
+
+    let mut kids = children
+        .map(take_packed)
+        .unwrap_or_else(|| vec![Element::new().text("Item")]);
+    let fg = parse_text_color("popover-foreground");
+    for k in &mut kids {
+        if !has_shortcut_slot(k) {
+            style_item_text(k, fg);
+        }
+    }
+
+    let control = menu_radio_control(group_value, &item_value);
+    let mut row = item_row_chrome(inset)
+        .bg([0.0, 0.0, 0.0, 0.0])
+        .text_color(fg)
+        .child(control);
+    for k in kids {
+        row = row.child(k);
+    }
+    let mut row: Element = row.into();
+    if disabled {
+        row = row.opacity(0.5);
+    }
+    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+        row = with_class_list(row, &c);
+    }
+
+    let mut hit: Element = interactive(row)
+        .on_hover(move |h| {
+            if disabled {
+                return;
+            }
+            if !h {
+                clear_ctx_active_if(active, ix);
+                return;
+            }
+            close_open_subs(&menu_id);
+            set_ctx_active(active, ix);
+        })
+        .on_click(move || {
+            if disabled {
+                return;
+            }
+            set_ctx_active(active, ix);
+            activate_click();
+        })
+        .cursor_kind(if disabled {
+            CursorKind::NotAllowed
+        } else {
+            CursorKind::Default
+        })
+        .into();
+    hit = hit.rounded("0.25rem");
+    hit.set_attr(ATTR_SLOT, SLOT_RADIO_ITEM);
+    hit.set_attr("rui_ctx_id", &ctx.id);
+    hit.set_attr("rui_ctx_ix", ix.to_string());
+    hit.set_attr("data-inset", if inset { "true" } else { "false" });
+    hit.set_attr("data-value", &value);
+    if disabled {
+        hit.set_attr("data-disabled", "true");
+        hit.set_attr("rui_ctx_disabled", "1");
+    }
+    hit.accesskit_role("menuitemradio")
 }
 
 // ---------------------------------------------------------------------------
@@ -904,13 +1201,14 @@ pub fn context_menu_sub_content(
             reset_activates(&sid);
             take_packed(body())
         });
-        // Match root Content chrome: outer `p-1` + overflow clip, inner `w-full` column so
-        // `menu_bleed` separators cancel the same padding on both sides as the main menu.
+        // Silhouette = floating root (same as root Content): bg/border/rounded/shadow live
+        // together. Own overflow does not clip own box-shadow. Visual gap is placement gap
+        // (not a padded shell), so the shadow outline matches the menu chrome.
         let mut rows = vstack().w("100%").gap("0");
         for k in kids {
             rows = rows.child(k);
         }
-        let mut chrome: Element = vstack()
+        let mut panel: Element = vstack()
             .w("auto")
             .h("auto")
             .min_w("12rem")
@@ -920,61 +1218,31 @@ pub fn context_menu_sub_content(
             .overflow_y("hidden")
             .child(rows)
             .into();
-        chrome = chrome
+        panel = panel
             .bg(tokens::popover())
             .rounded("0.375rem")
             .border_style("solid")
             .border_width(1.0)
             .border_color(tokens::border())
             .shadow([0.0, 0.0, 0.0, 0.14], 12.0)
-            .min_w("12rem")
-            .w("auto")
-            .h("auto")
-            .flex_shrink(0.0);
+            .absolute();
         if let Some(ref c) = class {
-            chrome = with_class_list(chrome, c);
+            panel = with_class_list(panel, c);
         }
-        chrome.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
-        chrome = chrome.accesskit_role("menu");
-
-        // Transparent pads on both sides: keep the visual gap, but absorb pointer hits in the
-        // seam. Dual pads cover both RightStart and flipped LeftStart without reading placement.
-        let seam_pad = || {
-            r#box()
-                .w(SUBMENU_VISUAL_GAP_PX)
-                .h("100%")
-                .min_h(1.0)
-                .flex_shrink(0.0)
-                .flex_grow(0.0)
-                .bg([0.0, 0.0, 0.0, 0.0])
-        };
-        let mut shell: Element = hstack()
-            .w("auto")
-            .h("auto")
-            .items("stretch")
-            .gap("0")
-            .child(seam_pad())
-            .child(chrome)
-            .child(seam_pad())
-            .into();
-        shell = shell.absolute();
+        panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
+        panel = panel.accesskit_role("menu");
         let fid = trigger_fid.peek();
-        // Gap 0: shell abuts the trigger; the near-side pad is the visible spacing.
         mark_floating_with_gap(
-            &mut shell,
+            &mut panel,
             &sid,
             fid.as_str(),
             PopupPlacement::RightStart,
-            0.0,
+            SUBMENU_VISUAL_GAP_PX,
         );
-        shell.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
-        // Shell includes seam pads; keep the chrome itself ≥ 12rem.
-        shell.set_attr(
-            ATTR_FLOATING_MIN_W,
-            format!("{}px", 12.0 * 16.0 + 2.0 * SUBMENU_VISUAL_GAP_PX),
-        );
-        apply_stored_floating_place(&mut shell, &sid);
-        mount_anchored_overlay(shell, oz.panel)
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
+        apply_stored_floating_place(&mut panel, &sid);
+        mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
@@ -986,7 +1254,10 @@ pub(crate) fn sync_context_menu_item_paint_subtree(
     impact: &mut LayoutStatus,
 ) {
     let slot = el.attrs.get(ATTR_SLOT).map(String::as_str);
-    if matches!(slot, Some(SLOT_ITEM) | Some(SLOT_SUB_TRIGGER)) {
+    if matches!(
+        slot,
+        Some(SLOT_ITEM) | Some(SLOT_SUB_TRIGGER) | Some(SLOT_CHECKBOX_ITEM) | Some(SLOT_RADIO_ITEM)
+    ) {
         let disabled = el.attrs.get("rui_ctx_disabled").map(String::as_str) == Some("1");
         let destructive = el.attrs.get("rui_ctx_destructive").map(String::as_str) == Some("1");
         let ix = el
@@ -1034,6 +1305,9 @@ fn apply_ctx_item_highlight(
 }
 
 fn paint_ctx_item_fg(el: &mut Element, fg: [u8; 4]) {
+    if el.checkbox_sync.is_some() || el.radio_selected_sync.is_some() {
+        return;
+    }
     if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_SHORTCUT) {
         return;
     }

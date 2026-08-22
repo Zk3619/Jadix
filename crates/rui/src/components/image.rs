@@ -9,6 +9,10 @@
 //!
 //! <Image src="assets/photo.jpg" w="8rem" h="8rem" />
 //! <Image src="data:image/svg+xml,..." w="2rem" h="2rem" />
+//!
+//! // HTML / Solid 风格别名（宏与 prelude 均可用）
+//! <Img src="assets/photo.jpg" w="8rem" h="8rem" />
+//! <img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! ```
 //!
 //! JPEG/GIF/WebP 需 `images`（或分项 feature）；SVG 需 `svg`。PNG/ICO/BMP 默认可用。
@@ -51,3 +55,8 @@ pub fn Image(
     }
     el
 }
+
+/// HTML / Solid 风格别名：与 [`Image`] 相同（`<Img>` / `Img(…)`）。
+pub use Image as Img;
+/// 与 [`ImageProps`] 相同。
+pub use ImageProps as ImgProps;

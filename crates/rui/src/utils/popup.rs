@@ -147,8 +147,8 @@ pub fn mark_floating(
 
 /// Like [`mark_floating`], with an explicit trigger–panel gap in px (e.g. tooltip `sideOffset`/`gutter` ≈ 4).
 ///
-/// Negative `gap_px` overlaps the panel onto the trigger. Prefer a transparent hit pad when you
-/// want a **visible** gap without pointer fall-through (see ContextMenu SubContent).
+/// Negative `gap_px` overlaps the panel onto the trigger. Submenus use a positive gap for the
+/// visual seam while keeping the floating silhouette (shadow host) itself unpadded.
 pub fn mark_floating_with_gap(
     el: &mut Element,
     id: &str,
@@ -531,6 +531,7 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
     // Cap without overflow → children paint past the panel chrome.
     // Use Hidden (not Scroll): product panels put ScrollArea inside; Scroll on the
     // floating root steals wheel and leaves the inner viewport thinking it has no overflow.
+    // Own box-shadow is not clipped by own overflow — keep shadow on the floating silhouette.
     if el.style.overflow.y == taffy::style::Overflow::Visible {
         el.style.overflow.y = taffy::style::Overflow::Hidden;
         changed = true;

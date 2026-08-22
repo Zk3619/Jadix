@@ -429,6 +429,10 @@ pub(crate) fn sync_checkbox_checked_subtree(
     impact: &mut LayoutStatus,
 ) {
     if let Some(sig) = el.checkbox_sync {
+        if !sig.is_alive() {
+            // Menu Content 等作用域关闭后，树节点可能仍短暂留在本帧；勿 peek 已 dispose 信号。
+            el.checkbox_sync = None;
+        } else {
         let on = sig.peek();
         let invalid = el
             .attrs
@@ -474,6 +478,7 @@ pub(crate) fn sync_checkbox_checked_subtree(
             // 可能不重跑字形/不扩脏区，表现为「黑底无对号」。
             crate::app::damage::push_frame_paint_damage(el.layout_bounds);
             *impact = impact.merge(LayoutStatus::LayoutChanged);
+        }
         }
     }
     for child in &mut el.children {

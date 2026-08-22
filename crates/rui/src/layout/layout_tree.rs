@@ -112,7 +112,11 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
             let key = portal_key_of(&node);
             wanted.insert(key.clone());
             fresh_keys.insert(key.clone());
-            prev.remove(&key);
+            // Same portal key was already live: adopt CSS transition mid from the previous
+            // hoisted tree (not layout_node — that breaks Taffy SlotMap topology).
+            if let Some(mut prev_node) = prev.remove(&key) {
+                adopt_hoisted_overlay_stability(&mut node, &mut prev_node);
+            }
             prepare_hoisted_node(&mut node, &key);
             place_hoisted(
                 root,
@@ -289,6 +293,131 @@ fn portal_key_of(el: &Element) -> String {
         return format!("tid:{tid}");
     }
     format!("z:{}", el.style.z_index)
+}
+
+/// Merge a freshly lifted portal into the previously hoisted instance of the same key.
+///
+/// Preserves in-flight CSS `transition_snapshot` / mid transform+opacity on matching
+/// `template_id` subtrees (e.g. `toast-card-*`) so reactive rebuilds do not snap
+/// enter/stack/exit animations.
+///
+/// **Do not** adopt `layout_node`: partial transfer leaves Taffy parent/child SlotMap
+/// topology inconsistent with the leftover prev shells, and the next GC `remove`
+/// panics with `invalid SlotMap key used`. Fresh nodes get new Taffy IDs; motion is
+/// style/snapshot-only (same as Carousel stack cards after a structural rebuild).
+fn adopt_hoisted_overlay_stability(fresh: &mut Element, prev: &mut Element) {
+    adopt_overlay_node(fresh, prev);
+}
+
+fn adopt_overlay_node(fresh: &mut Element, prev: &mut Element) {
+    let tid_match = fresh.template_id.is_some() && fresh.template_id == prev.template_id;
+    if tid_match {
+        if fresh.on_unmount.is_none() {
+            fresh.on_unmount = prev.on_unmount.clone();
+        }
+        preserve_overlay_css_motion(fresh, prev);
+    }
+
+    let fresh_keyed = !fresh.children.is_empty()
+        && fresh.children.iter().all(|c| c.template_id.is_some());
+    let prev_keyed =
+        !prev.children.is_empty() && prev.children.iter().all(|c| c.template_id.is_some());
+
+    if fresh_keyed && prev_keyed {
+        let mut prev_map: HashMap<String, Element> = HashMap::new();
+        for child in prev.children.drain(..) {
+            if let Some(tid) = child.template_id.clone() {
+                prev_map.insert(tid, child);
+            }
+        }
+        for child in &mut fresh.children {
+            if let Some(tid) = child.template_id.clone() {
+                if let Some(mut old) = prev_map.remove(&tid) {
+                    adopt_overlay_node(child, &mut old);
+                }
+            }
+        }
+        return;
+    }
+
+    if fresh.children.len() == prev.children.len() {
+        for (f, p) in fresh.children.iter_mut().zip(prev.children.iter_mut()) {
+            adopt_overlay_node(f, p);
+        }
+        return;
+    }
+
+    // Unequal unkeyed shells (Toast stage → panel → pile): match any templated
+    // descendants (toast-card-*) and zip single unkeyed wrappers when possible.
+    let mut prev_by_tid: HashMap<String, Element> = HashMap::new();
+    take_templated_descendants(prev, &mut prev_by_tid);
+    adopt_templated_into(fresh, &mut prev_by_tid);
+}
+
+fn preserve_overlay_css_motion(fresh: &mut Element, prev: &Element) {
+    let is_toast = fresh
+        .template_id
+        .as_deref()
+        .is_some_and(|t| t.starts_with("toast-card-"));
+    if !is_toast
+        && fresh.style.transition.is_empty()
+        && prev.style.transition.is_empty()
+        && !prev.transition_snapshot.has_active_tweens()
+    {
+        return;
+    }
+    // 退场：sync 可能已在 hoist 前把 opacity→0 并 seed tween。勿用上一帧 idle mid
+    // 盖掉，否则首帧像「直接消失」，且 exit_seed 已被消费无法再钉基线。
+    let fresh_exit_motion = fresh.transition_snapshot.has_active_tweens()
+        || fresh.style.opacity + 0.05 < prev.style.opacity;
+    if fresh_exit_motion {
+        if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
+            fresh.style.transition = prev.style.transition.clone();
+        }
+        return;
+    }
+    if is_toast
+        || !prev.style.transition.is_empty()
+        || prev.transition_snapshot.has_active_tweens()
+        || !fresh.style.transition.is_empty()
+    {
+        fresh.transition_snapshot = prev.transition_snapshot.clone();
+        fresh.style.translate = prev.style.translate;
+        fresh.style.opacity = prev.style.opacity;
+        fresh.style.scale = prev.style.scale;
+        fresh.style.rotate_deg = prev.style.rotate_deg;
+        fresh.style.shadow_color = prev.style.shadow_color;
+        if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
+            fresh.style.transition = prev.style.transition.clone();
+        }
+    }
+}
+
+fn take_templated_descendants(node: &mut Element, out: &mut HashMap<String, Element>) {
+    let mut i = 0;
+    while i < node.children.len() {
+        if node.children[i].template_id.is_some() {
+            let child = node.children.remove(i);
+            if let Some(tid) = child.template_id.clone() {
+                out.insert(tid, child);
+            }
+        } else {
+            take_templated_descendants(&mut node.children[i], out);
+            i += 1;
+        }
+    }
+}
+
+fn adopt_templated_into(fresh: &mut Element, prev_by_tid: &mut HashMap<String, Element>) {
+    for child in &mut fresh.children {
+        if let Some(tid) = child.template_id.clone() {
+            if let Some(mut old) = prev_by_tid.remove(&tid) {
+                adopt_overlay_node(child, &mut old);
+            }
+        } else {
+            adopt_templated_into(child, prev_by_tid);
+        }
+    }
 }
 
 fn prepare_hoisted_node(node: &mut Element, key: &str) {
@@ -1108,6 +1237,11 @@ pub struct LayoutProfileMs {
 /// [`Self::page_stack_bands`] applies the same band model to **in-page** stacking contexts
 /// (e.g. CarouselStack cards with `z-index`): without it, page glyphs from lower cards
 /// paint after every card rect and bleed through the top card.
+///
+/// Bands are recorded when the parent opts in via `data-stacking-context=1`, **or** when any
+/// direct child has a non-zero `z-index`. Inside an already-marked portal overlay (Toast),
+/// the same z-stack appends to [`Self::bands`] instead — `page_stack_bands` end at the
+/// portal split and cannot cover overlay glyphs.
 #[derive(Clone, Debug, Default)]
 pub struct OverlayPaintSplit {
     pub instance_start: usize,
@@ -2639,12 +2773,12 @@ impl LayoutTree {
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
         #[cfg(feature = "devtools")]
         crate::app::devtools::note_element_paint_visual(element, render_rect);
-        let resolved_translate = [
-            element.style.translate[0] + lay_w * element.style.translate_pct[0],
-            element.style.translate[1] + lay_h * element.style.translate_pct[1],
-        ];
+        // `render_x/y`（及 vis_*）已含 CSS translate；rounded_rect.wgsl 在中心上再加
+        // transform 的 tx/ty。若矩阵再带 translate，不透明壳会双倍位移，而子树文字只经
+        // `parent_tl` 单倍位移 → Toast/堆叠「壳与文分离」。矩阵只保留 rotate + transform 列表
+        // （scale 已 bake 进 rect，传 [1,1]）。
         let transform = crate::style::compute_combined_transform(
-            &resolved_translate,
+            &[0.0, 0.0],
             element.style.rotate_deg,
             &[1.0, 1.0],
             element.style.transform.as_ref(),
@@ -3320,6 +3454,14 @@ impl LayoutTree {
             }
         };
         let any_z = element.children.iter().any(|c| c.style.z_index != 0);
+        let stacking_attr = element
+            .attrs
+            .get("data-stacking-context")
+            .map(|s| s.as_str())
+            == Some("1");
+        // Capture before the closure so we don't borrow `element.children` across
+        // `&mut element.children[i]` (E0502).
+        let enable_page_stack_bands = stacking_attr || any_z;
         let mut max_right = abs_x + lay_w;
         let mut max_bottom = abs_y + lay_h;
 
@@ -3365,14 +3507,16 @@ impl LayoutTree {
             };
             if is_body_portal_layer {
                 overlay_split.bands.push(band);
-            } else if element
-                .attrs
-                .get("data-stacking-context")
-                .map(|s| s.as_str())
-                == Some("1")
-            {
-                // Opt-in in-page stacking (CarouselStack): band per z-ordered child.
-                overlay_split.page_stack_bands.push(band);
+            } else if enable_page_stack_bands {
+                if overlay_split.marked {
+                    // Already inside `__rui_portal_layer` (Toast / Dialog content).
+                    // `page_stack_bands` end at the portal split and clamp overlay glyphs
+                    // away — push portal bands so each z-card is rects→text in the overlay
+                    // pass (same model as stacked Modals).
+                    overlay_split.bands.push(band);
+                } else {
+                    overlay_split.page_stack_bands.push(band);
+                }
             }
         };
 
@@ -5013,6 +5157,160 @@ mod portal_hoist_tests {
                 .any(|t| t.text == "stack-high")
         });
         assert!(!earlier_has_high);
+    }
+
+    #[test]
+    fn z_index_children_auto_page_stack_bands_without_attr() {
+        // Toast-style pile: z-ordered absolute cards, no data-stacking-context.
+        // Without auto bands, all glyphs paint after all rects → text bleed.
+        let lower = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(120.0)
+            .h(60.0)
+            .absolute()
+            .left(0.0)
+            .top(0.0)
+            .z_index(1)
+            .child(Element::new().text("toast-low"));
+        let upper = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(120.0)
+            .h(60.0)
+            .absolute()
+            .left(0.0)
+            .top(20.0)
+            .z_index(2)
+            .child(Element::new().text("toast-high"));
+        let pile = Element::new()
+            .w(200.0)
+            .h(120.0)
+            .relative()
+            .child(lower)
+            .child(upper);
+        let mut root = Element::new().w(400.0).h(200.0).child(pile);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.page_stack_bands.len() >= 2,
+            "z-index children must auto-enable page_stack_bands, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        let ranges = result.overlay_split.page_stack_band_ranges();
+        let last = ranges.last().unwrap();
+        assert!(
+            result.text_nodes[last.text.0..last.text.1]
+                .iter()
+                .any(|t| t.text == "toast-high"),
+            "higher z text in last band"
+        );
+    }
+
+    #[test]
+    fn portal_nested_z_stack_extends_overlay_bands_not_page_stack() {
+        // Toast lives under `__rui_portal_layer`. Nested z-cards must become *portal*
+        // bands; page_stack_bands end at the portal split and would drop overlay glyphs.
+        let lower = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(120.0)
+            .h(60.0)
+            .absolute()
+            .left(0.0)
+            .top(0.0)
+            .z_index(1)
+            .child(Element::new().text("portal-low"));
+        let upper = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(120.0)
+            .h(60.0)
+            .absolute()
+            .left(0.0)
+            .top(24.0)
+            .z_index(2)
+            .child(Element::new().text("portal-high"));
+        let pile = Element::new()
+            .w(200.0)
+            .h(120.0)
+            .relative()
+            .child(lower)
+            .child(upper);
+        let host = Element::new().w(400.0).h(300.0).child(pile);
+        let layer = Element::new()
+            .w(400.0)
+            .h(300.0)
+            .template_id(PORTAL_LAYER_ID)
+            .child(host);
+        let mut root = Element::new().w(400.0).h(300.0).child(layer);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 300.0, [0.0, 0.0]);
+        assert!(
+            result.overlay_split.marked,
+            "portal layer must mark overlay split"
+        );
+        assert!(
+            result.overlay_split.page_stack_bands.is_empty(),
+            "nested portal z-stack must not use page_stack_bands (got {})",
+            result.overlay_split.page_stack_bands.len()
+        );
+        assert!(
+            result.overlay_split.bands.len() >= 3,
+            "expect host band + 2 z-card bands, got {}",
+            result.overlay_split.bands.len()
+        );
+        let ranges = result.overlay_split.band_ranges(
+            result.instances.len(),
+            result.textured_draws.len(),
+            result.text_nodes.len(),
+            result.input_chrome_instances.len(),
+            result.paint_ops.len(),
+        );
+        let last = ranges.last().unwrap();
+        assert!(
+            result.text_nodes[last.text.0..last.text.1]
+                .iter()
+                .any(|t| t.text == "portal-high"),
+            "highest z toast text must be in the last overlay band"
+        );
+    }
+
+    #[test]
+    fn translated_opaque_shell_keeps_child_text_aligned() {
+        // Shell translate must not be applied twice (rect_pos + matrix tx/ty).
+        let mut shell = Element::new()
+            .bg([1.0, 1.0, 1.0, 1.0])
+            .w(160.0)
+            .h(48.0)
+            .absolute()
+            .left(10.0)
+            .top(10.0)
+            .child(Element::new().text("shell-label").w(140.0).h(20.0));
+        shell.style.translate = [0.0, 40.0];
+        let mut root = Element::new().w(400.0).h(200.0).child(shell);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 200.0, [0.0, 0.0]);
+        let shell_inst = result
+            .instances
+            .iter()
+            .find(|i| i.color[0] > 0.9 && i.rect_size[1] > 40.0)
+            .expect("opaque shell instance");
+        let label = result
+            .text_nodes
+            .iter()
+            .find(|t| t.text == "shell-label")
+            .expect("label text");
+        // Text top should sit inside the translated shell, not ~40px above it.
+        assert!(
+            (label.y - shell_inst.rect_pos[1]).abs() < 24.0,
+            "text y={:.1} drifted from shell y={:.1} (double-translate?)",
+            label.y,
+            shell_inst.rect_pos[1]
+        );
+        // Matrix tx/ty must stay ~0; translation lives in rect_pos only.
+        let tx = shell_inst.transform[4];
+        let ty = shell_inst.transform[5];
+        assert!(
+            tx.abs() < 0.01 && ty.abs() < 0.01,
+            "transform tx/ty should be 0 when translate is baked into rect_pos, got [{tx}, {ty}]"
+        );
     }
 
     /// Scaled parent under scroll must pass pre-scroll `abs_offset` to children.

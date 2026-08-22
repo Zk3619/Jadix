@@ -550,6 +550,9 @@ pub(crate) fn sync_radio_checked_subtree(
     impact: &mut LayoutStatus,
 ) {
     if let Some(sel) = el.radio_selected_sync {
+        if !sel.is_alive() {
+            el.radio_selected_sync = None;
+        } else {
         let item_value = el
             .attrs
             .get(ATTR_RADIO_VALUE)
@@ -596,6 +599,7 @@ pub(crate) fn sync_radio_checked_subtree(
             }
             crate::app::damage::push_frame_paint_damage(el.layout_bounds);
             *impact = impact.merge(LayoutStatus::StyleChanged);
+        }
         }
     }
     for child in &mut el.children {
