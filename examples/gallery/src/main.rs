@@ -4197,8 +4197,11 @@ fn TextareaComboboxShowcase() -> Element {
 }
 
 /// 浮层页默认通知：与「Toast」按钮同一 Toaster 根、stack 布局、入场动画。
+/// 每次推送前恢复 host 默认（避免点过 Wait/Displace 后 limit=2 / wait 残留）。
 fn gallery_feedback_toast(title: impl Into<String>, description: impl Into<String>) {
     toast_set_layout("stack");
+    toast_set_overflow("displace");
+    toast_set_limit(3);
     toast(title).description(description).duration(5000).show();
 }
 
@@ -4477,6 +4480,89 @@ fn OverlayFeedbackShowcase() -> Element {
             </TooltipContent>
         </Tooltip>
     };
+    let dd: Element = ui! {
+        <DropdownMenu id="gal-dd">
+            <DropdownMenuTrigger>
+                <Button variant="outline" size="sm">
+                    "DropdownMenu"
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+                <DropdownMenuLabel>"Actions"</DropdownMenuLabel>
+                <DropdownMenuItem on_click={|| {
+                    toast_push("Profile", 1500);
+                }}>
+                    "Profile"
+                    <DropdownMenuShortcut>"⇧⌘P"</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem on_click={|| {
+                    toast_push("Billing", 1500);
+                }}>
+                    "Billing"
+                    <DropdownMenuShortcut>"⌘B"</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem defaultChecked={true} on_click={|| {
+                    gallery_feedback_toast("Status Bar toggled", "DropdownMenu CheckboxItem");
+                }}>
+                    "Status Bar"
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem on_click={|| {
+                    gallery_feedback_toast("Activity Bar toggled", "DropdownMenu CheckboxItem");
+                }}>
+                    "Activity Bar"
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuRadioGroup defaultValue="bottom">
+                    <DropdownMenuLabel>"Panel Position"</DropdownMenuLabel>
+                    <DropdownMenuRadioItem value="top" on_click={|| {
+                        gallery_feedback_toast("Panel: Top", "DropdownMenu RadioItem");
+                    }}>
+                        "Top"
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="bottom" on_click={|| {
+                        gallery_feedback_toast("Panel: Bottom", "DropdownMenu RadioItem");
+                    }}>
+                        "Bottom"
+                    </DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="right" on_click={|| {
+                        gallery_feedback_toast("Panel: Right", "DropdownMenu RadioItem");
+                    }}>
+                        "Right"
+                    </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>"Invite users"</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                        <DropdownMenuItem on_click={|| {
+                            toast_push("Email…", 1500);
+                        }}>
+                            "Email…"
+                        </DropdownMenuItem>
+                        <DropdownMenuItem on_click={|| {
+                            toast_push("Message…", 1500);
+                        }}>
+                            "Message…"
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem on_click={|| {
+                            toast_push("More…", 1500);
+                        }}>
+                            "More…"
+                        </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" on_click={|| {
+                    toast_push("Log out", 1500);
+                }}>
+                    "Log out"
+                    <DropdownMenuShortcut>"⇧⌘Q"</DropdownMenuShortcut>
+                </DropdownMenuItem>
+            </DropdownMenuContent>
+        </DropdownMenu>
+    };
     let ctx: Element = ui! {
         <ContextMenu id="gal-ctx">
             <ContextMenuTrigger>
@@ -4498,6 +4584,31 @@ fn OverlayFeedbackShowcase() -> Element {
                     "Paste"
                     <ContextMenuShortcut>"⌘V"</ContextMenuShortcut>
                 </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuCheckboxItem defaultChecked={true} on_click={|| {
+                    gallery_feedback_toast("Show Bookmarks Bar toggled", "ContextMenu CheckboxItem");
+                }}>
+                    "Show Bookmarks Bar"
+                </ContextMenuCheckboxItem>
+                <ContextMenuCheckboxItem on_click={|| {
+                    gallery_feedback_toast("Show Full URLs toggled", "ContextMenu CheckboxItem");
+                }}>
+                    "Show Full URLs"
+                </ContextMenuCheckboxItem>
+                <ContextMenuSeparator />
+                <ContextMenuRadioGroup defaultValue="pedro">
+                    <ContextMenuLabel>"People"</ContextMenuLabel>
+                    <ContextMenuRadioItem value="pedro" on_click={|| {
+                        gallery_feedback_toast("Pedro Duarte", "ContextMenu RadioItem");
+                    }}>
+                        "Pedro Duarte"
+                    </ContextMenuRadioItem>
+                    <ContextMenuRadioItem value="colm" on_click={|| {
+                        gallery_feedback_toast("Colm Tuite", "ContextMenu RadioItem");
+                    }}>
+                        "Colm Tuite"
+                    </ContextMenuRadioItem>
+                </ContextMenuRadioGroup>
                 <ContextMenuSeparator />
                 <ContextMenuSub>
                     <ContextMenuSubTrigger>"More Tools"</ContextMenuSubTrigger>
@@ -4545,10 +4656,10 @@ fn OverlayFeedbackShowcase() -> Element {
     let progress_el: Element = progress().value_signal(progress_val).into();
 
     ui! {
-        <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Progress">
+        <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Dropdown · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、侧滑、Toast、Tooltip、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
+                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、侧滑、Toast、Tooltip、DropdownMenu、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
@@ -4578,6 +4689,14 @@ fn OverlayFeedbackShowcase() -> Element {
                         let _ = toast("Third").description("Front of stack — hover to expand").duration(6000).show();
                     }}>
                         "Stack ×3"
+                    </Button>
+                    <Button variant="outline" size="sm" on_click={move || {
+                        toast_set_layout("list");
+                        toast_set_overflow("displace");
+                        toast_set_limit(3);
+                        let _ = toast("List toast").description("Single list item (bottom-right)").duration(5000).show();
+                    }}>
+                        "List"
                     </Button>
                     <Button variant="outline" size="sm" on_click={move || {
                         toast_set_layout("list");
@@ -4620,6 +4739,15 @@ fn OverlayFeedbackShowcase() -> Element {
                         "Success"
                     </Button>
                     <Button variant="outline" size="sm" on_click={move || {
+                        toast("FYI")
+                            .description("Optional left icon is on by default.")
+                            .variant("info")
+                            .duration(2500)
+                            .show();
+                    }}>
+                        "Info"
+                    </Button>
+                    <Button variant="outline" size="sm" on_click={move || {
                         toast("Check network")
                             .variant("warning")
                             .duration(2500)
@@ -4634,6 +4762,16 @@ fn OverlayFeedbackShowcase() -> Element {
                             .show();
                     }}>
                         "Error"
+                    </Button>
+                    <Button variant="ghost" size="sm" on_click={move || {
+                        toast("No icon")
+                            .description("Same success tone without the glyph.")
+                            .variant("success")
+                            .icon(false)
+                            .duration(2500)
+                            .show();
+                    }}>
+                        "Success · no icon"
                     </Button>
                     <Button variant="ghost" size="sm" on_click={move || {
                         toast_set_position("top-left");
@@ -4689,6 +4827,7 @@ fn OverlayFeedbackShowcase() -> Element {
                         "Secondary window"
                     </Button>
                     { tip }
+                    { dd }
                 </HStack>
                 { ctx }
                 <VStack gap="0.35rem" w="100%">
@@ -5855,7 +5994,7 @@ fn build_gallery_app() -> Element {
         .variant("stack")
         .overflow("displace")
         .limit(3)
-        .position("top-right")
+        .position("top-center")
         .into();
     Element::new()
         .w("100%")

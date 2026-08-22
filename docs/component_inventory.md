@@ -98,7 +98,7 @@
 
 | 公开 API | 导出符号（摘要） | 桶 | id 策略 | 证据 / 笔记 |
 |----------|------------------|----|---------|-------------|
-| Table | `table` / `TableBuilder` / `TableColumn` | **experimental** | 必填实例键；列 `id` 排序键 | 基础 columns+data；分组/筛选取消稳定承诺 |
+| Table | `Table`/`TableHeader`/`TableBody`/`TableFooter`/`TableRow`/`TableHead`/`TableCell`/`TableCaption`；预设 `table`/`data_table`/`table_compact`/`table_comfortable` + `TableBuilder`/`TableColumn` | **experimental** | 数据表必填实例键；列 `id` 排序键 | 复合壳对齐 solid-ui；TanStack columns+data（排序/筛选/分页可选）；分组/pinning 不承诺 |
 | VirtualList | `virtual_list` / `VirtualListBuilder` | **experimental** | 必填实例键 | 测宽依赖；Table/Tree 底座 |
 | VirtualMasonry | `virtual_masonry` / `VirtualMasonryBuilder` | **experimental** | 必填实例键 | **WP-3.10 ☑**：变高瀑布流虚拟化；`item_height` + 测宽缓存；不进 §5.2.1 |
 | TreeView | `tree_view` / `TreeViewBuilder` / `TreeNode` | **experimental** | 必填实例键；节点 id | 大数据实验 |
