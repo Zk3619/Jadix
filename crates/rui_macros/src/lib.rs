@@ -776,7 +776,7 @@ fn expand_node(
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             let carousel_is_compound = matches!(
                 name_str.as_str(),
-                "Carousel" | "CarouselMulti" | "CarouselStack"
+                "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
             if name_str == "Reactive"
                 || name_str == "Show"
@@ -1344,6 +1344,10 @@ fn expand_node(
                     let loop_expr = get_attr("loop")
                         .or_else(|| get_attr("loop_slides"))
                         .or_else(|| get_attr("loopSlides"));
+                    let seamless_expr = get_attr("seamless")
+                        .or_else(|| get_attr("seamless_loop"))
+                        .or_else(|| get_attr("seamlessLoop"));
+                    let snap_expr = get_attr("snap");
                     let per_view_expr = get_attr("per_view")
                         .or_else(|| get_attr("perView"))
                         .or_else(|| get_attr("slides_per_view"))
@@ -1361,22 +1365,33 @@ fn expand_node(
                         .or_else(|| get_attr("endAlign"))
                         .or_else(|| get_attr("page_end"))
                         .or_else(|| get_attr("pageEnd"));
+                    let page_snap_expr = get_attr("page_snap")
+                        .or_else(|| get_attr("pageSnap"))
+                        .or_else(|| get_attr("carry_peek"))
+                        .or_else(|| get_attr("carryPeek"));
+                    let item_sizing_expr = get_attr("item_sizing")
+                        .or_else(|| get_attr("itemSizing"))
+                        .or_else(|| get_attr("sizing"));
+                    let item_width_expr = get_attr("item_width")
+                        .or_else(|| get_attr("itemWidth"))
+                        .or_else(|| get_attr("slide_width"))
+                        .or_else(|| get_attr("slideWidth"));
                     let dots_expr = get_attr("dots").or_else(|| get_attr("show_dots")).or_else(|| get_attr("showDots"));
                     let stack_sides_expr = get_attr("stack_sides")
                         .or_else(|| get_attr("stackSides"))
                         .or_else(|| get_attr("stack_depth"))
                         .or_else(|| get_attr("stackDepth"));
-                    let kind_default = match name_str.as_str() {
-                        "CarouselMulti" => "multi",
-                        "CarouselStack" => "stack",
-                        _ => "single",
+                    let variant_expr = get_attr("variant").or_else(|| get_attr("kind"));
+                    // 专用标签锁定变体；统一 `<Carousel>` 读 `variant`/`kind`（默认 single）。
+                    let (variant_default, default_per_view) = match name_str.as_str() {
+                        "CarouselSingle" => ("single", quote! { 1.0f32 }),
+                        "CarouselMulti" => ("multi", quote! { 2.2f32 }),
+                        "CarouselStack" => ("stack", quote! { 1.0f32 }),
+                        // 统一入口：缺省 perView 传 0，由 carousel_scope 按 variant 填默认。
+                        "Carousel" => ("single", quote! { 0.0f32 }),
+                        _ => ("single", quote! { 1.0f32 }),
                     };
-                    let default_per_view = if name_str == "CarouselMulti" {
-                        quote! { 2.2f32 }
-                    } else {
-                        quote! { 1.0f32 }
-                    };
-                    let default_dots = name_str != "CarouselMulti";
+                    let pinned_variant = !matches!(name_str.as_str(), "Carousel");
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -1425,6 +1440,24 @@ fn expand_node(
                     } else {
                         quote! { true }
                     };
+                    let seamless_ts = if let Some(d) = seamless_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { Some(#b) }
+                        } else {
+                            quote! { Some(rui::core::tree::parse_bool_like(#d)) }
+                        }
+                    } else {
+                        quote! { None }
+                    };
+                    let snap_ts = if let Some(d) = snap_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { true }
+                    };
                     let per_view_ts = if let Some(p) = per_view_expr {
                         quote! { (#p) as f32 }
                     } else {
@@ -1445,11 +1478,43 @@ fn expand_node(
                     } else {
                         quote! { "slide".to_string() }
                     };
-                    let kind_ts = quote! { #kind_default.to_string() };
+                    let kind_ts = if pinned_variant {
+                        let v = variant_default;
+                        quote! { #v.to_string() }
+                    } else if let Some(v) = variant_expr {
+                        quote! { (#v).to_string() }
+                    } else {
+                        let v = variant_default;
+                        quote! { #v.to_string() }
+                    };
                     let end_align_ts = if let Some(e) = end_align_expr {
                         quote! { (#e).to_string() }
                     } else {
                         quote! { "flush".to_string() }
+                    };
+                    let page_snap_ts = if let Some(p) = page_snap_expr {
+                        // carryPeek={true|false} → peek|viewport；或 pageSnap="peek"|"viewport"
+                        if let Some(b) = expr_as_bool_compat(p) {
+                            if b {
+                                quote! { "peek".to_string() }
+                            } else {
+                                quote! { "viewport".to_string() }
+                            }
+                        } else {
+                            quote! { (#p).to_string() }
+                        }
+                    } else {
+                        quote! { "peek".to_string() }
+                    };
+                    let item_sizing_ts = if let Some(s) = item_sizing_expr {
+                        quote! { (#s).to_string() }
+                    } else {
+                        quote! { "fraction".to_string() }
+                    };
+                    let item_width_ts = if let Some(w) = item_width_expr {
+                        quote! { (#w).to_string() }
+                    } else {
+                        quote! { "12rem".to_string() }
                     };
                     let dots_ts = if let Some(d) = dots_expr {
                         if let Some(b) = expr_as_bool_compat(d) {
@@ -1465,19 +1530,23 @@ fn expand_node(
                     } else {
                         quote! { 1u32 }
                     };
-                    let _ = default_dots; // kind default applied inside carousel_scope when dots=None
                     return quote! {
                         rui::components::carousel_scope(
                             #id_ts,
                             #index_ts,
                             #orientation_ts,
                             #loop_ts,
+                            #seamless_ts,
+                            #snap_ts,
                             #per_view_ts,
                             #autoplay_ts,
                             #controls_ts,
                             #scroll_by_ts,
                             #kind_ts,
                             #end_align_ts,
+                            #page_snap_ts,
+                            #item_sizing_ts,
+                            #item_width_ts,
                             #dots_ts,
                             #stack_sides_ts,
                             || #child_el,

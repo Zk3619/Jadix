@@ -105,6 +105,9 @@ pub(super) struct AppState {
     overlay_text_renderer: RuiTextRenderer,
     /// Extra glyphon pipelines for portal paint bands beyond the first (share FontSystem).
     overlay_band_text_renderers: Vec<RuiTextRenderer>,
+    /// Extra glyphon pipelines for in-page stacking bands beyond the first (CarouselStack).
+    /// Band 0 reuses [`Self::text_renderer`]; further bands share its FontSystem.
+    page_stack_band_text_renderers: Vec<RuiTextRenderer>,
     pub(super) root_element: Element,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
@@ -332,6 +335,7 @@ impl AppState {
                 && Self::approx_eq(x.y, y.y, TEXT_GEOM_EPS)
                 && Self::approx_eq(x.width, y.width, TEXT_GEOM_EPS)
                 && Self::approx_eq(x.height, y.height, TEXT_GEOM_EPS)
+                && Self::approx_eq(x.paint_scale, y.paint_scale, 0.002)
         })
     }
 
@@ -617,6 +621,7 @@ impl AppState {
             text_renderer,
             overlay_text_renderer,
             overlay_band_text_renderers: Vec::new(),
+            page_stack_band_text_renderers: Vec::new(),
             root_element,
             template_paths: HashMap::new(),
             pending_layout_dirty: Vec::new(),
@@ -742,10 +747,28 @@ impl AppState {
         }
     }
 
+    /// Grow shared-font page stacking pipelines (band 0 = [`Self::text_renderer`]).
+    fn ensure_page_stack_band_text_renderers(&mut self, band_count: usize) {
+        let extra_needed = band_count.saturating_sub(1);
+        while self.page_stack_band_text_renderers.len() < extra_needed {
+            let font_ptr = self.text_renderer.font_system_mut() as *mut glyphon::FontSystem;
+            self.page_stack_band_text_renderers
+                .push(RuiTextRenderer::new_sharing_font_system(
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    font_ptr,
+                ));
+        }
+    }
+
     fn trim_all_glyph_atlases(&mut self) {
         self.text_renderer.trim_glyph_atlas();
         self.overlay_text_renderer.trim_glyph_atlas();
         for tr in &mut self.overlay_band_text_renderers {
+            tr.trim_glyph_atlas();
+        }
+        for tr in &mut self.page_stack_band_text_renderers {
             tr.trim_glyph_atlas();
         }
     }
@@ -1997,9 +2020,13 @@ impl AppState {
             self.mark_full_redraw();
         }
         // Portal overlay text must be prepared/rendered in a second pass (after overlay rects).
-        // Skip the single-buffer text cache whenever overlay glyphs exist.
+        // Skip the single-buffer text cache whenever overlay glyphs exist or the page uses
+        // stacking bands (each band needs its own prepare for rects→text interleaving).
+        let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
+        let has_page_stack_bands = !page_stack_band_ranges.is_empty();
         let has_overlay_text = overlay_text_start < self.text_nodes.len();
         let text_cache_valid = !has_overlay_text
+            && !has_page_stack_bands
             && self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
             && self.last_text_surface_size == [self.config.width, self.config.height]
             && Self::text_nodes_equal(
@@ -2010,7 +2037,102 @@ impl AppState {
             && self.text_renderer.pending_warmup.is_empty();
         let shadow_cached_keys: std::collections::HashSet<u64> =
             self.shadow_tex_cache.keys().copied().collect();
-        let (underline_instances, caret_instances, shadow_tex_draws) = if text_cache_valid {
+        let mut page_stack_band_underlines: Vec<Vec<InstanceInput>> = Vec::new();
+        let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
+            self.ensure_page_stack_band_text_renderers(page_stack_band_ranges.len());
+            let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
+            let mut caret_all = Vec::new();
+            let mut shadow_all = Vec::new();
+            let mut needs_warmup = false;
+            let mut culled = false;
+            let text_prepare_begin = Instant::now();
+            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                let text_lo = band.text.0.min(overlay_text_start);
+                let text_hi = band.text.1.min(overlay_text_start);
+                let prep_out = if band_i == 0 {
+                    prepare_text_frame(
+                        &mut self.text_renderer,
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        &self.text_nodes[text_lo..text_hi],
+                        ui_scale,
+                        text_fast,
+                        &shadow_cached_keys,
+                        &self.shadow_rect_cache,
+                    )
+                } else {
+                    prepare_text_frame(
+                        &mut self.page_stack_band_text_renderers[band_i - 1],
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        &self.text_nodes[text_lo..text_hi],
+                        ui_scale,
+                        text_fast,
+                        &shadow_cached_keys,
+                        &self.shadow_rect_cache,
+                    )
+                };
+                if prep_out.culled_skip_prepare {
+                    culled = true;
+                    break;
+                }
+                for bm in &prep_out.shadow_new_bitmaps {
+                    let gpu = super::image_registry::upload_rgba8(
+                        &self.device,
+                        &self.queue,
+                        &self.textured_pipeline,
+                        &bm.rgba,
+                        bm.width,
+                        bm.height,
+                    );
+                    self.shadow_tex_cache.insert(bm.cache_key, gpu);
+                    self.shadow_rect_cache.insert(bm.cache_key, bm.draw_rect);
+                }
+                if prep_out.needs_warmup {
+                    needs_warmup = true;
+                }
+                underlines.push(prep_out.underline_instances);
+                caret_all.extend(prep_out.caret_instances);
+                shadow_all.extend(prep_out.shadow_tex_draws);
+            }
+            if culled {
+                self.window.request_redraw();
+                (
+                    self.last_underline_instances.clone(),
+                    self.last_caret_instances.clone(),
+                    self.last_shadow_tex_draws.clone(),
+                )
+            } else {
+                self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
+                self.last_text_ui_scale = ui_scale;
+                self.last_text_surface_size = [self.config.width, self.config.height];
+                self.last_underline_instances.clear();
+                self.last_caret_instances = caret_all.clone();
+                self.last_shadow_tex_draws = shadow_all.clone();
+                self.last_caret_blink_phase = caret_phase;
+                if self.text_backend == TextRendererBackend::CpuTextHybrid {
+                    self.cpu_text_profiler.record(
+                        (Instant::now() - text_prepare_begin).as_secs_f64() * 1000.0,
+                        overlay_text_start,
+                    );
+                }
+                if needs_warmup {
+                    self.window.request_redraw();
+                }
+                if crate::text::take_fit_needs_relayout() {
+                    if scroll_paint_only {
+                        crate::text::note_fit_needs_relayout();
+                    } else {
+                        self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
+                        self.window.request_redraw();
+                    }
+                }
+                page_stack_band_underlines = underlines;
+                (Vec::new(), caret_all, shadow_all)
+            }
+        } else if text_cache_valid {
             (
                 self.last_underline_instances.clone(),
                 self.last_caret_instances.clone(),
@@ -2499,10 +2621,147 @@ impl AppState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
+            // Text-shadow quads: before page stacking bands so higher-z card fills cover them.
+            if !use_backdrop_blur && has_page_stack_bands {
+                for sd in &shadow_tex_draws {
+                    let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
+                        continue;
+                    };
+                    let inst = TexturedInstanceInput {
+                        rect_pos: [sd.rect[0], sd.rect[1]],
+                        rect_size: [sd.rect[2], sd.rect[3]],
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                        uv_offset: [0.0, 0.0],
+                        uv_scale: [1.0, 1.0],
+                    };
+                    let shadow_inst_buf =
+                        self.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Shadow instance"),
+                                contents: bytemuck::cast_slice(&[inst]),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            });
+                    render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                    render_pass
+                        .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
+                    render_pass.set_index_buffer(
+                        self.textured_pipeline.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
+                }
+            }
+
             // Page layer: tree-order rects + textures (Solid/CSS stacking with portal overlays).
+            // With in-page stacking bands (CarouselStack): each band is `rects → text` so
+            // higher-z card fills occlude lower cards' glyphs.
             // Skipped when backdrop blur already composited the page.
             if allow_primitives && !use_backdrop_blur {
-                if overlay_paint_start > 0 {
+                if has_page_stack_bands {
+                    for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                        if band.paint_ops.0 < band.paint_ops.1 {
+                            draw_paint_ops(
+                                &mut render_pass,
+                                &render_result.paint_ops,
+                                band.paint_ops.0,
+                                band.paint_ops.1,
+                                &self.pipeline,
+                                &self.instance_buffer,
+                                &self.textured_pipeline,
+                                &self.textured_instance_buffer,
+                                &self.image_textures,
+                                &scaled_tex,
+                            );
+                        } else if band.instance.0 < band.instance.1 {
+                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                self.pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(
+                                0..self.pipeline.num_indices,
+                                0,
+                                band.instance.0 as u32..band.instance.1 as u32,
+                            );
+                            if band.textured.0 < band.textured.1 {
+                                draw_packed_textured_runs(
+                                    &mut render_pass,
+                                    &self.textured_pipeline,
+                                    &self.textured_instance_buffer,
+                                    &self.image_textures,
+                                    &scaled_tex,
+                                    band.textured.0,
+                                    band.textured.1,
+                                );
+                            }
+                        }
+
+                        if band.chrome.0 < band.chrome.1 {
+                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                            let chrome_slice =
+                                &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                            let chrome_buffer = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("Page Stack Chrome Buffer"),
+                                    contents: bytemuck::cast_slice(chrome_slice),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                },
+                            );
+                            render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                self.pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(
+                                0..self.pipeline.num_indices,
+                                0,
+                                0..chrome_slice.len() as u32,
+                            );
+                        }
+
+                        if let Some(ul) = page_stack_band_underlines.get(band_i) {
+                            if !ul.is_empty() {
+                                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                render_pass
+                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                let underline_buffer = self.device.create_buffer_init(
+                                    &wgpu::util::BufferInitDescriptor {
+                                        label: Some("Page Stack Underline Buffer"),
+                                        contents: bytemuck::cast_slice(ul),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    },
+                                );
+                                render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                                render_pass.set_index_buffer(
+                                    self.pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                render_pass.draw_indexed(
+                                    0..self.pipeline.num_indices,
+                                    0,
+                                    0..ul.len() as u32,
+                                );
+                            }
+                        }
+
+                        if band.text.0 < band.text.1 {
+                            if band_i == 0 {
+                                self.text_renderer.render(&mut render_pass);
+                            } else {
+                                self.page_stack_band_text_renderers[band_i - 1]
+                                    .render(&mut render_pass);
+                            }
+                        }
+                    }
+                } else if overlay_paint_start > 0 {
                     draw_paint_ops(
                         &mut render_pass,
                         &render_result.paint_ops,
@@ -2535,7 +2794,7 @@ impl AppState {
                 }
             }
 
-            if !use_backdrop_blur {
+            if !use_backdrop_blur && !has_page_stack_bands {
                 for sd in &shadow_tex_draws {
                     let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
                         continue;
@@ -2567,7 +2826,7 @@ impl AppState {
                 }
             }
 
-            if !underline_instances.is_empty() && !use_backdrop_blur {
+            if !has_page_stack_bands && !underline_instances.is_empty() && !use_backdrop_blur {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
@@ -2590,12 +2849,17 @@ impl AppState {
                 );
             }
 
-            if !use_backdrop_blur {
+            if !has_page_stack_bands && !use_backdrop_blur {
                 self.text_renderer.render(&mut render_pass);
             }
 
             // Page input chrome above page glyphs, below portal overlay.
-            if allow_primitives && overlay_chrome_start > 0 && !use_backdrop_blur {
+            // (Stacking bands already drew per-band chrome inside the band loop.)
+            if allow_primitives
+                && overlay_chrome_start > 0
+                && !use_backdrop_blur
+                && !has_page_stack_bands
+            {
                 render_pass.set_pipeline(&self.pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
