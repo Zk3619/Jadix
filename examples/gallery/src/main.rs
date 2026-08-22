@@ -5064,11 +5064,11 @@ fn DataChartShowcase() -> Element {
     let carousel_el = ui! {
         <VStack w="100%" max_w="36rem" mx="auto" gap="1.25rem">
             <VStack w="100%" gap="0.5rem">
-                <Label font_weight="600" text_size="0.875rem">{ "Carousel · 单页" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselSingle · autoplay" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "单页满幅 · 默认底部进度点 · 无缝循环 · controls=outside"
+                    "variant=single · autoplay=4000 · loop+seamless · dots · controls=outside"
                 </Label>
-                <Carousel id="gal-carousel-single" controls="outside">
+                <CarouselSingle id="gal-carousel-single" controls="outside" autoplay={4000} loop={true} seamless={true}>
                     <CarouselContent>
                         <CarouselItem>
                             <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
@@ -5091,15 +5091,101 @@ fn DataChartShowcase() -> Element {
                     </CarouselContent>
                     <CarouselPrevious />
                     <CarouselNext />
-                </Carousel>
+                </CarouselSingle>
             </VStack>
 
             <VStack w="100%" gap="0.5rem">
-                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · 多列 slide" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · fraction peek" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "perView=2.2 · scrollBy=slide · 无缝环形 · autoplay · 默认无进度点"
+                    "perView=2.2 · itemSizing=fraction · 首项左对齐 · 右侧裁切 · loop+seamless（无 autoplay 便于看初始态）"
                 </Label>
-                <CarouselMulti id="gal-carousel-multi-slide" perView={2.2} scrollBy="slide" autoplay={4000}>
+                <CarouselMulti id="gal-carousel-multi-slide" perView={2.2} scrollBy="slide" loop={true} seamless={true} itemSizing="fraction">
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselMulti>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · fixed + free drag" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "itemSizing=fixed · itemWidth=12rem · snap=false · loop=false · 可随意拖拽"
+                </Label>
+                <CarouselMulti id="gal-carousel-multi-fixed" itemSizing="fixed" itemWidth="12rem" snap={false} loop={false}>
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselMulti>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · seamless + free drag" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "loop+seamless · snap=false · perView=2.2 · 自由拖拽可无限绕圈（无格点吸附）"
+                </Label>
+                <CarouselMulti id="gal-carousel-multi-seamless-free" perView={2.2} loop={true} seamless={true} snap={false} itemSizing="fraction">
                     <CarouselContent>
                         <CarouselItem>
                             <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
@@ -5140,9 +5226,9 @@ fn DataChartShowcase() -> Element {
             <VStack w="100%" gap="0.5rem">
                 <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · page + flush" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "scrollBy=page · endAlign=flush（末项贴右）"
+                    "scrollBy=page · pageSnap=viewport · endAlign=flush · 整屏推进 · loop=false"
                 </Label>
-                <CarouselMulti id="gal-carousel-multi-flush" perView={2.2} scrollBy="page" endAlign="flush">
+                <CarouselMulti id="gal-carousel-multi-flush" perView={2.2} scrollBy="page" pageSnap="viewport" endAlign="flush" loop={false}>
                     <CarouselContent>
                         <CarouselItem>
                             <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
@@ -5183,9 +5269,9 @@ fn DataChartShowcase() -> Element {
             <VStack w="100%" gap="0.5rem">
                 <Label font_weight="600" text_size="0.875rem">{ "CarouselMulti · page + pad" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "scrollBy=page · endAlign=pad（尾部空白翻页）"
+                    "scrollBy=page · pageSnap=peek · endAlign=pad · 裁切尾项成为下页首项 · loop=false"
                 </Label>
-                <CarouselMulti id="gal-carousel-multi-pad" perView={2.2} scrollBy="page" endAlign="pad">
+                <CarouselMulti id="gal-carousel-multi-pad" perView={2.2} scrollBy="page" pageSnap="peek" endAlign="pad" loop={false}>
                     <CarouselContent>
                         <CarouselItem>
                             <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
@@ -5224,11 +5310,11 @@ fn DataChartShowcase() -> Element {
             </VStack>
 
             <VStack w="100%" gap="0.5rem">
-                <Label font_weight="600" text_size="0.875rem">{ "CarouselStack · 两侧堆叠" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselStack · autoplay" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "默认左右各 1 张（stackSides=1）· 中间项顶层不透明"
+                    "autoplay=4000 · stackSides=1 · loop=true · 悬停暂停 · 亦可拖拽吸附"
                 </Label>
-                <CarouselStack id="gal-carousel-stack" controls="outside" stackSides={1}>
+                <CarouselStack id="gal-carousel-stack-auto" controls="outside" stackSides={1} loop={true} autoplay={4000}>
                     <CarouselContent>
                         <CarouselItem>
                             <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
@@ -5258,6 +5344,49 @@ fn DataChartShowcase() -> Element {
                             <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "Stack E" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious />
+                    <CarouselNext />
+                </CarouselStack>
+            </VStack>
+
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600" text_size="0.875rem">{ "CarouselStack · drag" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "无 autoplay · 拖拽跟手 · 松手吸附 · stackSides=1 · loop=true"
+                </Label>
+                <CarouselStack id="gal-carousel-stack-drag" controls="outside" stackSides={1} loop={true}>
+                    <CarouselContent>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Drag A" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Drag B" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600">{ "Drag C" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="primary-foreground">{ "Drag D" }</Label>
+                            </Rect>
+                        </CarouselItem>
+                        <CarouselItem>
+                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                                  items="center" justify="center">
+                                <Label font_weight="600" color="destructive-foreground">{ "Drag E" }</Label>
                             </Rect>
                         </CarouselItem>
                     </CarouselContent>
