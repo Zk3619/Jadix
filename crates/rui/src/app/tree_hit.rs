@@ -195,12 +195,7 @@ pub(super) fn visual_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     }
     let sw = b[2] * sx;
     let sh = b[3] * sy;
-    [
-        vx + (b[2] - sw) * 0.5,
-        vy + (b[3] - sh) * 0.5,
-        sw,
-        sh,
-    ]
+    [vx + (b[2] - sw) * 0.5, vy + (b[3] - sh) * 0.5, sw, sh]
 }
 
 /// Visual border box for hit-testing / inspector pick.
@@ -230,10 +225,8 @@ pub(crate) fn next_hit_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2
     let mut next = scroll_acc;
     let ox = el.style.overflow.x;
     let oy = el.style.overflow.y;
-    let scroll_x = is_scroll_viewport
-        || matches!(ox, taffy::style::Overflow::Scroll);
-    let scroll_y = is_scroll_viewport
-        || matches!(oy, taffy::style::Overflow::Scroll);
+    let scroll_x = is_scroll_viewport || matches!(ox, taffy::style::Overflow::Scroll);
+    let scroll_y = is_scroll_viewport || matches!(oy, taffy::style::Overflow::Scroll);
     if scroll_x {
         next[0] += el.scroll_offset[0];
     }
@@ -729,12 +722,8 @@ pub(super) fn update_hovers(
     };
     let force = HOVER_NEEDS_RESYNC.replace(false);
     let scope = crate::core::reactivity::signal_key_scope();
-    let prev = LAST_HOVER_BY_SCOPE.with(|map| {
-        map.borrow_mut()
-            .entry(scope)
-            .or_insert(None)
-            .clone()
-    });
+    let prev =
+        LAST_HOVER_BY_SCOPE.with(|map| map.borrow_mut().entry(scope).or_insert(None).clone());
     let same_identity = match (&prev, &target) {
         (Some(a), Some(b)) => a.key == b.key,
         (None, None) => true,
@@ -742,9 +731,7 @@ pub(super) fn update_hovers(
     };
     if same_identity {
         if let Some(next) = target {
-            let rc_changed = prev
-                .as_ref()
-                .is_some_and(|p| !Rc::ptr_eq(&p.cb, &next.cb));
+            let rc_changed = prev.as_ref().is_some_and(|p| !Rc::ptr_eq(&p.cb, &next.cb));
             // Quiet Rc refresh after rebuild. Re-fire enter when soft-invalidated, or when the
             // handler Rc was replaced while `{focus_id}_hover` is still false (desync after
             // jank/rebuild — otherwise chrome stays dead until a click forces a leave/enter).
@@ -786,6 +773,11 @@ pub(super) fn update_hovers(
     let streak = HOVER_MISS_STREAK.get().saturating_add(1);
     HOVER_MISS_STREAK.set(streak);
     if streak < 2 {
+        // The deferred leave MUST pump its own frame. `update_hovers` only runs from
+        // `CursorMoved` and from the non-scroll redraw pass, so if the pointer leaves the
+        // element and then stops, nothing produces miss #2 and the leave is lost forever
+        // (Toast's hover stack then stays expanded with every auto-dismiss timer frozen).
+        crate::primitives::interactive::mark_hover_paint_dirty();
         return;
     }
     HOVER_MISS_STREAK.set(0);
@@ -846,10 +838,7 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
 
     let b = el.layout_bounds;
     let hit = visual_hit_box(el, scroll_acc);
-    let inside = x >= hit[0]
-        && x <= hit[0] + hit[2]
-        && y >= hit[1]
-        && y <= hit[1] + hit[3];
+    let inside = x >= hit[0] && x <= hit[0] + hit[2] && y >= hit[1] && y <= hit[1] + hit[3];
 
     let is_body_portal =
         el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
@@ -997,10 +986,7 @@ pub(super) enum TextDragHScrollTick {
 ///
 /// Used to clamp drag-select hit-testing to the visible edge (avoids selection
 /// jumping ahead along a wide nowrap leaf when the pointer is outside the clip).
-pub(super) fn textarea_scrollport_visual_clip(
-    root: &Element,
-    field_id: &str,
-) -> Option<[f32; 4]> {
+pub(super) fn textarea_scrollport_visual_clip(root: &Element, field_id: &str) -> Option<[f32; 4]> {
     use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
     use crate::utils::text_field::textarea_scroll_rest;
 
@@ -1564,10 +1550,19 @@ mod hover_occlusion_tests {
             (*cb.borrow_mut())(is_hover);
         }
 
-        // First miss: hold hover.
+        // First miss: hold hover — but the deferred leave must pump its own frame.
+        // `update_hovers` only runs from `CursorMoved` and the redraw pass, so for a pointer
+        // that leaves the element and then stops, nothing else produces miss #2 and the leave
+        // would be lost forever (Toast's hover stack then stays expanded with every
+        // auto-dismiss timer frozen).
+        let _ = crate::primitives::interactive::take_hover_paint_dirty();
         update_hovers(&root, 100.0, 100.0, [0.0, 0.0], &mut to_run);
         assert!(to_run.is_empty());
         assert_eq!(leaves.get(), 0);
+        assert!(
+            crate::primitives::interactive::take_hover_paint_dirty(),
+            "first miss must request a frame so miss #2 can arrive under a still pointer"
+        );
 
         // Second miss: leave.
         update_hovers(&root, 100.0, 100.0, [0.0, 0.0], &mut to_run);
@@ -1654,8 +1649,8 @@ mod hover_occlusion_tests {
     }
 }
 
-    #[cfg(test)]
-    mod focused_key_dispatch_tests {
+#[cfg(test)]
+mod focused_key_dispatch_tests {
     use super::*;
     use crate::core::reactivity::use_signal;
     use crate::primitives::interactive::interactive;

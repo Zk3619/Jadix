@@ -47,7 +47,7 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
-use crate::core::tree::{Element, LayoutStatus, ATTR_POINTER_EVENTS, PointerEvents};
+use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::{LayoutTree, ATTR_PORTAL_KEY};
 use crate::primitives::interactive::interactive;
@@ -294,6 +294,12 @@ struct ToastTimer {
 }
 
 const SWIPE_DISMISS_PX: f32 = 56.0;
+/// 冻结时剩余时长的下限。正好在到期瞬间悬停，`saturating_sub` 会把剩余削到 0；
+/// 收起后该卡会在指针刚移开时原地蒸发。留一点余量，让「收起→接续→退场」看得见。
+const TOAST_PAUSE_FLOOR: Duration = Duration::from_millis(120);
+/// 顺延到期时留出的间隙：目标是落在上一段退场被 [`finalize_exits`] 摘掉之后，
+/// 否则同一帧里预算仍是满的，会被反复顺延。
+const TOAST_EXIT_GAP: Duration = Duration::from_millis(32);
 /// 退场滑出动画时长（到时后真正出队）。
 const TOAST_EXIT_MS: u64 = 320;
 /// 收起堆叠中后方条目淡出时长（Sonner opacity ~200ms）。
@@ -411,8 +417,18 @@ pub(crate) fn is_toast_dragging() -> bool {
     TOAST_DRAG.with(|d| d.borrow().is_some())
 }
 
+/// 计时是否应冻结：堆叠布局下悬停展开或拖拽即冻结（Sonner 口径）。
+///
+/// 逐项对账与新条目上计时都以此为准，**勿**只读 [`TOAST_STACK_TIMER_PAUSED`]——
+/// 那只是缓存，hover-out 掉帧时会滞后于真实展开态。
+fn toast_timers_should_freeze() -> bool {
+    is_stack_layout() && stack_expanded_now()
+}
+
 fn arm_toast_timer(id: u64, duration: Duration) {
-    let running = !TOAST_STACK_TIMER_PAUSED.get();
+    // 展开态下新到的通知同样生下来就冻结（悬停期间不该偷跑）；
+    // 收起后由 `apply_stack_timer_pause` 逐项接续。
+    let running = !(TOAST_STACK_TIMER_PAUSED.get() || toast_timers_should_freeze());
     TOAST_TIMERS.with(|m| {
         m.borrow_mut().insert(
             id,
@@ -546,6 +562,25 @@ fn ensure_exit_budget(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) 
     }
 }
 
+/// 非挤出退场（关闭/到期）是否已占满预算；占满时返回最晚一段的结束时刻。
+///
+/// [`prune_expired`] 用它把同帧其余到期项顺延，而不是 snap 掉正在播的那张。
+/// 若在播的那段没有 `exit_started`（[`finalize_exits`] 永远摘不掉它），返回 `None`
+/// 交回 [`ensure_exit_budget`] 走老路 snap，避免顺延变死等。
+fn non_displace_exit_busy_until(q: &[ToastItem]) -> Option<Instant> {
+    let mut until: Option<Instant> = None;
+    let mut n = 0usize;
+    for t in q.iter().filter(|t| t.exiting && !is_displace_exit(t.id)) {
+        n += 1;
+        let at = toast_exit_finish_at(t)?;
+        until = Some(until.map_or(at, |u| u.max(at)));
+    }
+    if n < MAX_CONCURRENT_EXITING {
+        return None;
+    }
+    until
+}
+
 /// 可见队列中视觉最前 = 最新的非退场项（队列末尾方向）。
 fn visible_front_id(q: &[ToastItem]) -> Option<u64> {
     q.iter().rev().find(|t| !t.exiting).map(|t| t.id)
@@ -570,7 +605,10 @@ fn pause_toast_timer(id: u64) {
     TOAST_TIMERS.with(|m| {
         if let Some(t) = m.borrow_mut().get_mut(&id) {
             if let Some(since) = t.running_since.take() {
-                t.remaining = t.remaining.saturating_sub(since.elapsed());
+                t.remaining = t
+                    .remaining
+                    .saturating_sub(since.elapsed())
+                    .max(TOAST_PAUSE_FLOOR);
             }
         }
     });
@@ -579,9 +617,25 @@ fn pause_toast_timer(id: u64) {
 fn resume_toast_timer(id: u64) {
     TOAST_TIMERS.with(|m| {
         if let Some(t) = m.borrow_mut().get_mut(&id) {
-            if t.running_since.is_none() && !t.remaining.is_zero() {
+            // 勿因 `remaining` 已归零就拒绝接续：那样 `running_since` 永远是 None，
+            // `toast_timer_expired` 恒 false，这条通知就再也不会自动退场了。
+            if t.running_since.is_none() {
                 t.running_since = Some(Instant::now());
             }
+        }
+    });
+}
+
+/// 到期但退场预算已满：顺延这条的到期时刻，**勿** snap 正在播的退场。
+///
+/// 见 [`prune_expired`]：一批同时到期时逐张顺延，才能一张接一张滑出。
+fn defer_toast_timer(id: u64, delay: Duration) {
+    // 冻结态下计时不会到期，理论上到不了这里；仍按冻结口径落盘，别偷跑。
+    let running = !toast_timers_should_freeze();
+    TOAST_TIMERS.with(|m| {
+        if let Some(t) = m.borrow_mut().get_mut(&id) {
+            t.remaining = delay;
+            t.running_since = running.then(Instant::now);
         }
     });
 }
@@ -677,13 +731,12 @@ pub(crate) fn clear_toast_drag_if_any() {
     }
 }
 
-fn set_stack_timers_paused(paused: bool) {
-    if TOAST_STACK_TIMER_PAUSED.get() == paused {
-        return;
-    }
+/// 逐项同步冻结态。**勿**按 [`TOAST_STACK_TIMER_PAUSED`] 早退：
+/// `displace` 挤出的条目在退场动画期间被 `t.exiting` 跳过、计时仍在跑，落进 pending
+/// 后 `exiting` 又被清掉，只有逐项对账才能在展开期间把它一并冻住（否则它会在悬停
+/// 期间悄悄到期，等收起时整批一起蒸发）。pause/resume 幂等，重复对账是廉价 no-op。
+fn apply_stack_timer_pause(paused: bool, q: &[ToastItem], p: &[ToastItem]) {
     TOAST_STACK_TIMER_PAUSED.set(paused);
-    let q = toast_queue().peek();
-    let p = toast_pending().peek();
     for t in q.iter().chain(p.iter()) {
         if t.exiting {
             continue;
@@ -694,6 +747,12 @@ fn set_stack_timers_paused(paused: bool) {
             resume_toast_timer(t.id);
         }
     }
+}
+
+fn set_stack_timers_paused(paused: bool) {
+    let q = toast_queue().peek();
+    let p = toast_pending().peek();
+    apply_stack_timer_pause(paused, &q, &p);
 }
 
 fn set_item_timer_paused(id: u64, paused: bool) {
@@ -799,22 +858,30 @@ fn begin_toast_exit(id: u64, from_drag: Option<[f32; 2]>) {
 
 /// 到期开始退场、退场结束出队；返回是否有队列变化（需重绘）。
 ///
-/// 由 [`paint_toast_host`] 调用：队列写入用 **silent**，避免同帧再次唤醒宿主 effect
-/// （挤出结束 + promote 时否则会连跑两次 reconcile）。
+/// 事件循环调用时必须通知队列订阅者，让 toast host 以新的 `exiting` 状态重新调和；
+/// 单纯 `request_redraw` 只会重画旧 Element 树，新通知到来前不会出现退场动画。
 pub(crate) fn tick_toast_lifecycle() -> bool {
+    tick_toast_lifecycle_commit(true)
+}
+
+/// `notify=false` 仅供 [`paint_toast_host`] 的构建过程使用：该次构建随后会直接读取并
+/// 渲染刚提交的队列，若再通知自身会造成同帧重复 reconcile。
+fn tick_toast_lifecycle_commit(notify: bool) -> bool {
     let mut q = toast_queue().peek();
     let mut p = toast_pending().peek();
 
     // 无可见活跃项：先恢复 pending 计时并剔除到期项，避免暂停状态下永远无法 prune。
     if active_count(&q) == 0 {
         expanded_signal().set_silent(false);
-        set_stack_timers_paused(false);
+        apply_stack_timer_pause(false, &q, &p);
         prune_expired_pending_into(&mut p);
     }
 
     // stack：以展开态为准同步冻结，避免 hover 重建闪断把计时误恢复。
+    // 逐项对账（勿早退）：全局标志在 hover-out 掉帧时会滞后，且挤出→pending 的条目
+    // 需要在这里补上冻结。
     if is_stack_layout() {
-        set_stack_timers_paused(expanded_signal().peek() || is_toast_dragging());
+        apply_stack_timer_pause(toast_timers_should_freeze(), &q, &p);
     }
 
     let started = prune_expired(&mut q, &mut p);
@@ -822,8 +889,15 @@ pub(crate) fn tick_toast_lifecycle() -> bool {
     let pending_pruned = prune_expired_pending_into(&mut p);
     let visible_empty_after_exit = active_count(&q) == 0;
     if started || removed || pending_pruned {
-        let _ = toast_queue().try_set_silent(q);
-        let _ = toast_pending().try_set_silent(p);
+        if notify {
+            batch(|| {
+                toast_queue().set(q);
+                toast_pending().set(p);
+            });
+        } else {
+            let _ = toast_queue().try_set_silent(q);
+            let _ = toast_pending().try_set_silent(p);
+        }
     }
     if removed {
         if visible_empty_after_exit {
@@ -835,6 +909,21 @@ pub(crate) fn tick_toast_lifecycle() -> bool {
     started || pending_pruned
 }
 
+/// 退场动画结束（应出队）的时刻：最前滑出与后方淡出时长不同。
+///
+/// [`finalize_exits`] 按同一口径摘树；[`toast_next_wake_at`] 与
+/// [`non_displace_exit_busy_until`] 复用此处，勿各自重算时长。
+fn toast_exit_finish_at(t: &ToastItem) -> Option<Instant> {
+    let started = t.exit_started?;
+    let behind_fade = toast_exit_vis(t.id).is_some_and(|v| !v.as_front);
+    let ms = if behind_fade {
+        TOAST_BEHIND_EXIT_MS
+    } else {
+        TOAST_EXIT_MS
+    };
+    Some(started + Duration::from_millis(ms))
+}
+
 /// 下一次应唤醒事件循环的时刻（到期或退场结束）。
 pub(crate) fn toast_next_wake_at() -> Option<Instant> {
     let q = toast_queue().peek();
@@ -842,19 +931,10 @@ pub(crate) fn toast_next_wake_at() -> Option<Instant> {
     if q.is_empty() && p.is_empty() {
         return None;
     }
-    let exit_dur_front = Duration::from_millis(TOAST_EXIT_MS);
-    let exit_dur_behind = Duration::from_millis(TOAST_BEHIND_EXIT_MS);
     let mut next: Option<Instant> = None;
     for t in &q {
         if t.exiting {
-            if let Some(started) = t.exit_started {
-                let behind_fade = toast_exit_vis(t.id).is_some_and(|v| !v.as_front);
-                let dur = if behind_fade {
-                    exit_dur_behind
-                } else {
-                    exit_dur_front
-                };
-                let at = started + dur;
+            if let Some(at) = toast_exit_finish_at(t) {
                 next = Some(next.map_or(at, |n| n.min(at)));
             }
             continue;
@@ -1003,6 +1083,10 @@ pub fn toast_set_layout(variant: impl Into<String>) {
     match layout {
         ToastLayout::List => {
             expanded_signal().set(false);
+            // A layout switch can happen while the stack is hovered. Clear the
+            // stack-wide pause latch and re-arm all existing timers before list
+            // mode takes over (list mode does not run stack reconciliation).
+            set_stack_timers_paused(false);
             position_signal().set(ToastPosition::BottomRight.as_str().to_string());
         }
         ToastLayout::Stack => {
@@ -1110,7 +1194,7 @@ fn rebalance_visible_queue_commit(notify: bool) {
     if active_count(&q) < lim && !p.is_empty() {
         if active_count(&q) == 0 {
             expanded_signal().set_silent(false);
-            set_stack_timers_paused(false);
+            apply_stack_timer_pause(false, &q, &p);
             let _ = prune_expired_pending_into(&mut p);
         }
     }
@@ -1178,7 +1262,17 @@ fn prune_expired(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) -> bo
         return false;
     }
     let now = Instant::now();
+    let mut started_any = false;
     for (id, as_front, rank) in plans {
+        // 预算已满：**勿**让 `ensure_exit_budget` snap 掉正在播的那张。一批同时到期
+        // （连点推送、或悬停冻结后一起接续时必然如此）会把前 N-1 张无动画瞬间抹掉，
+        // 看起来就是「原通知全部消失」。改为顺延到当前退场播完，逐张滑出。
+        let busy_until = non_displace_exit_busy_until(q);
+        if let Some(until) = busy_until {
+            let delay = until.saturating_duration_since(now) + TOAST_EXIT_GAP;
+            defer_toast_timer(id, delay);
+            continue;
+        }
         ensure_exit_budget(q, pending_out);
         let Some(t) = q.iter_mut().find(|t| t.id == id) else {
             continue;
@@ -1201,8 +1295,10 @@ fn prune_expired(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) -> bo
         });
         toast_exit_from_xy(id).set([0.0, 0.0]);
         pause_toast_timer(id);
+        started_any = true;
     }
-    true
+    // 全部顺延时队列未变：勿谎报变化，否则白跑一帧 reconcile。
+    started_any
 }
 
 fn prune_expired_pending_into(p: &mut Vec<ToastItem>) -> bool {
@@ -1227,8 +1323,8 @@ fn sync_pending_when_visible_empty(q: &[ToastItem]) {
         return;
     }
     expanded_signal().set_silent(false);
-    set_stack_timers_paused(false);
     let mut p = toast_pending().peek();
+    apply_stack_timer_pause(false, q, &p);
     if prune_expired_pending_into(&mut p) {
         // paint / tick 路径：silent，避免同帧再跑宿主。
         let _ = toast_pending().try_set_silent(p);
@@ -1795,10 +1891,7 @@ fn apply_enter_motion(
             .unwrap_or(0.0);
         let seed_y = toast_enter_offset_y(from_bottom) + seed_lift;
         // 自透明 + 边缘起步，避免强 ease-out 下「已完全可见却瞬移到位」。
-        card = card
-            .translate(0.0, seed_y)
-            .opacity(0.0)
-            .scale(scale);
+        card = card.translate(0.0, seed_y).opacity(0.0).scale(scale);
         ensure_toast_css_transition(&mut card, duration_ms, css_phase);
         snap_element_transitions_to_current(&card.style, &mut card.transition_snapshot);
         card.style.translate = [tx, ty];
@@ -1862,8 +1955,7 @@ fn apply_enter_motion(
     let last_shadow_a = Cell::new(None::<f32>);
     let last_pe_none = Cell::new(None::<bool>);
     card = card.reactive_sync(move |el: &mut Element, _lt: &mut LayoutTree| {
-        let dragging =
-            TOAST_DRAG.with(|d| d.borrow().as_ref().is_some_and(|dg| dg.id == item_id));
+        let dragging = TOAST_DRAG.with(|d| d.borrow().as_ref().is_some_and(|dg| dg.id == item_id));
         let behind = stack_for_sync.as_ref().is_some_and(|s| s.behind_fade);
         let dim_shadow = stack_for_sync
             .as_ref()
@@ -1961,10 +2053,7 @@ fn apply_enter_motion(
         // 会让堆里每张每帧都走重路径。
         let self_animating = !dragging
             && (el.transition_snapshot.has_active_tweens()
-                || crate::style::css_transition_needs_frame(
-                    &el.style,
-                    &el.transition_snapshot,
-                ));
+                || crate::style::css_transition_needs_frame(&el.style, &el.transition_snapshot));
         if self_animating || impact != LayoutStatus::Clean {
             crate::app::damage::push_frame_paint_damage(el.layout_bounds);
         }
@@ -1981,8 +2070,7 @@ fn apply_enter_motion(
 /// `ancestor_scale` 继承，避免子节点各自绕中心缩放导致文字脱壳。
 fn reset_toast_descendant_scales(el: &mut Element) {
     for child in &mut el.children {
-        if (child.style.scale[0] - 1.0).abs() > 0.001
-            || (child.style.scale[1] - 1.0).abs() > 0.001
+        if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
         {
             child.style.scale = [1.0, 1.0];
         }
@@ -2508,7 +2596,7 @@ fn toast_viewport_stage(panel: Element) -> Element {
 
 pub(crate) fn paint_toast_host() -> Element {
     let open = use_signal(TOAST_HOST_OPEN, || true);
-    let _ = tick_toast_lifecycle();
+    let _ = tick_toast_lifecycle_commit(false);
     let q = toast_queue().get();
     let _ = open.get();
     let _ = toast_pending().get(); // 等待队列变化时重绘（角标/状态）
@@ -2634,7 +2722,10 @@ mod tests {
         assert!(toast_enter_offset_y(true) > 0.0);
         assert!(toast_exit_offset_y(true) > 0.0);
         // 无拖拽时 front 终点。
-        assert_eq!(exit_target([0.0, 0.0], false)[1], toast_exit_offset_y(false));
+        assert_eq!(
+            exit_target([0.0, 0.0], false)[1],
+            toast_exit_offset_y(false)
+        );
         assert_eq!(exit_target([0.0, 0.0], true)[1], toast_exit_offset_y(true));
     }
 
@@ -2656,7 +2747,10 @@ mod tests {
         );
         let lift = stack_lift_visual(false, 14.0, 0.95);
         assert_eq!(x, 0.0);
-        assert!((y - lift).abs() < 0.01, "behind exit must not nudge, y={y} lift={lift}");
+        assert!(
+            (y - lift).abs() < 0.01,
+            "behind exit must not nudge, y={y} lift={lift}"
+        );
         assert_eq!(op, 0.0);
     }
 
@@ -3162,6 +3256,154 @@ mod tests {
         let q = toast_queue().get();
         for t in &q {
             toast_dismiss(t.id);
+        }
+        settle_toast_exits();
+    }
+
+    #[test]
+    fn collapse_resumes_a_timer_frozen_past_its_deadline() {
+        // 指针正好在到期瞬间压住堆叠：暂停会把剩余削到 `TOAST_PAUSE_FLOOR`。收起后必须
+        // 重新起表——否则 `running_since` 永远是 None、`toast_timer_expired` 恒 false，
+        // 这条通知再也不会自动退场（悬停展开后移开鼠标即卡死的主症状）。
+        toast_set_layout("stack");
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        expanded_signal().set(false);
+        set_stack_timers_paused(false);
+
+        let id = toast("stall").duration(500).show();
+        std::thread::sleep(Duration::from_millis(560));
+        assert!(
+            toast_timer_expired(id),
+            "500ms timer is due before the hover"
+        );
+
+        expanded_signal().set(true);
+        let _ = tick_toast_lifecycle();
+        assert!(
+            !toast_timer_expired(id),
+            "expanding must freeze even an already-due timer"
+        );
+        assert!(
+            toast_timer_deadline(id).is_none(),
+            "frozen timer has no deadline (nothing to wake the event loop for)"
+        );
+
+        expanded_signal().set(false);
+        let _ = tick_toast_lifecycle();
+        assert!(
+            toast_timer_deadline(id).is_some(),
+            "collapse must re-arm the frozen timer instead of leaving it dead"
+        );
+        std::thread::sleep(TOAST_PAUSE_FLOOR + Duration::from_millis(60));
+        assert!(
+            toast_timer_expired(id),
+            "resumed timer must expire so the toast leaves on its own"
+        );
+        toast_dismiss(id);
+        settle_toast_exits();
+    }
+
+    #[test]
+    fn expanded_stack_freezes_displaced_pending_timers() {
+        // displace 挤出的条目在退场动画期间被 `exiting` 跳过（计时继续跑），落进 pending
+        // 后 `exiting` 又被清掉。若冻结按全局标志早退，它会在悬停期间悄悄到期，收起那一
+        // 刻整批一起蒸发（「重新打开新通知，原通知全部消失」的来源）。
+        toast_set_layout("stack");
+        toast_set_overflow("displace");
+        toast_set_limit(1);
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        expanded_signal().set(false);
+        set_stack_timers_paused(false);
+
+        let a = toast("A").duration(10_000).show();
+        let _b = toast("B").duration(10_000).show();
+        settle_toast_exits();
+        assert!(
+            toast_pending().get().iter().any(|t| t.id == a),
+            "A demoted to pending after the displace fade"
+        );
+        assert!(
+            toast_timer_deadline(a).is_some(),
+            "pending timer runs while the stack is collapsed"
+        );
+
+        expanded_signal().set(true);
+        let _ = tick_toast_lifecycle();
+        assert!(
+            toast_timer_deadline(a).is_none(),
+            "expanding must freeze pending timers too, not only visible ones"
+        );
+
+        expanded_signal().set(false);
+        let _ = tick_toast_lifecycle();
+        assert!(
+            toast_timer_deadline(a).is_some(),
+            "collapsing resumes the pending timer"
+        );
+
+        toast_set_limit(3);
+        let q = toast_queue().get();
+        for t in &q {
+            toast_dismiss(t.id);
+        }
+        let p = toast_pending().get();
+        for t in &p {
+            toast_dismiss(t.id);
+        }
+        settle_toast_exits();
+    }
+
+    #[test]
+    fn same_frame_expiries_stagger_instead_of_snapping() {
+        // 退场预算只有 1：一批同时到期时老路会 `snap_finalize_exit` 掉正在播的那张，
+        // 前 N-1 张无动画瞬间抹掉——这就是「重新打开新通知，原通知全部消失」看到的样子。
+        // 现在应只起一张退场，其余顺延到它播完。
+        toast_set_overflow("displace");
+        toast_set_limit(3);
+        toast_queue().set(vec![]);
+        toast_pending().set(vec![]);
+        expanded_signal().set(false);
+        set_stack_timers_paused(false);
+
+        let a = toast("A").duration(500).show();
+        let b = toast("B").duration(500).show();
+        let c = toast("C").duration(500).show();
+        std::thread::sleep(Duration::from_millis(560));
+
+        let mut q = toast_queue().get();
+        let mut p = toast_pending().get();
+        assert_eq!(q.len(), 3, "all three visible before the batch expiry");
+        assert!(prune_expired(&mut q, &mut p), "the oldest starts leaving");
+        assert_eq!(
+            q.len(),
+            3,
+            "no card may be snapped off-tree while another animates out"
+        );
+        assert_eq!(
+            q.iter().filter(|t| t.exiting).count(),
+            1,
+            "exactly one exit animation at a time (MAX_CONCURRENT_EXITING)"
+        );
+        for id in [a, b, c] {
+            if q.iter().any(|t| t.id == id && t.exiting) {
+                continue;
+            }
+            assert!(
+                !toast_timer_expired(id),
+                "deferred card must stop being due, else it snaps the animating one"
+            );
+            assert!(
+                toast_timer_deadline(id).is_some(),
+                "deferred card keeps a running deadline so the loop wakes for it"
+            );
+        }
+
+        toast_queue().set(q);
+        toast_pending().set(p);
+        for id in [a, b, c] {
+            toast_dismiss(id);
         }
         settle_toast_exits();
     }
