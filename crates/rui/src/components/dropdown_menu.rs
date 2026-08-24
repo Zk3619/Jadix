@@ -347,7 +347,10 @@ fn item_row_chrome(inset: bool) -> crate::primitives::r#box::BoxBuilder {
         .justify("start")
 }
 
-fn attach_trigger_keys(mut trigger: Element, ctx: &DropdownMenuCtx) -> Element {
+pub(crate) fn attach_dropdown_menu_trigger_keys(
+    mut trigger: Element,
+    ctx: &DropdownMenuCtx,
+) -> Element {
     let open_keys = ctx.open;
     let active_keys = ctx.active;
     let menu_id = ctx.id.clone();
@@ -479,7 +482,7 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
         .unwrap_or_else(|| trigger_id.clone());
     ctx.trigger_fid.set(fid_focus);
 
-    trigger = attach_trigger_keys(trigger, &ctx);
+    trigger = attach_dropdown_menu_trigger_keys(trigger, &ctx);
     trigger.set_attr(ATTR_SLOT, SLOT_TRIGGER);
     trigger
 }
@@ -1232,7 +1235,15 @@ pub(crate) fn sync_dropdown_menu_item_paint_subtree(
     let slot = el.attrs.get(ATTR_SLOT).map(String::as_str);
     if matches!(
         slot,
-        Some(SLOT_ITEM) | Some(SLOT_SUB_TRIGGER) | Some(SLOT_CHECKBOX_ITEM) | Some(SLOT_RADIO_ITEM)
+        Some(SLOT_ITEM)
+            | Some(SLOT_SUB_TRIGGER)
+            | Some(SLOT_CHECKBOX_ITEM)
+            | Some(SLOT_RADIO_ITEM)
+            // Menubar wrappers may annotate the same interactive rows.
+            | Some("menubar-item")
+            | Some("menubar-sub-trigger")
+            | Some("menubar-checkbox-item")
+            | Some("menubar-radio-item")
     ) {
         let disabled = el.attrs.get("rui_dd_disabled").map(String::as_str) == Some("1");
         let destructive = el.attrs.get("rui_dd_destructive").map(String::as_str) == Some("1");

@@ -802,6 +802,12 @@ fn expand_node(
                 || name_str == "DropdownMenuSub"
                 || name_str == "DropdownMenuSubContent"
                 || name_str == "DropdownMenuRadioGroup"
+                || name_str == "Menubar"
+                || name_str == "MenubarMenu"
+                || name_str == "MenubarContent"
+                || name_str == "MenubarSub"
+                || name_str == "MenubarSubContent"
+                || name_str == "MenubarRadioGroup"
                 || select_is_compound
                 || name_str == "SelectContent"
                 || combobox_is_compound
@@ -1161,6 +1167,82 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dropdown_menu_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "Menubar" {
+                    let id_expr = get_attr("id");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Menubar#{}", file!(), line!(), #idx) }
+                    };
+                    return quote! {
+                        rui::components::menubar_scope(#id_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "MenubarMenu" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { Some((#id).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::menubar_menu(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -1933,6 +2015,100 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "MenubarSub" {
+                    let id_expr = get_attr("id");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __frag = rui::core::tree::Element::new();
+                                    __frag.set_attr("rui_fragment", "1");
+                                    __frag.children(__list)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { Some((#id).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::menubar_sub(#id_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "MenubarRadioGroup" {
+                    let id_expr = get_attr("id");
+                    let value_expr = get_attr("value");
+                    let default_expr = get_attr("default_value")
+                        .or_else(|| get_attr("defaultValue"));
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __frag = rui::core::tree::Element::new();
+                                    __frag.set_attr("rui_fragment", "1");
+                                    __frag.children(__list)
+                                }
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { Some((#id).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let value_ts = if let Some(v) = value_expr {
+                        quote! { Some(#v) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { Some((#d).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::menubar_radio_group(
+                            #id_ts,
+                            #value_ts,
+                            #default_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "ContextMenuContent" {
                     let placement = get_attr("placement")
                         .or_else(|| get_attr("side"))
@@ -2016,6 +2192,47 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "MenubarContent" {
+                    let placement = get_attr("placement")
+                        .or_else(|| get_attr("side"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom-start".to_string() });
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::menubar_content(
+                            rui::components::MenubarContentOpts {
+                                placement: #placement,
+                                class: #class,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "ContextMenuSubContent" {
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
@@ -2078,6 +2295,40 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dropdown_menu_sub_content(
+                            #class,
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "MenubarSubContent" {
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::menubar_sub_content(
                             #class,
                             move || #child_el,
                         )

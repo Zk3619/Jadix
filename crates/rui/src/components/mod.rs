@@ -22,6 +22,7 @@
 //! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
 //! - ContextMenu：`<ContextMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group（宏 `context_menu_scope`）；Builder [`context_menu`]。
 //! - DropdownMenu：`<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub（宏 `dropdown_menu_scope`）；Builder [`dropdown_menu`]。
+//! - Menubar：`<Menubar>` / Menu / Trigger / Content / Item…（宏 `menubar_scope` / `menubar_menu`；内容复用 DropdownMenu）；Builder [`menubar`]。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
@@ -180,7 +181,15 @@ pub use label::{
     text_node as text, try_copy_label_selection, Label, LabelBuilder, LabelProps,
     LABEL_SELECTION_COPY_SIGNAL,
 };
-pub use menubar::{menubar, MenuItem, MenuSection, MenubarBuilder};
+pub use menubar::{
+    menubar, menubar_content, menubar_menu, menubar_radio_group, menubar_scope, menubar_sub,
+    menubar_sub_content, use_menubar, MenuItem, MenuSection, MenubarBuilder, MenubarCheckboxItem,
+    MenubarCheckboxItemProps, MenubarContentOpts, MenubarCtx, MenubarGroup, MenubarGroupProps,
+    MenubarItem, MenubarItemProps, MenubarLabel, MenubarLabelProps, MenubarRadioItem,
+    MenubarRadioItemProps, MenubarSeparator, MenubarSeparatorProps, MenubarShortcut,
+    MenubarShortcutProps, MenubarSubTrigger, MenubarSubTriggerProps, MenubarTrigger,
+    MenubarTriggerProps,
+};
 pub use navbar::{navbar, NavbarBuilder};
 pub use navigation_menu::{
     navigation_menu, NavigationMenuBuilder, NavigationMenuItem, NavigationMenuLink,

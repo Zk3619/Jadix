@@ -153,6 +153,9 @@ pub fn portal_sync(
                         stack[pos].kind = kind;
                         (Some(z_for_index(pos)), to_close)
                     } else {
+                        // Capture before retain: peer Menu already open (menubar switch).
+                        let had_peer_menu = kind == OverlayKind::Menu
+                            && stack.iter().any(|l| l.kind == OverlayKind::Menu);
                         stack.retain(|l| {
                             if l.id == id {
                                 return true;
@@ -173,14 +176,15 @@ pub fn portal_sync(
                         });
                         // New stack entry = overlay just opened; ignore underlay closes until
                         // primary-button release (see `disarm_underlay_close` / `arm_underlay_close`).
-                        // Nested context-menu subs must NOT disarm — parent already armed after
-                        // the opening right-click, and disarm would require an extra click.
+                        // Nested subs must NOT disarm — parent already armed.
+                        // Peer Menu replace (menubar File→Edit) must NOT disarm either — otherwise
+                        // outside-click needs an extra press after hover/arrow switch.
                         let nested_sub = kind == OverlayKind::Menu
                             && stack.iter().any(|l| {
                                 l.kind == OverlayKind::Menu
                                     && id.starts_with(&format!("{}__sub", l.id))
                             });
-                        if !nested_sub {
+                        if !nested_sub && !had_peer_menu {
                             crate::utils::popup::disarm_underlay_close();
                         }
                         stack.push(OverlayLayer { id, open, kind });
@@ -551,6 +555,45 @@ mod tests {
         crate::utils::popup::arm_underlay_close();
         assert!(try_dismiss_outside_press());
         assert!(!open.peek());
+    }
+
+    #[test]
+    fn peer_menu_replace_does_not_disarm() {
+        clear();
+        let a = Signal::new(true);
+        let b = Signal::new(false);
+        assert!(portal_sync("menu-a", a, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        // Simulate post-click arm (opening gesture released).
+        crate::utils::popup::arm_underlay_close();
+        assert!(crate::utils::popup::underlay_close_is_armed());
+        // Menubar hover/arrow switch: open peer while first is still open.
+        b.set(true);
+        assert!(portal_sync("menu-b", b, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert!(
+            crate::utils::popup::underlay_close_is_armed(),
+            "replacing a peer Menu must keep underlay armed"
+        );
+        assert!(!a.peek(), "exclusive Menu should close the previous peer");
+        assert!(try_dismiss_outside_press());
+        assert!(!b.peek());
+    }
+
+    #[test]
+    fn nested_menu_sub_does_not_disarm() {
+        clear();
+        let parent = Signal::new(true);
+        let sub = Signal::new(false);
+        assert!(portal_sync("file", parent, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        crate::utils::popup::arm_underlay_close();
+        sub.set(true);
+        assert!(
+            portal_sync("file__sub0", sub, OverlayKind::Menu, OverlayMode::Stacked).is_some()
+        );
+        assert!(
+            crate::utils::popup::underlay_close_is_armed(),
+            "opening nested __sub must keep underlay armed"
+        );
+        assert!(parent.peek(), "parent menu must stay open under nested sub");
     }
 
     /// Regression: `arm` must run *after* the open `on_click` (which disarms). Arming first

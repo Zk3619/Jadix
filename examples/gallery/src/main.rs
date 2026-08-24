@@ -5701,32 +5701,6 @@ fn NavbarNavigationMenuShowcase() -> Element {
 #[component]
 fn MenubarStepperShowcase() -> Element {
     let step = use_signal("gal_stepper", || 1usize);
-    let menu: Element = menubar("gal-menubar")
-        .section(MenuSection::new(
-            "file",
-            "File",
-            vec![
-                MenuItem::new("new", "New", || {
-                    toast_push("New", 1500);
-                }),
-                MenuItem::new("open", "Open", || {
-                    toast_push("Open", 1500);
-                }),
-            ],
-        ))
-        .section(MenuSection::new(
-            "edit",
-            "Edit",
-            vec![
-                MenuItem::new("undo", "Undo", || {
-                    toast_push("Undo", 1500);
-                }),
-                MenuItem::new("redo", "Redo", || {
-                    toast_push("Redo", 1500);
-                }),
-            ],
-        ))
-        .into();
     let stepper_el: Element = stepper("gal-stepper")
         .steps(["Account", "Profile", "Confirm"])
         .current_signal(step)
@@ -5736,9 +5710,120 @@ fn MenubarStepperShowcase() -> Element {
         <MyCard title="Menubar · Stepper">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "应用外壳导航：菜单栏与步骤条。"
+                    "应用命令栏（复合 Menubar，对齐 solid-ui / ShadCN）：←→ 切换菜单；打开后悬停可切换。下方为 Stepper。"
                 </Label>
-                { menu }
+                <Menubar id="gal-menubar">
+                    <MenubarMenu id="file">
+                        <MenubarTrigger>"File"</MenubarTrigger>
+                        <MenubarContent>
+                            <MenubarItem on_click={|| {
+                                toast_push("New File", 1500);
+                            }}>
+                                "New File"
+                                <MenubarShortcut>"⌘N"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarItem on_click={|| {
+                                toast_push("Open…", 1500);
+                            }}>
+                                "Open…"
+                                <MenubarShortcut>"⌘O"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarSeparator />
+                            <MenubarSub>
+                                <MenubarSubTrigger>"Share"</MenubarSubTrigger>
+                                <MenubarSubContent>
+                                    <MenubarItem on_click={|| {
+                                        toast_push("Email link", 1500);
+                                    }}>
+                                        "Email link"
+                                    </MenubarItem>
+                                    <MenubarItem on_click={|| {
+                                        toast_push("Messages", 1500);
+                                    }}>
+                                        "Messages"
+                                    </MenubarItem>
+                                </MenubarSubContent>
+                            </MenubarSub>
+                            <MenubarSeparator />
+                            <MenubarItem variant="destructive" on_click={|| {
+                                toast_push("Quit", 1500);
+                            }}>
+                                "Quit"
+                                <MenubarShortcut>"⌘Q"</MenubarShortcut>
+                            </MenubarItem>
+                        </MenubarContent>
+                    </MenubarMenu>
+                    <MenubarMenu id="edit">
+                        <MenubarTrigger>"Edit"</MenubarTrigger>
+                        <MenubarContent>
+                            <MenubarItem on_click={|| {
+                                toast_push("Undo", 1500);
+                            }}>
+                                "Undo"
+                                <MenubarShortcut>"⌘Z"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarItem on_click={|| {
+                                toast_push("Redo", 1500);
+                            }}>
+                                "Redo"
+                                <MenubarShortcut>"⇧⌘Z"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarSeparator />
+                            <MenubarItem on_click={|| {
+                                toast_push("Cut", 1500);
+                            }}>
+                                "Cut"
+                                <MenubarShortcut>"⌘X"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarItem on_click={|| {
+                                toast_push("Copy", 1500);
+                            }}>
+                                "Copy"
+                                <MenubarShortcut>"⌘C"</MenubarShortcut>
+                            </MenubarItem>
+                            <MenubarItem on_click={|| {
+                                toast_push("Paste", 1500);
+                            }}>
+                                "Paste"
+                                <MenubarShortcut>"⌘V"</MenubarShortcut>
+                            </MenubarItem>
+                        </MenubarContent>
+                    </MenubarMenu>
+                    <MenubarMenu id="view">
+                        <MenubarTrigger>"View"</MenubarTrigger>
+                        <MenubarContent>
+                            <MenubarCheckboxItem defaultChecked={true} on_click={|| {
+                                toast_push("Status Bar toggled", 1500);
+                            }}>
+                                "Status Bar"
+                            </MenubarCheckboxItem>
+                            <MenubarCheckboxItem on_click={|| {
+                                toast_push("Activity Bar toggled", 1500);
+                            }}>
+                                "Activity Bar"
+                            </MenubarCheckboxItem>
+                            <MenubarSeparator />
+                            <MenubarRadioGroup defaultValue="bottom">
+                                <MenubarLabel>"Panel Position"</MenubarLabel>
+                                <MenubarRadioItem value="top" on_click={|| {
+                                    toast_push("Panel: Top", 1500);
+                                }}>
+                                    "Top"
+                                </MenubarRadioItem>
+                                <MenubarRadioItem value="bottom" on_click={|| {
+                                    toast_push("Panel: Bottom", 1500);
+                                }}>
+                                    "Bottom"
+                                </MenubarRadioItem>
+                                <MenubarRadioItem value="right" on_click={|| {
+                                    toast_push("Panel: Right", 1500);
+                                }}>
+                                    "Right"
+                                </MenubarRadioItem>
+                            </MenubarRadioGroup>
+                        </MenubarContent>
+                    </MenubarMenu>
+                </Menubar>
                 { stepper_el }
                 <HStack gap="0.5rem">
                     <Button size="sm" variant="outline" on_click={move || {
