@@ -13,8 +13,8 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::primitives::{hstack, r#box, vstack};
 use crate::style::{parse_color, parse_text_color};
-use crate::utils::{build_icon_text_node, lucide_glyph};
 use crate::utils::text_field::{focus_id_for_text_edit, input_value_signal_key};
+use crate::utils::{build_icon_text_node, lucide_glyph};
 
 use super::overlay::{box_model_diagram, highlight_slot};
 use super::reactivity_panel::build_reactivity_panel;
@@ -43,21 +43,11 @@ pub fn wrap_app(app: Element) -> Element {
     );
     host.template_id = Some("__rui_app_host".into());
 
-    let mut panel_slot = Element::from(
-        r#box()
-            .h("100%")
-            .w(0.0)
-            .flex_shrink(0.0)
-            .overflow("hidden"),
-    );
+    let mut panel_slot =
+        Element::from(r#box().h("100%").w(0.0).flex_shrink(0.0).overflow("hidden"));
     panel_slot.template_id = Some(PANEL_SLOT_ID.into());
 
-    Element::from(
-        hstack()
-            .w("100%")
-            .h("100%")
-            .children([host, panel_slot]),
-    )
+    Element::from(hstack().w("100%").h("100%").children([host, panel_slot]))
 }
 
 /// Rebuild the docked panel when Inspector chrome generation changes.
@@ -99,7 +89,13 @@ pub fn sync_overlay(root: &mut Element) -> bool {
 
 fn reset_inspector_button_hover_state() {
     use crate::core::reactivity::use_signal;
-    const IDS: &[&str] = &["dt-pick", "dt-close", "dt-tab-el", "dt-tab-lay", "dt-tab-rx"];
+    const IDS: &[&str] = &[
+        "dt-pick",
+        "dt-close",
+        "dt-tab-el",
+        "dt-tab-lay",
+        "dt-tab-rx",
+    ];
     for id in IDS {
         let hover = use_signal(&format!("{id}_hover"), || false);
         if hover.peek() {
@@ -189,7 +185,12 @@ fn dock_panel(
         .px("0.5rem")
         .flex_shrink(0.0)
         .children([
-            tab_btn("dt-tab-el", "Elements", tab == DevToolsTab::Elements, DevToolsTab::Elements),
+            tab_btn(
+                "dt-tab-el",
+                "Elements",
+                tab == DevToolsTab::Elements,
+                DevToolsTab::Elements,
+            ),
             tab_btn(
                 "dt-tab-lay",
                 "Layout",
@@ -365,16 +366,17 @@ fn elements_body(
     };
     let mut rows = Vec::new();
     for node in tree.iter().take(400) {
-        rows.push(tree_row(tree, node, selected_key.as_deref(), hover_key.as_deref()));
+        rows.push(tree_row(
+            tree,
+            node,
+            selected_key.as_deref(),
+            hover_key.as_deref(),
+        ));
     }
 
-    let tree_el: Element = crate::primitives::interactive::interactive(
-        vstack()
-            .w("100%")
-            .children(rows)
-            .into(),
-    )
-    .into();
+    let tree_el: Element =
+        crate::primitives::interactive::interactive(vstack().w("100%").children(rows).into())
+            .into();
 
     let details = details_pane(selected, root);
 
@@ -453,15 +455,11 @@ fn tree_row(
 fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Element {
     let Some(node) = selected else {
         return Element::from(
-            r#box()
-                .w("100%")
-                .flex_grow(1.0)
-                .p("0.75rem")
-                .child(
-                    label("dt-empty")
-                        .text("Select a node or use Pick (Ctrl+Shift+C).")
-                        .text_size("0.75rem"),
-                ),
+            r#box().w("100%").flex_grow(1.0).p("0.75rem").child(
+                label("dt-empty")
+                    .text("Select a node or use Pick (Ctrl+Shift+C).")
+                    .text_size("0.75rem"),
+            ),
         );
     };
 
@@ -521,11 +519,7 @@ fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Ele
         .unwrap_or_else(|| cssom_text_from_style(st));
     fields.push(cssom_editor(path, cssom_seed));
 
-    Element::from(
-        vstack()
-            .w("100%")
-            .children(fields),
-    )
+    Element::from(vstack().w("100%").children(fields))
 }
 
 fn layout_body(selected: Option<&InspectorNodeSnapshot>) -> Element {
@@ -533,14 +527,11 @@ fn layout_body(selected: Option<&InspectorNodeSnapshot>) -> Element {
         return inspector_card(
             "Layout",
             Element::from(
-                r#box()
-                    .w("100%")
-                    .p("0.75rem")
-                    .child(
-                        label("dt-lay-empty")
-                            .text("Select a node to inspect layout.")
-                            .text_size("0.75rem"),
-                    ),
+                r#box().w("100%").p("0.75rem").child(
+                    label("dt-lay-empty")
+                        .text("Select a node to inspect layout.")
+                        .text_size("0.75rem"),
+                ),
             ),
         );
     };
@@ -571,15 +562,15 @@ fn layout_body(selected: Option<&InspectorNodeSnapshot>) -> Element {
         ),
         kv(
             "box",
-            &format!("{:.1}×{:.1} @ ({:.1},{:.1})", bm.width, bm.height, bm.x, bm.y),
+            &format!(
+                "{:.1}×{:.1} @ ({:.1},{:.1})",
+                bm.width, bm.height, bm.x, bm.y
+            ),
         ),
         kv("scroll_offset", &format!("x {:.1}  y {:.1}", sx, sy)),
         kv("child_count", &node.child_count.to_string()),
     ];
-    inspector_card(
-        "Layout",
-        Element::from(vstack().w("100%").children(fields)),
-    )
+    inspector_card("Layout", Element::from(vstack().w("100%").children(fields)))
 }
 
 /// After CSSOM Apply, keep the textarea on the **applied source text**.
@@ -596,10 +587,7 @@ fn apply_cssom(path: Vec<usize>, css: String) {
 }
 
 fn cssom_input_id(path: &[usize]) -> String {
-    format!(
-        "dt-cssom-{}",
-        super::snapshot::path_to_key(path)
-    )
+    format!("dt-cssom-{}", super::snapshot::path_to_key(path))
 }
 
 fn field_store_value(field_id: &str) -> String {
@@ -625,22 +613,18 @@ fn seed_edit_field(field_id: &str, current: &str, multiline: bool) {
 
 fn kv(k: &str, v: &str) -> Element {
     Element::from(
-        vstack()
-            .w("100%")
-            .px("0.75rem")
-            .py("0.2rem")
-            .children([
-                label(format!("dt-k-{k}"))
-                    .text(k)
-                    .text_size("0.625rem")
-                    .color(parse_text_color("muted-foreground"))
-                    .into(),
-                label(format!("dt-v-{k}"))
-                    .text(v)
-                    .text_size("0.75rem")
-                    .w("100%")
-                    .into(),
-            ]),
+        vstack().w("100%").px("0.75rem").py("0.2rem").children([
+            label(format!("dt-k-{k}"))
+                .text(k)
+                .text_size("0.625rem")
+                .color(parse_text_color("muted-foreground"))
+                .into(),
+            label(format!("dt-v-{k}"))
+                .text(v)
+                .text_size("0.75rem")
+                .w("100%")
+                .into(),
+        ]),
     )
 }
 
@@ -682,13 +666,16 @@ fn cssom_editor(path: Vec<usize>, seed: String) -> Element {
                     editor = editor.w("100%").min_w("0");
                     editor
                 },
-                button(format!("dt-cssom-apply-{}", super::snapshot::path_to_key(&path)))
-                    .size("sm")
-                    .text("Apply CSS")
-                    .on_click(move || {
-                        apply_cssom(path.clone(), field_store_value(&field_id_click));
-                    })
-                    .into(),
+                button(format!(
+                    "dt-cssom-apply-{}",
+                    super::snapshot::path_to_key(&path)
+                ))
+                .size("sm")
+                .text("Apply CSS")
+                .on_click(move || {
+                    apply_cssom(path.clone(), field_store_value(&field_id_click));
+                })
+                .into(),
             ]),
     )
 }
@@ -717,8 +704,7 @@ mod tests {
 
             // Simulate Inspector switching to uncontrolled: drop pairing, seed store.
             unbind_controlled_value(id);
-            use_signal(&input_value_signal_key(id), String::new)
-                .set_silent("from-store".into());
+            use_signal(&input_value_signal_key(id), String::new).set_silent("from-store".into());
 
             // Paint sync must NOT pull the old external back over the store.
             let pulled = pull_controlled_into_store(id, "from-store", false);
@@ -743,9 +729,10 @@ mod tests {
             .iter()
             .find(|c| c.template_id.as_deref() == Some("__rui_app_host"))
             .expect("app host");
-        assert!(host.children.iter().any(|c| {
-            c.template_id.as_deref() == Some("__rui_devtools_highlight")
-        }));
+        assert!(host
+            .children
+            .iter()
+            .any(|c| { c.template_id.as_deref() == Some("__rui_devtools_highlight") }));
     }
 
     #[test]
@@ -838,10 +825,7 @@ mod tests {
                 .expect("seed");
             assert_eq!(seed, applied);
 
-            let field = format!(
-                "dt-cssom-{}",
-                super::super::snapshot::path_to_key(&path)
-            );
+            let field = format!("dt-cssom-{}", super::super::snapshot::path_to_key(&path));
             seed_edit_field(&field, &seed, true);
             assert_eq!(
                 use_signal(&input_value_signal_key(&field), String::new).peek(),

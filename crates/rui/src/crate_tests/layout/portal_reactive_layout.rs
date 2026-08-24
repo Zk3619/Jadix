@@ -51,9 +51,7 @@ fn portal_layout_changed_collects_dirty_without_page_flag() {
         .child(portal);
 
     tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
-    let page_node = root.children[0]
-        .layout_node
-        .expect("page text taffy node");
+    let page_node = root.children[0].layout_node.expect("page text taffy node");
     let pile_node = root.children[1].children[0]
         .layout_node
         .expect("pile taffy node");

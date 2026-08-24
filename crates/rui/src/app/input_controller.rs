@@ -659,9 +659,9 @@ impl super::App {
                             Key::Named(NamedKey::ArrowUp) => {
                                 let dest = if multiline {
                                     if let Some(ref model) = soft_visual_model {
-                                        let px = pref_x_sig.peek().unwrap_or_else(|| {
-                                            model.caret_x_on_line(caret)
-                                        });
+                                        let px = pref_x_sig
+                                            .peek()
+                                            .unwrap_or_else(|| model.caret_x_on_line(caret));
                                         if pref_x_sig.peek().is_none() {
                                             pref_x_sig.set_silent(Some(px));
                                         }
@@ -695,9 +695,9 @@ impl super::App {
                             Key::Named(NamedKey::ArrowDown) => {
                                 let dest = if multiline {
                                     if let Some(ref model) = soft_visual_model {
-                                        let px = pref_x_sig.peek().unwrap_or_else(|| {
-                                            model.caret_x_on_line(caret)
-                                        });
+                                        let px = pref_x_sig
+                                            .peek()
+                                            .unwrap_or_else(|| model.caret_x_on_line(caret));
                                         if pref_x_sig.peek().is_none() {
                                             pref_x_sig.set_silent(Some(px));
                                         }

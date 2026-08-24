@@ -68,8 +68,10 @@ fn build_check_indicator(fg: [u8; 4]) -> Element {
         .text_color(fg)
         .text_center()
         .flex_shrink(0.0);
-    icon.attrs
-        .insert(ATTR_INDICATOR.to_string(), SLOT_CHECKBOX_INDICATOR.to_string());
+    icon.attrs.insert(
+        ATTR_INDICATOR.to_string(),
+        SLOT_CHECKBOX_INDICATOR.to_string(),
+    );
     icon.attrs
         .insert("text_align".to_string(), "center".to_string());
     icon
@@ -95,7 +97,10 @@ pub(crate) fn menu_checkbox_control(checked: Signal<bool>) -> Element {
         .justify_center()
         .flex_shrink(0.0)
         .into();
-    control = control.border(border, BORDER_W).bg(bg).child(build_check_indicator(fg));
+    control = control
+        .border(border, BORDER_W)
+        .bg(bg)
+        .child(build_check_indicator(fg));
     control.checkbox_sync = Some(checked);
     control.pointer_events_none()
 }

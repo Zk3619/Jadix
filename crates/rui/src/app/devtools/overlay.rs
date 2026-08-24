@@ -159,9 +159,8 @@ fn highlight_box_model(tree_root: &Element, path: &[usize]) -> Option<BoxModelSn
             + el.sticky_visual_offset[1];
         let paint_y = el.paint_visual_bounds[1];
         let scrolled = acc[0].abs() > 1.0 || acc[1].abs() > 1.0;
-        let paint_forgot_scroll = scrolled
-            && (paint_y - abs_y).abs() < 2.0
-            && (paint_y - from_scroll.y).abs() > 2.0;
+        let paint_forgot_scroll =
+            scrolled && (paint_y - abs_y).abs() < 2.0 && (paint_y - from_scroll.y).abs() > 2.0;
         let paint_forgot_scroll_x = scrolled
             && (el.paint_visual_bounds[0]
                 - (el.layout_bounds[0]
@@ -174,8 +173,8 @@ fn highlight_box_model(tree_root: &Element, path: &[usize]) -> Option<BoxModelSn
         // Wrap reflow mix: paint size/pos from an old flex line while layout_bounds are new
         // (or the reverse). Trust abs−scroll whenever paint and layout visual disagree and
         // the node is not scaled (scale is the main reason paint may legitimately differ).
-        let scaled = (el.style.scale[0] - 1.0).abs() > 0.01
-            || (el.style.scale[1] - 1.0).abs() > 0.01;
+        let scaled =
+            (el.style.scale[0] - 1.0).abs() > 0.01 || (el.style.scale[1] - 1.0).abs() > 0.01;
         let paint_layout_mismatch = !scaled
             && ((from_paint.x - from_scroll.x).abs() > 2.0
                 || (from_paint.y - from_scroll.y).abs() > 2.0
@@ -374,13 +373,7 @@ fn apply_layers(
     for child in &mut slot.children {
         let id = child.template_id.as_deref().unwrap_or("");
         let (rect, color, this_layer, dashed, dotted) = match id {
-            HL_POSITION => (
-                position,
-                POSITION_C,
-                HighlightLayer::Position,
-                false,
-                true,
-            ),
+            HL_POSITION => (position, POSITION_C, HighlightLayer::Position, false, true),
             HL_MARGIN => (margin, MARGIN_C, HighlightLayer::Margin, true, false),
             HL_BORDER => (border, BORDER_C, HighlightLayer::Border, false, false),
             HL_PADDING => (padding, PADDING_C, HighlightLayer::Padding, true, false),
@@ -413,11 +406,7 @@ fn apply_layers(
                 .insert(layer_id, [rect[0], rect[1], rect[2], rect[3]]);
         });
         child.style.border_width = bw;
-        child.style.border_color = if show {
-            color
-        } else {
-            [0.0, 0.0, 0.0, 0.0]
-        };
+        child.style.border_color = if show { color } else { [0.0, 0.0, 0.0, 0.0] };
         child.style.border_style = LineStyle::Solid;
         child.set_attr(
             "data-rui-devtools-hl-style",
@@ -564,10 +553,7 @@ pub(crate) fn scroll_offset_to_center_rect(
 ///
 /// Uses laid-out bounds + scroll metrics signals. Returns `true` when the scroll
 /// target changed (caller should request a paint frame).
-pub(crate) fn scroll_elements_tree_row_into_center(
-    root: &Element,
-    path_key: &str,
-) -> bool {
+pub(crate) fn scroll_elements_tree_row_into_center(root: &Element, path_key: &str) -> bool {
     if path_key.is_empty() {
         return false;
     }
@@ -695,17 +681,9 @@ fn sync_ring_strip_fills(
 }
 
 fn content_size(bm: &BoxModelSnapshot) -> (f32, f32) {
-    let w = (bm.width
-        - bm.border_left
-        - bm.border_right
-        - bm.padding_left
-        - bm.padding_right)
-        .max(0.0);
-    let h = (bm.height
-        - bm.border_top
-        - bm.border_bottom
-        - bm.padding_top
-        - bm.padding_bottom)
+    let w =
+        (bm.width - bm.border_left - bm.border_right - bm.padding_left - bm.padding_right).max(0.0);
+    let h = (bm.height - bm.border_top - bm.border_bottom - bm.padding_top - bm.padding_bottom)
         .max(0.0);
     (w, h)
 }
@@ -875,7 +853,8 @@ fn ring_fill_strip(
         "r" => strip.right(0.0).top(pt).bottom(pb).w(pr),
         _ => strip,
     };
-    strip.child(edge_label(&format!("dt-bm-{suffix}-{caption}"), label_text))
+    strip
+        .child(edge_label(&format!("dt-bm-{suffix}-{caption}"), label_text))
         .into()
 }
 
@@ -1115,7 +1094,9 @@ mod tests {
             .p(16.0);
         card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
 
-        let mut outline = Element::new().template_id("outline-btn").focus_id("btn-outline");
+        let mut outline = Element::new()
+            .template_id("outline-btn")
+            .focus_id("btn-outline");
         outline.layout_bounds = [40.0, 80.0, 72.0, 36.0];
 
         // Live tree: viewport[outline, card] — path [0,0,0] is Outline.
@@ -1242,7 +1223,9 @@ mod tests {
             .p(16.0);
         card.layout_bounds = [20.0, 360.0, 164.0, 334.0];
 
-        let mut ghost = Element::new().template_id("ghost-btn").focus_id("btn-ghost");
+        let mut ghost = Element::new()
+            .template_id("ghost-btn")
+            .focus_id("btn-ghost");
         ghost.layout_bounds = [40.0, 120.0, 72.0, 36.0];
 
         let mut viewport = Element::new().children(vec![ghost, card]);
@@ -1361,7 +1344,12 @@ mod tests {
         host.layout_bounds = [0.0, 0.0, 680.0, 800.0];
         let mut root = Element::new().child(host);
 
-        DevToolsState::set_hover_highlight(vec![0, 0, 0], String::new(), Vec::new(), (164.0, 334.0));
+        DevToolsState::set_hover_highlight(
+            vec![0, 0, 0],
+            String::new(),
+            Vec::new(),
+            (164.0, 334.0),
+        );
 
         begin_highlight_collect();
         set_highlight_collect_root(&root);
@@ -1393,7 +1381,9 @@ mod tests {
         DevToolsState::enable_for_window();
         DevToolsState::set_open(true);
 
-        let mut target = Element::new().focus_id("btn-default").template_id("btn-default");
+        let mut target = Element::new()
+            .focus_id("btn-default")
+            .template_id("btn-default");
         target.layout_bounds = [20.0, 280.0, 140.0, 36.0];
 
         let mut viewport = Element::new().child(target);
@@ -1506,8 +1496,7 @@ mod tests {
             let _ = layout.build_and_layout(&mut root, 520.0, 420.0, [-1.0, -1.0]);
 
             // Drive scroll like the runtime prepass (signal → element).
-            let sy_key =
-                crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-narrow");
+            let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-narrow");
             crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).set(120.0);
             fn apply_sy(el: &mut Element) {
                 if el.focus_id.as_deref() == Some("scroll:gallery-narrow") {
@@ -1527,17 +1516,12 @@ mod tests {
                 (140.0, 36.0),
             );
 
-            let result = layout.build_and_layout_fast(
-                &mut root,
-                520.0,
-                420.0,
-                [-1.0, -1.0],
-                true,
-                false,
-            );
+            let result =
+                layout.build_and_layout_fast(&mut root, 520.0, 420.0, [-1.0, -1.0], true, false);
 
-            let btn = crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
-                .expect("btn-default");
+            let btn =
+                crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
+                    .expect("btn-default");
             let btn_path = path_of_element(&root, btn).expect("path of btn-default");
             let paint = result.instances.iter().find(|i| {
                 (i.rect_size[0] - btn.layout_bounds[2]).abs() < 2.0
@@ -1635,11 +1619,9 @@ mod tests {
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 1200.0, 700.0, [-1.0, -1.0]);
 
-            let wide_second = crate::app::devtools::snapshot::find_element_by_identity(
-                &root,
-                "btn-second",
-            )
-            .expect("btn-second wide");
+            let wide_second =
+                crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-second")
+                    .expect("btn-second wide");
             let wide_x = wide_second.layout_bounds[0];
             assert!(
                 wide_x > 100.0,
@@ -1649,16 +1631,12 @@ mod tests {
             // Squeeze + short host: row wraps AND sits below the clip → clip-cull path.
             let _ = layout.build_and_layout(&mut root, 520.0, 200.0, [-1.0, -1.0]);
 
-            let second = crate::app::devtools::snapshot::find_element_by_identity(
-                &root,
-                "btn-second",
-            )
-            .expect("btn-second narrow");
-            let default = crate::app::devtools::snapshot::find_element_by_identity(
-                &root,
-                "btn-default",
-            )
-            .expect("btn-default narrow");
+            let second =
+                crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-second")
+                    .expect("btn-second narrow");
+            let default =
+                crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
+                    .expect("btn-default narrow");
             assert!(
                 (second.layout_bounds[0] - default.layout_bounds[0]).abs() < 4.0,
                 "clip-cull after wrap must refresh descendant abs from Taffy (stacked), \
@@ -1672,8 +1650,7 @@ mod tests {
             );
 
             // scroll_only band-skip while deep scrolled: highlight must track abs−scroll.
-            let sy_key =
-                crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-cull");
+            let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key("gallery-cull");
             crate::core::reactivity::use_signal(&sy_key, || 0.0_f32).set(480.0);
             fn apply_sy(el: &mut Element) {
                 if el.focus_id.as_deref() == Some("scroll:gallery-cull") {
@@ -1692,17 +1669,12 @@ mod tests {
                 (140.0, 36.0),
             );
 
-            let _ = layout.build_and_layout_fast(
-                &mut root,
-                520.0,
-                200.0,
-                [-1.0, -1.0],
-                true,
-                false,
-            );
+            let _ =
+                layout.build_and_layout_fast(&mut root, 520.0, 200.0, [-1.0, -1.0], true, false);
 
-            let btn = crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
-                .expect("btn-default");
+            let btn =
+                crate::app::devtools::snapshot::find_element_by_identity(&root, "btn-default")
+                    .expect("btn-default");
             let btn_path = path_of_element(&root, btn).expect("path");
             let acc = crate::app::devtools::snapshot::scroll_acc_along_path(&root, &btn_path);
             let expect_y = btn.layout_bounds[1] - acc[1];

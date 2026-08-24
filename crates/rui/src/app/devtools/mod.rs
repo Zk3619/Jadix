@@ -47,9 +47,7 @@ pub(crate) fn try_toggle_from_key(
             true
         }
         Key::Character(c)
-            if c.eq_ignore_ascii_case("c")
-                && modifiers.control_key()
-                && modifiers.shift_key() =>
+            if c.eq_ignore_ascii_case("c") && modifiers.control_key() && modifiers.shift_key() =>
         {
             DevToolsState::toggle_pick();
             if !DevToolsState::is_open() {
@@ -73,7 +71,10 @@ pub(crate) fn try_pick_click(root: &crate::core::tree::Element, x: f32, y: f32) 
     let (identity, size_hint) = find_element_by_path(root, &path)
         .map(|el| {
             let b = el.layout_bounds;
-            (snapshot::element_hover_identity(el), (b[2].max(0.0), b[3].max(0.0)))
+            (
+                snapshot::element_hover_identity(el),
+                (b[2].max(0.0), b[3].max(0.0)),
+            )
         })
         .unwrap_or_default();
     DevToolsState::set_selected(path.clone(), identity, Vec::new(), size_hint);
@@ -230,7 +231,10 @@ mod tests {
         }
 
         assert!(try_pick_click(&root, 15.0, 15.0));
-        assert!(!DevToolsState::is_pick(), "pick mode must turn off after select");
+        assert!(
+            !DevToolsState::is_pick(),
+            "pick mode must turn off after select"
+        );
         assert_eq!(DevToolsState::active_tab(), DevToolsTab::Elements);
         let selected = DevToolsState::selected_path();
         let hit = find_element_by_path(&root, &selected).expect("selected");
@@ -362,10 +366,10 @@ mod tests {
 
     #[test]
     fn pick_uses_paint_visual_and_ignores_host_overflow_hidden_scroll() {
-        use crate::core::reactivity::create_root;
-        use crate::core::tree::LayoutTree;
         use super::overlay::highlight_paint_gen;
         use super::panel::wrap_app;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
 
         DevToolsState::enable_for_window();
         DevToolsState::set_open(true);

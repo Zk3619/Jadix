@@ -319,10 +319,7 @@ pub fn lower_css_filters(list: &FilterList) -> LoweredFilter {
                     region: PrimitiveRegion::default(),
                 });
                 current.primitives.push(FilterPrimitive::Merge {
-                    nodes: vec![
-                        FilterInput::Result(shadow_comp),
-                        prev.clone(),
-                    ],
+                    nodes: vec![FilterInput::Result(shadow_comp), prev.clone()],
                     result: result.clone(),
                     region: PrimitiveRegion::default(),
                 });

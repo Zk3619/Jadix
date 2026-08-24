@@ -12,7 +12,10 @@ use winit::{
 
 use crate::core::tree::Element;
 
-fn collect_scroll_rests(el: &crate::core::tree::Element, out: &mut std::collections::HashSet<String>) {
+fn collect_scroll_rests(
+    el: &crate::core::tree::Element,
+    out: &mut std::collections::HashSet<String>,
+) {
     if let Some(fid) = el.focus_id.as_deref() {
         if let Some(rest) = crate::core::scroll_viewport::strip_scroll_viewport_focus_id(fid) {
             out.insert(rest.to_string());

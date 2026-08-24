@@ -55,27 +55,15 @@ fn bench_scroll_only(label: &str, iters: u32, row_count: usize, scroll_y: f32) {
     root.scroll_offset = [0.0, scroll_y];
 
     for _ in 0..5 {
-        let _ = layout_tree.build_and_layout_fast(
-            &mut root,
-            320.0,
-            240.0,
-            [-1.0, -1.0],
-            true,
-            false,
-        );
+        let _ =
+            layout_tree.build_and_layout_fast(&mut root, 320.0, 240.0, [-1.0, -1.0], true, false);
     }
 
     let t0 = Instant::now();
     let mut last = None;
     for _ in 0..iters {
-        let result = layout_tree.build_and_layout_fast(
-            &mut root,
-            320.0,
-            240.0,
-            [-1.0, -1.0],
-            true,
-            false,
-        );
+        let result =
+            layout_tree.build_and_layout_fast(&mut root, 320.0, 240.0, [-1.0, -1.0], true, false);
         last = Some((result.prof.collect_ms, result.instances.len()));
     }
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;

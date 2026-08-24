@@ -433,52 +433,52 @@ pub(crate) fn sync_checkbox_checked_subtree(
             // Menu Content 等作用域关闭后，树节点可能仍短暂留在本帧；勿 peek 已 dispose 信号。
             el.checkbox_sync = None;
         } else {
-        let on = sig.peek();
-        let invalid = el
-            .attrs
-            .get(ATTR_INVALID)
-            .map(|s| s.as_str() == "true")
-            .unwrap_or(false);
-        let (want_bg, want_border) = if on {
-            let (bg, border, _) = checked_chrome();
-            (bg, border)
-        } else {
-            (unchecked_bg(), unchecked_border(invalid))
-        };
-        let want_fg = indicator_fg(on);
+            let on = sig.peek();
+            let invalid = el
+                .attrs
+                .get(ATTR_INVALID)
+                .map(|s| s.as_str() == "true")
+                .unwrap_or(false);
+            let (want_bg, want_border) = if on {
+                let (bg, border, _) = checked_chrome();
+                (bg, border)
+            } else {
+                (unchecked_bg(), unchecked_border(invalid))
+            };
+            let want_fg = indicator_fg(on);
 
-        let chrome_changed = el.style.bg_color != want_bg
-            || el.style.border_color != want_border
-            || el.style.border_width != BORDER_W
-            || el.style.border_style != LineStyle::Solid;
-        if chrome_changed {
-            el.style.bg_color = want_bg;
-            el.style.border_color = want_border;
-            el.style.border_width = BORDER_W;
-            el.style.border_style = LineStyle::Solid;
-        }
-
-        let indicator_changed = if let Some(indicator) = find_indicator_mut(el) {
-            apply_indicator_state(indicator, want_fg)
-        } else {
-            el.children.insert(0, build_indicator(want_fg));
-            true
-        };
-
-        if chrome_changed || indicator_changed {
-            if el.layout_node.is_some() {
-                layout_tree.update_taffy_node_style(el);
+            let chrome_changed = el.style.bg_color != want_bg
+                || el.style.border_color != want_border
+                || el.style.border_width != BORDER_W
+                || el.style.border_style != LineStyle::Solid;
+            if chrome_changed {
+                el.style.bg_color = want_bg;
+                el.style.border_color = want_border;
+                el.style.border_width = BORDER_W;
+                el.style.border_style = LineStyle::Solid;
             }
-            if let Some(indicator) = find_indicator_mut(el) {
-                if indicator.layout_node.is_some() {
-                    layout_tree.update_taffy_node_style(indicator);
+
+            let indicator_changed = if let Some(indicator) = find_indicator_mut(el) {
+                apply_indicator_state(indicator, want_fg)
+            } else {
+                el.children.insert(0, build_indicator(want_fg));
+                true
+            };
+
+            if chrome_changed || indicator_changed {
+                if el.layout_node.is_some() {
+                    layout_tree.update_taffy_node_style(el);
                 }
+                if let Some(indicator) = find_indicator_mut(el) {
+                    if indicator.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(indicator);
+                    }
+                }
+                // 与 Switch 一致：选中态切换必须 LayoutChanged，否则 StyleChanged 的局部 damage
+                // 可能不重跑字形/不扩脏区，表现为「黑底无对号」。
+                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                *impact = impact.merge(LayoutStatus::LayoutChanged);
             }
-            // 与 Switch 一致：选中态切换必须 LayoutChanged，否则 StyleChanged 的局部 damage
-            // 可能不重跑字形/不扩脏区，表现为「黑底无对号」。
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-            *impact = impact.merge(LayoutStatus::LayoutChanged);
-        }
         }
     }
     for child in &mut el.children {

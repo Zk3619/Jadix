@@ -51,10 +51,7 @@ pub fn parse_svg_filters_document(markup: &str) -> Result<Vec<FilterGraph>, Filt
             (&markup[body_start..body_end], next)
         };
 
-        let id = attrs
-            .get("id")
-            .cloned()
-            .unwrap_or_default();
+        let id = attrs.get("id").cloned().unwrap_or_default();
         let mut graph = FilterGraph {
             id,
             filter_units: match attrs.get("filterunits").map(|s| s.as_str()) {
@@ -162,10 +159,7 @@ fn parse_attrs(open_tag: &str) -> std::collections::HashMap<String, String> {
     map
 }
 
-fn parse_primitives(
-    body: &str,
-    out: &mut Vec<FilterPrimitive>,
-) -> Result<(), FilterParseError> {
+fn parse_primitives(body: &str, out: &mut Vec<FilterPrimitive>) -> Result<(), FilterParseError> {
     let lower = body.to_ascii_lowercase();
     let mut search_from = 0usize;
     while let Some(rel) = lower[search_from..].find('<') {
@@ -201,10 +195,7 @@ fn parse_primitives(
                 .ok_or_else(|| FilterParseError::Message(format!("missing {close_pat}")))?;
             let body_start = start + open_end + 1;
             let body_end = start + open_end + close_rel;
-            (
-                &body[body_start..body_end],
-                body_end + close_pat.len(),
-            )
+            (&body[body_start..body_end], body_end + close_pat.len())
         };
 
         if let Some(prim) = build_primitive(name, &attrs, inner)? {
@@ -260,10 +251,7 @@ fn parse_float_list(s: &str) -> Vec<f32> {
         .collect()
 }
 
-fn parse_transfer_fn(
-    tag: &str,
-    body: &str,
-) -> Result<TransferFunction, FilterParseError> {
+fn parse_transfer_fn(tag: &str, body: &str) -> Result<TransferFunction, FilterParseError> {
     // Find feFuncX inside body
     let lower = body.to_ascii_lowercase();
     let needle = format!("<{tag}");
@@ -328,9 +316,7 @@ fn parse_light(body: &str) -> LightSource {
             points_at_y: attr_f32(&attrs, "pointsaty", 0.0),
             points_at_z: attr_f32(&attrs, "pointsatz", 0.0),
             specular_exponent: attr_f32(&attrs, "specularexponent", 1.0),
-            limiting_cone_angle: attrs
-                .get("limitingconeangle")
-                .and_then(|s| s.parse().ok()),
+            limiting_cone_angle: attrs.get("limitingconeangle").and_then(|s| s.parse().ok()),
         };
     }
     LightSource::Distant {
@@ -559,7 +545,9 @@ fn build_primitive(
             in1: attr_in(attrs, "in"),
             surface_scale: attr_f32(attrs, "surfacescale", 1.0),
             diffuse_constant: attr_f32(attrs, "diffuseconstant", 1.0),
-            kernel_unit_length: attrs.get("kernelunitlength").map(|s| parse_std_deviation(s)),
+            kernel_unit_length: attrs
+                .get("kernelunitlength")
+                .map(|s| parse_std_deviation(s)),
             lighting_color: attrs
                 .get("lighting-color")
                 .or_else(|| attrs.get("lightingcolor"))
@@ -574,7 +562,9 @@ fn build_primitive(
             surface_scale: attr_f32(attrs, "surfacescale", 1.0),
             specular_constant: attr_f32(attrs, "specularconstant", 1.0),
             specular_exponent: attr_f32(attrs, "specularexponent", 1.0),
-            kernel_unit_length: attrs.get("kernelunitlength").map(|s| parse_std_deviation(s)),
+            kernel_unit_length: attrs
+                .get("kernelunitlength")
+                .map(|s| parse_std_deviation(s)),
             lighting_color: attrs
                 .get("lighting-color")
                 .or_else(|| attrs.get("lightingcolor"))

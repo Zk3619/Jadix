@@ -333,8 +333,7 @@ pub fn tick_active_css_transitions_subtree(
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    let is_portal =
-        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    let is_portal = el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     let scroll_acc = if el.style.position_fixed || is_portal {
         [0.0_f32, 0.0]
     } else {
@@ -347,7 +346,8 @@ pub fn tick_active_css_transitions_subtree(
 
     let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
     let has_active_css = el.transition_snapshot.has_active_tweens();
-    let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+    let css_needs =
+        super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
 
     if has_spin || has_active_css || css_needs {
         let before = el.style.clone();
@@ -484,8 +484,7 @@ fn sync_class_variants_subtree_inner(
 ) {
     // Reset accumulated scroll for fixed-position or portal-layer elements,
     // mirroring the behaviour in pick_hover_target / hit_path.
-    let is_portal = el.template_id.as_deref()
-        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    let is_portal = el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     let (scroll_acc, clip) = if el.style.position_fixed || is_portal {
         ([0.0_f32, 0.0], None)
     } else {
@@ -505,7 +504,9 @@ fn sync_class_variants_subtree_inner(
     // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
     // while the pointer is on the scaled ink (not the unscaled Taffy box).
     let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
-    let in_clip = clip.map_or(true, |c| c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c));
+    let in_clip = clip.map_or(true, |c| {
+        c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
+    });
     let inside = in_box && in_clip;
 
     let child_clip = if is_portal {
@@ -526,7 +527,8 @@ fn sync_class_variants_subtree_inner(
     // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
     // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
     let has_active_css = el.transition_snapshot.has_active_tweens();
-    let css_needs = super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+    let css_needs =
+        super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
     if has_variants || has_spin || has_active_css || css_needs {
         let hovered = inside;
         if has_variants {
@@ -682,7 +684,6 @@ fn tick_animate_spin(el: &mut Element) -> bool {
     el.style.rotate_deg = (el.style.rotate_deg + 6.0) % 360.0;
     true
 }
-
 
 fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflow) -> LayoutStatus {
     let before = (
@@ -1092,12 +1093,15 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             }
         }
         KnownUtility::SkewX(deg) => {
-            use crate::layout::dimension::CssAngle;
             use super::transform::TransformFunction;
+            use crate::layout::dimension::CssAngle;
             let func = TransformFunction::SkewX(CssAngle::Deg(deg));
             let list = el.style.transform.get_or_insert_with(Vec::new);
             // Replace existing SkewX or append
-            if let Some(pos) = list.iter().position(|f| matches!(f, TransformFunction::SkewX(_))) {
+            if let Some(pos) = list
+                .iter()
+                .position(|f| matches!(f, TransformFunction::SkewX(_)))
+            {
                 list[pos] = func;
             } else {
                 list.push(func);
@@ -1105,11 +1109,14 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             LayoutStatus::StyleChanged
         }
         KnownUtility::SkewY(deg) => {
-            use crate::layout::dimension::CssAngle;
             use super::transform::TransformFunction;
+            use crate::layout::dimension::CssAngle;
             let func = TransformFunction::SkewY(CssAngle::Deg(deg));
             let list = el.style.transform.get_or_insert_with(Vec::new);
-            if let Some(pos) = list.iter().position(|f| matches!(f, TransformFunction::SkewY(_))) {
+            if let Some(pos) = list
+                .iter()
+                .position(|f| matches!(f, TransformFunction::SkewY(_)))
+            {
                 list[pos] = func;
             } else {
                 list.push(func);
@@ -1340,9 +1347,9 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::FilterHueRotate(deg) => set_single_filter(
             el,
-            crate::style::FilterFunction::HueRotate(Some(
-                crate::layout::dimension::CssAngle::Deg(deg),
-            )),
+            crate::style::FilterFunction::HueRotate(Some(crate::layout::dimension::CssAngle::Deg(
+                deg,
+            ))),
         ),
         KnownUtility::FilterDropShadow(spec) => {
             let css = drop_shadow_utility_css(spec);
@@ -1375,15 +1382,9 @@ fn drop_shadow_utility_css(spec: &str) -> String {
             "drop-shadow(0 1px 2px #0000001a) drop-shadow(0 1px 1px #0000000f)".into()
         }
         "sm" => "drop-shadow(0 1px 1px #0000000d)".into(),
-        "md" => {
-            "drop-shadow(0 4px 3px #00000012) drop-shadow(0 2px 2px #0000000f)".into()
-        }
-        "lg" => {
-            "drop-shadow(0 10px 8px #0000000a) drop-shadow(0 4px 3px #0000001a)".into()
-        }
-        "xl" => {
-            "drop-shadow(0 20px 13px #00000008) drop-shadow(0 8px 5px #00000014)".into()
-        }
+        "md" => "drop-shadow(0 4px 3px #00000012) drop-shadow(0 2px 2px #0000000f)".into(),
+        "lg" => "drop-shadow(0 10px 8px #0000000a) drop-shadow(0 4px 3px #0000001a)".into(),
+        "xl" => "drop-shadow(0 20px 13px #00000008) drop-shadow(0 8px 5px #00000014)".into(),
         "2xl" => "drop-shadow(0 25px 25px #00000026)".into(),
         "none" => "drop-shadow(0 0 transparent)".into(),
         // Arbitrary: `drop-shadow-[0_35px_35px_#000]` or already `drop-shadow(...)`.
@@ -1442,8 +1443,8 @@ mod tests {
 
     #[test]
     fn apply_filter_utilities() {
-        use crate::style::FilterFunction;
         use crate::layout::dimension::CssDim;
+        use crate::style::FilterFunction;
 
         let mut el = Element::new();
         let impact = apply_class_list(&mut el, "blur-md");
@@ -1739,10 +1740,7 @@ mod p1_utility_tests {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut el = Element::new();
-        apply_class_list(
-            &mut el,
-            "scale-100 transition-transform hover:scale-x-150",
-        );
+        apply_class_list(&mut el, "scale-100 transition-transform hover:scale-x-150");
         el.layout_bounds = [400.0, 200.0, 64.0, 64.0];
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         for _ in 0..20 {
@@ -1772,10 +1770,7 @@ mod p1_utility_tests {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut el = Element::new();
-        apply_class_list(
-            &mut el,
-            "scale-100 transition-transform hover:scale-x-150",
-        );
+        apply_class_list(&mut el, "scale-100 transition-transform hover:scale-x-150");
         // 64px box at x=400. After scale-x 1.5 the paint AABB starts at 384.
         el.layout_bounds = [400.0, 200.0, 64.0, 64.0];
         el.style.scale = [1.5, 1.0];
@@ -1813,10 +1808,7 @@ mod p1_utility_tests {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
         let mut el = Element::new();
-        apply_class_list(
-            &mut el,
-            "scale-100 transition-transform hover:scale-x-150",
-        );
+        apply_class_list(&mut el, "scale-100 transition-transform hover:scale-x-150");
         el.layout_bounds = [400.0, 200.0, 64.0, 64.0];
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         // Enter and settle at 1.5×.
@@ -1865,10 +1857,7 @@ mod p1_utility_tests {
     #[test]
     fn class_variant_hover_needs_frame_on_enter_leave() {
         let mut el = Element::new();
-        apply_class_list(
-            &mut el,
-            "scale-100 transition-transform hover:scale-x-150",
-        );
+        apply_class_list(&mut el, "scale-100 transition-transform hover:scale-x-150");
         el.layout_bounds = [400.0, 200.0, 64.0, 64.0];
         assert!(
             class_variant_hover_needs_frame(&el, [432.0, 232.0]),

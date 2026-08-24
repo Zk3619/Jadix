@@ -1317,19 +1317,23 @@ impl Element {
     }
     // Per-side style
     pub fn border_top_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.set_border_side_style(0, LineStyle::from_css_keyword(style.as_ref()));
+        self.style
+            .set_border_side_style(0, LineStyle::from_css_keyword(style.as_ref()));
         self
     }
     pub fn border_right_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.set_border_side_style(1, LineStyle::from_css_keyword(style.as_ref()));
+        self.style
+            .set_border_side_style(1, LineStyle::from_css_keyword(style.as_ref()));
         self
     }
     pub fn border_bottom_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.set_border_side_style(2, LineStyle::from_css_keyword(style.as_ref()));
+        self.style
+            .set_border_side_style(2, LineStyle::from_css_keyword(style.as_ref()));
         self
     }
     pub fn border_left_style(mut self, style: impl AsRef<str>) -> Self {
-        self.style.set_border_side_style(3, LineStyle::from_css_keyword(style.as_ref()));
+        self.style
+            .set_border_side_style(3, LineStyle::from_css_keyword(style.as_ref()));
         self
     }
     // Logical property style
@@ -1361,13 +1365,17 @@ impl Element {
     // Logical compound shortcuts
     pub fn border_inline(self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
         self.ensure_border_solid()
-            .border_left_color(color).border_right_color(color)
-            .border_left_width(width).border_right_width(width)
+            .border_left_color(color)
+            .border_right_color(color)
+            .border_left_width(width)
+            .border_right_width(width)
     }
     pub fn border_block(self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
         self.ensure_border_solid()
-            .border_top_color(color).border_bottom_color(color)
-            .border_top_width(width).border_bottom_width(width)
+            .border_top_color(color)
+            .border_bottom_color(color)
+            .border_top_width(width)
+            .border_bottom_width(width)
     }
     pub fn border_inline_start(self, color: [f32; 4], width: impl IntoF32) -> Self {
         self.border_left(color, width)
@@ -1498,11 +1506,23 @@ impl Element {
             let t = token.to_ascii_lowercase();
             if matches!(
                 t.as_str(),
-                "none" | "auto" | "dotted" | "dashed" | "solid" | "double"
-                    | "groove" | "ridge" | "inset" | "outset"
+                "none"
+                    | "auto"
+                    | "dotted"
+                    | "dashed"
+                    | "solid"
+                    | "double"
+                    | "groove"
+                    | "ridge"
+                    | "inset"
+                    | "outset"
             ) {
                 self.style.outline_style = LineStyle::from_css_keyword(&t);
-            } else if token.bytes().next().map_or(false, |b| b.is_ascii_digit() || b == b'.') {
+            } else if token
+                .bytes()
+                .next()
+                .map_or(false, |b| b.is_ascii_digit() || b == b'.')
+            {
                 self.style.outline_width = (*token).into_f32();
             } else {
                 self.style.outline_color = parse_color(token);
@@ -1561,11 +1581,13 @@ impl Element {
     /// Parse CSS `transition` shorthand, e.g. `"opacity 300ms ease-in-out 100ms"`.
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
-        use crate::style::{TransitionEntry, TransitionProperty, TimingFunction};
+        use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
         self.style.transition.clear();
         for segment in value.as_ref().split(',') {
             let parts: Vec<&str> = segment.split_whitespace().collect();
-            if parts.is_empty() { continue; }
+            if parts.is_empty() {
+                continue;
+            }
             let mut property = TransitionProperty::All;
             let mut duration_ms: f32 = 0.0;
             let mut delay_ms: f32 = 0.0;
@@ -1573,7 +1595,12 @@ impl Element {
             let mut dur_set = false;
             for p in &parts {
                 if let Some(ms) = parse_time_ms(p) {
-                    if !dur_set { duration_ms = ms; dur_set = true; } else { delay_ms = ms; }
+                    if !dur_set {
+                        duration_ms = ms;
+                        dur_set = true;
+                    } else {
+                        delay_ms = ms;
+                    }
                 } else if p.starts_with("cubic-bezier(") || p.contains("cubic-bezier") {
                     timing = TimingFunction::from_css(p);
                 } else {
@@ -1585,21 +1612,29 @@ impl Element {
                     }
                 }
             }
-            self.style.transition.push(TransitionEntry { property, duration_ms, delay_ms, timing });
+            self.style.transition.push(TransitionEntry {
+                property,
+                duration_ms,
+                delay_ms,
+                timing,
+            });
         }
         self
     }
 
     pub fn transition_property(mut self, value: impl AsRef<str>) -> Self {
         use crate::style::TransitionProperty;
-        let props: Vec<TransitionProperty> = value.as_ref()
+        let props: Vec<TransitionProperty> = value
+            .as_ref()
             .split(',')
             .map(|s| TransitionProperty::from_css(s))
             .collect();
         if self.style.transition.is_empty() {
             for p in props {
                 self.style.transition.push(crate::style::TransitionEntry {
-                    property: p, duration_ms: 0.0, delay_ms: 0.0,
+                    property: p,
+                    duration_ms: 0.0,
+                    delay_ms: 0.0,
                     timing: crate::style::TimingFunction::Ease,
                 });
             }
@@ -1613,7 +1648,11 @@ impl Element {
     }
 
     pub fn transition_duration(mut self, value: impl AsRef<str>) -> Self {
-        let durations: Vec<f32> = value.as_ref().split(',').filter_map(|s| parse_time_ms(s.trim())).collect();
+        let durations: Vec<f32> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| parse_time_ms(s.trim()))
+            .collect();
         for (i, d) in durations.into_iter().enumerate() {
             if i < self.style.transition.len() {
                 self.style.transition[i].duration_ms = d;
@@ -1623,7 +1662,11 @@ impl Element {
     }
 
     pub fn transition_delay(mut self, value: impl AsRef<str>) -> Self {
-        let delays: Vec<f32> = value.as_ref().split(',').filter_map(|s| parse_time_ms(s.trim())).collect();
+        let delays: Vec<f32> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| parse_time_ms(s.trim()))
+            .collect();
         for (i, d) in delays.into_iter().enumerate() {
             if i < self.style.transition.len() {
                 self.style.transition[i].delay_ms = d;
@@ -1634,7 +1677,11 @@ impl Element {
 
     pub fn transition_timing_function(mut self, value: impl AsRef<str>) -> Self {
         use crate::style::TimingFunction;
-        let funcs: Vec<TimingFunction> = value.as_ref().split(',').map(|s| TimingFunction::from_css(s.trim())).collect();
+        let funcs: Vec<TimingFunction> = value
+            .as_ref()
+            .split(',')
+            .map(|s| TimingFunction::from_css(s.trim()))
+            .collect();
         for (i, f) in funcs.into_iter().enumerate() {
             if i < self.style.transition.len() {
                 self.style.transition[i].timing = f;
@@ -2176,27 +2223,39 @@ impl Element {
     pub fn skew_x(mut self, deg: f32) -> Self {
         use crate::layout::dimension::CssAngle;
         use crate::style::TransformFunction;
-        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::SkewX(CssAngle::Deg(deg)));
+        self.style
+            .transform
+            .get_or_insert_with(Vec::new)
+            .push(TransformFunction::SkewX(CssAngle::Deg(deg)));
         self
     }
     /// Shorthand: `skewY(deg)`.
     pub fn skew_y(mut self, deg: f32) -> Self {
         use crate::layout::dimension::CssAngle;
         use crate::style::TransformFunction;
-        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::SkewY(CssAngle::Deg(deg)));
+        self.style
+            .transform
+            .get_or_insert_with(Vec::new)
+            .push(TransformFunction::SkewY(CssAngle::Deg(deg)));
         self
     }
     /// Shorthand: `perspective(px)`.
     pub fn perspective(mut self, px: f32) -> Self {
         use crate::layout::dimension::CssDim;
         use crate::style::TransformFunction;
-        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::Perspective(CssDim::Px(px)));
+        self.style
+            .transform
+            .get_or_insert_with(Vec::new)
+            .push(TransformFunction::Perspective(CssDim::Px(px)));
         self
     }
     /// Set a raw `matrix(a,b,c,d,e,f)` transform.
     pub fn matrix(mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) -> Self {
         use crate::style::TransformFunction;
-        self.style.transform.get_or_insert_with(Vec::new).push(TransformFunction::Matrix([a, b, c, d, e, f]));
+        self.style
+            .transform
+            .get_or_insert_with(Vec::new)
+            .push(TransformFunction::Matrix([a, b, c, d, e, f]));
         self
     }
     /// CSS `zoom` — magnification factor that **affects layout**.
@@ -2323,12 +2382,7 @@ pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
     }
     let sw = b[2] * sx;
     let sh = b[3] * sy;
-    [
-        vx + (b[2] - sw) * 0.5,
-        vy + (b[3] - sh) * 0.5,
-        sw,
-        sh,
-    ]
+    [vx + (b[2] - sw) * 0.5, vy + (b[3] - sh) * 0.5, sw, sh]
 }
 
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
@@ -2340,10 +2394,9 @@ pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
 pub(crate) fn element_clips_overflow(el: &Element) -> bool {
     el.style.overflow.x != taffy::style::Overflow::Visible
         || el.style.overflow.y != taffy::style::Overflow::Visible
-        || el
-            .focus_id
-            .as_deref()
-            .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
+        || el.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        })
 }
 
 #[inline]
@@ -2414,8 +2467,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
         return;
     }
     let in_portal = in_portal
-        || element.template_id.as_deref()
-            == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+        || element.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
     if let Some(sync) = element.reactive_sync.clone() {
         let before = element.layout_bounds;

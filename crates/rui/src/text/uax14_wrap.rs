@@ -112,8 +112,7 @@ pub fn soft_wrap_logical(
     }
     let target = target_width.max(1.0);
     let family = best_font_family(font_system);
-    let weight =
-        crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+    let weight = crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
     let shaping = Shaping::Advanced;
     ensure_coverage_for_text(font_system, text);
 

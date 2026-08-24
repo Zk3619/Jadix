@@ -115,8 +115,7 @@ fn bidi_prewrap_applied(
     layout_w: f32,
 ) -> bool {
     let target = crate::text::layout_wrap_target_prewrap(layout_w).max(1.0);
-    let Some(fit) =
-        crate::text::try_glyphon_fit_soft_wrap(text, size, weight, logical_lh, target)
+    let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(text, size, weight, logical_lh, target)
     else {
         return false;
     };
@@ -855,9 +854,7 @@ fn emoji_sequence_content_hash(text: &str) -> u64 {
 
 /// Match `EmojiCacheKey` docs: coarse wrap buckets so 1px soft-width jitter does not miss.
 fn emoji_wrap_width_q(buffer_soft_w: f32) -> u16 {
-    (buffer_soft_w / 8.0)
-        .floor()
-        .clamp(0.0, u16::MAX as f32) as u16
+    (buffer_soft_w / 8.0).floor().clamp(0.0, u16::MAX as f32) as u16
 }
 
 fn direction_mark(dir: TextDirection) -> &'static str {
@@ -954,25 +951,23 @@ fn set_text_with_invisible_emoji_slots(
     shaping: glyphon::Shaping,
 ) {
     let visible = glyphon::AttrsOwned::new(&attrs);
-    let invisible = glyphon::AttrsOwned::new(
-        &attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0)),
-    );
+    let invisible =
+        glyphon::AttrsOwned::new(&attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0)));
     let mut owned: Vec<(String, glyphon::AttrsOwned)> = Vec::new();
     let mut buf = String::new();
     let mut slot_run = false;
-    let flush = |owned: &mut Vec<(String, glyphon::AttrsOwned)>,
-                 buf: &mut String,
-                 slot_run: bool| {
-        if buf.is_empty() {
-            return;
-        }
-        let a = if slot_run {
-            invisible.clone()
-        } else {
-            visible.clone()
+    let flush =
+        |owned: &mut Vec<(String, glyphon::AttrsOwned)>, buf: &mut String, slot_run: bool| {
+            if buf.is_empty() {
+                return;
+            }
+            let a = if slot_run {
+                invisible.clone()
+            } else {
+                visible.clone()
+            };
+            owned.push((std::mem::take(buf), a));
         };
-        owned.push((std::mem::take(buf), a));
-    };
     for c in text.chars() {
         let is_slot = c == EMOJI_LAYOUT_SLOT;
         if !buf.is_empty() && is_slot != slot_run {
@@ -1762,10 +1757,7 @@ pub fn prepare_text_frame(
     let viewport_clip = [0.0, 0.0, config.width as f32, config.height as f32];
 
     if text_renderer.shaped_cache.len() > text_nodes.len() {
-        for entry in text_renderer
-            .shaped_cache
-            .drain(text_nodes.len()..)
-        {
+        for entry in text_renderer.shaped_cache.drain(text_nodes.len()..) {
             park_shaped_entry(&mut text_renderer.shaped_identity_pool, entry);
         }
     }
@@ -2182,9 +2174,7 @@ pub fn prepare_text_frame(
             let entry = &text_renderer.shaped_cache[i];
             if entry.shape_hash != shape_hash
                 && shape_hash != 0
-                && text_renderer
-                    .shaped_identity_pool
-                    .contains_key(&shape_hash)
+                && text_renderer.shaped_identity_pool.contains_key(&shape_hash)
             {
                 let reclaimed = text_renderer
                     .shaped_identity_pool
@@ -2199,9 +2189,10 @@ pub fn prepare_text_frame(
         // unsafe: a first-frame false negative left buffers without emoji slots while later
         // Exact frames skipped detect → blank/flickering Twemoji quads (gallery text page).
         let has_emoji = emoji_detect::text_contains_emoji(info.text.as_str())
-            || info.shape_suffix.as_deref().is_some_and(|s| {
-                !s.is_empty() && emoji_detect::text_contains_emoji(s)
-            });
+            || info
+                .shape_suffix
+                .as_deref()
+                .is_some_and(|s| !s.is_empty() && emoji_detect::text_contains_emoji(s));
         text_renderer.shaped_cache[i].has_emoji = has_emoji;
 
         // Skip script coverage when this node will paint from an Exact buffer without reshape
@@ -2212,11 +2203,7 @@ pub fn prepare_text_frame(
             if !exact_peek {
                 false
             } else if is_input_text {
-                scroll_fast_skips_input_reshape(
-                    force_fast_mode,
-                    true,
-                    st.input_caret.is_some(),
-                )
+                scroll_fast_skips_input_reshape(force_fast_mode, true, st.input_caret.is_some())
             } else if force_fast_mode {
                 nowrap
                     || !crate::text::needs_logical_prewrap(info.text.as_str())
@@ -2285,43 +2272,44 @@ pub fn prepare_text_frame(
                                 wrap_w: cur_wrap,
                             }
                         } else {
-                        let mut wrap_w = resolve_paint_wrap();
-                        if nowrap {
-                            entry.buffer.set_wrap(glyphon::Wrap::None);
-                        }
-                        entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
-                        entry
-                            .buffer
-                            .set_scroll(glyphon::cosmic_text::Scroll::default());
-                        entry
-                            .buffer
-                            .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
-                        wrap_w = correct_bidi_ink_spill(
-                            &mut entry.buffer,
-                            unsafe { &mut *text_renderer.font_system },
-                            info.text.as_str(),
-                            st.size,
-                            font_weight,
-                            logical_lh,
-                            fit_lookup_w,
-                            soft_w_target,
-                            ui_scale,
-                            line_height,
-                            scaled_h,
-                            buffer_height_opt,
-                            wrap_w,
-                            nowrap,
-                            force_fast_mode,
-                        );
-                        entry.measured_text_w = entry
-                            .buffer
-                            .layout_runs()
-                            .map(|run| run.line_w)
-                            .fold(0.0_f32, f32::max);
-                        ShapePath::Exact {
-                            measured: entry.measured_text_w,
-                            wrap_w,
-                        }
+                            let mut wrap_w = resolve_paint_wrap();
+                            if nowrap {
+                                entry.buffer.set_wrap(glyphon::Wrap::None);
+                            }
+                            entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
+                            entry
+                                .buffer
+                                .set_scroll(glyphon::cosmic_text::Scroll::default());
+                            entry.buffer.shape_until_scroll(
+                                unsafe { &mut *text_renderer.font_system },
+                                false,
+                            );
+                            wrap_w = correct_bidi_ink_spill(
+                                &mut entry.buffer,
+                                unsafe { &mut *text_renderer.font_system },
+                                info.text.as_str(),
+                                st.size,
+                                font_weight,
+                                logical_lh,
+                                fit_lookup_w,
+                                soft_w_target,
+                                ui_scale,
+                                line_height,
+                                scaled_h,
+                                buffer_height_opt,
+                                wrap_w,
+                                nowrap,
+                                force_fast_mode,
+                            );
+                            entry.measured_text_w = entry
+                                .buffer
+                                .layout_runs()
+                                .map(|run| run.line_w)
+                                .fold(0.0_f32, f32::max);
+                            ShapePath::Exact {
+                                measured: entry.measured_text_w,
+                                wrap_w,
+                            }
                         }
                     } else if !nowrap
                         && crate::text::needs_logical_prewrap(info.text.as_str())
@@ -2343,9 +2331,7 @@ pub fn prepare_text_frame(
                         let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
                         let runs = entry.buffer.layout_runs().count().max(1);
                         let height_ok = (runs as f32 * line_height) <= scaled_h + 1.0;
-                        if force_fast_mode
-                            || (height_ok && entry.measured_text_w > 0.0)
-                        {
+                        if force_fast_mode || (height_ok && entry.measured_text_w > 0.0) {
                             ShapePath::Exact {
                                 measured: entry.measured_text_w,
                                 wrap_w: cur_wrap,
@@ -2461,56 +2447,56 @@ pub fn prepare_text_frame(
                     entry.measured_text_w = measured;
                     ShapePath::Bounds { measured, wrap_w }
                 } else {
-                // Skip set_size only when wrap already matches the desired width. "ink fits
-                // wider leaf" alone is wrong on grow: old narrow wrap leaves empty space on
-                // the right (gallery Checkbox blurb after widening the window).
-                if measured > 0.0
-                    && measured <= soft_w_target + 0.5
-                    && height_ok
-                    && wrap_matches_leaf
-                {
-                    entry.key_hash = key_hash;
-                    entry.shape_hash = shape_hash;
-                    ShapePath::Bounds {
-                        measured,
-                        wrap_w: cur_wrap,
+                    // Skip set_size only when wrap already matches the desired width. "ink fits
+                    // wider leaf" alone is wrong on grow: old narrow wrap leaves empty space on
+                    // the right (gallery Checkbox blurb after widening the window).
+                    if measured > 0.0
+                        && measured <= soft_w_target + 0.5
+                        && height_ok
+                        && wrap_matches_leaf
+                    {
+                        entry.key_hash = key_hash;
+                        entry.shape_hash = shape_hash;
+                        ShapePath::Bounds {
+                            measured,
+                            wrap_w: cur_wrap,
+                        }
+                    } else {
+                        let mut wrap_w = want_wrap;
+                        if nowrap {
+                            entry.buffer.set_wrap(glyphon::Wrap::None);
+                        }
+                        entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
+                        entry
+                            .buffer
+                            .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
+                        wrap_w = correct_bidi_ink_spill(
+                            &mut entry.buffer,
+                            unsafe { &mut *text_renderer.font_system },
+                            info.text.as_str(),
+                            st.size,
+                            font_weight,
+                            logical_lh,
+                            fit_lookup_w,
+                            soft_w_target,
+                            ui_scale,
+                            line_height,
+                            scaled_h,
+                            buffer_height_opt,
+                            wrap_w,
+                            nowrap,
+                            force_fast_mode,
+                        );
+                        let measured = entry
+                            .buffer
+                            .layout_runs()
+                            .map(|run| run.line_w)
+                            .fold(0.0_f32, f32::max);
+                        entry.key_hash = key_hash;
+                        entry.shape_hash = shape_hash;
+                        entry.measured_text_w = measured;
+                        ShapePath::Bounds { measured, wrap_w }
                     }
-                } else {
-                    let mut wrap_w = want_wrap;
-                    if nowrap {
-                        entry.buffer.set_wrap(glyphon::Wrap::None);
-                    }
-                    entry.buffer.set_size(Some(wrap_w), buffer_height_opt);
-                    entry
-                        .buffer
-                        .shape_until_scroll(unsafe { &mut *text_renderer.font_system }, false);
-                    wrap_w = correct_bidi_ink_spill(
-                        &mut entry.buffer,
-                        unsafe { &mut *text_renderer.font_system },
-                        info.text.as_str(),
-                        st.size,
-                        font_weight,
-                        logical_lh,
-                        fit_lookup_w,
-                        soft_w_target,
-                        ui_scale,
-                        line_height,
-                        scaled_h,
-                        buffer_height_opt,
-                        wrap_w,
-                        nowrap,
-                        force_fast_mode,
-                    );
-                    let measured = entry
-                        .buffer
-                        .layout_runs()
-                        .map(|run| run.line_w)
-                        .fold(0.0_f32, f32::max);
-                    entry.key_hash = key_hash;
-                    entry.shape_hash = shape_hash;
-                    entry.measured_text_w = measured;
-                    ShapePath::Bounds { measured, wrap_w }
-                }
                 }
             } else {
                 ShapePath::Miss
@@ -2530,10 +2516,8 @@ pub fn prepare_text_frame(
                     entry.shape_hash != 0 && entry.shape_hash != shape_hash
                 };
                 if should_park {
-                    let dummy =
-                        make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system });
-                    let displaced =
-                        std::mem::replace(&mut text_renderer.shaped_cache[i], dummy);
+                    let dummy = make_dummy_cache_entry(unsafe { &mut *text_renderer.font_system });
+                    let displaced = std::mem::replace(&mut text_renderer.shaped_cache[i], dummy);
                     park_shaped_entry(&mut text_renderer.shaped_identity_pool, displaced);
                 }
                 let entry = &mut text_renderer.shaped_cache[i];
@@ -2548,8 +2532,7 @@ pub fn prepare_text_frame(
                 // settle share the same breaks (avoids last-word jump on mouse-up).
                 // Never pair Wrap::None with raw text.
                 let prewrapped: Option<std::sync::Arc<str>> = if logical_prewrap {
-                    let prewrap_target =
-                        crate::text::layout_wrap_target_prewrap(layout_w).max(1.0);
+                    let prewrap_target = crate::text::layout_wrap_target_prewrap(layout_w).max(1.0);
                     // Always UAX#14 prewrap — including force_fast. Skipping left raw text
                     // + WordOrGlyph in the cache; Bounds then reused it and split WJ.
                     let fit = crate::text::try_glyphon_fit_soft_wrap(
@@ -2590,12 +2573,9 @@ pub fn prepare_text_frame(
                 if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
                     let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
                     for (si, span) in spans.iter().enumerate() {
-                        let mut body = apply_letter_spacing_approx(
-                            &span.text,
-                            st.letter_spacing,
-                            scaled_size,
-                        )
-                        .into_owned();
+                        let mut body =
+                            apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size)
+                                .into_owned();
                         if si == 0 {
                             let m = direction_mark(st.direction);
                             if !m.is_empty() {
@@ -2633,9 +2613,7 @@ pub fn prepare_text_frame(
                         owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
                     buffer.set_rich_text(rich, &attrs, shaping, None);
                 } else {
-                    let paint_text = prewrapped
-                        .as_deref()
-                        .unwrap_or_else(|| shape_text.as_ref());
+                    let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
                     set_shaped_buffer_text(
                         &mut buffer,
                         unsafe { &mut *text_renderer.font_system },
@@ -2718,8 +2696,7 @@ pub fn prepare_text_frame(
                 // Prefer the text actually in the Buffer (may be UAX#14-prewrapped + slotted).
                 let slotted = buffer_joined_text(&text_renderer.shaped_cache[i].buffer);
                 let (layout_text, segments) = if slotted.contains(EMOJI_LAYOUT_SLOT) {
-                    let segs =
-                        emoji_segments_from_slotted_layout(shape_text.as_ref(), &slotted);
+                    let segs = emoji_segments_from_slotted_layout(shape_text.as_ref(), &slotted);
                     (slotted, segs)
                 } else {
                     plan_emoji_layout(shape_text.as_ref())
@@ -3208,17 +3185,13 @@ pub fn prepare_text_frame(
         });
 
         if emoji_debug_enabled() {
-            if let Some(entry) = tb
-                .emoji_cache_key
-                .as_ref()
-                .and_then(|k| {
-                    text_renderer
-                        .emoji_cache
-                        .entries
-                        .get(k)
-                        .or_else(|| text_renderer.emoji_cache.find_wrap_sibling(k))
-                })
-            {
+            if let Some(entry) = tb.emoji_cache_key.as_ref().and_then(|k| {
+                text_renderer
+                    .emoji_cache
+                    .entries
+                    .get(k)
+                    .or_else(|| text_renderer.emoji_cache.find_wrap_sibling(k))
+            }) {
                 let baseline_y = tb.y + tb.text_size * 0.86;
                 if let Some([cx, cy, cw, ch]) =
                     clip_rect_to_bounds([tb.x, baseline_y, tb.box_w, 1.0], tb.clip_bounds)
@@ -3295,9 +3268,7 @@ pub fn prepare_text_frame(
             let layout_ul_w = tb.measured_text_w.min(tb.box_w);
             let ul_w = layout_ul_w * ps;
             let ul_x = match tb.align {
-                glyphon::cosmic_text::Align::Center => {
-                    tb.x + (tb.box_w - layout_ul_w) * 0.5 * ps
-                }
+                glyphon::cosmic_text::Align::Center => tb.x + (tb.box_w - layout_ul_w) * 0.5 * ps,
                 glyphon::cosmic_text::Align::Right => tb.x + (tb.box_w - layout_ul_w) * ps,
                 _ => tb.x,
             };
@@ -3383,9 +3354,8 @@ pub fn prepare_text_frame(
             };
             if tb.underline {
                 // Keep underline visually closer to the text bottom edge.
-                let y = tb.y + tb.box_h * ps
-                    - (ul_h * 0.45)
-                    - (tb.underline_offset * ui_scale * ps);
+                let y =
+                    tb.y + tb.box_h * ps - (ul_h * 0.45) - (tb.underline_offset * ui_scale * ps);
                 draw_at(y);
             }
             if tb.overline {
@@ -3533,8 +3503,14 @@ mod shape_cache_key_tests {
 
     #[test]
     fn emoji_wrap_width_q_buckets_one_px_jitter() {
-        assert_eq!(super::emoji_wrap_width_q(400.0), super::emoji_wrap_width_q(407.0));
-        assert_ne!(super::emoji_wrap_width_q(400.0), super::emoji_wrap_width_q(408.0));
+        assert_eq!(
+            super::emoji_wrap_width_q(400.0),
+            super::emoji_wrap_width_q(407.0)
+        );
+        assert_ne!(
+            super::emoji_wrap_width_q(400.0),
+            super::emoji_wrap_width_q(408.0)
+        );
     }
 
     #[test]
@@ -3562,12 +3538,32 @@ mod shape_cache_key_tests {
         let shaping = glyphon::Shaping::Advanced;
         let text = "日本語テスト：こんにちは世界。汉字・かな";
         let identity = node_shape_identity_hash(
-            text, 14.0, 21.0, 400, family, align, shaping, 0.0, TextDirection::Auto, [0, 0, 0, 255],
+            text,
+            14.0,
+            21.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            [0, 0, 0, 255],
         );
         let from_id = node_shape_key_from_identity(identity, 320.0, 40.0, false);
         let full = node_shape_hash(
-            text, 14.0, 21.0, 320.0, 40.0, 400, family, align, shaping, 0.0, TextDirection::Auto,
-            [0, 0, 0, 255], false,
+            text,
+            14.0,
+            21.0,
+            320.0,
+            40.0,
+            400,
+            family,
+            align,
+            shaping,
+            0.0,
+            TextDirection::Auto,
+            [0, 0, 0, 255],
+            false,
         );
         assert_eq!(from_id, full);
     }
@@ -3606,12 +3602,8 @@ mod shape_cache_key_tests {
                     TextDirection::Auto,
                     [0, 0, 0, 255],
                 );
-                let _key = node_shape_key_from_identity(
-                    identity,
-                    400.0 + (i % 7) as f32,
-                    24.0,
-                    false,
-                );
+                let _key =
+                    node_shape_key_from_identity(identity, 400.0 + (i % 7) as f32, 24.0, false);
             }
         }
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -4017,15 +4009,8 @@ mod input_shaping_stability_tests {
         let live = format!("{committed}nihaoshijie");
         let stale = crate::text::prepare(committed, size, 400, lh);
         let stale_w = crate::text::intrinsic_width(&stale);
-        let live_w = nowrap_layout_width_from_text(
-            &live,
-            size,
-            400,
-            lh,
-            TextOverflow::Clip,
-            false,
-            box_w,
-        );
+        let live_w =
+            nowrap_layout_width_from_text(&live, size, 400, lh, TextOverflow::Clip, false, box_w);
         assert!(
             live_w > stale_w + 8.0,
             "live wrap must exceed stale CJK-only intrinsic (live={live_w} stale={stale_w})"

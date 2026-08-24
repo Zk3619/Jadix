@@ -450,10 +450,7 @@ pub(super) fn find_scroll_area_metrics_by_rest(
 }
 
 /// Keep only future deadlines. Returns true if any entry was dropped as expired.
-pub(super) fn retain_future_instants(
-    map: &mut HashMap<String, Instant>,
-    now: Instant,
-) -> bool {
+pub(super) fn retain_future_instants(map: &mut HashMap<String, Instant>, now: Instant) -> bool {
     let mut expired = false;
     map.retain(|_, until| {
         if *until <= now {

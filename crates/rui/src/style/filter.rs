@@ -3,7 +3,9 @@
 //! Parsing follows Filter Effects Module Level 1. Rendering lowers this list into an
 //! SVG [`FilterGraph`](super::svg_filter::FilterGraph) (see `svg_filter::lower_css`).
 
-use crate::layout::dimension::{parse_css_angle, parse_css_dim, CssAngle, CssDim, CSS_ROOT_FONT_SIZE_PX};
+use crate::layout::dimension::{
+    parse_css_angle, parse_css_dim, CssAngle, CssDim, CSS_ROOT_FONT_SIZE_PX,
+};
 
 use super::color::try_parse_color;
 
@@ -170,13 +172,12 @@ fn parse_url_arg(args: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
-    let unquoted = if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-    {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    };
+    let unquoted =
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+            &s[1..s.len() - 1]
+        } else {
+            s
+        };
     let unquoted = unquoted.trim();
     if unquoted.is_empty() {
         None
@@ -447,9 +448,7 @@ fn factor_or(v: Option<f32>, default: f32) -> f32 {
 fn lerp_filter_fn(a: &FilterFunction, b: &FilterFunction, t: f32) -> Option<FilterFunction> {
     match (a, b) {
         (FilterFunction::Blur(la), FilterFunction::Blur(lb)) => {
-            let da = la
-                .clone()
-                .unwrap_or(CssDim::Px(0.0));
+            let da = la.clone().unwrap_or(CssDim::Px(0.0));
             let db = lb.clone().unwrap_or(CssDim::Px(0.0));
             Some(FilterFunction::Blur(Some(lerp_dim(&da, &db, t)?)))
         }
@@ -465,9 +464,9 @@ fn lerp_filter_fn(a: &FilterFunction, b: &FilterFunction, t: f32) -> Option<Filt
         (FilterFunction::Invert(la), FilterFunction::Invert(lb)) => Some(FilterFunction::Invert(
             Some(lerp_f(factor_or(*la, 0.0), factor_or(*lb, 0.0), t)),
         )),
-        (FilterFunction::Opacity(la), FilterFunction::Opacity(lb)) => Some(FilterFunction::Opacity(
-            Some(lerp_f(factor_or(*la, 1.0), factor_or(*lb, 1.0), t)),
-        )),
+        (FilterFunction::Opacity(la), FilterFunction::Opacity(lb)) => Some(
+            FilterFunction::Opacity(Some(lerp_f(factor_or(*la, 1.0), factor_or(*lb, 1.0), t))),
+        ),
         (FilterFunction::Saturate(la), FilterFunction::Saturate(lb)) => Some(
             FilterFunction::Saturate(Some(lerp_f(factor_or(*la, 1.0), factor_or(*lb, 1.0), t))),
         ),
@@ -530,7 +529,9 @@ mod tests {
     fn parse_blur() {
         let list = parse_filter("blur(5px)").unwrap();
         assert_eq!(list.len(), 1);
-        assert!(matches!(&list[0], FilterFunction::Blur(Some(CssDim::Px(v))) if (*v - 5.0).abs() < 1e-6));
+        assert!(
+            matches!(&list[0], FilterFunction::Blur(Some(CssDim::Px(v))) if (*v - 5.0).abs() < 1e-6)
+        );
     }
 
     #[test]
@@ -579,7 +580,9 @@ mod tests {
     fn hue_rotate_and_grayscale() {
         let list = parse_filter("hue-rotate(90deg) grayscale(80%)").unwrap();
         assert_eq!(list.len(), 2);
-        assert!(matches!(&list[0], FilterFunction::HueRotate(Some(a)) if (a.to_deg() - 90.0).abs() < 1e-6));
+        assert!(
+            matches!(&list[0], FilterFunction::HueRotate(Some(a)) if (a.to_deg() - 90.0).abs() < 1e-6)
+        );
         assert!(matches!(&list[1], FilterFunction::Grayscale(Some(v)) if (*v - 0.8).abs() < 1e-6));
     }
 }

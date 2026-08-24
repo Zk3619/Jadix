@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::core::reactivity::untrack;
 use crate::core::tree::{Element, IntoCssDim, IntoElementList, LayoutStatus};
 use crate::primitives::path::{
-    filled_rect, paint_path_premul, polygon, premul_to_straight_rgba,
-    src_over_premul, PathCommand, PathStyle, Point2,
+    filled_rect, paint_path_premul, polygon, premul_to_straight_rgba, src_over_premul, PathCommand,
+    PathStyle, Point2,
 };
 use crate::style::parse_color;
 

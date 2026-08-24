@@ -49,11 +49,11 @@ use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus};
+use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::{UnitSlot, TimingFunction, TransitionEntry, TransitionProperty};
-use crate::layout::dimension::CssDim;
+use crate::style::{TimingFunction, TransitionEntry, TransitionProperty, UnitSlot};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::resolve_instance_id;
@@ -425,11 +425,7 @@ fn reset_carousel_ephemeral(id: &str) {
     offset_target(id).set(cur);
     request_instant_snap_to(id, cur);
     CAROUSEL_DRAG.with(|d| {
-        let same = d
-            .borrow()
-            .as_ref()
-            .map(|x| x.id == id)
-            .unwrap_or(false);
+        let same = d.borrow().as_ref().map(|x| x.id == id).unwrap_or(false);
         if same {
             *d.borrow_mut() = None;
             crate::app::release_pointer_capture();
@@ -488,8 +484,7 @@ fn ensure_stack_card_css_transition(el: &mut Element) {
 /// 这样矩形与文本共用同一父级缩放，避免各自绕中心缩放导致拖拽时文字脱节。
 fn reset_stack_descendant_scales(el: &mut Element) {
     for child in &mut el.children {
-        if (child.style.scale[0] - 1.0).abs() > 0.001
-            || (child.style.scale[1] - 1.0).abs() > 0.001
+        if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
         {
             child.style.scale = [1.0, 1.0];
         }
@@ -624,8 +619,7 @@ fn stack_step_px(viewport_w: f32) -> f32 {
     }
     let ideal = card_w * 0.52;
     // 侧卡外缘：center - step - (card_w * side_sc)/2 ≥ 2px 边距。
-    let max_fit =
-        (viewport_w * 0.5 - card_w * SIDE_SCALE_AT_AD1 * 0.5 - 2.0).max(0.0);
+    let max_fit = (viewport_w * 0.5 - card_w * SIDE_SCALE_AT_AD1 * 0.5 - 2.0).max(0.0);
     ideal.min(max_fit).min(200.0)
 }
 
@@ -720,10 +714,7 @@ fn loop_clone_count(ctx: &CarouselCtx) -> usize {
     } else {
         ctx.per_view.ceil().max(1.0) as usize
     };
-    need_view
-        .max(scroll_delta(ctx))
-        .max(need_prev)
-        .min(n)
+    need_view.max(scroll_delta(ctx)).max(need_prev).min(n)
 }
 
 /// Pad 模式尾部空白槽数量（让末项可停在视口左侧并露出空区）。
@@ -1328,7 +1319,14 @@ fn resolve_snap_index(drag: &CarouselDrag, visual: f32, step: f32, cc: usize, hi
 
 /// 无缝 + 吸附松手：按视觉最近**轨道格**（可含首尾克隆）吸附。
 /// 若目标落在克隆槽，走 [`LoopAnim`] 再瞬移回真实带，避免尾项→首项反向长滚。
-fn end_seamless_snap_drag(drag: &CarouselDrag, visual: f32, step: f32, n: usize, cc: usize, hi: usize) {
+fn end_seamless_snap_drag(
+    drag: &CarouselDrag,
+    visual: f32,
+    step: f32,
+    n: usize,
+    cc: usize,
+    hi: usize,
+) {
     let start = drag.index.peek().min(hi);
     let start_off = -((start + cc) as f32) * step;
     let half = step.max(1.0) * 0.5;
@@ -1459,12 +1457,7 @@ fn end_carousel_drag() {
 }
 
 fn is_carousel_dragging_id(id: &str) -> bool {
-    CAROUSEL_DRAG.with(|d| {
-        d.borrow()
-            .as_ref()
-            .map(|x| x.id == id)
-            .unwrap_or(false)
-    })
+    CAROUSEL_DRAG.with(|d| d.borrow().as_ref().map(|x| x.id == id).unwrap_or(false))
 }
 
 /// CursorMoved：更新拖拽位移。
@@ -1604,11 +1597,7 @@ fn classify_carousel_kids(
     (content, prev, next, dots, rest)
 }
 
-fn place_nav_inside(
-    mut nav: Element,
-    orientation: CarouselOrientation,
-    which: &str,
-) -> Element {
+fn place_nav_inside(mut nav: Element, orientation: CarouselOrientation, which: &str) -> Element {
     nav = nav.absolute().z_index(2);
     match (orientation, which) {
         (CarouselOrientation::Horizontal, "prev") => {
@@ -1654,23 +1643,14 @@ fn assemble_carousel_chrome(
                 // 勿 w(100%)：与 Prev/Next 同处一行时会挤占/错算视口宽度。
                 .child(stage_body)
                 .into();
-            stage.attrs.insert(
-                ATTR_SLOT.to_string(),
-                "carousel-stage".to_string(),
-            );
+            stage
+                .attrs
+                .insert(ATTR_SLOT.to_string(), "carousel-stage".to_string());
 
             let mut track: Element = if horizontal {
-                hstack()
-                    .w("100%")
-                    .items_center()
-                    .gap("0.5rem")
-                    .into()
+                hstack().w("100%").items_center().gap("0.5rem").into()
             } else {
-                vstack()
-                    .h("100%")
-                    .items_center()
-                    .gap("0.5rem")
-                    .into()
+                vstack().h("100%").items_center().gap("0.5rem").into()
             };
             if let Some(p) = prev {
                 track = track.child(p);
@@ -1825,24 +1805,16 @@ pub fn carousel_scope(
         "data-orientation".to_string(),
         orientation.as_str().to_string(),
     );
-    root.attrs.insert(
-        "data-controls".to_string(),
-        controls.as_str().to_string(),
-    );
-    root.attrs.insert(
-        "data-scroll-by".to_string(),
-        scroll_by.as_str().to_string(),
-    );
+    root.attrs
+        .insert("data-controls".to_string(), controls.as_str().to_string());
+    root.attrs
+        .insert("data-scroll-by".to_string(), scroll_by.as_str().to_string());
     root.attrs
         .insert("data-variant".to_string(), variant.as_str().to_string());
-    root.attrs.insert(
-        "data-end-align".to_string(),
-        end_align.as_str().to_string(),
-    );
-    root.attrs.insert(
-        "data-page-snap".to_string(),
-        page_snap.as_str().to_string(),
-    );
+    root.attrs
+        .insert("data-end-align".to_string(), end_align.as_str().to_string());
+    root.attrs
+        .insert("data-page-snap".to_string(), page_snap.as_str().to_string());
     root.attrs.insert(
         "data-item-sizing".to_string(),
         item_sizing.as_str().to_string(),
@@ -1952,7 +1924,9 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
 
     if let Some(src) = items.first() {
         let mut measure = clone_carousel_slide_visual(src);
-        measure.style.set_css_dim(UnitSlot::Width, CssDim::Percent(CARD_WIDTH_FRAC));
+        measure
+            .style
+            .set_css_dim(UnitSlot::Width, CssDim::Percent(CARD_WIDTH_FRAC));
         measure = measure
             .mx("auto")
             .opacity(0.0)
@@ -2066,7 +2040,10 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
 
             let animating = !dragging
                 && (el.transition_snapshot.has_active_tweens()
-                    || crate::style::css_transition_needs_frame(&el.style, &el.transition_snapshot)
+                    || crate::style::css_transition_needs_frame(
+                        &el.style,
+                        &el.transition_snapshot,
+                    )
                     || el.children.iter().any(|c| {
                         c.transition_snapshot.has_active_tweens()
                             || crate::style::css_transition_needs_frame(
@@ -2207,11 +2184,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
     // Pad：尾部追加空白槽（无缝循环时已禁用）。
     let spacers = pad_spacer_count(&ctx);
     for _ in 0..spacers {
-        let mut spacer: Element = r#box()
-            .min_w(0.0)
-            .flex_shrink(0.0)
-            .flex_grow(0.0)
-            .into();
+        let mut spacer: Element = r#box().min_w(0.0).flex_shrink(0.0).flex_grow(0.0).into();
         spacer.set_attr("data-carousel-spacer", "1");
         track_items.push(spacer);
     }
@@ -2900,10 +2873,7 @@ mod tests {
             Some("pad")
         );
         assert_eq!(el.attrs.get("data-dots").map(|s| s.as_str()), Some("0"));
-        assert_eq!(
-            el.attrs.get("data-seamless").map(|s| s.as_str()),
-            Some("1")
-        );
+        assert_eq!(el.attrs.get("data-seamless").map(|s| s.as_str()), Some("1"));
         assert_eq!(el.attrs.get("data-snap").map(|s| s.as_str()), Some("1"));
     }
 
@@ -3523,10 +3493,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 4000,
             });
-            assert!(
-                is_carousel_dragging_id(id),
-                "drag session must be active"
-            );
+            assert!(is_carousel_dragging_id(id), "drag session must be active");
             assert!(
                 next_autoplay_at(id).is_none(),
                 "drag must clear autoplay deadline"
@@ -3626,7 +3593,13 @@ mod tests {
                     stage[2]
                 );
                 if card.style.z_index >= 99_000 && card.style.opacity > 0.9 {
-                    center = Some((mid, w, card.style.translate[0], shell_sc, card.style.opacity));
+                    center = Some((
+                        mid,
+                        w,
+                        card.style.translate[0],
+                        shell_sc,
+                        card.style.opacity,
+                    ));
                     assert!(
                         card.style.bg_color[3] < 0.05,
                         "center shell stays transparent; occlusion is page_stack_bands"
@@ -3646,10 +3619,7 @@ mod tests {
                 }
             }
             let (c_mid, c_w, c_tx, c_sc, c_op) = center.expect("active card");
-            assert!(
-                c_tx.abs() < 1.0,
-                "active card must sit at tx=0, got {c_tx}"
-            );
+            assert!(c_tx.abs() < 1.0, "active card must sit at tx=0, got {c_tx}");
             assert!(
                 (c_mid - stage_mid).abs() < 4.0,
                 "active card must be stage-centered; mid={c_mid} stage_mid={stage_mid}"
@@ -3732,7 +3702,11 @@ mod tests {
             drag_px.set(-(step * 0.6));
             snap_offset_to(id, -(step * 0.6));
             end_carousel_drag();
-            assert_eq!(index.peek(), 1, "stack drag past half step should land on next");
+            assert_eq!(
+                index.peek(),
+                1,
+                "stack drag past half step should land on next"
+            );
             assert!(
                 (offset_target(id).peek() + step).abs() < 1.0,
                 "stack ideal offset should be -index×step; got {}",
@@ -3832,7 +3806,11 @@ mod tests {
                     item.layout_bounds[2]
                 );
             }
-            assert!(widths.len() >= 3, "expected real+clone slides, got {}", widths.len());
+            assert!(
+                widths.len() >= 3,
+                "expected real+clone slides, got {}",
+                widths.len()
+            );
             assert!(
                 (offset + vp).abs() < 3.0,
                 "index0 must park at -viewport; offset={offset} vp={vp} widths={widths:?}"
@@ -3857,11 +3835,7 @@ mod tests {
                 .slide(|| r#box().w("100%").h("8rem").into())
                 .slide(|| r#box().w("100%").h("8rem").into())
                 .into();
-            let wrap: Element = r#box()
-                .w("100%")
-                .max_w("36rem")
-                .child(carousel_el)
-                .into();
+            let wrap: Element = r#box().w("100%").max_w("36rem").child(carousel_el).into();
             let main: Element = r#box()
                 .flex_grow(1.0)
                 .min_w(0.0)
@@ -3902,9 +3876,7 @@ mod tests {
                 }
                 widths.push(item.layout_bounds[2]);
             }
-            eprintln!(
-                "828x320 diag: vp={vp} offset={offset} target={tgt} widths={widths:?}"
-            );
+            eprintln!("828x320 diag: vp={vp} offset={offset} target={tgt} widths={widths:?}");
             assert!(vp > 100.0, "vp={vp}");
             assert!(
                 widths.iter().all(|w| (*w - vp).abs() < 3.0),
@@ -3947,7 +3919,12 @@ mod tests {
                     let _ = layout.build_and_layout(root, w, h, [-1.0, -1.0]);
                     let mut impact = LayoutStatus::Clean;
                     crate::core::tree::sync_reactive_elements_subtree(
-                        root, layout, &mut impact, w, h, [0.0, 0.0],
+                        root,
+                        layout,
+                        &mut impact,
+                        w,
+                        h,
+                        [0.0, 0.0],
                     );
                 }
             }

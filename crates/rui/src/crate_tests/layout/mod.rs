@@ -1,7 +1,6 @@
 mod box_model_contract;
-mod scale_paint_hit;
-mod collect_clip_cull;
 mod canvas_scene;
+mod collect_clip_cull;
 mod headless_smoke;
 mod mark_dirty;
 mod path_batch;
@@ -9,6 +8,7 @@ mod percent_content_box;
 mod portal_hoist;
 mod portal_reactive_layout;
 mod portal_scroll_passthrough;
+mod scale_paint_hit;
 mod scroll_clip_border;
 mod scroll_content_shrink;
 mod scrollbar_thumb_overlay;

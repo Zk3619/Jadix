@@ -1,9 +1,7 @@
 //! Gallery bidi: fit is cached; paint shapes at cached wrap width (not full leaf).
 use crate::renderer::font_loader;
 use crate::renderer::text_hit::best_font_family;
-use crate::text::{
-    glyphon_fit_soft_wrap, invalidate_prepare_cache, prepare, shutdown_layout_text,
-};
+use crate::text::{glyphon_fit_soft_wrap, invalidate_prepare_cache, prepare, shutdown_layout_text};
 use glyphon::{Attrs, Buffer, Metrics, Shaping};
 
 /// Same controls as the Text Compatibility gallery Edge Cases sample.

@@ -90,10 +90,14 @@ pub fn build_reactivity_panel(root: Option<&Element>, path: &[usize]) -> Element
     }
 
     rows.push(section_title("Named signals"));
-    for line in named_signal_lines(&snap.named_signal_entries).into_iter().take(NAME_CAP) {
+    for line in named_signal_lines(&snap.named_signal_entries)
+        .into_iter()
+        .take(NAME_CAP)
+    {
         rows.push(edge_row("key", &line));
     }
-    if let Some(note) = truncation_note(snap.named_signal_entries.len(), NAME_CAP, "named signals") {
+    if let Some(note) = truncation_note(snap.named_signal_entries.len(), NAME_CAP, "named signals")
+    {
         rows.push(label_line("", &note));
     }
 
@@ -164,7 +168,9 @@ fn sort_edge_rows(rows: &mut [EdgeRowData]) {
 fn build_signal_name_map(entries: &[NamedSignalDebugEntry]) -> HashMap<usize, Vec<String>> {
     let mut out: HashMap<usize, Vec<String>> = HashMap::new();
     for entry in entries {
-        out.entry(entry.signal_id).or_default().push(entry.key.clone());
+        out.entry(entry.signal_id)
+            .or_default()
+            .push(entry.key.clone());
     }
     for names in out.values_mut() {
         names.sort();
@@ -173,7 +179,11 @@ fn build_signal_name_map(entries: &[NamedSignalDebugEntry]) -> HashMap<usize, Ve
     out
 }
 
-fn build_filter_terms(focus_id: Option<&str>, template_id: Option<&str>, path_key: &str) -> Vec<String> {
+fn build_filter_terms(
+    focus_id: Option<&str>,
+    template_id: Option<&str>,
+    path_key: &str,
+) -> Vec<String> {
     let mut terms = Vec::new();
     push_term(&mut terms, focus_id);
     push_term(&mut terms, template_id);
@@ -250,65 +260,53 @@ fn fmt_ids(ids: &[usize]) -> String {
 
 fn section_title(text: &str) -> Element {
     Element::from(
-        r#box()
-            .w("100%")
-            .pt("0.5rem")
-            .pb("0.25rem")
-            .child(
-                crate::components::label(text)
-                    .text(text)
-                    .text_size("0.75rem")
-                    .font_weight("700")
-                    .color(parse_text_color("muted-foreground")),
-            ),
+        r#box().w("100%").pt("0.5rem").pb("0.25rem").child(
+            crate::components::label(text)
+                .text(text)
+                .text_size("0.75rem")
+                .font_weight("700")
+                .color(parse_text_color("muted-foreground")),
+        ),
     )
 }
 
 fn label_line(key: &str, val: &str) -> Element {
     Element::from(
-        vstack()
-            .w("100%")
-            .gap("0.125rem")
-            .py("0.25rem")
-            .children([
-                if key.is_empty() {
-                    Element::new()
-                } else {
-                    crate::components::label(key)
-                        .text(key)
-                        .text_size("0.6875rem")
-                        .color(parse_text_color("muted-foreground"))
-                        .into()
-                },
-                crate::components::label(val)
-                    .text(val)
-                    .text_size("0.75rem")
-                    .font_weight("500")
-                    .w("100%")
-                    .into(),
-            ]),
+        vstack().w("100%").gap("0.125rem").py("0.25rem").children([
+            if key.is_empty() {
+                Element::new()
+            } else {
+                crate::components::label(key)
+                    .text(key)
+                    .text_size("0.6875rem")
+                    .color(parse_text_color("muted-foreground"))
+                    .into()
+            },
+            crate::components::label(val)
+                .text(val)
+                .text_size("0.75rem")
+                .font_weight("500")
+                .w("100%")
+                .into(),
+        ]),
     )
 }
 
 fn edge_row(left: &str, right: &str) -> Element {
     Element::from(
-        hstack()
-            .w("100%")
-            .gap("0.25rem")
-            .py("0.125rem")
-            .children([
-                crate::components::label(left)
-                    .text(left)
-                    .text_size("0.6875rem")
-                    .font_weight("600")
-                    .into(),
-                crate::components::label(right)
-                    .text(right)
-                    .text_size("0.6875rem")
-                    .color(parse_text_color("muted-foreground"))
-                    .w("100%")
-                    .into(),
-            ]),
+        hstack().w("100%").gap("0.25rem").py("0.125rem").children([
+            crate::components::label(left)
+                .text(left)
+                .text_size("0.6875rem")
+                .font_weight("600")
+                .into(),
+            crate::components::label(right)
+                .text(right)
+                .text_size("0.6875rem")
+                .color(parse_text_color("muted-foreground"))
+                .w("100%")
+                .into(),
+        ]),
     )
 }
 

@@ -27,14 +27,13 @@ pub fn register_svg_filter_graph(id: impl Into<String>, graph: FilterGraph) {
 }
 
 /// Parse a single `<filter>...</filter>` (or a document containing one) and register by id.
-pub fn register_svg_filter(
-    id: impl Into<String>,
-    markup: &str,
-) -> Result<(), FilterParseError> {
+pub fn register_svg_filter(id: impl Into<String>, markup: &str) -> Result<(), FilterParseError> {
     let id = id.into();
     let graphs = parse_svg_filters_document(markup)?;
     if graphs.is_empty() {
-        return Err(FilterParseError::Message("no <filter> elements found".into()));
+        return Err(FilterParseError::Message(
+            "no <filter> elements found".into(),
+        ));
     }
     // Prefer matching id; otherwise register first under provided id.
     let key = id.strip_prefix('#').unwrap_or(id.as_str());

@@ -6,7 +6,10 @@ use rui::components::{Textarea, TextareaProps};
 use rui::style::WhiteSpace;
 use rui::ui;
 
-fn find_tid<'a>(el: &'a rui::core::tree::Element, tid: &str) -> Option<&'a rui::core::tree::Element> {
+fn find_tid<'a>(
+    el: &'a rui::core::tree::Element,
+    tid: &str,
+) -> Option<&'a rui::core::tree::Element> {
     if el.template_id.as_deref() == Some(tid) {
         return Some(el);
     }

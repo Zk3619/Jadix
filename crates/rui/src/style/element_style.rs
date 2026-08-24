@@ -242,7 +242,10 @@ pub enum CornerShape {
 impl CornerShape {
     pub fn from_css_keyword(s: &str) -> Self {
         let s = s.trim().to_ascii_lowercase();
-        if let Some(inner) = s.strip_prefix("superellipse(").and_then(|r| r.strip_suffix(')')) {
+        if let Some(inner) = s
+            .strip_prefix("superellipse(")
+            .and_then(|r| r.strip_suffix(')'))
+        {
             return Self::Superellipse(inner.trim().parse::<f32>().unwrap_or(2.0));
         }
         match s.as_str() {
@@ -576,8 +579,14 @@ impl TimingFunction {
             "ease-out" => Self::EaseOut,
             "ease-in-out" => Self::EaseInOut,
             _ => {
-                if let Some(inner) = s.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')) {
-                    let parts: Vec<f32> = inner.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                if let Some(inner) = s
+                    .strip_prefix("cubic-bezier(")
+                    .and_then(|r| r.strip_suffix(')'))
+                {
+                    let parts: Vec<f32> = inner
+                        .split(',')
+                        .filter_map(|p| p.trim().parse().ok())
+                        .collect();
                     if parts.len() == 4 {
                         return Self::CubicBezier(parts[0], parts[1], parts[2], parts[3]);
                     }
@@ -803,11 +812,12 @@ impl Style {
             }
         }
         // CSS `zoom`: scale layout dimensions by the zoom factor.
-        let z = if self.zoom.is_finite() && self.zoom > 0.0 && (self.zoom - 1.0).abs() > f32::EPSILON {
-            self.zoom
-        } else {
-            1.0
-        };
+        let z =
+            if self.zoom.is_finite() && self.zoom > 0.0 && (self.zoom - 1.0).abs() > f32::EPSILON {
+                self.zoom
+            } else {
+                1.0
+            };
         if z != 1.0 {
             size.width = zoom_dimension(size.width, z);
             size.height = zoom_dimension(size.height, z);
@@ -890,9 +900,15 @@ impl Style {
         let w = self.resolved_border_widths();
         let c = self.resolved_border_colors();
         let s = self.resolved_border_styles();
-        w[0] == w[1] && w[1] == w[2] && w[2] == w[3]
-            && c[0] == c[1] && c[1] == c[2] && c[2] == c[3]
-            && s[0] == s[1] && s[1] == s[2] && s[2] == s[3]
+        w[0] == w[1]
+            && w[1] == w[2]
+            && w[2] == w[3]
+            && c[0] == c[1]
+            && c[1] == c[2]
+            && c[2] == c[3]
+            && s[0] == s[1]
+            && s[1] == s[2]
+            && s[2] == s[3]
     }
 
     pub fn set_border_side_width(&mut self, side: usize, width: f32) {

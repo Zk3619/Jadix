@@ -1124,7 +1124,10 @@ mod tests {
         for panel in &contents {
             // 初始壳：0×0，避免未跑 effect 前就按 100% 撑开列高。
             assert_eq!(panel.style.size.width, taffy::style::Dimension::length(0.0));
-            assert_eq!(panel.style.size.height, taffy::style::Dimension::length(0.0));
+            assert_eq!(
+                panel.style.size.height,
+                taffy::style::Dimension::length(0.0)
+            );
         }
     }
 }

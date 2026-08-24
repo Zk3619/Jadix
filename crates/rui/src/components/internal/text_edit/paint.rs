@@ -43,7 +43,14 @@ pub(crate) fn sync_text_edit_paint_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    sync_text_edit_paint_subtree_in_viewport(el, layout_tree, impact, 10_000.0, 10_000.0, [0.0, 0.0]);
+    sync_text_edit_paint_subtree_in_viewport(
+        el,
+        layout_tree,
+        impact,
+        10_000.0,
+        10_000.0,
+        [0.0, 0.0],
+    );
 }
 
 /// 与 `sync_reactive_elements_subtree` 相同：完全离屏子树跳过（forms 页多 Input 滚动热路径）。
@@ -431,8 +438,7 @@ fn sync_one_text_edit_paint(
                     lh,
                 );
                 let anchor_x = crate::text::intrinsic_width(&prefix);
-                let next =
-                    ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current);
+                let next = ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, current);
                 if (next - current).abs() > 0.05 {
                     sx_sig.set(next);
                 }
@@ -502,12 +508,8 @@ fn sync_one_text_edit_paint(
             text_layout = true;
         }
         if desc.multiline && !desc.wrap_mode.soft_wrap() {
-            let prepared = crate::text::prepare(
-                &display_text,
-                desc.text_size_px,
-                desc.font_weight,
-                line_box,
-            );
+            let prepared =
+                crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, line_box);
             let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
             let cur_w = crate::layout::dim_length_px(text_el.style.size.width).unwrap_or(-1.0);
             if (cur_w - content_w).abs() > 0.5 {
@@ -711,8 +713,7 @@ fn sync_one_text_edit_paint(
                         desc.font_weight,
                         line_height,
                     );
-                    want_sx =
-                        ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, sx);
+                    want_sx = ensure_caret_visible_scroll_x(anchor_x, content_w, viewport_w, sx);
                 }
             }
 

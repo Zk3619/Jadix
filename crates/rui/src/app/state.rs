@@ -9,9 +9,8 @@ use winit::window::Window;
 use crate::core::tree::{Element, LayoutTree};
 use crate::renderer::{
     cpu_text::CpuTextProfiler, prepare_text_frame, scale_instances, scale_instances_in_place,
-    scale_textured_draws,
-    BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
-    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline,
+    scale_textured_draws, BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline,
+    RuiTextRenderer, ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
     components::{
@@ -39,9 +38,7 @@ use taffy::prelude::Dimension;
 
 fn render_profile_log_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        cfg!(debug_assertions) || std::env::var_os("RUI_RENDER_PROFILE").is_some()
-    })
+    *ON.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("RUI_RENDER_PROFILE").is_some())
 }
 
 #[cfg(debug_assertions)]
@@ -1461,11 +1458,10 @@ impl AppState {
         self.pending_layout_dirty
             .extend(sync_collect.layout_dirty.drain(..));
         // Snapshot before chrome merges into `sync_impact` (button/slider/… may also LayoutChanged).
-        let portal_only_reactive_layout = matches!(
-            sync_impact,
-            crate::core::tree::LayoutStatus::LayoutChanged
-        ) && sync_collect.portal_layout_changed
-            && !sync_collect.page_layout_changed;
+        let portal_only_reactive_layout =
+            matches!(sync_impact, crate::core::tree::LayoutStatus::LayoutChanged)
+                && sync_collect.portal_layout_changed
+                && !sync_collect.page_layout_changed;
         let impact_before_chrome = sync_impact;
         // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; CSS
         // transition paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
@@ -2764,15 +2760,14 @@ impl AppState {
                             render_pass.set_pipeline(&self.pipeline.render_pipeline);
                             render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
                             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                            let chrome_slice =
-                                &scaled_input_chrome[band.chrome.0..band.chrome.1];
-                            let chrome_buffer = self.device.create_buffer_init(
-                                &wgpu::util::BufferInitDescriptor {
-                                    label: Some("Page Stack Chrome Buffer"),
-                                    contents: bytemuck::cast_slice(chrome_slice),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                },
-                            );
+                            let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                            let chrome_buffer =
+                                self.device
+                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("Page Stack Chrome Buffer"),
+                                        contents: bytemuck::cast_slice(chrome_slice),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    });
                             render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
                             render_pass.set_index_buffer(
                                 self.pipeline.index_buffer.slice(..),
@@ -3433,12 +3428,9 @@ fn update_scrollbar_elements(
     } else if vis == "always" {
         1.0
     } else {
-        crate::style::use_ui_transition_cubic(
-            &format!("scrollbar_spring_{rest}:{axis}"),
-            0.0,
-        )
-        .peek()
-        .clamp(0.0, 1.0)
+        crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:{axis}"), 0.0)
+            .peek()
+            .clamp(0.0, 1.0)
     };
 
     // Recover base thickness from the track's max cross constraint only. Using `layout_bounds`

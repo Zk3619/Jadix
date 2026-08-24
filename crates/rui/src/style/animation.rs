@@ -212,9 +212,7 @@ fn css_timeline_now_ms() -> f64 {
 /// inventing progress from frame `dt` storms.
 pub fn set_css_transition_virtual_timeline(on: bool) {
     if on {
-        CSS_TIMELINE_VIRTUAL_MS.set(Some(
-            CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0).max(0.0),
-        ));
+        CSS_TIMELINE_VIRTUAL_MS.set(Some(CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0).max(0.0)));
     } else {
         CSS_TIMELINE_VIRTUAL_MS.set(None);
     }
@@ -384,10 +382,7 @@ const ALL_PROPS: &[TransitionProperty] = &[
 
 /// 无 class 变体的节点也要能推进 CSS transition（如 Carousel 轨道）。
 /// 有活跃 tween，或目标相对已记录的 `to` 已变，或尚未建档需要 seed。
-pub fn css_transition_needs_frame(
-    style: &super::Style,
-    snapshot: &TransitionSnapshot,
-) -> bool {
+pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSnapshot) -> bool {
     if style.transition.is_empty() {
         return false;
     }
@@ -624,16 +619,19 @@ pub fn tick_element_transitions(
             continue;
         }
 
-        let tween = snapshot.tweens.entry(prop).or_insert_with(|| PropertyTween {
-            from: target,
-            to: target,
-            components: comps,
-            start_ms: now_ms,
-            duration_ms: cfg.duration_ms,
-            delay_ms: cfg.delay_ms,
-            timing: cfg.timing,
-            active: false,
-        });
+        let tween = snapshot
+            .tweens
+            .entry(prop)
+            .or_insert_with(|| PropertyTween {
+                from: target,
+                to: target,
+                components: comps,
+                start_ms: now_ms,
+                duration_ms: cfg.duration_ms,
+                delay_ms: cfg.delay_ms,
+                timing: cfg.timing,
+                active: false,
+            });
 
         // Target changed → retarget from the **current computed value** (CSS transition).
         let target_changed = (0..comps as usize).any(|i| (tween.to[i] - target[i]).abs() > 1e-5);
@@ -745,7 +743,10 @@ mod css_transition_dt_tests {
         advance_css_transition_timeline_ms(200.0);
         style.scale = [1.5, 1.0];
         let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
-        assert!(!snap.has_active_tweens(), "virtual 150ms+ tween should settle");
+        assert!(
+            !snap.has_active_tweens(),
+            "virtual 150ms+ tween should settle"
+        );
         assert!((style.scale[0] - 1.5).abs() < 0.01);
         set_css_transition_virtual_timeline(false);
     }
@@ -769,11 +770,16 @@ mod css_transition_dt_tests {
         set_css_transition_timeline_ms(100.0); // mid-way → 0.75 on linear
         let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
         let mid = style.opacity;
-        assert!((mid - 0.75).abs() < 0.02, "expected ~0.75 at 100ms, got {mid}");
+        assert!(
+            (mid - 0.75).abs() < 0.02,
+            "expected ~0.75 at 100ms, got {mid}"
+        );
         // Leave: retarget to 0.5 from current (~0.75), not from 1.0.
         style.opacity = 0.5;
         assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
-        assert!((snap.tweens.get(&TransitionProperty::Opacity).unwrap().from[0] - mid).abs() < 0.02);
+        assert!(
+            (snap.tweens.get(&TransitionProperty::Opacity).unwrap().from[0] - mid).abs() < 0.02
+        );
         set_css_transition_timeline_ms(100.0); // same now — just retargeted, elapsed≈0
         let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
         assert!(

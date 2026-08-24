@@ -639,7 +639,12 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
         let b = el.layout_bounds;
         out.push((
             fid.clone(),
-            [b[0] - scroll_acc[0] + el.sticky_visual_offset[0], b[1] - scroll_acc[1] + el.sticky_visual_offset[1], b[2], b[3]],
+            [
+                b[0] - scroll_acc[0] + el.sticky_visual_offset[0],
+                b[1] - scroll_acc[1] + el.sticky_visual_offset[1],
+                b[2],
+                b[3],
+            ],
         ));
     }
     let mut next_acc = scroll_acc;
@@ -696,138 +701,136 @@ fn apply_floating_menus(
     };
 
     if let Some(tb) = tb {
-            let match_trigger = el
-                .attrs
-                .get(ATTR_FLOATING_MATCH_TRIGGER)
-                .or_else(|| el.attrs.get("rui_select_match_trigger"))
-                .map(|s| s.as_str() != "0")
-                .unwrap_or(true);
-            let explicit_w = el
-                .attrs
-                .get(ATTR_FLOATING_W)
-                .or_else(|| el.attrs.get("rui_select_menu_w"))
-                .map(|s| parse_css_px(s, tb[2]));
-            let attr_min_w = el
-                .attrs
-                .get(ATTR_FLOATING_MIN_W)
-                .map(|s| parse_len_vs_trigger(s, tb[2]));
-            // Geometry knobs only — product defaults (8rem / max-h-96 / …) live on components.
-            let (menu_w, width_auto, min_w) = if let Some(w) = explicit_w {
-                (w.max(0.0), false, attr_min_w.unwrap_or(0.0))
-            } else if point.is_some() {
-                // Cursor menus are content-sized; min-width from attr (e.g. 8rem).
-                let floor = attr_min_w.unwrap_or(0.0).max(0.0);
-                (floor, true, floor)
-            } else if match_trigger {
-                let w = tb[2].max(0.0);
-                (w, false, attr_min_w.unwrap_or(w).max(w))
+        let match_trigger = el
+            .attrs
+            .get(ATTR_FLOATING_MATCH_TRIGGER)
+            .or_else(|| el.attrs.get("rui_select_match_trigger"))
+            .map(|s| s.as_str() != "0")
+            .unwrap_or(true);
+        let explicit_w = el
+            .attrs
+            .get(ATTR_FLOATING_W)
+            .or_else(|| el.attrs.get("rui_select_menu_w"))
+            .map(|s| parse_css_px(s, tb[2]));
+        let attr_min_w = el
+            .attrs
+            .get(ATTR_FLOATING_MIN_W)
+            .map(|s| parse_len_vs_trigger(s, tb[2]));
+        // Geometry knobs only — product defaults (8rem / max-h-96 / …) live on components.
+        let (menu_w, width_auto, min_w) = if let Some(w) = explicit_w {
+            (w.max(0.0), false, attr_min_w.unwrap_or(0.0))
+        } else if point.is_some() {
+            // Cursor menus are content-sized; min-width from attr (e.g. 8rem).
+            let floor = attr_min_w.unwrap_or(0.0).max(0.0);
+            (floor, true, floor)
+        } else if match_trigger {
+            let w = tb[2].max(0.0);
+            (w, false, attr_min_w.unwrap_or(w).max(w))
+        } else {
+            // Content-sized (`width: auto`). Default min-width = trigger (Select menus);
+            // explicit `rui_floating_min_w` wins (e.g. `0` → true w-fit for Tooltip).
+            let floor = attr_min_w.unwrap_or(tb[2]).max(0.0);
+            (floor, true, floor)
+        };
+        let preferred = PopupPlacement::from_attr(
+            el.attrs
+                .get(ATTR_FLOATING_PLACEMENT)
+                .or_else(|| el.attrs.get("rui_select_placement"))
+                .map(|s| s.as_str())
+                .unwrap_or("bottom-start"),
+        );
+        let estimate_h = if el.layout_bounds[3] > 0.5 {
+            el.layout_bounds[3]
+        } else {
+            32.0
+        };
+        let estimate_w = if width_auto {
+            if el.layout_bounds[2] > 0.5 {
+                el.layout_bounds[2].max(menu_w)
             } else {
-                // Content-sized (`width: auto`). Default min-width = trigger (Select menus);
-                // explicit `rui_floating_min_w` wins (e.g. `0` → true w-fit for Tooltip).
-                let floor = attr_min_w.unwrap_or(tb[2]).max(0.0);
-                (floor, true, floor)
-            };
-            let preferred = PopupPlacement::from_attr(
-                el.attrs
-                    .get(ATTR_FLOATING_PLACEMENT)
-                    .or_else(|| el.attrs.get("rui_select_placement"))
-                    .map(|s| s.as_str())
-                    .unwrap_or("bottom-start"),
+                menu_w.max(32.0)
+            }
+        } else {
+            menu_w.max(min_w).max(32.0)
+        };
+        let gap = el
+            .attrs
+            .get(ATTR_FLOATING_GAP)
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(if point.is_some() {
+                0.0
+            } else {
+                FLOATING_TRIGGER_GAP
+            })
+            .clamp(-32.0, 64.0);
+        let strategy_fixed = el
+            .attrs
+            .get(ATTR_FLOATING_STRATEGY)
+            .map(|s| s.eq_ignore_ascii_case("fixed"))
+            .unwrap_or(false);
+        let (x, y, max_h) = if point.is_some() && !strategy_fixed {
+            let (x, y, available_max_h) = compute_cursor_menu_placement(
+                [tb[0], tb[1]],
+                viewport,
+                estimate_w,
+                estimate_h,
+                gap,
             );
-            let estimate_h = if el.layout_bounds[3] > 0.5 {
-                el.layout_bounds[3]
-            } else {
-                32.0
-            };
-            let estimate_w = if width_auto {
-                if el.layout_bounds[2] > 0.5 {
-                    el.layout_bounds[2].max(menu_w)
-                } else {
-                    menu_w.max(32.0)
-                }
-            } else {
-                menu_w.max(min_w).max(32.0)
-            };
-            let gap = el
+            let max_h = el
                 .attrs
-                .get(ATTR_FLOATING_GAP)
-                .and_then(|s| s.parse::<f32>().ok())
-                .unwrap_or(if point.is_some() {
-                    0.0
-                } else {
-                    FLOATING_TRIGGER_GAP
-                })
-                .clamp(-32.0, 64.0);
-            let strategy_fixed = el
+                .get(ATTR_FLOATING_MAX_H)
+                .or_else(|| el.attrs.get("rui_select_max_h"))
+                .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                .unwrap_or(available_max_h)
+                .max(1.0);
+            (x, y, max_h)
+        } else if strategy_fixed {
+            let (x, y) = compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
+            let max_h = el
                 .attrs
-                .get(ATTR_FLOATING_STRATEGY)
-                .map(|s| s.eq_ignore_ascii_case("fixed"))
-                .unwrap_or(false);
-            let (x, y, max_h) = if point.is_some() && !strategy_fixed {
-                let (x, y, available_max_h) = compute_cursor_menu_placement(
-                    [tb[0], tb[1]],
-                    viewport,
-                    estimate_w,
-                    estimate_h,
-                    gap,
-                );
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
-                    .unwrap_or(available_max_h)
-                    .max(1.0);
-                (x, y, max_h)
-            } else if strategy_fixed {
-                let (x, y) =
-                    compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| parse_css_px(s, 0.0))
-                    .filter(|h| *h > 0.0)
-                    .unwrap_or(0.0);
-                (x, y, max_h)
-            } else {
-                let (x, y, available_max_h, _) = compute_anchored_placement(
-                    tb, viewport, estimate_w, estimate_h, preferred, gap,
-                );
-                let max_h = el
-                    .attrs
-                    .get(ATTR_FLOATING_MAX_H)
-                    .or_else(|| el.attrs.get("rui_select_max_h"))
-                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
-                    .unwrap_or(available_max_h)
-                    .max(1.0);
-                (x, y, max_h)
-            };
-            let next = FloatingPlace {
-                x,
-                y,
-                w: menu_w.max(0.0),
-                max_h,
-                width_auto,
-                min_w: min_w.max(0.0),
-            };
-            let place_key = floating_place_signal_key(&id);
-            let place = use_signal(place_key.as_str(), FloatingPlace::default);
-            let cur = place.peek();
-            let signal_dirty = (cur.x - next.x).abs() > 0.5
-                || (cur.y - next.y).abs() > 0.5
-                || (cur.w - next.w).abs() > 0.5
-                || (cur.max_h - next.max_h).abs() > 0.5
-                || (cur.min_w - next.min_w).abs() > 0.5
-                || cur.width_auto != next.width_auto;
-            if signal_dirty {
-                place.set_silent(next);
-            }
-            // Always write onto the element: a reopened portal panel is a new node with
-            // `left/top: auto` even when the place signal already holds the right coords.
-            if write_floating_place(el, next) {
-                *changed = true;
-            }
+                .get(ATTR_FLOATING_MAX_H)
+                .or_else(|| el.attrs.get("rui_select_max_h"))
+                .map(|s| parse_css_px(s, 0.0))
+                .filter(|h| *h > 0.0)
+                .unwrap_or(0.0);
+            (x, y, max_h)
+        } else {
+            let (x, y, available_max_h, _) =
+                compute_anchored_placement(tb, viewport, estimate_w, estimate_h, preferred, gap);
+            let max_h = el
+                .attrs
+                .get(ATTR_FLOATING_MAX_H)
+                .or_else(|| el.attrs.get("rui_select_max_h"))
+                .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                .unwrap_or(available_max_h)
+                .max(1.0);
+            (x, y, max_h)
+        };
+        let next = FloatingPlace {
+            x,
+            y,
+            w: menu_w.max(0.0),
+            max_h,
+            width_auto,
+            min_w: min_w.max(0.0),
+        };
+        let place_key = floating_place_signal_key(&id);
+        let place = use_signal(place_key.as_str(), FloatingPlace::default);
+        let cur = place.peek();
+        let signal_dirty = (cur.x - next.x).abs() > 0.5
+            || (cur.y - next.y).abs() > 0.5
+            || (cur.w - next.w).abs() > 0.5
+            || (cur.max_h - next.max_h).abs() > 0.5
+            || (cur.min_w - next.min_w).abs() > 0.5
+            || cur.width_auto != next.width_auto;
+        if signal_dirty {
+            place.set_silent(next);
+        }
+        // Always write onto the element: a reopened portal panel is a new node with
+        // `left/top: auto` even when the place signal already holds the right coords.
+        if write_floating_place(el, next) {
+            *changed = true;
+        }
     }
 
     for c in &mut el.children {
@@ -1620,7 +1623,10 @@ mod tests {
             compute_cursor_menu_placement([40.0, 500.0], [800.0, 600.0], 160.0, 900.0, 0.0);
         assert!((x - 40.0).abs() < 0.5, "x={x}");
         // Flip above first, then translate up to the margin, then clamp max_h.
-        assert!(y <= 8.0 + 0.5, "should end near top after flip+translate, y={y}");
+        assert!(
+            y <= 8.0 + 0.5,
+            "should end near top after flip+translate, y={y}"
+        );
         assert!(
             max_h <= 600.0 - 16.0 + 0.5,
             "max_h must fit viewport, max_h={max_h}"

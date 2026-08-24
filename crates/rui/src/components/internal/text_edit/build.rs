@@ -274,8 +274,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         text_el = text_el.h(content_h).min_h(content_h);
         if !soft {
             // Grow with the longest hard line so overflow-x can scroll (never clip).
-            let prepared =
-                crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
+            let prepared = crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
             let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
             text_el = text_el.w(content_w).min_w("100%");
         }

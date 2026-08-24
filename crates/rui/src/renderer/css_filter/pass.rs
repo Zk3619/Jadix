@@ -367,27 +367,12 @@ impl CssFilterPassGpu {
         let mut use_ping = true;
 
         for (pi, prim) in job.graph.primitives.iter().enumerate() {
-            let dst_key = if use_ping {
-                ping.clone()
-            } else {
-                pong.clone()
-            };
+            let dst_key = if use_ping { ping.clone() } else { pong.clone() };
             use_ping = !use_ping;
 
             let ok = self.dispatch_primitive(
-                device,
-                queue,
-                textured,
-                images,
-                &named,
-                &last_key,
-                &dst_key,
-                prim,
-                texel,
-                w,
-                h,
-                pi,
-                scale,
+                device, queue, textured, images, &named, &last_key, &dst_key, prim, texel, w, h,
+                pi, scale,
             );
             if !ok {
                 continue;
@@ -488,9 +473,7 @@ impl CssFilterPassGpu {
                 self.draw(device, queue, textured, images, &src, &src, dst_key, &u)
             }
             FilterPrimitive::GaussianBlur {
-                in1,
-                std_deviation,
-                ..
+                in1, std_deviation, ..
             } => {
                 let src = self.resolve_input(named, last_key, in1);
                 // H then V into dst via temp swap: write H to dst, then V from dst to alternate then copy
@@ -549,9 +532,7 @@ impl CssFilterPassGpu {
                 u.p4 = *k4;
                 self.draw(device, queue, textured, images, &a, &b, dst_key, &u)
             }
-            FilterPrimitive::Blend {
-                in1, in2, mode, ..
-            } => {
+            FilterPrimitive::Blend { in1, in2, mode, .. } => {
                 let a = self.resolve_input(named, last_key, in1);
                 let b = self.resolve_input(named, last_key, in2);
                 u.mode = 7.0;
@@ -561,7 +542,8 @@ impl CssFilterPassGpu {
             FilterPrimitive::Merge { nodes, .. } => {
                 // Layered over from first to last into dst
                 if nodes.is_empty() {
-                    return self.blit_copy(device, queue, textured, images, last_key, dst_key, texel);
+                    return self
+                        .blit_copy(device, queue, textured, images, last_key, dst_key, texel);
                 }
                 let first = self.resolve_input(named, last_key, &nodes[0]);
                 if nodes.len() == 1 {
@@ -578,7 +560,7 @@ impl CssFilterPassGpu {
                     u.texel = texel;
                     u.mode = 6.0;
                     u.p0 = 0.0; // over: layer over acc — SVG merge paints later on top
-                    // composite_op(src=layer, dst=acc) with over
+                                // composite_op(src=layer, dst=acc) with over
                     let out = if i + 1 == nodes.len() {
                         dst_key.to_string()
                     } else if i % 2 == 1 {
@@ -692,14 +674,7 @@ impl CssFilterPassGpu {
                 u.p3 = *seed;
                 u.p4 = if *fractal_noise { 1.0 } else { 0.0 };
                 self.draw(
-                    device,
-                    queue,
-                    textured,
-                    images,
-                    last_key,
-                    last_key,
-                    dst_key,
-                    &u,
+                    device, queue, textured, images, last_key, last_key, dst_key, &u,
                 )
             }
             FilterPrimitive::ComponentTransfer {
@@ -772,20 +747,9 @@ impl CssFilterPassGpu {
                 u.mode = 17.0;
                 let has = images.contains_key(href);
                 u.p0 = if has { 1.0 } else { 0.0 };
-                let b_key = if has {
-                    href.as_str()
-                } else {
-                    last_key
-                };
+                let b_key = if has { href.as_str() } else { last_key };
                 self.draw(
-                    device,
-                    queue,
-                    textured,
-                    images,
-                    last_key,
-                    b_key,
-                    dst_key,
-                    &u,
+                    device, queue, textured, images, last_key, b_key, dst_key, &u,
                 )
             }
         }
@@ -808,14 +772,7 @@ impl CssFilterPassGpu {
         u.mode = 0.0;
         u.texel = texel;
         self.draw(
-            device,
-            queue,
-            textured,
-            images,
-            src_key,
-            src_key,
-            dst_key,
-            &u,
+            device, queue, textured, images, src_key, src_key, dst_key, &u,
         )
     }
 
@@ -834,14 +791,8 @@ impl CssFilterPassGpu {
             return false;
         };
         let fallback = self.fallback_tex.as_ref();
-        let tex_a = images
-            .get(src_a)
-            .or(fallback)
-            .expect("fallback must exist");
-        let tex_b = images
-            .get(src_b)
-            .or(fallback)
-            .expect("fallback must exist");
+        let tex_a = images.get(src_a).or(fallback).expect("fallback must exist");
+        let tex_b = images.get(src_b).or(fallback).expect("fallback must exist");
 
         let view_a = tex_a
             ._texture

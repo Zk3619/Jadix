@@ -54,7 +54,10 @@ fn unfocused_single_line_inputs_skip_caret_scroll_prepare() {
         "unfocused Inputs must not shape for caret scroll_x"
     );
     assert!(
-        !matches!(impact, LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged),
+        !matches!(
+            impact,
+            LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+        ),
         "steady unfocused sync should not force layout; got {impact:?}"
     );
 

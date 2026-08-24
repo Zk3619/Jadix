@@ -327,55 +327,72 @@ impl BoxBuilder {
         self
     }
     pub fn border_top_style(mut self, style: impl AsRef<str>) -> Self {
-        self.el = self.el.border_top_style(style); self
+        self.el = self.el.border_top_style(style);
+        self
     }
     pub fn border_right_style(mut self, style: impl AsRef<str>) -> Self {
-        self.el = self.el.border_right_style(style); self
+        self.el = self.el.border_right_style(style);
+        self
     }
     pub fn border_bottom_style(mut self, style: impl AsRef<str>) -> Self {
-        self.el = self.el.border_bottom_style(style); self
+        self.el = self.el.border_bottom_style(style);
+        self
     }
     pub fn border_left_style(mut self, style: impl AsRef<str>) -> Self {
-        self.el = self.el.border_left_style(style); self
+        self.el = self.el.border_left_style(style);
+        self
     }
     pub fn border_top_left_radius(mut self, r: f32) -> Self {
-        self.el = self.el.border_top_left_radius(r); self
+        self.el = self.el.border_top_left_radius(r);
+        self
     }
     pub fn border_top_right_radius(mut self, r: f32) -> Self {
-        self.el = self.el.border_top_right_radius(r); self
+        self.el = self.el.border_top_right_radius(r);
+        self
     }
     pub fn border_bottom_right_radius(mut self, r: f32) -> Self {
-        self.el = self.el.border_bottom_right_radius(r); self
+        self.el = self.el.border_bottom_right_radius(r);
+        self
     }
     pub fn border_bottom_left_radius(mut self, r: f32) -> Self {
-        self.el = self.el.border_bottom_left_radius(r); self
+        self.el = self.el.border_bottom_left_radius(r);
+        self
     }
     pub fn border_shape(mut self, shape: crate::style::CornerShape) -> Self {
-        self.el = self.el.border_shape(shape); self
+        self.el = self.el.border_shape(shape);
+        self
     }
     pub fn border_collapse(mut self, collapse: bool) -> Self {
-        self.el = self.el.border_collapse(collapse); self
+        self.el = self.el.border_collapse(collapse);
+        self
     }
     pub fn border_spacing(mut self, h: f32, v: f32) -> Self {
-        self.el = self.el.border_spacing(h, v); self
+        self.el = self.el.border_spacing(h, v);
+        self
     }
     pub fn border_inline(mut self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
-        self.el = self.el.border_inline(color, width); self
+        self.el = self.el.border_inline(color, width);
+        self
     }
     pub fn border_block(mut self, color: [f32; 4], width: impl IntoF32 + Copy) -> Self {
-        self.el = self.el.border_block(color, width); self
+        self.el = self.el.border_block(color, width);
+        self
     }
     pub fn border_inline_start(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
-        self.el = self.el.border_inline_start(color, width); self
+        self.el = self.el.border_inline_start(color, width);
+        self
     }
     pub fn border_inline_end(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
-        self.el = self.el.border_inline_end(color, width); self
+        self.el = self.el.border_inline_end(color, width);
+        self
     }
     pub fn border_block_start(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
-        self.el = self.el.border_block_start(color, width); self
+        self.el = self.el.border_block_start(color, width);
+        self
     }
     pub fn border_block_end(mut self, color: [f32; 4], width: impl IntoF32) -> Self {
-        self.el = self.el.border_block_end(color, width); self
+        self.el = self.el.border_block_end(color, width);
+        self
     }
 
     pub fn outline(mut self, color: [f32; 4], width: f32) -> Self {

@@ -318,8 +318,8 @@ fn adopt_overlay_node(fresh: &mut Element, prev: &mut Element) {
         preserve_overlay_css_motion(fresh, prev);
     }
 
-    let fresh_keyed = !fresh.children.is_empty()
-        && fresh.children.iter().all(|c| c.template_id.is_some());
+    let fresh_keyed =
+        !fresh.children.is_empty() && fresh.children.iter().all(|c| c.template_id.is_some());
     let prev_keyed =
         !prev.children.is_empty() && prev.children.iter().all(|c| c.template_id.is_some());
 
@@ -722,7 +722,12 @@ fn push_per_side_border_strips(
         [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, c[3]]
     }
     fn lighten(c: [f32; 4]) -> [f32; 4] {
-        [(c[0] * 1.4).min(1.0), (c[1] * 1.4).min(1.0), (c[2] * 1.4).min(1.0), c[3]]
+        [
+            (c[0] * 1.4).min(1.0),
+            (c[1] * 1.4).min(1.0),
+            (c[2] * 1.4).min(1.0),
+            c[3],
+        ]
     }
 
     /// Push a single side strip with style-aware rendering.
@@ -744,31 +749,32 @@ fn push_per_side_border_strips(
         let bw = if horizontal { size[1] } else { size[0] };
         let span = if horizontal { size[0] } else { size[1] };
 
-        let push_one = |instances: &mut Vec<InstanceInput>, p: [f32; 2], s: [f32; 2], c: [f32; 4]| {
-            if s[0] <= 0.0 || s[1] <= 0.0 || c[3] <= 0.0 {
-                return;
-            }
-            instances.push(
-                InstanceInput {
-                    rect_pos: p,
-                    rect_size: s,
-                    color: mul_color_alpha(c, opacity),
-                    border_color: [0.0; 4],
-                    radii: [0.0; 4],
-                    border_width: 0.0,
-                    shadow_color: [0.0; 4],
-                    shadow_offset: [0.0; 2],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_inset: 0.0,
-                    transform,
-                    clip_pos: [0.0, 0.0],
-                    clip_size: InstanceInput::NO_CLIP_SIZE,
-                    border_extra: 0.0,
+        let push_one =
+            |instances: &mut Vec<InstanceInput>, p: [f32; 2], s: [f32; 2], c: [f32; 4]| {
+                if s[0] <= 0.0 || s[1] <= 0.0 || c[3] <= 0.0 {
+                    return;
                 }
-                .with_clip(parent_clip),
-            );
-        };
+                instances.push(
+                    InstanceInput {
+                        rect_pos: p,
+                        rect_size: s,
+                        color: mul_color_alpha(c, opacity),
+                        border_color: [0.0; 4],
+                        radii: [0.0; 4],
+                        border_width: 0.0,
+                        shadow_color: [0.0; 4],
+                        shadow_offset: [0.0; 2],
+                        shadow_blur: 0.0,
+                        shadow_spread: 0.0,
+                        shadow_inset: 0.0,
+                        transform,
+                        clip_pos: [0.0, 0.0],
+                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        border_extra: 0.0,
+                    }
+                    .with_clip(parent_clip),
+                );
+            };
 
         match style {
             LineStyle::Solid => {
@@ -809,30 +815,60 @@ fn push_per_side_border_strips(
                 let third = bw / 3.0;
                 if horizontal {
                     push_one(instances, pos, [size[0], third], color);
-                    push_one(instances, [pos[0], pos[1] + bw - third], [size[0], third], color);
+                    push_one(
+                        instances,
+                        [pos[0], pos[1] + bw - third],
+                        [size[0], third],
+                        color,
+                    );
                 } else {
                     push_one(instances, pos, [third, size[1]], color);
-                    push_one(instances, [pos[0] + bw - third, pos[1]], [third, size[1]], color);
+                    push_one(
+                        instances,
+                        [pos[0] + bw - third, pos[1]],
+                        [third, size[1]],
+                        color,
+                    );
                 }
             }
             LineStyle::Groove => {
                 let half = bw / 2.0;
                 if horizontal {
                     push_one(instances, pos, [size[0], half], darken(color));
-                    push_one(instances, [pos[0], pos[1] + half], [size[0], half], lighten(color));
+                    push_one(
+                        instances,
+                        [pos[0], pos[1] + half],
+                        [size[0], half],
+                        lighten(color),
+                    );
                 } else {
                     push_one(instances, pos, [half, size[1]], darken(color));
-                    push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], lighten(color));
+                    push_one(
+                        instances,
+                        [pos[0] + half, pos[1]],
+                        [half, size[1]],
+                        lighten(color),
+                    );
                 }
             }
             LineStyle::Ridge => {
                 let half = bw / 2.0;
                 if horizontal {
                     push_one(instances, pos, [size[0], half], lighten(color));
-                    push_one(instances, [pos[0], pos[1] + half], [size[0], half], darken(color));
+                    push_one(
+                        instances,
+                        [pos[0], pos[1] + half],
+                        [size[0], half],
+                        darken(color),
+                    );
                 } else {
                     push_one(instances, pos, [half, size[1]], lighten(color));
-                    push_one(instances, [pos[0] + half, pos[1]], [half, size[1]], darken(color));
+                    push_one(
+                        instances,
+                        [pos[0] + half, pos[1]],
+                        [half, size[1]],
+                        darken(color),
+                    );
                 }
             }
             LineStyle::Inset => {
@@ -846,14 +882,54 @@ fn push_per_side_border_strips(
     }
 
     // Top (full width)
-    push_styled_side(instances, [x, y], [w, bt], colors[0], styles[0], true, opacity, transform, parent_clip);
+    push_styled_side(
+        instances,
+        [x, y],
+        [w, bt],
+        colors[0],
+        styles[0],
+        true,
+        opacity,
+        transform,
+        parent_clip,
+    );
     // Bottom (full width)
-    push_styled_side(instances, [x, y + (h - bb).max(0.0)], [w, bb], colors[2], styles[2], true, opacity, transform, parent_clip);
+    push_styled_side(
+        instances,
+        [x, y + (h - bb).max(0.0)],
+        [w, bb],
+        colors[2],
+        styles[2],
+        true,
+        opacity,
+        transform,
+        parent_clip,
+    );
     let mid_h = (h - bt - bb).max(0.0);
     // Left
-    push_styled_side(instances, [x, y + bt], [bl, mid_h], colors[3], styles[3], false, opacity, transform, parent_clip);
+    push_styled_side(
+        instances,
+        [x, y + bt],
+        [bl, mid_h],
+        colors[3],
+        styles[3],
+        false,
+        opacity,
+        transform,
+        parent_clip,
+    );
     // Right
-    push_styled_side(instances, [x + (w - br).max(0.0), y + bt], [br, mid_h], colors[1], styles[1], false, opacity, transform, parent_clip);
+    push_styled_side(
+        instances,
+        [x + (w - br).max(0.0), y + bt],
+        [br, mid_h],
+        colors[1],
+        styles[1],
+        false,
+        opacity,
+        transform,
+        parent_clip,
+    );
 }
 
 /// Generate nine-slice `TexturedDraw` instances for CSS `border-image`.
@@ -900,10 +976,26 @@ fn push_border_image_draws(
             return;
         }
         // Compute UV for the clipped portion relative to the full rect
-        let sub_u = if rect[2] > 0.0 { (draw[0] - rect[0]) / rect[2] } else { 0.0 };
-        let sub_v = if rect[3] > 0.0 { (draw[1] - rect[1]) / rect[3] } else { 0.0 };
-        let sub_uw = if rect[2] > 0.0 { draw[2] / rect[2] } else { 1.0 };
-        let sub_vh = if rect[3] > 0.0 { draw[3] / rect[3] } else { 1.0 };
+        let sub_u = if rect[2] > 0.0 {
+            (draw[0] - rect[0]) / rect[2]
+        } else {
+            0.0
+        };
+        let sub_v = if rect[3] > 0.0 {
+            (draw[1] - rect[1]) / rect[3]
+        } else {
+            0.0
+        };
+        let sub_uw = if rect[2] > 0.0 {
+            draw[2] / rect[2]
+        } else {
+            1.0
+        };
+        let sub_vh = if rect[3] > 0.0 {
+            draw[3] / rect[3]
+        } else {
+            1.0
+        };
         // Map to source UV (rect top → smaller v, matching textured_rect vertices).
         let final_u = uv_x + sub_u * uv_w;
         let final_v = uv_y + sub_v * uv_h;
@@ -918,19 +1010,25 @@ fn push_border_image_draws(
 
     // Nine regions (CSS border-image nine-slice):
     // Corners (always stretch)
-    push_slice([bx, by, wl, wt], 0.0, 0.0, sl, st);                                    // top-left
-    push_slice([bx + bw - wr, by, wr, wt], 1.0 - sr, 0.0, sr, st);                     // top-right
-    push_slice([bx, by + bh - wb, wl, wb], 0.0, 1.0 - sb, sl, sb);                      // bottom-left
-    push_slice([bx + bw - wr, by + bh - wb, wr, wb], 1.0 - sr, 1.0 - sb, sr, sb);       // bottom-right
+    push_slice([bx, by, wl, wt], 0.0, 0.0, sl, st); // top-left
+    push_slice([bx + bw - wr, by, wr, wt], 1.0 - sr, 0.0, sr, st); // top-right
+    push_slice([bx, by + bh - wb, wl, wb], 0.0, 1.0 - sb, sl, sb); // bottom-left
+    push_slice(
+        [bx + bw - wr, by + bh - wb, wr, wb],
+        1.0 - sr,
+        1.0 - sb,
+        sr,
+        sb,
+    ); // bottom-right
 
     // Edges (stretch for now; repeat/round/space would need multiple draws)
     let ew = bw - wl - wr;
     let eh = bh - wt - wb;
     let eu_w = (1.0 - sl - sr).max(0.0);
     let eu_h = (1.0 - st - sb).max(0.0);
-    push_slice([bx + wl, by, ew, wt], sl, 0.0, eu_w, st);              // top edge
+    push_slice([bx + wl, by, ew, wt], sl, 0.0, eu_w, st); // top edge
     push_slice([bx + wl, by + bh - wb, ew, wb], sl, 1.0 - sb, eu_w, sb); // bottom edge
-    push_slice([bx, by + wt, wl, eh], 0.0, st, sl, eu_h);              // left edge
+    push_slice([bx, by + wt, wl, eh], 0.0, st, sl, eu_h); // left edge
     push_slice([bx + bw - wr, by + wt, wr, eh], 1.0 - sr, st, sr, eu_h); // right edge
 
     // Center (only if fill)
@@ -1198,14 +1296,10 @@ fn next_scroll_acc_for_children(element: &Element, scroll_acc: [f32; 2]) -> [f32
         .focus_id
         .as_deref()
         .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
-    if is_scroll_viewport
-        || matches!(element.style.overflow.x, taffy::style::Overflow::Scroll)
-    {
+    if is_scroll_viewport || matches!(element.style.overflow.x, taffy::style::Overflow::Scroll) {
         next[0] += element.scroll_offset[0];
     }
-    if is_scroll_viewport
-        || matches!(element.style.overflow.y, taffy::style::Overflow::Scroll)
-    {
+    if is_scroll_viewport || matches!(element.style.overflow.y, taffy::style::Overflow::Scroll) {
         next[1] += element.scroll_offset[1];
     }
     next
@@ -2689,9 +2783,7 @@ impl LayoutTree {
         element.layout_bounds = [abs_x, abs_y, lay_w, lay_h];
 
         #[cfg(feature = "devtools")]
-        if element.template_id.as_deref()
-            == Some(crate::app::devtools::HIGHLIGHT_SLOT_ID)
-        {
+        if element.template_id.as_deref() == Some(crate::app::devtools::HIGHLIGHT_SLOT_ID) {
             let _ = crate::app::devtools::refresh_highlight_slot(element);
         }
 
@@ -2704,8 +2796,12 @@ impl LayoutTree {
         } else {
             scroll_acc
         };
-        let mut render_x = abs_x - scroll_for_render[0] + element.style.translate[0] + lay_w * element.style.translate_pct[0];
-        let mut render_y = abs_y - scroll_for_render[1] + element.style.translate[1] + lay_h * element.style.translate_pct[1];
+        let mut render_x = abs_x - scroll_for_render[0]
+            + element.style.translate[0]
+            + lay_w * element.style.translate_pct[0];
+        let mut render_y = abs_y - scroll_for_render[1]
+            + element.style.translate[1]
+            + lay_h * element.style.translate_pct[1];
 
         // CSS `position: sticky` — clamp render position within the nearest scroll ancestor clip.
         if element.style.position_sticky {
@@ -2863,16 +2959,8 @@ impl LayoutTree {
 
         // CSS `filter` must capture this node's own paint (bg/border/shadow) + descendants.
         // Record buffer indices *before* own paint; `rui_fx` still captures children only.
-        let filter_capture = element
-            .style
-            .filter
-            .as_ref()
-            .is_some_and(|l| !l.is_empty());
-        let filter_cap_inst0 = if filter_capture {
-            instances.len()
-        } else {
-            0
-        };
+        let filter_capture = element.style.filter.as_ref().is_some_and(|l| !l.is_empty());
+        let filter_cap_inst0 = if filter_capture { instances.len() } else { 0 };
         let filter_cap_tex0 = if filter_capture {
             textured_draws.len()
         } else {
@@ -2894,7 +2982,11 @@ impl LayoutTree {
             mul_color_alpha(element.style.border_color, opacity)
         };
         let sdf_border_extra = {
-            let bs = if use_border_strips { 0.0 } else { element.style.border_style.to_shader_f32() };
+            let bs = if use_border_strips {
+                0.0
+            } else {
+                element.style.border_style.to_shader_f32()
+            };
             InstanceInput::pack_border_extra(
                 bs,
                 element.style.corner_shape.to_shader_f32(),
@@ -3112,7 +3204,9 @@ impl LayoutTree {
                                 shadow_blur: 0.0,
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
-                                transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
+                                transform: crate::style::transform::mat2d_rotate(
+                                    q.rotate_deg.to_radians(),
+                                ),
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
                                 border_extra: 0.0,
@@ -3170,7 +3264,9 @@ impl LayoutTree {
                             shadow_blur: 0.0,
                             shadow_spread: 0.0,
                             shadow_inset: 0.0,
-                            transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
+                            transform: crate::style::transform::mat2d_rotate(
+                                q.rotate_deg.to_radians(),
+                            ),
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: 0.0,
@@ -3317,13 +3413,12 @@ impl LayoutTree {
             // soft-wrap reflow**, and **no per-frame font-size reshape** (that lagged behind
             // continuous rect scale during CarouselStack drag). Shape at layout size; place
             // at the scaled top-left; glyphon `TextArea.scale` applies the CSS scale.
-            let text_scale = if (paint_sx - 1.0).abs() > f32::EPSILON
-                || (paint_sy - 1.0).abs() > f32::EPSILON
-            {
-                paint_sx.min(paint_sy)
-            } else {
-                1.0
-            };
+            let text_scale =
+                if (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON {
+                    paint_sx.min(paint_sy)
+                } else {
+                    1.0
+                };
             let scaled_paint = (text_scale - 1.0).abs() > f32::EPSILON;
             if scaled_paint {
                 text_style.white_space = crate::style::WhiteSpace::Nowrap;
@@ -3567,11 +3662,8 @@ impl LayoutTree {
                     || element.style.translate_pct[0].abs() > 0.001
                     || element.style.translate_pct[1].abs() > 0.001
                     || parent_scales;
-                let is_carousel_track = element
-                    .attrs
-                    .get("data-carousel-track")
-                    .map(|s| s.as_str())
-                    == Some("1");
+                let is_carousel_track =
+                    element.attrs.get("data-carousel-track").map(|s| s.as_str()) == Some("1");
                 if _scroll_only && !parent_translates && !is_carousel_track {
                     if let Some(clip_rect) = clip {
                         if !element.children[i].style.position_fixed
@@ -3813,18 +3905,14 @@ impl LayoutTree {
                 visible_rect
             };
             let out_key = if filter_capture {
-                element
-                    .style
-                    .filter
-                    .as_ref()
-                    .and_then(|list| {
-                        crate::renderer::queue_css_filter_wrap(
-                            list,
-                            filter_bounds,
-                            child_insts,
-                            child_tex,
-                        )
-                    })
+                element.style.filter.as_ref().and_then(|list| {
+                    crate::renderer::queue_css_filter_wrap(
+                        list,
+                        filter_bounds,
+                        child_insts,
+                        child_tex,
+                    )
+                })
             } else {
                 crate::renderer::queue_subtree_wrap(
                     &element.attrs,
@@ -4335,10 +4423,7 @@ fn push_input_chrome_instances(
                 .map(|&(s, e)| (s, &text[s..e]))
                 .unwrap_or((0, ""))
         } else {
-            hard_lines
-                .get(line_i)
-                .copied()
-                .unwrap_or((0, ""))
+            hard_lines.get(line_i).copied().unwrap_or((0, ""))
         }
     };
     let line_and_local = |byte: usize| -> (usize, usize) {
@@ -4586,8 +4671,7 @@ mod prepared_text_attach_tests {
     fn soft_wrap_caret_sits_on_visual_line_not_box_center() {
         // One hard line soft-wrapped into several visual rows: caret must track the
         // visual line (not vertically center in the tall leaf — gallery symptom).
-        let text =
-            "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px";
+        let text = "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px";
         let lh = 21.0_f32;
         let box_w = 160.0_f32;
         let ranges = crate::text::soft_visual_line_byte_ranges(text, 14.0, 400, lh, box_w);

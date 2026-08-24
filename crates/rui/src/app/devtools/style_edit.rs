@@ -45,8 +45,7 @@ enum CommittedInspectorOp {
 
 pub(crate) fn queue_inspector_cssom(path: Vec<usize>, css: String) {
     PENDING_INSPECTOR_EDITS.with(|q| {
-        q.borrow_mut()
-            .push(PendingInspectorCssom { path, css });
+        q.borrow_mut().push(PendingInspectorCssom { path, css });
     });
     crate::app::runtime::request_redraw();
 }
@@ -260,22 +259,30 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
     match prop {
         "padding" => apply_padding(el, value),
         "margin" => apply_margin(el, value),
-        "width" => dim_to_size(value).map(|d| {
-            el.style.size.width = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "height" => dim_to_size(value).map(|d| {
-            el.style.size.height = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "min-width" | "min_width" => dim_to_size(value).map(|d| {
-            el.style.min_size.width = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "min-height" | "min_height" => dim_to_size(value).map(|d| {
-            el.style.min_size.height = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
+        "width" => dim_to_size(value)
+            .map(|d| {
+                el.style.size.width = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "height" => dim_to_size(value)
+            .map(|d| {
+                el.style.size.height = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "min-width" | "min_width" => dim_to_size(value)
+            .map(|d| {
+                el.style.min_size.width = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "min-height" | "min_height" => dim_to_size(value)
+            .map(|d| {
+                el.style.min_size.height = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
         "background" | "background-color" | "bg" => {
             el.style.bg_color = parse_cssom_color(value);
             LayoutStatus::StyleChanged
@@ -299,44 +306,56 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 el.style.set_border_side_width(0, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-right-width" | "border_right_width" => {
             if let Ok(v) = parse_f32(value) {
                 el.style.set_border_side_width(1, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-bottom-width" | "border_bottom_width" => {
             if let Ok(v) = parse_f32(value) {
                 el.style.set_border_side_width(2, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-left-width" | "border_left_width" => {
             if let Ok(v) = parse_f32(value) {
                 el.style.set_border_side_width(3, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-style" | "border_style" => apply_border_style_shorthand(el, value),
         "border-top-style" | "border_top_style" => {
-            el.style.set_border_side_style(0, crate::style::LineStyle::from_css_keyword(value));
+            el.style
+                .set_border_side_style(0, crate::style::LineStyle::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "border-right-style" | "border_right_style" => {
-            el.style.set_border_side_style(1, crate::style::LineStyle::from_css_keyword(value));
+            el.style
+                .set_border_side_style(1, crate::style::LineStyle::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "border-bottom-style" | "border_bottom_style" => {
-            el.style.set_border_side_style(2, crate::style::LineStyle::from_css_keyword(value));
+            el.style
+                .set_border_side_style(2, crate::style::LineStyle::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "border-left-style" | "border_left_style" => {
-            el.style.set_border_side_style(3, crate::style::LineStyle::from_css_keyword(value));
+            el.style
+                .set_border_side_style(3, crate::style::LineStyle::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "border-color" | "border_color" => apply_border_color_shorthand(el, value),
@@ -358,37 +377,69 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "border-radius" | "border_radius" => apply_border_radius(el, value),
         "border-top-left-radius" | "border_top_left_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[2] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[2] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-top-right-radius" | "border_top_right_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[0] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[0] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-bottom-right-radius" | "border_bottom_right_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[1] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[1] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-bottom-left-radius" | "border_bottom_left_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[3] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[3] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         // Logical radius properties (LTR mapping)
         "border-start-start-radius" | "border_start_start_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[2] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[2] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-start-end-radius" | "border_start_end_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[0] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[0] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-end-end-radius" | "border_end_end_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[1] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[1] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-end-start-radius" | "border_end_start_radius" => {
-            if let Ok(v) = parse_f32(value) { el.style.radii[3] = v.max(0.0); LayoutStatus::StyleChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[3] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         // Logical border properties (LTR: inline-start=left, inline-end=right, block-start=top, block-end=bottom)
         "border-block" | "border_block" => {
@@ -406,44 +457,76 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         "border-inline-start" | "border_inline_start" => apply_border_shorthand(el, value, Some(3)),
         "border-inline-end" | "border_inline_end" => apply_border_shorthand(el, value, Some(1)),
         "border-block-start-width" | "border_block_start_width" => {
-            if let Ok(v) = parse_f32(value) { el.style.set_border_side_width(0, v); ensure_border_style_visible(&mut el.style); LayoutStatus::LayoutChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.set_border_side_width(0, v);
+                ensure_border_style_visible(&mut el.style);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-block-end-width" | "border_block_end_width" => {
-            if let Ok(v) = parse_f32(value) { el.style.set_border_side_width(2, v); ensure_border_style_visible(&mut el.style); LayoutStatus::LayoutChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.set_border_side_width(2, v);
+                ensure_border_style_visible(&mut el.style);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-block-start-color" | "border_block_start_color" => {
-            el.style.set_border_side_color(0, parse_cssom_color(value)); LayoutStatus::StyleChanged
+            el.style.set_border_side_color(0, parse_cssom_color(value));
+            LayoutStatus::StyleChanged
         }
         "border-block-end-color" | "border_block_end_color" => {
-            el.style.set_border_side_color(2, parse_cssom_color(value)); LayoutStatus::StyleChanged
+            el.style.set_border_side_color(2, parse_cssom_color(value));
+            LayoutStatus::StyleChanged
         }
         "border-block-start-style" | "border_block_start_style" => {
-            el.style.set_border_side_style(0, crate::style::LineStyle::from_css_keyword(value)); LayoutStatus::StyleChanged
+            el.style
+                .set_border_side_style(0, crate::style::LineStyle::from_css_keyword(value));
+            LayoutStatus::StyleChanged
         }
         "border-block-end-style" | "border_block_end_style" => {
-            el.style.set_border_side_style(2, crate::style::LineStyle::from_css_keyword(value)); LayoutStatus::StyleChanged
+            el.style
+                .set_border_side_style(2, crate::style::LineStyle::from_css_keyword(value));
+            LayoutStatus::StyleChanged
         }
         "border-inline-start-width" | "border_inline_start_width" => {
-            if let Ok(v) = parse_f32(value) { el.style.set_border_side_width(3, v); ensure_border_style_visible(&mut el.style); LayoutStatus::LayoutChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.set_border_side_width(3, v);
+                ensure_border_style_visible(&mut el.style);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-inline-end-width" | "border_inline_end_width" => {
-            if let Ok(v) = parse_f32(value) { el.style.set_border_side_width(1, v); ensure_border_style_visible(&mut el.style); LayoutStatus::LayoutChanged }
-            else { LayoutStatus::Clean }
+            if let Ok(v) = parse_f32(value) {
+                el.style.set_border_side_width(1, v);
+                ensure_border_style_visible(&mut el.style);
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-inline-start-color" | "border_inline_start_color" => {
-            el.style.set_border_side_color(3, parse_cssom_color(value)); LayoutStatus::StyleChanged
+            el.style.set_border_side_color(3, parse_cssom_color(value));
+            LayoutStatus::StyleChanged
         }
         "border-inline-end-color" | "border_inline_end_color" => {
-            el.style.set_border_side_color(1, parse_cssom_color(value)); LayoutStatus::StyleChanged
+            el.style.set_border_side_color(1, parse_cssom_color(value));
+            LayoutStatus::StyleChanged
         }
         "border-inline-start-style" | "border_inline_start_style" => {
-            el.style.set_border_side_style(3, crate::style::LineStyle::from_css_keyword(value)); LayoutStatus::StyleChanged
+            el.style
+                .set_border_side_style(3, crate::style::LineStyle::from_css_keyword(value));
+            LayoutStatus::StyleChanged
         }
         "border-inline-end-style" | "border_inline_end_style" => {
-            el.style.set_border_side_style(1, crate::style::LineStyle::from_css_keyword(value)); LayoutStatus::StyleChanged
+            el.style
+                .set_border_side_style(1, crate::style::LineStyle::from_css_keyword(value));
+            LayoutStatus::StyleChanged
         }
         "border-block-width" | "border_block_width" => {
             if let Ok(v) = parse_f32(value) {
@@ -451,7 +534,9 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 el.style.set_border_side_width(2, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-block-style" | "border_block_style" => {
             let s = crate::style::LineStyle::from_css_keyword(value);
@@ -471,7 +556,9 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 el.style.set_border_side_width(1, v);
                 ensure_border_style_visible(&mut el.style);
                 LayoutStatus::LayoutChanged
-            } else { LayoutStatus::Clean }
+            } else {
+                LayoutStatus::Clean
+            }
         }
         "border-inline-style" | "border_inline_style" => {
             let s = crate::style::LineStyle::from_css_keyword(value);
@@ -493,13 +580,20 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             let parts = split_box(value);
             match parts.as_slice() {
                 [a] => {
-                    if let Ok(v) = parse_f32(a) { el.style.border_spacing = [v, v]; LayoutStatus::LayoutChanged }
-                    else { LayoutStatus::Clean }
+                    if let Ok(v) = parse_f32(a) {
+                        el.style.border_spacing = [v, v];
+                        LayoutStatus::LayoutChanged
+                    } else {
+                        LayoutStatus::Clean
+                    }
                 }
                 [h, v_val] => {
                     if let (Ok(h), Ok(v)) = (parse_f32(h), parse_f32(v_val)) {
-                        el.style.border_spacing = [h, v]; LayoutStatus::LayoutChanged
-                    } else { LayoutStatus::Clean }
+                        el.style.border_spacing = [h, v];
+                        LayoutStatus::LayoutChanged
+                    } else {
+                        LayoutStatus::Clean
+                    }
                 }
                 _ => LayoutStatus::Clean,
             }
@@ -508,35 +602,43 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             apply_border_shape_shorthand(el, value)
         }
         "corner-top-left-shape" | "corner_top_left_shape" => {
-            el.style.set_corner_side_shape(0, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(0, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-top-right-shape" | "corner_top_right_shape" => {
-            el.style.set_corner_side_shape(1, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(1, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-bottom-right-shape" | "corner_bottom_right_shape" => {
-            el.style.set_corner_side_shape(2, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(2, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-bottom-left-shape" | "corner_bottom_left_shape" => {
-            el.style.set_corner_side_shape(3, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(3, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-start-start-shape" | "corner_start_start_shape" => {
-            el.style.set_corner_side_shape(0, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(0, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-start-end-shape" | "corner_start_end_shape" => {
-            el.style.set_corner_side_shape(1, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(1, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-end-end-shape" | "corner_end_end_shape" => {
-            el.style.set_corner_side_shape(2, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(2, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "corner-end-start-shape" | "corner_end_start_shape" => {
-            el.style.set_corner_side_shape(3, crate::style::CornerShape::from_css_keyword(value));
+            el.style
+                .set_corner_side_shape(3, crate::style::CornerShape::from_css_keyword(value));
             LayoutStatus::StyleChanged
         }
         "flex-grow" | "flex_grow" => {
@@ -581,30 +683,42 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             LayoutStatus::LayoutChanged
         }
         "position" => apply_position(el, value),
-        "top" => dim_to_lpa(value).map(|d| {
-            el.style.inset.top = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "right" => dim_to_lpa(value).map(|d| {
-            el.style.inset.right = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "bottom" => dim_to_lpa(value).map(|d| {
-            el.style.inset.bottom = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "left" => dim_to_lpa(value).map(|d| {
-            el.style.inset.left = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "max-width" | "max_width" => dim_to_size(value).map(|d| {
-            el.style.max_size.width = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
-        "max-height" | "max_height" => dim_to_size(value).map(|d| {
-            el.style.max_size.height = d;
-            LayoutStatus::LayoutChanged
-        }).unwrap_or(LayoutStatus::Clean),
+        "top" => dim_to_lpa(value)
+            .map(|d| {
+                el.style.inset.top = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "right" => dim_to_lpa(value)
+            .map(|d| {
+                el.style.inset.right = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "bottom" => dim_to_lpa(value)
+            .map(|d| {
+                el.style.inset.bottom = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "left" => dim_to_lpa(value)
+            .map(|d| {
+                el.style.inset.left = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "max-width" | "max_width" => dim_to_size(value)
+            .map(|d| {
+                el.style.max_size.width = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
+        "max-height" | "max_height" => dim_to_size(value)
+            .map(|d| {
+                el.style.max_size.height = d;
+                LayoutStatus::LayoutChanged
+            })
+            .unwrap_or(LayoutStatus::Clean),
         "color" => {
             let c = parse_cssom_color(value);
             el.text_style.color = [
@@ -643,9 +757,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             }
             LayoutStatus::StyleChanged
         }
-        "border-image-slice" | "border_image_slice" => {
-            apply_border_image_slice(el, value)
-        }
+        "border-image-slice" | "border_image_slice" => apply_border_image_slice(el, value),
         "border-image-width" | "border_image_width" => {
             let parts: Vec<&str> = value.split_whitespace().collect();
             let vals: Vec<f32> = parts.iter().filter_map(|s| parse_f32(s).ok()).collect();
@@ -673,8 +785,14 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 .map(|s| crate::style::BorderImageRepeat::from_css_keyword(s))
                 .collect();
             match reps.as_slice() {
-                [a] => { el.style.border_image_repeat = [*a, *a]; LayoutStatus::StyleChanged }
-                [h, v] => { el.style.border_image_repeat = [*h, *v]; LayoutStatus::StyleChanged }
+                [a] => {
+                    el.style.border_image_repeat = [*a, *a];
+                    LayoutStatus::StyleChanged
+                }
+                [h, v] => {
+                    el.style.border_image_repeat = [*h, *v];
+                    LayoutStatus::StyleChanged
+                }
                 _ => LayoutStatus::Clean,
             }
         }
@@ -748,10 +866,7 @@ fn dim_to_lpa(s: &str) -> Option<taffy::prelude::LengthPercentageAuto> {
 }
 
 fn split_box(value: &str) -> Vec<String> {
-    value
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect()
+    value.split_whitespace().map(|s| s.to_string()).collect()
 }
 
 fn apply_padding(el: &mut Element, value: &str) -> LayoutStatus {
@@ -917,8 +1032,16 @@ fn ensure_border_style_visible(style: &mut crate::style::Style) {
 fn is_line_style_keyword(s: &str) -> bool {
     matches!(
         s,
-        "none" | "hidden" | "solid" | "dotted" | "dashed" | "double"
-            | "groove" | "ridge" | "inset" | "outset"
+        "none"
+            | "hidden"
+            | "solid"
+            | "dotted"
+            | "dashed"
+            | "double"
+            | "groove"
+            | "ridge"
+            | "inset"
+            | "outset"
     )
 }
 
@@ -982,10 +1105,30 @@ fn apply_border_shorthand(el: &mut Element, value: &str, side: Option<usize>) ->
 
 fn expand_box_values<T: Clone>(parts: &[T]) -> Option<[T; 4]> {
     match parts.len() {
-        1 => Some([parts[0].clone(), parts[0].clone(), parts[0].clone(), parts[0].clone()]),
-        2 => Some([parts[0].clone(), parts[1].clone(), parts[0].clone(), parts[1].clone()]),
-        3 => Some([parts[0].clone(), parts[1].clone(), parts[2].clone(), parts[1].clone()]),
-        4 => Some([parts[0].clone(), parts[1].clone(), parts[2].clone(), parts[3].clone()]),
+        1 => Some([
+            parts[0].clone(),
+            parts[0].clone(),
+            parts[0].clone(),
+            parts[0].clone(),
+        ]),
+        2 => Some([
+            parts[0].clone(),
+            parts[1].clone(),
+            parts[0].clone(),
+            parts[1].clone(),
+        ]),
+        3 => Some([
+            parts[0].clone(),
+            parts[1].clone(),
+            parts[2].clone(),
+            parts[1].clone(),
+        ]),
+        4 => Some([
+            parts[0].clone(),
+            parts[1].clone(),
+            parts[2].clone(),
+            parts[3].clone(),
+        ]),
         _ => None,
     }
 }
@@ -1142,7 +1285,7 @@ fn apply_border_shape_shorthand(el: &mut Element, value: &str) -> LayoutStatus {
 mod tests {
     use super::*;
     use crate::core::tree::Element;
-    use crate::layout::dimension::{lp_length_px, dim_length_px};
+    use crate::layout::dimension::{dim_length_px, lp_length_px};
 
     #[test]
     fn pending_inspector_edits_queue_and_take() {
@@ -1213,15 +1356,15 @@ mod tests {
             .as_ref()
             .and_then(|cs| cs.base_style.as_ref())
             .expect("base_style after");
-        assert!((after.bg_color[1] - 1.0).abs() < 0.02, "base bg should be green");
+        assert!(
+            (after.bg_color[1] - 1.0).abs() < 0.02,
+            "base bg should be green"
+        );
         assert_ne!(before, after.bg_color);
         assert_eq!(lp_length_px(after.padding.top), Some(20.0));
         // Authored dump must reflect the applied base (not a stale snapshot).
         let dump = crate::app::devtools::cssom_text_from_element(&el);
-        assert!(
-            dump.contains("background: #00ff00"),
-            "dump={dump}"
-        );
+        assert!(dump.contains("background: #00ff00"), "dump={dump}");
     }
 
     #[test]

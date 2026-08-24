@@ -853,7 +853,9 @@ pub fn context_menu_radio_group(
     };
     let default_value = default_value.unwrap_or_default();
     let value = value.unwrap_or_else(|| {
-        use_signal(format!("{rid}__value").as_str(), move || default_value.clone())
+        use_signal(format!("{rid}__value").as_str(), move || {
+            default_value.clone()
+        })
     });
     let kids = with_child_owner(|| {
         provide_context(
@@ -1015,7 +1017,9 @@ pub fn context_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> E
         _ => format!("{}__sub{seq}", parent.id),
     };
     let open = use_signal(format!("{sid}__open").as_str(), || false);
-    let trigger_fid = use_signal(format!("{sid}__tfid").as_str(), || format!("{sid}__trigger"));
+    let trigger_fid = use_signal(format!("{sid}__tfid").as_str(), || {
+        format!("{sid}__trigger")
+    });
     let kids = with_child_owner(|| {
         provide_context(
             context_menu_sub_context(),
@@ -1486,8 +1490,7 @@ impl ContextMenuBuilder {
     }
 
     pub fn item(mut self, label: impl Into<String>, on_click: impl Fn() + 'static) -> Self {
-        self.items
-            .push(ContextMenuAction::new(label, on_click));
+        self.items.push(ContextMenuAction::new(label, on_click));
         self
     }
 
@@ -1572,9 +1575,7 @@ mod tests {
     fn context_menu_records_items() {
         let fired = Rc::new(Cell::new(false));
         let f = fired.clone();
-        let _el: Element = context_menu("cm1")
-            .item("Copy", move || f.set(true))
-            .into();
+        let _el: Element = context_menu("cm1").item("Copy", move || f.set(true)).into();
         assert!(!fired.get());
     }
 

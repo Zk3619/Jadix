@@ -63,7 +63,6 @@ pub use ime_support::{
 };
 pub mod error_boundary;
 mod glass_gpu;
-mod wgpu_backend;
 mod input_controller;
 pub mod keyed_list;
 mod lifecycle;
@@ -81,10 +80,13 @@ pub(crate) mod scroll_support;
 mod secondary_input;
 mod secondary_window;
 mod state;
+mod wgpu_backend;
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
 };
+#[cfg(feature = "devtools")]
+pub mod devtools;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tray;
@@ -94,8 +96,6 @@ mod window_chrome;
 mod window_events;
 pub mod window_keys;
 pub(crate) mod window_scope;
-#[cfg(feature = "devtools")]
-pub mod devtools;
 
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use multi_window::{

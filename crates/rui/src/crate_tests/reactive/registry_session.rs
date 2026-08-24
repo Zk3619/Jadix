@@ -3,12 +3,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::app::reactive::{
-    reactive_anchor, reset_registered_anchors, switch_reactive,
-};
+use super::registry_owner::registry_totals;
+use crate::app::reactive::{reactive_anchor, reset_registered_anchors, switch_reactive};
 use crate::core::reactivity::{create_effect, create_root, reactivity_debug_snapshot, use_signal};
 use crate::core::tree::Element;
-use super::registry_owner::registry_totals;
 
 #[test]
 fn switch_reactive_section_cycles_do_not_grow_registry() {
@@ -27,21 +25,18 @@ fn switch_reactive_section_cycles_do_not_grow_registry() {
                 |key| match key.as_str() {
                     "basics" => {
                         reactive_anchor("gal_sec:basics", || Element::new().text("basics"));
-                        Element::new().child(
-                            crate::app::reactive::reactive_placeholder("gal_sec:basics"),
-                        )
+                        Element::new()
+                            .child(crate::app::reactive::reactive_placeholder("gal_sec:basics"))
                     }
                     "forms" => {
                         reactive_anchor("gal_sec:forms", || Element::new().text("forms"));
-                        Element::new().child(
-                            crate::app::reactive::reactive_placeholder("gal_sec:forms"),
-                        )
+                        Element::new()
+                            .child(crate::app::reactive::reactive_placeholder("gal_sec:forms"))
                     }
                     "data" => {
                         reactive_anchor("gal_sec:data", || Element::new().text("data"));
-                        Element::new().child(
-                            crate::app::reactive::reactive_placeholder("gal_sec:data"),
-                        )
+                        Element::new()
+                            .child(crate::app::reactive::reactive_placeholder("gal_sec:data"))
                     }
                     _ => Element::new(),
                 },

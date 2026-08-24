@@ -1468,9 +1468,8 @@ border-radius: 6px 6px 6px 6px";
     );
     let hard_n = css.split('\n').count().max(1) as f32;
     let h = text_el.layout_bounds[3];
-    let soft_inflated = crate::utils::text_field::text_edit_content_height_px(
-        css, size, 400, lh, 80.0,
-    );
+    let soft_inflated =
+        crate::utils::text_field::text_edit_content_height_px(css, size, 400, lh, 80.0);
     assert!(
         soft_inflated > h + lh * 0.5,
         "narrow soft-wrap height ({soft_inflated}) should exceed nowrap leaf ({h})"

@@ -862,7 +862,12 @@ fn outline_width_token(rest: &str) -> Option<f32> {
         "8" => Some(8.0),
         _ => {
             if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                return inner.trim().strip_suffix("px").unwrap_or(inner.trim()).parse().ok();
+                return inner
+                    .trim()
+                    .strip_suffix("px")
+                    .unwrap_or(inner.trim())
+                    .parse()
+                    .ok();
             }
             None
         }
@@ -901,32 +906,90 @@ fn parse_zoom_token(rest: &str) -> Option<f32> {
 /// Parse translate token: px via spacing scale, fractions (`1/2`, `full`), percentage (`[50%]`), arbitrary px (`[20px]`).
 fn parse_translate_token(rest: &str, is_x: bool) -> Option<KnownUtility<'_>> {
     match rest {
-        "full" => return Some(if is_x { KnownUtility::TranslateXPct(1.0) } else { KnownUtility::TranslateYPct(1.0) }),
-        "1/2" => return Some(if is_x { KnownUtility::TranslateXPct(0.5) } else { KnownUtility::TranslateYPct(0.5) }),
-        "1/3" => return Some(if is_x { KnownUtility::TranslateXPct(1.0 / 3.0) } else { KnownUtility::TranslateYPct(1.0 / 3.0) }),
-        "2/3" => return Some(if is_x { KnownUtility::TranslateXPct(2.0 / 3.0) } else { KnownUtility::TranslateYPct(2.0 / 3.0) }),
-        "1/4" => return Some(if is_x { KnownUtility::TranslateXPct(0.25) } else { KnownUtility::TranslateYPct(0.25) }),
-        "3/4" => return Some(if is_x { KnownUtility::TranslateXPct(0.75) } else { KnownUtility::TranslateYPct(0.75) }),
+        "full" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(1.0)
+            } else {
+                KnownUtility::TranslateYPct(1.0)
+            })
+        }
+        "1/2" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(0.5)
+            } else {
+                KnownUtility::TranslateYPct(0.5)
+            })
+        }
+        "1/3" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(1.0 / 3.0)
+            } else {
+                KnownUtility::TranslateYPct(1.0 / 3.0)
+            })
+        }
+        "2/3" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(2.0 / 3.0)
+            } else {
+                KnownUtility::TranslateYPct(2.0 / 3.0)
+            })
+        }
+        "1/4" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(0.25)
+            } else {
+                KnownUtility::TranslateYPct(0.25)
+            })
+        }
+        "3/4" => {
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(0.75)
+            } else {
+                KnownUtility::TranslateYPct(0.75)
+            })
+        }
         _ => {}
     }
     if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let inner = inner.trim();
         if let Some(pct) = inner.strip_suffix('%') {
             let v: f32 = pct.trim().parse().ok()?;
-            return Some(if is_x { KnownUtility::TranslateXPct(v / 100.0) } else { KnownUtility::TranslateYPct(v / 100.0) });
+            return Some(if is_x {
+                KnownUtility::TranslateXPct(v / 100.0)
+            } else {
+                KnownUtility::TranslateYPct(v / 100.0)
+            });
         }
         if let Some(px) = inner.strip_suffix("px") {
             let v: f32 = px.trim().parse().ok()?;
-            return Some(if is_x { KnownUtility::TranslateX(v) } else { KnownUtility::TranslateY(v) });
+            return Some(if is_x {
+                KnownUtility::TranslateX(v)
+            } else {
+                KnownUtility::TranslateY(v)
+            });
         }
         if let Some(rem) = inner.strip_suffix("rem") {
             let v: f32 = rem.trim().parse().ok()?;
-            return Some(if is_x { KnownUtility::TranslateX(v * 16.0) } else { KnownUtility::TranslateY(v * 16.0) });
+            return Some(if is_x {
+                KnownUtility::TranslateX(v * 16.0)
+            } else {
+                KnownUtility::TranslateY(v * 16.0)
+            });
         }
         let v: f32 = inner.parse().ok()?;
-        return Some(if is_x { KnownUtility::TranslateX(v) } else { KnownUtility::TranslateY(v) });
+        return Some(if is_x {
+            KnownUtility::TranslateX(v)
+        } else {
+            KnownUtility::TranslateY(v)
+        });
     }
-    spacing_token_to_px(rest).map(|px| if is_x { KnownUtility::TranslateX(px) } else { KnownUtility::TranslateY(px) })
+    spacing_token_to_px(rest).map(|px| {
+        if is_x {
+            KnownUtility::TranslateX(px)
+        } else {
+            KnownUtility::TranslateY(px)
+        }
+    })
 }
 
 /// Parse angle value: `45deg`, `0.5turn`, `1.57rad`, or bare number as degrees.
@@ -990,7 +1053,11 @@ fn parse_filter_amount_token(rest: &str) -> Option<f32> {
     if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let inner = inner.trim();
         if let Some(pct) = inner.strip_suffix('%') {
-            return pct.trim().parse::<f32>().ok().map(|v| (v / 100.0).clamp(0.0, 1.0));
+            return pct
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|v| (v / 100.0).clamp(0.0, 1.0));
         }
         return inner.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0));
     }

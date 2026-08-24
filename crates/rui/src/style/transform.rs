@@ -414,7 +414,10 @@ fn find_matching_paren(s: &str) -> Option<usize> {
 }
 
 fn split_args(s: &str) -> Vec<&str> {
-    s.split(',').map(str::trim).filter(|a| !a.is_empty()).collect()
+    s.split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .collect()
 }
 
 fn parse_num(s: &str) -> Option<f32> {
@@ -567,7 +570,9 @@ fn parse_transform_func(name: &str, args: &str) -> Option<TransformFunction> {
             }
             let vals: Option<Vec<f32>> = parts.iter().map(|p| parse_num(p)).collect();
             let v = vals?;
-            Some(TransformFunction::Matrix([v[0], v[1], v[2], v[3], v[4], v[5]]))
+            Some(TransformFunction::Matrix([
+                v[0], v[1], v[2], v[3], v[4], v[5],
+            ]))
         }
         "matrix3d" => {
             let parts = split_args(args);
@@ -667,19 +672,11 @@ fn parse_origin_two(a: &str, b: &str) -> TransformOrigin {
 
     // Both keywords
     if let (Some(x), Some(y)) = (ax.clone(), by.clone()) {
-        return TransformOrigin {
-            x,
-            y,
-            z: 0.0,
-        };
+        return TransformOrigin { x, y, z: 0.0 };
     }
     // Reversed keywords (y-keyword first, x-keyword second)
     if let (Some(y), Some(x)) = (ay.clone(), bx.clone()) {
-        return TransformOrigin {
-            x,
-            y,
-            z: 0.0,
-        };
+        return TransformOrigin { x, y, z: 0.0 };
     }
 
     // First is keyword or length, second is keyword or length
@@ -739,16 +736,24 @@ mod tests {
     fn parse_rotate_deg() {
         let list = parse_transform("rotate(45deg)").unwrap();
         assert_eq!(list.len(), 1);
-        assert!(matches!(list[0], TransformFunction::Rotate(CssAngle::Deg(d)) if (d - 45.0).abs() < 1e-6));
+        assert!(
+            matches!(list[0], TransformFunction::Rotate(CssAngle::Deg(d)) if (d - 45.0).abs() < 1e-6)
+        );
     }
 
     #[test]
     fn parse_multi_functions() {
         let list = parse_transform("translateX(10px) rotate(90deg) scale(2, 0.5)").unwrap();
         assert_eq!(list.len(), 3);
-        assert!(matches!(&list[0], TransformFunction::TranslateX(CssDim::Px(v)) if (*v - 10.0).abs() < 1e-6));
-        assert!(matches!(&list[1], TransformFunction::Rotate(CssAngle::Deg(d)) if (*d - 90.0).abs() < 1e-6));
-        assert!(matches!(&list[2], TransformFunction::Scale(sx, Some(sy)) if (*sx - 2.0).abs() < 1e-6 && (*sy - 0.5).abs() < 1e-6));
+        assert!(
+            matches!(&list[0], TransformFunction::TranslateX(CssDim::Px(v)) if (*v - 10.0).abs() < 1e-6)
+        );
+        assert!(
+            matches!(&list[1], TransformFunction::Rotate(CssAngle::Deg(d)) if (*d - 90.0).abs() < 1e-6)
+        );
+        assert!(
+            matches!(&list[2], TransformFunction::Scale(sx, Some(sy)) if (*sx - 2.0).abs() < 1e-6 && (*sy - 0.5).abs() < 1e-6)
+        );
     }
 
     #[test]
@@ -766,7 +771,9 @@ mod tests {
     #[test]
     fn parse_skew() {
         let list = parse_transform("skewX(30deg)").unwrap();
-        assert!(matches!(&list[0], TransformFunction::SkewX(CssAngle::Deg(d)) if (*d - 30.0).abs() < 1e-6));
+        assert!(
+            matches!(&list[0], TransformFunction::SkewX(CssAngle::Deg(d)) if (*d - 30.0).abs() < 1e-6)
+        );
     }
 
     #[test]
@@ -806,8 +813,12 @@ mod tests {
     #[test]
     fn parse_origin_lengths() {
         let o = parse_transform_origin("50% 50%");
-        assert!(matches!(o.x, TransformOriginX::Length(CssDim::Percent(p)) if (p - 0.5).abs() < 1e-6));
-        assert!(matches!(o.y, TransformOriginY::Length(CssDim::Percent(p)) if (p - 0.5).abs() < 1e-6));
+        assert!(
+            matches!(o.x, TransformOriginX::Length(CssDim::Percent(p)) if (p - 0.5).abs() < 1e-6)
+        );
+        assert!(
+            matches!(o.y, TransformOriginY::Length(CssDim::Percent(p)) if (p - 0.5).abs() < 1e-6)
+        );
     }
 
     #[test]

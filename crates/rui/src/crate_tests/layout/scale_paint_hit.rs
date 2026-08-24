@@ -11,11 +11,7 @@ use crate::primitives::r#box::r#box;
 fn scaled_fill_instance_matches_visual_aabb_not_scale_squared() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let mut tile: Element = r#box()
-                .w(64.0)
-                .h(64.0)
-                .bg([1.0, 0.0, 0.0, 1.0])
-                .into();
+            let mut tile: Element = r#box().w(64.0).h(64.0).bg([1.0, 0.0, 0.0, 1.0]).into();
             tile.style.scale = [1.5, 1.0];
             let mut root = Element::new().w(400.0).h(200.0).p(40.0).child(tile);
             let mut layout = LayoutTree::new();

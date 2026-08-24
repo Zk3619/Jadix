@@ -388,8 +388,7 @@ impl SecondaryWindowState {
             || (sync_impact != LayoutStatus::Clean && !portal_only_layout);
 
         if !use_full {
-            let dirty: std::collections::HashSet<_> =
-                self.pending_layout_dirty.drain(..).collect();
+            let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
             if !dirty.is_empty() {
                 self.layout_tree
                     .mark_dirty_nodes_in_tree(&self.root_element, &dirty);

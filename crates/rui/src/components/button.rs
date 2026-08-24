@@ -28,8 +28,8 @@ use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
-    focus_ring_style, is_dark_theme, lerp_display_srgb_linear,
-    mix_display_srgb_in_oklab, TimingFunction, TransitionEntry, TransitionProperty,
+    focus_ring_style, is_dark_theme, lerp_display_srgb_linear, mix_display_srgb_in_oklab,
+    TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
@@ -444,12 +444,11 @@ pub fn Button(
     truncate: bool,
     text_overflow: Option<String>,
 ) -> Element {
-    let hover_easing =
-        if hover_easing.is_empty() || hover_easing == "spring" {
-            "cubic".to_string()
-        } else {
-            hover_easing
-        };
+    let hover_easing = if hover_easing.is_empty() || hover_easing == "spring" {
+        "cubic".to_string()
+    } else {
+        hover_easing
+    };
     let mut builder = button(&id)
         .variant(variant.as_paint_key())
         .hover_easing(&hover_easing)
@@ -1155,9 +1154,7 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
     let hovered = el
         .focus_id
         .as_deref()
-        .map(|fid| {
-            use_signal(&format!("{fid}_hover"), || false).peek() && !desc.disabled
-        })
+        .map(|fid| use_signal(&format!("{fid}_hover"), || false).peek() && !desc.disabled)
         .unwrap_or(false);
     let hover_t = hover_t_from_bool(hovered, desc.disabled);
     let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);

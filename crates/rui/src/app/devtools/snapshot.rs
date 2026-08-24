@@ -227,9 +227,7 @@ pub fn find_element_by_identity_near_size<'a>(
         }
         for (i, child) in el.children.iter().enumerate() {
             path.push(i);
-            walk(
-                child, identity, path, hint_path, relative, hint_size, best,
-            );
+            walk(child, identity, path, hint_path, relative, hint_size, best);
             path.pop();
         }
     }
@@ -482,9 +480,15 @@ pub fn style_snapshot(style: &Style) -> StyleSnapshot {
         border_width: style.border_width,
         border_color: format_rgba(style.border_color),
         border_style: format!("{:?}", style.border_style),
-        border_radius: format!("{:.0} {:.0} {:.0} {:.0}", style.radii[2], style.radii[0], style.radii[1], style.radii[3]),
+        border_radius: format!(
+            "{:.0} {:.0} {:.0} {:.0}",
+            style.radii[2], style.radii[0], style.radii[1], style.radii[3]
+        ),
         border_collapse: style.border_collapse,
-        border_spacing: format!("{:.0} {:.0}", style.border_spacing[0], style.border_spacing[1]),
+        border_spacing: format!(
+            "{:.0} {:.0}",
+            style.border_spacing[0], style.border_spacing[1]
+        ),
         border_image_source: style.border_image_source.clone().unwrap_or_default(),
         corner_shape: format!("{:?}", style.corner_shape),
         flex_grow: style.flex_grow,
@@ -618,11 +622,7 @@ fn tag_hint_from(el: &Element) -> Option<String> {
         .get("data-slot")
         .cloned()
         .or_else(|| el.attrs.get("role").cloned())
-        .or_else(|| {
-            el.class_set
-                .as_ref()
-                .and_then(|s| s.base.first().cloned())
-        })
+        .or_else(|| el.class_set.as_ref().and_then(|s| s.base.first().cloned()))
 }
 
 fn text_preview_from(el: &Element) -> Option<String> {
@@ -873,7 +873,11 @@ pub fn cssom_text_from_element(el: &Element) -> String {
     let mut lines: Vec<String> = Vec::with_capacity(64);
     push_decl(&mut lines, "display", &css_dbg(&style.display));
     push_decl(&mut lines, "box-sizing", &css_dbg(&style.box_sizing));
-    push_decl(&mut lines, "flex-direction", &css_dbg(&style.flex_direction));
+    push_decl(
+        &mut lines,
+        "flex-direction",
+        &css_dbg(&style.flex_direction),
+    );
     push_decl(&mut lines, "flex-wrap", &css_dbg(&style.flex_wrap));
     push_decl(
         &mut lines,
@@ -914,9 +918,17 @@ pub fn cssom_text_from_element(el: &Element) -> String {
     push_decl(&mut lines, "width", &format_dim(&style.size.width));
     push_decl(&mut lines, "height", &format_dim(&style.size.height));
     push_decl(&mut lines, "min-width", &format_dim(&style.min_size.width));
-    push_decl(&mut lines, "min-height", &format_dim(&style.min_size.height));
+    push_decl(
+        &mut lines,
+        "min-height",
+        &format_dim(&style.min_size.height),
+    );
     push_decl(&mut lines, "max-width", &format_dim(&style.max_size.width));
-    push_decl(&mut lines, "max-height", &format_dim(&style.max_size.height));
+    push_decl(
+        &mut lines,
+        "max-height",
+        &format_dim(&style.max_size.height),
+    );
     push_decl(&mut lines, "flex-grow", &format_num(style.flex_grow));
     push_decl(&mut lines, "flex-shrink", &format_num(style.flex_shrink));
     push_decl(&mut lines, "flex-basis", &format_dim(&style.flex_basis));
@@ -940,11 +952,7 @@ pub fn cssom_text_from_element(el: &Element) -> String {
         "filter",
         &crate::style::filter_list_to_css(style.filter.as_ref()),
     );
-    push_decl(
-        &mut lines,
-        "border-width",
-        &border_width_css(&style),
-    );
+    push_decl(&mut lines, "border-width", &border_width_css(&style));
     push_decl(
         &mut lines,
         "border-style",
@@ -979,10 +987,7 @@ pub fn cssom_text_from_element(el: &Element) -> String {
     push_decl(
         &mut lines,
         "border-image-source",
-        style
-            .border_image_source
-            .as_deref()
-            .unwrap_or("none"),
+        style.border_image_source.as_deref().unwrap_or("none"),
     );
     push_decl(&mut lines, "corner-shape", &css_dbg(&style.corner_shape));
     push_decl(
@@ -995,7 +1000,11 @@ pub fn cssom_text_from_element(el: &Element) -> String {
         "outline-style",
         &line_style_css(style.outline_style),
     );
-    push_decl(&mut lines, "outline-color", &format_rgba(style.outline_color));
+    push_decl(
+        &mut lines,
+        "outline-color",
+        &format_rgba(style.outline_color),
+    );
     push_decl(
         &mut lines,
         "outline-offset",
@@ -1018,11 +1027,7 @@ pub fn cssom_text_from_element(el: &Element) -> String {
             ),
         );
     }
-    push_decl(
-        &mut lines,
-        "rotate",
-        &format!("{:.1}deg", style.rotate_deg),
-    );
+    push_decl(&mut lines, "rotate", &format!("{:.1}deg", style.rotate_deg));
     push_decl(
         &mut lines,
         "scale",
@@ -1238,7 +1243,8 @@ fn variant_selector_css(sel: &rui_style_tokens::VariantSelector) -> String {
 }
 
 fn css_ident(dbg: &str) -> String {
-    dbg.trim_matches(|c| c == '"' || c == '\'').to_ascii_lowercase()
+    dbg.trim_matches(|c| c == '"' || c == '\'')
+        .to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -1562,7 +1568,9 @@ mod tests {
             .child(overlay);
         let nodes = snapshot_tree(&root);
         assert!(nodes.iter().all(|n| n.focus_id.as_deref() != Some("dock")));
-        assert!(nodes.iter().all(|n| n.focus_id.as_deref() != Some("secret")));
+        assert!(nodes
+            .iter()
+            .all(|n| n.focus_id.as_deref() != Some("secret")));
         assert_eq!(nodes.len(), 2);
     }
 

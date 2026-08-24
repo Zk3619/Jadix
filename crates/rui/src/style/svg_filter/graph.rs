@@ -177,8 +177,15 @@ impl Default for TransferFunction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LightSource {
-    Distant { azimuth: f32, elevation: f32 },
-    Point { x: f32, y: f32, z: f32 },
+    Distant {
+        azimuth: f32,
+        elevation: f32,
+    },
+    Point {
+        x: f32,
+        y: f32,
+        z: f32,
+    },
     Spot {
         x: f32,
         y: f32,

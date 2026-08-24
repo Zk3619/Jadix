@@ -31,10 +31,7 @@ impl TextRendererCacheStats {
     pub fn format_short(&self) -> String {
         format!(
             "shaped={} emoji_n={} emoji_r={} emoji_id={}",
-            self.shaped_cache,
-            self.emoji_nodes,
-            self.emoji_rasters,
-            self.emoji_id_rasters,
+            self.shaped_cache, self.emoji_nodes, self.emoji_rasters, self.emoji_id_rasters,
         )
     }
 }

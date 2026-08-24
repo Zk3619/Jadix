@@ -371,7 +371,14 @@ fn build_hard_lines_only(
     let mut start = 0usize;
     for (i, _) in text.match_indices('\n') {
         ranges.push((start, i));
-        caret_xs.push(line_caret_xs_prefix(text, start, i, size, weight, line_height));
+        caret_xs.push(line_caret_xs_prefix(
+            text,
+            start,
+            i,
+            size,
+            weight,
+            line_height,
+        ));
         start = i + 1;
     }
     ranges.push((start, text.len()));
@@ -412,12 +419,8 @@ fn line_caret_xs_prefix(
     let slice = &text[start..end];
     for (i, ch) in slice.char_indices() {
         let next = i + ch.len_utf8();
-        let adv = crate::text::measure::measure_prefix_advance(
-            &slice[..next],
-            size,
-            weight,
-            line_height,
-        );
+        let adv =
+            crate::text::measure::measure_prefix_advance(&slice[..next], size, weight, line_height);
         out.push((start + next, adv));
     }
     out
@@ -521,8 +524,7 @@ fn shape_buffer_to_model(
     source: LineBreakSource,
 ) -> VisualLineModel {
     let family = crate::renderer::text_hit::best_font_family(font_system);
-    let weight =
-        crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+    let weight = crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
     ensure_coverage_for_text(font_system, text);
     let shaping = if text.is_ascii() {
         Shaping::Basic
@@ -702,7 +704,9 @@ pub fn textarea_visual_content_height(
     // Virtualized: sample first / middle / last hard paragraphs for avg visual lines/char.
     let sample = sample_virt_avg_line_height(text, size, weight, lh, avail_width, wrap);
     let hard_n = text.split('\n').count().max(1);
-    let est_lines = ((text.len() as f32) * sample.lines_per_byte).ceil().max(hard_n as f32) as usize;
+    let est_lines = ((text.len() as f32) * sample.lines_per_byte)
+        .ceil()
+        .max(hard_n as f32) as usize;
     VirtHeightEstimate {
         content_height: lh * est_lines as f32 + ink_pad,
         exact_line_count: est_lines,
@@ -822,7 +826,11 @@ mod tests {
     fn soft_word_wraps_latin() {
         let text = "hello world hello world hello world";
         let model = build_visual_lines(text, 14.0, 400, 21.0, 80.0, LineBreakSource::SoftWord);
-        assert!(model.line_count() > 1, "expected wrap, got {:?}", model.ranges);
+        assert!(
+            model.line_count() > 1,
+            "expected wrap, got {:?}",
+            model.ranges
+        );
     }
 
     #[test]

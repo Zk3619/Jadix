@@ -344,11 +344,9 @@ impl super::App {
                             None,
                         );
                     };
-                    let focused = crate::core::reactivity::use_signal(
-                        "__rui_button_focus_id",
-                        String::new,
-                    )
-                    .peek();
+                    let focused =
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .peek();
                     let fid = if focused.is_empty() {
                         None
                     } else {
@@ -1014,58 +1012,57 @@ impl super::App {
         let slider_drag_x = x;
 
         let mut input_drag_keep_redraw = false;
-        let drag_sel_update: Option<(String, usize, usize, usize)> = if self.left_button_down
-            && self.scrollbar_drag.is_none()
-        {
-            if self.input_drag_rest.is_some() {
-                let now = std::time::Instant::now();
-                let dt = now
-                    .duration_since(self.last_frame_time)
-                    .as_secs_f32()
-                    .clamp(1.0 / 240.0, 0.05);
-                let rest = self.input_drag_rest.as_deref().unwrap();
-                let x = self.cursor_pos.x as f32 / scale.max(1.0);
-                let y = self.cursor_pos.y as f32 / scale.max(1.0);
-                let anchor = self.input_drag_anchor;
-                input_drag_keep_redraw = tick_input_drag_select_at(
-                    &mut state.root_element,
-                    state.text_renderer.font_system_mut(),
-                    scale,
-                    dt,
-                    x,
-                    y,
-                    rest,
-                    anchor,
-                );
-                None
-            } else if let Some(key) = self.label_drag_key.as_ref() {
-                if let Some((bounds, display_el, style, leaf_scroll)) =
-                    super::tree_hit::find_selectable_text_leaf_for_key(&state.root_element, key)
-                {
-                    let ui_scale = scale.max(1.0);
-                    let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
-                    let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
-                    let ix = crate::renderer::hit_test_input_text_index(
+        let drag_sel_update: Option<(String, usize, usize, usize)> =
+            if self.left_button_down && self.scrollbar_drag.is_none() {
+                if self.input_drag_rest.is_some() {
+                    let now = std::time::Instant::now();
+                    let dt = now
+                        .duration_since(self.last_frame_time)
+                        .as_secs_f32()
+                        .clamp(1.0 / 240.0, 0.05);
+                    let rest = self.input_drag_rest.as_deref().unwrap();
+                    let x = self.cursor_pos.x as f32 / scale.max(1.0);
+                    let y = self.cursor_pos.y as f32 / scale.max(1.0);
+                    let anchor = self.input_drag_anchor;
+                    input_drag_keep_redraw = tick_input_drag_select_at(
+                        &mut state.root_element,
                         state.text_renderer.font_system_mut(),
-                        &display_el,
-                        mx,
-                        my,
-                        bounds,
-                        &style,
-                        ui_scale,
+                        scale,
+                        dt,
+                        x,
+                        y,
+                        rest,
+                        anchor,
                     );
-                    let lo = self.label_drag_anchor.min(ix);
-                    let hi = self.label_drag_anchor.max(ix);
-                    Some((key.clone(), lo, hi, ix))
+                    None
+                } else if let Some(key) = self.label_drag_key.as_ref() {
+                    if let Some((bounds, display_el, style, leaf_scroll)) =
+                        super::tree_hit::find_selectable_text_leaf_for_key(&state.root_element, key)
+                    {
+                        let ui_scale = scale.max(1.0);
+                        let mx = (x + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2]);
+                        let my = (y + leaf_scroll[1]).clamp(bounds[1], bounds[1] + bounds[3]);
+                        let ix = crate::renderer::hit_test_input_text_index(
+                            state.text_renderer.font_system_mut(),
+                            &display_el,
+                            mx,
+                            my,
+                            bounds,
+                            &style,
+                            ui_scale,
+                        );
+                        let lo = self.label_drag_anchor.min(ix);
+                        let hi = self.label_drag_anchor.max(ix);
+                        Some((key.clone(), lo, hi, ix))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         let label_drag_sel_update = drag_sel_update.as_ref().and_then(|(key, lo, hi, _caret)| {
             if self.label_drag_key.as_deref() == Some(key.as_str()) {
@@ -1074,8 +1071,7 @@ impl super::App {
                 None
             }
         });
-        let input_drag_needs_redraw =
-            self.input_drag_rest.is_some() && self.left_button_down;
+        let input_drag_needs_redraw = self.input_drag_rest.is_some() && self.left_button_down;
 
         if self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
@@ -2007,7 +2003,8 @@ impl super::App {
             if cursor_stable
                 && super::scroll_support::wheel_sticky_matches_deepest(&sticky, &target_rests)
             {
-                if let Some((_, [max_x, max_y], _)) = self.scroll_metrics_cache.get(&sticky).copied()
+                if let Some((_, [max_x, max_y], _)) =
+                    self.scroll_metrics_cache.get(&sticky).copied()
                 {
                     let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                         &sticky,
@@ -2381,8 +2378,16 @@ impl super::App {
                 crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
             })
             .peek();
-            let old_sx = if sx.peek().is_finite() { sx.peek() } else { 0.0 };
-            let old_sy = if sy.peek().is_finite() { sy.peek() } else { 0.0 };
+            let old_sx = if sx.peek().is_finite() {
+                sx.peek()
+            } else {
+                0.0
+            };
+            let old_sy = if sy.peek().is_finite() {
+                sy.peek()
+            } else {
+                0.0
+            };
             if !sx.peek().is_finite() {
                 sx.set_silent(0.0);
             }
@@ -2405,8 +2410,16 @@ impl super::App {
             // Persist clamped targets when max shrinks (e.g. viewport grew until content
             // fits). Offset-only clamp left a stale target; smooth-scroll then re-sought it
             // after a later shrink and scrolled the top out of view.
-            let tx_raw = if tx.peek().is_finite() { tx.peek() } else { 0.0 };
-            let ty_raw = if ty.peek().is_finite() { ty.peek() } else { 0.0 };
+            let tx_raw = if tx.peek().is_finite() {
+                tx.peek()
+            } else {
+                0.0
+            };
+            let ty_raw = if ty.peek().is_finite() {
+                ty.peek()
+            } else {
+                0.0
+            };
             let (sx_clamped, tx_clamped) =
                 super::scroll_support::clamp_scroll_offset_and_target(old_sx, tx_raw, raw_max_x);
             let (sy_clamped, ty_clamped) =
@@ -2588,8 +2601,7 @@ impl super::App {
             || !self.scroll_accum.is_empty()
             || scrollbar_fade_busy;
 
-        let scrollbar_skip_flex_layout =
-            self.scrollbar_drag.is_none() && scrollbar_fade_busy;
+        let scrollbar_skip_flex_layout = self.scrollbar_drag.is_none() && scrollbar_fade_busy;
         // Do NOT fold `smooth_active_until` into paint-only: the 200ms wheel bridge would skip
         // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
         // but the caret does not install until the bridge expires.
@@ -3064,10 +3076,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .to_ascii_lowercase();
 
                     if axis_x_enabled {
-                        let fade_x = crate::style::use_ui_transition_cubic(
-                            keys.spring_x.as_str(),
-                            0.0,
-                        );
+                        let fade_x =
+                            crate::style::use_ui_transition_cubic(keys.spring_x.as_str(), 0.0);
                         // `raw_max_*` can sit at 0 briefly (stale metrics / sub-pixel) while the axis is
                         // still hoverable. Never force fade to 0 when that axis is actively hovered,
                         // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
@@ -3101,10 +3111,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         }
                     }
                     if axis_y_enabled {
-                        let fade_y = crate::style::use_ui_transition_cubic(
-                            keys.spring_y.as_str(),
-                            0.0,
-                        );
+                        let fade_y =
+                            crate::style::use_ui_transition_cubic(keys.spring_y.as_str(), 0.0);
                         let spring_eligible_y =
                             raw_max_y > 0.5 || is_hover_y || is_dragging_y || now < visible_until_y;
                         let target_y_vis = match vis_y.as_str() {

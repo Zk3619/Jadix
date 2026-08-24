@@ -49,14 +49,7 @@ fn scroll_only_sibling_band_cull_skips_far_offscreen_rows() {
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut root, 80.0, 100.0, [-1.0, -1.0]);
     root.scroll_offset = [0.0, 1500.0];
-    let result = tree.build_and_layout_fast(
-        &mut root,
-        80.0,
-        100.0,
-        [-1.0, -1.0],
-        true,
-        false,
-    );
+    let result = tree.build_and_layout_fast(&mut root, 80.0, 100.0, [-1.0, -1.0], true, false);
     assert!(
         result.instances.len() <= 4,
         "scroll_only band cull must skip rows far outside the clip (got {} instances)",
@@ -117,14 +110,7 @@ fn scroll_only_band_cull_keeps_stable_content_extent_with_overflowing_children()
 
     for sy in [0.0_f32, 200.0, 600.0, 1100.0, 1500.0] {
         root.scroll_offset = [0.0, sy];
-        let _ = tree.build_and_layout_fast(
-            &mut root,
-            80.0,
-            100.0,
-            [-1.0, -1.0],
-            true,
-            false,
-        );
+        let _ = tree.build_and_layout_fast(&mut root, 80.0, 100.0, [-1.0, -1.0], true, false);
         let h = root.children[0].collect_extent[1];
         assert!(
             (h - content_extent_h).abs() < 0.5,
@@ -140,14 +126,7 @@ fn scroll_only_band_cull_keeps_full_column_extent() {
     let mut tree = LayoutTree::new();
     let _ = tree.build_and_layout(&mut root, 80.0, 100.0, [-1.0, -1.0]);
     root.scroll_offset = [0.0, 1500.0];
-    let _ = tree.build_and_layout_fast(
-        &mut root,
-        80.0,
-        100.0,
-        [-1.0, -1.0],
-        true,
-        false,
-    );
+    let _ = tree.build_and_layout_fast(&mut root, 80.0, 100.0, [-1.0, -1.0], true, false);
     let last = &root.children[0].children[19];
     let bottom = last.layout_bounds[1] + last.layout_bounds[3];
     assert!(

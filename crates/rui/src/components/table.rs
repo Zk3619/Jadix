@@ -345,11 +345,7 @@ fn row_uid() -> u64 {
 /// `th`：`h-10 px-2`、`font-medium text-muted-foreground`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn TableHead(
-    w: Option<String>,
-    align: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
     let align = align
         .as_deref()
         .map(parse_align)
@@ -387,11 +383,7 @@ pub fn TableHead(
 /// `td`：`p-2 align-middle`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn TableCell(
-    w: Option<String>,
-    align: Option<String>,
-    children: Option<Element>,
-) -> Element {
+pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Element>) -> Element {
     let align = align
         .as_deref()
         .map(parse_align)
@@ -439,11 +431,7 @@ pub fn TableCaption(children: Option<Element>) -> Element {
         ));
     }
     mark_slot(
-        r#box()
-            .w("100%")
-            .mt(tokens::SPACE_4)
-            .children(kids)
-            .into(),
+        r#box().w("100%").mt(tokens::SPACE_4).children(kids).into(),
         SLOT_CAPTION,
     )
 }
@@ -705,9 +693,10 @@ fn filtered_row_order(
     }
     (0..row_count)
         .filter(|&r| {
-            columns.iter().enumerate().any(|(ci, _)| {
-                cell(r, ci).to_ascii_lowercase().contains(&q)
-            })
+            columns
+                .iter()
+                .enumerate()
+                .any(|(ci, _)| cell(r, ci).to_ascii_lowercase().contains(&q))
         })
         .collect()
 }
@@ -797,10 +786,7 @@ impl From<TableBuilder> for Element {
         reactive_view(view_id, move || {
             let _ = selected.get();
             let sort_state = sort.get();
-            let filter_text = filter_sig
-                .as_ref()
-                .map(|s| s.get())
-                .unwrap_or_default();
+            let filter_text = filter_sig.as_ref().map(|s| s.get()).unwrap_or_default();
             let page_state = page_sig.as_ref().map(|s| s.get());
 
             let filtered = filtered_row_order(row_count, &columns, &cell, &filter_text);
@@ -935,10 +921,8 @@ impl From<TableBuilder> for Element {
                 })
                 .into();
 
-            let header_wrap: Element = mark_slot(
-                vstack().w("100%").child(header_row).into(),
-                SLOT_HEADER,
-            );
+            let header_wrap: Element =
+                mark_slot(vstack().w("100%").child(header_row).into(), SLOT_HEADER);
             let body_wrap: Element = mark_slot(list, SLOT_BODY);
 
             let mut stack_kids: Vec<Element> = Vec::new();
@@ -947,12 +931,7 @@ impl From<TableBuilder> for Element {
                     r#box()
                         .w("100%")
                         .mt(tokens::SPACE_4)
-                        .child(
-                            text(cap)
-                                .size(TEXT_SM)
-                                .weight(400.0)
-                                .color(muted_fg),
-                        )
+                        .child(text(cap).size(TEXT_SM).weight(400.0).color(muted_fg))
                         .into(),
                     SLOT_CAPTION,
                 ));
@@ -1082,8 +1061,7 @@ mod tests {
     fn density_presets_and_filter_paginate() {
         let _c: Element = table_compact("tc").row_count(3).into();
         let _f: Element = table_comfortable("tf").row_count(3).into();
-        let cell: Rc<dyn Fn(usize, usize) -> String> =
-            Rc::new(|r, c| format!("{}-{}", r, c));
+        let cell: Rc<dyn Fn(usize, usize) -> String> = Rc::new(|r, c| format!("{}-{}", r, c));
         let cols = [TableColumn::new("a", "A")];
         let order = filtered_row_order(5, &cols, &cell, "2-");
         assert_eq!(order, vec![2]);

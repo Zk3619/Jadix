@@ -32,14 +32,8 @@ fn preferred_x_vertical_move_stays_near_pixel_column() {
     assert_eq!(model.line_count(), 2);
     let start_second = text.find('\n').unwrap() + 1;
     let px = model.caret_x_on_line(3); // after "WWW"
-    let dest = caret_move_vertical_visual_pref(
-        text,
-        &model.ranges,
-        Some(&model.caret_xs),
-        3,
-        1,
-        Some(px),
-    );
+    let dest =
+        caret_move_vertical_visual_pref(text, &model.ranges, Some(&model.caret_xs), 3, 1, Some(px));
     assert!(dest >= start_second);
     let landed_x = model.caret_x_on_line(dest);
     assert!(
