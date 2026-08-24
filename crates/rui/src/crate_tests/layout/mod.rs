@@ -7,6 +7,7 @@ mod mark_dirty;
 mod path_batch;
 mod percent_content_box;
 mod portal_hoist;
+mod portal_reactive_layout;
 mod portal_scroll_passthrough;
 mod scroll_clip_border;
 mod scroll_content_shrink;

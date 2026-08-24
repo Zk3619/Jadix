@@ -2364,6 +2364,19 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
     next
 }
 
+/// Scratch filled by [`sync_reactive_elements_subtree_ex`] so the frame path can
+/// mark specific Taffy nodes dirty (instead of remasuring every text leaf) and
+/// distinguish portal-local geometry from page layout.
+#[derive(Debug, Default)]
+pub(crate) struct ReactiveSyncCollect {
+    /// Nodes whose style/measure must be pushed into Taffy after sync.
+    pub layout_dirty: Vec<NodeId>,
+    /// `LayoutChanged` (or structure) under the page tree — FullClear.
+    pub page_layout_changed: bool,
+    /// `LayoutChanged` only under [`crate::layout::layout_tree::PORTAL_LAYER_ID`].
+    pub portal_layout_changed: bool,
+}
+
 /// Run generic component-owned reactive synchronizers for the mounted tree.
 pub(crate) fn sync_reactive_elements_subtree(
     element: &mut Element,
@@ -2373,24 +2386,99 @@ pub(crate) fn sync_reactive_elements_subtree(
     viewport_h: f32,
     scroll_acc: [f32; 2],
 ) {
+    let mut collect = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        element,
+        layout_tree,
+        impact,
+        viewport_w,
+        viewport_h,
+        scroll_acc,
+        false,
+        &mut collect,
+    );
+}
+
+/// Like [`sync_reactive_elements_subtree`], but records dirty nodes + portal vs page geometry.
+pub(crate) fn sync_reactive_elements_subtree_ex(
+    element: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+    viewport_w: f32,
+    viewport_h: f32,
+    scroll_acc: [f32; 2],
+    in_portal: bool,
+    collect: &mut ReactiveSyncCollect,
+) {
     if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
         return;
     }
+    let in_portal = in_portal
+        || element.template_id.as_deref()
+            == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
     // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
     if let Some(sync) = element.reactive_sync.clone() {
-        *impact = impact.merge(sync.run(element, layout_tree));
+        let before = element.layout_bounds;
+        let status = sync.run(element, layout_tree);
+        match status {
+            LayoutStatus::LayoutChanged => {
+                push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+                if in_portal {
+                    collect.portal_layout_changed = true;
+                    crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
+                        element, before,
+                    ));
+                } else {
+                    collect.page_layout_changed = true;
+                }
+            }
+            LayoutStatus::StructureChanged => {
+                // Structure (dialog mount, list remount, …) still needs a coherent FullClear.
+                collect.page_layout_changed = true;
+                push_subtree_layout_nodes(element, &mut collect.layout_dirty);
+            }
+            LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
+        }
+        *impact = impact.merge(status);
     }
     let child_acc = child_scroll_accumulation(element, scroll_acc);
     for child in &mut element.children {
-        sync_reactive_elements_subtree(
+        sync_reactive_elements_subtree_ex(
             child,
             layout_tree,
             impact,
             viewport_w,
             viewport_h,
             child_acc,
+            in_portal,
+            collect,
         );
     }
+}
+
+fn push_subtree_layout_nodes(el: &Element, out: &mut Vec<NodeId>) {
+    if let Some(n) = el.layout_node {
+        out.push(n);
+    }
+    for child in &el.children {
+        push_subtree_layout_nodes(child, out);
+    }
+}
+
+/// Old layout box ∪ authored length size after sync (covers expand and collapse).
+fn estimate_geom_damage(el: &Element, before: [f32; 4]) -> [f32; 4] {
+    let mut d = before;
+    if let DimKind::Length(w) = dim_kind(el.style.size.width) {
+        if w > 0.0 {
+            d[2] = d[2].max(w);
+        }
+    }
+    if let DimKind::Length(h) = dim_kind(el.style.size.height) {
+        if h > 0.0 {
+            d[3] = d[3].max(h);
+        }
+    }
+    d
 }
 
 impl From<String> for Element {

@@ -341,14 +341,22 @@ impl SecondaryWindowState {
         let logical_h = self.config.height as f32 / scale.max(1.0);
 
         let mut sync_impact = LayoutStatus::Clean;
-        crate::core::tree::sync_reactive_elements_subtree(
+        let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
+        crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
             logical_w,
             logical_h,
             [0.0, 0.0],
+            false,
+            &mut sync_collect,
         );
+        self.pending_layout_dirty
+            .extend(sync_collect.layout_dirty.drain(..));
+        let portal_only_layout = matches!(sync_impact, LayoutStatus::LayoutChanged)
+            && sync_collect.portal_layout_changed
+            && !sync_collect.page_layout_changed;
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
@@ -377,7 +385,24 @@ impl SecondaryWindowState {
                 self.layout_status,
                 LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
             )
-            || sync_impact != LayoutStatus::Clean;
+            || (sync_impact != LayoutStatus::Clean && !portal_only_layout);
+
+        if !use_full {
+            let dirty: std::collections::HashSet<_> =
+                self.pending_layout_dirty.drain(..).collect();
+            if !dirty.is_empty() {
+                self.layout_tree
+                    .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
+            }
+        } else {
+            self.pending_layout_dirty.clear();
+        }
+
+        let scroll_only = !portal_only_layout
+            && matches!(
+                sync_impact,
+                LayoutStatus::Clean | LayoutStatus::StyleChanged
+            );
 
         let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
@@ -392,7 +417,7 @@ impl SecondaryWindowState {
                 logical_w,
                 logical_h,
                 [0.0, 0.0],
-                true,
+                scroll_only,
                 true,
             )
         };

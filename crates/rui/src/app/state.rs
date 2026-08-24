@@ -1446,15 +1446,27 @@ impl AppState {
         }
 
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
+        let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
         let (viewport_w, viewport_h) = self.logical_size();
-        crate::core::tree::sync_reactive_elements_subtree(
+        crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,
             viewport_w,
             viewport_h,
             [0.0, 0.0],
+            false,
+            &mut sync_collect,
         );
+        self.pending_layout_dirty
+            .extend(sync_collect.layout_dirty.drain(..));
+        // Snapshot before chrome merges into `sync_impact` (button/slider/… may also LayoutChanged).
+        let portal_only_reactive_layout = matches!(
+            sync_impact,
+            crate::core::tree::LayoutStatus::LayoutChanged
+        ) && sync_collect.portal_layout_changed
+            && !sync_collect.page_layout_changed;
+        let impact_before_chrome = sync_impact;
         // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; CSS
         // transition paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
         if !scroll_paint_only {
@@ -1594,12 +1606,26 @@ impl AppState {
             self.union_damage(local);
         }
         // WP-2.2: paint-only StyleChanged must NOT expand to the full window (that forced
-        // FullClear on every hover spring tick / bind_text). Structure / layout geometry
-        // changes move pixels → PartialLoad+scissor is unsafe (must FullClear).
+        // FullClear on every hover spring tick / bind_text). Structure / *page* layout geometry
+        // changes move pixels under the main tree → PartialLoad+scissor is unsafe (FullClear).
+        // Portal-local LayoutChanged (toast pile height, etc.) only dirties overlay nodes and
+        // already pushed a local damage rect — do not Clear the whole gallery.
         match sync_impact {
             LayoutStatus::Clean | LayoutStatus::StyleChanged => {}
-            LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged => {
+            LayoutStatus::StructureChanged => {
                 self.mark_full_redraw();
+            }
+            LayoutStatus::LayoutChanged => {
+                let chrome_raised_layout = !matches!(
+                    impact_before_chrome,
+                    LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+                );
+                if sync_collect.page_layout_changed
+                    || chrome_raised_layout
+                    || !portal_only_reactive_layout
+                {
+                    self.mark_full_redraw();
+                }
             }
         }
         let layout_for_build_base =
@@ -1744,6 +1770,8 @@ impl AppState {
             if dirty.is_empty() {
                 // Resize settle / paint→fit relayout: available space often unchanged, so Taffy
                 // will not remasure unless text leaves are marked dirty.
+                // Do **not** hit this when `reactive_sync` returned LayoutChanged — those nodes
+                // are queued into `pending_layout_dirty` (portal toast pile, slider, …).
                 self.layout_tree
                     .mark_all_text_leaves_dirty(&self.root_element);
             } else {

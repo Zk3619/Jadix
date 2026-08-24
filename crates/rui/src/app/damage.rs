@@ -3,9 +3,11 @@
 //! ## Default frame policy (WP-2.2)
 //!
 //! - **Logical PartialLoad**: structure unchanged + local `damage_rect` (Gallery counters).
+//!   This logical strategy is the **shipped default** (not experimental).
 //! - **GPU present (default)**: always swapchain `FullClear` — Solid-aligned coherent paint.
-//!   Opt-in retain Load+scissor+blit via `RUI_PARTIAL_DAMAGE=1` (experimental; needs draw culling
-//!   before it wins on Mark invalid / forms).
+//!   Opt-in retain Load+scissor+blit via `RUI_PARTIAL_DAMAGE=1` (experimental; needs draw
+//!   culling and/or fingerprint display-list before it wins). Tree-scoped collect prune
+//!   (dirty subtree only) is B8 — it does **not** replace geometric damage.
 //!
 //! Chrome sync (`StyleChanged` / button hover) must push **local** rects via
 //! [`push_frame_paint_damage`] — never expand to the full window on paint-only updates.
