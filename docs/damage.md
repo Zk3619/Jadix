@@ -1,6 +1,14 @@
 # 细粒度 damage（WP-2.2）
 
-对应 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-2.2**（策略可测已签署）；GPU PartialLoad 实装见同文 **§何时做 GPU PartialLoad** 与计划 §7 **B8**。
+对应 [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) **WP-2.2**（策略可测已签署）；GPU PartialLoad / 树级 collect 增量见同文 **§何时做 GPU PartialLoad** 与计划 §7 **B8**。
+
+**能力分级（2026-08-24 口径）**
+
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| **逻辑 damage 策略**（`frame_clear_policy`、局部脏区、计数、Gallery） | **正式默认**（WP-2.2 已签） | 真实产品契约，非实验 |
+| **GPU PartialLoad / retain**（`RUI_PARTIAL_DAMAGE=1`） | **实验** | 升默认须 B8 全套；勿单独开 |
+| **树级 collect 剪枝**（脏子树 patch DL、跳过干净兄弟） | **规划（B8）** | 见下「四层模型」；≠ 替代脏区 |
 
 ## 术语
 
@@ -11,10 +19,28 @@
 | **逻辑 FullClear** | 首帧 / 强制重绘 / 结构·布局·滚动 / 脏区铺满或越界 → 策略上必须整帧失效 |
 | **GPU FullClear** | 对 swapchain（或 retain）`LoadOp::Clear` 后完整绘制（**当前默认 present**） |
 | **GPU PartialLoad / retain** | 在可保留的离屏色缓冲上 `Load` + scissor，再 blit 到 swapchain（**默认关闭**；`RUI_PARTIAL_DAMAGE=1` 实验） |
+| **树级失效剪枝** | 只对脏 Element/Taffy 节点及必要祖先·子孙做 layout/collect；跳过父下干净兄弟与无关分支（布局侧已有 `mark_dirty`；绘制侧见 B8） |
+
+## 四层模型（勿混层）
+
+| 层 | 目标 | 现状 | 与「只重绘受影响组件」 |
+|----|------|------|------------------------|
+| **1. 响应式** | 只改受影响 Element 属性 | ✅ Solid 式 `bind_*` / `batch` | ✅ 已是此层 |
+| **2. 布局** | 脏节点 + 上溢升父；干净兄弟不重算 | ✅ `mark_dirty`；Taffy 脏缓存；live 仍从 app root compute（见 [layout_subtree.md](layout_subtree.md)） | ✅ 布局语义已对齐；子树 root live 未开 |
+| **3. Collect / display list** | 只重建脏子树 draw ops；跳过干净兄弟 | ❌ 主路径仍整树/可见带 collect；`scroll_only` band cull、Canvas 叶 dirty 为子集 | → **B8 fingerprint DL** |
+| **4. Present** | 屏上只写变化像素 | 默认 GPU FullClear；逻辑 PartialLoad 可测；GPU retain 实验 | 需 **脏区 ∪ 层缓存**，不能单靠树身份 |
+
+**决策（ADR 摘要 · 2026-08-24）**
+
+1. **不以 Solid「组件重绘」替代脏区。** Solid 改的是 DOM；像素由浏览器合成。RUI 自绘，几何脏区是 present/retain 的正确性输入。
+2. **不以「只重绘脏子树、跳过干净兄弟」替代脏区。** 树剪枝省的是 CPU collect；默认 FullClear 下跳过兄弟 = 像素消失。要「不重画仍看得见」须跨帧 display list 或 layer cache，再叠加 damage/scissor。
+3. **理想增量路径（B8）三者叠加，非二选一：**  
+   `脏节点集 →（可选）patch 跨帧 DL → union damage_rect → retain Load+scissor / viewport layer blit`
+4. **滚动 / Layout / Structure** 仍强制逻辑 + 默认 GPU FullClear（有意）；滚动少画须 layer cache，不能只开 PartialLoad。
 
 ## 与 Solid 对齐的模型
 
-Solid 的细粒度更新改的是**节点属性**（`batch` + 绑定 / `createRenderEffect`），一次 flush 后由浏览器合成**完整**像素——不是「只重画 scissor 里一半 framebuffer」。
+Solid 的细粒度更新改的是**节点属性**（`batch` + 绑定 / `createRenderEffect`），一次 flush 后由浏览器合成**完整**像素——不是「只重画 scissor 里一半 framebuffer」，也不是应用层「按组件身份跳过兄弟像素」。
 
 | 层 | Solid | RUI |
 |----|--------|-----|
@@ -22,9 +48,9 @@ Solid 的细粒度更新改的是**节点属性**（`batch` + 绑定 / `createRe
 | 脏区策略 | （浏览器内部） | `frame_clear_policy` + `damage_rect`：逻辑 Clear vs PartialLoad（可测计数） |
 | 像素 | 合成器完整上色 | **默认 swapchain FullClear**；GPU PartialLoad 仅作后续优化 |
 
-原则：**先 Solid 式改树 + 完整 present；能「少画」后再开 retain PartialLoad。**
+原则：**先 Solid 式改树 + 完整 present；能「少画」后再开 retain PartialLoad +（B8）树级 DL 剪枝。**
 
-## WP-2.2 已交付（策略可测）
+## WP-2.2 已交付（策略可测 · 正式能力）
 
 - `app/damage.rs`：`rects_union` / `frame_clear_policy` / `accumulate_paint_damage` / `push_frame_paint_damage`
 - 同宽 `bind_text`、hover / invalid 等 paint-only → 局部脏区，**不** `mark_full_redraw`
@@ -36,9 +62,9 @@ Solid 的细粒度更新改的是**节点属性**（`batch` + 绑定 / `createRe
 
 | | |
 |--|--|
-| **状态** | ☑ **策略可测已签署**（2026-08-10，Kingdom / Win 10.0.26200） |
+| **状态** | ☑ **策略可测已签署**（2026-08-10，Kingdom / Win 10.0.26200）；**逻辑策略 = 正式默认**（2026-08-24 口径澄清） |
 | **证明** | 库测 `cargo test -p rui --lib damage::`；Gallery **布局 / WP-2.2** 逻辑计数验收 |
-| **非范围** | GPU PartialLoad 默认路径、draw-list 按脏区裁剪（→ **B8**） |
+| **非范围** | GPU PartialLoad 默认路径、跨帧 display list、树级 collect 剪枝、draw-list 按脏区裁剪（→ **B8**） |
 
 ## 逻辑策略（计数 / 验收）
 
@@ -80,21 +106,23 @@ cargo test -p rui --lib damage::
 1. **retain = 合成后缓冲**  
    UI 只画进可 `Load` 的离屏纹理；swapchain 只收完整 blit/copy。禁止对 swapchain `Load`（FLIP_DISCARD / GLES）。
 
-2. **真正少画**  
-   PartialLoad 时按脏区**裁剪 draw-list**（实例 / 文本 / 阴影只提交与脏区相交者），再 scissor。  
-   若仍全量 draw + 全屏 blit，必然比 surface FullClear 慢（Mark invalid / 表单连点已证实）。
+2. **真正少画（几何 + 树）**  
+   - PartialLoad 时按脏区**裁剪 draw-list**（实例 / 文本 / 阴影只提交与脏区相交者），再 scissor。  
+   - **指纹跨帧 display list**：paint-only 只 patch 脏节点段；父下干净兄弟**复用**上帧 ops（树级剪枝）。无跨帧 DL 时「跳过兄弟 collect」在 FullClear 下会丢像素。  
+   - 若仍全量 draw + 全屏 blit，必然比 surface FullClear 慢（Mark invalid / 表单连点已证实）。
 
 3. **脏区语义正确**  
-   - paint-only：局部脏区  
-   - 布局变宽/变窄、滚动、切页、结构：整视口失效  
-   - 文案收缩须覆盖**旧包围盒**（防残影）  
+   - paint-only：局部脏区（含文案收缩的**旧包围盒**）  
+   - 布局变宽/变窄、滚动、切页、结构：整视口失效（或整 viewport layer）  
+   - 重叠 / z-order：脏子盖住干净兄弟时，须重画下层或依赖 layer；纯树标记不够  
+   - Portal / absolute / overlay：失效作用域 ≠ 简单父子链（见 `state.rs` portal-local LayoutChanged）  
    - scissor 严格夹在 target 内  
 
 4. **失效干净**  
    滚动 / Layout / Structure 后禁止用旧 retain 打补丁；FullClear 后重新 warm 或 copy 同步。
 
 5. **验收**  
-   Mark invalid 连点、悬停后滚动、切页：无卡顿、无半帧；同宽 +1 在开启 GPU 路径时才验真正的 `LoadOp::Load`。
+   Mark invalid 连点、悬停后滚动、切页：无卡顿、无半帧；同宽 +1 在开启 GPU 路径时才验真正的 `LoadOp::Load`；开启树级 DL 后干净兄弟像素不丢、无残影。
 
 实验开关（非正式默认）：
 
@@ -102,12 +130,13 @@ cargo test -p rui --lib damage::
 RUI_PARTIAL_DAMAGE=1
 ```
 
-## 何时做 GPU PartialLoad（规划）
+## 何时做 GPU PartialLoad / 树级 DL（规划）
 
 | 时机 | 建议 |
 |------|------|
-| **现在（WP-2.2）** | ☑ 策略可测 + 默认 FullClear。不阻塞 Wave 2 / Beta。 |
-| **值得开工（B8）** | **W4+ / Beta 后**；不早于 **B3** backdrop-blur 离屏缓存。前置：draw-list 按脏区剔除，或 profiling 证 FullClear 填色为瓶颈（本机核显 scroll 已观测 fill，但 **Wave P profile CPU p99 已过关**，非阻塞项）。 |
-| **不要抢做** | 布局/文本/滚动正确性未稳；或没有裁剪却开 retain+blit。 |
+| **现在（WP-2.2）** | ☑ **逻辑策略正式默认** + GPU FullClear。不阻塞 Wave 2 / Beta。 |
+| **值得开工（B8）** | **W4+ / Beta 后**；不早于 **B3** backdrop-blur 离屏缓存。前置：指纹 DL 或按脏区裁剪 draw-list；或 profiling 证 FullClear 填色为瓶颈（本机核显 scroll 已观测 fill，但 **Wave P profile CPU p99 已过关**，非阻塞项）。 |
+| **升为 GPU 正式默认** | 仅当 B8 验收全过（retain + 裁剪/DL + 滚动 layer 或等价 FullClear 安全路径）；此前保持实验开关。 |
+| **不要抢做** | 用「只重绘脏组件」替代脏区；无跨帧 DL/层却跳过兄弟 collect；无裁剪却开 retain+blit。 |
 
 跟踪项：[ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) §7 **B8**。

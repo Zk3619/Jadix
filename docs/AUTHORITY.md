@@ -96,7 +96,7 @@ RUI 底座已验证：**Solid 式细粒度 + 保留 Element/taffy 树 + `winit/w
 |------|---------------------|--------|
 | 代码 | `crates/` ≈ 5.3 万行；`components/` ≈ 45 模块 | 稳定面文档化；破坏性可追踪 |
 | 原生 | Win 冒烟 #1–#9 已签；macOS/Linux 未签 | 三平台签署 |
-| 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | 细粒度 damage 默认；glyph 级 golden 可加深 |
+| 文本/像素 | **W2 已退出（2026-08-13）**：测宽 ☑；damage 逻辑策略正式默认 ☑；golden×5 ☑；盒模型 WP-2.9 ☑ | GPU PartialLoad / 树级 DL → B8；glyph 级 golden 可加深 |
 | 反应性 | API 主路径齐；WP-2.4 / 2.7 ☑；**WP-R.5 ☑**（I-7/I-11）；**WP-R.3 ☑**（I-8）；**WP-R.9 ☑**（I-12 分相）；**WP-R.7 ☑**（G8 宏漏绑，含 `<Match>` RSX）；**战略：超过 Floem、逼近 Solid 机制**（§5.9）；**北极星：Solid 机制 × 原生 GUI**（§0.2 / §5.10） | 纯度超 Floem 可宣称（I-7 绿）；逼近 Solid 机制可宣称（G8 ☑）；**不挡** Win-first 0.1；**G7 ☑ / G9 ☑ 2026-08-18** |
 | 组件 | Gallery 八分区 ☑；**WP-CV.0–.4 ☑ · CV 已退出（2026-08-13）**；golden → WP-2.6 | 分桶 + 测/冒烟；未过 CV 不做 C1 大重构 |
 | 发布 | `PUBLISH.md` 齐；无 CHANGELOG；未 crates.io；**主名已锁 `jadix`（琢玉），重命名未执行** | `cargo add jadix` + 文档站 · [`NAMING_DECISION.md`](NAMING_DECISION.md) |
@@ -249,7 +249,7 @@ broken 修不好 → 降出稳定面，禁止假装 `verified`。
 | ID | 主题 | 别名 | 状态 |
 |----|------|------|------|
 | **WP-2.1** | 测宽与 glyphon 分行对齐 | — | ☑ |
-| **WP-2.2** | 细粒度 damage 策略可测 | — | ☑（GPU PartialLoad = B8，不挡） |
+| **WP-2.2** | 细粒度 damage 策略可测（逻辑正式默认；GPU = B8） | — | ☑（GPU PartialLoad / 树级 DL = B8，不挡） |
 | **WP-2.3** | 子树布局上溢升父 | — | ☑ |
 | **WP-2.4** | Anchors/Bindings 挂 Owner + scoped ID | R-WP-1；消费方 C-WP-2.6 | ☑ 2026-08-13；`registry_owner` 测 + `scoped_template_id`/`scoped_focus_id`；Gallery「布局 → WP-2.4」 |
 | **WP-2.5** | Store produce + Resource→EB 契约 | R-WP-4 测 | ☑ 2026-08-13；`produce` 切片测 + `throw_resource_error` e2e + `docs/CHANGELOG.md`；Gallery「布局 → WP-2.5」 |
@@ -646,7 +646,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | 子项 | 任务 | 状态 |
 |------|------|------|
 | **P.3.1** | 帧热路径 profile（`cargo flamegraph` 或 Tracy）：定位 Top-3 帧时间瓶颈 | ☑ 2026-08-20：release 可用 `RUI_RENDER_PROFILE=1`；Top-3 仍为 **collect / text prepare / FullClear encode**（布局 taffy 在 scroll-only 下≈0） |
-| **P.3.2** | damage 策略实效：确认滚动/动画只重绘脏区；B8 GPU PartialLoad 关键子集是否可提前开启 | ☑ 2026-08-20：**paint-only 逻辑 PartialLoad**；滚动/切页仍 **FullClear（有意）**；**不提前开 B8**（无 draw-list 裁剪时 retain 更慢） |
+| **P.3.2** | damage 策略实效：确认滚动/动画只重绘脏区；B8 GPU PartialLoad 关键子集是否可提前开启 | ☑ 2026-08-20：**paint-only 逻辑 PartialLoad**（正式）；滚动/切页仍 **FullClear（有意）**；**不提前开 B8**（无 DL/裁剪时 retain 更慢；ADR 见 damage.md） |
 | **P.3.3** | 布局热路径：滚动时 `compute_layout` 是否触发非必要全树重算；子树布局缓存命中率 | ☑ 2026-08-20：Taffy **scroll-only** + collect **flex sibling band 剪枝**（`NoWrap` 列/行；`Absolute`/`fixed`/`wrap`/`reverse` 不剪） |
 | **P.3.4** | effect 风暴排查：三档更新纪律（§3 红线）实测；根裸 `get()` 诊断仍为 0 | ☑ 2026-08-20：库测 `root_bare_get`（`bind_text` / `show_reactive` 根 dep=0）；切 Gallery 分区走 `isolate_reads` + keyed 重建，非根裸 `get()` 风暴 |
 | **P.3.5** | 渲染批次：draw call 合并现状；文本 / 矩形是否逐元素提交 | ☑ 2026-08-20：同帧 `PaintRecorder` 合并相邻 `Rects`/`Textured`；矩形走 **一次 instanced draw**；文本 glyphon 按层/band prepare；非逐元素 submit |
@@ -671,7 +671,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 - `scroll_only` 跳过 Taffy；滚动条 thumb 走 overlay collect（`ViewportsOnly` prepass）。
 - **P.3.3**：`scroll_only` 下对 `flex-wrap: nowrap` 的 Column/Row **sibling band 剪枝**（clip 外兄弟不 `collect`；extent 仍用 Taffy size）。
 - Canvas 叶 dirty 缓存（WP-3.12：滚动不重跑 `paint`）；VirtualList/Masonry 结构虚拟化（experimental）。
-- WP-2.2 damage：paint-only（hover / bind_text）可逻辑 PartialLoad；**滚动强制逻辑 + GPU FullClear 为有意设计**。
+- WP-2.2 damage：**逻辑策略正式默认**（paint-only → 逻辑 PartialLoad；**滚动强制逻辑 + GPU FullClear 为有意设计**）。GPU retain / 树级 DL 剪枝 = B8 实验→升默认。禁区：用「只重绘脏组件」替代脏区。细则 [`damage.md`](damage.md)。
 
 **主要瓶颈（解释观测占用）**
 
@@ -688,8 +688,8 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **P1（Wave P）** | collect 缓冲回收 + band cull + wheel sticky | ☑ | 不废细粒度 Signal |
 | **延后 · B3 同期或更后** | **backdrop-blur 离屏缓存**（§7 **B3**） | 未做 | 不换 wgpu 主线 |
 | **延后 · ≥ B3** | **滚动 viewport layer cache**（offscreen + GPU translate） | 未做；**不早于 B3** 离屏纹理管线 | 同上 |
-| **延后 · ≥ B8** | **fingerprint 跨帧 display list** | 未做；B8 前置 | 同上 |
-| **延后 · ≥ B8** | **viewport union damage + PartialLoad**（B8 全套） | 未做；无 draw-list 时 retain 更慢 | 同上 |
+| **延后 · ≥ B8** | **fingerprint 跨帧 display list**（脏子树 patch；干净兄弟复用上帧 ops） | 未做；B8 前置；≠ 替代脏区 |
+| **延后 · ≥ B8** | **viewport union damage + PartialLoad**（B8 全套） | 未做；无 draw-list/DL 时 retain 更慢 |
 | **P2** | wheel sticky / 嵌套 retarget | ☑ 2026-08-20 | — |
 
 > **Wave P 结论（2026-08-20）**：本机 release 滚动 **CPU ~1%**、profile 单帧 **pre+layout+draw p99≈7.3 ms**；**满载 RSS ≤85 MiB**（侧栏全部分区）。**Wave P 已退出 → W4**；核显 fill 与 layer cache / B8 留 **≥B3 backlog**。
@@ -760,7 +760,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 - [ ] 文档站：Getting Started（含双写法）+ 更新契约 + 组件索引（WP-4.4）  
 - [ ] 三平台真窗口冒烟 #1–#8（WP-1.4；**Win 已签**，macOS/Linux ☐）  
 - [x] AccessKit 主路径可演示并有文档（WP-1.3）  
-- [x] damage 策略可测（WP-2.2；GPU PartialLoad = B8）  
+- [x] damage 策略可测（WP-2.2；逻辑正式默认；GPU PartialLoad / 树级 DL = B8）  
 - [x] 测宽对齐测 + ≥5 组件 golden CI（WP-2.1 ☑，**WP-2.6 ☑ 2026-08-13**；WP-4.5 CI 矩阵仍可加深）  
 - [x] WP-2.4：Owner 注册表无泄漏测（2026-08-13；`registry_owner`）  
 - [x] Wave P 性能退出门已过（WP-P.0–P.3 ☑ **2026-08-20**；[`size_and_memory.md`](size_and_memory.md) §7.7）  
@@ -784,7 +784,7 @@ W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_sty
 | B16 | **canvas-ui 式创意组件库**（Liquid/Glass/粒子/VHS… 包住子树） | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；**底座 ☑ 2026-08-18**（`effect_wrap` / capture / fx pass）；产品目录仍 backlog；**不搬** HTML-in-canvas；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | **react-bits 式动效目录**（文字动效 / 背景 / 动画 UI） | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；**底座 ☑ 2026-08-18**（`Timeline` + `glyph_fx` glyphon 前处理）；目录仍 backlog；**不搬** CSS-in-JS / Framer / 每字 DOM span；不挡 W3/Beta；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI | 工程 |
-| B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list + draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；见 `damage.md` · [`size_and_memory.md`](size_and_memory.md) §7 |
+| B8 | GPU PartialLoad / retain 默认开；**滚动 viewport layer cache + fingerprint display list（树级剪枝）+ draw-list 脏区裁剪** | 工程 · **≥ B3，同期或更后**；ADR 见 [`damage.md`](damage.md)；[`size_and_memory.md`](size_and_memory.md) §7 |
 | B9 | 完整 headless 公开模块 `rui::headless::*` | 组件 CB1 |
 | B10 | 块级 markdown 编辑控件 | 组件 CB3 |
 | B11 | 组件视觉回归（多 DPI / dark） | 组件 CB4 |

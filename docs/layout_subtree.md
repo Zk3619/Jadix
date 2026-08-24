@@ -21,6 +21,16 @@
 
 `resolve_layout_compute_root` 固化升父规则并供库测 / 未来安全子树 compute 使用；**当前 live 不传入非 `None` 的 subtree root**。
 
+## 与 damage / collect 的边界
+
+布局剪枝（本 WP）**不等于**绘制剪枝：
+
+| | 布局（WP-2.3） | Collect / present（WP-2.2 + B8） |
+|--|----------------|----------------------------------|
+| 跳过干净兄弟 | Taffy 脏缓存跳过重算 | 须跨帧 display list 或 layer 才「不重画仍看得见」 |
+| 升父 | 尺寸上溢 → 更高 compute 根 | 几何脏区 / FullClear；重叠与 portal 另算 |
+| 细则 | 本文 | [damage.md](damage.md) 四层模型与 ADR |
+
 ## 自动化
 
 ```powershell

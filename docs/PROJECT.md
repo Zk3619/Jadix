@@ -99,7 +99,7 @@ rect!(
 *   **任务 3.2:** 事件系统的完善（射线检测 Hit Testing）。将 `winit` 捕获的鼠标/键盘事件精准路由到排版计算好坐标的 Node 节点。
 *   **任务 3.3:** 数据绑定机制。当 Signal 触发修改时排期 (Schedule) 受影响的 UI Node 参数。
 *   **任务 3.4:** Dirty Tracking。计算出需要重绘的矩形区域（脏区），让 `wgpu` 执行 Scissor 测试，仅渲染变动部分以降低功耗。
-    - **现状（2026-08-09）：** 脏区 scissor MVP 已落地（`damage` + Load/scissor）；结构变更仍可走全帧 Clear。细粒度「默认路径」深化见巩固期 WP-2.2。
+    - **现状（2026-08-24）：** 逻辑 damage 策略已正式默认（WP-2.2）；GPU present 默认 FullClear；GPU PartialLoad / 树级 display-list 剪枝见 B8（[`damage.md`](damage.md)）。
 
 ### Stage 4: 样式层 (UnoCSS 理念) 与动画引擎 (Week 10-12)
 **目标：提供类 UnoCSS、灵活并具备 Attributify 体验的样式宏声明，以及平滑的动效支持。**

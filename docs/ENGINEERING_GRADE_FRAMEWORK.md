@@ -17,7 +17,7 @@ RUI 的架构赌注已经验证：**Solid 式细粒度响应式 + 保留 Element
 |------|-------------------------------|------------|
 | 代码体量 | `crates/` ≈ **5.3 万行** / **182** 个 `.rs`；`components/` **45** 个模块（含 `mod.rs` 共 46 文件） | API 稳定面文档化；破坏性变更可追踪 |
 | 响应式 | Owner / Signal / Memo / Context / Store / Resource / Suspense / **ErrorBoundary** / **`switch_reactive`** / `on_mount` | 热路径无全局表泄漏；`REGISTERED_*` 挂 Owner；Store produce 契约完整 |
-| 渲染布局 | wgpu SDF 矩形 + glyphon；脏区 scissor MVP；子树 `mark_dirty`；**公开 Svg/Canvas 叶仍 ☐**（[`drawing.md`](drawing.md)） | 细粒度 damage 默认路径；测宽≡绘制；W3 自绘面起步 |
+| 渲染布局 | wgpu SDF 矩形 + glyphon；**逻辑 damage 正式默认**；子树 `mark_dirty`；GPU PartialLoad / 树级 DL = B8；**公开 Svg/Canvas 叶仍 ☐**（[`drawing.md`](drawing.md)） | 测宽≡绘制；W3 自绘面起步；B8 少画 |
 | 桌面可用 | IME 光标区代码路径；焦点环 / roving / focus_trap；AccessKit 桥；**多窗 wired MVP**；**Router wired MVP**；托盘 **可选 feature 已接线**（默认 stub） | 三平台真窗口冒烟签署；读屏主路径可演示 |
 | 质量门 | CI 三平台 + `clippy -D warnings` + 离屏 golden（clear + stage8 + **5 组件场景**） | 真窗冒烟或等价；glyph 级 golden 可加深 |
 | 发布 | `PUBLISH.md`；文档站 stub；**无 CHANGELOG / 未 crates.io** | `cargo add rui` 可用；文档站有 Getting Started |
@@ -178,7 +178,7 @@ crates/
 | P0 发布 | crates.io 实发 + 文档站正文 + CHANGELOG | stub / checklist 已有；缺真实 `cargo publish` |
 | P0 原生 | 三平台真窗口冒烟签署 | 见 [`desktop_smoke.md`](desktop_smoke.md)；IME 代码路径已合入、手工签署未完成 |
 | P1 文本 | glyphon 分行与 `layout_lines` 完全对齐；绕排边界 | 虚拟列表 / masonry 前置；审计见 [`glyphon_audit.md`](glyphon_audit.md) |
-| P1 渲染 | 按元素 rect 的细粒度 damage 默认路径 | scissor MVP 可继续加深 |
+| P1 渲染 | 逻辑细粒度 damage 正式默认；GPU retain / 树级 DL → B8 | 见 [`damage.md`](damage.md) ADR；勿用「只重绘组件」替代脏区 |
 | P1 DX | 列表项级 Owner（完整 FG I-7）；宏漏绑；热重载×反应槽 | `REGISTERED_*`→Owner 已 ☑ WP-2.4；余见 [`REACTIVITY.md`](REACTIVITY.md) §5.7 / AUTHORITY WP-R.5·6·7 |
 | P1 布局 | 盒模型契约收口（utility / 测宽叶 ContentBox / 命中测） | ☑ WP-2.9（2026-08-13）；见 [`box_model.md`](box_model.md)；P2 加深 = B15 |
 | P1 组件 | 稳定面 CV 验证；Chart/Path；Date/Time 键盘；组件 golden ≥5 | Gallery 分区已有；信任度不足 |

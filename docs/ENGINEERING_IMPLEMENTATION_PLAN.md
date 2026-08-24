@@ -137,8 +137,8 @@ flowchart TB
 | **路径** | `app/damage.rs`、`app/state.rs`；细则 [damage.md](damage.md) |
 | **任务** | ① 逻辑策略：`rects_union` + `frame_clear_policy`（局部 paint → PartialLoad；结构/布局/滚动 → FullClear）；② 同宽 `bind_text` 不 `mark_full_redraw`；③ 可测计数 + Gallery 验收卡；④ GPU present **默认 FullClear**（Solid 式完整像素）；GPU PartialLoad/retain **不**纳入本 WP |
 | **验收** | 库测 `damage::` CI 绿；Gallery 逻辑 `ΔPartialLoad` / `ΔFullClear` 可演示；文档写清默认策略与 GPU 非范围 |
-| **状态** | ☑ **策略可测已签署**（2026-08-10，Kingdom / Win 10.0.26200）：计数 API + Gallery **布局 / WP-2.2**；默认 GPU FullClear；GPU PartialLoad → §7 **B8** |
-| **进展** | 曾试 retain+blit PartialLoad：无 draw 裁剪时更慢且易半帧；已关默认路径并写入 [damage.md](damage.md) |
+| **状态** | ☑ **策略可测已签署**（2026-08-10）；**逻辑策略 = 正式默认**（2026-08-24 口径：非实验）；GPU PartialLoad / 树级 DL → §7 **B8** |
+| **进展** | 曾试 retain+blit PartialLoad：无 draw 裁剪时更慢且易半帧；已关默认路径。ADR：不以 Solid「组件重绘」或以「脏子树跳过干净兄弟」替代脏区；四层模型与 B8 叠加路径见 [damage.md](damage.md) |
 
 ### WP-2.3 子树布局上溢升父
 
@@ -392,7 +392,7 @@ flowchart TB
 | B16 | canvas-ui 式创意组件库 | 对照 [canvas-ui](https://github.com/DavidHDev/canvas-ui)；依赖 3.11–3.13；不搬 HTML-in-canvas；见 [`drawing.md`](drawing.md) §6.1 |
 | B17 | react-bits 式动效目录 | 对照 [react-bits](https://github.com/DavidHDev/react-bits)；文字/背景/动画 UI；不搬 CSS 运行时；见 [`drawing.md`](drawing.md) §6.2 |
 | B7 | 真窗口 CI（云桌面 / self-hosted） | 冒烟签署可先顶上 |
-| B8 | **GPU PartialLoad / retain**（默认开启） | **前置**：实例/文本按脏区裁剪 draw-list，或 profiling 证 FullClear 填色为瓶颈。约束与验收见 [damage.md](damage.md)「如何把 GPU PartialLoad 做好 / 何时做」。不阻塞 W2/Beta；建议 WP-2.6 golden 稳后或独立性能 WP。代码预留：`present_retain.*`、`RUI_PARTIAL_DAMAGE=1` |
+| B8 | **GPU PartialLoad / retain**（默认开启）+ **指纹跨帧 display list（树级 collect 剪枝）** + draw-list 脏区裁剪 +（宜同期）scroll viewport layer | **前置**：B3 离屏管线；实例/文本按脏区裁剪 **或** 跨帧 DL patch 脏节点段。约束与 ADR（不替代脏区、不单靠树身份）见 [damage.md](damage.md)。不阻塞 W2/Beta。代码预留：`present_retain.*`、`RUI_PARTIAL_DAMAGE=1` |
 
 ---
 
@@ -404,7 +404,7 @@ flowchart TB
 - [ ] 文档站：Getting Started + 更新契约 + 组件索引（WP-4.4）
 - [ ] 三平台真窗口冒烟 #1–#8 签署（WP-1.4；**Win 已签**，macOS/Linux 待补）
 - [x] AccessKit 主路径可演示并有文档（WP-1.3；Win Narrator #9 已签）
-- [x] damage 策略可测（WP-2.2；GPU PartialLoad = B8，不阻塞 Beta）
+- [x] damage 逻辑策略正式默认（WP-2.2；GPU PartialLoad / 树级 DL = B8，不阻塞 Beta）
 - [ ] 测宽绘制对齐测 + ≥5 组件 golden CI（WP-2.1、WP-2.6、WP-4.5）
 - [ ] gap / 纲领开放 **P0 = 0**（冒烟、crates、文档站）
 - [ ] README：SemVer 承诺面 / 实验面 + 状态 **Beta**（WP-4.1、WP-4.7）

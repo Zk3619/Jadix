@@ -154,7 +154,7 @@
 
 | 等级 | 问题 | 状态 | 说明 |
 |------|------|------|------|
-| ~~P0~~ | 没有脏区重绘（实现） | ✅ MVP | [`damage.rs`](../crates/rui/src/app/damage.rs) + scissor；细粒度 damage 仍可打磨 |
+| ~~P0~~ | 没有脏区重绘（实现） | ✅ MVP | [`damage.rs`](../crates/rui/src/app/damage.rs)；**逻辑策略正式默认**（WP-2.2）；GPU PartialLoad / 树级 DL → B8（[`damage.md`](damage.md)） |
 | ~~P1~~ | 缺 opacity / translate | ✅ MVP | `opacity-*` / `translate-x/y-*` + 布局收集乘 opacity |
 | ~~P1~~ | 无局部布局：脏标记是全局单值 | ✅ MVP | `template_paths` 路径索引；`bind_text` 同宽 → `StyleChanged`；几何变更 → 子树 `mark_dirty`（见下行） |
 | ~~P1~~ | 缺渐变 / 多层阴影 / rotate·scale | ✅ MVP | 两色渐变条带；`parse_box_shadows` 多层；`rotate_deg`/`scale` + WGSL 旋转。完整 3D/矩阵仍可加深 |

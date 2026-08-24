@@ -89,7 +89,7 @@ flowchart TB
 | glyphon ↔ layout_lines | soft-wrap / chip 与绘制分行一致 | `prepare_text.rs` |
 | 字体策略 | UI 字体打包与字重回退 | `font_loader.rs` |
 | 子树布局加深 | 尺寸上溢时升父/根（☑ WP-2.3） | `layout_tree.rs` · [layout_subtree.md](layout_subtree.md) |
-| 细粒度 damage | 结构未变时按元素 rect union | `damage.rs` |
+| 细粒度 damage | 逻辑策略正式默认（元素 rect union）；GPU / 树级 DL → B8 | `damage.rs` · [damage.md](damage.md) |
 | 组件级 golden | 场景进 CI | `offscreen.rs` |
 | Scrollbar overlay | 不占布局宽的 overlay 条 | `scrollbar.rs` |
 

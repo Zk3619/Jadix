@@ -386,12 +386,12 @@ Gallery → 布局 → WP-2.2：同宽 bind_text 应增 `PartialLoad` 计数；�
 | P1 | wheel sticky + 嵌套 retarget | ☑ 2026-08-20 |
 | **≥ B3** | **backdrop-blur 离屏缓存**（§7 B3） | 未做 · **layer cache 不早于本项** |
 | **≥ B3** | **scroll viewport layer cache**（offscreen + GPU blit） | 未做 · 与 B3 共用 retain/offscreen 管线 |
-| **≥ B8** | **fingerprint 跨帧 display list** | 未做 · B8 前置 |
-| **≥ B8** | **viewport union damage + PartialLoad** | 未做 · 须 draw-list 裁剪，否则 retain 更慢 |
+| **≥ B8** | **fingerprint 跨帧 display list**（脏子树 patch；干净兄弟复用；树剪枝 ≠ 替代脏区） | 未做 · B8 前置 |
+| **≥ B8** | **viewport union damage + PartialLoad** | 未做 · 须 draw-list/DL 裁剪，否则 retain 更慢 |
 
 **Wave P 决策（2026-08-20）**：退出门全过 → **Wave P 已关闭**；layer cache / display list / B8 留 **W4+ / ≥B3 backlog**。
 
-**禁区**（与 AUTHORITY §5.6 一致）：换 wgpu/Skia；为帧率回 VDOM；无 draw culling 强开 retain。
+**禁区**（与 AUTHORITY §5.6 / [damage.md](damage.md) ADR 一致）：换 wgpu/Skia；为帧率回 VDOM；无 draw culling / 跨帧 DL 强开 retain；用「只重绘脏组件」替代几何脏区。
 
 ### 7.7 基线记录表（P.0.1–P.0.4 · 2026-08-20）
 
