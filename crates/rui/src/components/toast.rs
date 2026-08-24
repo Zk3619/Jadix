@@ -39,26 +39,30 @@
 //!   绘制，避免下层字形透到上层壳上。
 //! - 达 `limit` 后再连推时，并发退场最多 1 条（多余立刻 snap 进 pending），避免 portal
 //!   band / `prepare_text` 堆积把帧率打穿。
+//! - 堆叠悬停展开/收起：**不**重建宿主树（避免 3+ 卡时每卡 portal band + reconcile
+//!   打穿帧率）；`reactive_sync` 读 `expanded` 热更新 lift/scale/阴影/命中高度。
+//!   堆高度 `LayoutChanged` 由框架按 portal 局部 dirty 处理（不全窗 remasure / FullClear）。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::core::reactivity::{remove_named_signal, use_signal, Signal};
-use crate::core::tree::{Element, LayoutStatus};
+use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
+use crate::core::tree::{Element, LayoutStatus, ATTR_POINTER_EVENTS, PointerEvents};
+use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::{LayoutTree, ATTR_PORTAL_KEY};
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::{
     parse_color, parse_text_color, snap_element_transitions_to_current, TimingFunction,
-    TransitionEntry, TransitionProperty,
+    TransitionEntry, TransitionProperty, UnitSlot,
 };
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::portal_panel;
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -504,6 +508,7 @@ fn is_displace_exit(id: u64) -> bool {
 /// 并发退场预算：挤出淡出与新通知入场同步，勿中途 snap；仅在挤出淡出过多时
 /// 才收最旧一段。非挤出（关闭/到期）仍受 [`MAX_CONCURRENT_EXITING`] 限制。
 fn ensure_exit_budget(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) {
+    // 挤出可与入场重叠；上限 = limit+1，避免连推时瞬间堆出过多 portal band。
     let max_displace_fades = visible_limit().saturating_add(1).max(2);
     while q
         .iter()
@@ -608,7 +613,7 @@ fn begin_toast_drag(drag: ToastDrag) {
     let id = drag.id;
     TOAST_DRAG.with(|d| *d.borrow_mut() = Some(drag));
     if is_stack_layout() {
-        expanded_signal().set(true);
+        set_stack_expanded(true);
         set_stack_timers_paused(true);
     } else {
         set_item_timer_paused(id, true);
@@ -741,63 +746,68 @@ fn exit_target(from: [f32; 2], from_bottom: bool) -> [f32; 2] {
 }
 
 fn begin_toast_exit(id: u64, from_drag: Option<[f32; 2]>) {
-    let mut p = toast_pending().get();
-    if p.iter().any(|t| t.id == id) {
-        p.retain(|t| t.id != id);
-        toast_pending().set(p);
-        clear_toast_timer(id);
-        dispose_toast_motion(id);
-        clear_toast_enter_state(id);
-        clear_toast_exit_vis(id);
-        return;
-    }
+    batch(|| {
+        let mut p = toast_pending().peek();
+        if p.iter().any(|t| t.id == id) {
+            p.retain(|t| t.id != id);
+            toast_pending().set(p);
+            clear_toast_timer(id);
+            dispose_toast_motion(id);
+            clear_toast_enter_state(id);
+            clear_toast_exit_vis(id);
+            return;
+        }
 
-    let mut q = toast_queue().get();
-    ensure_exit_budget(&mut q, &mut p);
-    let as_front = visible_front_id(&q) == Some(id);
-    let rank = visible_stack_rank(&q, id);
-    let Some(t) = q.iter_mut().find(|t| t.id == id) else {
-        toast_pending().set(p);
-        return;
-    };
-    if t.exiting {
+        let mut q = toast_queue().peek();
+        ensure_exit_budget(&mut q, &mut p);
+        let as_front = visible_front_id(&q) == Some(id);
+        let rank = visible_stack_rank(&q, id);
+        let Some(t) = q.iter_mut().find(|t| t.id == id) else {
+            toast_pending().set(p);
+            return;
+        };
+        if t.exiting {
+            toast_queue().set(q);
+            toast_pending().set(p);
+            return;
+        }
+        t.exiting = true;
+        t.exit_started = Some(Instant::now());
+        mark_toast_exit_seed(id);
+        TOAST_EXIT_VIS.with(|m| {
+            m.borrow_mut().insert(
+                id,
+                ToastExitVis {
+                    as_front,
+                    rank,
+                    to_pending: false,
+                },
+            );
+        });
+        let from = from_drag.unwrap_or([0.0, 0.0]);
+        toast_exit_from_xy(id).set(from);
+        toast_drag_xy(id).set([0.0, 0.0]);
+        pause_toast_timer(id);
+        if as_front && is_stack_layout() {
+            // 关闭最前：收起展开堆叠，余下条目仅堆叠弹簧重排，不从顶栏重新滑入。
+            set_stack_expanded(false);
+        }
         toast_queue().set(q);
         toast_pending().set(p);
-        return;
-    }
-    t.exiting = true;
-    t.exit_started = Some(Instant::now());
-    mark_toast_exit_seed(id);
-    TOAST_EXIT_VIS.with(|m| {
-        m.borrow_mut().insert(
-            id,
-            ToastExitVis {
-                as_front,
-                rank,
-                to_pending: false,
-            },
-        );
     });
-    let from = from_drag.unwrap_or([0.0, 0.0]);
-    toast_exit_from_xy(id).set(from);
-    toast_drag_xy(id).set([0.0, 0.0]);
-    pause_toast_timer(id);
-    if as_front && is_stack_layout() {
-        // 关闭最前：收起展开堆叠，余下条目仅堆叠弹簧重排，不从顶栏重新滑入。
-        expanded_signal().set(false);
-    }
-    toast_queue().set(q);
-    toast_pending().set(p);
 }
 
 /// 到期开始退场、退场结束出队；返回是否有队列变化（需重绘）。
+///
+/// 由 [`paint_toast_host`] 调用：队列写入用 **silent**，避免同帧再次唤醒宿主 effect
+/// （挤出结束 + promote 时否则会连跑两次 reconcile）。
 pub(crate) fn tick_toast_lifecycle() -> bool {
     let mut q = toast_queue().peek();
     let mut p = toast_pending().peek();
 
     // 无可见活跃项：先恢复 pending 计时并剔除到期项，避免暂停状态下永远无法 prune。
     if active_count(&q) == 0 {
-        expanded_signal().set(false);
+        expanded_signal().set_silent(false);
         set_stack_timers_paused(false);
         prune_expired_pending_into(&mut p);
     }
@@ -812,14 +822,14 @@ pub(crate) fn tick_toast_lifecycle() -> bool {
     let pending_pruned = prune_expired_pending_into(&mut p);
     let visible_empty_after_exit = active_count(&q) == 0;
     if started || removed || pending_pruned {
-        toast_queue().set(q);
-        toast_pending().set(p);
+        let _ = toast_queue().try_set_silent(q);
+        let _ = toast_pending().try_set_silent(p);
     }
     if removed {
         if visible_empty_after_exit {
             sync_pending_when_visible_empty(&toast_queue().peek());
         }
-        promote_pending();
+        rebalance_visible_queue_commit(false);
         return true;
     }
     started || pending_pruned
@@ -966,6 +976,21 @@ fn expanded_signal() -> Signal<bool> {
     use_signal("__rui_toast_stack_expanded", || false)
 }
 
+/// 堆叠是否处于展开态（悬停或拖拽）。仅 `peek`，不订阅宿主 effect。
+fn stack_expanded_now() -> bool {
+    expanded_signal().peek() || is_toast_dragging()
+}
+
+/// 切换堆叠展开；宿主**不**订阅此信号（避免整树重建），故显式 `request_redraw`。
+fn set_stack_expanded(expanded: bool) {
+    let sig = expanded_signal();
+    if sig.peek() == expanded {
+        return;
+    }
+    sig.set(expanded);
+    crate::app::runtime::request_redraw();
+}
+
 fn visible_limit() -> usize {
     limit_signal().peek().max(1)
 }
@@ -1053,6 +1078,11 @@ fn begin_displace_exit(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>)
 
 /// 按 `limit` 重平衡：多余可见 → pending；有空位则 pending 晋级到可见末尾。
 fn rebalance_visible_queue() {
+    rebalance_visible_queue_commit(true);
+}
+
+/// `notify`：是否唤醒宿主 effect。paint 路径内必须 silent，否则同帧二次 reconcile。
+fn rebalance_visible_queue_commit(notify: bool) {
     let lim = visible_limit();
     let mut q = toast_queue().peek();
     let mut p = toast_pending().peek();
@@ -1078,8 +1108,11 @@ fn rebalance_visible_queue() {
 
     let mut promoted = false;
     if active_count(&q) < lim && !p.is_empty() {
-        sync_pending_when_visible_empty(&q);
-        p = toast_pending().peek();
+        if active_count(&q) == 0 {
+            expanded_signal().set_silent(false);
+            set_stack_timers_paused(false);
+            let _ = prune_expired_pending_into(&mut p);
+        }
     }
     while active_count(&q) < lim {
         if p.is_empty() {
@@ -1101,14 +1134,30 @@ fn rebalance_visible_queue() {
         promoted = true;
     }
 
-    if pruned || finalized || demoted || promoted {
-        toast_queue().set(q);
-    }
-    if demoted || promoted || finalized || pending_pruned {
-        toast_pending().set(p);
-    }
-    if promoted {
-        use_signal(TOAST_HOST_OPEN, || true).set(true);
+    let q_changed = pruned || finalized || demoted || promoted;
+    let p_changed = demoted || promoted || finalized || pending_pruned;
+    if notify {
+        batch(|| {
+            if q_changed {
+                toast_queue().set(q);
+            }
+            if p_changed {
+                toast_pending().set(p);
+            }
+            if promoted {
+                use_signal(TOAST_HOST_OPEN, || true).set(true);
+            }
+        });
+    } else {
+        if q_changed {
+            let _ = toast_queue().try_set_silent(q);
+        }
+        if p_changed {
+            let _ = toast_pending().try_set_silent(p);
+        }
+        if promoted {
+            let _ = use_signal(TOAST_HOST_OPEN, || true).try_set_silent(true);
+        }
     }
 }
 
@@ -1177,11 +1226,12 @@ fn sync_pending_when_visible_empty(q: &[ToastItem]) {
     if active_count(q) != 0 {
         return;
     }
-    expanded_signal().set(false);
+    expanded_signal().set_silent(false);
     set_stack_timers_paused(false);
     let mut p = toast_pending().peek();
     if prune_expired_pending_into(&mut p) {
-        toast_pending().set(p);
+        // paint / tick 路径：silent，避免同帧再跑宿主。
+        let _ = toast_pending().try_set_silent(p);
     }
 }
 
@@ -1316,8 +1366,7 @@ fn toast_push_item(
     show_icon: Option<bool>,
 ) -> u64 {
     let seq = use_signal(TOAST_SEQ_KEY, || 0_u64);
-    let id = seq.get() + 1;
-    seq.set(id);
+    let id = seq.peek() + 1;
     let duration = Duration::from_millis(duration_ms.max(500));
     let item = ToastItem {
         id,
@@ -1333,48 +1382,54 @@ fn toast_push_item(
 
     let lim = visible_limit();
     let policy = ToastOverflow::parse(&overflow_signal().peek());
-    let mut q = toast_queue().get();
-    let mut p = toast_pending().get();
-    prune_expired(&mut q, &mut p);
-    finalize_exits(&mut q, &mut p);
 
-    if active_count(&q) < lim {
-        arm_toast_timer(id, duration);
-        q.push(item);
-        toast_queue().set(q);
-        toast_pending().set(p);
-    } else {
-        match policy {
-            ToastOverflow::Displace => {
-                // 最旧可见原地淡出 → pending；新项同步入场（勿 demote 瞬丢动画）。
-                while active_count(&q) >= lim {
-                    if !begin_displace_exit(&mut q, &mut p) {
-                        break;
+    // 一次 push 会写 queue + pending + open；不 batch 时宿主 effect 连跑多次
+    // reconcile（满员挤出时尤甚：3 活跃 + 1 挤出 × 每卡 portal band）。
+    batch(|| {
+        seq.set(id);
+        let mut q = toast_queue().peek();
+        let mut p = toast_pending().peek();
+        prune_expired(&mut q, &mut p);
+        finalize_exits(&mut q, &mut p);
+
+        if active_count(&q) < lim {
+            arm_toast_timer(id, duration);
+            q.push(item);
+            toast_queue().set(q);
+            toast_pending().set(p);
+        } else {
+            match policy {
+                ToastOverflow::Displace => {
+                    // 最旧可见原地淡出 → pending；新项同步入场（勿 demote 瞬丢动画）。
+                    while active_count(&q) >= lim {
+                        if !begin_displace_exit(&mut q, &mut p) {
+                            break;
+                        }
+                    }
+                    if active_count(&q) >= lim {
+                        // 仍满：本条改走等待，保留已在播的挤出退场。
+                        arm_toast_timer(id, duration);
+                        p.push(item);
+                        toast_queue().set(q);
+                        toast_pending().set(p);
+                    } else {
+                        arm_toast_timer(id, duration);
+                        q.push(item);
+                        toast_queue().set(q);
+                        toast_pending().set(p);
                     }
                 }
-                if active_count(&q) >= lim {
-                    // 仍满：本条改走等待，保留已在播的挤出退场。
+                ToastOverflow::Wait => {
+                    toast_queue().set(q);
+                    let mut p = toast_pending().peek();
                     arm_toast_timer(id, duration);
                     p.push(item);
-                    toast_queue().set(q);
-                    toast_pending().set(p);
-                } else {
-                    arm_toast_timer(id, duration);
-                    q.push(item);
-                    toast_queue().set(q);
                     toast_pending().set(p);
                 }
             }
-            ToastOverflow::Wait => {
-                toast_queue().set(q);
-                let mut p = toast_pending().get();
-                arm_toast_timer(id, duration);
-                p.push(item);
-                toast_pending().set(p);
-            }
         }
-    }
-    use_signal(TOAST_HOST_OPEN, || true).set(true);
+        use_signal(TOAST_HOST_OPEN, || true).set(true);
+    });
     id
 }
 
@@ -1604,6 +1659,47 @@ struct ToastStackMotion {
     behind_fade: bool,
     /// 收起时后方卡：阴影目标 alpha=0（与 lift 同步淡出）。
     dim_shadow: bool,
+    /// `Some(rank)`：每帧按 [`stack_expanded_now`] 重算 lift/scale/dim（悬停展开热路径）。
+    /// `None`：用上面烘焙目标（list / 单测）。
+    live_rank: Option<usize>,
+}
+
+/// 堆叠 rank → 原始 lift / scale / 是否压暗阴影。
+fn stack_pose_for_rank(rank: usize, from_bottom: bool, expanded: bool) -> (f32, f32, bool) {
+    let scale = if expanded {
+        1.0
+    } else {
+        (1.0 - rank as f32 * 0.05).max(0.90)
+    };
+    let lift_raw = if expanded {
+        let step = CARD_H + STACK_EXPAND_GAP;
+        if from_bottom {
+            -(rank as f32 * step)
+        } else {
+            rank as f32 * step
+        }
+    } else if from_bottom {
+        -(rank as f32 * STACK_PEEK)
+    } else {
+        rank as f32 * STACK_PEEK
+    };
+    let dim_shadow = !expanded && rank > 0;
+    (lift_raw, scale, dim_shadow)
+}
+
+fn resolve_stack_pose(stack: &ToastStackMotion, from_bottom: bool) -> (f32, f32, bool) {
+    if let Some(rank) = stack.live_rank {
+        let expanded = stack_expanded_now();
+        // 展开时退场后方卡提到 front 档，避免仍停在窥视位。
+        let effective = if stack.behind_fade && expanded {
+            0
+        } else {
+            rank
+        };
+        stack_pose_for_rank(effective, from_bottom, expanded)
+    } else {
+        (stack.target_lift, stack.target_scale, stack.dim_shadow)
+    }
 }
 
 /// 缩放绕壳顶/底时，translate 补偿（与 CarouselStack / 原 spring 同口径）。
@@ -1625,9 +1721,11 @@ fn toast_motion_pose(
     stack: Option<&ToastStackMotion>,
     drag: [f32; 2],
 ) -> (f32, f32, f32, f32) {
-    let scale = stack.map(|s| s.target_scale).unwrap_or(1.0);
+    let (lift_raw, scale, _) = stack
+        .map(|s| resolve_stack_pose(s, from_bottom))
+        .unwrap_or((0.0, 1.0, false));
     let lift = stack
-        .map(|s| stack_lift_visual(from_bottom, s.target_lift, scale))
+        .map(|_| stack_lift_visual(from_bottom, lift_raw, scale))
         .unwrap_or(0.0);
 
     if exiting {
@@ -1690,7 +1788,10 @@ fn apply_enter_motion(
     if needs_enter {
         let seed_lift = stack
             .as_ref()
-            .map(|s| stack_lift_visual(from_bottom, s.target_lift, scale))
+            .map(|s| {
+                let (lift_raw, sc, _) = resolve_stack_pose(s, from_bottom);
+                stack_lift_visual(from_bottom, lift_raw, sc)
+            })
             .unwrap_or(0.0);
         let seed_y = toast_enter_offset_y(from_bottom) + seed_lift;
         // 自透明 + 边缘起步，避免强 ease-out 下「已完全可见却瞬移到位」。
@@ -1727,7 +1828,10 @@ fn apply_enter_motion(
                 let sc = scale;
                 let lift = stack
                     .as_ref()
-                    .map(|s| stack_lift_visual(from_bottom, s.target_lift, sc))
+                    .map(|s| {
+                        let (lift_raw, _, _) = resolve_stack_pose(s, from_bottom);
+                        stack_lift_visual(from_bottom, lift_raw, sc)
+                    })
                     .unwrap_or(0.0);
                 (exit_from[0], lift + exit_from[1], 1.0, sc)
             }
@@ -1746,21 +1850,25 @@ fn apply_enter_motion(
 
     let stack_for_sync = stack;
     let exiting = item.exiting;
-    let exit_seed_pending = std::cell::Cell::new(exit_seed);
+    let exit_seed_pending = Cell::new(exit_seed);
     // 入场缓动持续整段 ENTER_MS；避免 sync 立刻切到 Stack ease 打断起步。
-    let enter_until = std::cell::Cell::new(if needs_enter {
+    let enter_until = Cell::new(if needs_enter {
         Some(Instant::now() + Duration::from_millis(TOAST_ENTER_MS as u64))
     } else {
         None
     });
     // 上一帧已断言的目标；tick 会把 style 写成 mid，不能靠 style≈target 判断「目标未变」。
-    let last_target = std::cell::Cell::new(None::<(f32, f32, f32, f32)>);
-    let last_shadow_a = std::cell::Cell::new(None::<f32>);
+    let last_target = Cell::new(None::<(f32, f32, f32, f32)>);
+    let last_shadow_a = Cell::new(None::<f32>);
+    let last_pe_none = Cell::new(None::<bool>);
     card = card.reactive_sync(move |el: &mut Element, _lt: &mut LayoutTree| {
         let dragging =
             TOAST_DRAG.with(|d| d.borrow().as_ref().is_some_and(|dg| dg.id == item_id));
         let behind = stack_for_sync.as_ref().is_some_and(|s| s.behind_fade);
-        let dim_shadow = stack_for_sync.as_ref().is_some_and(|s| s.dim_shadow);
+        let dim_shadow = stack_for_sync
+            .as_ref()
+            .map(|s| resolve_stack_pose(s, from_bottom).2)
+            .unwrap_or(false);
         let drag = toast_drag_xy(item_id).peek();
         let (x, y, opacity, scale) = toast_motion_pose(
             item_id,
@@ -1824,6 +1932,23 @@ fn apply_enter_motion(
         el.style.shadow_color = want_shadow;
         el.style.shadow_blur = want_blur;
         el.style.shadow_spread = want_spread;
+
+        // 收起时后方卡不命中；展开后恢复（不重建树）。
+        if !exiting {
+            if let Some(s) = stack_for_sync.as_ref() {
+                if s.live_rank.is_some_and(|r| r > 0) {
+                    let want_none = !stack_expanded_now();
+                    if last_pe_none.get() != Some(want_none) {
+                        last_pe_none.set(Some(want_none));
+                        if want_none {
+                            el.set_attr(ATTR_POINTER_EVENTS, PointerEvents::None.as_str());
+                        } else {
+                            el.attrs.remove(ATTR_POINTER_EVENTS);
+                        }
+                    }
+                }
+            }
+        }
 
         if dragging || target_changed || shadow_changed {
             last_target.set(Some(target));
@@ -1980,7 +2105,7 @@ fn place_panel(panel: Element, position: &str) -> Element {
 /// `items` 新→旧（index 0 = 最前）。
 /// 布局：同锚点 + `translateY` 堆叠（避免中心缩放 + 不同 `top` 导致窥视条不匀）。
 /// 后方到期：整卡淡出；最前到期：滑出淡出。
-/// 悬停命中区始终按**展开高度**计算，避免折叠高度与卡片动画不同步导致 expand 抖动。
+/// 展开态由卡/堆 `reactive_sync` 热读，宿主不因悬停重建（3+ 卡性能关键）。
 fn render_stack(
     items: &[&ToastItem],
     expanded: bool,
@@ -2009,9 +2134,8 @@ fn render_stack(
     let pile_h_expanded =
         pile_n as f32 * CARD_H + (pile_n.saturating_sub(1) as f32) * STACK_EXPAND_GAP;
     // 收起时命中区跟窥视堆高度走，避免展开幽灵高度拖住 hover 导致「移开却不收」。
-    // 展开后用满高，保证卡间空隙仍可命中。
-    let pile_h_collapsed =
-        CARD_H + (pile_n.saturating_sub(1) as f32) * STACK_PEEK;
+    // 展开后用满高，保证卡间空隙仍可命中。高度由 pile sync 热更新，不重建子树。
+    let pile_h_collapsed = CARD_H + (pile_n.saturating_sub(1) as f32) * STACK_PEEK;
     let pile_h = if expanded {
         pile_h_expanded
     } else {
@@ -2028,6 +2152,35 @@ fn render_stack(
     // 与 CarouselStack 相同：逐卡 rects→text band，避免下层字形画在上层壳之上。
     // （框架也会在子节点有 z-index 时自动建 band；此处显式标注语义。）
     pile.set_attr("data-stacking-context", "1");
+    pile.template_id = Some("__rui_toast_stack_pile".into());
+
+    let last_pile_h = Cell::new(pile_h);
+    pile = pile.reactive_sync(move |el: &mut Element, _lt: &mut LayoutTree| {
+        let exp = stack_expanded_now();
+        let h = if exp {
+            pile_h_expanded
+        } else {
+            pile_h_collapsed
+        };
+        if (last_pile_h.get() - h).abs() <= 0.5 {
+            return LayoutStatus::Clean;
+        }
+        last_pile_h.set(h);
+        el.style.set_css_dim(UnitSlot::Height, CssDim::Px(h));
+        if from_bottom {
+            let top = h - CARD_H;
+            for child in &mut el.children {
+                if child
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("toast-card-"))
+                {
+                    child.style.set_css_dim(UnitSlot::InsetT, CssDim::Px(top));
+                }
+            }
+        }
+        LayoutStatus::LayoutChanged
+    });
 
     // 从后往前挂：先画最旧（底），再画最新（顶），保证命中/绘制顺序。
     for draw_i in (0..n).rev() {
@@ -2035,41 +2188,24 @@ fn render_stack(
         let exit_vis = toast_exit_vis(item.id);
         let behind_fade = item.exiting && !expanded && exit_vis.is_some_and(|v| !v.as_front);
 
-        let (rank, target_scale, behind, pointer_none, z) = if item.exiting {
+        let (rank, behind, pointer_none, z, live_rank) = if item.exiting {
             if let Some(v) = exit_vis {
-                if v.as_front || expanded {
-                    (0usize, 1.0, false, true, 2000)
+                if v.as_front {
+                    (0usize, false, true, 2000, Some(0usize))
                 } else {
                     let rank = v.rank;
-                    let scale = (1.0 - rank as f32 * 0.05).max(0.90);
-                    (rank, scale, true, true, 900 - rank as i32)
+                    (rank, true, true, 900 - rank as i32, Some(rank))
                 }
             } else {
-                (0usize, 1.0, false, true, 2000)
+                (0usize, false, true, 2000, Some(0usize))
             }
         } else {
             let rank = rank_of[draw_i].unwrap_or(0);
-            let scale = if expanded {
-                1.0
-            } else {
-                (1.0 - rank as f32 * 0.05).max(0.90)
-            };
             let is_behind = !expanded && rank > 0;
-            (rank, scale, is_behind, is_behind, 1000 - rank as i32)
+            (rank, is_behind, is_behind, 1000 - rank as i32, Some(rank))
         };
 
-        let base_lift = if expanded {
-            let step = CARD_H + STACK_EXPAND_GAP;
-            if from_bottom {
-                -(rank as f32 * step)
-            } else {
-                rank as f32 * step
-            }
-        } else if from_bottom {
-            -(rank as f32 * STACK_PEEK)
-        } else {
-            rank as f32 * STACK_PEEK
-        };
+        let (base_lift, base_scale, _) = stack_pose_for_rank(rank, from_bottom, expanded);
 
         // 后方窥视条不重播入场滑入（晋升 front 时再播）。
         if behind {
@@ -2085,9 +2221,10 @@ fn render_stack(
             behind_fade,
             Some(ToastStackMotion {
                 target_lift: base_lift,
-                target_scale,
+                target_scale: base_scale,
                 behind_fade,
                 dim_shadow: behind,
+                live_rank,
             }),
         );
         card = card
@@ -2102,17 +2239,16 @@ fn render_stack(
         pile = pile.child(card);
     }
 
-    let expanded_sig = expanded_signal();
     interactive(Element::from(pile))
         .on_hover(move |h| {
             if is_toast_dragging() {
                 if h {
-                    expanded_sig.set(true);
+                    set_stack_expanded(true);
                     set_stack_timers_paused(true);
                 }
                 return;
             }
-            expanded_sig.set(h);
+            set_stack_expanded(h);
             set_stack_timers_paused(h);
         })
         .into()
@@ -2204,6 +2340,7 @@ fn render_list(items: &[&ToastItem], from_bottom: bool, swipe: ToastSwipeDirs) -
                 target_scale: 1.0,
                 behind_fade: list_slot_fade,
                 dim_shadow: false,
+                live_rank: None,
             }),
         );
         let z = 1000i32 - rank as i32;
@@ -2377,7 +2514,8 @@ pub(crate) fn paint_toast_host() -> Element {
     let _ = toast_pending().get(); // 等待队列变化时重绘（角标/状态）
     let layout = ToastLayout::parse(&layout_signal().get());
     let position = position_signal().get();
-    let expanded = expanded_signal().get() || is_toast_dragging();
+    // 仅 peek：悬停展开由卡/堆 sync 热更新，勿订阅以免整树重建。
+    let expanded = stack_expanded_now();
     let _ = overflow_signal().get();
     let _ = limit_signal().get();
     // 与 Tooltip 相同：Pinned 登记，不进 Modal 栈。关 Command 不得把队列藏起来。
@@ -2512,6 +2650,7 @@ mod tests {
                 target_scale: 0.95,
                 behind_fade: true,
                 dim_shadow: true,
+                live_rank: None,
             }),
             [0.0, 0.0],
         );
@@ -2550,6 +2689,7 @@ mod tests {
                 target_scale: 1.0,
                 behind_fade: true,
                 dim_shadow: false,
+                live_rank: None,
             }),
             [0.0, 0.0],
         );
@@ -2591,6 +2731,7 @@ mod tests {
                 target_scale: scale,
                 behind_fade: true,
                 dim_shadow: true,
+                live_rank: None,
             }),
             [0.0, 0.0],
         );
