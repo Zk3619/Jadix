@@ -348,6 +348,7 @@ $env:RUST_LOG = "warn"
 # debug：默认打 render profile
 cargo run -p gallery
 # release：需显式打开（建议 --features runtime-logging 以输出 warn）
+# 可选文件：`$env:RUI_LOG_FILE="rui.log"`（与控制台同格式追加）
 $env:RUI_RENDER_PROFILE = "1"
 cargo run -p gallery --release --features runtime-logging
 # 或自动化脚本（PostMessage 滚轮，约 10s）：

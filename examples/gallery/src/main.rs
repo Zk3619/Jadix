@@ -6091,11 +6091,9 @@ fn build_gallery_app() -> Element {
 
 fn main() {
     #[cfg(feature = "runtime-logging")]
-    env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off"),
-    )
-    .init();
+    rui::logging::init_with(rui::logging::InitOptions {
+        default_filter: "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
+    });
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
 

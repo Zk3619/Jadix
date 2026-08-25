@@ -14,7 +14,8 @@ pub use renderer as render;
 pub mod a11y;
 pub mod app;
 pub mod components;
-pub(crate) mod debug_stack;
+/// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
+pub mod logging;
 /// 默认应用入口：`use rui::prelude::*;`（标签 + Builder 双书写面，见规范 §3 / ADR-9）。
 pub mod prelude;
 pub mod primitives;

@@ -57,14 +57,15 @@ pub fn emit_registry_stats() {
     let stats = RegistryStats::collect();
     #[cfg(windows)]
     {
-        eprintln!(
-            "[rui registry stats] private={:.1} MiB {}",
+        log::info!(
+            target: "rui::registry_stats",
+            "private={:.1} MiB {}",
             process_private_mb(),
             stats.format_line()
         );
     }
     #[cfg(not(windows))]
     {
-        eprintln!("[rui registry stats] {}", stats.format_line());
+        log::info!(target: "rui::registry_stats", "{}", stats.format_line());
     }
 }

@@ -271,11 +271,6 @@ pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
 }
 
 fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
-    #[cfg(debug_assertions)]
-    if std::env::var("RUI_TEXT_DEBUG").is_ok() {
-        // Only print once or twice to avoid spam
-    }
-
     for raw_name in family_list.split(',').map(|s| s.trim()) {
         let name = raw_name.trim_matches(|c| c == '\'' || c == '"');
         if name.is_empty() {

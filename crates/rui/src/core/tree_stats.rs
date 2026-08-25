@@ -149,15 +149,16 @@ pub fn emit_tree_stats(root: &Element, layout: &LayoutTree) {
     let stats = AppTreeStats::from_app(root, layout);
     #[cfg(windows)]
     {
-        eprintln!(
-            "[rui tree stats] private={:.1} MiB {}",
+        log::info!(
+            target: "rui::tree_stats",
+            "private={:.1} MiB {}",
             process_private_mb(),
             stats.format_line()
         );
     }
     #[cfg(not(windows))]
     {
-        eprintln!("[rui tree stats] {}", stats.format_line());
+        log::info!(target: "rui::tree_stats", "{}", stats.format_line());
     }
 }
 

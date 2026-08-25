@@ -12,7 +12,7 @@ categories = ["gui"]
 [features]
 # Lean by default: no resvg. Apps opt into emoji-svg / bundled-* as needed.
 default = []
-# Optional runtime logger initialization (env_logger).
+# Optional runtime logger: console (stderr) + optional file via RUI_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
 tracing = ["dep:tracing"]

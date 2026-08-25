@@ -565,8 +565,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             ));
             crate::app::reactive::reset_registered_anchors();
 
-            crate::debug_stack::reset_crumb_file();
-            crate::debug_stack::crumb("lifecycle: before root create_effect");
+            log::debug!("lifecycle: before root create_effect");
             // Enable Inspector before the root effect so wrap_app sees the flag on first run.
             #[cfg(feature = "devtools")]
             if self.window_options.devtools {
@@ -578,32 +577,32 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             let builder_ref = self.app_builder.clone();
             crate::core::reactivity::mark_next_effect_as_ui_root();
             crate::core::reactivity::create_effect(move || {
-                crate::debug_stack::crumb("root_effect: before app_builder");
+                log::debug!("root_effect: before app_builder");
                 let new_root = (builder_ref.borrow_mut())();
                 #[cfg(feature = "devtools")]
                 let new_root = crate::app::devtools::wrap_app(new_root);
-                crate::debug_stack::crumb(&format!(
+                log::debug!(
                     "root_effect: after app_builder children={}",
                     new_root.children.len()
-                ));
+                );
                 if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
-                    crate::debug_stack::crumb("root_effect: before rebuild_ui");
+                    log::debug!("root_effect: before rebuild_ui");
                     st.rebuild_ui(new_root);
-                    crate::debug_stack::crumb("root_effect: after rebuild_ui");
+                    log::debug!("root_effect: after rebuild_ui");
                     st.window.request_redraw();
                 }
-                crate::debug_stack::crumb("root_effect: body done (flush_deferred next)");
+                log::debug!("root_effect: body done (flush_deferred next)");
             });
-            crate::debug_stack::crumb("lifecycle: after root create_effect");
+            log::debug!("lifecycle: after root create_effect");
 
-            crate::debug_stack::crumb("lifecycle: before accesskit");
+            log::debug!("lifecycle: before accesskit");
             let adapter = Adapter::with_mixed_handlers(
                 event_loop,
                 &window,
                 AccessKitBootstrap,
                 self.event_loop_proxy.clone(),
             );
-            crate::debug_stack::crumb("lifecycle: after accesskit");
+            log::debug!("lifecycle: after accesskit");
             window.set_visible(true);
             let composition = self
                 .state
@@ -907,24 +906,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     window_options: super::WindowOptions,
     app_builder: F,
 ) {
-    #[cfg(feature = "runtime-logging")]
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Warn)
-        .filter_module("wgpu_hal::vulkan::instance", log::LevelFilter::Off)
-        .filter_module("fontdb", log::LevelFilter::Error)
-        .format(|buf, record| {
-            use std::io::Write;
-            let ts = buf.timestamp();
-            writeln!(
-                buf,
-                "[{} {:<5} {}] {}",
-                ts,
-                record.level(),
-                record.target(),
-                record.args()
-            )
-        })
-        .init();
+    crate::logging::init();
 
     crate::init();
 

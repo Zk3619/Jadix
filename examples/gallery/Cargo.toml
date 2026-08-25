@@ -9,13 +9,13 @@ rui = { path = "../../crates/rui", default-features = false, features = [
     "bundled-lucide",
     "svg",
 ] }
-env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 
 [features]
-# Optional logger initialization for local profiling/debug.
+# Optional logger: console + RUI_LOG_FILE (via rui/runtime-logging).
 #   cargo run -p gallery --features runtime-logging
-runtime-logging = ["dep:env_logger"]
+#   $env:RUI_LOG_FILE="rui.log"; $env:RUST_LOG="info"
+runtime-logging = ["rui/runtime-logging"]
 # Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
 #   cargo run -p gallery --features system-tray
 system-tray = ["rui/system-tray"]

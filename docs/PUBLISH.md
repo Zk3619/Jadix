@@ -37,7 +37,7 @@ cargo package -p jadix_hot_reload --allow-dirty
 | Feature | 默认 | 说明 |
 |---------|------|------|
 | （default） | 开空集 | 精简：无 resvg、无大字体嵌入 |
-| `runtime-logging` | 关 | `env_logger` |
+| `runtime-logging` | 关 | 控制台（stderr）+ 可选 `RUI_LOG_FILE`（`env_logger`） |
 | `tracing` | 关 | 热路径 span |
 | `system-tray` | 关 | 原生托盘（`tray-icon`）；见 [`tray.md`](tray.md) |
 | `backend-dx12` | 关 | Windows D3D12 |

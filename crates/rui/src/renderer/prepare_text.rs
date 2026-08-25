@@ -3154,8 +3154,9 @@ pub fn prepare_text_frame(
                     .collect();
                 let hard_n = info.text.split('\n').count();
                 let clip_h = tb.clip_bounds.map(|c| c[3]).unwrap_or(-1.0);
-                eprintln!(
-                    "[TA-DIAG] tid={:?} text={:?} leaf_h={:.1} clip_h={:.1} \
+                log::debug!(
+                    target: "rui::textarea_diag",
+                    "tid={:?} text={:?} leaf_h={:.1} clip_h={:.1} \
                      bounds_h={} top={} bottom={} buf_h={:?} hard={} runs_len={} runs={:?}",
                     info.template_id,
                     info.text,
