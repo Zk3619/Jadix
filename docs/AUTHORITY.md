@@ -719,6 +719,27 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 ---
 
+### 5.6b Wave SI — 行为深化下沉（Sink Deepen · **不挡 Beta**）
+
+> 在 WP-3.4 / 3.7 浮层与布尔态底座之上，把已导出组件里仍重复或单体过厚的交互抽进 `utils/` / `components/internal/`。**不挡** W4 / Beta；与发布轨并行。
+
+| ID | 主题 | 状态 |
+|----|------|------|
+| **WP-SI.1** | Activate 注册表（Dropdown / Context / Command） | ☑ |
+| **WP-SI.2** | 受控 Signal 泛化（String / f32 / open） | ☑ |
+| **WP-SI.3** | 菜单子树生命周期 + 键盘（`menu_subtree`） | ☑ |
+| **WP-SI.4** | 打开列表键盘 `list_nav`（Combobox / Command） | ☑ |
+| **WP-SI.5** | 菜单行 chrome + highlight paint | ☑ |
+| **WP-SI.6** | Radio roving + Dialog/Sheet `focus_trap` 接线 | ☑ |
+| **WP-SI.7** | 指针拖拽会话 `pointer_drag` | ☑ |
+| **WP-SI.8** | 数据态小助手（table_sort / element_pack …） | ☑ |
+| **WP-SI.9** | Toast 计时/队列/滑动策略内聚 | ☑ |
+| **WP-SI.10** | Carousel snap/seamless/autoplay 轨道引擎内聚 | ☑ |
+
+**禁区**：第二套 portal；Menubar peer 泛化 disarm；公开 notification_queue / Embla 式 carousel；Toast/Carousel CSS 动效进 utils；为下沉升 experimental→verified。
+
+---
+
 ### 5.7 Wave 4 — 发布与质量矩阵
 
 | ID | 主题 | 别名 | 状态 |

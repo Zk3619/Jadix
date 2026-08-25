@@ -10,7 +10,7 @@
 | 层级 | 路径 | 职责 | 禁止 |
 |------|------|------|------|
 | 布局 / 交互原语 | `crates/rui/src/primitives/` | `box`/`hstack`/`vstack`/`gstack`、`interactive`、`overlay`、`text`/`icon`、`path`、`Portal` | 不写配色、圆角、阴影等视觉常量 |
-| 行为工具 | `crates/rui/src/utils/` | **`popup`**（浮层几何 / underlay）、`roving`、`focus_trap`、`keyboard`、`text_field`、**`toggle_state`**（布尔受控/非受控） | 不绑定某一组件的外观变体 |
+| 行为工具 | `crates/rui/src/utils/` | **`popup`**、`roving`、`focus_trap`、`keyboard`、`text_field`、**`toggle_state`**、**`controlled`**（String/f32/open）、**`activate_registry`**、**`list_nav`**、**`pointer_drag`**、**`table_sort`** / **`tree_model`** / **`element_pack`** | 不绑定某一组件的外观变体 |
 | 设计令牌 | `crates/rui/src/tokens/` + `style/theme` + `style/color_space` | 语义色、间距、圆角等可主题化数值 | 不包含业务逻辑 |
 | 样式组件 | `crates/rui/src/components/` | 组合原语 + 令牌 + utils，形成 ShadCN 风格外观 | 不把复杂状态机永久只藏在样式层 |
 
@@ -19,7 +19,11 @@
 | 目标原语 | 现状 | 计划 |
 |----------|------|------|
 | `toggle` 布尔状态 | [`utils/toggle_state`](../crates/rui/src/utils/toggle_state.rs) | **WP-3.7 ☑**；Toggle / Checkbox / Switch 共用受控 XOR Owner 作用域 |
-| `popup` 开合契约 | 几何在 `utils/popup`；挂载走 `mount_anchored_overlay` / `mount_viewport_portal_stage` | **WP-3.4 ☑**；开合 Signal 仍可内嵌各组件 |
+| String / f32 / open | [`utils/controlled`](../crates/rui/src/utils/controlled.rs) | **WP-SI.2**；Tabs / Radio / Slider / Date·Color open+value |
+| Activate 注册表 | [`utils/activate_registry`](../crates/rui/src/utils/activate_registry.rs) | **WP-SI.1**；菜单 / Command Enter 激活 |
+| 打开列表键 | [`utils/list_nav`](../crates/rui/src/utils/list_nav.rs) | **WP-SI.4**；Combobox ↑↓/Home/End；Command 过滤框仅 ↑↓/Enter/Esc |
+| Toast 引擎 | `components/internal/toast_{timer,queue,swipe}` | **WP-SI.9**；CSS 动效留 `toast.rs` |
+| Carousel 引擎 | `components/internal/carousel_{track,snap,loop,autoplay}` | **WP-SI.10**；视觉变体壳留 `carousel.rs` |
 
 用户自定义组件（如 Alert）应只组合 `Box` / `Text` / `Interactive` 等，并通过 `#[component]` 暴露 props，与 [custom_components.md](custom_components.md) 一致。`#[component]` 默认实例 Owner（WP-3.14）；纯 Builder 复合根用 `component_root`。浮层子树用 `isolate_reads`。私有壳（`components/internal/text_edit`）不是公开无头 API；Dialog 模态壳在 `components/dialog.rs`。
 

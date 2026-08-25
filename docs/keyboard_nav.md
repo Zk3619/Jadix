@@ -55,15 +55,19 @@ Gallery / 应用应保证上述 id **页面内唯一**；Tab 顺序 = 树 DFS �
 | Menubar | 关闭：←→ 移触发器焦点环；打开：↓ 进首项，↑↓ 移菜单项焦点环，←→ 换相邻菜单 |
 | Tabs（无头 `tabstrip:`） | ←→ 环绕切换选中 index；Home / End |
 | TabsList / 单选 ToggleGroup | ←→/↑↓ / Home / End **只移焦点环**；Enter / Space / 点击才改选中；TabsList `required` 禁止空选 |
+| RadioGroup | ↑↓ / Home / End **只移焦点环**（`attach_focus_roving` Vertical）；Enter / Space / 点击才改选中 |
+| Dialog / Sheet | 打开时 [`sync_focus_trap`](../crates/rui/src/utils/focus_trap.rs) 收集面板可聚焦 id；关闭 / 未挂载时 deactivate |
 | NavigationMenu | 顶栏芯片 ←→ 移焦点环；↓ 进入下拉首链；面板内 ↑↓；Esc 回触发器 |
 | Sidebar | 槽位内可聚焦控件 ↑↓ / Home / End 移焦点环（`attach_focus_roving`） |
 | Calendar | ←→ 日；↑↓ 周；Home/End 周首尾；PageUp/PageDown 月；Enter/Space 选定；dropdown 年月为 Select（Esc 关 Select 菜单） |
 | DatePicker | 触发器 Enter/Space 开合；Esc 关浮层；打开后焦点进 Calendar（同上） |
 | TimePicker | 三个 Combobox：输入过滤 + ↑↓ 选项；Esc 关 Combobox 菜单 |
 | ColorPicker | 触发器 Enter/Space 开合、Esc 关；HSV 面积 ←→ 饱和度 ↑↓ 明度；色相/透明度滑块 ←→（Shift ×10） |
-| Command | 过滤框 ↑↓ / Home / End 高亮；Enter 执行并关；Esc 关 |
+| Command | 过滤框 ↑↓ 高亮（Home/End 留给文本编辑）；Enter 执行并关；Esc 关 |
 
-Helpers：[`roving_move`](../crates/rui/src/utils/roving.rs) / [`roving_edge`](../crates/rui/src/utils/roving.rs) / `roving_move_skipping`。
+Helpers：[`roving_move`](../crates/rui/src/utils/roving.rs) / [`roving_edge`](../crates/rui/src/utils/roving.rs) / `roving_move_skipping`；打开列表共用 [`list_nav`](../crates/rui/src/utils/list_nav.rs)。
+
+> C-WP-1.3「有库无接线」已收口：RadioGroup 挂 roving；Dialog / Sheet 挂 `sync_focus_trap`。
 
 ## 冒烟对照
 
