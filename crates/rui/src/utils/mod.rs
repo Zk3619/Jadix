@@ -1,20 +1,29 @@
+pub mod activate_registry;
 pub mod clipboard;
+pub mod controlled;
 pub mod drag_reorder;
+pub mod element_pack;
 pub mod file_dialog;
 pub mod focus_trap;
 pub mod font;
 pub mod input_hit;
 pub mod instance_id;
 pub mod keyboard;
+pub mod list_nav;
 pub mod lucide;
+pub mod pointer_drag;
 pub mod popup;
 pub mod roving;
+pub mod table_sort;
 pub mod text_field;
 pub mod text_node;
 pub mod toggle_state;
+pub mod tree_model;
 pub mod virtual_list;
 pub mod virtual_masonry;
 
+pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
+pub use element_pack::{take_fragment, take_packed};
 pub use file_dialog::{
     file_dialog_paths, file_dialog_paths_signal_key, pick_file, pick_files, pick_files_into,
     pick_folder, pick_folder_into,
