@@ -13,6 +13,12 @@
 //!   语义色落在边框、阴影与文案/图标上；容器底保持 popover。
 //!   非 `default` 默认在左侧居中显示语气图标，可用 [`.icon(false)`](ToastBuilder::icon) 关闭。
 //!
+//! ## 引擎边界（WP-SI.9）
+//! - 计时 / 暂停地板：[`internal::toast_timer`](crate::components::internal::toast_timer)
+//! - 退场预算常量：[`internal::toast_queue`](crate::components::internal::toast_queue)
+//! - 滑动阈值 / 轴向：[`internal::toast_swipe`](crate::components::internal::toast_swipe)
+//! - CSS 动效与产品壳留本文件；拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)。
+//!
 //! ## 用法
 //! ```ignore
 //! ui! { <Toaster variant="stack" overflow="displace" limit={3} /> }
@@ -46,6 +52,13 @@
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::toast_queue::{
+    max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP,
+};
+use crate::components::internal::toast_swipe::{
+    clamp_swipe_offset, should_dismiss, ToastSwipeDirs,
+};
+use crate::components::internal::toast_timer;
 use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
 use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::layout::dimension::CssDim;
@@ -208,47 +221,36 @@ impl ToastPosition {
     }
 }
 
-/// 拖拽关闭允许的轴向（四角可沿靠近的两边；中上/中下仅垂直反向）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct ToastSwipeDirs {
-    up: bool,
-    down: bool,
-    left: bool,
-    right: bool,
-}
-
-impl ToastSwipeDirs {
-    fn for_position(pos: ToastPosition) -> Self {
-        match pos {
-            ToastPosition::TopLeft => Self {
-                up: true,
-                left: true,
-                ..Self::default()
-            },
-            ToastPosition::TopCenter => Self {
-                up: true,
-                ..Self::default()
-            },
-            ToastPosition::TopRight => Self {
-                up: true,
-                right: true,
-                ..Self::default()
-            },
-            ToastPosition::BottomLeft => Self {
-                down: true,
-                left: true,
-                ..Self::default()
-            },
-            ToastPosition::BottomCenter => Self {
-                down: true,
-                ..Self::default()
-            },
-            ToastPosition::BottomRight => Self {
-                down: true,
-                right: true,
-                ..Self::default()
-            },
-        }
+fn swipe_dirs_for_position(pos: ToastPosition) -> ToastSwipeDirs {
+    match pos {
+        ToastPosition::TopLeft => ToastSwipeDirs {
+            up: true,
+            left: true,
+            ..ToastSwipeDirs::default()
+        },
+        ToastPosition::TopCenter => ToastSwipeDirs {
+            up: true,
+            ..ToastSwipeDirs::default()
+        },
+        ToastPosition::TopRight => ToastSwipeDirs {
+            up: true,
+            right: true,
+            ..ToastSwipeDirs::default()
+        },
+        ToastPosition::BottomLeft => ToastSwipeDirs {
+            down: true,
+            left: true,
+            ..ToastSwipeDirs::default()
+        },
+        ToastPosition::BottomCenter => ToastSwipeDirs {
+            down: true,
+            ..ToastSwipeDirs::default()
+        },
+        ToastPosition::BottomRight => ToastSwipeDirs {
+            down: true,
+            right: true,
+            ..ToastSwipeDirs::default()
+        },
     }
 }
 
@@ -262,9 +264,6 @@ struct ToastDrag {
 
 thread_local! {
     static TOAST_DRAG: RefCell<Option<ToastDrag>> = const { RefCell::new(None) };
-    /// 独立于 `toast_queue` 的剩余时间计时（暂停勿写回 queue，避免重建导致 hover 闪断）。
-    static TOAST_TIMERS: RefCell<std::collections::HashMap<u64, ToastTimer>> =
-        RefCell::new(std::collections::HashMap::new());
     static TOAST_STACK_TIMER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// 可见入场标记：仅「新挂上可见队列」播入场滑入；堆叠晋升为 front 不重播。
     static TOAST_NEEDS_ENTER: RefCell<std::collections::HashSet<u64>> =
@@ -287,26 +286,10 @@ struct ToastExitVis {
     to_pending: bool,
 }
 
-#[derive(Clone, Debug)]
-struct ToastTimer {
-    remaining: Duration,
-    running_since: Option<Instant>,
-}
-
-const SWIPE_DISMISS_PX: f32 = 56.0;
-/// 冻结时剩余时长的下限。正好在到期瞬间悬停，`saturating_sub` 会把剩余削到 0；
-/// 收起后该卡会在指针刚移开时原地蒸发。留一点余量，让「收起→接续→退场」看得见。
-const TOAST_PAUSE_FLOOR: Duration = Duration::from_millis(120);
-/// 顺延到期时留出的间隙：目标是落在上一段退场被 [`finalize_exits`] 摘掉之后，
-/// 否则同一帧里预算仍是满的，会被反复顺延。
-const TOAST_EXIT_GAP: Duration = Duration::from_millis(32);
 /// 退场滑出动画时长（到时后真正出队）。
 const TOAST_EXIT_MS: u64 = 320;
 /// 收起堆叠中后方条目淡出时长（Sonner opacity ~200ms）。
 const TOAST_BEHIND_EXIT_MS: u64 = 240;
-/// 同时做完整退场动画的上限（非挤出：手动关闭/到期）。挤出淡出另计，见
-/// [`ensure_exit_budget`]，避免连环 displace 把上一段退场 snap 掉。
-const MAX_CONCURRENT_EXITING: usize = 1;
 /// 入场 CSS transition 时长。
 const TOAST_ENTER_MS: f32 = 550.0;
 /// 堆叠 lift/scale CSS transition 时长。
@@ -429,15 +412,7 @@ fn arm_toast_timer(id: u64, duration: Duration) {
     // 展开态下新到的通知同样生下来就冻结（悬停期间不该偷跑）；
     // 收起后由 `apply_stack_timer_pause` 逐项接续。
     let running = !(TOAST_STACK_TIMER_PAUSED.get() || toast_timers_should_freeze());
-    TOAST_TIMERS.with(|m| {
-        m.borrow_mut().insert(
-            id,
-            ToastTimer {
-                remaining: duration,
-                running_since: running.then(Instant::now),
-            },
-        );
-    });
+    toast_timer::arm(id, duration, running);
     mark_toast_enter(id);
 }
 
@@ -483,10 +458,6 @@ fn clear_toast_exit_vis(id: u64) {
     });
 }
 
-fn exiting_count(q: &[ToastItem]) -> usize {
-    q.iter().filter(|t| t.exiting).count()
-}
-
 /// 卸掉该 toast 的拖拽/退场起点信号与入场/退场 seed。
 fn dispose_toast_motion(id: u64) {
     remove_named_signal(&format!("__rui_toast_drag_xy:{id}"));
@@ -525,12 +496,12 @@ fn is_displace_exit(id: u64) -> bool {
 /// 才收最旧一段。非挤出（关闭/到期）仍受 [`MAX_CONCURRENT_EXITING`] 限制。
 fn ensure_exit_budget(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) {
     // 挤出可与入场重叠；上限 = limit+1，避免连推时瞬间堆出过多 portal band。
-    let max_displace_fades = visible_limit().saturating_add(1).max(2);
+    let max_displace = max_displace_fades(visible_limit());
     while q
         .iter()
         .filter(|t| t.exiting && is_displace_exit(t.id))
         .count()
-        >= max_displace_fades
+        >= max_displace
     {
         let Some(id) = q
             .iter()
@@ -575,7 +546,7 @@ fn non_displace_exit_busy_until(q: &[ToastItem]) -> Option<Instant> {
         let at = toast_exit_finish_at(t)?;
         until = Some(until.map_or(at, |u| u.max(at)));
     }
-    if n < MAX_CONCURRENT_EXITING {
+    if !non_displace_budget_full(n) {
         return None;
     }
     until
@@ -596,34 +567,15 @@ fn visible_stack_rank(q: &[ToastItem], id: u64) -> usize {
 }
 
 fn clear_toast_timer(id: u64) {
-    TOAST_TIMERS.with(|m| {
-        m.borrow_mut().remove(&id);
-    });
+    toast_timer::clear(id);
 }
 
 fn pause_toast_timer(id: u64) {
-    TOAST_TIMERS.with(|m| {
-        if let Some(t) = m.borrow_mut().get_mut(&id) {
-            if let Some(since) = t.running_since.take() {
-                t.remaining = t
-                    .remaining
-                    .saturating_sub(since.elapsed())
-                    .max(TOAST_PAUSE_FLOOR);
-            }
-        }
-    });
+    toast_timer::pause(id);
 }
 
 fn resume_toast_timer(id: u64) {
-    TOAST_TIMERS.with(|m| {
-        if let Some(t) = m.borrow_mut().get_mut(&id) {
-            // 勿因 `remaining` 已归零就拒绝接续：那样 `running_since` 永远是 None，
-            // `toast_timer_expired` 恒 false，这条通知就再也不会自动退场了。
-            if t.running_since.is_none() {
-                t.running_since = Some(Instant::now());
-            }
-        }
-    });
+    toast_timer::resume(id);
 }
 
 /// 到期但退场预算已满：顺延这条的到期时刻，**勿** snap 正在播的退场。
@@ -632,39 +584,26 @@ fn resume_toast_timer(id: u64) {
 fn defer_toast_timer(id: u64, delay: Duration) {
     // 冻结态下计时不会到期，理论上到不了这里；仍按冻结口径落盘，别偷跑。
     let running = !toast_timers_should_freeze();
-    TOAST_TIMERS.with(|m| {
-        if let Some(t) = m.borrow_mut().get_mut(&id) {
-            t.remaining = delay;
-            t.running_since = running.then(Instant::now);
-        }
-    });
+    toast_timer::defer(id, delay, running);
 }
 
 fn toast_timer_expired(id: u64) -> bool {
-    TOAST_TIMERS.with(|m| {
-        let map = m.borrow();
-        let Some(t) = map.get(&id) else {
-            return false;
-        };
-        match t.running_since {
-            Some(since) => since.elapsed() >= t.remaining,
-            None => false,
-        }
-    })
+    toast_timer::expired(id)
 }
 
 fn toast_timer_deadline(id: u64) -> Option<Instant> {
-    TOAST_TIMERS.with(|m| {
-        let map = m.borrow();
-        let t = map.get(&id)?;
-        let since = t.running_since?;
-        Some(since + t.remaining)
-    })
+    toast_timer::deadline(id)
 }
 
 fn begin_toast_drag(drag: ToastDrag) {
     toast_drag_xy(drag.id).set([0.0, 0.0]);
     let id = drag.id;
+    crate::utils::pointer_drag::begin(
+        crate::utils::pointer_drag::DragKind::Toast,
+        format!("toast:{id}"),
+        drag.start_x,
+        drag.start_y,
+    );
     TOAST_DRAG.with(|d| *d.borrow_mut() = Some(drag));
     if is_stack_layout() {
         set_stack_expanded(true);
@@ -672,24 +611,6 @@ fn begin_toast_drag(drag: ToastDrag) {
     } else {
         set_item_timer_paused(id, true);
     }
-}
-
-fn clamp_swipe_offset(dx: f32, dy: f32, dirs: ToastSwipeDirs) -> [f32; 2] {
-    let ox = if dirs.left && dx < 0.0 {
-        dx
-    } else if dirs.right && dx > 0.0 {
-        dx
-    } else {
-        0.0
-    };
-    let oy = if dirs.up && dy < 0.0 {
-        dy
-    } else if dirs.down && dy > 0.0 {
-        dy
-    } else {
-        0.0
-    };
-    [ox, oy]
 }
 
 /// CursorMoved：若正在拖拽 toast，按指针更新偏移（仅允许的关闭轴向）。
@@ -710,13 +631,14 @@ pub(crate) fn tick_toast_drag(x: f32, y: f32) -> bool {
 
 /// 指针抬起：任一侧向超过阈值则退场，否则回弹。
 pub(crate) fn clear_toast_drag_if_any() {
+    crate::utils::pointer_drag::clear();
     let finished = TOAST_DRAG.with(|d| d.borrow_mut().take());
     let Some(drag) = finished else {
         return;
     };
     crate::app::release_pointer_capture();
     let off = toast_drag_xy(drag.id).peek();
-    let dismiss = off[0].abs() >= SWIPE_DISMISS_PX || off[1].abs() >= SWIPE_DISMISS_PX;
+    let dismiss = should_dismiss(off);
     if dismiss {
         begin_toast_exit(drag.id, Some(off));
     } else {
@@ -2103,7 +2025,7 @@ pub fn Toast(
     };
     build_toast_card(
         &item,
-        ToastSwipeDirs::for_position(ToastPosition::TopRight),
+        swipe_dirs_for_position(ToastPosition::TopRight),
         None,
         false,
     )
@@ -2475,7 +2397,7 @@ fn render_queue(layout: ToastLayout, position: &str, q: &[ToastItem], expanded: 
 
     let pos = ToastPosition::parse(position);
     let bottom = pos.is_bottom();
-    let swipe = ToastSwipeDirs::for_position(pos);
+    let swipe = swipe_dirs_for_position(pos);
     let expanded = expanded || is_toast_dragging();
     let body = match layout {
         ToastLayout::Stack => render_stack(&newest_first, expanded, bottom, swipe),
@@ -3262,7 +3184,7 @@ mod tests {
 
     #[test]
     fn collapse_resumes_a_timer_frozen_past_its_deadline() {
-        // 指针正好在到期瞬间压住堆叠：暂停会把剩余削到 `TOAST_PAUSE_FLOOR`。收起后必须
+        // 指针正好在到期瞬间压住堆叠：暂停会把剩余削到 `toast_timer::TOAST_PAUSE_FLOOR`。收起后必须
         // 重新起表——否则 `running_since` 永远是 None、`toast_timer_expired` 恒 false，
         // 这条通知再也不会自动退场（悬停展开后移开鼠标即卡死的主症状）。
         toast_set_layout("stack");
@@ -3295,7 +3217,7 @@ mod tests {
             toast_timer_deadline(id).is_some(),
             "collapse must re-arm the frozen timer instead of leaving it dead"
         );
-        std::thread::sleep(TOAST_PAUSE_FLOOR + Duration::from_millis(60));
+        std::thread::sleep(toast_timer::TOAST_PAUSE_FLOOR + Duration::from_millis(60));
         assert!(
             toast_timer_expired(id),
             "resumed timer must expire so the toast leaves on its own"
@@ -3441,11 +3363,11 @@ mod tests {
 
     #[test]
     fn corner_swipe_allows_two_edges() {
-        let tr = ToastSwipeDirs::for_position(ToastPosition::TopRight);
+        let tr = swipe_dirs_for_position(ToastPosition::TopRight);
         assert!(tr.up && tr.right && !tr.left && !tr.down);
-        let bl = ToastSwipeDirs::for_position(ToastPosition::BottomLeft);
+        let bl = swipe_dirs_for_position(ToastPosition::BottomLeft);
         assert!(bl.down && bl.left && !bl.up && !bl.right);
-        let tc = ToastSwipeDirs::for_position(ToastPosition::TopCenter);
+        let tc = swipe_dirs_for_position(ToastPosition::TopCenter);
         assert!(tc.up && !tc.left && !tc.right && !tc.down);
         assert_eq!(clamp_swipe_offset(40.0, -30.0, tr), [40.0, -30.0]);
         assert_eq!(clamp_swipe_offset(-40.0, 30.0, tr), [0.0, 0.0]);

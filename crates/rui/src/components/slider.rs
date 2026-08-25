@@ -32,6 +32,7 @@ use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, r#box};
 use crate::style::use_ui_transition_cubic;
+use crate::utils::controlled::resolve_f32_signal;
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -75,11 +76,18 @@ thread_local! {
     static SLIDER_DRAG: RefCell<Option<SliderDrag>> = const { RefCell::new(None) };
 }
 
-fn begin_slider_drag(drag: SliderDrag) {
+fn begin_slider_drag(id: impl Into<String>, drag: SliderDrag) {
+    crate::utils::pointer_drag::begin(
+        crate::utils::pointer_drag::DragKind::Slider,
+        id,
+        0.0,
+        0.0,
+    );
     SLIDER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
 }
 
 fn end_slider_drag() {
+    crate::utils::pointer_drag::clear();
     SLIDER_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
 }
@@ -392,10 +400,7 @@ impl From<SliderBuilder> for Element {
             builder.step
         };
         let default_value = quantize(builder.default_value, min, max, step);
-        let scope = format!("{id}__slider");
-        let val = builder
-            .value
-            .unwrap_or_else(|| use_signal(scope.as_str(), || default_value));
+        let val = resolve_f32_signal(builder.value, &id, "slider", default_value);
         let disabled = builder.disabled;
         let bounds = Rc::new(Cell::new([0.0_f32; 4]));
 
@@ -517,12 +522,15 @@ impl From<SliderBuilder> for Element {
             let b = bounds_pd.get();
             let v = value_from_pointer_x(e.x, b, min, max);
             val_k.set(v);
-            begin_slider_drag(SliderDrag {
-                value: val_k,
-                min,
-                max,
-                bounds: bounds_pd.clone(),
-            });
+            begin_slider_drag(
+                focus_id.clone(),
+                SliderDrag {
+                    value: val_k,
+                    min,
+                    max,
+                    bounds: bounds_pd.clone(),
+                },
+            );
             mark_hover_paint_dirty();
             crate::app::set_pointer_capture(focus_id.clone());
             e.stop_propagation();

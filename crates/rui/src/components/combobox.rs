@@ -77,7 +77,6 @@ use crate::utils::popup::{
     PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
     ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
-use crate::utils::roving::{roving_edge, roving_move};
 use crate::utils::text_field::{commit_value, commit_value_sig};
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -424,33 +423,24 @@ pub fn ComboboxInput(
                 let list = vis.peek();
                 let n = list.len();
                 match &ev.logical_key {
+                    Key::Named(NamedKey::ArrowDown)
+                    | Key::Named(NamedKey::ArrowUp)
+                    | Key::Named(NamedKey::Home)
+                    | Key::Named(NamedKey::End)
+                        if o_focus.peek() =>
+                    {
+                        if let Some(next) =
+                            crate::utils::list_nav::list_nav_move(&ev.logical_key, n, a_sig.peek())
+                        {
+                            a_sig.set(next);
+                        }
+                        return true;
+                    }
                     Key::Named(NamedKey::ArrowDown) => {
                         if !o_focus.peek() {
                             a_sig.set(active_index_for_value(&list, &val_sig.peek()));
                             disarm_underlay_close();
                             o_focus.set(true);
-                        } else if let Some(next) = roving_move(n, a_sig.peek(), 1) {
-                            a_sig.set(next);
-                        }
-                        return true;
-                    }
-                    Key::Named(NamedKey::ArrowUp) => {
-                        if o_focus.peek() {
-                            if let Some(next) = roving_move(n, a_sig.peek(), -1) {
-                                a_sig.set(next);
-                            }
-                            return true;
-                        }
-                    }
-                    Key::Named(NamedKey::Home) if o_focus.peek() => {
-                        if let Some(i) = roving_edge(n, false) {
-                            a_sig.set(i);
-                        }
-                        return true;
-                    }
-                    Key::Named(NamedKey::End) if o_focus.peek() => {
-                        if let Some(i) = roving_edge(n, true) {
-                            a_sig.set(i);
                         }
                         return true;
                     }

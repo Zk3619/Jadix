@@ -474,19 +474,7 @@ impl TableColumn {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum TableSortDir {
-    #[default]
-    None,
-    Asc,
-    Desc,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct TableSortState {
-    pub column_id: Option<String>,
-    pub dir: TableSortDir,
-}
+pub use crate::utils::table_sort::{TableSortDir, TableSortState};
 
 /// 客户端分页状态（对齐 TanStack `PaginationState`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -663,22 +651,7 @@ impl From<String> for TableDensity {
 }
 
 fn cycle_sort(current: &TableSortState, column_id: &str) -> TableSortState {
-    if current.column_id.as_deref() != Some(column_id) {
-        return TableSortState {
-            column_id: Some(column_id.into()),
-            dir: TableSortDir::Asc,
-        };
-    }
-    match current.dir {
-        TableSortDir::None | TableSortDir::Desc => TableSortState {
-            column_id: Some(column_id.into()),
-            dir: TableSortDir::Asc,
-        },
-        TableSortDir::Asc => TableSortState {
-            column_id: Some(column_id.into()),
-            dir: TableSortDir::Desc,
-        },
-    }
+    crate::utils::table_sort::cycle_sort(current, column_id)
 }
 
 fn filtered_row_order(
@@ -687,45 +660,20 @@ fn filtered_row_order(
     cell: &Rc<dyn Fn(usize, usize) -> String>,
     filter: &str,
 ) -> Vec<usize> {
-    let q = filter.trim().to_ascii_lowercase();
-    if q.is_empty() {
-        return (0..row_count).collect();
-    }
-    (0..row_count)
-        .filter(|&r| {
-            columns
-                .iter()
-                .enumerate()
-                .any(|(ci, _)| cell(r, ci).to_ascii_lowercase().contains(&q))
-        })
-        .collect()
+    crate::utils::table_sort::filtered_row_order(row_count, columns.len(), cell, filter)
 }
 
 fn sorted_row_order(
-    mut order: Vec<usize>,
+    order: Vec<usize>,
     columns: &[TableColumn],
     cell: &Rc<dyn Fn(usize, usize) -> String>,
     sort: &TableSortState,
 ) -> Vec<usize> {
-    let Some(col_id) = sort.column_id.as_deref() else {
-        return order;
-    };
-    if sort.dir == TableSortDir::None {
-        return order;
-    }
-    let Some(ci) = columns.iter().position(|c| c.id == col_id) else {
-        return order;
-    };
-    let desc = sort.dir == TableSortDir::Desc;
-    order.sort_by(|&a, &b| {
-        let cmp = cell(a, ci).cmp(&cell(b, ci));
-        if desc {
-            cmp.reverse()
-        } else {
-            cmp
-        }
-    });
-    order
+    let col_index = sort
+        .column_id
+        .as_deref()
+        .and_then(|id| columns.iter().position(|c| c.id == id));
+    crate::utils::table_sort::sorted_row_order(order, col_index, cell, sort.dir)
 }
 
 fn paginate_order(order: Vec<usize>, page: TablePaginationState) -> Vec<usize> {

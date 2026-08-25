@@ -43,6 +43,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
+use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
@@ -589,10 +590,21 @@ thread_local! {
 }
 
 fn begin_color_drag(drag: ColorDrag) {
+    let sid = drag
+        .sv_id
+        .clone()
+        .unwrap_or_else(|| "color_picker".into());
+    crate::utils::pointer_drag::begin(
+        crate::utils::pointer_drag::DragKind::ColorPicker,
+        sid,
+        0.0,
+        0.0,
+    );
     COLOR_DRAG.with(|d| *d.borrow_mut() = Some(drag));
 }
 
 fn end_color_drag() {
+    crate::utils::pointer_drag::clear();
     COLOR_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
 }
@@ -1888,10 +1900,7 @@ impl From<ColorPickerBuilder> for Element {
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "color_picker");
         let initial = parse_color_str(&default_value).unwrap_or(Rgba::opaque(59, 130, 246));
-        let out = value.unwrap_or_else(|| {
-            let s = format_color(initial, format);
-            use_signal(format!("{id}__cp_value").as_str(), move || s.clone())
-        });
+        let out = resolve_string_signal(value, &id, "value", format_color(initial, format));
         let parsed0 = parse_color_str(&out.peek()).unwrap_or(initial);
         let rgba = use_signal(format!("{id}__cp_rgba").as_str(), || parsed0);
         let (h0, s0, v0) = rgb_to_hsv(parsed0.r, parsed0.g, parsed0.b);
@@ -1902,7 +1911,7 @@ impl From<ColorPickerBuilder> for Element {
         let fmt_sig = use_signal(format!("{id}__cp_fmt").as_str(), || format);
         let fmt0 = format.as_str().to_string();
         let fmt_str = use_signal(format!("{id}__cp_fmt_str").as_str(), move || fmt0.clone());
-        let open = use_signal(format!("{id}__cp_open").as_str(), || false);
+        let open = resolve_open_signal(None, &id, false);
         follow_hue_into_rgba(rgba, hue, sat, val, out, fmt_sig);
         // Defer SV/hue CPU ramps until the panel mounts (`sv_area` /
         // `sync_sv_visuals`). Eager generation here made every closed Gallery

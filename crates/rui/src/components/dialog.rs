@@ -61,6 +61,7 @@ use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::sync_focus_trap;
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 
@@ -394,10 +395,13 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
 
     reactive_view(view_id, move || {
         let is_open = open.get();
+        let owner = format!("dialog:{id}");
         let Some(zs) = modal_sync(&id, open) else {
+            sync_focus_trap(&owner, false, "");
             return Element::new();
         };
         if !is_open {
+            sync_focus_trap(&owner, false, "");
             return Element::new();
         }
 
@@ -424,8 +428,31 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         } else {
             None
         };
+        let mut ring = Vec::new();
+        collect_dialog_focus_ids(&inner, &mut ring);
+        if show_close {
+            ring.push(format!("{id}:chrome_close"));
+        }
+        if ring.is_empty() {
+            sync_focus_trap(&owner, false, "");
+        } else {
+            sync_focus_trap(&owner, true, ring.join(","));
+        }
         dialog_shell_frame(open, &zs, inner, &overlay, chrome_close, hug_content)
     })
+}
+
+fn collect_dialog_focus_ids(el: &Element, out: &mut Vec<String>) {
+    if el.focusable {
+        if let Some(fid) = &el.focus_id {
+            if !fid.is_empty() {
+                out.push(fid.clone());
+            }
+        }
+    }
+    for c in &el.children {
+        collect_dialog_focus_ids(c, out);
+    }
 }
 
 /// 固定顶栏（不滚动）。

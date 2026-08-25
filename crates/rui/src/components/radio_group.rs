@@ -54,6 +54,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::LineStyle;
+use crate::utils::controlled::resolve_string_signal;
+use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use rui_macros::component;
 use std::sync::OnceLock;
 
@@ -92,12 +94,9 @@ fn require_radio_group(part: &str) -> RadioGroupCtx {
     })
 }
 
-fn take_packed(mut el: Element) -> Vec<Element> {
+fn take_packed(el: Element) -> Vec<Element> {
     // 宏多子节点打成 `rui_fragment`；勿把 RadioGroupItem 的横排（control+label）拆开。
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
+    crate::utils::take_fragment(el)
 }
 
 fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {
@@ -320,7 +319,7 @@ pub fn radio_group_scope(
     let id = crate::utils::resolve_instance_id(id, "radio");
     let default_value = default_value.into();
     let value =
-        value.unwrap_or_else(|| use_signal(format!("{id}__radio").as_str(), || default_value));
+        resolve_string_signal(value, &id, "radio", default_value);
     with_child_owner(move || {
         provide_context(
             radio_group_context(),
@@ -340,6 +339,7 @@ pub fn radio_group_scope(
         root = root.accesskit_role("radiogroup");
         root.attrs.insert("accesskit_id".to_string(), id.clone());
         root.template_id = Some(id);
+        attach_focus_roving(&mut root, FocusRovingAxis::Vertical);
         root
     })
 }
@@ -493,9 +493,7 @@ impl From<RadioGroupBuilder> for Element {
         let disabled = builder.disabled;
         let options = builder.options;
         let extra = builder.children;
-        let selected = builder.selected.unwrap_or_else(|| {
-            use_signal(format!("{id}__radio").as_str(), || default_value.clone())
-        });
+        let selected = resolve_string_signal(builder.selected, &id, "radio", default_value.clone());
 
         with_child_owner(move || {
             provide_context(
@@ -529,6 +527,7 @@ impl From<RadioGroupBuilder> for Element {
             root = root.accesskit_role("radiogroup");
             root.attrs.insert("accesskit_id".to_string(), id.clone());
             root.template_id = Some(id);
+            attach_focus_roving(&mut root, FocusRovingAxis::Vertical);
             root
         })
     }

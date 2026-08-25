@@ -69,7 +69,6 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -93,10 +92,10 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
+use crate::utils::activate_registry;
 use crate::utils::popup::{
     mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
 };
-use crate::utils::roving::roving_move;
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -208,24 +207,16 @@ fn query_of(ctx: &CommandCtx) -> String {
     use_signal(input_value_signal_key(&ctx.filter_id).as_str(), String::new).peek()
 }
 
-thread_local! {
-    static COMMAND_ACTIVATES: RefCell<HashMap<String, Vec<Rc<dyn Fn()>>>> = RefCell::new(HashMap::new());
-}
-
 fn reset_activates(id: &str) {
-    COMMAND_ACTIVATES.with(|m| {
-        m.borrow_mut().insert(id.to_string(), Vec::new());
-    });
+    activate_registry::reset(id);
 }
 
 fn push_activate(id: &str, f: Rc<dyn Fn()>) {
-    COMMAND_ACTIVATES.with(|m| {
-        m.borrow_mut().entry(id.to_string()).or_default().push(f);
-    });
+    activate_registry::push(id, f);
 }
 
 fn take_activate(id: &str, ix: usize) -> Option<Rc<dyn Fn()>> {
-    COMMAND_ACTIVATES.with(|m| m.borrow().get(id).and_then(|v| v.get(ix).cloned()))
+    activate_registry::take(id, ix)
 }
 
 fn is_palette(surface: CommandSurface) -> bool {
@@ -249,13 +240,7 @@ fn reset_command_session(id: &str) {
 
 /// 过滤框只拦截列表导航 / 执行 / 关闭。退格、Delete、左右方向、Home/End、字符一律交给文本编辑。
 fn command_filter_consumes_key(key: &Key) -> bool {
-    matches!(
-        key,
-        Key::Named(NamedKey::Escape)
-            | Key::Named(NamedKey::ArrowDown)
-            | Key::Named(NamedKey::ArrowUp)
-            | Key::Named(NamedKey::Enter)
-    )
+    crate::utils::list_nav::is_list_nav_key(key)
 }
 
 fn set_command_active(active: Signal<usize>, next: usize) {
@@ -896,14 +881,12 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
                     return true;
                 }
             }
-            Key::Named(NamedKey::ArrowDown) => {
-                if let Some(next) = roving_move(n, active.peek(), 1) {
-                    set_command_active(active, next);
-                }
-                return true;
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                if let Some(next) = roving_move(n, active.peek(), -1) {
+            Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
+                if let Some(next) = crate::utils::list_nav::list_nav_move_arrows(
+                    &ev.logical_key,
+                    n,
+                    active.peek(),
+                ) {
                     set_command_active(active, next);
                 }
                 return true;

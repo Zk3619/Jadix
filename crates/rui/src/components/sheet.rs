@@ -11,6 +11,7 @@ use crate::tokens;
 use crate::utils::popup::{
     mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
 };
+use crate::utils::sync_focus_trap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SheetSide {
@@ -72,10 +73,13 @@ impl From<SheetBuilder> for Element {
 
         reactive_view(view_id, move || {
             let _ = open.get();
+            let owner = format!("sheet:{id}");
             let Some(oz) = portal_sync(&id, open, OverlayKind::Modal, OverlayMode::Stacked) else {
+                sync_focus_trap(&owner, false, "");
                 return Element::new();
             };
             if !open.peek() {
+                sync_focus_trap(&owner, false, "");
                 return Element::new();
             }
 
@@ -103,12 +107,33 @@ impl From<SheetBuilder> for Element {
 
             panel = swallow_clicks(panel);
 
+            let mut ring = Vec::new();
+            collect_sheet_focus_ids(&panel, &mut ring);
+            if ring.is_empty() {
+                sync_focus_trap(&owner, false, "");
+            } else {
+                sync_focus_trap(&owner, true, ring.join(","));
+            }
+
             let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
             mount_modal_layer(
                 underlay_close_on_click(open, oz.underlay),
                 mount_viewport_portal_stage(stage, oz.panel),
             )
         })
+    }
+}
+
+fn collect_sheet_focus_ids(el: &Element, out: &mut Vec<String>) {
+    if el.focusable {
+        if let Some(fid) = &el.focus_id {
+            if !fid.is_empty() {
+                out.push(fid.clone());
+            }
+        }
+    }
+    for c in &el.children {
+        collect_sheet_focus_ids(c, out);
     }
 }
 

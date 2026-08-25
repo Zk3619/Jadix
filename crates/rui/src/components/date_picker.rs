@@ -37,6 +37,7 @@ use crate::core::reactivity::{isolate_reads, use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
+use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
     apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
@@ -830,11 +831,8 @@ impl From<DatePickerBuilder> for Element {
             caption,
             disabled,
         } = builder;
-        let open = use_signal(format!("{id}__dp_open").as_str(), || false);
-        let initial = default_value.clone();
-        let val = value.unwrap_or_else(|| {
-            use_signal(format!("{id}__dp_value").as_str(), move || initial.clone())
-        });
+        let open = resolve_open_signal(None, &id, false);
+        let val = resolve_string_signal(value, &id, "value", default_value.clone());
         let (iy, im, _) = parse_ymd(&default_value).unwrap_or((2026, 8, 1));
         let year = use_signal(format!("{id}__dp_year").as_str(), move || iy);
         let month = use_signal(format!("{id}__dp_month").as_str(), move || im);

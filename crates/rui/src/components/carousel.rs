@@ -17,6 +17,13 @@
 //! - **步进**：`scrollBy="slide"|"page"`；`pageSnap="peek"|"viewport"`（page 时裁切尾项衔接下页 / 整屏推进）。
 //! - **控件位**：`controls="outside"|"inside"`。
 //!
+//! ## 引擎边界（WP-SI.10）
+//! - 轨道 ideal/clamp：[`internal::carousel_track`](crate::components::internal::carousel_track)
+//! - Snap / nearest index：[`internal::carousel_snap`](crate::components::internal::carousel_snap)
+//! - Seamless `LoopAnim`：[`internal::carousel_loop`](crate::components::internal::carousel_loop)
+//! - Autoplay 判定：[`internal::carousel_autoplay`](crate::components::internal::carousel_autoplay)
+//! - 视觉变体壳 / CSS transition / dots 留本文件；拖拽会话见 [`utils::pointer_drag`](crate::utils::pointer_drag)。
+//!
 //! ## 用法
 //! ```ignore
 //! ui! {
@@ -45,6 +52,9 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
+use crate::components::internal::carousel_autoplay::{decide_autoplay, AutoplayAction};
+use crate::components::internal::carousel_loop::LoopAnim;
+use crate::components::internal::{carousel_snap, carousel_track};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
@@ -315,19 +325,10 @@ fn offset_target(id: &str) -> Signal<f32> {
     use_signal(&offset_target_key(id), || 0.0f32)
 }
 
-/// 无缝循环：先滚到首/尾克隆槽，到位后再瞬移到真实项。
-///
-/// 注意：此 flag 存在 `thread_local`，寿命长于组件树。`sync_offset_target` 在它存在时会
-/// 直接 return——因此任何「丢掉 flag 却不 settle / 重挂载不清理」都会导致半途冻结。
-#[derive(Clone, Copy)]
-struct LoopAnim {
-    target_offset: f32,
-    settle_index: usize,
-    settle_offset: f32,
-}
-
 thread_local! {
     static AUTOPLAY_AT: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
+    /// 无缝循环：先滚到首/尾克隆槽，到位后再瞬移到真实项（[`LoopAnim`]）。
+    /// 寿命长于组件树；`sync_offset_target` 在它存在时会直接 return——丢掉 flag 却不 settle 会半途冻结。
     static LOOP_ANIM: RefCell<HashMap<String, LoopAnim>> = RefCell::new(HashMap::new());
     /// 上一帧轨道视觉 translate（供拖拽起点；CSS tween 插值后的值）。
     static LAST_VISUAL_OFFSET: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
@@ -606,21 +607,7 @@ fn step_px(ctx: &CarouselCtx) -> f32 {
 /// 上限随视口收紧：保证 ad=1 侧卡在 scale≈0.82 时外缘仍落在舞台内，
 /// 避免窄屏下 `overflow:hidden` 裁掉圆角。勿再 `clamp(min=56)`——窄视口会被强制过大步长。
 fn stack_step_px(viewport_w: f32) -> f32 {
-    const CARD_WIDTH_FRAC: f32 = 0.46;
-    // 与 stack_card_appearance 在 ad=1 时的缩放一致。
-    const SIDE_SCALE_AT_AD1: f32 = 0.82;
-    let card_w = if viewport_w > 8.0 {
-        viewport_w * CARD_WIDTH_FRAC
-    } else {
-        return 0.0;
-    };
-    if card_w <= 8.0 {
-        return 0.0;
-    }
-    let ideal = card_w * 0.52;
-    // 侧卡外缘：center - step - (card_w * side_sc)/2 ≥ 2px 边距。
-    let max_fit = (viewport_w * 0.5 - card_w * SIDE_SCALE_AT_AD1 * 0.5 - 2.0).max(0.0);
-    ideal.min(max_fit).min(200.0)
+    carousel_track::stack_step_px(viewport_w)
 }
 
 fn page_size(ctx: &CarouselCtx) -> usize {
@@ -690,11 +677,7 @@ fn max_scroll_offset(ctx: &CarouselCtx) -> f32 {
 }
 
 fn clamp_offset(ctx: &CarouselCtx, off: f32) -> f32 {
-    if track_loops(ctx) {
-        return off;
-    }
-    let min_off = max_scroll_offset(ctx);
-    off.clamp(min_off, 0.0)
+    carousel_track::clamp_linear_offset(off, max_scroll_offset(ctx), track_loops(ctx))
 }
 
 fn loop_clone_count(ctx: &CarouselCtx) -> usize {
@@ -763,33 +746,22 @@ fn max_index(ctx: &CarouselCtx) -> usize {
 fn ideal_offset(ctx: &CarouselCtx) -> f32 {
     let step = step_px(ctx);
     let cc = loop_clone_count(ctx);
-    // Stack：与 Multi 相同用 offset 表达进度（ideal = -index×step），拖拽/自动翻页共用。
-    if ctx.variant == CarouselVariant::Stack {
-        let i = ctx.index.peek().min(max_index(ctx));
-        let raw = -((i + cc) as f32) * step;
-        return if wraps_nav(ctx) {
-            raw
-        } else {
-            clamp_offset(ctx, raw)
-        };
-    }
-    // Multi + page：理想位按整页（如 perView=2.2 → 一屏宽），而非 floor(perView) 整数格。
-    if ctx.variant == CarouselVariant::Multi
-        && ctx.scroll_by == CarouselScrollBy::Page
-        && !track_loops(ctx)
-    {
-        let page = page_delta_px(ctx).max(step);
-        let i = ctx.index.peek().min(max_index(ctx)) as f32;
-        let k = (i * step / page).round().max(0.0);
-        return clamp_offset(ctx, -k * page);
-    }
-    let i = ctx.index.peek().min(max_index(ctx));
-    let raw = ((i + cc) as f32) * step;
-    if !track_loops(ctx) {
-        let capped = -raw;
-        return clamp_offset(ctx, capped);
-    }
-    -raw
+    let hi = max_index(ctx);
+    let min_off = max_scroll_offset(ctx);
+    carousel_track::ideal_offset(carousel_track::IdealOffsetInput {
+        index: ctx.index.peek(),
+        max_index: hi,
+        step,
+        clone_count: cc,
+        page_delta: page_delta_px(ctx),
+        is_stack: ctx.variant == CarouselVariant::Stack,
+        multi_page_linear: ctx.variant == CarouselVariant::Multi
+            && ctx.scroll_by == CarouselScrollBy::Page
+            && !track_loops(ctx),
+        track_loops: track_loops(ctx),
+        wraps_nav: wraps_nav(ctx),
+        min_offset: min_off,
+    })
 }
 
 fn sync_offset_target(ctx: &CarouselCtx) {
@@ -819,22 +791,14 @@ fn auto_sync_offset_if_snapping(ctx: &CarouselCtx) {
 
 /// 由当前轨道 offset 推导 nearest index（供 dots / 禁绕回按钮态）。
 fn index_from_offset(ctx: &CarouselCtx, off: f32) -> usize {
-    let step = step_px(ctx);
-    let cc = loop_clone_count(ctx);
-    let hi = max_index(ctx);
-    let n = ctx.count.peek().max(1);
-    if step <= 1.0 {
-        return 0;
-    }
-    let track_i = (-off / step).round() as i32;
-    let logical = track_i - cc as i32;
-    if wraps_nav(ctx) && track_loops(ctx) {
-        let n_i = n as i32;
-        let wrapped = ((logical % n_i) + n_i) % n_i;
-        (wrapped as usize).min(hi)
-    } else {
-        logical.clamp(0, hi as i32) as usize
-    }
+    carousel_snap::index_from_offset(
+        off,
+        step_px(ctx),
+        loop_clone_count(ctx),
+        ctx.count.peek(),
+        max_index(ctx),
+        wraps_nav(ctx) && track_loops(ctx),
+    )
 }
 
 /// `snap=false`：相对当前 offset 步进（不先吸附到格点再走）。
@@ -1202,6 +1166,12 @@ fn begin_carousel_drag(drag: CarouselDrag) {
     // 拖拽打断无缝段时必须 settle，不能只丢 flag（否则弹簧停在半途且 target 残留）。
     finish_loop_anim(&drag.id, drag.index);
     clear_autoplay_deadline(&drag.id, drag.autoplay_ms);
+    crate::utils::pointer_drag::begin(
+        crate::utils::pointer_drag::DragKind::Carousel,
+        drag.id.clone(),
+        0.0,
+        0.0,
+    );
     CAROUSEL_DRAG.with(|d| *d.borrow_mut() = Some(drag));
 }
 
@@ -1367,6 +1337,7 @@ fn end_seamless_snap_drag(
 }
 
 fn end_carousel_drag() {
+    crate::utils::pointer_drag::clear();
     CAROUSEL_DRAG.with(|d| {
         if let Some(drag) = d.borrow_mut().take() {
             let step = drag_step_px(&drag);
@@ -1512,21 +1483,24 @@ pub(crate) fn tick_carousel_autoplay() -> bool {
     let mut advanced = false;
     AUTOPLAY_REG.with(|reg| {
         for ctx in reg.borrow().values() {
-            if ctx.autoplay_ms == 0 || ctx.paused.peek() || is_carousel_dragging_id(&ctx.id) {
-                continue;
-            }
-            if loop_anim(&ctx.id).is_some() {
-                maybe_finish_loop_snap(ctx, last_visual_offset(&ctx.id));
-                advanced = true;
-                continue;
-            }
-            let Some(at) = next_autoplay_at(&ctx.id) else {
-                bump_autoplay(ctx);
-                continue;
-            };
-            if now >= at {
-                scroll_next(ctx);
-                advanced = true;
+            match decide_autoplay(
+                ctx.autoplay_ms,
+                ctx.paused.peek(),
+                is_carousel_dragging_id(&ctx.id),
+                loop_anim(&ctx.id).is_some(),
+                now,
+                next_autoplay_at(&ctx.id),
+            ) {
+                AutoplayAction::Skip => {}
+                AutoplayAction::FinishLoop => {
+                    maybe_finish_loop_snap(ctx, last_visual_offset(&ctx.id));
+                    advanced = true;
+                }
+                AutoplayAction::ArmDeadline => bump_autoplay(ctx),
+                AutoplayAction::Advance => {
+                    scroll_next(ctx);
+                    advanced = true;
+                }
             }
         }
     });

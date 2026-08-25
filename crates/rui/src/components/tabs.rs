@@ -65,6 +65,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{LineStyle, WhiteSpace};
+use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
 use rui_macros::component;
 use std::sync::OnceLock;
@@ -429,7 +430,7 @@ pub fn tabs_scope(
     let default_value = default_value.into();
     let orientation = TabsOrientation::parse(&orientation.into());
     let value =
-        value.unwrap_or_else(|| use_signal(format!("{id}__tabs").as_str(), || default_value));
+        resolve_string_signal(value, &id, "tabs", default_value);
     provide_context(
         tabs_context(),
         TabsCtx {

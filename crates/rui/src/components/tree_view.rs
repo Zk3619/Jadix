@@ -8,6 +8,7 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::r#box;
 use crate::primitives::text::text;
+use crate::utils::tree_model::{self, TreeNodeLike};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug)]
@@ -15,6 +16,15 @@ pub struct TreeNode {
     pub id: String,
     pub label: String,
     pub children: Vec<TreeNode>,
+}
+
+impl TreeNodeLike for TreeNode {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn children(&self) -> &[Self] {
+        &self.children
+    }
 }
 
 #[derive(Clone)]
@@ -26,18 +36,12 @@ struct FlatRow {
 }
 
 fn flatten(nodes: &[TreeNode], expanded: &HashSet<String>, depth: usize, out: &mut Vec<FlatRow>) {
-    for n in nodes {
-        let has_children = !n.children.is_empty();
-        out.push(FlatRow {
-            id: n.id.clone(),
-            label: n.label.clone(),
-            depth,
-            has_children,
-        });
-        if has_children && expanded.contains(&n.id) {
-            flatten(&n.children, expanded, depth + 1, out);
-        }
-    }
+    *out = tree_model::flatten_expanded(nodes, expanded, depth, |n, d, has| FlatRow {
+        id: n.id.clone(),
+        label: n.label.clone(),
+        depth: d,
+        has_children: has,
+    });
 }
 
 pub struct TreeViewBuilder {
@@ -137,11 +141,7 @@ impl From<TreeViewBuilder> for Element {
                             return;
                         }
                         let mut set = s.get();
-                        if set.contains(&nid) {
-                            set.remove(&nid);
-                        } else {
-                            set.insert(nid.clone());
-                        }
+                        tree_model::toggle_expanded(&mut set, &nid);
                         s.set(set);
                     });
                     el
