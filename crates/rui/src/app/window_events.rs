@@ -132,6 +132,7 @@ impl super::App {
         for (cb, is_hover) in hover_to_run {
             (*cb.borrow_mut())(is_hover);
         }
+        crate::app::reactive::drain_deferred_view_remounts();
     }
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
@@ -1267,6 +1268,7 @@ impl super::App {
         for (cb, is_hover) in to_run {
             (*cb.borrow_mut())(is_hover);
         }
+        crate::app::reactive::drain_deferred_view_remounts();
 
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
@@ -3210,6 +3212,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 for (cb, is_hover) in hover_to_run {
                     (*cb.borrow_mut())(is_hover);
                 }
+                crate::app::reactive::drain_deferred_view_remounts();
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }

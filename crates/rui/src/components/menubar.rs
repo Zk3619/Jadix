@@ -69,11 +69,12 @@ use winit::keyboard::{Key, NamedKey};
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::dropdown_menu::{
-    attach_dropdown_menu_trigger_keys, dropdown_menu_content, dropdown_menu_radio_group,
-    dropdown_menu_scope, dropdown_menu_sub, dropdown_menu_sub_content, use_dropdown_menu,
-    DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps, DropdownMenuContentOpts,
-    DropdownMenuGroup, DropdownMenuGroupProps, DropdownMenuItem, DropdownMenuItemProps,
-    DropdownMenuLabel, DropdownMenuLabelProps, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
+    attach_dropdown_menu_trigger_keys, dropdown_menu_active_is_sub_trigger, dropdown_menu_content,
+    dropdown_menu_open_sub_id, dropdown_menu_radio_group, dropdown_menu_scope, dropdown_menu_sub,
+    dropdown_menu_sub_content, use_dropdown_menu, DropdownMenuCheckboxItem,
+    DropdownMenuCheckboxItemProps, DropdownMenuContentOpts, DropdownMenuGroup,
+    DropdownMenuGroupProps, DropdownMenuItem, DropdownMenuItemProps, DropdownMenuLabel,
+    DropdownMenuLabelProps, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
     DropdownMenuSeparator, DropdownMenuSeparatorProps, DropdownMenuShortcut,
     DropdownMenuShortcutProps, DropdownMenuSubTrigger, DropdownMenuSubTriggerProps,
 };
@@ -503,11 +504,12 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
             }
         });
 
-        // Dropdown ↑↓ / Enter when open, then menubar ←→ / closed horizontal roving.
+        // Dropdown ↑↓ / Enter / submenu ←→ when open, then menubar peer ←→ / closed roving.
         trigger = attach_dropdown_menu_trigger_keys(trigger, &ctx);
         let open_keys = open;
         let bar_keys = bar_id_t.clone();
         let menu_id_keys = menu_id_t.clone();
+        let active_keys = ctx.active;
         trigger = chain_key_down(trigger, move |ev| {
             if ev.state != ElementState::Pressed || ev.repeat {
                 return false;
@@ -532,10 +534,19 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
             }
             match &ev.logical_key {
                 Key::Named(NamedKey::ArrowRight) if n_sec > 0 => {
+                    // Nested submenu open, or highlight on a SubTrigger → dropdown keys.
+                    if dropdown_menu_open_sub_id(&menu_id_keys).is_some()
+                        || dropdown_menu_active_is_sub_trigger(&menu_id_keys, active_keys.peek())
+                    {
+                        return false;
+                    }
                     open_neighbor_menu(&bar_keys, menu_ix, 1);
                     true
                 }
                 Key::Named(NamedKey::ArrowLeft) if n_sec > 0 => {
+                    if dropdown_menu_open_sub_id(&menu_id_keys).is_some() {
+                        return false;
+                    }
                     open_neighbor_menu(&bar_keys, menu_ix, -1);
                     true
                 }
@@ -544,7 +555,7 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
                     focus_by_id(format!("{}__dd_trigger", menu_id_keys));
                     true
                 }
-                // Let attach_dropdown_menu_trigger_keys handle ↑↓ / Enter / Home / End.
+                // Let attach_dropdown_menu_trigger_keys handle ↑↓ / Enter / Home / End / submenu.
                 _ => false,
             }
         });
@@ -904,5 +915,695 @@ mod tests {
             ))
             .into();
         assert!(el.template_id.as_deref().is_some());
+    }
+
+    /// Gallery symptom proxy: namespaced menubar parent open + sub_open must leave
+    /// parent open and push a nested Menu overlay (SubContent `portal_sync` path).
+    #[test]
+    fn menubar_sub_open_keeps_parent_and_pushes_sub_overlay() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::{clear_overlay_stack, overlay_stack_depth_for_test};
+        use crate::app::reactive::{registered_anchor_count, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, parent_open) = create_root(|| {
+            let parent_open = use_signal("mb_sub_loop_bar__file__dd_open", || false);
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = menubar_scope("mb_sub_loop_bar", || {
+                    menubar_menu(Some("file".into()), Some(parent_open), || {
+                        let trigger = MenubarTrigger(MenubarTriggerProps {
+                            id: String::new(),
+                            class: None,
+                            children: Some(Element::new().text("File")),
+                            base: None,
+                        });
+                        let content = menubar_content(MenubarContentOpts::default(), || {
+                            menubar_sub(None, || {
+                                let st = MenubarSubTrigger(MenubarSubTriggerProps {
+                                    disabled: Some(false),
+                                    inset: Some(false),
+                                    class: None,
+                                    children: Some(Element::new().text("Share")),
+                                    base: None,
+                                });
+                                let sc = menubar_sub_content(None, || {
+                                    MenubarItem(MenubarItemProps {
+                                        disabled: Some(false),
+                                        inset: Some(false),
+                                        variant: None,
+                                        class: None,
+                                        on_click: None,
+                                        children: Some(Element::new().text("Email")),
+                                        base: None,
+                                    })
+                                });
+                                let mut frag = Element::new();
+                                frag.set_attr("rui_fragment", "1");
+                                frag.children(vec![st, sc])
+                            })
+                        });
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![trigger, content])
+                    })
+                });
+                *root_e.borrow_mut() = el;
+            });
+            parent_open
+        });
+
+        let anchors_before_open = registered_anchor_count();
+        let depth_before = overlay_stack_depth_for_test();
+        parent_open.set(true);
+        let anchors_after_open = registered_anchor_count();
+        let depth_after_open = overlay_stack_depth_for_test();
+        assert!(parent_open.peek(), "parent_open.set(true) must stick");
+        assert!(
+            depth_after_open > depth_before,
+            "Content open must portal_sync parent Menu (before={depth_before} after={depth_after_open}); anchors {anchors_before_open}->{anchors_after_open}"
+        );
+        assert!(
+            anchors_after_open > anchors_before_open,
+            "opening menubar content must register SubContent reactive_anchor (before={anchors_before_open} after={anchors_after_open}, depth={depth_after_open})"
+        );
+
+        // Gallery path: layout hoists the Content portal before the user can hover Share.
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        let sub_anchor_after_hoist = {
+            let tree = root.borrow();
+            fn find_tid(el: &Element, want: &str) -> bool {
+                if el.template_id.as_deref() == Some(want) {
+                    return true;
+                }
+                el.children.iter().any(|c| find_tid(c, want))
+            }
+            find_tid(&tree, "mb_sub_loop_bar__file__sub0__view")
+        };
+        assert!(
+            sub_anchor_after_hoist,
+            "SubContent placeholder must remain findable after Content portal hoist"
+        );
+
+        let sub_trigger_fid = {
+            let tree = root.borrow();
+            fn find_sub_trigger_fid(el: &Element) -> Option<String> {
+                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                {
+                    return el.focus_id.clone();
+                }
+                for c in &el.children {
+                    if let Some(f) = find_sub_trigger_fid(c) {
+                        return Some(f);
+                    }
+                }
+                None
+            }
+            find_sub_trigger_fid(&tree)
+        };
+        assert_eq!(
+            sub_trigger_fid.as_deref(),
+            Some("mb_sub_loop_bar__file__sub0__trigger"),
+            "MenubarSubTrigger must expose the floating trigger focus_id after hoist"
+        );
+
+        let sub_open = use_signal("mb_sub_loop_bar__file__sub0__open", || false);
+        assert!(!sub_open.peek(), "sub starts closed after parent open");
+        sub_open.set(true);
+
+        assert!(
+            parent_open.peek(),
+            "parent must stay open after sub opens (portal must not exclusive-dismiss)"
+        );
+        assert!(
+            sub_open.peek(),
+            "sub open signal must remain true after SubContent portal_sync"
+        );
+        assert!(
+            overlay_stack_depth_for_test() >= 2,
+            "SubContent open must push nested Menu overlay (got depth {})",
+            overlay_stack_depth_for_test()
+        );
+
+        // Nested sub portal must hoist out of the parent menu (same as Select-in-Dialog).
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        let (has_sub_panel, sub_on_portal_layer, layer_len) = {
+            let tree = root.borrow();
+            fn find_slot(el: &Element, slot: &str) -> bool {
+                if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+                    return true;
+                }
+                el.children.iter().any(|c| find_slot(c, slot))
+            }
+            let layer = tree.children.iter().find(|c| {
+                c.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+            });
+            let layer_len = layer.map(|l| l.children.len()).unwrap_or(0);
+            let sub_on_layer = layer.is_some_and(|l| {
+                l.children.iter().any(|c| find_slot(c, "dropdown-menu-sub-content"))
+            });
+            (find_slot(&tree, "dropdown-menu-sub-content"), sub_on_layer, layer_len)
+        };
+        assert!(
+            has_sub_panel,
+            "SubContent open must reconcile a dropdown-menu-sub-content panel into the tree"
+        );
+        assert!(
+            sub_on_portal_layer,
+            "submenu must be a portal-layer sibling after hoist (layer_len={layer_len}); \
+             staying under parent overflow:hidden clips RightStart panels — gallery Share symptom"
+        );
+        assert!(
+            layer_len >= 2,
+            "parent File menu + Share submenu must both live on the portal layer (got {layer_len})"
+        );
+
+        // Stuck-open recovery: clear panel chrome under the live `{sid}__view` island
+        // without dropping its UnmountHook (that would dispose the SubContent effect).
+        {
+            let mut tree = root.borrow_mut();
+            fn hollow_sub_view(el: &mut Element, want: &str) -> bool {
+                if el.template_id.as_deref() == Some(want) {
+                    el.children.clear();
+                    el.attrs.remove("data-slot");
+                    el.text = None;
+                    return true;
+                }
+                for c in &mut el.children {
+                    if hollow_sub_view(c, want) {
+                        return true;
+                    }
+                }
+                false
+            }
+            assert!(
+                hollow_sub_view(&mut tree, "mb_sub_loop_bar__file__sub0__view"),
+                "must find sub view island"
+            );
+        }
+        let remount = use_signal("mb_sub_loop_bar__file__sub0__remount", || 0u32);
+        remount.set(remount.peek().wrapping_add(1));
+        assert!(
+            {
+                let tree = root.borrow();
+                fn find_slot(el: &Element, slot: &str) -> bool {
+                    if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+                        return true;
+                    }
+                    el.children.iter().any(|c| find_slot(c, slot))
+                }
+                find_slot(&tree, "dropdown-menu-sub-content")
+            },
+            "remount bump must rebuild SubContent panel while sub_open stays true"
+        );
+
+        clear_test_reconcile_root();
+        drop(root);
+        handle.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery root cause: sibling MenubarMenu scopes share one owner; without child-owner
+    /// isolation the last menu (View) overwrites DropdownMenuCtx. File→Share then binds as
+    /// `{bar}__view__sub0` while View.open is false — SubContent immediately closes it.
+    #[test]
+    fn menubar_sibling_menus_isolate_sub_parent_id() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, file_open) = create_root(|| {
+            let file_open = use_signal("mb_iso_bar__file__dd_open", || false);
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = menubar_scope("mb_iso_bar", || {
+                    let file = menubar_menu(Some("file".into()), Some(file_open), || {
+                        let trigger = MenubarTrigger(MenubarTriggerProps {
+                            id: String::new(),
+                            class: None,
+                            children: Some(Element::new().text("File")),
+                            base: None,
+                        });
+                        let content = menubar_content(MenubarContentOpts::default(), || {
+                            menubar_sub(None, || {
+                                let st = MenubarSubTrigger(MenubarSubTriggerProps {
+                                    disabled: Some(false),
+                                    inset: Some(false),
+                                    class: None,
+                                    children: Some(Element::new().text("Share")),
+                                    base: None,
+                                });
+                                let sc = menubar_sub_content(None, || {
+                                    MenubarItem(MenubarItemProps {
+                                        disabled: Some(false),
+                                        inset: Some(false),
+                                        variant: None,
+                                        class: None,
+                                        on_click: None,
+                                        children: Some(Element::new().text("Email")),
+                                        base: None,
+                                    })
+                                });
+                                let mut frag = Element::new();
+                                frag.set_attr("rui_fragment", "1");
+                                frag.children(vec![st, sc])
+                            })
+                        });
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![trigger, content])
+                    });
+                    // Last sibling must not steal File's DropdownMenuCtx.
+                    let view = menubar_menu(Some("view".into()), None, || {
+                        let trigger = MenubarTrigger(MenubarTriggerProps {
+                            id: String::new(),
+                            class: None,
+                            children: Some(Element::new().text("View")),
+                            base: None,
+                        });
+                        let content = menubar_content(MenubarContentOpts::default(), || {
+                            MenubarItem(MenubarItemProps {
+                                disabled: Some(false),
+                                inset: Some(false),
+                                variant: None,
+                                class: None,
+                                on_click: None,
+                                children: Some(Element::new().text("Status Bar")),
+                                base: None,
+                            })
+                        });
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![trigger, content])
+                    });
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![file, view])
+                });
+                *root_e.borrow_mut() = el;
+            });
+            file_open
+        });
+
+        file_open.set(true);
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        let sub_trigger_fid = {
+            let tree = root.borrow();
+            fn find_sub_trigger_fid(el: &Element) -> Option<String> {
+                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                    || el.attrs.get("data-slot").map(String::as_str) == Some("menubar-sub-trigger")
+                {
+                    return el.focus_id.clone();
+                }
+                for c in &el.children {
+                    if let Some(f) = find_sub_trigger_fid(c) {
+                        return Some(f);
+                    }
+                }
+                None
+            }
+            find_sub_trigger_fid(&tree)
+        };
+        assert_eq!(
+            sub_trigger_fid.as_deref(),
+            Some("mb_iso_bar__file__sub0__trigger"),
+            "Share under File must keep File's id even after a sibling View menu is built \
+             (regression: was mb_iso_bar__view__sub0__trigger)"
+        );
+        assert!(
+            !use_signal("mb_iso_bar__view__sub0__open", || false).peek(),
+            "View must not own a phantom Share sub signal"
+        );
+
+        clear_test_reconcile_root();
+        drop(root);
+        handle.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery-faithful: Content body is a VStack (macro multi-child) with Separators around Sub.
+    /// Drive open via the real SubTrigger `on_hover` (set_dd_active + open_or_remount), then
+    /// hoist + layout + floating — assert the submenu has on-screen geometry.
+    #[test]
+    fn menubar_share_hover_opens_visible_submenu_panel() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+        use crate::core::tree::LayoutTree;
+        use crate::utils::popup::sync_floating_placement;
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, parent_open) = create_root(|| {
+            let parent_open = use_signal("mb_share_vis_bar__file__dd_open", || false);
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = menubar_scope("mb_share_vis_bar", || {
+                    menubar_menu(Some("file".into()), Some(parent_open), || {
+                        let trigger = MenubarTrigger(MenubarTriggerProps {
+                            id: String::new(),
+                            class: None,
+                            children: Some(Element::new().text("File")),
+                            base: None,
+                        });
+                        // Mirror gallery RSX multi-child Content → VStack wrapping.
+                        let content = menubar_content(MenubarContentOpts::default(), || {
+                            let mut col = crate::primitives::vstack().w("100%").gap("0");
+                            col = col.child(MenubarItem(MenubarItemProps {
+                                disabled: Some(false),
+                                inset: Some(false),
+                                variant: None,
+                                class: None,
+                                on_click: None,
+                                children: Some(Element::new().text("New File")),
+                                base: None,
+                            }));
+                            col = col.child(MenubarSeparator(MenubarSeparatorProps {
+                                children: None,
+                                base: None,
+                            }));
+                            col = col.child(menubar_sub(None, || {
+                                let st = MenubarSubTrigger(MenubarSubTriggerProps {
+                                    disabled: Some(false),
+                                    inset: Some(false),
+                                    class: None,
+                                    children: Some(Element::new().text("Share")),
+                                    base: None,
+                                });
+                                let sc = menubar_sub_content(None, || {
+                                    MenubarItem(MenubarItemProps {
+                                        disabled: Some(false),
+                                        inset: Some(false),
+                                        variant: None,
+                                        class: None,
+                                        on_click: None,
+                                        children: Some(Element::new().text("Email link")),
+                                        base: None,
+                                    })
+                                });
+                                let mut frag = Element::new();
+                                frag.set_attr("rui_fragment", "1");
+                                frag.children(vec![st, sc])
+                            }));
+                            col.into()
+                        });
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![trigger, content])
+                    })
+                });
+                *root_e.borrow_mut() = el;
+            });
+            parent_open
+        });
+
+        parent_open.set(true);
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        // Fire the real SubTrigger hover handler (same path as gallery pointer enter).
+        let hover_cb = {
+            let tree = root.borrow();
+            fn find_sub_hover(
+                el: &Element,
+            ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
+                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                {
+                    return el.on_hover.clone();
+                }
+                for c in &el.children {
+                    if let Some(h) = find_sub_hover(c) {
+                        return Some(h);
+                    }
+                }
+                None
+            }
+            find_sub_hover(&tree)
+        };
+        let hover_cb = hover_cb.expect("Share SubTrigger must expose on_hover after File open");
+        hover_cb.borrow_mut()(true);
+
+        // Same-frame contract: reconcile of SubContent must hoist the nested portal out of
+        // File's overflow:hidden scroll — no extra hoist_portal_subtrees call required.
+        {
+            let tree = root.borrow();
+            let layer = tree.children.iter().find(|c| {
+                c.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+            });
+            fn find_sub_panel(el: &Element) -> bool {
+                el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-content")
+                    || el.children.iter().any(find_sub_panel)
+            }
+            assert!(
+                layer.is_some_and(|l| l.children.iter().any(find_sub_panel)),
+                "Share submenu must sit on portal layer immediately after hover reconcile (same-frame hoist)"
+            );
+        }
+
+        {
+            let mut tree = root.borrow_mut();
+            // Give the File trigger + Share row non-zero geometry so floating can place.
+            fn stamp_bounds(el: &mut Element) {
+                if el.focus_id.as_deref() == Some("mb_share_vis_bar__file__dd_trigger") {
+                    el.layout_bounds = [40.0, 40.0, 48.0, 28.0];
+                }
+                if el.focus_id.as_deref() == Some("mb_share_vis_bar__file__sub0__trigger") {
+                    el.layout_bounds = [48.0, 120.0, 160.0, 28.0];
+                }
+                for c in &mut el.children {
+                    stamp_bounds(c);
+                }
+            }
+            stamp_bounds(&mut tree);
+            let _ = sync_floating_placement(&mut tree, 800.0, 600.0);
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [-1.0, -1.0]);
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+            let _ = sync_floating_placement(&mut tree, 800.0, 600.0);
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [-1.0, -1.0]);
+        }
+
+        let (sub_open, on_layer, panel_left, panel_w) = {
+            let tree = root.borrow();
+            let sub_open = use_signal("mb_share_vis_bar__file__sub0__open", || false).peek();
+            let layer = tree.children.iter().find(|c| {
+                c.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
+            });
+            fn find_sub_panel(el: &Element) -> Option<&Element> {
+                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-content")
+                {
+                    return Some(el);
+                }
+                el.children.iter().find_map(find_sub_panel)
+            }
+            let panel = layer.and_then(|l| l.children.iter().find_map(find_sub_panel));
+            let on_layer = panel.is_some();
+            let left = panel
+                .and_then(|p| crate::layout::lpa_length_px(p.style.inset.left))
+                .unwrap_or(-1.0);
+            let w = panel.map(|p| p.layout_bounds[2]).unwrap_or(0.0);
+            (sub_open, on_layer, left, w)
+        };
+
+        assert!(sub_open, "Share hover must set sub_open true");
+        assert!(
+            on_layer,
+            "Share submenu panel must sit on the portal layer after hover+hoist"
+        );
+        assert!(
+            panel_left > 40.0,
+            "submenu must be placed to the right of Share (left={panel_left}), not stuck at 0/clipped"
+        );
+        assert!(
+            panel_w > 8.0 || panel_left > 40.0,
+            "submenu must have visible width or at least a placed left edge (w={panel_w}, left={panel_left})"
+        );
+
+        clear_test_reconcile_root();
+        drop(root);
+        handle.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    /// Gallery stuck path: Share hover opens while reconcile misses (borrow / missing slot).
+    /// Without deferred remount, highlight sticks and no further enter fires — panel never appears.
+    #[test]
+    fn menubar_share_hover_recovers_after_reconcile_miss() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{
+            drain_deferred_view_remounts, reset_registered_anchors,
+        };
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, parent_open) = create_root(|| {
+            let parent_open = use_signal("mb_miss_bar__file__dd_open", || false);
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = menubar_scope("mb_miss_bar", || {
+                    menubar_menu(Some("file".into()), Some(parent_open), || {
+                        let trigger = MenubarTrigger(MenubarTriggerProps {
+                            id: String::new(),
+                            class: None,
+                            children: Some(Element::new().text("File")),
+                            base: None,
+                        });
+                        let content = menubar_content(MenubarContentOpts::default(), || {
+                            menubar_sub(None, || {
+                                let st = MenubarSubTrigger(MenubarSubTriggerProps {
+                                    disabled: Some(false),
+                                    inset: Some(false),
+                                    class: None,
+                                    children: Some(Element::new().text("Share")),
+                                    base: None,
+                                });
+                                let sc = menubar_sub_content(None, || {
+                                    MenubarItem(MenubarItemProps {
+                                        disabled: Some(false),
+                                        inset: Some(false),
+                                        variant: None,
+                                        class: None,
+                                        on_click: None,
+                                        children: Some(Element::new().text("Email link")),
+                                        base: None,
+                                    })
+                                });
+                                let mut frag = Element::new();
+                                frag.set_attr("rui_fragment", "1");
+                                frag.children(vec![st, sc])
+                            })
+                        });
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![trigger, content])
+                    })
+                });
+                *root_e.borrow_mut() = el;
+            });
+            parent_open
+        });
+
+        parent_open.set(true);
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        let hover_cb = {
+            let tree = root.borrow();
+            fn find_sub_hover(
+                el: &Element,
+            ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
+                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                {
+                    return el.on_hover.clone();
+                }
+                for c in &el.children {
+                    if let Some(h) = find_sub_hover(c) {
+                        return Some(h);
+                    }
+                }
+                None
+            }
+            find_sub_hover(&tree)
+        };
+        let hover_cb = hover_cb.expect("Share SubTrigger on_hover");
+
+        // Simulate reconcile miss during open (e.g. AppState borrowed): drop the test root.
+        clear_test_reconcile_root();
+        hover_cb.borrow_mut()(true);
+        let sub_open_after_miss =
+            use_signal("mb_miss_bar__file__sub0__open", || false).peek();
+        assert!(
+            sub_open_after_miss,
+            "hover must still set sub_open even when reconcile misses"
+        );
+
+        fn find_sub_panel(el: &Element) -> bool {
+            if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-content") {
+                return true;
+            }
+            el.children.iter().any(find_sub_panel)
+        }
+        assert!(
+            !find_sub_panel(&root.borrow()),
+            "panel must be absent while reconcile root is cleared (miss path)"
+        );
+
+        // Restore tree + drain deferred remount (same as CursorMoved/redraw after hover).
+        install_test_reconcile_root(Rc::clone(&root));
+        drain_deferred_view_remounts();
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        assert!(
+            find_sub_panel(&root.borrow()),
+            "deferred remount after reconcile miss must mount Share submenu panel"
+        );
+
+        clear_test_reconcile_root();
+        drop(root);
+        handle.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

@@ -133,6 +133,9 @@ fn dropdown_menu_context() -> Context<DropdownMenuCtx> {
 
 thread_local! {
     static DD_ACTIVATES: RefCell<HashMap<String, Vec<Rc<dyn Fn()>>>> = RefCell::new(HashMap::new());
+    /// Parent menu item index → nested submenu id (for ArrowRight / keyboard enter).
+    static DD_SUB_AT_IX: RefCell<HashMap<String, HashMap<usize, String>>> =
+        RefCell::new(HashMap::new());
     static DD_SUB_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
     static DD_RADIO_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
 }
@@ -140,6 +143,9 @@ thread_local! {
 fn reset_activates(id: &str) {
     DD_ACTIVATES.with(|m| {
         m.borrow_mut().insert(id.to_string(), Vec::new());
+    });
+    DD_SUB_AT_IX.with(|m| {
+        m.borrow_mut().remove(id);
     });
 }
 
@@ -155,6 +161,61 @@ fn activate_count(id: &str) -> usize {
 
 fn take_activate(id: &str, ix: usize) -> Option<Rc<dyn Fn()>> {
     DD_ACTIVATES.with(|m| m.borrow().get(id).and_then(|v| v.get(ix).cloned()))
+}
+
+fn register_sub_at_ix(parent_id: &str, ix: usize, sid: &str) {
+    DD_SUB_AT_IX.with(|m| {
+        m.borrow_mut()
+            .entry(parent_id.to_string())
+            .or_default()
+            .insert(ix, sid.to_string());
+    });
+}
+
+fn sub_id_at_ix(parent_id: &str, ix: usize) -> Option<String> {
+    DD_SUB_AT_IX.with(|m| {
+        m.borrow()
+            .get(parent_id)
+            .and_then(|map| map.get(&ix).cloned())
+    })
+}
+
+/// First open nested submenu under `parent_id`, if any.
+pub(crate) fn dropdown_menu_open_sub_id(parent_id: &str) -> Option<String> {
+    for i in 0..16 {
+        let sid = format!("{parent_id}__sub{i}");
+        let open = use_signal(format!("{sid}__open").as_str(), || false);
+        if open.peek() {
+            return Some(sid);
+        }
+    }
+    None
+}
+
+/// Whether the highlighted parent row is a SubTrigger.
+pub(crate) fn dropdown_menu_active_is_sub_trigger(parent_id: &str, ix: usize) -> bool {
+    sub_id_at_ix(parent_id, ix).is_some()
+}
+
+fn focus_submenu_first_item(sid: &str) {
+    let n = activate_count(sid);
+    let active = use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE);
+    let next = if n == 0 {
+        0
+    } else if let Some(i) = roving_edge(n, false) {
+        i
+    } else {
+        0
+    };
+    set_dd_active(active, next);
+}
+
+fn close_open_submenu_keep_parent_highlight(sid: &str) {
+    let open = use_signal(format!("{sid}__open").as_str(), || false);
+    if open.peek() {
+        open.set(false);
+    }
+    use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE).set_silent(ACTIVE_NONE);
 }
 
 fn reset_sub_seq(parent_id: &str) {
@@ -220,6 +281,47 @@ fn close_open_subs_except(parent_id: &str, keep_sub_id: Option<&str>) {
     }
 }
 
+/// Ensure submenu open and **re-notify** SubContent even when already `true`.
+///
+/// `Signal::set(true)` while already true does not flush effects. If the previous open
+/// lost its panel (`reconcile_subtree` missed the `{sid}__view` anchor), hover highlight
+/// can stick while the submenu never remounts.
+///
+/// `refresh_hover`: pointer open/click may soft-invalidate so rebuilt handlers rebind.
+/// Keyboard activate must pass `false` — otherwise the resting pointer re-enters the item
+/// under the cursor (often the parent row above), which `close_open_subs` and kills the sub.
+fn open_or_remount_sub(sub_id: &str, sub_open: Signal<bool>) {
+    open_or_remount_sub_ex(sub_id, sub_open, true);
+}
+
+fn open_or_remount_sub_ex(sub_id: &str, sub_open: Signal<bool>, refresh_hover: bool) {
+    let bump = use_signal(format!("{sub_id}__remount").as_str(), || 0u32);
+    let was_open = sub_open.peek();
+    if !was_open {
+        sub_open.set(true);
+    }
+    // Parent SubContent may synchronously force `false` (wrong parent `open`). Do not
+    // invalidate / remount in that case — it re-enters forever under a resting pointer.
+    if !sub_open.peek() {
+        log::debug!(
+            target: "rui::menu_sub",
+            "open_or_remount REJECT id={sub_id} was_open={was_open} now=false"
+        );
+        return;
+    }
+    if !was_open && refresh_hover {
+        crate::app::tree_hit::invalidate_hover_handlers();
+    }
+    bump.set(bump.peek().wrapping_add(1));
+    crate::app::runtime::request_redraw();
+    crate::app::runtime::try_hoist_portals_now();
+    log::debug!(
+        target: "rui::menu_sub",
+        "open_or_remount id={sub_id} was_open={was_open} now=true remount={} refresh_hover={refresh_hover}",
+        bump.peek()
+    );
+}
+
 /// 读取最近的 [`DropdownMenu`] 上下文。
 pub fn use_dropdown_menu() -> Option<DropdownMenuCtx> {
     use_context(dropdown_menu_context())
@@ -232,6 +334,12 @@ fn require_dropdown_menu(part: &str) -> DropdownMenuCtx {
 }
 
 /// 提供 DropdownMenu 上下文并构建子树（`ui!` `<DropdownMenu>` / Builder 共用）。
+///
+/// Context is installed under a **child owner** so sibling scopes (Menubar File / Edit /
+/// View) do not overwrite each other on the shared parent. Without isolation, the last
+/// menu wins and later Content rebuilds (e.g. Share) bind to the wrong `open` / id —
+/// gallery logged `gal-menubar__view__sub0` while File was open, then SubContent closed
+/// the sub because View's `open` was still false.
 pub fn dropdown_menu_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -243,17 +351,19 @@ pub fn dropdown_menu_scope(
     let trigger_fid = use_signal(format!("{id}__dd_trigger_fid").as_str(), || {
         format!("{id}__dd_trigger")
     });
-    provide_context(
-        dropdown_menu_context(),
-        DropdownMenuCtx {
-            open,
-            id: id.clone(),
-            trigger_fid,
-            active,
-            placement: PopupPlacement::BottomStart,
-        },
-    );
-    let mut root = body();
+    let mut root = with_child_owner(|| {
+        provide_context(
+            dropdown_menu_context(),
+            DropdownMenuCtx {
+                open,
+                id: id.clone(),
+                trigger_fid,
+                active,
+                placement: PopupPlacement::BottomStart,
+            },
+        );
+        body()
+    });
     if root.template_id.is_none() {
         root.template_id = Some(format!("{id}__dropdown_menu"));
     }
@@ -358,6 +468,74 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
         if !open_keys.peek() {
             return false;
         }
+
+        // While a nested submenu is open: ↑↓/Enter stay inside it; ← closes it
+        // (Esc is usually handled by overlay `try_close_top` before this runs).
+        if let Some(sid) = dropdown_menu_open_sub_id(&menu_id) {
+            let n = activate_count(&sid);
+            let sub_active = use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE);
+            return match &ev.logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    if n == 0 {
+                        return true;
+                    }
+                    let cur = sub_active.peek();
+                    let next = if cur == ACTIVE_NONE || cur >= n {
+                        0
+                    } else if let Some(i) = roving_move(n, cur, 1) {
+                        i
+                    } else {
+                        return true;
+                    };
+                    set_dd_active(sub_active, next);
+                    true
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    if n == 0 {
+                        return true;
+                    }
+                    let cur = sub_active.peek();
+                    let next = if cur == ACTIVE_NONE || cur >= n {
+                        n - 1
+                    } else if let Some(i) = roving_move(n, cur, -1) {
+                        i
+                    } else {
+                        return true;
+                    };
+                    set_dd_active(sub_active, next);
+                    true
+                }
+                Key::Named(NamedKey::Home) => {
+                    if let Some(i) = roving_edge(n, false) {
+                        set_dd_active(sub_active, i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::End) => {
+                    if let Some(i) = roving_edge(n, true) {
+                        set_dd_active(sub_active, i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                    let ix = sub_active.peek();
+                    if ix == ACTIVE_NONE {
+                        return true;
+                    }
+                    if let Some(cb) = take_activate(&sid, ix) {
+                        cb();
+                    }
+                    true
+                }
+                Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::Escape) => {
+                    close_open_submenu_keep_parent_highlight(&sid);
+                    true
+                }
+                Key::Named(NamedKey::ArrowRight) => true,
+                _ => false,
+            };
+        }
+
         let n = activate_count(&menu_id);
         if n == 0 {
             return false;
@@ -372,6 +550,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                 } else {
                     return false;
                 };
+                close_open_subs(&menu_id);
                 set_dd_active(active_keys, next);
                 true
             }
@@ -384,18 +563,36 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                 } else {
                     return false;
                 };
+                close_open_subs(&menu_id);
                 set_dd_active(active_keys, next);
                 true
             }
             Key::Named(NamedKey::Home) => {
                 if let Some(i) = roving_edge(n, false) {
+                    close_open_subs(&menu_id);
                     set_dd_active(active_keys, i);
                 }
                 true
             }
             Key::Named(NamedKey::End) => {
                 if let Some(i) = roving_edge(n, true) {
+                    close_open_subs(&menu_id);
                     set_dd_active(active_keys, i);
+                }
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                let ix = active_keys.peek();
+                if ix == ACTIVE_NONE {
+                    return false;
+                }
+                let Some(sid) = sub_id_at_ix(&menu_id, ix) else {
+                    return false;
+                };
+                let sub_open = use_signal(format!("{sid}__open").as_str(), || false);
+                open_or_remount_sub_ex(&sid, sub_open, false);
+                if sub_open.peek() {
+                    focus_submenu_first_item(&sid);
                 }
                 true
             }
@@ -406,7 +603,11 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                 }
                 if let Some(cb) = take_activate(&menu_id, ix) {
                     // Close is owned by each activate (Item/Radio)；Checkbox 不关。
+                    // SubTrigger open + move highlight into the submenu first row.
                     cb();
+                    if let Some(sid) = dropdown_menu_open_sub_id(&menu_id) {
+                        focus_submenu_first_item(&sid);
+                    }
                     return true;
                 }
                 false
@@ -1043,15 +1244,21 @@ pub fn DropdownMenuSubTrigger(
     sub.trigger_fid.set(trigger_id.clone());
 
     let activate = {
+        let sub_id = sub_id.clone();
         let sub_open = sub_open;
         Rc::new(move || {
             if !disabled {
-                sub_open.set(true);
+                // Keyboard Enter/Space: do not refresh hover (resting pointer would steal).
+                open_or_remount_sub_ex(&sub_id, sub_open, false);
+                if sub_open.peek() {
+                    focus_submenu_first_item(&sub_id);
+                }
             }
         }) as Rc<dyn Fn()>
     };
     let ix = activate_count(&parent.id);
     push_activate(&parent.id, activate);
+    register_sub_at_ix(&parent.id, ix, &sub_id);
 
     let mut kids = children
         .map(take_packed)
@@ -1096,22 +1303,14 @@ pub fn DropdownMenuSubTrigger(
             }
             close_open_subs_except(&parent_id, Some(sub_id.as_str()));
             set_dd_active(active, ix);
-            if !sub_open.peek() {
-                sub_open.set(true);
-                crate::app::tree_hit::invalidate_hover_handlers();
-                crate::app::runtime::request_redraw();
-            }
+            open_or_remount_sub(&sub_id, sub_open);
         })
         .on_click(move || {
             if disabled {
                 return;
             }
             close_open_subs_except(&parent_id_click, Some(sub_id_click.as_str()));
-            if !sub_open_click.peek() {
-                sub_open_click.set(true);
-                crate::app::tree_hit::invalidate_hover_handlers();
-                crate::app::runtime::request_redraw();
-            }
+            open_or_remount_sub(&sub_id_click, sub_open_click);
             set_dd_active(active, ix);
         })
         .cursor_kind(if disabled {
@@ -1149,6 +1348,8 @@ pub fn dropdown_menu_sub_content(
     reactive_anchor(view_id.clone(), move || {
         let parent_is_open = parent_open.get();
         let is_open = sub_open.get();
+        // Remount bump from SubTrigger hover/click (same-value open would not re-run).
+        let remount_n = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
         if !parent_is_open {
             if sub_open.peek() {
                 sub_open.set(false);
@@ -1164,6 +1365,10 @@ pub fn dropdown_menu_sub_content(
             return Element::new().w(0.0).h(0.0);
         }
         let Some(oz) = portal_sync(&sid, sub_open, OverlayKind::Menu, OverlayMode::Stacked) else {
+            log::debug!(
+                target: "rui::menu_sub",
+                "sub_content portal_sync NONE sid={sid} parent_open={parent_is_open} remount={remount_n}"
+            );
             return Element::new().w(0.0).h(0.0);
         };
 
@@ -1221,7 +1426,18 @@ pub fn dropdown_menu_sub_content(
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
         apply_stored_floating_place(&mut panel, &sid);
-        mount_anchored_overlay(panel, oz.panel)
+        let mounted = mount_anchored_overlay(panel, oz.panel);
+        log::debug!(
+            target: "rui::menu_sub",
+            "sub_content BUILD sid={sid} fid={fid} oz={} remount={remount_n} kids_portal={}",
+            oz.panel,
+            mounted
+                .children
+                .first()
+                .and_then(|c| c.attrs.get("rui_portal").map(String::as_str))
+                .unwrap_or("-")
+        );
+        mounted
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
@@ -1572,5 +1788,124 @@ mod tests {
                 })
             })
         });
+    }
+
+    /// Enter on SubTrigger opens the sub and highlights its first item; Esc/← close
+    /// restores parent-only highlighting (sub active cleared).
+    #[test]
+    fn keyboard_enter_sub_focuses_first_item_then_escape_clears_sub_active() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, parent_open) = create_root(|| {
+            let parent_open = use_signal("dd_kb_sub__dd_open", || false);
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = dropdown_menu_scope("dd_kb_sub", Some(parent_open), || {
+                    let trigger = DropdownMenuTrigger(DropdownMenuTriggerProps {
+                        id: String::new(),
+                        children: Some(Element::new().text("Open")),
+                        base: None,
+                    });
+                    let content = dropdown_menu_content(DropdownMenuContentOpts::default(), || {
+                        let _ = DropdownMenuItem(DropdownMenuItemProps {
+                            disabled: Some(false),
+                            inset: Some(false),
+                            variant: None,
+                            class: None,
+                            on_click: None,
+                            children: Some(Element::new().text("Above")),
+                            base: None,
+                        });
+                        dropdown_menu_sub(None, || {
+                            let st = DropdownMenuSubTrigger(DropdownMenuSubTriggerProps {
+                                disabled: Some(false),
+                                inset: Some(false),
+                                class: None,
+                                children: Some(Element::new().text("More")),
+                                base: None,
+                            });
+                            let sc = dropdown_menu_sub_content(None, || {
+                                DropdownMenuItem(DropdownMenuItemProps {
+                                    disabled: Some(false),
+                                    inset: Some(false),
+                                    variant: None,
+                                    class: None,
+                                    on_click: None,
+                                    children: Some(Element::new().text("Nested")),
+                                    base: None,
+                                })
+                            });
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag.children(vec![st, sc])
+                        })
+                    });
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![trigger, content])
+                });
+                *root_e.borrow_mut() = el;
+            });
+            parent_open
+        });
+
+        parent_open.set(true);
+        {
+            let mut tree = root.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+        }
+
+        // Simulate Enter on SubTrigger (ix 1 after "Above").
+        let parent_active = use_signal("dd_kb_sub__dd_active", || ACTIVE_NONE);
+        set_dd_active(parent_active, 1);
+        assert!(
+            dropdown_menu_active_is_sub_trigger("dd_kb_sub", 1),
+            "Share/More row must register as a sub trigger"
+        );
+        if let Some(cb) = take_activate("dd_kb_sub", 1) {
+            cb();
+        }
+        assert_eq!(
+            dropdown_menu_open_sub_id("dd_kb_sub").as_deref(),
+            Some("dd_kb_sub__sub0")
+        );
+        let sub_active = use_signal("dd_kb_sub__sub0__dd_active", || ACTIVE_NONE).peek();
+        assert_eq!(sub_active, 0, "Enter must highlight the submenu first item");
+        assert_eq!(
+            parent_active.peek(),
+            1,
+            "parent SubTrigger highlight must remain while sub is open"
+        );
+
+        close_open_submenu_keep_parent_highlight("dd_kb_sub__sub0");
+        assert!(dropdown_menu_open_sub_id("dd_kb_sub").is_none());
+        assert_eq!(
+            use_signal("dd_kb_sub__sub0__dd_active", || ACTIVE_NONE).peek(),
+            ACTIVE_NONE
+        );
+        assert_eq!(
+            parent_active.peek(),
+            1,
+            "closing sub must keep parent highlight on the SubTrigger"
+        );
+
+        clear_test_reconcile_root();
+        drop(root);
+        handle.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 }

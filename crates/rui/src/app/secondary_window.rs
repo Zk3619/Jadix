@@ -797,17 +797,23 @@ impl SecondaryWindowState {
         &mut self,
         anchor_id: &str,
         new_fragment: Element,
-    ) -> LayoutStatus {
+    ) -> Option<LayoutStatus> {
         let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
-        let status = if let Some(old) = find_template_mut(&mut self.root_element, &want) {
-            *old = new_fragment;
-            LayoutStatus::StructureChanged
-        } else {
-            drop(new_fragment);
-            LayoutStatus::StructureChanged
-        };
+        let old = find_template_mut(&mut self.root_element, &want)?;
+        let needs_portal_hoist = element_contains_rui_portal(&new_fragment);
+        *old = new_fragment;
+        let mut status = LayoutStatus::StructureChanged;
+        if needs_portal_hoist {
+            let portal_moves =
+                crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
+                    &mut self.root_element,
+                );
+            if portal_moves > 0 {
+                status = status.merge(LayoutStatus::StructureChanged);
+            }
+        }
         self.layout_status = self.layout_status.merge(status);
-        status
+        Some(status)
     }
 
     pub(super) fn update_element_by_template_id<F>(
@@ -841,4 +847,11 @@ fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&
         }
     }
     None
+}
+
+fn element_contains_rui_portal(el: &Element) -> bool {
+    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
+        return true;
+    }
+    el.children.iter().any(element_contains_rui_portal)
 }

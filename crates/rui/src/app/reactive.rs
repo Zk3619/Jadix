@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use crate::core::reactivity::{
-    create_render_effect, dispose_effect, untrack, use_signal, EffectId, Signal,
+    create_render_effect, dispose_effect, effect_is_alive, untrack, use_signal, EffectId, Signal,
 };
 use crate::core::tree::{Element, IntoCssDim, IntoNodeText, LayoutStatus, UnitSlot, UnmountHook};
 
@@ -49,6 +49,12 @@ thread_local! {
     static COMPONENT_PROPS: RefCell<HashMap<String, Rc<RefCell<Box<dyn Any>>>>> =
         RefCell::new(HashMap::new());
     static COMPONENT_CHILDREN: RefCell<HashMap<String, Option<Element>>> =
+        RefCell::new(HashMap::new());
+    /// `{sid}__view` reconcile miss → bump `{sid}__remount` once borrow/tree settles.
+    /// Drained after hover callbacks (AppState released) on pointer / redraw paths.
+    static DEFERRED_VIEW_REMOUNTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Cap deferred remounts per sub id so a permanently missing anchor cannot pump forever.
+    static DEFERRED_VIEW_RETRY_COUNTS: RefCell<HashMap<String, u8>> =
         RefCell::new(HashMap::new());
 }
 
@@ -109,6 +115,62 @@ pub fn registered_anchor_count() -> usize {
     REGISTERED_ANCHORS.with(|registry| registry.borrow().len())
 }
 
+/// Queue a remount for a menu/submenu content island (`{sid}__view` → `{sid}__remount`).
+///
+/// Used when `try_reconcile_subtree` misses (borrow contention, or anchor not yet in the live
+/// tree). Hover highlight can stick while the pointer stays on the trigger — without a deferred
+/// bump, no further `on_hover(true)` fires and the panel never appears.
+pub fn defer_view_remount(view_anchor_id: &str) {
+    let Some(sid) = view_anchor_id.strip_suffix("__view") else {
+        return;
+    };
+    if sid.is_empty() {
+        return;
+    }
+    const MAX_RETRIES: u8 = 4;
+    let allow = DEFERRED_VIEW_RETRY_COUNTS.with(|c| {
+        let mut c = c.borrow_mut();
+        let n = c.entry(sid.to_string()).or_insert(0);
+        if *n >= MAX_RETRIES {
+            return false;
+        }
+        *n = n.saturating_add(1);
+        true
+    });
+    if !allow {
+        return;
+    }
+    DEFERRED_VIEW_REMOUNTS.with(|q| {
+        let mut q = q.borrow_mut();
+        if !q.iter().any(|s| s == sid) {
+            q.push(sid.to_string());
+        }
+    });
+    runtime::request_redraw();
+}
+
+/// Clear deferred-remount retry budget after a successful reconcile into `{sid}__view`.
+fn clear_view_remount_retries(view_anchor_id: &str) {
+    if let Some(sid) = view_anchor_id.strip_suffix("__view") {
+        DEFERRED_VIEW_RETRY_COUNTS.with(|c| {
+            c.borrow_mut().remove(sid);
+        });
+    }
+}
+
+/// Drain [`defer_view_remount`] bumps. Call only when `AppState` is not borrowed.
+pub fn drain_deferred_view_remounts() {
+    let ids = DEFERRED_VIEW_REMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    if ids.is_empty() {
+        return;
+    }
+    for sid in ids {
+        let bump = use_signal(format!("{sid}__remount").as_str(), || 0u32);
+        bump.set(bump.peek().wrapping_add(1));
+    }
+    runtime::request_redraw();
+}
+
 /// Current size of [`REGISTERED_BINDINGS`] (WP-2.4 diagnostics / leak tests).
 pub fn registered_binding_count() -> usize {
     REGISTERED_BINDINGS.with(|registry| registry.borrow().len())
@@ -157,6 +219,9 @@ pub fn reset_registered_anchors() {
             dispose_effect(effect_id);
         }
     }
+
+    DEFERRED_VIEW_REMOUNTS.with(|q| q.borrow_mut().clear());
+    DEFERRED_VIEW_RETRY_COUNTS.with(|c| c.borrow_mut().clear());
 
     COMPONENT_PROPS.with(|store| store.borrow_mut().clear());
     COMPONENT_CHILDREN.with(|store| store.borrow_mut().clear());
@@ -231,8 +296,27 @@ where
 
     let id = anchor_id.into();
     let registry_key = window_scoped_registry_key(&id);
-    let already_registered =
-        REGISTERED_ANCHORS.with(|registry| registry.borrow().contains_key(&registry_key));
+    // Zombie registration: id still in the map but effect was disposed (e.g. owner teardown
+    // raced with unmount). Re-register so nested SubContent can mount again.
+    let already_registered = REGISTERED_ANCHORS.with(|registry| {
+        let mut map = registry.borrow_mut();
+        if let Some(registration) = map.get(&registry_key) {
+            let alive = registration
+                .effect_id
+                .is_some_and(effect_is_alive);
+            if alive {
+                return true;
+            }
+            if let Some(hook) = registration.hook.upgrade() {
+                hook.disarm();
+            }
+            if let Some(effect_id) = registration.effect_id {
+                dispose_effect(effect_id);
+            }
+            map.remove(&registry_key);
+        }
+        false
+    });
     if already_registered {
         return;
     }
@@ -290,7 +374,16 @@ where
             fragment = fragment.on_unmount_hook(hook);
         }
         if runtime::try_reconcile_subtree(&effect_anchor_id, fragment).is_some() {
+            clear_view_remount_retries(&effect_anchor_id);
             runtime::request_redraw();
+        } else {
+            // Miss: borrow held, or `{sid}__view` not in the live tree yet. Defer remount so
+            // hover-open menus (Share) are not stuck with highlight and no panel.
+            defer_view_remount(&effect_anchor_id);
+            log::debug!(
+                target: "rui::menu_sub",
+                "reconcile MISS anchor={effect_anchor_id} (deferred remount)"
+            );
         }
     });
     REGISTERED_ANCHORS.with(|registry| {

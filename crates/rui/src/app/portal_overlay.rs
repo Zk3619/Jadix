@@ -398,6 +398,12 @@ pub fn clear_overlay_stack() {
     crate::utils::popup::arm_underlay_close();
 }
 
+/// Test/harness helper: current Stacked overlay depth for the active window scope.
+#[cfg(test)]
+pub fn overlay_stack_depth_for_test() -> usize {
+    with_stack_mut(|s| s.len())
+}
+
 pub(crate) fn drop_overlay_stack(scope: WindowScope) {
     OVERLAY_STACKS.with(|cell| {
         cell.borrow_mut().remove(&scope);
@@ -594,6 +600,27 @@ mod tests {
             "opening nested __sub must keep underlay armed"
         );
         assert!(parent.peek(), "parent menu must stay open under nested sub");
+    }
+
+    /// Menubar namespaces menus as `{bar}__{menu}`; sub ids are `{bar}__{menu}__subN`.
+    /// Nested keep-parent must use the full parent overlay id, not a short suffix.
+    #[test]
+    fn nested_menubar_namespaced_sub_keeps_parent_open() {
+        clear();
+        let parent = Signal::new(true);
+        let sub = Signal::new(false);
+        let parent_id = "gal-menubar__file";
+        let sub_id = format!("{parent_id}__sub0");
+        assert!(portal_sync(parent_id, parent, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        crate::utils::popup::arm_underlay_close();
+        sub.set(true);
+        assert!(
+            portal_sync(sub_id.as_str(), sub, OverlayKind::Menu, OverlayMode::Stacked).is_some(),
+            "namespaced sub must push onto the stack"
+        );
+        assert!(parent.peek(), "menubar parent Menu must stay open under namespaced __sub");
+        assert!(sub.peek(), "sub open signal must remain true after portal_sync");
+        assert_eq!(depth(), 2, "parent + nested sub must both remain stacked");
     }
 
     /// Regression: `arm` must run *after* the open `on_click` (which disarms). Arming first

@@ -590,7 +590,7 @@ impl AppState {
         let font_ptr: *mut glyphon::FontSystem = text_renderer.font_system_mut();
         let overlay_text_renderer =
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
-        crate::debug_stack::crumb("new_bootstrap: after text_renderer");
+        log::debug!("new_bootstrap: after text_renderer");
 
         Self {
             window,
@@ -829,7 +829,7 @@ impl AppState {
         &mut self,
         anchor_id: &str,
         mut new_fragment: Element,
-    ) -> crate::core::tree::LayoutStatus {
+    ) -> Option<crate::core::tree::LayoutStatus> {
         #[cfg(feature = "tracing")]
         let _span = tracing::trace_span!("app.reconcile_subtree", anchor_id).entered();
 
@@ -840,19 +840,38 @@ impl AppState {
         // *different* node earlier in DFS and replace the wrong subtree — e.g. sibling buttons +
         // `<Show>` vanishing intermittently.
         let want = normalize_anchor_template_id(anchor_id);
-        let status = if let Some(old_subtree) =
+        let Some(old_subtree) =
             find_reactive_subtree_by_anchor_id_mut(&mut self.root_element, &want)
-        {
-            let mut dirty = Vec::new();
-            let status = Self::reconcile_elements(&mut new_fragment, old_subtree, &mut dirty);
-            self.pending_layout_dirty.extend(dirty);
-            *old_subtree = new_fragment;
-            status
-        } else {
-            LayoutStatus::StructureChanged
+        else {
+            // Do **not** report StructureChanged here: callers treat `Some(_)` as "applied".
+            // Returning success while dropping `new_fragment` left overlays (menu subs) stuck
+            // open-with-no-panel until a signal re-notified the island.
+            log::debug!(
+                target: "rui::reconcile",
+                "reconcile_subtree: anchor not found, fragment dropped ({anchor_id})"
+            );
+            return None;
         };
 
+        let mut dirty = Vec::new();
+        let status = Self::reconcile_elements(&mut new_fragment, old_subtree, &mut dirty);
+        self.pending_layout_dirty.extend(dirty);
+        // Nested portals (Dropdown/Menubar SubContent) are born under already-hoisted
+        // parents that use overflow:hidden scroll. Promote them in this same call so the
+        // panel escapes clipping before the next paint — waiting for a later layout frame
+        // left gallery Share submenu stuck with highlight and no right-hand panel.
+        let needs_portal_hoist = element_contains_rui_portal(&new_fragment);
+        *old_subtree = new_fragment;
+
         recompute_scroll_viewport_flags(&mut self.root_element);
+        let mut status = status;
+        if needs_portal_hoist {
+            let portal_moves =
+                hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
+            if portal_moves > 0 {
+                status = Self::merge_layout_status(status, LayoutStatus::StructureChanged);
+            }
+        }
         self.layout_status = Self::merge_layout_status(self.layout_status, status);
         if matches!(
             status,
@@ -860,7 +879,7 @@ impl AppState {
         ) {
             self.mark_full_redraw();
         }
-        status
+        Some(status)
     }
 
     fn merge_layout_status(
@@ -3189,6 +3208,13 @@ pub(crate) fn recompute_scroll_viewport_flags(el: &mut Element) -> bool {
 
 fn normalize_anchor_template_id(id: &str) -> String {
     id.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn element_contains_rui_portal(el: &Element) -> bool {
+    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
+        return true;
+    }
+    el.children.iter().any(element_contains_rui_portal)
 }
 
 /// Used by [`AppState::reconcile_subtree`] only. Must not use hot-reload fuzzy matching.

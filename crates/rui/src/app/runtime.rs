@@ -46,18 +46,27 @@ impl AppRuntime {
                 let state_rc = self.state.upgrade()?;
                 // Root rebuild / input handlers may already hold this RefCell
                 // (Inspector overlay used to panic here via nested reactive_view).
-                let mut opt = state_rc.try_borrow_mut().ok()?;
+                let mut opt = match state_rc.try_borrow_mut() {
+                    Ok(b) => b,
+                    Err(_) => {
+                        log::debug!(
+                            target: "rui::menu_sub",
+                            "reconcile BORROW_FAIL anchor={anchor_id}"
+                        );
+                        return None;
+                    }
+                };
                 let state = opt.as_mut()?;
                 #[cfg(debug_assertions)]
                 state.apply_hot_reload_overrides_to_fragment(&mut new_fragment);
-                Some(state.reconcile_subtree(anchor_id, new_fragment))
+                state.reconcile_subtree(anchor_id, new_fragment)
             }
             TreeHome::SecondarySlot => {
                 let id = Self::secondary_slot_id()?;
                 let secs = self.secondaries.upgrade()?;
                 let mut secs = secs.borrow_mut();
                 let sec = secs.get_mut(&id)?;
-                Some(sec.reconcile_subtree(anchor_id, new_fragment))
+                sec.reconcile_subtree(anchor_id, new_fragment)
             }
         }
     }
@@ -144,11 +153,91 @@ pub fn try_reconcile_subtree(
     anchor_id: &str,
     new_fragment: Element,
 ) -> Option<crate::core::tree::LayoutStatus> {
-    APP_RUNTIME.with(|c| {
-        c.borrow()
-            .as_ref()
-            .and_then(|rt| rt.try_reconcile_subtree(anchor_id, new_fragment))
+    let has_app = APP_RUNTIME.with(|c| c.borrow().is_some());
+    if has_app {
+        return APP_RUNTIME.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|rt| rt.try_reconcile_subtree(anchor_id, new_fragment))
+        });
+    }
+    #[cfg(test)]
+    {
+        return test_reconcile_subtree(anchor_id, new_fragment);
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (anchor_id, new_fragment);
+        None
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RECONCILE_ROOT: RefCell<Option<std::rc::Rc<RefCell<Element>>>> =
+        const { RefCell::new(None) };
+}
+
+/// Install an in-memory tree so [`try_reconcile_subtree`] works without a live `AppState`
+/// (component overlay / menubar harnesses).
+#[cfg(test)]
+pub fn install_test_reconcile_root(root: std::rc::Rc<RefCell<Element>>) {
+    TEST_RECONCILE_ROOT.with(|c| *c.borrow_mut() = Some(root));
+}
+
+#[cfg(test)]
+pub fn clear_test_reconcile_root() {
+    TEST_RECONCILE_ROOT.with(|c| *c.borrow_mut() = None);
+}
+
+#[cfg(test)]
+fn test_reconcile_subtree(
+    anchor_id: &str,
+    new_fragment: Element,
+) -> Option<crate::core::tree::LayoutStatus> {
+    TEST_RECONCILE_ROOT.with(|c| {
+        let root = c.borrow().as_ref()?.clone();
+        let mut root = root.borrow_mut();
+        let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
+        if let Some(slot) = find_template_id_mut(&mut root, &want) {
+            let needs_portal_hoist = element_contains_rui_portal(&new_fragment);
+            *slot = new_fragment;
+            // Match AppState: nested SubContent portals must leave overflow parents
+            // in the same reconcile turn (gallery Share submenu).
+            if needs_portal_hoist {
+                let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
+            }
+            Some(crate::core::tree::LayoutStatus::StructureChanged)
+        } else {
+            // Match AppState: miss must not look like a successful apply.
+            None
+        }
     })
+}
+
+#[cfg(test)]
+fn element_contains_rui_portal(el: &Element) -> bool {
+    if el.attrs.get("rui_portal").map(String::as_str) == Some("1") {
+        return true;
+    }
+    el.children.iter().any(element_contains_rui_portal)
+}
+
+#[cfg(test)]
+fn find_template_id_mut<'a>(el: &'a mut Element, want: &str) -> Option<&'a mut Element> {
+    if el
+        .template_id
+        .as_deref()
+        .is_some_and(|t| t.replace('\\', "/").to_ascii_lowercase() == want)
+    {
+        return Some(el);
+    }
+    for child in &mut el.children {
+        if let Some(hit) = find_template_id_mut(child, want) {
+            return Some(hit);
+        }
+    }
+    None
 }
 
 pub fn request_redraw() {
@@ -157,6 +246,69 @@ pub fn request_redraw() {
             rt.request_redraw();
         }
     });
+}
+
+/// Promote nested portals (e.g. menu submenu) while AppState is free to borrow.
+/// Safe no-op when no runtime is installed or the tree is already borrowed.
+pub fn try_hoist_portals_now() {
+    APP_RUNTIME.with(|c| {
+        let rt_slot = c.borrow();
+        let Some(rt) = rt_slot.as_ref() else {
+            return;
+        };
+        match window_scope::tree_home_for(window_scope::active()) {
+            TreeHome::AppState => {
+                let Some(state_rc) = rt.state.upgrade() else {
+                    return;
+                };
+                drop(rt_slot);
+                let Ok(mut opt) = state_rc.try_borrow_mut() else {
+                    return;
+                };
+                let Some(state) = opt.as_mut() else {
+                    return;
+                };
+                let n = crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
+                    &mut state.root_element,
+                );
+                if n > 0 {
+                    state.mark_full_redraw();
+                    state.window.request_redraw();
+                }
+            }
+            TreeHome::SecondarySlot => {
+                let Some(id) = window_scope::active_window_id() else {
+                    return;
+                };
+                let Some(secs) = rt.secondaries.upgrade() else {
+                    return;
+                };
+                drop(rt_slot);
+                let Ok(mut secs) = secs.try_borrow_mut() else {
+                    return;
+                };
+                let Some(sec) = secs.get_mut(&id) else {
+                    return;
+                };
+                let n = crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
+                    &mut sec.root_element,
+                );
+                if n > 0 {
+                    sec.window.request_redraw();
+                }
+            }
+        }
+    });
+    #[cfg(test)]
+    {
+        TEST_RECONCILE_ROOT.with(|c| {
+            if let Some(root) = c.borrow().as_ref() {
+                if let Ok(mut tree) = root.try_borrow_mut() {
+                    let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+                }
+            }
+        });
+    }
 }
 
 pub fn request_redraw_all() {

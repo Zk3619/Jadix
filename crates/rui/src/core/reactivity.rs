@@ -508,8 +508,8 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
     let depth = rt.effect_run_depth.get() + 1;
     rt.effect_run_depth.set(depth);
     if depth > 512 {
-        eprintln!(
-            "[rui] run_effect stack depth={depth} effect_id={} — likely infinite effect re-entry",
+        log::error!(
+            "run_effect stack depth={depth} effect_id={} — likely infinite effect re-entry",
             effect_id.0
         );
         rt.effect_run_depth.set(depth - 1);
@@ -562,8 +562,8 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
         #[cfg(debug_assertions)]
         if !rt.ui_root_bare_get_warned.get() {
             rt.ui_root_bare_get_warned.set(true);
-            eprintln!(
-                "[rui] root app_builder subscribed {dep_count} signal(s) via bare Signal::get() \
+            log::warn!(
+                "root app_builder subscribed {dep_count} signal(s) via bare Signal::get() \
                  — prefer bind_* / Show / For / reactive! \
                  (see docs/reactivity_and_hot_reload.md; diagnose with ui_root_effect_dep_count)"
             );
@@ -591,10 +591,10 @@ fn flush_deferred_effects(rt: &Runtime) {
         }
         rounds += 1;
         if rounds == 1 || rounds % 50 == 0 {
-            crate::debug_stack::crumb(&format!(
+            log::debug!(
                 "flush_deferred: round={rounds} batch={}",
                 ids.len()
-            ));
+            );
         }
         if rounds > 100_000 {
             panic!("flush_deferred_effects exceeded 100k rounds — likely effect create loop");
@@ -605,7 +605,7 @@ fn flush_deferred_effects(rt: &Runtime) {
         }
     }
     if rounds > 0 {
-        crate::debug_stack::crumb(&format!("flush_deferred: done rounds={rounds}"));
+        log::debug!("flush_deferred: done rounds={rounds}");
     }
     rt.flushing_deferred.set(false);
 }
@@ -1174,6 +1174,11 @@ pub fn ui_root_effect_dep_count() -> usize {
 /// Alias of [`ui_root_effect_dep_count`] (WP-2.7 / R-WP-2 diagnostic hook).
 pub fn root_bare_get_count() -> usize {
     ui_root_effect_dep_count()
+}
+
+/// Whether `id` still refers to a live effect slot (not yet disposed).
+pub fn effect_is_alive(id: EffectId) -> bool {
+    RUNTIME.with(|rt_rc| rt_rc.borrow().effects.borrow().contains_key(&id))
 }
 
 /// Dispose one effect and its owner scope (cascades to nested effects / signals / cleanups).

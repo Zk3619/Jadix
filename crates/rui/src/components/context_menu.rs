@@ -138,6 +138,8 @@ fn context_menu_context() -> Context<ContextMenuCtx> {
 
 thread_local! {
     static CTX_ACTIVATES: RefCell<HashMap<String, Vec<Rc<dyn Fn()>>>> = RefCell::new(HashMap::new());
+    static CTX_SUB_AT_IX: RefCell<HashMap<String, HashMap<usize, String>>> =
+        RefCell::new(HashMap::new());
     static SUB_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
     static RADIO_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
 }
@@ -145,6 +147,9 @@ thread_local! {
 fn reset_activates(id: &str) {
     CTX_ACTIVATES.with(|m| {
         m.borrow_mut().insert(id.to_string(), Vec::new());
+    });
+    CTX_SUB_AT_IX.with(|m| {
+        m.borrow_mut().remove(id);
     });
 }
 
@@ -160,6 +165,55 @@ fn activate_count(id: &str) -> usize {
 
 fn take_activate(id: &str, ix: usize) -> Option<Rc<dyn Fn()>> {
     CTX_ACTIVATES.with(|m| m.borrow().get(id).and_then(|v| v.get(ix).cloned()))
+}
+
+fn register_sub_at_ix(parent_id: &str, ix: usize, sid: &str) {
+    CTX_SUB_AT_IX.with(|m| {
+        m.borrow_mut()
+            .entry(parent_id.to_string())
+            .or_default()
+            .insert(ix, sid.to_string());
+    });
+}
+
+fn sub_id_at_ix(parent_id: &str, ix: usize) -> Option<String> {
+    CTX_SUB_AT_IX.with(|m| {
+        m.borrow()
+            .get(parent_id)
+            .and_then(|map| map.get(&ix).cloned())
+    })
+}
+
+fn context_menu_open_sub_id(parent_id: &str) -> Option<String> {
+    for i in 0..16 {
+        let sid = format!("{parent_id}__sub{i}");
+        let open = use_signal(format!("{sid}__open").as_str(), || false);
+        if open.peek() {
+            return Some(sid);
+        }
+    }
+    None
+}
+
+fn focus_submenu_first_item(sid: &str) {
+    let n = activate_count(sid);
+    let active = use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE);
+    let next = if n == 0 {
+        0
+    } else if let Some(i) = roving_edge(n, false) {
+        i
+    } else {
+        0
+    };
+    set_ctx_active(active, next);
+}
+
+fn close_open_submenu_keep_parent_highlight(sid: &str) {
+    let open = use_signal(format!("{sid}__open").as_str(), || false);
+    if open.peek() {
+        open.set(false);
+    }
+    use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE).set_silent(ACTIVE_NONE);
 }
 
 fn reset_sub_seq(parent_id: &str) {
@@ -226,6 +280,28 @@ fn close_open_subs_except(parent_id: &str, keep_sub_id: Option<&str>) {
     }
 }
 
+/// Same contract as dropdown: remount when needed; never invalidate if open did not stick.
+/// Keyboard activate must pass `refresh_hover=false` (see dropdown `open_or_remount_sub_ex`).
+fn open_or_remount_sub(sub_id: &str, sub_open: Signal<bool>) {
+    open_or_remount_sub_ex(sub_id, sub_open, true);
+}
+
+fn open_or_remount_sub_ex(sub_id: &str, sub_open: Signal<bool>, refresh_hover: bool) {
+    let bump = use_signal(format!("{sub_id}__remount").as_str(), || 0u32);
+    let was_open = sub_open.peek();
+    if !was_open {
+        sub_open.set(true);
+    }
+    if !sub_open.peek() {
+        return;
+    }
+    if !was_open && refresh_hover {
+        crate::app::tree_hit::invalidate_hover_handlers();
+    }
+    bump.set(bump.peek().wrapping_add(1));
+    crate::app::runtime::request_redraw();
+}
+
 /// 读取最近的 [`ContextMenu`] 上下文。
 pub fn use_context_menu() -> Option<ContextMenuCtx> {
     use_context(context_menu_context())
@@ -238,6 +314,9 @@ fn require_context_menu(part: &str) -> ContextMenuCtx {
 }
 
 /// 提供 ContextMenu 上下文并构建子树（`ui!` `<ContextMenu>` / Builder 共用）。
+///
+/// Context under a child owner — same isolation as [`dropdown_menu_scope`] for sibling
+/// compound roots.
 pub fn context_menu_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -250,18 +329,20 @@ pub fn context_menu_scope(
         format!("{id}__ctx_trigger")
     });
     let cursor = use_signal(format!("{id}__ctx_cursor").as_str(), || [-1.0_f32, -1.0]);
-    provide_context(
-        context_menu_context(),
-        ContextMenuCtx {
-            open,
-            id: id.clone(),
-            trigger_fid,
-            cursor,
-            active,
-            placement: PopupPlacement::BottomStart,
-        },
-    );
-    let mut root = body();
+    let mut root = with_child_owner(|| {
+        provide_context(
+            context_menu_context(),
+            ContextMenuCtx {
+                open,
+                id: id.clone(),
+                trigger_fid,
+                cursor,
+                active,
+                placement: PopupPlacement::BottomStart,
+            },
+        );
+        body()
+    });
     if root.template_id.is_none() {
         root.template_id = Some(format!("{id}__context_menu"));
     }
@@ -354,6 +435,72 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
         if !open_keys.peek() {
             return false;
         }
+
+        if let Some(sid) = context_menu_open_sub_id(&menu_id) {
+            let n = activate_count(&sid);
+            let sub_active = use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE);
+            return match &ev.logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    if n == 0 {
+                        return true;
+                    }
+                    let cur = sub_active.peek();
+                    let next = if cur == ACTIVE_NONE || cur >= n {
+                        0
+                    } else if let Some(i) = roving_move(n, cur, 1) {
+                        i
+                    } else {
+                        return true;
+                    };
+                    set_ctx_active(sub_active, next);
+                    true
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    if n == 0 {
+                        return true;
+                    }
+                    let cur = sub_active.peek();
+                    let next = if cur == ACTIVE_NONE || cur >= n {
+                        n - 1
+                    } else if let Some(i) = roving_move(n, cur, -1) {
+                        i
+                    } else {
+                        return true;
+                    };
+                    set_ctx_active(sub_active, next);
+                    true
+                }
+                Key::Named(NamedKey::Home) => {
+                    if let Some(i) = roving_edge(n, false) {
+                        set_ctx_active(sub_active, i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::End) => {
+                    if let Some(i) = roving_edge(n, true) {
+                        set_ctx_active(sub_active, i);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                    let ix = sub_active.peek();
+                    if ix == ACTIVE_NONE {
+                        return true;
+                    }
+                    if let Some(cb) = take_activate(&sid, ix) {
+                        cb();
+                    }
+                    true
+                }
+                Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::Escape) => {
+                    close_open_submenu_keep_parent_highlight(&sid);
+                    true
+                }
+                Key::Named(NamedKey::ArrowRight) => true,
+                _ => false,
+            };
+        }
+
         let n = activate_count(&menu_id);
         if n == 0 {
             return false;
@@ -368,6 +515,7 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                 } else {
                     return false;
                 };
+                close_open_subs(&menu_id);
                 set_ctx_active(active_keys, next);
                 true
             }
@@ -380,18 +528,36 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                 } else {
                     return false;
                 };
+                close_open_subs(&menu_id);
                 set_ctx_active(active_keys, next);
                 true
             }
             Key::Named(NamedKey::Home) => {
                 if let Some(i) = roving_edge(n, false) {
+                    close_open_subs(&menu_id);
                     set_ctx_active(active_keys, i);
                 }
                 true
             }
             Key::Named(NamedKey::End) => {
                 if let Some(i) = roving_edge(n, true) {
+                    close_open_subs(&menu_id);
                     set_ctx_active(active_keys, i);
+                }
+                true
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                let ix = active_keys.peek();
+                if ix == ACTIVE_NONE {
+                    return false;
+                }
+                let Some(sid) = sub_id_at_ix(&menu_id, ix) else {
+                    return false;
+                };
+                let sub_open = use_signal(format!("{sid}__open").as_str(), || false);
+                open_or_remount_sub_ex(&sid, sub_open, false);
+                if sub_open.peek() {
+                    focus_submenu_first_item(&sid);
                 }
                 true
             }
@@ -401,8 +567,10 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                     return false;
                 }
                 if let Some(cb) = take_activate(&menu_id, ix) {
-                    // Close is owned by each activate (Item/Radio)；Checkbox 不关。
                     cb();
+                    if let Some(sid) = context_menu_open_sub_id(&menu_id) {
+                        focus_submenu_first_item(&sid);
+                    }
                     return true;
                 }
                 false
@@ -1059,15 +1227,20 @@ pub fn ContextMenuSubTrigger(
     sub.trigger_fid.set(trigger_id.clone());
 
     let activate = {
+        let sub_id = sub_id.clone();
         let sub_open = sub_open;
         Rc::new(move || {
             if !disabled {
-                sub_open.set(true);
+                open_or_remount_sub_ex(&sub_id, sub_open, false);
+                if sub_open.peek() {
+                    focus_submenu_first_item(&sub_id);
+                }
             }
         }) as Rc<dyn Fn()>
     };
     let ix = activate_count(&parent.id);
     push_activate(&parent.id, activate);
+    register_sub_at_ix(&parent.id, ix, &sub_id);
 
     let mut kids = children
         .map(take_packed)
@@ -1113,22 +1286,14 @@ pub fn ContextMenuSubTrigger(
             }
             close_open_subs_except(&parent_id, Some(sub_id.as_str()));
             set_ctx_active(active, ix);
-            if !sub_open.peek() {
-                sub_open.set(true);
-                crate::app::tree_hit::invalidate_hover_handlers();
-                crate::app::runtime::request_redraw();
-            }
+            open_or_remount_sub(&sub_id, sub_open);
         })
         .on_click(move || {
             if disabled {
                 return;
             }
             close_open_subs_except(&parent_id_click, Some(sub_id_click.as_str()));
-            if !sub_open_click.peek() {
-                sub_open_click.set(true);
-                crate::app::tree_hit::invalidate_hover_handlers();
-                crate::app::runtime::request_redraw();
-            }
+            open_or_remount_sub(&sub_id_click, sub_open_click);
             set_ctx_active(active, ix);
         })
         .cursor_kind(if disabled {
@@ -1170,6 +1335,8 @@ pub fn context_menu_sub_content(
     reactive_anchor(view_id.clone(), move || {
         let parent_is_open = parent_open.get();
         let is_open = sub_open.get();
+        // Remount bump from SubTrigger (same-value open would not re-run).
+        let _ = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
         if !parent_is_open {
             if sub_open.peek() {
                 sub_open.set(false);
