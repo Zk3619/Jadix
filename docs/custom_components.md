@@ -5,6 +5,8 @@
 
 RUI 用分层 + `#[component]` 组合原语。`#[component]` **每实例自动** [`component_root`](../crates/rui/src/core/reactivity.rs)（WP-3.14）。纯 Builder 复合根（自己 `provide_context` / 浮层）仍须显式调用同一 helper。浮层子树用 `isolate_reads`，不要用 `untrack`。
 
+需要「`show`→播退场→再卸树」时，先用 [`utils::presence`](../crates/rui/src/utils/presence.rs)（`ExitGate` / `exit_elapsed`，**WP-PRIM.1**）。需要 CSS 入退场/位移时，用 [`utils::motion`](../crates/rui/src/utils/motion.rs)（`MotionStyle` / `prepare_motion_sync`，**WP-PRIM.2**）——只写目标，mid 由 `transition_snapshot` 推进。Portal 浮层 + 多条实例同 key 调和（含 shadow/transform mid），用 [`utils::keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs)（**WP-PRIM.3**）。堆叠/列表 `rank → translate/scale` 目标用 [`utils::layout_group`](../crates/rui/src/utils/layout_group.rs)（**WP-PRIM.4**）。战略背景见 [`custom_components_suggestions.md`](custom_components_suggestions.md)。
+
 ## Two equivalent ways to write UI
 
 Both are first-class and must stay interchangeable ([COMPONENT_LIBRARY.md §3](COMPONENT_LIBRARY.md)):

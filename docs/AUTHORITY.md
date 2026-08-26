@@ -719,24 +719,37 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 
 ---
 
-### 5.6b Wave SI — 行为深化下沉（Sink Deepen · **不挡 Beta**）
+### 5.6b Wave SI — 行为深化下沉（Sink Deepen · **不挡 Beta** · **已收口**）
 
-> 在 WP-3.4 / 3.7 浮层与布尔态底座之上，把已导出组件里仍重复或单体过厚的交互抽进 `utils/` / `components/internal/`。**不挡** W4 / Beta；与发布轨并行。
+> 在 WP-3.4 / 3.7 浮层与布尔态底座之上，把 **≥2 组件重复** 的交互抽进 `utils/` / `components/internal/`。**不挡** W4 / Beta。
+>
+> **纠偏**：SI.9 / SI.10「单组件引擎进 internal」已判定为假下沉，代码折回 `components/{toast,carousel}/`。后续原语波见 **§5.6c Wave Prim**（对位 [`custom_components_suggestions.md`](custom_components_suggestions.md)）。
 
 | ID | 主题 | 状态 |
 |----|------|------|
 | **WP-SI.1** | Activate 注册表（Dropdown / Context / Command） | ☑ |
 | **WP-SI.2** | 受控 Signal 泛化（String / f32 / open） | ☑ |
-| **WP-SI.3** | 菜单子树生命周期 + 键盘（`menu_subtree`） | ☑ |
+| **WP-SI.3** | 菜单子树生命周期 + 键盘（`internal/menu/subtree`） | ☑ |
 | **WP-SI.4** | 打开列表键盘 `list_nav`（Combobox / Command） | ☑ |
 | **WP-SI.5** | 菜单行 chrome + highlight paint | ☑ |
 | **WP-SI.6** | Radio roving + Dialog/Sheet `focus_trap` 接线 | ☑ |
 | **WP-SI.7** | 指针拖拽会话 `pointer_drag` | ☑ |
 | **WP-SI.8** | 数据态小助手（table_sort / element_pack …） | ☑ |
-| **WP-SI.9** | Toast 计时/队列/滑动策略内聚 | ☑ |
-| **WP-SI.10** | Carousel snap/seamless/autoplay 轨道引擎内聚 | ☑ |
+| **WP-SI.9** | Toast 策略（~~internal~~ → `components/toast/` 产品拆分） | ☑ 折回 |
+| **WP-SI.10** | Carousel 策略（~~internal~~ → `components/carousel/` 产品拆分） | ☑ 折回 |
 
-**禁区**：第二套 portal；Menubar peer 泛化 disarm；公开 notification_queue / Embla 式 carousel；Toast/Carousel CSS 动效进 utils；为下沉升 experimental→verified。
+**禁区**：第二套 portal；Menubar peer 泛化 disarm；公开 notification_queue / Embla 式 carousel；把单组件算术再塞进 `internal/` 冒充原语；为下沉升 experimental→verified。
+
+### 5.6c Wave Prim — 自定义组件原语（**不挡 Beta**）
+
+> 厚逻辑沉成框架面 API，让自定义浮层变薄。顺序见 [`custom_components_suggestions.md`](custom_components_suggestions.md) 与计划 [`plans/组件交互下沉_145e4c9e.plan.md`](plans/组件交互下沉_145e4c9e.plan.md)。
+
+| ID | 主题 | 状态 |
+|----|------|------|
+| **WP-PRIM.1** | Presence / ExitGate（`utils/presence`；Toast finalize 首迁） | ☑ |
+| **WP-PRIM.2** | MotionStyle（`utils/motion`；Toast/Carousel CSS sync 首迁） | ☑ |
+| **WP-PRIM.3** | KeyedOverlay（`utils/keyed_overlay`；Toast 宿主/卡首迁） | ☑ |
+| **WP-PRIM.4** | LayoutGroup / slot_list（`utils/layout_group`；Toast rank→位移首迁） | ☑ |
 
 ---
 

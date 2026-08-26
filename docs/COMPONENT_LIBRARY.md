@@ -56,7 +56,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
      ▼
  style/theme + color_space(OKLCH) + utility 变体 + focus_ring
 
- 私有（非产品面）：components/internal/text_edit（Dialog 壳在 `dialog.rs`）
+  私有（非产品面）：components/internal/{text_edit,menu}（Dialog 壳在 `dialog.rs`）
 ```
 
 ### 2.1 职责与禁区
@@ -64,10 +64,10 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`** | 浮层标记与 placement、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、fragment 解包 | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`** | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、fragment 解包 | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
-| 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
-| 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；菜单子树 / item chrome；**Toast 计时·队列·滑动**（`toast_*`）；**Carousel 轨道·snap·loop·autoplay**（`carousel_*`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**Dialog 壳在 `dialog.rs`，非 internal** |
+| 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
+| 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
 
 现状缺口（须按计划下沉，见实施计划 C-WP）：
 
