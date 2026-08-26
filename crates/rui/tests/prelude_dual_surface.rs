@@ -30,6 +30,36 @@ fn prelude_tag_surface_compiles() {
 }
 
 #[test]
+fn prelude_badge_dual_surface_compiles() {
+    let _b: Element = badge().variant("secondary").text("Builder").into();
+    let el = ui! {
+        <HStack gap="0.5rem">
+            <Badge>"Default"</Badge>
+            <Badge variant="outline">"Outline"</Badge>
+            { Element::from(badge().variant("ghost").text("内嵌")) }
+        </HStack>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_aspect_ratio_dual_surface_compiles() {
+    let _b: Element = aspect_ratio().ratio(16.0 / 9.0).into();
+    let el = ui! {
+        <HStack gap="0.5rem" w="20rem">
+            <AspectRatio ratio="16/9" w="10rem">
+                <Rect w="100%" h="100%" bg="muted" />
+            </AspectRatio>
+            { Element::from(aspect_ratio().ratio("1/1").child(Element::new().w("100%").h("100%")))
+                .w("6rem") }
+            <Image texture="demo" w="6rem" aspect_ratio="4/3" />
+            <Rect w="6rem" aspect_ratio={1.5} bg="muted" />
+        </HStack>
+    };
+    let _: Element = el;
+}
+
+#[test]
 fn prelude_ui_embeds_builder() {
     let el = ui! {
         <VStack gap="0.5rem">

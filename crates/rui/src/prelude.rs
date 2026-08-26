@@ -18,7 +18,7 @@
 //! | `overlay` | 原语能力层，非默认产品面 |
 //! | `path` 核（`PathCommand` / tessellate） | 原语能力层；公开面是 [`svg`] / Chart |
 //! | `BaseComponentBuilder`、`apply_bound_*`、信号键 helpers | 进阶 / 内部契约 |
-//! | `planned` 组件（Badge…） | 尚未 `pub use` |
+//! | `planned` 未落地组件（Avatar / Skeleton…） | 尚未 `pub use`；Badge 已导出 |
 //!
 //! # 示例
 //!
@@ -27,15 +27,18 @@
 //!
 //! // A · 标签
 //! let _a = ui! { <Button variant="outline">"保存"</Button> };
+//! let _badge = ui! { <Badge variant="secondary">"New"</Badge> };
 //!
 //! // B · Builder
 //! let _b: Element = button("save").variant("outline").into();
+//! let _b2: Element = badge().variant("destructive").text("Error").into();
 //!
 //! // 互嵌：标签树里嵌入 Builder
 //! let _c = ui! {
 //!     <VStack gap="0.5rem">
 //!         { Element::from(button("x").variant("ghost").text("内嵌 Builder")) }
 //!         <Button>"标签子节点"</Button>
+//!         { Element::from(badge().text("内嵌 Badge")) }
 //!     </VStack>
 //! };
 //!
@@ -43,6 +46,7 @@
 //! let _d: Element = vstack()
 //!     .gap("0.5rem")
 //!     .child(ui! { <Label>"内嵌标签"</Label> })
+//!     .child(ui! { <Badge variant="outline">"ok"</Badge> })
 //!     .into();
 //! ```
 
@@ -100,6 +104,10 @@ pub use crate::components::{
     bar_chart,
     bar_x,
     bar_y,
+    // AspectRatio
+    aspect_ratio,
+    // Badge
+    badge,
     // Button
     button,
     calendar,
@@ -264,9 +272,17 @@ pub use crate::components::{
     virtual_masonry,
     AreaChart,
     AreaChartProps,
+    AspectRatio,
+    AspectRatioBuilder,
+    AspectRatioProps,
+    AspectRatioValue,
     BarChart,
     BarChartBuilder,
     BarChartProps,
+    Badge,
+    BadgeBuilder,
+    BadgeProps,
+    BadgeVariant,
     Button,
     ButtonBuilder,
     ButtonProps,

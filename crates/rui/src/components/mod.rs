@@ -24,6 +24,8 @@
 //! - DropdownMenu：`<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub（宏 `dropdown_menu_scope`）；Builder [`dropdown_menu`]。
 //! - Menubar：`<Menubar>` / Menu / Trigger / Content / Item…（宏 `menubar_scope` / `menubar_menu`；内容复用 DropdownMenu）；Builder [`menubar`]。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
+//! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
+//! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
@@ -33,6 +35,8 @@
 /// 组件库私有实现（不进产品面）。
 pub(crate) mod internal;
 
+pub mod aspect_ratio;
+pub mod badge;
 pub mod base;
 pub mod button;
 pub mod calendar;
@@ -79,6 +83,12 @@ pub mod tree_view;
 pub mod virtual_list;
 pub mod virtual_masonry;
 
+pub use aspect_ratio::{
+    aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
+};
+pub use badge::{
+    apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps, BadgeVariant,
+};
 pub use base::BaseComponentBuilder;
 pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,

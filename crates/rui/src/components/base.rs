@@ -101,6 +101,69 @@ impl BaseComponentBuilder {
         self
     }
 
+    /// CSS `aspect-ratio`（数字 / `"16/9"` / `"auto"`…）。见 [`crate::core::tree::parse_css_aspect_ratio`]。
+    pub fn aspect_ratio(mut self, ratio: impl crate::core::tree::IntoAspectRatioValue) -> Self {
+        self.el = self.el.aspect_ratio(ratio);
+        self
+    }
+
+    pub fn animation(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation(value);
+        self
+    }
+    pub fn animation_name(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_name(value);
+        self
+    }
+    pub fn animation_duration(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_duration(value);
+        self
+    }
+    pub fn animation_delay(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_delay(value);
+        self
+    }
+    pub fn animation_timing_function(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_timing_function(value);
+        self
+    }
+    pub fn animation_iteration_count(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_iteration_count(value);
+        self
+    }
+    pub fn animation_direction(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_direction(value);
+        self
+    }
+    pub fn animation_fill_mode(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_fill_mode(value);
+        self
+    }
+    pub fn animation_play_state(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_play_state(value);
+        self
+    }
+    pub fn animation_composition(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_composition(value);
+        self
+    }
+    pub fn animation_timeline(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_timeline(value);
+        self
+    }
+    pub fn animation_range(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_range(value);
+        self
+    }
+    pub fn animation_range_start(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_range_start(value);
+        self
+    }
+    pub fn animation_range_end(mut self, value: impl AsRef<str>) -> Self {
+        self.el = self.el.animation_range_end(value);
+        self
+    }
+
     pub fn p(mut self, p: impl IntoCssDim) -> Self {
         self.el = self.el.p(p);
         self

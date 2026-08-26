@@ -3072,13 +3072,28 @@ fn expand_node(
                         continue;
                     }
 
-                    // Button / Input chrome attrs → bind_attr (Solid-style, no rebuild).
-                    if matches!(name_str.as_str(), "Button" | "Input")
+                    // Button / Badge / Input chrome attrs → bind_attr (Solid-style, no rebuild).
+                    if matches!(name_str.as_str(), "Button" | "Badge" | "Input")
                         && matches!(attr_name, "variant" | "disabled" | "invalid")
                         && expr_reads_get(value)
                     {
                         let idx = *node_counter;
                         *node_counter += 1;
+                        if name_str == "Badge" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_badge_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_badge_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
                         if name_str == "Button" && attr_name == "variant" {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {
@@ -3172,6 +3187,9 @@ fn expand_node(
                                 | "min_h"
                                 | "minHeight"
                                 | "min_height"
+                                | "aspect_ratio"
+                                | "aspect-ratio"
+                                | "aspectRatio"
                                 | "p"
                                 | "padding"
                                 | "mx"
@@ -3300,6 +3318,33 @@ fn expand_node(
                                 | "transitionDelay"
                                 | "transition_timing_function"
                                 | "transitionTimingFunction"
+                                | "animation"
+                                | "animation_name"
+                                | "animationName"
+                                | "animation_duration"
+                                | "animationDuration"
+                                | "animation_delay"
+                                | "animationDelay"
+                                | "animation_timing_function"
+                                | "animationTimingFunction"
+                                | "animation_iteration_count"
+                                | "animationIterationCount"
+                                | "animation_direction"
+                                | "animationDirection"
+                                | "animation_fill_mode"
+                                | "animationFillMode"
+                                | "animation_play_state"
+                                | "animationPlayState"
+                                | "animation_composition"
+                                | "animationComposition"
+                                | "animation_timeline"
+                                | "animationTimeline"
+                                | "animation_range"
+                                | "animationRange"
+                                | "animation_range_start"
+                                | "animationRangeStart"
+                                | "animation_range_end"
+                                | "animationRangeEnd"
                                 | "shadow"
                                 | "box_shadow"
                                 | "boxShadow"
@@ -3484,6 +3529,46 @@ fn expand_node(
                                 });
                                 continue;
                             }
+                            if matches!(attr_name, "aspect_ratio" | "aspect-ratio" | "aspectRatio") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!("{}:{}:bind_aspect_ratio#{}", file!(), line!(), #idx),
+                                        move || (#value).to_string(),
+                                        |el, s: String| {
+                                            let next =
+                                                rui::core::tree::parse_css_aspect_ratio(s.as_str());
+                                            if el.style.aspect_ratio == next {
+                                                rui::core::tree::LayoutStatus::Clean
+                                            } else {
+                                                el.style.aspect_ratio = next;
+                                                rui::core::tree::LayoutStatus::LayoutChanged
+                                            }
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
+                            if matches!(attr_name, "animation_play_state" | "animationPlayState") {
+                                chrome_binds.push(quote! {
+                                    __rui_el = rui::app::reactive::bind_prop(
+                                        __rui_el,
+                                        format!(
+                                            "{}:{}:bind_animation_play_state#{}",
+                                            file!(),
+                                            line!(),
+                                            #idx
+                                        ),
+                                        move || (#value).to_string(),
+                                        |el, v| {
+                                            rui::app::reactive::apply_bound_animation_play_state(
+                                                el, v,
+                                            )
+                                        },
+                                    );
+                                });
+                                continue;
+                            }
                         }
                         if attr_name == "class"
                             || attr_name == "className"
@@ -3590,6 +3675,19 @@ fn expand_node(
                                 "transitionDuration" => "transition_duration",
                                 "transitionDelay" => "transition_delay",
                                 "transitionTimingFunction" => "transition_timing_function",
+                                "animationName" => "animation_name",
+                                "animationDuration" => "animation_duration",
+                                "animationDelay" => "animation_delay",
+                                "animationTimingFunction" => "animation_timing_function",
+                                "animationIterationCount" => "animation_iteration_count",
+                                "animationDirection" => "animation_direction",
+                                "animationFillMode" => "animation_fill_mode",
+                                "animationPlayState" => "animation_play_state",
+                                "animationComposition" => "animation_composition",
+                                "animationTimeline" => "animation_timeline",
+                                "animationRange" => "animation_range",
+                                "animationRangeStart" => "animation_range_start",
+                                "animationRangeEnd" => "animation_range_end",
                                 "boxShadow" | "box-shadow" => "box_shadow",
                                 "boxShadowColor" => "box_shadow_color",
                                 "boxShadowBlur" => "box_shadow_blur",
@@ -3604,6 +3702,7 @@ fn expand_node(
                                 "textShadowOffsetX" => "text_shadow_offset_x",
                                 "textShadowOffsetY" => "text_shadow_offset_y",
                                 "pointerEvents" => "pointer_events",
+                                "aspect-ratio" | "aspectRatio" => "aspect_ratio",
                                 _ => attr_name,
                             };
                             let method_ident = syn::Ident::new(method, attr.span());
@@ -4300,6 +4399,68 @@ fn expand_node(
                     "transition_timing_function" => {
                         element = quote! { #element.transition_timing_function(#value) }
                     }
+                    "animation" => {
+                        element = quote! { #element.animation(#value) }
+                    }
+                    "animation_name" | "animationName" => {
+                        element = quote! { #element.animation_name(#value) }
+                    }
+                    "animation_duration" | "animationDuration" => {
+                        element = quote! { #element.animation_duration(#value) }
+                    }
+                    "animation_delay" | "animationDelay" => {
+                        element = quote! { #element.animation_delay(#value) }
+                    }
+                    "animation_timing_function" | "animationTimingFunction" => {
+                        element = quote! { #element.animation_timing_function(#value) }
+                    }
+                    "animation_iteration_count" | "animationIterationCount" => {
+                        element = quote! { #element.animation_iteration_count(#value) }
+                    }
+                    "animation_direction" | "animationDirection" => {
+                        element = quote! { #element.animation_direction(#value) }
+                    }
+                    "animation_fill_mode" | "animationFillMode" => {
+                        element = quote! { #element.animation_fill_mode(#value) }
+                    }
+                    "animation_play_state" | "animationPlayState" => {
+                        if expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!(
+                                        "{}:{}:bind_animation_play_state#{}",
+                                        file!(),
+                                        line!(),
+                                        #idx
+                                    ),
+                                    move || (#value).to_string(),
+                                    |el, v| {
+                                        rui::app::reactive::apply_bound_animation_play_state(el, v)
+                                    },
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.animation_play_state(#value) }
+                        }
+                    }
+                    "animation_composition" | "animationComposition" => {
+                        element = quote! { #element.animation_composition(#value) }
+                    }
+                    "animation_timeline" | "animationTimeline" => {
+                        element = quote! { #element.animation_timeline(#value) }
+                    }
+                    "animation_range" | "animationRange" => {
+                        element = quote! { #element.animation_range(#value) }
+                    }
+                    "animation_range_start" | "animationRangeStart" => {
+                        element = quote! { #element.animation_range_start(#value) }
+                    }
+                    "animation_range_end" | "animationRangeEnd" => {
+                        element = quote! { #element.animation_range_end(#value) }
+                    }
                     "color" | "text_color" => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;
@@ -4454,6 +4615,31 @@ fn expand_node(
                     "overflow" => element = quote! { #element.overflow(#value) },
                     "overflow_x" | "overflowX" => element = quote! { #element.overflow_x(#value) },
                     "overflow_y" | "overflowY" => element = quote! { #element.overflow_y(#value) },
+                    "aspect_ratio" | "aspect-ratio" | "aspectRatio" => {
+                        if expr_reads_get(value) {
+                            let idx = *node_counter;
+                            *node_counter += 1;
+                            dynamic_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_prop(
+                                    __rui_el,
+                                    format!("{}:{}:bind_aspect_ratio#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, s: String| {
+                                        let next =
+                                            rui::core::tree::parse_css_aspect_ratio(s.as_str());
+                                        if el.style.aspect_ratio == next {
+                                            rui::core::tree::LayoutStatus::Clean
+                                        } else {
+                                            el.style.aspect_ratio = next;
+                                            rui::core::tree::LayoutStatus::LayoutChanged
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            element = quote! { #element.aspect_ratio(#value) };
+                        }
+                    }
                     "scroll_behavior" | "scrollBehavior" => {
                         element = quote! { #element.scroll_behavior(#value) }
                     }
@@ -4908,6 +5094,15 @@ mod rsx_lowering_tests {
         let s = expand("<Rect data_status={status.get()} />");
         assert!(s.contains("bind_attr"), "{s}");
         assert!(s.contains("apply_bound_attr"), "{s}");
+    }
+
+    #[test]
+    fn animation_play_state_get_emits_bind_prop() {
+        let s = expand(
+            r#"<Rect animation="1s linear infinite spin" animation_play_state={ if play.get() { "running" } else { "paused" } } />"#,
+        );
+        assert!(s.contains("bind_prop"), "{s}");
+        assert!(s.contains("apply_bound_animation_play_state"), "{s}");
     }
 
     #[test]
