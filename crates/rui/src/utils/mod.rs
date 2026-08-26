@@ -9,10 +9,14 @@ pub mod font;
 pub mod input_hit;
 pub mod instance_id;
 pub mod keyboard;
+pub mod keyed_overlay;
+pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
+pub mod motion;
 pub mod pointer_drag;
 pub mod popup;
+pub mod presence;
 pub mod roving;
 pub mod table_sort;
 pub mod text_field;
@@ -46,6 +50,20 @@ pub use popup::{
     ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
 };
+pub use keyed_overlay::{
+    adopt_keyed_overlay, is_keyed_motion_item, item_template_id, mount_reactive_anchor,
+    preserve_keyed_motion_on_reconcile, viewport_portal_stage, KEYED_OVERLAY_PREFIX,
+    TOAST_CARD_SCOPE,
+};
+pub use layout_group::{
+    linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
+};
+pub use motion::{
+    clear_motion, ensure_motion_transitions, motion_is_animating, motion_sync_status,
+    prepare_motion_sync, snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle,
+    MotionTransform,
+};
+pub use presence::{exit_elapsed, exit_elapsed_at, ExitGate, PresencePhase};
 pub use roving::{roving_edge, roving_move};
 pub use text_field::{
     bind_controlled_value, caret_line_and_local, commit_value, commit_value_sig,

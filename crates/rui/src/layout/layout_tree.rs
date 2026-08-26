@@ -115,7 +115,7 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
             // Same portal key was already live: adopt CSS transition mid from the previous
             // hoisted tree (not layout_node — that breaks Taffy SlotMap topology).
             if let Some(mut prev_node) = prev.remove(&key) {
-                adopt_hoisted_overlay_stability(&mut node, &mut prev_node);
+                crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev_node);
             }
             prepare_hoisted_node(&mut node, &key);
             place_hoisted(
@@ -293,131 +293,6 @@ fn portal_key_of(el: &Element) -> String {
         return format!("tid:{tid}");
     }
     format!("z:{}", el.style.z_index)
-}
-
-/// Merge a freshly lifted portal into the previously hoisted instance of the same key.
-///
-/// Preserves in-flight CSS `transition_snapshot` / mid transform+opacity on matching
-/// `template_id` subtrees (e.g. `toast-card-*`) so reactive rebuilds do not snap
-/// enter/stack/exit animations.
-///
-/// **Do not** adopt `layout_node`: partial transfer leaves Taffy parent/child SlotMap
-/// topology inconsistent with the leftover prev shells, and the next GC `remove`
-/// panics with `invalid SlotMap key used`. Fresh nodes get new Taffy IDs; motion is
-/// style/snapshot-only (same as Carousel stack cards after a structural rebuild).
-fn adopt_hoisted_overlay_stability(fresh: &mut Element, prev: &mut Element) {
-    adopt_overlay_node(fresh, prev);
-}
-
-fn adopt_overlay_node(fresh: &mut Element, prev: &mut Element) {
-    let tid_match = fresh.template_id.is_some() && fresh.template_id == prev.template_id;
-    if tid_match {
-        if fresh.on_unmount.is_none() {
-            fresh.on_unmount = prev.on_unmount.clone();
-        }
-        preserve_overlay_css_motion(fresh, prev);
-    }
-
-    let fresh_keyed =
-        !fresh.children.is_empty() && fresh.children.iter().all(|c| c.template_id.is_some());
-    let prev_keyed =
-        !prev.children.is_empty() && prev.children.iter().all(|c| c.template_id.is_some());
-
-    if fresh_keyed && prev_keyed {
-        let mut prev_map: HashMap<String, Element> = HashMap::new();
-        for child in prev.children.drain(..) {
-            if let Some(tid) = child.template_id.clone() {
-                prev_map.insert(tid, child);
-            }
-        }
-        for child in &mut fresh.children {
-            if let Some(tid) = child.template_id.clone() {
-                if let Some(mut old) = prev_map.remove(&tid) {
-                    adopt_overlay_node(child, &mut old);
-                }
-            }
-        }
-        return;
-    }
-
-    if fresh.children.len() == prev.children.len() {
-        for (f, p) in fresh.children.iter_mut().zip(prev.children.iter_mut()) {
-            adopt_overlay_node(f, p);
-        }
-        return;
-    }
-
-    // Unequal unkeyed shells (Toast stage → panel → pile): match any templated
-    // descendants (toast-card-*) and zip single unkeyed wrappers when possible.
-    let mut prev_by_tid: HashMap<String, Element> = HashMap::new();
-    take_templated_descendants(prev, &mut prev_by_tid);
-    adopt_templated_into(fresh, &mut prev_by_tid);
-}
-
-fn preserve_overlay_css_motion(fresh: &mut Element, prev: &Element) {
-    let is_toast = fresh
-        .template_id
-        .as_deref()
-        .is_some_and(|t| t.starts_with("toast-card-"));
-    if !is_toast
-        && fresh.style.transition.is_empty()
-        && prev.style.transition.is_empty()
-        && !prev.transition_snapshot.has_active_tweens()
-    {
-        return;
-    }
-    // 退场：sync 可能已在 hoist 前把 opacity→0 并 seed tween。勿用上一帧 idle mid
-    // 盖掉，否则首帧像「直接消失」，且 exit_seed 已被消费无法再钉基线。
-    let fresh_exit_motion = fresh.transition_snapshot.has_active_tweens()
-        || fresh.style.opacity + 0.05 < prev.style.opacity;
-    if fresh_exit_motion {
-        if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
-            fresh.style.transition = prev.style.transition.clone();
-        }
-        return;
-    }
-    if is_toast
-        || !prev.style.transition.is_empty()
-        || prev.transition_snapshot.has_active_tweens()
-        || !fresh.style.transition.is_empty()
-    {
-        fresh.transition_snapshot = prev.transition_snapshot.clone();
-        fresh.style.translate = prev.style.translate;
-        fresh.style.opacity = prev.style.opacity;
-        fresh.style.scale = prev.style.scale;
-        fresh.style.rotate_deg = prev.style.rotate_deg;
-        fresh.style.shadow_color = prev.style.shadow_color;
-        if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
-            fresh.style.transition = prev.style.transition.clone();
-        }
-    }
-}
-
-fn take_templated_descendants(node: &mut Element, out: &mut HashMap<String, Element>) {
-    let mut i = 0;
-    while i < node.children.len() {
-        if node.children[i].template_id.is_some() {
-            let child = node.children.remove(i);
-            if let Some(tid) = child.template_id.clone() {
-                out.insert(tid, child);
-            }
-        } else {
-            take_templated_descendants(&mut node.children[i], out);
-            i += 1;
-        }
-    }
-}
-
-fn adopt_templated_into(fresh: &mut Element, prev_by_tid: &mut HashMap<String, Element>) {
-    for child in &mut fresh.children {
-        if let Some(tid) = child.template_id.clone() {
-            if let Some(mut old) = prev_by_tid.remove(&tid) {
-                adopt_overlay_node(child, &mut old);
-            }
-        } else {
-            adopt_templated_into(child, prev_by_tid);
-        }
-    }
 }
 
 fn prepare_hoisted_node(node: &mut Element, key: &str) {

@@ -904,28 +904,10 @@ impl AppState {
             if new_el.on_unmount.is_none() {
                 new_el.on_unmount = old_el.on_unmount.clone();
             }
-            // Toast 等带 CSS transition 的稳定 template：始终保留上一帧的
-            // translate/opacity/scale + snapshot。否则 idle 卡被挤到新 lift/scale 时
-            // new.style 已是终点、snapshot 空 → from=to 瞬跳（堆叠「啪」一下）。
-            let preserve_motion = !new_el.style.transition.is_empty()
-                && (new_el
-                    .template_id
-                    .as_deref()
-                    .is_some_and(|t| t.starts_with("toast-card-"))
-                    || old_el.transition_snapshot.has_active_tweens()
-                    || crate::style::css_transition_needs_frame(
-                        &old_el.style,
-                        &old_el.transition_snapshot,
-                    ));
-            if preserve_motion {
-                new_el.transition_snapshot = old_el.transition_snapshot.clone();
-                new_el.style.translate = old_el.style.translate;
-                new_el.style.opacity = old_el.style.opacity;
-                new_el.style.scale = old_el.style.scale;
-                new_el.style.rotate_deg = old_el.style.rotate_deg;
-                // 堆叠阴影淡出同样靠 mid 保留；否则 new 目标 alpha=0 会瞬跳。
-                new_el.style.shadow_color = old_el.style.shadow_color;
-            }
+            // Keyed overlay：同 template_id 保留 transition mid（见 utils/keyed_overlay）。
+            let _ = crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(
+                new_el, old_el,
+            );
             let is_reactive_placeholder = new_el.template_hash.as_deref()
                 == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
             if is_reactive_placeholder {
