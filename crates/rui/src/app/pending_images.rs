@@ -1,13 +1,16 @@
 //! 在任意线程将 RGBA 贴图加入队列，由 [`super::state::AppState::render`] 首帧上传至 GPU。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::media::{decode_bytes, load_src, DecodeOptions};
 
 static PENDING: Mutex<Vec<(String, Vec<u8>, u32, u32)>> = Mutex::new(Vec::new());
-static QUEUED_SRC: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+/// Decoded `src` images kept on CPU so TexturePool eviction can rehydrate.
+static DECODED_SRC: Mutex<Option<HashMap<String, (Vec<u8>, u32, u32)>>> = Mutex::new(None);
+/// Keys referenced by `<Image src>` this frame (collect).
+static SRC_NEEDED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// 动态贴图内容世代：同一 `texture_key` 像素变了（canvas 重绘 / scene3d 旋转）
 /// 也必须让 present 指纹变化，否则 `last_gpu_frame_fp` 会跳过 swapchain。
 static DYNAMIC_TEX_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -43,23 +46,62 @@ pub fn queue_image_from_path(id: impl Into<String>, path: impl AsRef<str>) -> bo
     queue_image_from_src(id, path.as_ref())
 }
 
-/// 从 `data:` / 本地路径解码并排队。同一 `id` 只解码一次。禁止 `http(s)`。
+/// 从 `data:` / 本地路径解码并排队。同一 `id` 只解码一次；GPU 驱逐后由
+/// [`flush_src_textures`] 从 CPU 缓存回补。禁止 `http(s)`。
 pub fn queue_image_from_src(id: impl Into<String>, src: &str) -> bool {
     let id = id.into();
     {
-        let mut g = QUEUED_SRC.lock().unwrap();
-        let set = g.get_or_insert_with(HashSet::new);
-        if set.contains(&id) {
+        let mut g = DECODED_SRC.lock().unwrap();
+        let map = g.get_or_insert_with(HashMap::new);
+        if map.contains_key(&id) {
+            SRC_NEEDED
+                .lock()
+                .unwrap()
+                .get_or_insert_with(HashSet::new)
+                .insert(id);
             return true;
         }
-        set.insert(id.clone());
     }
     let Some(img) = load_src(src, DecodeOptions::image()) else {
-        QUEUED_SRC.lock().unwrap().as_mut().unwrap().remove(&id);
         return false;
     };
+    {
+        let mut g = DECODED_SRC.lock().unwrap();
+        let map = g.get_or_insert_with(HashMap::new);
+        map.insert(id.clone(), (img.rgba.clone(), img.width, img.height));
+    }
+    SRC_NEEDED
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashSet::new)
+        .insert(id.clone());
     queue_image_rgba8(id, img.width, img.height, img.rgba);
     true
+}
+
+/// Re-queue decoded `src` images missing from the GPU pool.
+pub(crate) fn flush_src_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
+    let needed: Vec<String> = {
+        let mut g = SRC_NEEDED.lock().unwrap();
+        g.get_or_insert_with(HashSet::new)
+            .drain()
+            .collect()
+    };
+    let mut any = false;
+    let decoded = DECODED_SRC.lock().unwrap();
+    let Some(map) = decoded.as_ref() else {
+        return false;
+    };
+    for key in needed {
+        if has_gpu(&key) {
+            continue;
+        }
+        if let Some((rgba, w, h)) = map.get(&key) {
+            queue_image_rgba8(&key, *w, *h, rgba.clone());
+            any = true;
+        }
+    }
+    any
 }
 
 /// `<Image src>` 使用的稳定贴图键。

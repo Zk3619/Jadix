@@ -13,6 +13,7 @@ pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
+pub mod icon_texture;
 pub mod motion;
 pub mod pointer_drag;
 pub mod popup;

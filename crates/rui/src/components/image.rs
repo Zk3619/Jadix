@@ -10,12 +10,17 @@
 //! <Image src="assets/photo.jpg" w="8rem" h="8rem" />
 //! <Image src="data:image/svg+xml,..." w="2rem" h="2rem" />
 //!
+//! // CSS `aspect-ratio`（定宽、另一轴 auto 时生效；亦可用 utility `aspect-video`）
+//! <Image src="assets/photo.jpg" w="12rem" aspect_ratio="16/9" rounded="0.5rem" />
+//! <Image src="assets/photo.jpg" w="12rem" aspect-ratio="1 / 1" />
+//!
 //! // HTML / Solid 风格别名（宏与 prelude 均可用）
 //! <Img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! <img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! ```
 //!
 //! JPEG/GIF/WebP 需 `images`（或分项 feature）；SVG 需 `svg`。PNG/ICO/BMP 默认可用。
+//! 与 [`crate::components::AspectRatio`] 容器二选一或组合：容器负责裁剪铺满，属性直接钉在 Image 上。
 
 use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
 use crate::components::base::BaseComponentBuilder;
