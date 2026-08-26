@@ -1,6 +1,6 @@
-//! Carousel 轨道偏移纯函数（WP-SI.10）。
+//! Carousel 轨道偏移纯函数（产品层）。
 //!
-//! CSS / 变体壳留在 `carousel.rs`；此处只算 ideal / clamp / index。
+//! CSS / 变体壳留在 `carousel/mod.rs`；此处只算 ideal / clamp / index。
 
 /// Stack coverflow 侧移步长（与卡宽公式一致：视口 × 0.46 × 0.52）。
 pub fn stack_step_px(viewport_w: f32) -> f32 {

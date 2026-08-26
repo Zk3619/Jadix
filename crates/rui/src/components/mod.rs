@@ -8,8 +8,8 @@
 //!
 //! 布局原语（`Box` / `HStack` / `VStack` / `GStack` / [`crate::primitives::Portal`]）在
 //! [`crate::primitives`]；本模块在其上拼装**产品组件**（Button、Input、Dialog…）。
-//! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`）；Dialog 模态壳在本目录 [`dialog`] 内，
-//! 不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
+//! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`；弹出菜单共享 → `menu`）；
+//! Dialog 模态壳在本目录 [`dialog`] 内，不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留
 //! [`ScrollArea`] / [`Scrollbar`] / RSX [`ScrollViewport`] 等产品层封装。
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
@@ -94,11 +94,15 @@ pub use card::{
     CardTitle, CardTitleProps,
 };
 pub use carousel::{
-    carousel, carousel_multi, carousel_scope, carousel_single, carousel_stack, use_carousel,
-    CarouselBuilder, CarouselContent, CarouselContentProps, CarouselControls, CarouselCtx,
-    CarouselDots, CarouselDotsProps, CarouselEndAlign, CarouselItem, CarouselItemProps,
-    CarouselItemSizing, CarouselKind, CarouselNext, CarouselNextProps, CarouselOrientation,
-    CarouselPageSnap, CarouselPrevious, CarouselPreviousProps, CarouselScrollBy, CarouselVariant,
+    carousel_scope, use_carousel, CarouselControls, CarouselCtx, CarouselEndAlign, CarouselItemSizing,
+    CarouselKind, CarouselOrientation, CarouselPageSnap, CarouselScrollBy, CarouselVariant,
+};
+pub use carousel::builder::{
+    carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder,
+};
+pub use carousel::content::{
+    CarouselContent, CarouselContentProps, CarouselDots, CarouselDotsProps, CarouselItem,
+    CarouselItemProps, CarouselNext, CarouselNextProps, CarouselPrevious, CarouselPreviousProps,
 };
 pub use chart::{
     area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, dot, format_time_label,
@@ -238,11 +242,14 @@ pub use tabs::{
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
 pub use toast::{
-    toast, toast_dismiss, toast_host, toast_pending, toast_push, toast_queue, toast_set_layout,
-    toast_set_limit, toast_set_overflow, toast_set_position, toaster, Toast, ToastBuilder,
-    ToastClose, ToastCloseProps, ToastDescription, ToastDescriptionProps, ToastItem, ToastLayout,
-    ToastOverflow, ToastPosition, ToastProps, ToastTitle, ToastTitleProps, ToastTone, Toaster,
-    ToasterBuilder, ToasterProps,
+    toast, toast_dismiss, toast_pending, toast_push, toast_queue, toast_set_layout, toast_set_limit,
+    toast_set_overflow, toast_set_position, ToastBuilder, ToastItem, ToastLayout, ToastOverflow,
+    ToastPosition, ToastTone,
+};
+pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
+pub use toast::view::{
+    Toast, ToastClose, ToastCloseProps, ToastDescription, ToastDescriptionProps, ToastProps,
+    ToastTitle, ToastTitleProps,
 };
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};

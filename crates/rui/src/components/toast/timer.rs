@@ -1,4 +1,4 @@
-//! Toast 可暂停计时（WP-SI.9）。
+//! Toast 可暂停计时（产品层，随 toast 目录）。
 //!
 //! 暂停勿写回 queue（避免 hover 闪断）。冻结时剩余时长不低于 [`TOAST_PAUSE_FLOOR`]。
 

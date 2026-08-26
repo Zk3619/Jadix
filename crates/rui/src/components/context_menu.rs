@@ -67,9 +67,8 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::menu_checkable::{menu_checkbox_control, menu_radio_control};
-use crate::components::internal::menu_item_chrome;
-use crate::components::internal::menu_subtree;
+use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
+use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -183,19 +182,19 @@ fn sub_id_at_ix(parent_id: &str, ix: usize) -> Option<String> {
 }
 
 fn context_menu_open_sub_id(parent_id: &str) -> Option<String> {
-    menu_subtree::open_sub_id(parent_id)
+    subtree::open_sub_id(parent_id)
 }
 
 fn focus_submenu_first_item(sid: &str) {
-    menu_subtree::focus_submenu_first_item(sid, "ctx_active", activate_count(sid));
+    subtree::focus_submenu_first_item(sid, "ctx_active", activate_count(sid));
 }
 
 fn close_open_submenu_keep_parent_highlight(sid: &str) {
-    menu_subtree::close_open_submenu_keep_parent_highlight(sid, "ctx_active");
+    subtree::close_open_submenu_keep_parent_highlight(sid, "ctx_active");
 }
 
 fn reset_sub_seq(parent_id: &str) {
-    menu_subtree::reset_sub_seq(parent_id);
+    subtree::reset_sub_seq(parent_id);
 }
 
 fn reset_radio_seq(parent_id: &str) {
@@ -205,7 +204,7 @@ fn reset_radio_seq(parent_id: &str) {
 }
 
 fn next_sub_seq(parent_id: &str) -> usize {
-    menu_subtree::next_sub_seq(parent_id)
+    subtree::next_sub_seq(parent_id)
 }
 
 fn next_radio_seq(parent_id: &str) -> usize {
@@ -219,7 +218,7 @@ fn next_radio_seq(parent_id: &str) -> usize {
 }
 
 fn set_ctx_active(active: Signal<usize>, next: usize) {
-    menu_subtree::set_menu_active(active, next);
+    subtree::set_menu_active(active, next);
 }
 
 fn clear_ctx_active_if(active: Signal<usize>, ix: usize) {
@@ -229,19 +228,19 @@ fn clear_ctx_active_if(active: Signal<usize>, ix: usize) {
 }
 
 fn close_open_subs(parent_id: &str) {
-    menu_subtree::close_open_subs(parent_id);
+    subtree::close_open_subs(parent_id);
 }
 
 fn close_open_subs_except(parent_id: &str, keep_sub_id: Option<&str>) {
-    menu_subtree::close_open_subs_except(parent_id, keep_sub_id);
+    subtree::close_open_subs_except(parent_id, keep_sub_id);
 }
 
 fn open_or_remount_sub(sub_id: &str, sub_open: Signal<bool>) {
-    menu_subtree::open_or_remount_sub(sub_id, sub_open);
+    subtree::open_or_remount_sub(sub_id, sub_open);
 }
 
 fn open_or_remount_sub_ex(sub_id: &str, sub_open: Signal<bool>, refresh_hover: bool) {
-    menu_subtree::open_or_remount_sub_ex(sub_id, sub_open, refresh_hover);
+    subtree::open_or_remount_sub_ex(sub_id, sub_open, refresh_hover);
 }
 
 /// 读取最近的 [`ContextMenu`] 上下文。
@@ -309,16 +308,16 @@ fn is_text_leaf(el: &Element) -> bool {
 }
 
 fn has_shortcut_slot(el: &Element) -> bool {
-    menu_item_chrome::has_shortcut_slot(el, ATTR_SLOT, SLOT_SHORTCUT)
+    item_chrome::has_shortcut_slot(el, ATTR_SLOT, SLOT_SHORTCUT)
 }
 
 fn style_item_text(el: &mut Element, color: [u8; 4]) {
-    menu_item_chrome::style_item_text(el, color, ATTR_SLOT, SLOT_SHORTCUT);
+    item_chrome::style_item_text(el, color, ATTR_SLOT, SLOT_SHORTCUT);
 }
 
 /// Shared item chrome. Do **not** use `min_w(0)` — that collapses wrapping labels to 1ch.
 fn item_row_chrome(inset: bool) -> crate::primitives::r#box::BoxBuilder {
-    menu_item_chrome::item_row_chrome(inset)
+    item_chrome::item_row_chrome(inset)
 }
 
 fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
@@ -1319,7 +1318,7 @@ pub(crate) fn sync_context_menu_item_paint_subtree(
     impact: &mut LayoutStatus,
 ) {
     const CTX_SLOTS: &[&str] = &[SLOT_ITEM, SLOT_SUB_TRIGGER, SLOT_CHECKBOX_ITEM, SLOT_RADIO_ITEM];
-    let cfg = menu_item_chrome::ItemPaintConfig {
+    let cfg = item_chrome::ItemPaintConfig {
         attr_slot: ATTR_SLOT,
         shortcut_slot: SLOT_SHORTCUT,
         interactive_slots: CTX_SLOTS,
@@ -1330,7 +1329,7 @@ pub(crate) fn sync_context_menu_item_paint_subtree(
         active_key_suffix: "__ctx_active",
         active_none: ACTIVE_NONE,
     };
-    menu_item_chrome::sync_item_paint_subtree(el, layout_tree, impact, &cfg);
+    item_chrome::sync_item_paint_subtree(el, layout_tree, impact, &cfg);
 }
 
 /// solid-ui / shadcn `ContextMenuLabel`：`px-2 py-1.5 text-sm font-semibold`。

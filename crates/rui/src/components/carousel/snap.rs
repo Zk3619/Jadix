@@ -1,4 +1,4 @@
-//! Carousel snap / nearest-index（WP-SI.10）。
+//! Carousel snap / nearest-index（产品层，随 carousel 目录）。
 
 /// 由当前轨道 offset 推导 nearest index。
 pub fn index_from_offset(

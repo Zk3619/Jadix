@@ -1,4 +1,4 @@
-//! Toast 队列溢出 / 退场预算常量（WP-SI.9）。
+//! Toast 队列溢出 / 退场预算常量（产品层）。
 //!
 //! `displace` 退场勿 snap 正在播的非挤出退场；顺延用 [`TOAST_EXIT_GAP`]。
 

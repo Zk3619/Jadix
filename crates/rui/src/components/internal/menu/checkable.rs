@@ -1,4 +1,5 @@
-//! Menu CheckboxItem / RadioItem 控制面（对齐 [`checkbox`] / [`radio_group`] chrome）。
+//! Menu CheckboxItem / RadioItem 控制面（对齐 [`crate::components::checkbox`] /
+//! [`crate::components::radio_group`] chrome）。
 //!
 //! 选中态走 `checkbox_sync` / `radio_selected_sync` + 每帧 paint sync，**禁止**
 //! `reactive_view` 订阅选中信号——否则切换选项会在关菜单前先重建指示器，出现

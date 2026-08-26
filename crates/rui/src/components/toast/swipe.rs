@@ -1,4 +1,4 @@
-//! Toast 滑动关闭策略（WP-SI.9）。会话壳走 `utils/pointer_drag`；阈值/轴向在此。
+//! Toast 滑动关闭策略（产品层）。会话壳走 `utils/pointer_drag`；阈值/轴向在此。
 
 /// 任一侧向超过该阈值则退场。
 pub const SWIPE_DISMISS_PX: f32 = 56.0;

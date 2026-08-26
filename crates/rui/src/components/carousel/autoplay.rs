@@ -1,4 +1,4 @@
-//! Carousel autoplay 推进判定（WP-SI.10）。
+//! Carousel autoplay 推进判定（产品层）。
 //!
 //! 与指针按住 / 悬停暂停互斥；无缝环动画进行中优先 settle。
 

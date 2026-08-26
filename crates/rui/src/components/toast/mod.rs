@@ -13,11 +13,13 @@
 //!   语义色落在边框、阴影与文案/图标上；容器底保持 popover。
 //!   非 `default` 默认在左侧居中显示语气图标，可用 [`.icon(false)`](ToastBuilder::icon) 关闭。
 //!
-//! ## 引擎边界（WP-SI.9）
-//! - 计时 / 暂停地板：[`internal::toast_timer`](crate::components::internal::toast_timer)
-//! - 退场预算常量：[`internal::toast_queue`](crate::components::internal::toast_queue)
-//! - 滑动阈值 / 轴向：[`internal::toast_swipe`](crate::components::internal::toast_swipe)
-//! - CSS 动效与产品壳留本文件；拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)。
+//! ## 模块拆分（产品层，非框架原语）
+//! - [`timer`] / [`queue`] / [`swipe`] / [`motion`] / [`view`] / [`host`]：本组件私有拆层
+//! - 退场时长判定吃 [`utils::presence::exit_elapsed`](crate::utils::presence::exit_elapsed)
+//! - 入退场/堆叠位移吃 [`utils::motion::MotionStyle`](crate::utils::motion::MotionStyle)
+//! - portal + 同 key 调和吃 [`utils::keyed_overlay`](crate::utils::keyed_overlay)
+//! - 堆叠/列表 rank→位移吃 [`utils::layout_group`](crate::utils::layout_group)
+//! - 拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)
 //!
 //! ## 用法
 //! ```ignore
@@ -51,28 +53,42 @@
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::internal::toast_queue::{
+mod queue;
+mod swipe;
+mod timer;
+mod motion;
+pub mod view;
+pub mod host;
+
+
+use queue::{
     max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP,
 };
-use crate::components::internal::toast_swipe::{
-    clamp_swipe_offset, should_dismiss, ToastSwipeDirs,
-};
-use crate::components::internal::toast_timer;
+use swipe::{clamp_swipe_offset, should_dismiss, ToastSwipeDirs};
 use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
+use crate::utils::presence::exit_elapsed;
 use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::layout::dimension::CssDim;
-use crate::layout::layout_tree::{LayoutTree, ATTR_PORTAL_KEY};
+use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::{
-    parse_color, parse_text_color, snap_element_transitions_to_current, TimingFunction,
-    TransitionEntry, TransitionProperty, UnitSlot,
+    parse_color, parse_text_color, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
 };
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::popup::portal_panel;
+use crate::utils::keyed_overlay::{
+    item_template_id, mount_reactive_anchor, viewport_portal_stage, TOAST_CARD_SCOPE,
+};
+use crate::utils::layout_group::{
+    linear_slot_offset, slot_list_pose, slot_visual_offset, SlotListConfig,
+};
+use crate::utils::motion::{
+    ensure_motion_transitions, motion_sync_status, prepare_motion_sync, snap_motion_baseline,
+    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform,
+};
+
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
@@ -304,86 +320,6 @@ const TOAST_OPACITY_EASE: TimingFunction = TimingFunction::EaseInOut;
 const TOAST_FRONT_EXIT_EASE: TimingFunction = TimingFunction::EaseIn;
 /// 后方淡出 / 挤出靠拢。
 const TOAST_BEHIND_EXIT_EASE: TimingFunction = TimingFunction::EaseInOut;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ToastCssPhase {
-    /// 新通知自边缘滑入。
-    Enter,
-    /// 堆叠 lift/scale。
-    Stack,
-    /// 最前整卡滑出 + 淡出。
-    FrontExit,
-    /// 后方淡出；挤出则向 limit 档位靠拢并淡出。
-    BehindExit,
-}
-
-fn toast_css_phase(exiting: bool, behind_fade: bool, entering: bool) -> ToastCssPhase {
-    if exiting {
-        if behind_fade {
-            ToastCssPhase::BehindExit
-        } else {
-            ToastCssPhase::FrontExit
-        }
-    } else if entering {
-        ToastCssPhase::Enter
-    } else {
-        ToastCssPhase::Stack
-    }
-}
-
-fn ensure_toast_css_transition(el: &mut Element, duration_ms: f32, phase: ToastCssPhase) {
-    let ms = duration_ms.max(1.0);
-    let (transform_ease, opacity_ease) = match phase {
-        ToastCssPhase::Enter => (TOAST_ENTER_EASE, TOAST_OPACITY_EASE),
-        ToastCssPhase::Stack => (TOAST_STACK_EASE, TOAST_OPACITY_EASE),
-        ToastCssPhase::FrontExit => (TOAST_FRONT_EXIT_EASE, TOAST_FRONT_EXIT_EASE),
-        ToastCssPhase::BehindExit => (TOAST_BEHIND_EXIT_EASE, TOAST_BEHIND_EXIT_EASE),
-    };
-    // 堆叠阴影淡出与 lift 同拍；BoxShadow tween 只插值 color（含 alpha）。
-    let shadow_ease = TOAST_STACK_EASE;
-    let shadow_ms = TOAST_STACK_MS;
-    let transform_ok = el.style.transition.iter().any(|e| {
-        e.property == TransitionProperty::Transform
-            && (e.duration_ms - ms).abs() < 0.5
-            && e.delay_ms == 0.0
-            && e.timing == transform_ease
-    });
-    let opacity_ok = el.style.transition.iter().any(|e| {
-        e.property == TransitionProperty::Opacity
-            && (e.duration_ms - ms).abs() < 0.5
-            && e.delay_ms == 0.0
-            && e.timing == opacity_ease
-    });
-    let shadow_ok = el.style.transition.iter().any(|e| {
-        e.property == TransitionProperty::BoxShadow
-            && (e.duration_ms - shadow_ms).abs() < 0.5
-            && e.delay_ms == 0.0
-            && e.timing == shadow_ease
-    });
-    if el.style.transition.len() == 3 && transform_ok && opacity_ok && shadow_ok {
-        return;
-    }
-    el.style.transition.clear();
-    el.style.transition.push(TransitionEntry {
-        property: TransitionProperty::Transform,
-        duration_ms: ms,
-        delay_ms: 0.0,
-        timing: transform_ease,
-    });
-    el.style.transition.push(TransitionEntry {
-        property: TransitionProperty::Opacity,
-        duration_ms: ms,
-        delay_ms: 0.0,
-        timing: opacity_ease,
-    });
-    el.style.transition.push(TransitionEntry {
-        property: TransitionProperty::BoxShadow,
-        duration_ms: shadow_ms,
-        delay_ms: 0.0,
-        timing: shadow_ease,
-    });
-}
-
 fn toast_drag_xy(id: u64) -> Signal<[f32; 2]> {
     use_signal(&format!("__rui_toast_drag_xy:{id}"), || [0.0_f32, 0.0])
 }
@@ -412,7 +348,7 @@ fn arm_toast_timer(id: u64, duration: Duration) {
     // 展开态下新到的通知同样生下来就冻结（悬停期间不该偷跑）；
     // 收起后由 `apply_stack_timer_pause` 逐项接续。
     let running = !(TOAST_STACK_TIMER_PAUSED.get() || toast_timers_should_freeze());
-    toast_timer::arm(id, duration, running);
+    timer::arm(id, duration, running);
     mark_toast_enter(id);
 }
 
@@ -567,15 +503,15 @@ fn visible_stack_rank(q: &[ToastItem], id: u64) -> usize {
 }
 
 fn clear_toast_timer(id: u64) {
-    toast_timer::clear(id);
+    timer::clear(id);
 }
 
 fn pause_toast_timer(id: u64) {
-    toast_timer::pause(id);
+    timer::pause(id);
 }
 
 fn resume_toast_timer(id: u64) {
-    toast_timer::resume(id);
+    timer::resume(id);
 }
 
 /// 到期但退场预算已满：顺延这条的到期时刻，**勿** snap 正在播的退场。
@@ -584,15 +520,15 @@ fn resume_toast_timer(id: u64) {
 fn defer_toast_timer(id: u64, delay: Duration) {
     // 冻结态下计时不会到期，理论上到不了这里；仍按冻结口径落盘，别偷跑。
     let running = !toast_timers_should_freeze();
-    toast_timer::defer(id, delay, running);
+    timer::defer(id, delay, running);
 }
 
 fn toast_timer_expired(id: u64) -> bool {
-    toast_timer::expired(id)
+    timer::expired(id)
 }
 
 fn toast_timer_deadline(id: u64) -> Option<Instant> {
-    toast_timer::deadline(id)
+    timer::deadline(id)
 }
 
 fn begin_toast_drag(drag: ToastDrag) {
@@ -690,42 +626,6 @@ fn active_count(q: &[ToastItem]) -> usize {
 }
 
 /// 入场起点：顶栏从上方（负 Y），底栏从下方（正 Y）。
-fn toast_enter_offset_y(from_bottom: bool) -> f32 {
-    if from_bottom {
-        TOAST_ENTER_SLIDE
-    } else {
-        -TOAST_ENTER_SLIDE
-    }
-}
-
-/// 默认退场终点：退回入场边（运动方向与入场相反）。
-/// 顶栏从上滑入 → 向上滑出；底栏从下滑入 → 向下滑出。
-fn toast_exit_offset_y(from_bottom: bool) -> f32 {
-    toast_enter_offset_y(from_bottom).signum() * TOAST_EXIT_SLIDE
-}
-
-fn exit_target(from: [f32; 2], from_bottom: bool) -> [f32; 2] {
-    let mag = from[0].abs() + from[1].abs();
-    if mag > 1.0 {
-        let sx = if from[0].abs() < 1.0 {
-            0.0
-        } else {
-            from[0].signum()
-        };
-        let sy = if from[1].abs() < 1.0 {
-            0.0
-        } else {
-            from[1].signum()
-        };
-        [
-            from[0] + sx * TOAST_EXIT_SLIDE,
-            from[1] + sy * TOAST_EXIT_SLIDE,
-        ]
-    } else {
-        [0.0, toast_exit_offset_y(from_bottom)]
-    }
-}
-
 fn begin_toast_exit(id: u64, from_drag: Option<[f32; 2]>) {
     batch(|| {
         let mut p = toast_pending().peek();
@@ -1272,8 +1172,8 @@ fn finalize_exits(q: &mut Vec<ToastItem>, pending_out: &mut Vec<ToastItem>) -> b
                 } else {
                     exit_dur_front
                 };
-                // 墙钟到点摘树（CSS transition 与时长对齐）。
-                if started.elapsed() < dur {
+                // 墙钟到点摘树（CSS transition 与时长对齐）；时长判定走 Presence 原语。
+                if !exit_elapsed(started, dur) {
                     return true;
                 }
                 if vis.is_some_and(|v| v.to_pending) {
@@ -1454,1142 +1354,18 @@ fn toast_push_item(
 pub fn toast_dismiss(id: u64) {
     begin_toast_exit(id, None);
 }
+pub(crate) use host::paint_toast_host;
 
-// ---------------------------------------------------------------------------
-// Visual: card + parts
-// ---------------------------------------------------------------------------
-
-fn tone_colors(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
-    // 底色始终 popover；语义色只落在边框与文案/图标上。
-    let bg = tokens::popover();
-    match tone {
-        ToastTone::Default => (bg, tokens::foreground_text(), tokens::border(), None),
-        ToastTone::Info => (
-            bg,
-            parse_text_color("blue-600"),
-            parse_color("blue-300"),
-            Some("info"),
-        ),
-        ToastTone::Success => (
-            bg,
-            parse_text_color("green-600"),
-            parse_color("green-300"),
-            Some("circle-check"),
-        ),
-        ToastTone::Warning => (
-            bg,
-            parse_text_color("orange-600"),
-            parse_color("orange-300"),
-            Some("circle-alert"),
-        ),
-        ToastTone::Destructive | ToastTone::Error => (
-            bg,
-            parse_text_color("red-600"),
-            parse_color("red-300"),
-            Some("circle-x"),
-        ),
-    }
-}
-
-/// 四边均匀阴影（offset 0,0）；语义变体仅换色相，强度与 default 一致。
-fn tone_shadow(tone: ToastTone) -> ([f32; 4], f32, f32) {
-    const BLUR: f32 = 10.0;
-    const SPREAD: f32 = -2.0;
-    const ALPHA: f32 = 0.12;
-    match tone {
-        ToastTone::Default => ([0.0, 0.0, 0.0, ALPHA], BLUR, SPREAD),
-        ToastTone::Info => {
-            let mut c = parse_color("blue-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Success => {
-            let mut c = parse_color("green-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Warning => {
-            let mut c = parse_color("orange-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Destructive | ToastTone::Error => {
-            let mut c = parse_color("red-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-    }
-}
-
-/// 收起堆叠后方层：阴影 alpha 淡出至 0（blur/spread 不变，便于只 tween color）。
-fn tone_shadow_stacked(tone: ToastTone, behind: bool) -> ([f32; 4], f32, f32) {
-    let (mut c, blur, spread) = tone_shadow(tone);
-    if behind {
-        c[3] = 0.0;
-    }
-    (c, blur, spread)
-}
-
-/// `dirs`：关闭拖拽允许方向（四角两边，中位仅垂直反向）。
-/// `collapse_h`：堆叠模式锁定与 front 同高，窥视条步长稳定（Sonner `--front-toast-height`）。
-/// 后方层**不**再单独淡出文案——运动只加在整卡壳上，避免「空壳 + 文字晚到」。
-fn build_toast_card(
-    item: &ToastItem,
-    dirs: ToastSwipeDirs,
-    collapse_h: Option<f32>,
-    behind: bool,
-) -> Element {
-    let id = item.id;
-    let (mut bg, fg, mut border, icon_name) = tone_colors(item.tone);
-    // 必须不透明，否则堆叠时后方文案会透出。
-    bg[3] = 1.0;
-    border[3] = 1.0;
-    let muted_fg = if matches!(item.tone, ToastTone::Default) {
-        parse_text_color("muted-foreground")
-    } else {
-        let mut c = fg;
-        c[3] = (c[3] as f32 * 0.78) as u8;
-        c
-    };
-    let show_icon = item
-        .show_icon
-        .unwrap_or_else(|| item.tone.default_show_icon());
-
-    let mut body = vstack().gap("0.125rem").flex_grow(1.0).min_w(0.0);
-    if !item.title.is_empty() {
-        let title_el: Element = text(item.title.as_str())
-            .size(14.0)
-            .weight(600.0)
-            .color(fg)
-            .into();
-        body = body.child(title_el);
-    }
-    if !item.description.is_empty() {
-        let desc: Element = text(item.description.as_str())
-            .size(14.0)
-            .color(muted_fg)
-            .into();
-        body = body.child(desc);
-    }
-
-    let mut row = hstack()
-        .w("100%")
-        .items("center")
-        .gap("0.75rem")
-        .justify("between");
-
-    if show_icon {
-        if let Some(name) = icon_name {
-            if let Some(g) = lucide_glyph(name) {
-                // 独立左侧图标列，纵向居中（与文案区分离）。
-                let icon = build_icon_text_node(g)
-                    .text_size(18.0)
-                    .text_color(fg)
-                    .w(18.0)
-                    .h(18.0)
-                    .flex_shrink(0.0);
-                row = row.child(icon);
-            }
-        }
-    }
-
-    row = row.child(Element::from(body));
-
-    let close_glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-    let close_icon = build_icon_text_node(close_glyph)
-        .text_size(14.0)
-        .text_color({
-            let mut c = fg;
-            c[3] = (c[3] as f32 * 0.55) as u8;
-            c
-        })
-        .w(16.0)
-        .h(16.0)
-        .pointer_events_none();
-    let mut close_btn: Element = interactive(
-        r#box()
-            .p("0.25rem")
-            .rounded("0.375rem")
-            .child(close_icon)
-            .into(),
-    )
-    .on_click(move || toast_dismiss(id))
-    .into();
-    close_btn = close_btn.on_pointer_down(move |e: &PointerEvent| {
-        // 避免关闭钮按下启动整卡拖拽。
-        e.stop_propagation();
-    });
-    row = row.child(close_btn.flex_shrink(0.0));
-
-    let content: Element = Element::from(row);
-
-    let capture_id = format!("toast-card-{id}");
-    let capture_for_down = capture_id.clone();
-
-    let mut card: Element = r#box()
-        .w("100%")
-        .min_h(CARD_H)
-        .px("1rem")
-        .py("0.875rem")
-        .pr("0.75rem")
-        .rounded("0.5rem")
-        .child(content)
-        .into();
-    if let Some(h) = collapse_h {
-        // 与 front 同高 + 裁切，窥视条步长才稳定（Sonner `--front-toast-height`）。
-        card = card.h(h).overflow("hidden");
-    }
-    let (shadow_color, shadow_blur, shadow_spread) = tone_shadow_stacked(item.tone, behind);
-    card = card
-        .bg(bg)
-        .border(border, 1.0)
-        .shadow(shadow_color, shadow_blur)
-        .box_shadow_spread(shadow_spread)
-        .opacity(1.0)
-        .focus_id(capture_id)
-        .on_pointer_down(move |e: &PointerEvent| {
-            if e.phase == EventPhase::Capture {
-                return;
-            }
-            begin_toast_drag(ToastDrag {
-                id,
-                start_x: e.x,
-                start_y: e.y,
-                dirs,
-            });
-            crate::app::set_pointer_capture(capture_for_down.clone());
-            e.stop_propagation();
-        })
-        .on_pointer_up(move |e: &PointerEvent| {
-            if e.phase == EventPhase::Capture {
-                return;
-            }
-            clear_toast_drag_if_any();
-        });
-    card
-}
-
-/// 堆叠位移动画参数；`None` = list 布局仅入场/退场。
-#[derive(Clone)]
-struct ToastStackMotion {
-    target_lift: f32,
-    target_scale: f32,
-    behind_fade: bool,
-    /// 收起时后方卡：阴影目标 alpha=0（与 lift 同步淡出）。
-    dim_shadow: bool,
-    /// `Some(rank)`：每帧按 [`stack_expanded_now`] 重算 lift/scale/dim（悬停展开热路径）。
-    /// `None`：用上面烘焙目标（list / 单测）。
-    live_rank: Option<usize>,
-}
-
-/// 堆叠 rank → 原始 lift / scale / 是否压暗阴影。
-fn stack_pose_for_rank(rank: usize, from_bottom: bool, expanded: bool) -> (f32, f32, bool) {
-    let scale = if expanded {
-        1.0
-    } else {
-        (1.0 - rank as f32 * 0.05).max(0.90)
-    };
-    let lift_raw = if expanded {
-        let step = CARD_H + STACK_EXPAND_GAP;
-        if from_bottom {
-            -(rank as f32 * step)
-        } else {
-            rank as f32 * step
-        }
-    } else if from_bottom {
-        -(rank as f32 * STACK_PEEK)
-    } else {
-        rank as f32 * STACK_PEEK
-    };
-    let dim_shadow = !expanded && rank > 0;
-    (lift_raw, scale, dim_shadow)
-}
-
-fn resolve_stack_pose(stack: &ToastStackMotion, from_bottom: bool) -> (f32, f32, bool) {
-    if let Some(rank) = stack.live_rank {
-        let expanded = stack_expanded_now();
-        // 展开时退场后方卡提到 front 档，避免仍停在窥视位。
-        let effective = if stack.behind_fade && expanded {
-            0
-        } else {
-            rank
-        };
-        stack_pose_for_rank(effective, from_bottom, expanded)
-    } else {
-        (stack.target_lift, stack.target_scale, stack.dim_shadow)
-    }
-}
-
-/// 缩放绕壳顶/底时，translate 补偿（与 CarouselStack / 原 spring 同口径）。
-fn stack_lift_visual(from_bottom: bool, lift_raw: f32, scale: f32) -> f32 {
-    let origin_fix = CARD_H * (1.0 - scale) * 0.5;
-    if from_bottom {
-        lift_raw - origin_fix
-    } else {
-        lift_raw + origin_fix
-    }
-}
-
-/// 当前目标姿态（只写目标；mid 由 Element CSS transition 推进）。
-fn toast_motion_pose(
-    item_id: u64,
-    exiting: bool,
-    from_bottom: bool,
-    behind_fade: bool,
-    stack: Option<&ToastStackMotion>,
-    drag: [f32; 2],
-) -> (f32, f32, f32, f32) {
-    let (lift_raw, scale, _) = stack
-        .map(|s| resolve_stack_pose(s, from_bottom))
-        .unwrap_or((0.0, 1.0, false));
-    let lift = stack
-        .map(|_| stack_lift_visual(from_bottom, lift_raw, scale))
-        .unwrap_or(0.0);
-
-    if exiting {
-        let exit_from = toast_exit_from_xy(item_id).peek();
-        let [to_x, to_y] = exit_target(exit_from, from_bottom);
-        if behind_fade {
-            // 后方手动关：lift 为当前档（原地淡出）。
-            // 挤出：lift/scale 已指向 limit 档（向上限+1 靠拢）再淡出。
-            (0.0, lift, 0.0, scale)
-        } else {
-            (to_x, lift + to_y, 0.0, scale)
-        }
-    } else {
-        (drag[0], lift + drag[1], 1.0, scale)
-    }
-}
-
-fn toast_motion_duration_ms(exiting: bool, behind_fade: bool, entering: bool) -> f32 {
-    if exiting {
-        if behind_fade {
-            TOAST_BEHIND_EXIT_MS as f32
-        } else {
-            TOAST_EXIT_MS as f32
-        }
-    } else if entering {
-        TOAST_ENTER_MS
-    } else {
-        TOAST_STACK_MS
-    }
-}
-
-/// 入场：仅「新挂上可见队列」时自边缘整卡滑入（Sonner）；堆叠晋升 front 不重播。
-/// 退场：最前滑向边缘并淡出（ease-in）；后方原地淡出；挤出向 limit 档靠拢并淡出。
-///
-/// 运动挂在稳定 `toast-card-{id}` 的 CSS `transition-*` 上：重建时 reconcile /
-/// portal 同 key 调和保留 mid；`reactive_sync` 只写目标。
-fn apply_enter_motion(
-    mut card: Element,
-    item: &ToastItem,
-    from_bottom: bool,
-    behind_fade: bool,
-    stack: Option<ToastStackMotion>,
-) -> Element {
-    let item_id = item.id;
-    let needs_enter = take_toast_needs_enter(item_id);
-    let exit_seed = item.exiting && take_toast_exit_seed(item_id);
-    let drag = toast_drag_xy(item_id).peek();
-    let (tx, ty, opacity, scale) = toast_motion_pose(
-        item_id,
-        item.exiting,
-        from_bottom,
-        behind_fade,
-        stack.as_ref(),
-        drag,
-    );
-    let duration_ms = toast_motion_duration_ms(item.exiting, behind_fade, needs_enter);
-    let css_phase = toast_css_phase(item.exiting, behind_fade, needs_enter);
-    let tone = item.tone;
-
-    if needs_enter {
-        let seed_lift = stack
-            .as_ref()
-            .map(|s| {
-                let (lift_raw, sc, _) = resolve_stack_pose(s, from_bottom);
-                stack_lift_visual(from_bottom, lift_raw, sc)
-            })
-            .unwrap_or(0.0);
-        let seed_y = toast_enter_offset_y(from_bottom) + seed_lift;
-        // 自透明 + 边缘起步，避免强 ease-out 下「已完全可见却瞬移到位」。
-        card = card.translate(0.0, seed_y).opacity(0.0).scale(scale);
-        ensure_toast_css_transition(&mut card, duration_ms, css_phase);
-        snap_element_transitions_to_current(&card.style, &mut card.transition_snapshot);
-        card.style.translate = [tx, ty];
-        card.style.opacity = opacity;
-        card.style.scale = [scale, scale];
-    } else {
-        // 退场：先落到 rest/mid；reconcile/hoist 再盖真实 mid；sync seed 后写出口目标。
-        // 挤出仅在 exit_seed 帧从「当前最深可见档」起步，后续重建用目标档以免打断 mid。
-        let (ix, iy, iop, isc) = if item.exiting {
-            let exit_from = toast_exit_from_xy(item_id).peek();
-            if exit_seed && is_displace_exit(item_id) {
-                let from_rank = visible_limit().saturating_sub(1);
-                let step = displace_slot_step();
-                let sc = if is_stack_layout() {
-                    (1.0 - from_rank as f32 * 0.05).max(0.90)
-                } else {
-                    1.0
-                };
-                let from_lift_raw = if from_bottom {
-                    -(from_rank as f32 * step)
-                } else {
-                    from_rank as f32 * step
-                };
-                let lift = stack_lift_visual(from_bottom, from_lift_raw, sc);
-                (exit_from[0], lift + exit_from[1], 1.0, sc)
-            } else {
-                let sc = scale;
-                let lift = stack
-                    .as_ref()
-                    .map(|s| {
-                        let (lift_raw, _, _) = resolve_stack_pose(s, from_bottom);
-                        stack_lift_visual(from_bottom, lift_raw, sc)
-                    })
-                    .unwrap_or(0.0);
-                (exit_from[0], lift + exit_from[1], 1.0, sc)
-            }
-        } else {
-            (tx, ty, opacity, scale)
-        };
-        card = card.translate(ix, iy).opacity(iop).scale(isc);
-        ensure_toast_css_transition(&mut card, duration_ms, css_phase);
-        if exit_seed {
-            snap_element_transitions_to_current(&card.style, &mut card.transition_snapshot);
-        }
-    }
-
-    reset_toast_descendant_scales(&mut card);
-    card.template_id = Some(format!("toast-card-{item_id}"));
-
-    let stack_for_sync = stack;
-    let exiting = item.exiting;
-    let exit_seed_pending = Cell::new(exit_seed);
-    // 入场缓动持续整段 ENTER_MS；避免 sync 立刻切到 Stack ease 打断起步。
-    let enter_until = Cell::new(if needs_enter {
-        Some(Instant::now() + Duration::from_millis(TOAST_ENTER_MS as u64))
-    } else {
-        None
-    });
-    // 上一帧已断言的目标；tick 会把 style 写成 mid，不能靠 style≈target 判断「目标未变」。
-    let last_target = Cell::new(None::<(f32, f32, f32, f32)>);
-    let last_shadow_a = Cell::new(None::<f32>);
-    let last_pe_none = Cell::new(None::<bool>);
-    card = card.reactive_sync(move |el: &mut Element, _lt: &mut LayoutTree| {
-        let dragging = TOAST_DRAG.with(|d| d.borrow().as_ref().is_some_and(|dg| dg.id == item_id));
-        let behind = stack_for_sync.as_ref().is_some_and(|s| s.behind_fade);
-        let dim_shadow = stack_for_sync
-            .as_ref()
-            .map(|s| resolve_stack_pose(s, from_bottom).2)
-            .unwrap_or(false);
-        let drag = toast_drag_xy(item_id).peek();
-        let (x, y, opacity, scale) = toast_motion_pose(
-            item_id,
-            exiting,
-            from_bottom,
-            behind,
-            stack_for_sync.as_ref(),
-            drag,
-        );
-        let entering = enter_until
-            .get()
-            .is_some_and(|until| Instant::now() < until);
-        if !entering {
-            enter_until.set(None);
-        }
-        let duration_ms = toast_motion_duration_ms(exiting, behind, entering);
-        let css_phase = toast_css_phase(exiting, behind, entering);
-
-        if dragging {
-            el.style.transition.clear();
-            el.transition_snapshot = Default::default();
-            last_target.set(None);
-            last_shadow_a.set(None);
-        } else if exit_seed_pending.get() {
-            // reconcile/hoist 已把 mid 写回 style；钉基线后再写退场目标。
-            ensure_toast_css_transition(el, duration_ms, css_phase);
-            snap_element_transitions_to_current(&el.style, &mut el.transition_snapshot);
-            exit_seed_pending.set(false);
-            last_target.set(None);
-            last_shadow_a.set(None);
-        } else if el.style.transition.is_empty() {
-            snap_element_transitions_to_current(&el.style, &mut el.transition_snapshot);
-            ensure_toast_css_transition(el, duration_ms, css_phase);
-        } else {
-            ensure_toast_css_transition(el, duration_ms, css_phase);
-        }
-
-        let mut impact = LayoutStatus::Clean;
-        let target = (x, y, opacity, scale);
-        let target_changed = match last_target.get() {
-            Some((lx, ly, lo, ls)) => {
-                (lx - x).abs() > 0.5
-                    || (ly - y).abs() > 0.5
-                    || (lo - opacity).abs() > 0.001
-                    || (ls - scale).abs() > 0.001
-            }
-            None => true,
-        };
-
-        // 每帧把目标写回 style（tick 会覆盖为 mid）；仅目标变化或拖拽时报 StyleChanged，
-        // 避免 3 卡堆叠动画期间每帧 3× StyleChanged 打满同步路径。
-        el.style.translate = [x, y];
-        el.style.opacity = opacity;
-        el.style.scale = [scale, scale];
-
-        let (want_shadow, want_blur, want_spread) = tone_shadow_stacked(tone, dim_shadow);
-        let shadow_changed = match last_shadow_a.get() {
-            Some(a) => (a - want_shadow[3]).abs() > 0.001,
-            None => true,
-        };
-        el.style.shadow_color = want_shadow;
-        el.style.shadow_blur = want_blur;
-        el.style.shadow_spread = want_spread;
-
-        // 收起时后方卡不命中；展开后恢复（不重建树）。
-        if !exiting {
-            if let Some(s) = stack_for_sync.as_ref() {
-                if s.live_rank.is_some_and(|r| r > 0) {
-                    let want_none = !stack_expanded_now();
-                    if last_pe_none.get() != Some(want_none) {
-                        last_pe_none.set(Some(want_none));
-                        if want_none {
-                            el.set_attr(ATTR_POINTER_EVENTS, PointerEvents::None.as_str());
-                        } else {
-                            el.attrs.remove(ATTR_POINTER_EVENTS);
-                        }
-                    }
-                }
-            }
-        }
-
-        if dragging || target_changed || shadow_changed {
-            last_target.set(Some(target));
-            last_shadow_a.set(Some(want_shadow[3]));
-            impact = impact.merge(LayoutStatus::StyleChanged);
-        }
-        reset_toast_descendant_scales(el);
-
-        // 只按本卡 CSS 是否在跑来要帧；勿用 any_ui_animation_active，否则一张在动
-        // 会让堆里每张每帧都走重路径。
-        let self_animating = !dragging
-            && (el.transition_snapshot.has_active_tweens()
-                || crate::style::css_transition_needs_frame(&el.style, &el.transition_snapshot));
-        if self_animating || impact != LayoutStatus::Clean {
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        }
-        impact
-    });
-
-    if item.exiting {
-        card = card.pointer_events_none();
-    }
-    card
-}
-
-/// 与 CarouselStack 相同：缩放只写在壳上，子树保持 scale=1，由 collect 的
-/// `ancestor_scale` 继承，避免子节点各自绕中心缩放导致文字脱壳。
-fn reset_toast_descendant_scales(el: &mut Element) {
-    for child in &mut el.children {
-        if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
-        {
-            child.style.scale = [1.0, 1.0];
-        }
-        reset_toast_descendant_scales(child);
-    }
-}
-
-/// 声明式条目壳（语气变体）；一般由宿主渲染队列，亦可自定义。
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn Toast(
-    variant: Option<String>,
-    title: Option<String>,
-    description: Option<String>,
-    icon: Option<bool>,
-    children: Option<Element>,
-) -> Element {
-    let _ = children;
-    let tone = ToastTone::parse(variant.as_deref().unwrap_or("default"));
-    let item = ToastItem {
-        id: 0,
-        title: title.unwrap_or_default(),
-        description: description.unwrap_or_default(),
-        tone,
-        show_icon: icon,
-        created: Instant::now(),
-        duration: Duration::from_secs(3),
-        exiting: false,
-        exit_started: None,
-    };
-    build_toast_card(
-        &item,
-        swipe_dirs_for_position(ToastPosition::TopRight),
-        None,
-        false,
-    )
-}
-
-/// 标题叶（文档/自定义组合用）。
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn ToastTitle(children: Option<Element>) -> Element {
-    let label = children
-        .as_ref()
-        .and_then(|c| c.text.clone())
-        .unwrap_or_default();
-    text(label.as_str())
-        .size(14.0)
-        .weight(600.0)
-        .color(tokens::foreground_text())
-        .into()
-}
-
-/// 描述叶。
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn ToastDescription(children: Option<Element>) -> Element {
-    let label = children
-        .as_ref()
-        .and_then(|c| c.text.clone())
-        .unwrap_or_default();
-    text(label.as_str())
-        .size(14.0)
-        .color(parse_text_color("muted-foreground"))
-        .into()
-}
-
-/// 关闭按钮（需自行 `on_click` dismiss；队列卡片已内置关闭）。
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn ToastClose(children: Option<Element>) -> Element {
-    let _ = children;
-    let g = lucide_glyph("x").unwrap_or_else(|| "×".into());
-    let icon = build_icon_text_node(g)
-        .text_size(14.0)
-        .text_color(parse_text_color("muted-foreground"))
-        .w(16.0)
-        .h(16.0);
-    interactive(r#box().p("0.25rem").rounded("0.375rem").child(icon).into()).into()
-}
-
-// ---------------------------------------------------------------------------
-// Host layout
-// ---------------------------------------------------------------------------
-
-fn place_panel(panel: Element, position: &str) -> Element {
-    let pad = 16.0;
-    let pos = ToastPosition::parse(position);
-    match pos {
-        ToastPosition::TopLeft => panel.absolute().left(pad).top(pad),
-        ToastPosition::TopRight => panel.absolute().right(pad).top(pad),
-        ToastPosition::BottomLeft => panel.absolute().left(pad).bottom(pad),
-        ToastPosition::BottomRight => panel.absolute().right(pad).bottom(pad),
-        ToastPosition::TopCenter => Element::from(
-            hstack()
-                .absolute(true)
-                .left(0.0)
-                .right(0.0)
-                .top(pad)
-                .w("100%")
-                .justify("center")
-                .pointer_events("box-none")
-                .child(panel),
-        ),
-        ToastPosition::BottomCenter => Element::from(
-            hstack()
-                .absolute(true)
-                .left(0.0)
-                .right(0.0)
-                .bottom(pad)
-                .w("100%")
-                .justify("center")
-                .pointer_events("box-none")
-                .child(panel),
-        ),
-    }
-}
-
-/// Sonner 式堆叠：收起时仅窥视后方条目；悬停展开为完整间距列表。
-/// `items` 新→旧（index 0 = 最前）。
-/// 布局：同锚点 + `translateY` 堆叠（避免中心缩放 + 不同 `top` 导致窥视条不匀）。
-/// 后方到期：整卡淡出；最前到期：滑出淡出。
-/// 展开态由卡/堆 `reactive_sync` 热读，宿主不因悬停重建（3+ 卡性能关键）。
-fn render_stack(
-    items: &[&ToastItem],
-    expanded: bool,
-    from_bottom: bool,
-    swipe: ToastSwipeDirs,
-) -> Element {
-    let n = items.len();
-    if n == 0 {
-        return Element::new();
-    }
-
-    // 仅非退场项参与堆叠位次与堆高度（退场后方不占位，对标 Sonner 立即收高度）。
-    let mut rank_of = vec![None; n];
-    let mut n_active = 0usize;
-    for i in 0..n {
-        if !items[i].exiting {
-            rank_of[i] = Some(n_active);
-            n_active += 1;
-        }
-    }
-    let has_front_exit = items
-        .iter()
-        .any(|t| t.exiting && toast_exit_vis(t.id).is_some_and(|v| v.as_front));
-    let pile_n = n_active.max(usize::from(has_front_exit));
-
-    let pile_h_expanded =
-        pile_n as f32 * CARD_H + (pile_n.saturating_sub(1) as f32) * STACK_EXPAND_GAP;
-    // 收起时命中区跟窥视堆高度走，避免展开幽灵高度拖住 hover 导致「移开却不收」。
-    // 展开后用满高，保证卡间空隙仍可命中。高度由 pile sync 热更新，不重建子树。
-    let pile_h_collapsed = CARD_H + (pile_n.saturating_sub(1) as f32) * STACK_PEEK;
-    let pile_h = if expanded {
-        pile_h_expanded
-    } else {
-        pile_h_collapsed
-    };
-    let anchor_top = if from_bottom { pile_h - CARD_H } else { 0.0 };
-
-    let mut pile: Element = r#box()
-        .relative(true)
-        .w(TOAST_WIDTH)
-        .h(pile_h)
-        .overflow("visible")
-        .into();
-    // 与 CarouselStack 相同：逐卡 rects→text band，避免下层字形画在上层壳之上。
-    // （框架也会在子节点有 z-index 时自动建 band；此处显式标注语义。）
-    pile.set_attr("data-stacking-context", "1");
-    pile.template_id = Some("__rui_toast_stack_pile".into());
-
-    let last_pile_h = Cell::new(pile_h);
-    pile = pile.reactive_sync(move |el: &mut Element, _lt: &mut LayoutTree| {
-        let exp = stack_expanded_now();
-        let h = if exp {
-            pile_h_expanded
-        } else {
-            pile_h_collapsed
-        };
-        if (last_pile_h.get() - h).abs() <= 0.5 {
-            return LayoutStatus::Clean;
-        }
-        last_pile_h.set(h);
-        el.style.set_css_dim(UnitSlot::Height, CssDim::Px(h));
-        if from_bottom {
-            let top = h - CARD_H;
-            for child in &mut el.children {
-                if child
-                    .template_id
-                    .as_deref()
-                    .is_some_and(|t| t.starts_with("toast-card-"))
-                {
-                    child.style.set_css_dim(UnitSlot::InsetT, CssDim::Px(top));
-                }
-            }
-        }
-        LayoutStatus::LayoutChanged
-    });
-
-    // 从后往前挂：先画最旧（底），再画最新（顶），保证命中/绘制顺序。
-    for draw_i in (0..n).rev() {
-        let item = items[draw_i];
-        let exit_vis = toast_exit_vis(item.id);
-        let behind_fade = item.exiting && !expanded && exit_vis.is_some_and(|v| !v.as_front);
-
-        let (rank, behind, pointer_none, z, live_rank) = if item.exiting {
-            if let Some(v) = exit_vis {
-                if v.as_front {
-                    (0usize, false, true, 2000, Some(0usize))
-                } else {
-                    let rank = v.rank;
-                    (rank, true, true, 900 - rank as i32, Some(rank))
-                }
-            } else {
-                (0usize, false, true, 2000, Some(0usize))
-            }
-        } else {
-            let rank = rank_of[draw_i].unwrap_or(0);
-            let is_behind = !expanded && rank > 0;
-            (rank, is_behind, is_behind, 1000 - rank as i32, Some(rank))
-        };
-
-        let (base_lift, base_scale, _) = stack_pose_for_rank(rank, from_bottom, expanded);
-
-        // 后方窥视条不重播入场滑入（晋升 front 时再播）。
-        if behind {
-            let _ = take_toast_needs_enter(item.id);
-        }
-        // 整壳裁切到 front 同高；文案始终绘制，靠 overflow 裁切窥视。
-        let collapse_h = Some(CARD_H);
-        let mut card = build_toast_card(item, swipe, collapse_h, behind);
-        card = apply_enter_motion(
-            card,
-            item,
-            from_bottom,
-            behind_fade,
-            Some(ToastStackMotion {
-                target_lift: base_lift,
-                target_scale: base_scale,
-                behind_fade,
-                dim_shadow: behind,
-                live_rank,
-            }),
-        );
-        card = card
-            .absolute()
-            .left(0.0)
-            .w("100%")
-            .top(anchor_top)
-            .z_index(z);
-        if pointer_none {
-            card = card.pointer_events_none();
-        }
-        pile = pile.child(card);
-    }
-
-    interactive(Element::from(pile))
-        .on_hover(move |h| {
-            if is_toast_dragging() {
-                if h {
-                    set_stack_expanded(true);
-                    set_stack_timers_paused(true);
-                }
-                return;
-            }
-            set_stack_expanded(h);
-            set_stack_timers_paused(h);
-        })
-        .into()
-}
-
-/// list：绝对定位 + translateY 占位（与 stack 同口径），index 变化才有过渡。
-/// `items`：顶→底视觉序。底栏传入 oldest→newest（最上最旧）；顶栏 newest→oldest。
-/// 挤出最旧：向入场推移方向再移一档（底栏向上 / 顶栏向下）并淡出。
-fn render_list(items: &[&ToastItem], from_bottom: bool, swipe: ToastSwipeDirs) -> Element {
-    let n = items.len();
-    if n == 0 {
-        return Element::new();
-    }
-
-    let step = list_step();
-    let mut rank_of = vec![None; n];
-    let actives: Vec<usize> = (0..n).filter(|&i| !items[i].exiting).collect();
-    let n_active = actives.len();
-    if from_bottom {
-        // oldest→newest：末项最新 → rank 0（贴底边）。
-        for (k, &i) in actives.iter().rev().enumerate() {
-            rank_of[i] = Some(k);
-        }
-    } else {
-        // newest→oldest：首项最新 → rank 0（贴顶边）。
-        for (k, &i) in actives.iter().enumerate() {
-            rank_of[i] = Some(k);
-        }
-    }
-
-    let has_front_exit = items
-        .iter()
-        .any(|t| t.exiting && toast_exit_vis(t.id).is_some_and(|v| v.as_front));
-    let pile_n = n_active.max(usize::from(has_front_exit));
-    let pile_h = pile_n as f32 * CARD_H + (pile_n.saturating_sub(1) as f32) * LIST_GAP;
-    let anchor_top = if from_bottom { pile_h - CARD_H } else { 0.0 };
-
-    let mut pile: Element = r#box()
-        .relative(true)
-        .w(TOAST_WIDTH)
-        .max_w("420px")
-        .h(pile_h)
-        .overflow("visible")
-        .into();
-
-    // 先画高 rank（更远），再画 rank0，保证命中/绘制。
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&i| {
-        let item = items[i];
-        let r = if item.exiting {
-            toast_exit_vis(item.id).map(|v| v.rank).unwrap_or(0)
-        } else {
-            rank_of[i].unwrap_or(0)
-        };
-        std::cmp::Reverse(r)
-    });
-
-    for draw_i in order {
-        let item = items[draw_i];
-        let exit_vis = toast_exit_vis(item.id);
-        let as_front = exit_vis.is_some_and(|v| v.as_front);
-        // 挤出 / 非最前关闭：按档位平移淡出；最前关闭：滑向入场边。
-        let list_slot_fade = item.exiting && !as_front;
-
-        let rank = if item.exiting {
-            if as_front {
-                0usize
-            } else {
-                exit_vis.map(|v| v.rank).unwrap_or_else(visible_limit)
-            }
-        } else {
-            rank_of[draw_i].unwrap_or(0)
-        };
-
-        let base_lift = if from_bottom {
-            -(rank as f32 * step)
-        } else {
-            rank as f32 * step
-        };
-
-        let mut card = build_toast_card(item, swipe, None, false);
-        card = apply_enter_motion(
-            card,
-            item,
-            from_bottom,
-            list_slot_fade,
-            Some(ToastStackMotion {
-                target_lift: base_lift,
-                target_scale: 1.0,
-                behind_fade: list_slot_fade,
-                dim_shadow: false,
-                live_rank: None,
-            }),
-        );
-        let z = 1000i32 - rank as i32;
-        card = card
-            .absolute()
-            .left(0.0)
-            .w("100%")
-            .top(anchor_top)
-            .z_index(z);
-
-        let id = item.id;
-        let card: Element = if item.exiting {
-            card.pointer_events_none()
-        } else {
-            interactive(card)
-                .on_hover(move |h| {
-                    set_item_timer_paused(id, h);
-                })
-                .into()
-        };
-        pile = pile.child(card);
-    }
-
-    Element::from(pile)
-}
-
-fn render_queue(layout: ToastLayout, position: &str, q: &[ToastItem], expanded: bool) -> Element {
-    let limit = visible_limit();
-    let active_ids: std::collections::HashSet<u64> = q
-        .iter()
-        .rev()
-        .filter(|t| !t.exiting)
-        .take(limit)
-        .map(|t| t.id)
-        .collect();
-    let newest_first: Vec<&ToastItem> = q
-        .iter()
-        .rev()
-        .filter(|t| t.exiting || active_ids.contains(&t.id))
-        .collect();
-    if newest_first.is_empty() {
-        return Element::new();
-    }
-
-    let pos = ToastPosition::parse(position);
-    let bottom = pos.is_bottom();
-    let swipe = swipe_dirs_for_position(pos);
-    let expanded = expanded || is_toast_dragging();
-    let body = match layout {
-        ToastLayout::Stack => render_stack(&newest_first, expanded, bottom, swipe),
-        ToastLayout::List => {
-            if bottom {
-                let oldest_first: Vec<&ToastItem> = newest_first.into_iter().rev().collect();
-                render_list(&oldest_first, bottom, swipe)
-            } else {
-                render_list(&newest_first, bottom, swipe)
-            }
-        }
-    };
-
-    place_panel(r#box().child(body).into(), position)
-}
-
-/// Builder：配置宿主布局/锚点/上限策略。
-pub struct ToasterBuilder {
-    variant: ToastLayout,
-    position: String,
-    overflow: ToastOverflow,
-    limit: usize,
-}
-
-pub fn toaster() -> ToasterBuilder {
-    ToasterBuilder {
-        variant: ToastLayout::Stack,
-        position: "top-center".into(),
-        overflow: ToastOverflow::Displace,
-        limit: DEFAULT_LIMIT,
-    }
-}
-
-/// 兼容旧名：默认 `stack` 宿主。
-pub fn toast_host() -> Element {
-    toaster().into()
-}
-
-impl ToasterBuilder {
-    /// `stack`（默认）| `list`。切换时套用布局默认锚点（stack→顶中，list→右下）。
-    pub fn variant(mut self, v: impl Into<String>) -> Self {
-        self.variant = ToastLayout::parse(&v.into());
-        self.position = match self.variant {
-            ToastLayout::List => ToastPosition::BottomRight.as_str().to_string(),
-            ToastLayout::Stack => ToastPosition::TopCenter.as_str().to_string(),
-        };
-        self
-    }
-    pub fn layout(mut self, layout: ToastLayout) -> Self {
-        self.variant = layout;
-        self.position = match layout {
-            ToastLayout::List => ToastPosition::BottomRight.as_str().to_string(),
-            ToastLayout::Stack => ToastPosition::TopCenter.as_str().to_string(),
-        };
-        self
-    }
-    /// `top-center`（stack 默认）| `top-right` | `top-left` | `bottom-left` | `bottom-center` | `bottom-right`（list 默认）。
-    pub fn position(mut self, p: impl Into<String>) -> Self {
-        self.position = ToastPosition::parse(&p.into()).as_str().to_string();
-        self
-    }
-    /// 上限策略：`displace`（挤出最旧）| `wait`（等待空位）。
-    pub fn overflow(mut self, v: impl Into<String>) -> Self {
-        self.overflow = ToastOverflow::parse(&v.into());
-        self
-    }
-    pub fn overflow_policy(mut self, policy: ToastOverflow) -> Self {
-        self.overflow = policy;
-        self
-    }
-    /// 同时可见上限（默认 3，至少 1）。
-    pub fn limit(mut self, n: usize) -> Self {
-        self.limit = n.max(1);
-        self
-    }
-}
-
-impl crate::core::tree::IntoElementList for ToasterBuilder {
-    fn into_element_list(self) -> Vec<Element> {
-        vec![self.into()]
-    }
-}
-
-impl From<ToasterBuilder> for Element {
-    fn from(builder: ToasterBuilder) -> Self {
-        layout_signal().set(builder.variant.as_str().to_string());
-        position_signal().set(ToastPosition::parse(&builder.position).as_str().to_string());
-        overflow_signal().set(builder.overflow.as_str().to_string());
-        limit_signal().set(builder.limit.max(1));
-        match builder.overflow {
-            ToastOverflow::Displace => flush_pending_by_displace(),
-            ToastOverflow::Wait => promote_pending(),
-        }
-        mount_toast_host()
-    }
-}
-
-const TOAST_HOST_VIEW: &str = "__rui_toast_host_view";
-
-/// 反应根必须是**非 portal** 外壳。若把 `rui_portal` 当 `__rui_toast_host_view` 根，
-/// hoist 后身份落到 portal 层；Command Modal 关闭再调和会找不到壳，后续通知全部不上屏。
-fn toast_host_idle() -> Element {
-    Element::new().w(0.0).h(0.0).pointer_events_none()
-}
-
-/// 铺满视口的舞台（提升到窗口根 portal 层）；卡片在其内按 `position` 锚点摆放。
-fn toast_viewport_stage(panel: Element) -> Element {
-    let mut stage: Element = Element::new()
-        .absolute()
-        .inset(0.0)
-        .w("100%")
-        .h("100%")
-        .pointer_events_box_none()
-        .child(panel);
-    stage.set_attr(ATTR_PORTAL_KEY, "toast-host");
-    portal_panel(stage, TOAST_PORTAL_Z)
-}
-
-pub(crate) fn paint_toast_host() -> Element {
-    let open = use_signal(TOAST_HOST_OPEN, || true);
-    let _ = tick_toast_lifecycle_commit(false);
-    let q = toast_queue().get();
-    let _ = open.get();
-    let _ = toast_pending().get(); // 等待队列变化时重绘（角标/状态）
-    let layout = ToastLayout::parse(&layout_signal().get());
-    let position = position_signal().get();
-    // 仅 peek：悬停展开由卡/堆 sync 热更新，勿订阅以免整树重建。
-    let expanded = stack_expanded_now();
-    let _ = overflow_signal().get();
-    let _ = limit_signal().get();
-    // 与 Tooltip 相同：Pinned 登记，不进 Modal 栈。关 Command 不得把队列藏起来。
-    let _ = portal_sync(
-        "toast-host",
-        open,
-        OverlayKind::Tooltip,
-        OverlayMode::Pinned,
-    );
-    if q.is_empty() && toast_pending().peek().is_empty() {
-        if expanded_signal().peek() {
-            expanded_signal().set(false);
-        }
-        set_stack_timers_paused(false);
-        return toast_host_idle();
-    }
-    if q.is_empty() {
-        sync_pending_when_visible_empty(&q);
-        return toast_host_idle();
-    }
-    let panel = render_queue(layout, position.as_str(), &q, expanded);
-    toast_host_idle().child(toast_viewport_stage(panel))
-}
-
-fn mount_toast_host() -> Element {
-    reactive_anchor(TOAST_HOST_VIEW, paint_toast_host);
-    // 锚点必须是子节点：`ui! { <Toaster/> }` 会用 file:line:column 盖掉根 template_id。
-    // 0×0 外壳不占 flex；真正的舞台 hoist 到窗口根 `__rui_portal_layer`。
-    Element::new()
-        .w(0.0)
-        .h(0.0)
-        .pointer_events_box_none()
-        .child(reactive_placeholder_sized(TOAST_HOST_VIEW, 0.0, 0.0).pointer_events_box_none())
-}
-
-/// RSX `<Toaster variant="stack" overflow="displace" limit={3} position="top-right" />`。
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn Toaster(
-    variant: Option<String>,
-    position: Option<String>,
-    overflow: Option<String>,
-    limit: Option<i32>,
-    children: Option<Element>,
-) -> Element {
-    let _ = children;
-    let mut b = toaster();
-    if let Some(v) = variant {
-        b = b.variant(v);
-    }
-    if let Some(p) = position {
-        b = b.position(p);
-    }
-    if let Some(o) = overflow {
-        b = b.overflow(o);
-    }
-    if let Some(n) = limit {
-        b = b.limit(n.max(1) as usize);
-    }
-    b.into()
-}
 
 #[cfg(test)]
 mod tests {
+    use super::host::{toaster, TOAST_HOST_VIEW};
+    use super::motion::{
+        exit_target, stack_lift_visual, toast_enter_offset_y, toast_exit_offset_y,
+        toast_motion_pose, tone_shadow, ToastStackMotion,
+    };
+    use super::view::tone_colors;
+    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
     use super::*;
 
     fn settle_toast_exits() {
@@ -3184,7 +1960,7 @@ mod tests {
 
     #[test]
     fn collapse_resumes_a_timer_frozen_past_its_deadline() {
-        // 指针正好在到期瞬间压住堆叠：暂停会把剩余削到 `toast_timer::TOAST_PAUSE_FLOOR`。收起后必须
+        // 指针正好在到期瞬间压住堆叠：暂停会把剩余削到 `timer::TOAST_PAUSE_FLOOR`。收起后必须
         // 重新起表——否则 `running_since` 永远是 None、`toast_timer_expired` 恒 false，
         // 这条通知再也不会自动退场（悬停展开后移开鼠标即卡死的主症状）。
         toast_set_layout("stack");
@@ -3217,7 +1993,7 @@ mod tests {
             toast_timer_deadline(id).is_some(),
             "collapse must re-arm the frozen timer instead of leaving it dead"
         );
-        std::thread::sleep(toast_timer::TOAST_PAUSE_FLOOR + Duration::from_millis(60));
+        std::thread::sleep(timer::TOAST_PAUSE_FLOOR + Duration::from_millis(60));
         assert!(
             toast_timer_expired(id),
             "resumed timer must expire so the toast leaves on its own"

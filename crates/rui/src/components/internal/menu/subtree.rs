@@ -1,4 +1,4 @@
-//! 嵌套菜单子树生命周期（WP-SI.3）。
+//! 嵌套菜单子树生命周期。
 //!
 //! DropdownMenu / ContextMenu 共用：关子菜单、`open_or_remount`、子序号、打开探测。
 //! 键盘绑定仍可由产品层调用本模块 API；active 信号后缀由调用方传入（`dd_active` / `ctx_active`）。

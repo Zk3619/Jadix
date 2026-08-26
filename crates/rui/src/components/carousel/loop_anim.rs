@@ -1,4 +1,4 @@
-//! Carousel seamless 环动画状态（WP-SI.10）。
+//! Carousel seamless 环动画状态（产品层）。
 //!
 //! 拖拽中途不得撕环：打断时须 settle，不能只丢 flag。
 

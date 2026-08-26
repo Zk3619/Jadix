@@ -1,4 +1,4 @@
-//! Dropdown / Context 菜单行 chrome、文本染色与 highlight paint（WP-SI.5）。
+//! Dropdown / Context 菜单行 chrome、文本染色与 highlight paint。
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
