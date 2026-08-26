@@ -164,7 +164,8 @@ WP-2.9 退出：2.9.1–2.9.7 ☑（含 B15 分边 border）。
 | **SelectItem** | verified | 行容器 + 文案叶 | BorderBox | 拆叶，OK |
 | **Label** | verified | 文案叶；`.p()` API 存在，默认无 pad | BorderBox | 默认 OK；用户再加 **padding + center / auto 宽** → 必须 `.content_box()` |
 | **Card 系列** | verified | 区容器 padding，标题为 Label 子 | BorderBox | 拆叶，OK |
-| **Badge** | planned | — | — | 落地时按 Tabs 纪律：单节点 pad+center → ContentBox，否则拆叶 |
+| **Badge** | experimental | chrome 容器 + 文案/图标叶 | BorderBox | 已落地；拆叶，OK |
+| **AspectRatio** | experimental | 比例容器（relative + overflow + aspect_ratio） | BorderBox | 已落地；子节点 absolute 铺满；Image 亦可直接 `aspect_ratio` 属性 |
 
 Gallery / 业务自建 chip：单节点文案 + padding + 居中 → `class="box-content"` 或 `.content_box()`。
 

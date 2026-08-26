@@ -148,7 +148,7 @@
 | ~~P1~~ | 无 dark mode / 运行时换肤 | ✅ | `set_theme_mode` / `toggle_theme_mode` + dark tokens |
 | ~~P1~~ | Tailwind 色板不完整 | ✅ | 常见 family × 50–950；`try_parse_color` 可区分未知 |
 | ~~P2~~ | 缺断点、负值、任意值覆盖不全 | ✅ MVP | `sm:`–`2xl:` 断点 + `-m-*`/`-translate-*` + `group-hover:`/`peer-*`（含命名）；任意值间距已有 |
-| ~~P2~~ | `transition-*` / `animate-*` 无类名入口 | ✅ MVP | `transition-opacity`/`transition-transform` → CSS `tick_element_transitions`；`animate-spin` 旋转 |
+| ~~P2~~ | `transition-*` / `animate-*` 无类名入口 | ✅ MVP | `transition-opacity`/`transition-transform` → CSS `tick_element_transitions`；`animate-spin/ping/pulse/bounce` → `Style.animations` + `@keyframes` |
 
 ### 4.3 渲染与布局
 

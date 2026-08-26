@@ -121,15 +121,187 @@ fn ReactiveStatusBadge(
     label: rui::core::reactivity::Signal<String>,
     ok: rui::core::reactivity::Signal<bool>,
 ) -> rui::core::tree::Element {
+    let _ = &id; // 实例键由 #[component(reactive)] 占用；徽标本身展示型可不写 id
     ui! {
-        <HStack gap="0.5rem" items="center" p="0.5rem" class="rounded" bg="secondary">
+        <Badge
+            variant={ if ok.get() { "default" } else { "destructive" } }
+        >
             <Icon
                 name={ if ok.get() { "check".to_string() } else { "ban".to_string() } }
-                size="1rem"
-                color="foreground"
+                size="0.75rem"
             />
-            <Label text_size="0.875rem">{ label.get() }</Label>
-        </HStack>
+            { label.get() }
+        </Badge>
+    }
+}
+
+#[component]
+fn BadgeShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1c) Badge 变体（ShadCN）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：<Badge variant> 与 badge().variant().text()；success / warning(=warn) / error≡destructive；Icon 用 name+animate-spin，图片请用 Image src"
+                </Label>
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
+                    <Badge>"Default"</Badge>
+                    <Badge variant="secondary">"Secondary"</Badge>
+                    <Badge variant="success">"Success"</Badge>
+                    <Badge variant="warning">"Warning"</Badge>
+                    <Badge variant="destructive">"Destructive"</Badge>
+                    <Badge variant="error">"Error"</Badge>
+                    <Badge variant="outline">"Outline"</Badge>
+                    <Badge variant="ghost">"Ghost"</Badge>
+                    <Badge variant="link">"Link"</Badge>
+                </HStack>
+                <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
+                    <Badge variant="secondary">
+                        <Icon name="badge-check" size="0.75rem" />
+                        "Verified"
+                    </Badge>
+                    <Badge variant="outline">
+                        <Icon name="clock" size="0.75rem" />
+                        "Pending"
+                    </Badge>
+                    <Badge variant="secondary">
+                        <Icon name="loader-circle" size="0.75rem" class="animate-spin" />
+                        "Loading"
+                    </Badge>
+                    { Element::from(badge().variant("warn").text("Builder Warn")) }
+                    { Element::from(badge().variant("destructive").text("Builder Error")) }
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn AspectRatioShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1d) AspectRatio（CSS aspect-ratio）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：<AspectRatio ratio> 与 aspect_ratio().ratio()；Image/Box 亦可写 aspect_ratio=\"16/9\"（MDN：定宽 + 另一轴 auto）"
+                </Label>
+                <HStack w="100%" min_w="0" gap="0.75rem" items="start" wrap="wrap">
+                    <VStack gap="0.25rem" w="10rem">
+                        <Label font_weight="700" text_size="0.75rem">"16:9 容器"</Label>
+                        <AspectRatio ratio={16.0 / 9.0} w="10rem" class="rounded-md" bg="muted">
+                            <Image texture="demo-checker" w="100%" h="100%" />
+                        </AspectRatio>
+                    </VStack>
+                    <VStack gap="0.25rem" w="8rem">
+                        <Label font_weight="700" text_size="0.75rem">"1:1 容器"</Label>
+                        <AspectRatio ratio="1/1" w="8rem" class="rounded-md" bg="muted">
+                            <Image
+                                src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%233b82f6'/><circle cx='32' cy='32' r='18' fill='white'/></svg>"
+                                w="100%"
+                                h="100%"
+                            />
+                        </AspectRatio>
+                    </VStack>
+                    <VStack gap="0.25rem" w="10rem">
+                        <Label font_weight="700" text_size="0.75rem">"Image 属性"</Label>
+                        <Image
+                            texture="demo-checker"
+                            w="10rem"
+                            aspect_ratio="4/3"
+                            rounded="0.375rem"
+                        />
+                    </VStack>
+                    <VStack gap="0.25rem" w="10rem">
+                        <Label font_weight="700" text_size="0.75rem">"Builder 21:9"</Label>
+                        { Element::from(
+                            aspect_ratio()
+                                .ratio("21/9")
+                                .child(
+                                    Element::new()
+                                        .w("100%")
+                                        .h("100%")
+                                        .bg(rui::core::tree::parse_color("primary")),
+                                ),
+                        )
+                        .w("10rem")
+                        .rounded(6.0) }
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn AnimationShowcase() -> rui::core::tree::Element {
+    let play = use_signal("gal_anim_play", || true);
+    let play_btn = play;
+    let play_box = play;
+    ui! {
+        <MyCard title="1e) CSS animation（MDN）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "utility：animate-spin / ping / pulse / bounce；属性：animation / animation_play_state / fill-mode；Icon+spin 走字形贴图+transform（非 glyphon）；fade 用 infinite alternate"
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" items="end" wrap="wrap">
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"spin"</Label>
+                        <Icon name="loader-circle" size="2rem" color="foreground" class="animate-spin" />
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"ping"</Label>
+                        <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
+                            <Rect w="2rem" h="2rem" rounded="9999px" bg="primary" />
+                            <Rect
+                                absolute={true}
+                                inset="0"
+                                rounded="9999px"
+                                bg="primary"
+                                class="animate-ping"
+                            />
+                        </Box>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"pulse"</Label>
+                        <Rect w="3rem" h="2rem" rounded="0.375rem" bg="secondary" class="animate-pulse" />
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"bounce"</Label>
+                        <Rect w="2rem" h="2rem" rounded="0.375rem" bg="accent" class="animate-bounce" />
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"alternate pulse"</Label>
+                        <Rect
+                            w="3rem"
+                            h="2rem"
+                            rounded="0.375rem"
+                            bg="destructive"
+                            animation="1s ease-in-out infinite alternate pulse"
+                        />
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"play-state"</Label>
+                        <Rect
+                            w="2.5rem"
+                            h="2.5rem"
+                            rounded="0.375rem"
+                            bg="primary"
+                            animation="1s linear infinite spin"
+                            animation_play_state={ if play_box.get() { "running" } else { "paused" } }
+                        />
+                        <Button variant="outline" on_click={move || play_btn.set(!play_btn.get())}>
+                            { if play.get() { "Pause" } else { "Play" } }
+                        </Button>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"fade alternate"</Label>
+                        { Element::new()
+                            .w("3rem")
+                            .h("2rem")
+                            .rounded(6.0)
+                            .bg(rui::core::tree::parse_color("muted"))
+                            .animation("1.2s ease-in-out infinite alternate fade-in") }
+                    </VStack>
+                </HStack>
+            </VStack>
+        </MyCard>
     }
 }
 
@@ -548,6 +720,9 @@ fn InputShowcase() -> rui::core::tree::Element {
                         <Label text_size="0.75rem" color="muted-foreground">"online"</Label>
                     </Show>
                 </HStack>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "ReactiveStatusBadge：底层 <Badge variant={…}> + bind 文案；完整变体矩阵见「基础 → Badge」。"
+                </Label>
             </VStack>
         </MyCard>
     }
@@ -617,9 +792,9 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
     ui! {
         <VStack w="100%" gap="1rem">
             <MyCard title="2b) Pickers (file · color · date/time)">
-                <VStack w="100%" gap="0.75rem">
+                <VStack w="100%" min_w="0" gap="0.75rem">
                     <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                        "WP-3.3：触发器行 + Date/Time Tabs（仅挂载当前项，避免 forms 滚入时一次冷启动整排 picker）。"
+                        "WP-3.3：触发器行 + Date/Time Tabs（芯片按内容宽并折行；仅挂载当前项，避免 forms 滚入时一次冷启动整排 picker）。"
                     </Label>
                     <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                         <Button
@@ -671,7 +846,7 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                 </VStack>
             </MyCard>
             <MyCard title="2c) Inline Calendar · ColorPicker">
-                <VStack w="100%" gap="0.75rem">
+                <VStack w="100%" min_w="0" gap="0.75rem">
                     <Label w="100%" text_size="0.75rem" color="muted-foreground">
                         "独立卡片：滚入 2b 上半时不连带着 Calendar / 内联 HSV。"
                     </Label>
@@ -680,7 +855,7 @@ fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                         <ColorPicker id="gal-color-inline" variant="inline" format="hsla" />
                     </HStack>
                     <Label w="100%" text_size="0.75rem" color="muted-foreground">
-                        "ColorPicker 变体（Tabs 仅挂载当前项）"
+                        "ColorPicker 变体（TabsList 折行保完整标签；仅挂载当前项）"
                     </Label>
                     <Tabs id="gal-cp-variants" default_value="sketch">
                         <TabsList>
@@ -1014,6 +1189,311 @@ fn FilterShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"组合 / Tailwind / url()"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     { tiles_combo }
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn gradient_demo_tile(label: &str, el: Element) -> Element {
+    ui! {
+        <VStack gap="0.25rem" items="center">
+            { el }
+            <Label text_size="0.6rem" color="muted-foreground">{ label }</Label>
+        </VStack>
+    }
+}
+
+fn gradient_swatch(css: &str, w: &str, h: &str) -> Element {
+    Element::from(
+        r#box()
+            .w(w)
+            .h(h)
+            .rounded("0.5rem")
+            .background_image(css),
+    )
+}
+
+/// MDN-aligned CSS gradient showcase (linear / radial / conic / repeating).
+#[component]
+fn GradientShowcase() -> rui::core::tree::Element {
+    let linear_tiles: Vec<Element> = [
+        (
+            "basic ↓",
+            "linear-gradient(blue, pink)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "to right",
+            "linear-gradient(to right, blue, pink)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "to bottom right",
+            "linear-gradient(to bottom right, blue, pink)",
+            "9rem",
+            "4.5rem",
+        ),
+        (
+            "70deg",
+            "linear-gradient(70deg, blue, pink)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "多色",
+            "linear-gradient(red, yellow, blue, orange)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "硬边条纹",
+            "linear-gradient(to bottom left, cyan 50%, palegoldenrod 50%)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "色带",
+            "linear-gradient(to left, lime 20%, red 30% 45%, cyan 55% 70%, yellow 80%)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "color hint",
+            "linear-gradient(to top, lime, 20%, cyan)",
+            "7.5rem",
+            "4.5rem",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, css, w, h)| gradient_demo_tile(label, gradient_swatch(css, w, h)))
+    .collect();
+
+    let stacked = Element::from(
+        r#box()
+            .w("8rem")
+            .h("8rem")
+            .rounded("0.5rem")
+            .overflow("hidden")
+            // Each stacked layer must also carry the same radii: overflow clip is
+            // axis-aligned, so corner masking comes from the gradient texture bake.
+            .background_image(
+                "linear-gradient(217deg, #ff0000cc, transparent 70.71%)",
+            )
+            .child(
+                Element::from(
+                    r#box()
+                        .w("100%")
+                        .h("100%")
+                        .rounded("0.5rem")
+                        .background_image(
+                            "linear-gradient(127deg, #00ff00cc, transparent 70.71%)",
+                        )
+                        .child(
+                            Element::from(
+                                r#box()
+                                    .w("100%")
+                                    .h("100%")
+                                    .rounded("0.5rem")
+                                    .background_image(
+                                        "linear-gradient(336deg, #0000ffcc, transparent 70.71%)",
+                                    ),
+                            ),
+                        ),
+                ),
+            ),
+    );
+
+    let radial_tiles: Vec<Element> = [
+        ("basic", "radial-gradient(red, blue)", "9rem", "4.5rem"),
+        (
+            "stops",
+            "radial-gradient(red 10%, yellow 30%, dodgerblue 50%)",
+            "7.5rem",
+            "7.5rem",
+        ),
+        (
+            "at 0% 30%",
+            "radial-gradient(at 0% 30%, red 10%, yellow 30%, dodgerblue 50%)",
+            "7.5rem",
+            "9rem",
+        ),
+        (
+            "ellipse closest-side",
+            "radial-gradient(ellipse closest-side, red, yellow 10%, dodgerblue 50%, beige)",
+            "9rem",
+            "4rem",
+        ),
+        (
+            "circle closest-side",
+            "radial-gradient(circle closest-side at 25% 75%, red, yellow 10%, dodgerblue 50%, beige)",
+            "9rem",
+            "4.5rem",
+        ),
+        (
+            "circle 40%",
+            "radial-gradient(circle 40%, red, yellow 10%, dodgerblue 50%, beige)",
+            "9rem",
+            "4.5rem",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, css, w, h)| gradient_demo_tile(label, gradient_swatch(css, w, h)))
+    .collect();
+
+    let conic_tiles: Vec<Element> = [
+        ("basic", "conic-gradient(red, blue)", "5.5rem", "5.5rem"),
+        (
+            "at 0% 30%",
+            "conic-gradient(at 0% 30%, red 10%, yellow 30%, dodgerblue 50%)",
+            "5.5rem",
+            "5.5rem",
+        ),
+        (
+            "from 45deg",
+            "conic-gradient(from 45deg, red, orange 50%, yellow 85%, green)",
+            "5.5rem",
+            "5.5rem",
+        ),
+        (
+            "色轮",
+            "conic-gradient(red, yellow, lime, aqua, blue, magenta, red)",
+            "5.5rem",
+            "5.5rem",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, css, w, h)| {
+        let el = Element::from(
+            r#box()
+                .w(w)
+                .h(h)
+                .rounded("9999px")
+                .overflow("hidden")
+                .background_image(css),
+        );
+        gradient_demo_tile(label, el)
+    })
+    .collect();
+
+    let repeating_tiles: Vec<Element> = [
+        (
+            "repeating-linear",
+            "repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)",
+            "7.5rem",
+            "4.5rem",
+        ),
+        (
+            "repeating-radial",
+            "repeating-radial-gradient(black, black 5px, white 5px, white 10px)",
+            "5.5rem",
+            "5.5rem",
+        ),
+        (
+            "repeating-conic",
+            "repeating-conic-gradient(#66ccff 0% 8.25%, #6633ff 8.25% 16.5%, #ff3399 16.5% 25%)",
+            "5.5rem",
+            "5.5rem",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, css, w, h)| {
+        let rounded = if label.contains("conic") || label.contains("radial") {
+            "9999px"
+        } else {
+            "0.5rem"
+        };
+        let el = Element::from(
+            r#box()
+                .w(w)
+                .h(h)
+                .rounded(rounded)
+                .overflow("hidden")
+                .background_image(css),
+        );
+        gradient_demo_tile(label, el)
+    })
+    .collect();
+
+    let tw_tile = Element::from(
+        rui::style::with_class_list(
+            r#box().w("7.5rem").h("4.5rem").rounded("0.5rem").into(),
+            "bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
+        ),
+    );
+
+    let color_fmt_tiles: Vec<Element> = [
+        (
+            "rgba / hsl",
+            "linear-gradient(to right, rgba(255,0,0,0.85), hsl(210 100% 50%))",
+        ),
+        (
+            "oklch",
+            "linear-gradient(135deg, oklch(0.7 0.18 40), oklch(0.65 0.2 250))",
+        ),
+        (
+            "hwb()",
+            "linear-gradient(to right, hwb(0 10% 0%), hwb(240 10% 0%))",
+        ),
+        (
+            "color-mix()",
+            "linear-gradient(to right, color-mix(in oklab, red, blue), color-mix(in srgb, lime 40%, blue))",
+        ),
+        (
+            "rgb(from …)",
+            "linear-gradient(to right, rgb(from #ff6600 r g b), rgb(from #ff6600 b g r / 70%))",
+        ),
+        (
+            "hsl(from …)",
+            "linear-gradient(to bottom, hsl(from dodgerblue h s l), hsl(from hotpink h s l))",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, css)| gradient_demo_tile(label, gradient_swatch(css, "7.5rem", "4.5rem")))
+    .collect();
+
+    ui! {
+        <MyCard title="12c) CSS Gradients">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "对齐 MDN Using CSS gradients：linear / radial / conic + repeating；色标支持 hex / rgba / hsl / hwb / oklch / color-mix / rgb(from …)。纹理绘制（无条带缝隙），滚动后自动回补 GPU 纹理。"
+                </Label>
+
+                <Label font_weight="700" text_size="0.875rem">"Linear"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { linear_tiles }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Stacked linear（半透明叠层）"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start">
+                    { gradient_demo_tile("217°+127°+336°", stacked) }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Radial"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { radial_tiles }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Conic"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { conic_tiles }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Repeating"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { repeating_tiles }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Color formats"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
+                    { color_fmt_tiles }
+                </HStack>
+
+                <Label font_weight="700" text_size="0.875rem">"Tailwind utility"</Label>
+                <HStack gap="0.75rem" wrap="wrap" items="start">
+                    { gradient_demo_tile("from / via / to", tw_tile) }
                 </HStack>
             </VStack>
         </MyCard>
@@ -5956,6 +6436,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <GridAndDragShowcase />
                     <ShadowShowcase />
                     <FilterShowcase />
+                    <GradientShowcase />
                     <BorderStyleShowcase />
                     <OutlineShowcase />
                     <TransitionShowcase />
@@ -6001,10 +6482,13 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"基础"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
-                        "Button 变体 / 尺寸 / hover 缓动 · 排版装饰"
+                        "Button 变体 / 尺寸 / hover 缓动 · Badge · AspectRatio · CSS animation · 排版装饰"
                     </Label>
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
+                    <BadgeShowcase />
+                    { AspectRatioShowcase() }
+                    <AnimationShowcase />
                     <TypographyShowcase />
                 </VStack>
             </ScrollArea>
@@ -6192,6 +6676,274 @@ mod mount_tests {
                         !find_contains(&tree, "gal-cp-compact__cp_view"),
                         "inactive variant must not be an eager declarative sibling"
                     );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
+
+    #[test]
+    fn picker_showcase_tabs_chips_layout_alone() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let mut tree = rui::core::reactivity::isolate_reads(|| {
+                        PickerPlaceholdersShowcase(PickerPlaceholdersShowcaseProps::default())
+                    });
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
+                    eprintln!(
+                        "picker alone: root={:?} texts={} instances={}",
+                        tree.layout_bounds,
+                        result.text_nodes.len(),
+                        result.instances.len()
+                    );
+                    for label in ["Date", "DateTime", "Time", "Month", "Week", "Sketch", "Chrome"] {
+                        match result.text_nodes.iter().find(|n| n.text == label) {
+                            Some(n) => eprintln!(
+                                "  '{label}' @ ({:.1},{:.1}) {:.1}x{:.1}",
+                                n.x, n.y, n.width, n.height
+                            ),
+                            None => eprintln!("  '{label}' MISSING"),
+                        }
+                    }
+                    fn collect_triggers<'a>(
+                        el: &'a rui::core::tree::Element,
+                        out: &mut Vec<&'a rui::core::tree::Element>,
+                    ) {
+                        if el.attrs.get("data-slot").map(|s| s.as_str()) == Some("tabs-trigger") {
+                            out.push(el);
+                        }
+                        for c in &el.children {
+                            collect_triggers(c, out);
+                        }
+                    }
+                    let mut triggers = Vec::new();
+                    collect_triggers(&tree, &mut triggers);
+                    eprintln!("triggers={}", triggers.len());
+                    for t in &triggers {
+                        eprintln!("  {:?} bounds={:?}", t.text, t.layout_bounds);
+                    }
+                    assert!(
+                        triggers.len() >= 5,
+                        "expected date/time triggers, got {}",
+                        triggers.len()
+                    );
+                    let date = triggers
+                        .iter()
+                        .find(|t| t.text.as_deref() == Some("Date"))
+                        .expect("Date");
+                    let dt = triggers
+                        .iter()
+                        .find(|t| t.text.as_deref() == Some("DateTime"))
+                        .expect("DateTime");
+                    assert!(
+                        date.layout_bounds[2] > 20.0,
+                        "Date chip width crushed: {:?}",
+                        date.layout_bounds
+                    );
+                    assert!(
+                        (dt.layout_bounds[0] - date.layout_bounds[0]).abs() > 4.0
+                            || (dt.layout_bounds[1] - date.layout_bounds[1]).abs() > 4.0,
+                        "Date/DateTime piled: {:?} vs {:?}",
+                        date.layout_bounds,
+                        dt.layout_bounds
+                    );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
+
+    #[test]
+    fn forms_tabs_chips_after_scroll_into_view_do_not_overlap() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let mut tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let _ = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
+
+                    fn find_scroll<'a>(
+                        el: &'a mut rui::core::tree::Element,
+                    ) -> Option<&'a mut rui::core::tree::Element> {
+                        if el
+                            .focus_id
+                            .as_deref()
+                            .is_some_and(|f| f.starts_with("scroll:"))
+                        {
+                            return Some(el);
+                        }
+                        for c in el.children.iter_mut() {
+                            if let Some(hit) = find_scroll(c) {
+                                return Some(hit);
+                            }
+                        }
+                        None
+                    }
+                    // Pickers sit ~y=1287; scroll so TabsList enters the 800px viewport.
+                    let scroll = find_scroll(&mut tree).expect("forms ScrollArea viewport");
+                    scroll.scroll_offset = [0.0, 1100.0];
+
+                    let result =
+                        layout.build_and_layout_fast(&mut tree, 900.0, 800.0, [0.0, 0.0], true, false);
+
+                    for label in ["Date", "DateTime", "Time", "Month", "Week"] {
+                        match result.text_nodes.iter().find(|n| n.text == label) {
+                            Some(n) => eprintln!(
+                                "scrolled '{label}' @ ({:.1},{:.1}) {:.1}x{:.1}",
+                                n.x, n.y, n.width, n.height
+                            ),
+                            None => eprintln!("scrolled '{label}' MISSING"),
+                        }
+                    }
+                    let mut xs: Vec<(String, f32, f32)> = ["Date", "DateTime", "Time", "Month", "Week"]
+                        .iter()
+                        .filter_map(|lab| {
+                            let n = result.text_nodes.iter().find(|n| n.text == *lab)?;
+                            Some((lab.to_string(), n.x, n.width))
+                        })
+                        .collect();
+                    assert!(
+                        xs.len() >= 3,
+                        "after scroll, date/time chip labels must paint (got {xs:?})"
+                    );
+                    xs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                    for w in xs.windows(2) {
+                        let (la, xa, wa) = (&w[0].0, w[0].1, w[0].2);
+                        let (lb, xb, _) = (&w[1].0, w[1].1, w[1].2);
+                        assert!(
+                            (xb - xa).abs() > 4.0,
+                            "after scroll chips share x — '{la}'@x={xa}w={wa} vs '{lb}'@x={xb} (gallery pile-up)"
+                        );
+                        assert!(
+                            xb + 0.5 >= xa + wa.min(8.0),
+                            "after scroll chips overlap — '{la}'@x={xa}w={wa} vs '{lb}'@x={xb}"
+                        );
+                    }
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
+
+    #[test]
+    fn forms_date_time_tabs_chips_do_not_overlap() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let mut tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let result = layout.build_and_layout(&mut tree, 900.0, 4000.0, [0.0, 0.0]);
+                    eprintln!(
+                        "forms layout: root_bounds={:?} text_nodes={} instances={}",
+                        tree.layout_bounds,
+                        result.text_nodes.len(),
+                        result.instances.len()
+                    );
+                    for label in ["Date", "DateTime", "Sketch", "表单", "Mark invalid"] {
+                        match result.text_nodes.iter().find(|n| n.text == label) {
+                            Some(n) => eprintln!(
+                                "  paint '{label}' @ ({:.1},{:.1}) size {:.1}x{:.1}",
+                                n.x, n.y, n.width, n.height
+                            ),
+                            None => eprintln!("  paint '{label}' MISSING"),
+                        }
+                    }
+
+                    fn collect_triggers<'a>(
+                        el: &'a rui::core::tree::Element,
+                        out: &mut Vec<&'a rui::core::tree::Element>,
+                    ) {
+                        if el.attrs.get("data-slot").map(|s| s.as_str()) == Some("tabs-trigger") {
+                            out.push(el);
+                        }
+                        for c in &el.children {
+                            collect_triggers(c, out);
+                        }
+                    }
+                    fn under_tabs<'a>(
+                        el: &'a rui::core::tree::Element,
+                        tabs_id: &str,
+                    ) -> Option<&'a rui::core::tree::Element> {
+                        if el.template_id.as_deref() == Some(tabs_id) {
+                            return Some(el);
+                        }
+                        el.children.iter().find_map(|c| under_tabs(c, tabs_id))
+                    }
+
+                    for tabs_id in ["gal-dp-kinds", "gal-cp-variants"] {
+                        let tabs = under_tabs(&tree, tabs_id).expect(tabs_id);
+                        eprintln!(
+                            "{tabs_id} root bounds={:?} kids={}",
+                            tabs.layout_bounds,
+                            tabs.children.len()
+                        );
+                        for (i, c) in tabs.children.iter().enumerate() {
+                            eprintln!(
+                                "  child[{i}] slot={:?} tid={:?} bounds={:?} text={:?} kids={} display={:?}",
+                                c.attrs.get("data-slot"),
+                                c.template_id,
+                                c.layout_bounds,
+                                c.text,
+                                c.children.len(),
+                                c.style.display
+                            );
+                        }
+                        let mut triggers = Vec::new();
+                        collect_triggers(tabs, &mut triggers);
+                        assert!(
+                            triggers.len() >= 3,
+                            "{tabs_id}: expected triggers, got {}",
+                            triggers.len()
+                        );
+                        for t in &triggers {
+                            eprintln!(
+                                "{tabs_id} chip text={:?} bounds={:?}",
+                                t.text, t.layout_bounds
+                            );
+                        }
+                        // Prefer paint positions when element bounds were not stamped (0×0).
+                        let mut paint_xs: Vec<(String, f32, f32)> = triggers
+                            .iter()
+                            .filter_map(|t| {
+                                let label = t.text.as_deref()?;
+                                let n = result.text_nodes.iter().find(|n| n.text == label)?;
+                                Some((label.to_string(), n.x, n.width))
+                            })
+                            .collect();
+                        assert!(
+                            paint_xs.len() >= 2,
+                            "{tabs_id}: missing painted chip labels (got {paint_xs:?})"
+                        );
+                        paint_xs.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                        for w in paint_xs.windows(2) {
+                            let (la, xa, wa) = (&w[0].0, w[0].1, w[0].2);
+                            let (lb, xb, _wb) = (&w[1].0, w[1].1, w[1].2);
+                            assert!(
+                                (xb - xa).abs() > 4.0,
+                                "{tabs_id}: painted chips share x — '{la}'@x={xa}w={wa} vs '{lb}'@x={xb}"
+                            );
+                            assert!(
+                                xb + 0.5 >= xa + wa.min(8.0),
+                                "{tabs_id}: painted chips overlap — '{la}'@x={xa}w={wa} vs '{lb}'@x={xb}"
+                            );
+                        }
+                    }
                 });
             });
             rui::app::reactive::reset_registered_anchors();

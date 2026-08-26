@@ -151,7 +151,8 @@
 
 | 规划名（ShadCN） | 建议 Gallery 分区 | 优先级 | 建议 id 策略 | 依赖 / 笔记 |
 |------------------|-------------------|--------|--------------|-------------|
-| **Badge** | 基础 | P1 | 展示型不要求 | 现状用 Label 凑；应独立 `variant`（default/secondary/outline/destructive） |
+| **Badge** | 基础 | experimental | 展示型不要求 | **已落地**：`badge` / `<Badge>`；variant=default/secondary/success/warning/destructive(=error)/outline/ghost/link |
+| **AspectRatio** | 基础 | experimental | 展示型不要求 | **已落地**：`aspect_ratio` / `<AspectRatio ratio>`；CSS `aspect-ratio`（MDN）；Image/Box 亦可写 `aspect_ratio`/`aspectRatio` 属性或 utility `aspect-*` |
 | **Avatar** | 基础 | P1 | 可选 | Image + 占位字 / 回退；可组合非必须新原语 |
 | **Skeleton** | 基础 | P1 | 展示型不要求 | 加载占位；脉冲可用既有动效或静态灰块 |
 | **Spinner** | 基础 | P1 | 展示型不要求 | 不确定进度；与 Progress 互补 |
@@ -178,7 +179,6 @@
 | NativeSelect | **Select** | 无 DOM `<select>` |
 | Field | **form_field** / Form helpers | 校验 Context 已覆盖字段层；Form **不**单列产品组件 |
 | Item | 列表行组合 | 用 HStack + Label；不必先成组件 |
-| AspectRatio | 布局约束 | 宜 `primitives` / utility，非产品组件优先 |
 | Direction | RTL/LTR | 主题级；未开国际化前不单列 |
 | Alert（若只要确认） | 用 **Dialog** Header/Footer | planned Alert = 页内横幅；确认框勿复活 AlertDialog |
 
@@ -304,13 +304,13 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 状态 | 数量（约） | 项 |
 |------|------------|-----|
-| **已导出对位** | 34+ | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
-| **planned P1** | 9 | Badge、Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination |
+| **已导出对位** | 36+ | Button、Badge、AspectRatio、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
+| **planned P1** | 8 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination |
 | **planned P2** | 7 | HoverCard、Calendar、Empty、Kbd、ButtonGroup、InputOTP、InputGroup |
 | **等价不单列** | 6 | Drawer→Sheet、Sonner→Toast、DropdownMenu→Dropdown、NativeSelect→Select、Field→Form、Item→组合 |
-| **布局/主题级** | 2 | AspectRatio、Direction |
+| **布局/主题级** | 1 | Direction |
 
-完整规划行见 **§1.9**。落地顺序建议：Badge / Skeleton / Spinner / Alert → Accordion+Collapsible → Avatar / Breadcrumb / Pagination → 其余 P2。
+完整规划行见 **§1.9**。落地顺序建议：Skeleton / Spinner / Alert → Accordion+Collapsible → Avatar / Breadcrumb / Pagination → 其余 P2（Badge / AspectRatio 已 experimental）。
 
 ### 4.2 SolidJS
 
@@ -326,7 +326,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
+`aspect_ratio`, `badge`, `button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

@@ -176,6 +176,7 @@ use rui::prelude::*;
 
 // A · 标签（无持久状态时可省略 id）
 ui! { <Button variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
+ui! { <Badge variant="secondary">"New"</Badge> }
 
 // 多实例 / 测试 / 稳定焦点时再显式 id（见 §4.2）
 ui! { <Button id="save" variant="outline" on_click={move || { /* … */ }}>"保存"</Button> }
@@ -185,6 +186,7 @@ let _: Element = button("save")
     .variant("outline")
     .on_click(move |_| { /* … */ })
     .into();
+let _: Element = badge().variant("destructive").text("Error").into();
 ```
 
 互嵌（验收用例，见 `crates/rui/tests/prelude_dual_surface.rs`）：
@@ -197,6 +199,8 @@ let _ = ui! {
     <VStack gap="0.5rem">
         { Element::from(button("x").variant("ghost").text("内嵌 Builder")) }
         <Button variant="outline">"标签子节点"</Button>
+        { Element::from(badge().variant("outline").text("内嵌 Badge")) }
+        <Badge variant="link">"标签 Badge"</Badge>
     </VStack>
 };
 
@@ -351,7 +355,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 分区 | 组件（`components/` 模块） | 分桶摘要（详见 inventory） |
 |------|----------------------------|----------------------------|
-| **基础** | Button、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；其余=`experimental`（越出 §5.2.1） |
+| **基础** | Button、**Badge**、**AspectRatio**、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；Badge/AspectRatio=`experimental`；其余=`experimental`（越出 §5.2.1） |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1；**WP-3.9 ☑** 错误文案与 Input invalid 环同源）；Calendar/Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
 | **数据** | VirtualList、**VirtualMasonry**、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺）；VirtualMasonry **WP-3.10 ☑** |
@@ -364,7 +368,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 优先级 | 规划组件 | 建议分区 |
 |--------|----------|----------|
-| P1 | Badge、Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination | 基础 / 浮层 / 导航 / 数据 |
+| P1 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination | 基础 / 浮层 / 导航 / 数据 |
 | P2 | HoverCard、Empty、Kbd、ButtonGroup、InputOTP、InputGroup | 浮层 / 表单 / 基础 |
 | 等价不单列 | Drawer→Sheet、Sonner→Toast、NativeSelect→Select、Field→Form 等 | — |
 
@@ -379,7 +383,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
-| | VirtualMasonry（**WP-3.10 ☑** experimental MVP）、Stepper 产品打磨；**ShadCN planned**（Badge/Avatar/Skeleton/Spinner/Alert/Accordion/…，见 inventory §1.9） |
+| | VirtualMasonry（**WP-3.10 ☑** experimental MVP）、Stepper 产品打磨；**Badge** / **AspectRatio**（experimental）；其余 ShadCN planned（Avatar/Skeleton/…，见 inventory §1.9） |
 
 **CV 分桶快照（2026-08-12，WP-CV.1 / CV.3）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**（CV.3 签署）；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 
