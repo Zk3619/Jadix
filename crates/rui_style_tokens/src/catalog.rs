@@ -145,6 +145,7 @@ pub enum KnownUtility<'a> {
     /// Linear gradient direction angle (0=to-r, 90=to-b, 180=to-l, 270=to-t).
     BgGradientTo(f32),
     GradientFrom(&'a str),
+    GradientVia(&'a str),
     GradientTo(&'a str),
     LetterSpacing(f32),
     TextDirectionLtr,
@@ -165,9 +166,15 @@ pub enum KnownUtility<'a> {
     TransitionDelay(u32),
     /// `ease-*` — transition timing function.
     TransitionEase(&'static str),
-    /// `animate-spin` — continuous rotate (`rui_animate=spin`).
+    /// `animate-spin` — continuous rotate (`animation: spin 1s linear infinite`).
     AnimateSpin,
-    /// `animate-none` — clear animation (`rui_animate=none`).
+    /// `animate-ping` — scale+fade pulse.
+    AnimatePing,
+    /// `animate-pulse` — opacity breathe.
+    AnimatePulse,
+    /// `animate-bounce` — translateY bounce.
+    AnimateBounce,
+    /// `animate-none` — clear animation.
     AnimateNone,
     /// Tailwind `cursor-*` (CSS `cursor` keywords).
     Cursor(&'a str),
@@ -400,6 +407,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         "pointer-events-none" => return Some(KnownUtility::PointerEventsNone),
         "pointer-events-box-none" => return Some(KnownUtility::PointerEventsBoxNone),
         "animate-spin" => return Some(KnownUtility::AnimateSpin),
+        "animate-ping" => return Some(KnownUtility::AnimatePing),
+        "animate-pulse" => return Some(KnownUtility::AnimatePulse),
+        "animate-bounce" => return Some(KnownUtility::AnimateBounce),
         "animate-none" => return Some(KnownUtility::AnimateNone),
         "group" => return Some(KnownUtility::GroupMarker { name: None }),
         "peer" => return Some(KnownUtility::PeerMarker { name: None }),
@@ -556,6 +566,18 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         if rest == "gradient-to-t" {
             return Some(KnownUtility::BgGradientTo(270.0));
         }
+        if rest == "gradient-to-tr" {
+            return Some(KnownUtility::BgGradientTo(315.0));
+        }
+        if rest == "gradient-to-tl" {
+            return Some(KnownUtility::BgGradientTo(225.0));
+        }
+        if rest == "gradient-to-br" {
+            return Some(KnownUtility::BgGradientTo(45.0));
+        }
+        if rest == "gradient-to-bl" {
+            return Some(KnownUtility::BgGradientTo(135.0));
+        }
         return Some(KnownUtility::BgColor(rest));
     }
     if let Some(rest) = token.strip_prefix("font-") {
@@ -674,6 +696,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
 
     if let Some(rest) = token.strip_prefix("from-") {
         return Some(KnownUtility::GradientFrom(rest));
+    }
+    if let Some(rest) = token.strip_prefix("via-") {
+        return Some(KnownUtility::GradientVia(rest));
     }
     if let Some(rest) = token.strip_prefix("to-") {
         // Avoid colliding with unrelated tokens if any; gradient `to-*` color stops only.
@@ -1349,6 +1374,18 @@ mod tests {
         assert!(matches!(
             classify_utility("animate-spin"),
             Some(KnownUtility::AnimateSpin)
+        ));
+        assert!(matches!(
+            classify_utility("animate-ping"),
+            Some(KnownUtility::AnimatePing)
+        ));
+        assert!(matches!(
+            classify_utility("animate-pulse"),
+            Some(KnownUtility::AnimatePulse)
+        ));
+        assert!(matches!(
+            classify_utility("animate-bounce"),
+            Some(KnownUtility::AnimateBounce)
         ));
         assert!(matches!(
             classify_utility("animate-none"),

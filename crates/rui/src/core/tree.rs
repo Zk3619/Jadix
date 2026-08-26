@@ -89,8 +89,99 @@ impl ParseBoolLike for &String {
     }
 }
 
-/// Whether hit-testing may target this node's own bounds (not only descendants).
-#[inline]
+/// Parse CSS `aspect-ratio` ([MDN](https://developer.mozilla.org/en-US/docs/Web/CSS/aspect-ratio)):
+/// `auto` | `<ratio>` | `auto <ratio>` | `<ratio> auto`.
+///
+/// `<ratio>` is `width [/ height]`（省略 height 时为 1）。返回 `width/height`；
+/// `auto` / 空 / 全局关键字 / 非法值 → [`None`]（无首选比例）。
+pub fn parse_css_aspect_ratio(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    match lower.as_str() {
+        "auto" | "initial" | "unset" | "inherit" | "revert" | "revert-layer" => return None,
+        _ => {}
+    }
+    // Drop optional `auto` when paired with a ratio (`auto 3/4`, `9/6 auto`).
+    let mut parts: Vec<&str> = s.split_whitespace().collect();
+    parts.retain(|p| !p.eq_ignore_ascii_case("auto"));
+    if parts.is_empty() {
+        return None;
+    }
+    parse_css_aspect_ratio_token(&parts.join(" "))
+}
+
+fn parse_css_aspect_ratio_token(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some((a, b)) = s.split_once('/') {
+        let num: f32 = a.trim().parse().ok()?;
+        let den: f32 = b.trim().parse().ok()?;
+        if !num.is_finite() || !den.is_finite() || num < 0.0 || den <= 0.0 {
+            return None;
+        }
+        Some(num / den)
+    } else {
+        let v: f32 = s.parse().ok()?;
+        if !v.is_finite() || v < 0.0 {
+            return None;
+        }
+        Some(v)
+    }
+}
+
+/// Values accepted by [`Element::aspect_ratio`] / RSX `aspect_ratio` / `aspect-ratio`.
+pub trait IntoAspectRatioValue {
+    fn into_aspect_ratio_value(self) -> Option<f32>;
+}
+
+impl IntoAspectRatioValue for f32 {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        if self.is_finite() && self >= 0.0 {
+            Some(self)
+        } else {
+            None
+        }
+    }
+}
+
+impl IntoAspectRatioValue for f64 {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        (self as f32).into_aspect_ratio_value()
+    }
+}
+
+impl IntoAspectRatioValue for i32 {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        (self as f32).into_aspect_ratio_value()
+    }
+}
+
+impl IntoAspectRatioValue for u32 {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        (self as f32).into_aspect_ratio_value()
+    }
+}
+
+impl IntoAspectRatioValue for &str {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        parse_css_aspect_ratio(self)
+    }
+}
+
+impl IntoAspectRatioValue for String {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        parse_css_aspect_ratio(&self)
+    }
+}
+
+impl IntoAspectRatioValue for &String {
+    fn into_aspect_ratio_value(self) -> Option<f32> {
+        parse_css_aspect_ratio(self)
+    }
+}
+
 /// Parse CSS time value like `"300ms"` or `"0.3s"` into milliseconds.
 pub fn parse_time_ms(s: &str) -> Option<f32> {
     let s = s.trim();
@@ -101,6 +192,104 @@ pub fn parse_time_ms(s: &str) -> Option<f32> {
     } else {
         s.parse::<f32>().ok()
     }
+}
+
+/// Parse CSS time with **required** unit (`ms` / `s`). Bare numbers are not times.
+pub fn parse_css_time_ms_strict(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(ms) = s.strip_suffix("ms").or_else(|| s.strip_suffix("MS")) {
+        ms.trim().parse::<f32>().ok()
+    } else if let Some(secs) = s.strip_suffix('s').or_else(|| s.strip_suffix('S')) {
+        // `forwards`.strip_suffix('s') → `forward` → parse fails (good).
+        secs.trim().parse::<f32>().ok().map(|v| v * 1000.0)
+    } else {
+        None
+    }
+}
+
+fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize) {
+    while list.len() < n {
+        list.push(crate::style::AnimationEntry::default());
+    }
+}
+
+/// Parse one or more CSS `animation` shorthand declarations (comma-separated).
+pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntry> {
+    use crate::style::{
+        AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
+        AnimationIterationCount, AnimationPlayState, AnimationTimeline, TimingFunction,
+    };
+    let mut out = Vec::new();
+    for segment in value.split(',') {
+        let parts: Vec<&str> = segment.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let mut entry = AnimationEntry::default();
+        let mut dur_set = false;
+        let mut delay_set = false;
+        for p in parts {
+            let pl = p.to_ascii_lowercase();
+            if let Some(ms) = parse_css_time_ms_strict(p) {
+                if !dur_set {
+                    entry.duration_ms = ms;
+                    dur_set = true;
+                } else if !delay_set {
+                    entry.delay_ms = ms;
+                    delay_set = true;
+                }
+                continue;
+            }
+            if pl.starts_with("cubic-bezier(")
+                || matches!(
+                    pl.as_str(),
+                    "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out"
+                )
+            {
+                entry.timing = TimingFunction::from_css(p);
+                continue;
+            }
+            if let Some(d) = AnimationDirection::from_css(p) {
+                entry.direction = d;
+                continue;
+            }
+            if matches!(pl.as_str(), "forwards" | "backwards" | "both") {
+                if let Some(f) = AnimationFillMode::from_css(p) {
+                    entry.fill_mode = f;
+                    continue;
+                }
+            }
+            if let Some(ps) = AnimationPlayState::from_css(p) {
+                entry.play_state = ps;
+                continue;
+            }
+            if let Some(c) = AnimationComposition::from_css(p) {
+                entry.composition = c;
+                continue;
+            }
+            if pl == "infinite" {
+                entry.iteration_count = AnimationIterationCount::Infinite;
+                continue;
+            }
+            if let Ok(n) = pl.parse::<f32>() {
+                // Bare number → iteration-count (times require units).
+                entry.iteration_count = AnimationIterationCount::Finite(n.max(0.0));
+                continue;
+            }
+            if pl == "auto" || pl.starts_with("scroll(") || pl.starts_with("view(") {
+                entry.timeline = AnimationTimeline::from_css(p);
+                continue;
+            }
+            // Remaining token → animation-name (`none` clears).
+            if pl == "none" {
+                entry.name.clear();
+            } else {
+                entry.name = p.to_string();
+            }
+        }
+        out.push(entry);
+    }
+    out
 }
 
 pub fn pointer_events_targets_self(el: &Element) -> bool {
@@ -281,6 +470,8 @@ pub struct Element {
     pub(crate) paint_visual_gen: u32,
     /// Per-element CSS transition tween state (persists across frames).
     pub transition_snapshot: crate::style::TransitionSnapshot,
+    /// Per-element CSS `@keyframes` animation runtime.
+    pub animation_snapshot: crate::style::AnimationSnapshot,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
@@ -584,6 +775,7 @@ impl Element {
             #[cfg(feature = "devtools")]
             paint_visual_gen: 0,
             transition_snapshot: Default::default(),
+            animation_snapshot: Default::default(),
             on_click: None,
             on_hover: None,
             on_mousedown: None,
@@ -1690,6 +1882,212 @@ impl Element {
         self
     }
 
+    /// CSS `animation` shorthand (comma-separated). See MDN `animation`.
+    pub fn animation(mut self, value: impl AsRef<str>) -> Self {
+        self.style.animations = parse_animation_shorthand(value.as_ref());
+        self
+    }
+
+    pub fn animation_name(mut self, value: impl AsRef<str>) -> Self {
+        let names: Vec<String> = value
+            .as_ref()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, names.len().max(1));
+        for (i, name) in names.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].name = if name.eq_ignore_ascii_case("none") {
+                String::new()
+            } else {
+                name
+            };
+        }
+        self
+    }
+
+    pub fn animation_duration(mut self, value: impl AsRef<str>) -> Self {
+        let durs: Vec<f32> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| parse_time_ms(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, durs.len().max(1));
+        for (i, d) in durs.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].duration_ms = d;
+        }
+        self
+    }
+
+    pub fn animation_delay(mut self, value: impl AsRef<str>) -> Self {
+        let delays: Vec<f32> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| parse_time_ms(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, delays.len().max(1));
+        for (i, d) in delays.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].delay_ms = d;
+        }
+        self
+    }
+
+    pub fn animation_timing_function(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::TimingFunction;
+        let funcs: Vec<TimingFunction> = value
+            .as_ref()
+            .split(',')
+            .map(|s| TimingFunction::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, funcs.len().max(1));
+        for (i, f) in funcs.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].timing = f;
+        }
+        self
+    }
+
+    pub fn animation_iteration_count(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationIterationCount;
+        let counts: Vec<AnimationIterationCount> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| AnimationIterationCount::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, counts.len().max(1));
+        for (i, c) in counts.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].iteration_count = c;
+        }
+        self
+    }
+
+    pub fn animation_direction(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationDirection;
+        let dirs: Vec<AnimationDirection> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| AnimationDirection::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, dirs.len().max(1));
+        for (i, d) in dirs.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].direction = d;
+        }
+        self
+    }
+
+    pub fn animation_fill_mode(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationFillMode;
+        let modes: Vec<AnimationFillMode> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| AnimationFillMode::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, modes.len().max(1));
+        for (i, m) in modes.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].fill_mode = m;
+        }
+        self
+    }
+
+    pub fn animation_play_state(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationPlayState;
+        let states: Vec<AnimationPlayState> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| AnimationPlayState::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, states.len().max(1));
+        for (i, s) in states.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].play_state = s;
+        }
+        self
+    }
+
+    pub fn animation_composition(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationComposition;
+        let comps: Vec<AnimationComposition> = value
+            .as_ref()
+            .split(',')
+            .filter_map(|s| AnimationComposition::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, comps.len().max(1));
+        for (i, c) in comps.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].composition = c;
+        }
+        self
+    }
+
+    pub fn animation_timeline(mut self, value: impl AsRef<str>) -> Self {
+        use crate::style::AnimationTimeline;
+        let tls: Vec<AnimationTimeline> = value
+            .as_ref()
+            .split(',')
+            .map(|s| AnimationTimeline::from_css(s.trim()))
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, tls.len().max(1));
+        for (i, t) in tls.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].timeline = t;
+        }
+        self
+    }
+
+    pub fn animation_range(mut self, value: impl AsRef<str>) -> Self {
+        // `animation-range: <start> <end>` per list item (comma-separated).
+        let parts: Vec<&str> = value.as_ref().split(',').collect();
+        ensure_animation_slots(&mut self.style.animations, parts.len().max(1));
+        for (i, part) in parts.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            let toks: Vec<&str> = part.split_whitespace().collect();
+            if toks.is_empty() {
+                continue;
+            }
+            self.style.animations[idx].range_start = Some(toks[0].to_string());
+            if toks.len() >= 2 {
+                self.style.animations[idx].range_end = Some(toks[1].to_string());
+            }
+        }
+        self
+    }
+
+    pub fn animation_range_start(mut self, value: impl AsRef<str>) -> Self {
+        let parts: Vec<String> = value
+            .as_ref()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, parts.len().max(1));
+        for (i, s) in parts.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].range_start = Some(s);
+        }
+        self
+    }
+
+    pub fn animation_range_end(mut self, value: impl AsRef<str>) -> Self {
+        let parts: Vec<String> = value
+            .as_ref()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        ensure_animation_slots(&mut self.style.animations, parts.len().max(1));
+        for (i, s) in parts.into_iter().enumerate() {
+            let idx = i.min(self.style.animations.len() - 1);
+            self.style.animations[idx].range_end = Some(s);
+        }
+        self
+    }
+
     pub fn box_shadow_offset_x(mut self, dx: f32) -> Self {
         self.style.shadow_offset[0] = dx;
         self
@@ -2155,8 +2553,9 @@ impl Element {
             _ => self.relative(),
         }
     }
-    pub fn aspect_ratio(mut self, ratio: f32) -> Self {
-        self.style.aspect_ratio = Some(ratio);
+    /// CSS `aspect-ratio`：数字、`"16/9"` / `"1.5"` / `"auto"` 等（见 [`parse_css_aspect_ratio`]）。
+    pub fn aspect_ratio(mut self, ratio: impl IntoAspectRatioValue) -> Self {
+        self.style.aspect_ratio = ratio.into_aspect_ratio_value();
         self
     }
     pub fn aspect_ratio_opt(mut self, ratio: Option<f32>) -> Self {
@@ -2264,11 +2663,24 @@ impl Element {
         self
     }
     pub fn linear_gradient(mut self, from: [f32; 4], to: [f32; 4], angle_deg: f32) -> Self {
-        self.style.bg_gradient = Some(crate::style::LinearGradient {
-            from,
-            to,
-            angle_deg,
-        });
+        self.style.bg_gradient = Some(crate::style::Gradient::Linear(
+            crate::style::LinearGradient::two_stop(from, to, angle_deg),
+        ));
+        self
+    }
+
+    /// CSS gradient image: `linear-gradient(...)` / `radial-gradient(...)` /
+    /// `conic-gradient(...)` / `repeating-*` (see MDN Using CSS gradients).
+    pub fn background_image(mut self, css: impl AsRef<str>) -> Self {
+        if let Some(g) = crate::style::parse_gradient(css.as_ref()) {
+            self.style.bg_gradient = Some(g);
+        }
+        self
+    }
+
+    /// Set a parsed [`crate::style::Gradient`] as the background fill.
+    pub fn gradient(mut self, grad: crate::style::Gradient) -> Self {
+        self.style.bg_gradient = Some(grad);
         self
     }
     pub fn text_spans(mut self, spans: Vec<crate::style::TextSpan>) -> Self {

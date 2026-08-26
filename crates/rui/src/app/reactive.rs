@@ -562,11 +562,11 @@ where
 /// Solid-style in-place text binding (like setting a DOM text node). Prefer this for
 /// labels/counters — it does **not** rebuild a subtree.
 ///
-/// Layout impact mirrors the browser: when intrinsic width **grows** (or exceeds the mounted
-/// box), or when layout height **changes** (grow or shrink — Labels echoing multiline Textarea
-/// must collapse when lines are deleted), return [`LayoutStatus::LayoutChanged`]. Equal-width /
-/// equal-height updates (digit counters `"10"`→`"11"`) stay paint-only
-/// [`LayoutStatus::StyleChanged`].
+/// Layout impact mirrors the browser: when intrinsic width **or** layout height **changes**
+/// (grow *or* shrink — content-sized badges / Labels must collapse; multiline echo Labels must
+/// drop height when lines are deleted), or when new text exceeds the mounted box, return
+/// [`LayoutStatus::LayoutChanged`]. Equal-metric updates (digit counters `"10"`→`"11"`) stay
+/// paint-only [`LayoutStatus::StyleChanged`].
 pub fn bind_text<F>(anchor_id: impl Into<String>, compute: F) -> Element
 where
     F: FnMut() -> String + 'static,
@@ -604,9 +604,11 @@ pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str)
     let avail = if box_w > 1.0 { box_w } else { f32::MAX };
     let before_h = text_layout_height(el, old, avail);
     let after_h = text_layout_height(el, next, avail);
-    let width_grew = match (before_w, after_w) {
+    // Width grow *or* shrink: gallery Toggle badge ("Blocked"→"Ready") must collapse the chip.
+    // Grow-only left content-sized parents stuck at the wider measure.
+    let width_changed = match (before_w, after_w) {
         (Some(before), Some(after)) => {
-            after > before + 0.01 || (box_w > 1.0 && after > box_w + 0.01)
+            (after - before).abs() > 0.01 || (box_w > 1.0 && after > box_w + 0.01)
         }
         _ => true,
     };
@@ -617,7 +619,7 @@ pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str)
         }
         _ => true,
     };
-    width_grew || height_changed
+    width_changed || height_changed
 }
 
 fn plain_text_leaf(el: &Element) -> bool {
@@ -981,6 +983,34 @@ pub fn apply_bound_attr(el: &mut Element, key: &str, value: String) -> LayoutSta
     }
 }
 
+/// Fine-grained `animation-play-state` update (pause/resume without rebuilding the entry).
+pub fn apply_bound_animation_play_state(el: &mut Element, value: String) -> LayoutStatus {
+    use crate::style::AnimationPlayState;
+    let states: Vec<AnimationPlayState> = value
+        .split(',')
+        .filter_map(|s| AnimationPlayState::from_css(s.trim()))
+        .collect();
+    if states.is_empty() {
+        return LayoutStatus::Clean;
+    }
+    while el.style.animations.len() < states.len().max(1) {
+        el.style.animations.push(crate::style::AnimationEntry::default());
+    }
+    let mut changed = false;
+    for (i, s) in states.into_iter().enumerate() {
+        let idx = i.min(el.style.animations.len() - 1);
+        if el.style.animations[idx].play_state != s {
+            el.style.animations[idx].play_state = s;
+            changed = true;
+        }
+    }
+    if changed {
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
 /// Solid-style `<For each={list.get()}>`: rebuild the keyed children list inside a dedicated
 /// [`reactive_view`] so reading the list signal does not subscribe the root tree.
 ///
@@ -1159,6 +1189,26 @@ mod intrinsic_width_tests {
         assert!(
             !bind_text_metric_needs_layout(&same, "10", "11"),
             "equal-metric digit counters stay paint-only"
+        );
+    }
+
+    #[test]
+    fn shorter_label_shrink_requests_layout() {
+        // Gallery ReactiveStatusBadge: "Blocked" → "Ready" must collapse chip width.
+        let el = label("Blocked");
+        let before = text_intrinsic_width(&el, "Blocked").expect("before");
+        let after = text_intrinsic_width(&el, "Ready").expect("after");
+        assert!(
+            before > after + 0.5,
+            "fixture must shrink: {before} → {after}"
+        );
+        assert!(
+            bind_text_metric_needs_layout(&el, "Blocked", "Ready"),
+            "width shrink must LayoutChanged (not paint-only StyleChanged)"
+        );
+        assert!(
+            bind_text_metric_needs_layout(&el, "Ready", "Blocked"),
+            "width grow must still LayoutChanged"
         );
     }
 

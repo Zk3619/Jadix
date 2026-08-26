@@ -1837,6 +1837,7 @@ impl AppState {
                 && scrollbar_update_resolved == ScrollbarUpdateMode::Full
                 && scroll_only)
             || active_drag_rest.is_some();
+        crate::style::set_gradient_raster_dpi(self.ui_scale());
         let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
@@ -1973,6 +1974,23 @@ impl AppState {
 
         let ui_scale = self.ui_scale();
         self.image_textures.begin_frame();
+
+        // Pin every texture referenced by this frame's draw list before uploads/eviction.
+        for draw in &render_result.textured_draws {
+            self.image_textures.touch(&draw.texture_key);
+        }
+
+        // Rehydrate CPU-cached textures after TexturePool eviction / first paint.
+        // Uploads happen immediately in take_pending below (same frame).
+        let _ = crate::style::flush_gradient_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+        let _ = crate::primitives::path::flush_path_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+        let _ = super::pending_images::flush_src_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
 
         for (id, rgba, w, h) in super::pending_images::take_pending() {
             let gpu = super::image_registry::upload_rgba8(
@@ -2689,6 +2707,7 @@ impl AppState {
                         tint: [1.0, 1.0, 1.0, 1.0],
                         uv_offset: [0.0, 0.0],
                         uv_scale: [1.0, 1.0],
+                        transform: crate::style::transform::MAT2D_IDENTITY,
                     };
                     let shadow_inst_buf =
                         self.device
@@ -2860,6 +2879,7 @@ impl AppState {
                         tint: [1.0, 1.0, 1.0, 1.0],
                         uv_offset: [0.0, 0.0],
                         uv_scale: [1.0, 1.0],
+                        transform: crate::style::transform::MAT2D_IDENTITY,
                     };
                     let shadow_inst_buf =
                         self.device

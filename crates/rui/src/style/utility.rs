@@ -345,13 +345,24 @@ pub fn tick_active_css_transitions_subtree(
     }
 
     let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
+    let has_css_anim = !el.style.animations.is_empty()
+        || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs =
         super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
 
-    if has_spin || has_active_css || css_needs {
+    if has_spin || has_css_anim || has_active_css || css_needs {
         let before = el.style.clone();
         let spun = tick_animate_spin(el);
+        let css_anim = if has_css_anim || !el.style.animations.is_empty() {
+            super::animation::tick_element_animations(
+                &mut el.style,
+                &mut el.animation_snapshot,
+                frame_dt(),
+            )
+        } else {
+            false
+        };
         let css_trans = if has_active_css || css_needs || !el.style.transition.is_empty() {
             super::animation::tick_element_transitions(
                 &mut el.style,
@@ -361,7 +372,7 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             false
         };
-        if spun || css_trans || el.style != before {
+        if spun || css_anim || css_trans || el.style != before {
             *impact = impact.merge(LayoutStatus::StyleChanged);
             mark_hover_paint_dirty();
             let need_taffy = style_needs_taffy_sync(&before, &el.style);
@@ -523,13 +534,15 @@ fn sync_class_variants_subtree_inner(
         .is_some_and(|cs| !cs.variants.is_empty());
     let has_spin = el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin");
     // Only wake the per-frame resolve/tick path while a tween is actually running,
-    // variants may match, or spin needs a tick.
+    // variants may match, or spin / CSS animation needs a tick.
     // Idle `transition-transform` tiles used to force resolve+taffy every frame on the
     // gallery layout page — enough work to jitter hit-test and flash sidebar hover.
+    let has_css_anim = !el.style.animations.is_empty()
+        || super::animation::css_animation_needs_frame(&el.style, &el.animation_snapshot);
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs =
         super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    if has_variants || has_spin || has_active_css || css_needs {
+    if has_variants || has_spin || has_css_anim || has_active_css || css_needs {
         let hovered = inside;
         if has_variants {
             if let Some(cs) = el.class_set.as_mut() {
@@ -558,7 +571,7 @@ fn sync_class_variants_subtree_inner(
             .and_then(|cs| cs.last_ctx_fp)
             .is_some_and(|fp| fp == ctx_fp);
         // Idle variants with unchanged hover/focus ctx: skip. Active CSS tweens or spin still need a tick.
-        if !ctx_unchanged || has_spin || has_active_css || css_needs {
+        if !ctx_unchanged || has_spin || has_css_anim || has_active_css || css_needs {
             let attrs_snapshot = el.attrs.clone();
             let ctx = VariantContext {
                 hovered,
@@ -575,6 +588,11 @@ fn sync_class_variants_subtree_inner(
             let before_text = el.text_style.clone();
             let local = resolve_class_variants(el, &ctx);
             let spun = tick_animate_spin(el);
+            let css_anim = super::animation::tick_element_animations(
+                &mut el.style,
+                &mut el.animation_snapshot,
+                frame_dt(),
+            );
             let css_trans = super::animation::tick_element_transitions(
                 &mut el.style,
                 &mut el.transition_snapshot,
@@ -585,11 +603,12 @@ fn sync_class_variants_subtree_inner(
             }
             if local != LayoutStatus::Clean
                 || spun
+                || css_anim
                 || css_trans
                 || el.style != before
                 || el.text_style != before_text
             {
-                *impact = impact.merge(if spun || css_trans {
+                *impact = impact.merge(if spun || css_anim || css_trans {
                     local.merge(LayoutStatus::StyleChanged)
                 } else {
                     local
@@ -676,13 +695,37 @@ fn sync_class_variants_subtree_inner(
     }
 }
 
-/// Advance `rotate_deg` when `rui_animate=spin` (≈360°/s at 60fps).
+/// Advance `rotate_deg` when legacy `rui_animate=spin` **and** no CSS animations list.
+/// Prefer `Style.animations` (utility `animate-spin` now writes that).
 fn tick_animate_spin(el: &mut Element) -> bool {
+    if !el.style.animations.is_empty() {
+        return false;
+    }
     if el.attrs.get("rui_animate").map(|v| v.as_str()) != Some("spin") {
         return false;
     }
     el.style.rotate_deg = (el.style.rotate_deg + 6.0) % 360.0;
     true
+}
+
+fn apply_builtin_animation(
+    el: &mut Element,
+    name: &str,
+    duration: &str,
+    timing: &str,
+    iteration: &str,
+) {
+    el.style.animations.clear();
+    let mut entry = crate::style::AnimationEntry::default();
+    entry.name = name.to_string();
+    if let Some(ms) = crate::core::tree::parse_css_time_ms_strict(duration) {
+        entry.duration_ms = ms;
+    }
+    entry.timing = crate::style::TimingFunction::from_css(timing);
+    if let Some(c) = crate::style::AnimationIterationCount::from_css(iteration) {
+        entry.iteration_count = c;
+    }
+    el.style.animations.push(entry);
 }
 
 fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflow) -> LayoutStatus {
@@ -1128,23 +1171,26 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             LayoutStatus::StyleChanged
         }
         KnownUtility::BgGradientTo(angle) => {
-            let mut g = el.style.bg_gradient.unwrap_or_default();
-            g.angle_deg = angle;
-            el.style.bg_gradient = Some(g);
+            let g = el.style.bg_gradient.get_or_insert_with(Default::default);
+            g.as_linear_mut().angle_deg = angle;
             LayoutStatus::StyleChanged
         }
         KnownUtility::GradientFrom(name) => {
             let color = parse_color(name);
-            let mut g = el.style.bg_gradient.unwrap_or_default();
-            g.from = color;
-            el.style.bg_gradient = Some(g);
+            let g = el.style.bg_gradient.get_or_insert_with(Default::default);
+            g.as_linear_mut().set_from(color);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::GradientVia(name) => {
+            let color = parse_color(name);
+            let g = el.style.bg_gradient.get_or_insert_with(Default::default);
+            g.as_linear_mut().set_via(color);
             LayoutStatus::StyleChanged
         }
         KnownUtility::GradientTo(name) => {
             let color = parse_color(name);
-            let mut g = el.style.bg_gradient.unwrap_or_default();
-            g.to = color;
-            el.style.bg_gradient = Some(g);
+            let g = el.style.bg_gradient.get_or_insert_with(Default::default);
+            g.as_linear_mut().set_to(color);
             LayoutStatus::StyleChanged
         }
         KnownUtility::LetterSpacing(px) => {
@@ -1217,24 +1263,34 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
             LayoutStatus::StyleChanged
         }
         KnownUtility::AnimateSpin => {
-            let prev = el
-                .attrs
+            apply_builtin_animation(el, "spin", "1s", "linear", "infinite");
+            el.attrs
                 .insert("rui_animate".to_string(), "spin".to_string());
-            if prev.as_deref() == Some("spin") {
-                LayoutStatus::Clean
-            } else {
-                LayoutStatus::StyleChanged
-            }
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::AnimatePing => {
+            apply_builtin_animation(el, "ping", "1s", "cubic-bezier(0,0,0.2,1)", "infinite");
+            el.attrs
+                .insert("rui_animate".to_string(), "ping".to_string());
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::AnimatePulse => {
+            apply_builtin_animation(el, "pulse", "2s", "cubic-bezier(0.4,0,0.6,1)", "infinite");
+            el.attrs
+                .insert("rui_animate".to_string(), "pulse".to_string());
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::AnimateBounce => {
+            apply_builtin_animation(el, "bounce", "1s", "ease", "infinite");
+            el.attrs
+                .insert("rui_animate".to_string(), "bounce".to_string());
+            LayoutStatus::StyleChanged
         }
         KnownUtility::AnimateNone => {
-            let prev = el
-                .attrs
+            el.style.animations.clear();
+            el.attrs
                 .insert("rui_animate".to_string(), "none".to_string());
-            if prev.as_deref() == Some("none") {
-                LayoutStatus::Clean
-            } else {
-                LayoutStatus::StyleChanged
-            }
+            LayoutStatus::StyleChanged
         }
         KnownUtility::GroupMarker { name } => {
             let value = name.unwrap_or("1");
@@ -1585,6 +1641,8 @@ mod p1_utility_tests {
             el.attrs.get("rui_animate").map(|s| s.as_str()),
             Some("spin")
         );
+        assert_eq!(el.style.animations.len(), 1);
+        assert_eq!(el.style.animations[0].name, "spin");
 
         let mut el = Element::new();
         apply_class_list(&mut el, "transition-transform animate-none");
@@ -1596,6 +1654,7 @@ mod p1_utility_tests {
             "transition-transform must register a CSS transform tween, got {:?}",
             el.style.transition
         );
+        assert!(el.style.animations.is_empty());
         assert_eq!(
             el.attrs.get("rui_animate").map(|s| s.as_str()),
             Some("none")

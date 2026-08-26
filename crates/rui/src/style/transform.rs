@@ -132,6 +132,14 @@ pub fn mat2d_rotate(rad: f32) -> Mat2d {
     [c, s, -s, c, 0.0, 0.0]
 }
 
+/// Keep the 2×2 linear part; zero translation.
+///
+/// SDF / textured shaders pivot about the instance rect center, so origin-baked
+/// `tx/ty` from [`compute_combined_transform`] must not be applied again.
+pub fn mat2d_linear(m: &Mat2d) -> Mat2d {
+    [m[0], m[1], m[2], m[3], 0.0, 0.0]
+}
+
 pub fn mat2d_skew(ax: f32, ay: f32) -> Mat2d {
     [1.0, ay.tan(), ax.tan(), 1.0, 0.0, 0.0]
 }

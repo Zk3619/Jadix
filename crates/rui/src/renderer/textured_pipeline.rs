@@ -12,6 +12,8 @@ pub struct TexturedInstanceInput {
     pub tint: [f32; 4],
     pub uv_offset: [f32; 2],
     pub uv_scale: [f32; 2],
+    /// 2D affine `[a, b, c, d, tx, ty]` about rect center (identity = no rotate).
+    pub transform: [f32; 6],
 }
 
 impl TexturedInstanceInput {
@@ -43,6 +45,21 @@ impl TexturedInstanceInput {
                 wgpu::VertexAttribute {
                     offset: 40,
                     shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 56,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 64,
+                    shader_location: 9,
                     format: wgpu::VertexFormat::Float32x2,
                 },
             ],

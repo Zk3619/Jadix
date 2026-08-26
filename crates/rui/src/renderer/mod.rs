@@ -159,6 +159,8 @@ pub struct TexturedDraw {
     pub texture_key: String,
     /// Combined ancestor × element opacity for tint alpha.
     pub opacity: f32,
+    /// CSS/`compute_combined_transform` 矩阵（绕矩形中心）；默认单位阵。
+    pub transform: [f32; 6],
 }
 
 impl TexturedDraw {
@@ -184,7 +186,13 @@ impl TexturedDraw {
             uv_scale,
             texture_key: texture_key.into(),
             opacity,
+            transform: crate::style::transform::MAT2D_IDENTITY,
         })
+    }
+
+    pub fn with_transform(mut self, transform: [f32; 6]) -> Self {
+        self.transform = transform;
+        self
     }
 }
 
@@ -215,6 +223,7 @@ pub struct ScaledTexturedDraw {
     pub uv_scale: [f32; 2],
     pub texture_key: String,
     pub opacity: f32,
+    pub transform: [f32; 6],
 }
 
 impl ScaledTexturedDraw {
@@ -225,6 +234,7 @@ impl ScaledTexturedDraw {
             tint: [1.0, 1.0, 1.0, self.opacity],
             uv_offset: self.uv_offset,
             uv_scale: self.uv_scale,
+            transform: self.transform,
         }
     }
 }
@@ -232,17 +242,24 @@ impl ScaledTexturedDraw {
 pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTexturedDraw> {
     draws
         .iter()
-        .map(|d| ScaledTexturedDraw {
-            rect: [
-                d.rect[0] * scale,
-                d.rect[1] * scale,
-                d.rect[2] * scale,
-                d.rect[3] * scale,
-            ],
-            uv_offset: d.uv_offset,
-            uv_scale: d.uv_scale,
-            texture_key: d.texture_key.clone(),
-            opacity: d.opacity,
+        .map(|d| {
+            // Scale translation of the affine; linear part (rotate/scale) stays.
+            let mut t = d.transform;
+            t[4] *= scale;
+            t[5] *= scale;
+            ScaledTexturedDraw {
+                rect: [
+                    d.rect[0] * scale,
+                    d.rect[1] * scale,
+                    d.rect[2] * scale,
+                    d.rect[3] * scale,
+                ],
+                uv_offset: d.uv_offset,
+                uv_scale: d.uv_scale,
+                texture_key: d.texture_key.clone(),
+                opacity: d.opacity,
+                transform: t,
+            }
         })
         .collect()
 }
@@ -272,6 +289,7 @@ mod textured_uv_tests {
                 uv_scale: [1.0, 1.0],
                 texture_key: "rui_path:line".into(),
                 opacity: 1.0,
+                transform: crate::style::transform::MAT2D_IDENTITY,
             },
             TexturedDraw {
                 rect: [10.0, 200.0, 180.0, 180.0],
@@ -279,6 +297,7 @@ mod textured_uv_tests {
                 uv_scale: [1.0, 1.0],
                 texture_key: "rui_path:pie".into(),
                 opacity: 1.0,
+                transform: crate::style::transform::MAT2D_IDENTITY,
             },
         ];
         let scaled = scale_textured_draws(&draws, 1.0);

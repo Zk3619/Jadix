@@ -153,24 +153,6 @@ pub fn parse_box_shadows(s: impl AsRef<str>) -> Vec<BoxShadow> {
     parts.into_iter().map(parse_box_shadow).collect()
 }
 
-/// Two-stop linear gradient. `angle_deg`: 0 = left→right, 90 = top→bottom.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LinearGradient {
-    pub from: [f32; 4],
-    pub to: [f32; 4],
-    pub angle_deg: f32,
-}
-
-impl Default for LinearGradient {
-    fn default() -> Self {
-        Self {
-            from: [0.0, 0.0, 0.0, 0.0],
-            to: [0.0, 0.0, 0.0, 0.0],
-            angle_deg: 90.0,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_box_shadow;
@@ -453,8 +435,8 @@ pub struct Style {
     pub shadow_inset: bool,
     /// Additional box-shadow layers beyond the primary `shadow_*` fields.
     pub extra_shadows: Vec<BoxShadow>,
-    /// Optional two-stop linear gradient fill (painted as strips; layout unchanged).
-    pub bg_gradient: Option<LinearGradient>,
+    /// Optional CSS gradient fill (linear / radial / conic; painted as strips or texture).
+    pub bg_gradient: Option<super::gradient::Gradient>,
     /// Element opacity multiplier for drawn colors (layout unchanged).
     pub opacity: f32,
     /// Visual translate offset in logical px (MVP transform; does not affect layout).
@@ -494,6 +476,9 @@ pub struct Style {
     /// CSS `transition` entries. Each entry specifies which property to animate,
     /// duration, delay, and timing function.
     pub transition: Vec<TransitionEntry>,
+    /// CSS `animation` entries (MDN shorthand / longhands). Driven by
+    /// [`crate::style::tick_element_animations`].
+    pub animations: Vec<AnimationEntry>,
 }
 
 /// Which CSS property a transition applies to.
@@ -606,6 +591,228 @@ pub struct TransitionEntry {
     pub timing: TimingFunction,
 }
 
+/// CSS `animation-direction`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AnimationDirection {
+    #[default]
+    Normal,
+    Reverse,
+    Alternate,
+    AlternateReverse,
+}
+
+impl AnimationDirection {
+    pub fn from_css(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "reverse" => Some(Self::Reverse),
+            "alternate" => Some(Self::Alternate),
+            "alternate-reverse" => Some(Self::AlternateReverse),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Reverse => "reverse",
+            Self::Alternate => "alternate",
+            Self::AlternateReverse => "alternate-reverse",
+        }
+    }
+}
+
+/// CSS `animation-fill-mode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AnimationFillMode {
+    #[default]
+    None,
+    Forwards,
+    Backwards,
+    Both,
+}
+
+impl AnimationFillMode {
+    pub fn from_css(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "forwards" => Some(Self::Forwards),
+            "backwards" => Some(Self::Backwards),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Forwards => "forwards",
+            Self::Backwards => "backwards",
+            Self::Both => "both",
+        }
+    }
+
+    pub fn apply_backwards(self) -> bool {
+        matches!(self, Self::Backwards | Self::Both)
+    }
+
+    pub fn apply_forwards(self) -> bool {
+        matches!(self, Self::Forwards | Self::Both)
+    }
+}
+
+/// CSS `animation-play-state`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AnimationPlayState {
+    #[default]
+    Running,
+    Paused,
+}
+
+impl AnimationPlayState {
+    pub fn from_css(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "running" => Some(Self::Running),
+            "paused" => Some(Self::Paused),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+/// CSS `animation-iteration-count`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AnimationIterationCount {
+    Finite(f32),
+    Infinite,
+}
+
+impl Default for AnimationIterationCount {
+    fn default() -> Self {
+        Self::Finite(1.0)
+    }
+}
+
+impl AnimationIterationCount {
+    pub fn from_css(s: &str) -> Option<Self> {
+        let s = s.trim().to_ascii_lowercase();
+        if s == "infinite" {
+            return Some(Self::Infinite);
+        }
+        s.parse::<f32>().ok().map(|n| Self::Finite(n.max(0.0)))
+    }
+}
+
+/// CSS `animation-composition` (MVP: stored; runtime always **replace**).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AnimationComposition {
+    #[default]
+    Replace,
+    Add,
+    Accumulate,
+}
+
+impl AnimationComposition {
+    pub fn from_css(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "replace" => Some(Self::Replace),
+            "add" => Some(Self::Add),
+            "accumulate" => Some(Self::Accumulate),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Replace => "replace",
+            Self::Add => "add",
+            Self::Accumulate => "accumulate",
+        }
+    }
+}
+
+/// CSS `animation-timeline` (MVP: only [`Self::Auto`] drives time).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum AnimationTimeline {
+    #[default]
+    Auto,
+    Other(String),
+}
+
+impl AnimationTimeline {
+    pub fn from_css(s: &str) -> Self {
+        let s = s.trim();
+        if s.is_empty() || s.eq_ignore_ascii_case("auto") {
+            Self::Auto
+        } else {
+            Self::Other(s.to_string())
+        }
+    }
+
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
+/// A single CSS `animation` entry (one list item in the shorthand).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimationEntry {
+    pub name: String,
+    pub duration_ms: f32,
+    pub timing: TimingFunction,
+    pub delay_ms: f32,
+    pub iteration_count: AnimationIterationCount,
+    pub direction: AnimationDirection,
+    pub fill_mode: AnimationFillMode,
+    pub play_state: AnimationPlayState,
+    pub composition: AnimationComposition,
+    pub timeline: AnimationTimeline,
+    /// Raw CSS `animation-range-start` (stored; not driven in MVP).
+    pub range_start: Option<String>,
+    /// Raw CSS `animation-range-end` (stored; not driven in MVP).
+    pub range_end: Option<String>,
+}
+
+impl Default for AnimationEntry {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            duration_ms: 0.0,
+            timing: TimingFunction::Ease,
+            delay_ms: 0.0,
+            iteration_count: AnimationIterationCount::Finite(1.0),
+            direction: AnimationDirection::Normal,
+            fill_mode: AnimationFillMode::None,
+            play_state: AnimationPlayState::Running,
+            composition: AnimationComposition::Replace,
+            timeline: AnimationTimeline::Auto,
+            range_start: None,
+            range_end: None,
+        }
+    }
+}
+
+impl AnimationEntry {
+    pub fn is_named(&self) -> bool {
+        !self.name.is_empty() && !self.name.eq_ignore_ascii_case("none")
+    }
+
+    /// True when this entry should keep requesting frames.
+    pub fn needs_frame(&self) -> bool {
+        self.is_named()
+            && self.timeline.is_auto()
+            && self.play_state == AnimationPlayState::Running
+            && (self.duration_ms > 0.0
+                || matches!(self.iteration_count, AnimationIterationCount::Infinite))
+    }
+}
+
 impl Default for Style {
     fn default() -> Self {
         Self {
@@ -704,6 +911,7 @@ impl Default for Style {
             backdrop_blur: 0.0,
             filter: None,
             transition: Vec::new(),
+            animations: Vec::new(),
         }
     }
 }

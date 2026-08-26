@@ -9,6 +9,9 @@ struct InstanceInput {
     @location(4) tint: vec4<f32>,
     @location(5) uv_offset: vec2<f32>,
     @location(6) uv_scale: vec2<f32>,
+    @location(7) transform_ab: vec2<f32>,   // [a, b]
+    @location(8) transform_cd: vec2<f32>,   // [c, d]
+    @location(9) transform_txty: vec2<f32>, // [tx, ty]
 };
 
 struct Globals {
@@ -31,10 +34,25 @@ struct VertexOutput {
     @location(1) tint: vec4<f32>,
 };
 
+fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(ab.x * v.x + cd.x * v.y, ab.y * v.x + cd.y * v.y);
+}
+
 @vertex
 fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     var out: VertexOutput;
-    let physical = inst.rect_pos + v.position * inst.rect_size;
+    let ab = inst.transform_ab;
+    let cd = inst.transform_cd;
+    let txty = inst.transform_txty;
+
+    // Local point relative to rect center; apply **linear** part only.
+    // CSS origin is handled by the SDF/textured convention: pivot = rect center,
+    // so callers must zero matrix tx/ty (origin wrap lives in that pivot, not txty).
+    let local = (v.position - 0.5) * inst.rect_size;
+    let rotated = affine_linear(local, ab, cd);
+    let center = inst.rect_pos + inst.rect_size * 0.5;
+    let physical = center + rotated + txty;
+
     let x = (physical.x / globals.resolution.x) * 2.0 - 1.0;
     let y = 1.0 - (physical.y / globals.resolution.y) * 2.0;
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);

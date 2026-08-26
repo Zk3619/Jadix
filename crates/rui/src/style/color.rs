@@ -233,7 +233,689 @@ fn rgba_u8_to_f32(c: [u8; 4]) -> [f32; 4] {
     ]
 }
 
-/// Parse a color name / hex / Tailwind shade for backgrounds.
+/// Parse CSS functional colors: `rgb()`/`rgba()`/`hsl()`/`hsla()`/`hwb()`/
+/// `oklch()`/`oklab()`/`color-mix()`, including modern space-separated /
+/// slash-alpha forms and relative syntax `rgb(from …)`.
+fn parse_css_color_function(s: &str) -> Option<[f32; 4]> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let name = s[..open].trim().to_ascii_lowercase();
+    let inner = s[open + 1..close].trim();
+    match name.as_str() {
+        "rgb" | "rgba" => {
+            if inner.to_ascii_lowercase().starts_with("from ") {
+                parse_relative_rgb_hsl(inner, true)
+            } else {
+                parse_rgb_args(inner)
+            }
+        }
+        "hsl" | "hsla" => {
+            if inner.to_ascii_lowercase().starts_with("from ") {
+                parse_relative_rgb_hsl(inner, false)
+            } else {
+                parse_hsl_args(inner)
+            }
+        }
+        "hwb" => parse_hwb_args(inner),
+        "oklch" => parse_oklch_args(inner),
+        "oklab" => parse_oklab_args(inner),
+        "color-mix" => parse_color_mix_args(inner),
+        _ => None,
+    }
+}
+
+fn split_css_color_args(inner: &str) -> Vec<String> {
+    // Support both `r, g, b[, a]` and `r g b[/ a]`.
+    let t = inner.trim();
+    if t.contains(',') {
+        return t
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+    }
+    let mut parts = Vec::new();
+    let mut alpha: Option<String> = None;
+    let mut rest = t;
+    if let Some((before, after)) = t.split_once('/') {
+        rest = before.trim();
+        let a = after.trim();
+        if !a.is_empty() {
+            alpha = Some(a.to_string());
+        }
+    }
+    for tok in rest.split_whitespace() {
+        parts.push(tok.to_string());
+    }
+    if let Some(a) = alpha {
+        parts.push(a);
+    }
+    parts
+}
+
+fn parse_css_number_or_percent(tok: &str) -> Option<f32> {
+    let t = tok.trim();
+    if let Some(raw) = t.strip_suffix('%') {
+        let v: f32 = raw.trim().parse().ok()?;
+        return Some(v / 100.0);
+    }
+    t.parse().ok()
+}
+
+fn parse_rgb_channel(tok: &str) -> Option<f32> {
+    let t = tok.trim();
+    if let Some(raw) = t.strip_suffix('%') {
+        let v: f32 = raw.trim().parse().ok()?;
+        return Some((v / 100.0).clamp(0.0, 1.0));
+    }
+    let v: f32 = t.parse().ok()?;
+    // CSS rgb: bare numbers are 0–255 (legacy + modern without none/relative).
+    Some((v / 255.0).clamp(0.0, 1.0))
+}
+
+fn parse_alpha_component(tok: &str) -> Option<f32> {
+    parse_css_number_or_percent(tok).map(|v| v.clamp(0.0, 1.0))
+}
+
+fn parse_rgb_args(inner: &str) -> Option<[f32; 4]> {
+    let parts = split_css_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let r = parse_rgb_channel(&parts[0])?;
+    let g = parse_rgb_channel(&parts[1])?;
+    let b = parse_rgb_channel(&parts[2])?;
+    let a = if parts.len() >= 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        1.0
+    };
+    Some([r, g, b, a])
+}
+
+fn parse_hue_degrees(tok: &str) -> Option<f32> {
+    let t = tok.trim().to_ascii_lowercase();
+    if let Some(raw) = t.strip_suffix("deg") {
+        return raw.trim().parse().ok();
+    }
+    if let Some(raw) = t.strip_suffix("turn") {
+        let v: f32 = raw.trim().parse().ok()?;
+        return Some(v * 360.0);
+    }
+    if let Some(raw) = t.strip_suffix("rad") {
+        let v: f32 = raw.trim().parse().ok()?;
+        return Some(v.to_degrees());
+    }
+    if let Some(raw) = t.strip_suffix("grad") {
+        let v: f32 = raw.trim().parse().ok()?;
+        return Some(v * 0.9);
+    }
+    t.parse().ok()
+}
+
+fn hsl_to_srgb(h_deg: f32, s: f32, l: f32) -> [f32; 3] {
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h = ((h_deg % 360.0) + 360.0) % 360.0;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c * 0.5;
+    let (r1, g1, b1) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    [r1 + m, g1 + m, b1 + m]
+}
+
+fn parse_hsl_args(inner: &str) -> Option<[f32; 4]> {
+    let parts = split_css_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let h = parse_hue_degrees(&parts[0])?;
+    let s = parse_css_number_or_percent(&parts[1])?;
+    let l = parse_css_number_or_percent(&parts[2])?;
+    // `s`/`l` from percent → 0..=1; bare numbers in modern syntax are also 0..=1
+    // but legacy `hsl(120, 100%, 50%)` uses percent. If someone writes `100` without
+    // `%` for S/L, treat >1 as percent-like 0–100.
+    let s = if s > 1.0 { (s / 100.0).clamp(0.0, 1.0) } else { s };
+    let l = if l > 1.0 { (l / 100.0).clamp(0.0, 1.0) } else { l };
+    let a = if parts.len() >= 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        1.0
+    };
+    let [r, g, b] = hsl_to_srgb(h, s, l);
+    Some([r, g, b, a])
+}
+
+/// `hwb(h w% b% [/ a])` → display sRGB.
+fn parse_hwb_args(inner: &str) -> Option<[f32; 4]> {
+    let parts = split_css_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let h = parse_hue_degrees(&parts[0])?;
+    let mut w = parse_css_number_or_percent(&parts[1])?;
+    let mut bl = parse_css_number_or_percent(&parts[2])?;
+    if w > 1.0 {
+        w = (w / 100.0).clamp(0.0, 1.0);
+    }
+    if bl > 1.0 {
+        bl = (bl / 100.0).clamp(0.0, 1.0);
+    }
+    let a = if parts.len() >= 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        1.0
+    };
+    let sum = w + bl;
+    let (w, bl) = if sum > 1.0 {
+        (w / sum, bl / sum)
+    } else {
+        (w, bl)
+    };
+    // HWB → RGB: start from pure hue (HSL with S=100% L=50%), then mix white/black.
+    let [hr, hg, hb] = hsl_to_srgb(h, 1.0, 0.5);
+    let r = hr * (1.0 - w - bl) + w;
+    let g = hg * (1.0 - w - bl) + w;
+    let b = hb * (1.0 - w - bl) + w;
+    Some([r, g, b, a])
+}
+
+/// `color-mix(in <space>, <color> [<%>], <color> [<%>])`
+fn parse_color_mix_args(inner: &str) -> Option<[f32; 4]> {
+    let inner = inner.trim();
+    let rest = if inner.len() >= 3 && inner[..3].eq_ignore_ascii_case("in ") {
+        inner[3..].trim_start()
+    } else {
+        return None;
+    };
+    // rest: `<space>, <color…>, <color…>`
+    let comma = find_top_level_comma(rest)?;
+    let space = rest[..comma].trim().to_ascii_lowercase();
+    let colors_part = rest[comma + 1..].trim();
+    let comma2 = find_top_level_comma(colors_part)?;
+    let (c1, p1) = parse_color_mix_leg(colors_part[..comma2].trim())?;
+    let (c2, p2) = parse_color_mix_leg(colors_part[comma2 + 1..].trim())?;
+
+    let (_w1, w2) = match (p1, p2) {
+        (Some(a), Some(b)) => {
+            let s = a + b;
+            if s <= 1e-6 {
+                return None;
+            }
+            (a / s, b / s)
+        }
+        (Some(a), None) => (a.clamp(0.0, 1.0), 1.0 - a.clamp(0.0, 1.0)),
+        (None, Some(b)) => (1.0 - b.clamp(0.0, 1.0), b.clamp(0.0, 1.0)),
+        (None, None) => (0.5, 0.5),
+    };
+    // mix weight t = weight of second color.
+    let t = w2;
+    match space.as_str() {
+        "oklab" | "oklch" => Some(super::color_space::mix_display_srgb_in_oklab(c1, c2, t)),
+        "srgb-linear" | "linear-srgb" => {
+            Some(super::color_space::lerp_display_srgb_linear(c1, c2, t))
+        }
+        // Default / `srgb` / `hsl` / `hwb`: channel lerp in display sRGB (MVP).
+        _ => Some([
+            c1[0] + (c2[0] - c1[0]) * t,
+            c1[1] + (c2[1] - c1[1]) * t,
+            c1[2] + (c2[2] - c1[2]) * t,
+            c1[3] + (c2[3] - c1[3]) * t,
+        ]),
+    }
+}
+
+fn find_top_level_comma(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_color_mix_leg(s: &str) -> Option<([f32; 4], Option<f32>)> {
+    let s = s.trim();
+    // Trailing percentage: `red 40%` or `rgb(...) 40%`
+    let (color_s, pct) = if let Some((before, after)) = rsplit_color_and_percent(s) {
+        (before, Some(after))
+    } else {
+        (s, None)
+    };
+    let color = try_parse_color_recursive(color_s)?;
+    Some((color, pct))
+}
+
+fn rsplit_color_and_percent(s: &str) -> Option<(&str, f32)> {
+    let s = s.trim();
+    let mut depth = 0i32;
+    let mut last_ws = None;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => last_ws = Some(i),
+            _ => {}
+        }
+    }
+    let i = last_ws?;
+    let (left, right) = s.split_at(i);
+    let right = right.trim();
+    if !right.ends_with('%') {
+        return None;
+    }
+    let v: f32 = right.trim_end_matches('%').trim().parse().ok()?;
+    Some((left.trim(), (v / 100.0).clamp(0.0, 1.0)))
+}
+
+/// Parse a color without re-entering theme-only path infinitely — uses the public
+/// parser which already handles functions / hex / names.
+fn try_parse_color_recursive(s: &str) -> Option<[f32; 4]> {
+    try_parse_color(s)
+}
+
+/// Relative color: `rgb(from <color> r g b [/ a])` or `hsl(from <color> h s l [/ a])`.
+/// Channel tokens: `r`/`g`/`b`/`h`/`s`/`l`/`alpha`/`a`, numbers, percentages.
+fn parse_relative_rgb_hsl(inner: &str, as_rgb: bool) -> Option<[f32; 4]> {
+    let rest = {
+        let t = inner.trim();
+        let lower = t.to_ascii_lowercase();
+        let stripped = lower.strip_prefix("from ")?;
+        // Map back to original slice length.
+        let skip = t.len() - stripped.len();
+        t[skip..].trim_start()
+    };
+    let (origin, channels_s) = split_origin_color(rest)?;
+    let origin_c = try_parse_color_recursive(origin)?;
+    // Normalize `r g b / a` → treat `/` as whitespace separator for the alpha slot.
+    let channels_norm = channels_s.replace('/', " ");
+    let channel_tokens = split_ws_preserving_parens_local(&channels_norm);
+    if channel_tokens.len() < 3 {
+        return None;
+    }
+
+    if as_rgb {
+        let r = eval_rel_channel(&channel_tokens[0], origin_c, RelSpace::Rgb)?;
+        let g = eval_rel_channel(&channel_tokens[1], origin_c, RelSpace::Rgb)?;
+        let b = eval_rel_channel(&channel_tokens[2], origin_c, RelSpace::Rgb)?;
+        let a = if channel_tokens.len() >= 4 {
+            eval_rel_channel(&channel_tokens[3], origin_c, RelSpace::Rgb)?
+        } else {
+            origin_c[3]
+        };
+        Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), a.clamp(0.0, 1.0)])
+    } else {
+        let (oh, os, ol) = rgb_to_hsl(origin_c[0], origin_c[1], origin_c[2]);
+        let h = eval_rel_hsl_channel(&channel_tokens[0], oh, os, ol, origin_c[3], true)?;
+        let s = eval_rel_hsl_channel(&channel_tokens[1], oh, os, ol, origin_c[3], false)?;
+        let l = eval_rel_hsl_channel(&channel_tokens[2], oh, os, ol, origin_c[3], false)?;
+        let a = if channel_tokens.len() >= 4 {
+            eval_rel_hsl_channel(&channel_tokens[3], oh, os, ol, origin_c[3], false)?
+        } else {
+            origin_c[3]
+        };
+        let [r, g, b] = hsl_to_srgb(h, s.clamp(0.0, 1.0), l.clamp(0.0, 1.0));
+        Some([r, g, b, a.clamp(0.0, 1.0)])
+    }
+}
+
+enum RelSpace {
+    Rgb,
+}
+
+fn split_origin_color(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    if s.starts_with('#') {
+        let end = s
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(s.len());
+        return Some((s[..end].trim(), s[end..].trim_start()));
+    }
+    // Functional color: name(...)
+    if let Some(open) = s.find('(') {
+        let name = s[..open].trim();
+        if !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphabetic() || b == b'-')
+        {
+            let after = &s[open + 1..];
+            let mut depth = 1i32;
+            for (i, ch) in after.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let end = open + 1 + i + 1;
+                            return Some((s[..end].trim(), s[end..].trim_start()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Named color / token (single word).
+    let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());
+    if end == 0 {
+        return None;
+    }
+    Some((s[..end].trim(), s[end..].trim_start()))
+}
+
+fn split_ws_preserving_parens_local(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = None;
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => {
+                depth += 1;
+                if start.is_none() {
+                    start = Some(i);
+                }
+            }
+            ')' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(st) = start {
+                    out.push(s[st..i].trim());
+                    start = None;
+                }
+            }
+            _ => {
+                if start.is_none() {
+                    start = Some(i);
+                }
+            }
+        }
+    }
+    if let Some(st) = start {
+        let t = s[st..].trim();
+        if !t.is_empty() {
+            out.push(t);
+        }
+    }
+    out
+}
+
+fn eval_rel_channel(tok: &str, origin: [f32; 4], _space: RelSpace) -> Option<f32> {
+    let t = tok.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "r" => Some(origin[0]),
+        "g" => Some(origin[1]),
+        "b" => Some(origin[2]),
+        "alpha" | "a" => Some(origin[3]),
+        _ => {
+            if let Some(raw) = t.strip_suffix('%') {
+                let v: f32 = raw.trim().parse().ok()?;
+                return Some((v / 100.0).clamp(0.0, 1.0));
+            }
+            // Absolute 0–255 channel (common in relative examples) or 0–1.
+            let v: f32 = t.parse().ok()?;
+            if v > 1.0 {
+                Some((v / 255.0).clamp(0.0, 1.0))
+            } else {
+                Some(v)
+            }
+        }
+    }
+}
+
+fn eval_rel_hsl_channel(
+    tok: &str,
+    h: f32,
+    s: f32,
+    l: f32,
+    a: f32,
+    is_hue: bool,
+) -> Option<f32> {
+    let t = tok.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "h" => Some(h),
+        "s" => Some(s),
+        "l" => Some(l),
+        "alpha" | "a" => Some(a),
+        _ => {
+            if is_hue {
+                return parse_hue_degrees(tok);
+            }
+            let mut v = parse_css_number_or_percent(tok)?;
+            if v > 1.0 {
+                v /= 100.0;
+            }
+            Some(v)
+        }
+    }
+}
+
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) * 0.5;
+    if (max - min).abs() < 1e-6 {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if (max - r).abs() < 1e-6 {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if (max - g).abs() < 1e-6 {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    } * 60.0;
+    (h, s, l)
+}
+
+fn parse_oklch_args(inner: &str) -> Option<[f32; 4]> {
+    let parts = split_css_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let l = parse_css_number_or_percent(&parts[0])?;
+    let c: f32 = parts[1].trim().parse().ok()?;
+    let h = parse_hue_degrees(&parts[2])?;
+    let a = if parts.len() >= 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        1.0
+    };
+    Some(super::color_space::oklch_to_display_srgba(l, c, h, a))
+}
+
+fn parse_oklab_args(inner: &str) -> Option<[f32; 4]> {
+    use palette::{IntoColor, Oklab, Srgb};
+    let parts = split_css_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let l = parse_css_number_or_percent(&parts[0])?;
+    let a_ch: f32 = parts[1].trim().parse().ok()?;
+    let b_ch: f32 = parts[2].trim().parse().ok()?;
+    let alpha = if parts.len() >= 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        1.0
+    };
+    let ok = Oklab::new(l, a_ch, b_ch);
+    let srgb: Srgb<f32> = ok.into_color();
+    let (r, g, b) = srgb.into_components();
+    Some([r, g, b, alpha])
+}
+
+/// CSS Level 4 `<named-color>` keywords → display sRGB.
+pub(crate) fn css_named_color(s: &str) -> Option<[f32; 4]> {
+    let t = s.trim();
+    // CSS Level 4 named colors commonly used in MDN gradient examples.
+    let (r, g, b) = match t.to_ascii_lowercase().as_str() {
+        "aliceblue" => (240, 248, 255),
+        "antiquewhite" => (250, 235, 215),
+        "aqua" | "cyan" => (0, 255, 255),
+        "aquamarine" => (127, 255, 212),
+        "azure" => (240, 255, 255),
+        "beige" => (245, 245, 220),
+        "bisque" => (255, 228, 196),
+        "blanchedalmond" => (255, 235, 205),
+        "blue" => (0, 0, 255),
+        "blueviolet" => (138, 43, 226),
+        "brown" => (165, 42, 42),
+        "burlywood" => (222, 184, 135),
+        "cadetblue" => (95, 158, 160),
+        "chartreuse" => (127, 255, 0),
+        "chocolate" => (210, 105, 30),
+        "coral" => (255, 127, 80),
+        "cornflowerblue" => (100, 149, 237),
+        "cornsilk" => (255, 248, 220),
+        "crimson" => (220, 20, 60),
+        "darkblue" => (0, 0, 139),
+        "darkcyan" => (0, 139, 139),
+        "darkgoldenrod" => (184, 134, 11),
+        "darkgray" | "darkgrey" => (169, 169, 169),
+        "darkgreen" => (0, 100, 0),
+        "darkkhaki" => (189, 183, 107),
+        "darkmagenta" => (139, 0, 139),
+        "darkolivegreen" => (85, 107, 47),
+        "darkorange" => (255, 140, 0),
+        "darkorchid" => (153, 50, 204),
+        "darkred" => (139, 0, 0),
+        "darksalmon" => (233, 150, 122),
+        "darkseagreen" => (143, 188, 143),
+        "darkslateblue" => (72, 61, 139),
+        "darkslategray" | "darkslategrey" => (47, 79, 79),
+        "darkturquoise" => (0, 206, 209),
+        "darkviolet" => (148, 0, 211),
+        "deeppink" => (255, 20, 147),
+        "deepskyblue" => (0, 191, 255),
+        "dimgray" | "dimgrey" => (105, 105, 105),
+        "dodgerblue" => (30, 144, 255),
+        "firebrick" => (178, 34, 34),
+        "floralwhite" => (255, 250, 240),
+        "forestgreen" => (34, 139, 34),
+        "fuchsia" | "magenta" => (255, 0, 255),
+        "gainsboro" => (220, 220, 220),
+        "ghostwhite" => (248, 248, 255),
+        "gold" => (255, 215, 0),
+        "goldenrod" => (218, 165, 32),
+        "gray" | "grey" => (128, 128, 128),
+        "green" => (0, 128, 0),
+        "greenyellow" => (173, 255, 47),
+        "honeydew" => (240, 255, 240),
+        "hotpink" => (255, 105, 180),
+        "indianred" => (205, 92, 92),
+        "indigo" => (75, 0, 130),
+        "ivory" => (255, 255, 240),
+        "khaki" => (240, 230, 140),
+        "lavender" => (230, 230, 250),
+        "lavenderblush" => (255, 240, 245),
+        "lawngreen" => (124, 252, 0),
+        "lemonchiffon" => (255, 250, 205),
+        "lightblue" => (173, 216, 230),
+        "lightcoral" => (240, 128, 128),
+        "lightcyan" => (224, 255, 255),
+        "lightgoldenrodyellow" => (250, 250, 210),
+        "lightgray" | "lightgrey" => (211, 211, 211),
+        "lightgreen" => (144, 238, 144),
+        "lightpink" => (255, 182, 193),
+        "lightsalmon" => (255, 160, 122),
+        "lightseagreen" => (32, 178, 170),
+        "lightskyblue" => (135, 206, 250),
+        "lightslategray" | "lightslategrey" => (119, 136, 153),
+        "lightsteelblue" => (176, 196, 222),
+        "lightyellow" => (255, 255, 224),
+        "lime" => (0, 255, 0),
+        "limegreen" => (50, 205, 50),
+        "linen" => (250, 240, 230),
+        "maroon" => (128, 0, 0),
+        "mediumaquamarine" => (102, 205, 170),
+        "mediumblue" => (0, 0, 205),
+        "mediumorchid" => (186, 85, 211),
+        "mediumpurple" => (147, 112, 219),
+        "mediumseagreen" => (60, 179, 113),
+        "mediumslateblue" => (123, 104, 238),
+        "mediumspringgreen" => (0, 250, 154),
+        "mediumturquoise" => (72, 209, 204),
+        "mediumvioletred" => (199, 21, 133),
+        "midnightblue" => (25, 25, 112),
+        "mintcream" => (245, 255, 250),
+        "mistyrose" => (255, 228, 225),
+        "moccasin" => (255, 228, 181),
+        "navajowhite" => (255, 222, 173),
+        "navy" => (0, 0, 128),
+        "oldlace" => (253, 245, 230),
+        "olive" => (128, 128, 0),
+        "olivedrab" => (107, 142, 35),
+        "orange" => (255, 165, 0),
+        "orangered" => (255, 69, 0),
+        "orchid" => (218, 112, 214),
+        "palegoldenrod" => (238, 232, 170),
+        "palegreen" => (152, 251, 152),
+        "paleturquoise" => (175, 238, 238),
+        "palevioletred" => (219, 112, 147),
+        "papayawhip" => (255, 239, 213),
+        "peachpuff" => (255, 218, 185),
+        "peru" => (205, 133, 63),
+        "pink" => (255, 192, 203),
+        "plum" => (221, 160, 221),
+        "powderblue" => (176, 224, 230),
+        "purple" => (128, 0, 128),
+        "rebeccapurple" => (102, 51, 153),
+        "red" => (255, 0, 0),
+        "rosybrown" => (188, 143, 143),
+        "royalblue" => (65, 105, 225),
+        "saddlebrown" => (139, 69, 19),
+        "salmon" => (250, 128, 114),
+        "sandybrown" => (244, 164, 96),
+        "seagreen" => (46, 139, 87),
+        "seashell" => (255, 245, 238),
+        "sienna" => (160, 82, 45),
+        "silver" => (192, 192, 192),
+        "skyblue" => (135, 206, 235),
+        "slateblue" => (106, 90, 205),
+        "slategray" | "slategrey" => (112, 128, 144),
+        "snow" => (255, 250, 250),
+        "springgreen" => (0, 255, 127),
+        "steelblue" => (70, 130, 180),
+        "tan" => (210, 180, 140),
+        "teal" => (0, 128, 128),
+        "thistle" => (216, 191, 216),
+        "tomato" => (255, 99, 71),
+        "turquoise" => (64, 224, 208),
+        "violet" => (238, 130, 238),
+        "wheat" => (245, 222, 179),
+        "whitesmoke" => (245, 245, 245),
+        "yellow" => (255, 255, 0),
+        "yellowgreen" => (154, 205, 50),
+        _ => return None,
+    };
+    Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
+}
+
+/// Parse a color name / hex / Tailwind shade / CSS color function for backgrounds.
 ///
 /// Unknown tokens return `None` (callers may fall back). Prefer this over silent gray.
 pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
@@ -242,6 +924,9 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
     let s = s.trim();
     if let Some(c) = parse_hex_color_rgba(s) {
         return Some(rgba_u8_to_f32(c));
+    }
+    if let Some(c) = parse_css_color_function(s) {
+        return Some(c);
     }
     if let Some(c) = parse_tailwind_family_shade_token(s) {
         return Some(rgba_u8_to_f32(c));
@@ -291,7 +976,7 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
         "black" => [0.0, 0.0, 0.0, 1.0],
         "red" => [1.0, 0.3, 0.3, 1.0],
         "transparent" => [0.0, 0.0, 0.0, 0.0],
-        _ => return None,
+        _ => return css_named_color(s),
     })
 }
 
@@ -300,64 +985,64 @@ pub fn parse_color(s: &str) -> [f32; 4] {
 }
 
 pub fn try_parse_text_color(s: &str) -> Option<[u8; 4]> {
-    let theme = get_theme();
-    let colors = theme.colors;
-    let s = s.trim();
-    if let Some(c) = parse_hex_color_rgba(s) {
-        return Some(c);
-    }
-    if let Some(c) = parse_tailwind_family_shade_token(s) {
-        return Some(c);
-    }
-    Some(match s {
-        "background" => f32_to_u8(colors.background),
-        "foreground" => f32_to_u8(colors.foreground),
-        "card" => f32_to_u8(colors.card),
-        "card-foreground" => f32_to_u8(colors.card_foreground),
-        "popover" => f32_to_u8(colors.popover),
-        "popover-foreground" => f32_to_u8(colors.popover_foreground),
-        "primary" => f32_to_u8(colors.primary),
-        "primary-foreground" => f32_to_u8(colors.primary_foreground),
-        "secondary" => f32_to_u8(colors.secondary),
-        "secondary-foreground" => f32_to_u8(colors.secondary_foreground),
-        "muted" => f32_to_u8(colors.muted),
-        "muted-foreground" => f32_to_u8(colors.muted_foreground),
-        "accent" => f32_to_u8(colors.accent),
-        "accent-foreground" => f32_to_u8(colors.accent_foreground),
-        "destructive" => f32_to_u8(colors.destructive),
-        "destructive-foreground" => f32_to_u8(colors.destructive_foreground),
-        "border" => f32_to_u8(colors.border),
-        "input" => f32_to_u8(colors.input),
-        "ring" => f32_to_u8(colors.ring),
-        "chart-1" => f32_to_u8(colors.chart_1),
-        "chart-2" => f32_to_u8(colors.chart_2),
-        "chart-3" => f32_to_u8(colors.chart_3),
-        "chart-4" => f32_to_u8(colors.chart_4),
-        "chart-5" => f32_to_u8(colors.chart_5),
-        "sidebar" => f32_to_u8(colors.sidebar),
-        "sidebar-foreground" => f32_to_u8(colors.sidebar_foreground),
-        "sidebar-primary" => f32_to_u8(colors.sidebar_primary),
-        "sidebar-primary-foreground" => f32_to_u8(colors.sidebar_primary_foreground),
-        "sidebar-accent" => f32_to_u8(colors.sidebar_accent),
-        "sidebar-accent-foreground" => f32_to_u8(colors.sidebar_accent_foreground),
-        "sidebar-border" => f32_to_u8(colors.sidebar_border),
-        "sidebar-ring" => f32_to_u8(colors.sidebar_ring),
-        "surface" => f32_to_u8(colors.surface),
-        "surface-foreground" => f32_to_u8(colors.surface_foreground),
-        "code" => f32_to_u8(colors.code),
-        "code-foreground" => f32_to_u8(colors.code_foreground),
-        "code-highlight" => f32_to_u8(colors.code_highlight),
-        "code-number" => f32_to_u8(colors.code_number),
-        "selection" => f32_to_u8(colors.selection),
-        "selection-foreground" => f32_to_u8(colors.selection_foreground),
-        "white" => [255, 255, 255, 255],
-        "black" => [0, 0, 0, 255],
-        "red" => [255, 77, 77, 255],
-        "transparent" => [0, 0, 0, 0],
-        _ => return None,
-    })
+    try_parse_color(s).map(|c| f32_to_u8(c))
 }
 
 pub fn parse_text_color(s: &str) -> [u8; 4] {
     try_parse_text_color(s).unwrap_or([23, 23, 23, 255])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hex_and_rgba_hsl_oklch() {
+        let hex = try_parse_color("#ff0000").unwrap();
+        assert!((hex[0] - 1.0).abs() < 1e-3);
+
+        let rgb = try_parse_color("rgb(255, 0, 0)").unwrap();
+        assert!((rgb[0] - 1.0).abs() < 1e-3 && rgb[1] < 1e-3);
+
+        let modern = try_parse_color("rgb(255 0 0 / 50%)").unwrap();
+        assert!((modern[3] - 0.5).abs() < 1e-3);
+
+        let hsl = try_parse_color("hsl(120, 100%, 50%)").unwrap();
+        assert!(hsl[1] > 0.9 && hsl[0] < 1e-3);
+
+        let oklch = try_parse_color("oklch(0.63 0.2 25)").unwrap();
+        assert!(oklch[0] > 0.5); // reddish
+    }
+
+    #[test]
+    fn parses_hwb_color_mix_and_relative() {
+        let hwb = try_parse_color("hwb(120 20% 10%)").unwrap();
+        assert!(hwb[1] > hwb[0] && hwb[1] > hwb[2]); // greenish
+
+        let mixed = try_parse_color("color-mix(in oklab, red 50%, blue)").unwrap();
+        assert!(mixed[0] > 0.1 && mixed[2] > 0.1);
+
+        let rel = try_parse_color("rgb(from #ff0000 r g b / 50%)").unwrap();
+        assert!((rel[0] - 1.0).abs() < 1e-3);
+        assert!((rel[3] - 0.5).abs() < 1e-3);
+
+        let rel_hsl = try_parse_color("hsl(from lime h s l)").unwrap();
+        assert!(rel_hsl[1] > 0.8 && rel_hsl[0] < 0.2);
+    }
+
+    #[test]
+    fn gradient_accepts_functional_colors() {
+        use super::super::gradient::parse_gradient;
+        let g = parse_gradient(
+            "linear-gradient(to right, rgba(255,0,0,0.8), hsl(210 100% 50%), #00ff00)",
+        )
+        .unwrap();
+        assert_eq!(g.stops().len(), 3);
+
+        let g2 = parse_gradient(
+            "linear-gradient(90deg, color-mix(in oklab, red, blue), hwb(40 10% 0%), rgb(from pink r g b))",
+        )
+        .unwrap();
+        assert_eq!(g2.stops().len(), 3);
+    }
 }

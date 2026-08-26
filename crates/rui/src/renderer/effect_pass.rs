@@ -331,6 +331,12 @@ impl EffectPassGpu {
                 tint: [1.0, 1.0, 1.0, d.opacity],
                 uv_offset: d.uv_offset,
                 uv_scale: d.uv_scale,
+                transform: {
+                    let mut t = d.transform;
+                    t[4] *= ui_scale;
+                    t[5] *= ui_scale;
+                    t
+                },
             })
             .collect();
 

@@ -9,7 +9,7 @@ use std::ops::{Deref, DerefMut};
 use super::graph::PassKind;
 use crate::app::image_registry::GpuImageTexture;
 
-const DEFAULT_MAX_ENTRIES: usize = 256;
+const DEFAULT_MAX_ENTRIES: usize = 512;
 
 fn texture_pool_stale_frames() -> Option<u64> {
     static MAX: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
@@ -38,6 +38,8 @@ pub enum ResourceKind {
     Scene3d,
     Capture,
     Effect,
+    /// CSS / API background gradients (`rui-grad:…`).
+    Gradient,
     Other,
 }
 
@@ -55,6 +57,8 @@ impl ResourceKind {
             Self::Effect
         } else if key.starts_with("rui-src:") || key.starts_with("rui_src:") {
             Self::Image
+        } else if key.starts_with("rui-grad:") {
+            Self::Gradient
         } else {
             Self::Other
         }
@@ -62,7 +66,7 @@ impl ResourceKind {
 
     pub fn pass_kind(self) -> Option<PassKind> {
         match self {
-            Self::Path | Self::Canvas | Self::Image => Some(PassKind::Geometry2d),
+            Self::Path | Self::Canvas | Self::Image | Self::Gradient => Some(PassKind::Geometry2d),
             Self::Scene3d => Some(PassKind::Scene3d),
             Self::Capture => Some(PassKind::SubtreeCapture),
             Self::Effect => Some(PassKind::Effect),
@@ -181,9 +185,14 @@ impl TexturePool {
         if self.map.len() <= self.max_entries {
             return;
         }
+        let frame = self.frame;
+        // Never drop textures touched/inserted this frame — they are still referenced by
+        // the in-flight draw list. Preferring "keep gradients" previously filled the pool
+        // with grads and then thrashing-evicted other (or even current) draws → blank UI.
         let mut aged: Vec<(u64, String)> = self
             .meta
             .iter()
+            .filter(|(_, m)| m.last_frame != frame)
             .map(|(k, m)| (m.last_frame, k.clone()))
             .collect();
         aged.sort_by_key(|(f, _)| *f);
@@ -192,6 +201,7 @@ impl TexturePool {
             self.map.remove(&k);
             self.meta.remove(&k);
         }
+        // Soft-cap: if everything left is in-use this frame, allow temporary overshoot.
     }
 
     pub fn dump(&self) -> String {
@@ -256,5 +266,9 @@ mod tests {
             ResourceKind::Effect
         );
         assert_eq!(ResourceKind::from_key("rui-src:a.png"), ResourceKind::Image);
+        assert_eq!(
+            ResourceKind::from_key("rui-grad:deadbeef"),
+            ResourceKind::Gradient
+        );
     }
 }

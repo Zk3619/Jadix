@@ -880,6 +880,7 @@ fn push_border_image_draws(
             uv_scale: [sub_uw * uv_w, sub_vh * uv_h],
             texture_key: tex_key.clone(),
             opacity,
+            transform: crate::style::transform::MAT2D_IDENTITY,
         });
     };
 
@@ -2877,59 +2878,21 @@ impl LayoutTree {
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
             let need_fill_instance = has_bg || has_shadow || (has_border && !use_border_strips);
-            if let Some(grad) = element.style.bg_gradient {
-                const STRIPS: usize = 24;
-                let angle = grad.angle_deg.to_radians();
-                let dx = angle.cos();
-                let dy = angle.sin();
-                let horizontal = dx.abs() >= dy.abs();
-                for i in 0..STRIPS {
-                    let t = (i as f32 + 0.5) / STRIPS as f32;
-                    let t = if horizontal {
-                        if dx >= 0.0 {
-                            t
-                        } else {
-                            1.0 - t
-                        }
-                    } else if dy >= 0.0 {
-                        t
-                    } else {
-                        1.0 - t
-                    };
-                    let color = mul_color_alpha(lerp_color(grad.from, grad.to, t), opacity);
-                    let (pos, size) = if horizontal {
-                        let sw = render_rect[2] / STRIPS as f32;
-                        (
-                            [render_rect[0] + i as f32 * sw, render_rect[1]],
-                            [sw.max(0.5), render_rect[3]],
-                        )
-                    } else {
-                        let sh = render_rect[3] / STRIPS as f32;
-                        (
-                            [render_rect[0], render_rect[1] + i as f32 * sh],
-                            [render_rect[2], sh.max(0.5)],
-                        )
-                    };
-                    instances.push(
-                        InstanceInput {
-                            rect_pos: pos,
-                            rect_size: size,
-                            color,
-                            border_color: [0.0, 0.0, 0.0, 0.0],
-                            radii: resolved_radii,
-                            border_width: 0.0,
-                            shadow_color: [0.0, 0.0, 0.0, 0.0],
-                            shadow_offset: [0.0, 0.0],
-                            shadow_blur: 0.0,
-                            shadow_spread: 0.0,
-                            shadow_inset: 0.0,
-                            transform,
-                            clip_pos: [0.0, 0.0],
-                            clip_size: InstanceInput::NO_CLIP_SIZE,
-                            border_extra: sdf_border_extra,
-                        }
-                        .with_clip(parent_clip),
-                    );
+            if let Some(ref grad) = element.style.bg_gradient {
+                use crate::style::{
+                    ensure_gradient_texture, gradient_texture_radii, gradient_texture_size,
+                };
+
+                // Always texture-paint: strip approximation left seams with corner radii
+                // and diagonal/radial/conic cannot be represented as axis-aligned strips.
+                // Size textures in physical pixels so hard edges stay sharp under DPI scale.
+                let (tw, th) = gradient_texture_size(render_rect[2], render_rect[3]);
+                let tex_radii = gradient_texture_radii(resolved_radii);
+                let key = ensure_gradient_texture(grad, tw, th, tex_radii);
+                if let Some(draw) =
+                    TexturedDraw::clipped(render_rect, parent_clip, key, opacity)
+                {
+                    textured_draws.push(draw);
                 }
                 if has_shadow || (has_border && !use_border_strips) {
                     instances.push(
@@ -3040,7 +3003,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw);
+                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
@@ -3053,7 +3016,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw);
+                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if crate::renderer::gpu2d_enabled() {
@@ -3079,9 +3042,18 @@ impl LayoutTree {
                                 shadow_blur: 0.0,
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
-                                transform: crate::style::transform::mat2d_rotate(
-                                    q.rotate_deg.to_radians(),
-                                ),
+                                transform: {
+                                    if q.rotate_deg.abs() > 1e-3 {
+                                        crate::style::transform::mat2d_multiply(
+                                            &transform,
+                                            &crate::style::transform::mat2d_rotate(
+                                                q.rotate_deg.to_radians(),
+                                            ),
+                                        )
+                                    } else {
+                                        transform
+                                    }
+                                },
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
                                 border_extra: 0.0,
@@ -3100,7 +3072,7 @@ impl LayoutTree {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                     {
-                        textured_draws.push(draw);
+                        textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                         path_tex_drawn = true;
                     }
                 }
@@ -3114,7 +3086,7 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw);
+                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
@@ -3126,6 +3098,14 @@ impl LayoutTree {
                     if q.color[3] <= 0.0 || q.size.0 <= 0.0 || q.size.1 <= 0.0 {
                         continue;
                     }
+                    let q_xf = if q.rotate_deg.abs() > 1e-3 {
+                        crate::style::transform::mat2d_multiply(
+                            &transform,
+                            &crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
+                        )
+                    } else {
+                        transform
+                    };
                     instances.push(
                         InstanceInput {
                             rect_pos: [q.pos.0, q.pos.1],
@@ -3139,9 +3119,7 @@ impl LayoutTree {
                             shadow_blur: 0.0,
                             shadow_spread: 0.0,
                             shadow_inset: 0.0,
-                            transform: crate::style::transform::mat2d_rotate(
-                                q.rotate_deg.to_radians(),
-                            ),
+                            transform: q_xf,
                             clip_pos: [0.0, 0.0],
                             clip_size: InstanceInput::NO_CLIP_SIZE,
                             border_extra: 0.0,
@@ -3306,6 +3284,57 @@ impl LayoutTree {
             };
             let text_x = text_x0 - text_style.scroll_x.max(0.0) * text_scale;
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
+            // Glyphon cannot rotate. Lucide + spin/rotate → cached glyph texture + element
+            // transform (vector/SVG path is the long-term home; same TexturedDraw path).
+            let icon_needs_xform = is_icon
+                && (element.style.rotate_deg.abs() > 0.5
+                    || element
+                        .style
+                        .animations
+                        .iter()
+                        .any(|e| e.name == "spin" && e.is_named())
+                    || element.style.transform.as_ref().is_some_and(|t| !t.is_empty()));
+            if icon_needs_xform {
+                let side = lay_w
+                    .max(lay_h)
+                    .max(vis_w)
+                    .max(vis_h)
+                    .max(text_style.size)
+                    .max(1.0);
+                let cx = vis_x + vis_w * 0.5;
+                let cy = vis_y + vis_h * 0.5;
+                let full = [cx - side * 0.5, cy - side * 0.5, side, side];
+                // Textured shader pivots about rect center (like SDF). Strip origin-baked
+                // tx/ty from `compute_combined_transform` — otherwise the icon orbits a corner.
+                let full_xf = crate::style::compute_combined_transform(
+                    &[0.0, 0.0],
+                    element.style.rotate_deg,
+                    &[1.0, 1.0],
+                    element.style.transform.as_ref(),
+                    &element.style.transform_origin,
+                    side,
+                    side,
+                );
+                let icon_xf = crate::style::mat2d_linear(&full_xf);
+                if let Some(glyph) = element.text.as_deref() {
+                    // Rasterize at layout side so EM center == draw-rect center (no 0.85 shrink).
+                    if let Some((tex_key, _)) = crate::utils::icon_texture::ensure_lucide_glyph_texture(
+                        glyph,
+                        side,
+                        text_style.color,
+                    ) {
+                        // Do not `clipped()`-shrink the rect: that moves the pivot off-center.
+                        textured_draws.push(crate::renderer::TexturedDraw {
+                            rect: full,
+                            uv_offset: [0.0, 0.0],
+                            uv_scale: [1.0, 1.0],
+                            texture_key: tex_key,
+                            opacity,
+                            transform: icon_xf,
+                        });
+                    }
+                }
+            } else {
             let prepared = if is_icon {
                 None
             } else {
@@ -3384,6 +3413,7 @@ impl LayoutTree {
                 chrome_clip,
                 opacity,
             );
+            } // else !icon_spin_paint
         }
 
         paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
@@ -4061,17 +4091,6 @@ fn scrollbar_track_overlay_abs(
 fn mul_color_alpha(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
     color[3] *= opacity;
     color
-}
-
-#[inline]
-fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    let t = t.clamp(0.0, 1.0);
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-        a[3] + (b[3] - a[3]) * t,
-    ]
 }
 
 fn inflate_rect(rect: [f32; 4], dx: f32, dy: f32) -> [f32; 4] {

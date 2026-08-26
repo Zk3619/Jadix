@@ -280,6 +280,256 @@ impl TransitionSnapshot {
     }
 }
 
+/// Baseline visual props captured when an animation starts (fill-mode / restore).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimationBaseline {
+    pub opacity: f32,
+    pub rotate_deg: f32,
+    pub scale: [f32; 2],
+    pub translate: [f32; 2],
+}
+
+impl AnimationBaseline {
+    pub fn from_style(style: &super::Style) -> Self {
+        Self {
+            opacity: style.opacity,
+            rotate_deg: style.rotate_deg,
+            scale: style.scale,
+            translate: style.translate,
+        }
+    }
+}
+
+/// Per-list-item runtime for CSS `animation`.
+#[derive(Clone, Debug)]
+pub struct AnimationRunState {
+    pub elapsed_ms: f32,
+    pub baseline: AnimationBaseline,
+    pub finished: bool,
+    /// Fingerprint of the driving [`AnimationEntry`] so style edits restart cleanly.
+    pub entry_fp: u64,
+}
+
+/// Per-element CSS animation runtime (persists across frames).
+#[derive(Clone, Debug, Default)]
+pub struct AnimationSnapshot {
+    pub runs: Vec<AnimationRunState>,
+}
+
+impl AnimationSnapshot {
+    pub fn has_active(&self, style: &super::Style) -> bool {
+        style.animations.iter().any(|e| e.needs_frame())
+            || self.runs.iter().any(|r| !r.finished)
+    }
+}
+
+fn animation_entry_fp(entry: &super::element_style::AnimationEntry) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    // Intentionally omit `play_state`: pause/resume must keep elapsed time.
+    entry.name.hash(&mut h);
+    entry.duration_ms.to_bits().hash(&mut h);
+    entry.delay_ms.to_bits().hash(&mut h);
+    format!("{:?}", entry.iteration_count).hash(&mut h);
+    entry.direction.as_str().hash(&mut h);
+    entry.fill_mode.as_str().hash(&mut h);
+    h.finish()
+}
+
+fn apply_keyframe_sample(style: &mut super::Style, sample: &super::keyframes::KeyframeSample) {
+    if let Some(o) = sample.opacity {
+        style.opacity = o;
+    }
+    if let Some(r) = sample.rotate_deg {
+        style.rotate_deg = r;
+    }
+    if let Some(s) = sample.scale {
+        style.scale = s;
+    }
+    if let Some(t) = sample.translate {
+        style.translate = t;
+    }
+}
+
+fn restore_baseline(style: &mut super::Style, base: &AnimationBaseline) {
+    style.opacity = base.opacity;
+    style.rotate_deg = base.rotate_deg;
+    style.scale = base.scale;
+    style.translate = base.translate;
+}
+
+/// Map local cycle progress through `animation-direction`.
+fn direction_local_t(
+    direction: super::element_style::AnimationDirection,
+    iteration_index: u32,
+    cycle_t: f32,
+) -> f32 {
+    use super::element_style::AnimationDirection;
+    let reverse = match direction {
+        AnimationDirection::Normal => false,
+        AnimationDirection::Reverse => true,
+        AnimationDirection::Alternate => iteration_index % 2 == 1,
+        AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
+    };
+    if reverse {
+        1.0 - cycle_t
+    } else {
+        cycle_t
+    }
+}
+
+/// Advance CSS `@keyframes` animations on one element. Returns true if still active.
+pub fn tick_element_animations(
+    style: &mut super::Style,
+    snap: &mut AnimationSnapshot,
+    dt_secs: f32,
+) -> bool {
+    use super::element_style::{
+        AnimationFillMode, AnimationIterationCount, AnimationPlayState,
+    };
+    use super::keyframes::{lookup_keyframes, sample_keyframes};
+
+    if style.animations.is_empty() {
+        snap.runs.clear();
+        return false;
+    }
+
+    // Sync run slots with style list length / fingerprints.
+    while snap.runs.len() < style.animations.len() {
+        let i = snap.runs.len();
+        snap.runs.push(AnimationRunState {
+            elapsed_ms: 0.0,
+            baseline: AnimationBaseline::from_style(style),
+            finished: false,
+            entry_fp: animation_entry_fp(&style.animations[i]),
+        });
+    }
+    snap.runs.truncate(style.animations.len());
+
+    let dt_ms = (dt_secs.max(0.0) * 1000.0).min(80.0);
+    let mut any_active = false;
+    let animations = style.animations.clone();
+
+    for (i, entry) in animations.iter().enumerate() {
+        if !entry.is_named() || !entry.timeline.is_auto() {
+            continue;
+        }
+        let fp = animation_entry_fp(entry);
+        let run = &mut snap.runs[i];
+        if run.entry_fp != fp {
+            *run = AnimationRunState {
+                elapsed_ms: 0.0,
+                baseline: AnimationBaseline::from_style(style),
+                finished: false,
+                entry_fp: fp,
+            };
+        }
+
+        let Some(stops) = lookup_keyframes(&entry.name) else {
+            continue;
+        };
+
+        if entry.play_state == AnimationPlayState::Paused {
+            // Still paint current fill/frame without advancing.
+            let sample_t = animation_sample_t(entry, run.elapsed_ms);
+            if let Some(local) = sample_t {
+                let eased = entry.timing.eval(local);
+                apply_keyframe_sample(style, &sample_keyframes(&stops, eased));
+            } else if entry.fill_mode.apply_backwards() && run.elapsed_ms < entry.delay_ms {
+                let local = direction_local_t(entry.direction, 0, 0.0);
+                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
+            }
+            if entry.needs_frame() || !run.finished {
+                any_active = true;
+            }
+            continue;
+        }
+
+        if !run.finished {
+            run.elapsed_ms += dt_ms;
+        }
+
+        let after_delay = run.elapsed_ms - entry.delay_ms;
+        if after_delay < 0.0 {
+            if entry.fill_mode.apply_backwards() {
+                let local = direction_local_t(entry.direction, 0, 0.0);
+                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
+            }
+            any_active = true;
+            continue;
+        }
+
+        let dur = entry.duration_ms.max(1e-3);
+        let total_iters = match entry.iteration_count {
+            AnimationIterationCount::Infinite => None,
+            AnimationIterationCount::Finite(n) => Some(n.max(0.0)),
+        };
+
+        let finished = if let Some(n) = total_iters {
+            after_delay >= dur * n
+        } else {
+            false
+        };
+
+        if finished {
+            run.finished = true;
+            if entry.fill_mode.apply_forwards() {
+                let last_iter = match total_iters {
+                    Some(n) if n > 0.0 => (n.ceil() as u32).saturating_sub(1),
+                    _ => 0,
+                };
+                // End of last iteration: local t = 1.0 before direction.
+                let local = direction_local_t(entry.direction, last_iter, 1.0);
+                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
+            } else if matches!(entry.fill_mode, AnimationFillMode::None) {
+                restore_baseline(style, &run.baseline);
+            }
+            continue;
+        }
+
+        run.finished = false;
+        any_active = true;
+
+        let cycle_index = (after_delay / dur).floor() as u32;
+        let cycle_t = (after_delay % dur) / dur;
+        let local = direction_local_t(entry.direction, cycle_index, cycle_t);
+        let eased = entry.timing.eval(local);
+        apply_keyframe_sample(style, &sample_keyframes(&stops, eased));
+    }
+
+    any_active
+}
+
+fn animation_sample_t(
+    entry: &super::element_style::AnimationEntry,
+    elapsed_ms: f32,
+) -> Option<f32> {
+    use super::element_style::AnimationIterationCount;
+    let after_delay = elapsed_ms - entry.delay_ms;
+    if after_delay < 0.0 {
+        return None;
+    }
+    let dur = entry.duration_ms.max(1e-3);
+    let total_iters = match entry.iteration_count {
+        AnimationIterationCount::Infinite => None,
+        AnimationIterationCount::Finite(n) => Some(n.max(0.0)),
+    };
+    if let Some(n) = total_iters {
+        if after_delay >= dur * n {
+            return Some(1.0);
+        }
+    }
+    let cycle_index = (after_delay / dur).floor() as u32;
+    let cycle_t = (after_delay % dur) / dur;
+    Some(direction_local_t(entry.direction, cycle_index, cycle_t))
+}
+
+/// True when this element should keep the animation frame pump alive.
+pub fn css_animation_needs_frame(style: &super::Style, snap: &AnimationSnapshot) -> bool {
+    style.animations.iter().any(|e| e.needs_frame()) || snap.has_active(style)
+}
+
 fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8) {
     match prop {
         TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1),
@@ -916,5 +1166,134 @@ mod tests {
             v > 0.01 && v < 0.99,
             "expected mid-tween after clamped step, got {v}"
         );
+    }
+
+    #[test]
+    fn tick_element_animations_spin_advances_rotate() {
+        use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
+        let mut style = crate::style::Style::default();
+        style.animations.push(AnimationEntry {
+            name: "spin".into(),
+            duration_ms: 1000.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Infinite,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        // Engine clamps dt to ≤80ms per tick.
+        for _ in 0..4 {
+            assert!(tick_element_animations(&mut style, &mut snap, 0.08));
+        }
+        assert!(
+            (style.rotate_deg - 115.2).abs() < 2.0,
+            "expected ~115deg after 320ms of 1s spin, got {}",
+            style.rotate_deg
+        );
+    }
+
+    #[test]
+    fn tick_element_animations_respects_paused() {
+        use crate::style::{
+            AnimationEntry, AnimationIterationCount, AnimationPlayState, TimingFunction,
+        };
+        let mut style = crate::style::Style::default();
+        style.animations.push(AnimationEntry {
+            name: "spin".into(),
+            duration_ms: 1000.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Infinite,
+            play_state: AnimationPlayState::Paused,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.25);
+        assert!(
+            style.rotate_deg.abs() < 1.0,
+            "paused should not advance elapsed (got {})",
+            style.rotate_deg
+        );
+    }
+
+    #[test]
+    fn pause_resume_preserves_elapsed() {
+        use crate::style::{
+            AnimationEntry, AnimationIterationCount, AnimationPlayState, TimingFunction,
+        };
+        let mut style = crate::style::Style::default();
+        style.animations.push(AnimationEntry {
+            name: "spin".into(),
+            duration_ms: 1000.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Infinite,
+            play_state: AnimationPlayState::Running,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        // Engine clamps dt to ≤80ms per tick → 3×80ms ≈ 86.4deg.
+        for _ in 0..3 {
+            assert!(tick_element_animations(&mut style, &mut snap, 0.08));
+        }
+        let mid = style.rotate_deg;
+        assert!(mid > 70.0 && mid < 100.0, "expected ~86deg, got {mid}");
+
+        style.animations[0].play_state = AnimationPlayState::Paused;
+        let _ = tick_element_animations(&mut style, &mut snap, 0.08);
+        assert!(
+            (style.rotate_deg - mid).abs() < 1.0,
+            "pause must not reset elapsed (mid={mid}, after={})",
+            style.rotate_deg
+        );
+
+        style.animations[0].play_state = AnimationPlayState::Running;
+        let _ = tick_element_animations(&mut style, &mut snap, 0.08);
+        assert!(
+            style.rotate_deg > mid + 20.0,
+            "resume should continue from mid={mid}, got {}",
+            style.rotate_deg
+        );
+    }
+
+    #[test]
+    fn tick_element_animations_forwards_keeps_end() {
+        use crate::style::{
+            AnimationEntry, AnimationFillMode, AnimationIterationCount, TimingFunction,
+        };
+        let mut style = crate::style::Style::default();
+        style.opacity = 1.0;
+        style.animations.push(AnimationEntry {
+            name: "fade-out".into(),
+            duration_ms: 100.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Finite(1.0),
+            fill_mode: AnimationFillMode::Forwards,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        for _ in 0..5 {
+            let _ = tick_element_animations(&mut style, &mut snap, 0.05);
+        }
+        assert!(
+            style.opacity < 0.05,
+            "forwards fade-out should stay near 0, got {}",
+            style.opacity
+        );
+    }
+
+    #[test]
+    fn parse_animation_shorthand_spin_infinite() {
+        let list = crate::core::tree::parse_animation_shorthand(
+            "1s linear infinite reverse both running spin",
+        );
+        assert_eq!(list.len(), 1);
+        let e = &list[0];
+        assert_eq!(e.name, "spin");
+        assert!((e.duration_ms - 1000.0).abs() < 0.1);
+        assert!(matches!(
+            e.iteration_count,
+            crate::style::AnimationIterationCount::Infinite
+        ));
+        assert_eq!(e.direction, crate::style::AnimationDirection::Reverse);
+        assert_eq!(e.fill_mode, crate::style::AnimationFillMode::Both);
+        assert_eq!(e.play_state, crate::style::AnimationPlayState::Running);
     }
 }

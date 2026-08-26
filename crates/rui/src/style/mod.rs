@@ -13,6 +13,8 @@ pub(crate) mod cursor_image;
 mod element_style;
 pub mod filter;
 mod focus_ring;
+pub(crate) mod gradient;
+pub mod keyframes;
 pub mod svg_filter;
 mod tailwind_leading;
 mod text_style;
@@ -22,11 +24,12 @@ pub mod transform;
 pub(crate) mod utility;
 
 pub use animation::{
-    advance_css_transition_timeline_ms, any_ui_animation_active, css_transition_needs_frame,
-    cubic_bezier_y_at_x, set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
-    set_css_transition_virtual_timeline, snap_element_transitions_to_current, tick_animations,
-    tick_element_transitions, use_ui_transition_cubic, AnimationTick, CubicTween, CubicTweenState,
-    TransitionSnapshot,
+    advance_css_transition_timeline_ms, any_ui_animation_active, css_animation_needs_frame,
+    css_transition_needs_frame, cubic_bezier_y_at_x, set_css_transition_synthetic_clock,
+    set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+    snap_element_transitions_to_current, tick_animations, tick_element_animations,
+    tick_element_transitions, use_ui_transition_cubic, AnimationBaseline, AnimationRunState,
+    AnimationSnapshot, AnimationTick, CubicTween, CubicTweenState, TransitionSnapshot,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
@@ -39,8 +42,13 @@ pub use cursor::{CursorKind, CursorUrl, CursorValue};
 pub use cursor_image::register_cursor_rgba8;
 pub(crate) use cursor_image::CustomCursorCache;
 pub use element_style::{
-    parse_box_shadow, parse_box_shadows, BorderImageRepeat, BoxShadow, CornerShape, LineStyle,
-    LinearGradient, Style, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
+    parse_box_shadow, parse_box_shadows, AnimationComposition, AnimationDirection, AnimationEntry,
+    AnimationFillMode, AnimationIterationCount, AnimationPlayState, AnimationTimeline,
+    BorderImageRepeat, BoxShadow, CornerShape, LineStyle, Style, TimingFunction, TransitionEntry,
+    TransitionProperty, UnitSlot,
+};
+pub use keyframes::{
+    lookup_keyframes, register_keyframes, sample_keyframes, KeyframeSample, KeyframeStop,
 };
 pub use filter::{
     filter_list_to_css, interpolate_filter_lists, parse_filter, FilterFunction, FilterList,
@@ -50,6 +58,13 @@ pub use focus_ring::{
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
     focus_ring_shadow_matches, focus_ring_shadow_matches_color, sync_focus_ring_subtree,
     FOCUS_RING_BLUR, FOCUS_RING_HARD_SPREAD, FOCUS_RING_SOFT_BLUR,
+};
+pub use gradient::{
+    ensure_gradient_texture, flush_gradient_textures, gradient_texture_radii,
+    gradient_texture_size, parse_gradient, rasterize_gradient, sample_gradient,
+    sample_gradient_in_box, set_gradient_raster_dpi, ColorHint, ColorStop, ConicGradient,
+    Gradient, GradientPosition, LinearGradient, RadialExtent, RadialGradient, RadialShape,
+    RadialSize,
 };
 pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,
@@ -74,10 +89,11 @@ pub use timeline::{
     Timeline, TimelineInner,
 };
 pub use transform::{
-    compute_combined_transform, mat2d_inverse, mat2d_is_identity, mat2d_transform_point,
-    parse_transform, parse_transform_box, parse_transform_origin, parse_transform_style,
-    resolve_transform_matrix, Mat2d, TransformBox, TransformFunction, TransformList,
-    TransformOrigin, TransformOriginX, TransformOriginY, TransformStyle, MAT2D_IDENTITY,
+    compute_combined_transform, mat2d_inverse, mat2d_is_identity, mat2d_linear,
+    mat2d_transform_point, parse_transform, parse_transform_box, parse_transform_origin,
+    parse_transform_style, resolve_transform_matrix, Mat2d, TransformBox, TransformFunction,
+    TransformList, TransformOrigin, TransformOriginX, TransformOriginY, TransformStyle,
+    MAT2D_IDENTITY,
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, class_variant_hover_needs_frame,

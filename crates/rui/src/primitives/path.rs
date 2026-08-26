@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use crate::core::tree::Element;
@@ -760,7 +760,7 @@ pub fn path_quads_from_element_attrs(
 }
 
 const MAX_RASTER_PX: u32 = 1024 * 1024;
-const MAX_RASTER_CACHE: usize = 48;
+const MAX_RASTER_CACHE: usize = 64;
 const MAX_SCENE_STORE: usize = 64;
 
 #[derive(Clone)]
@@ -771,8 +771,16 @@ struct PathScene {
     vb: [f32; 4],
 }
 
+struct PathCpuEntry {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
 thread_local! {
-    static RASTER_CACHE: RefCell<HashMap<u64, ()>> = RefCell::new(HashMap::new());
+    /// CPU rgba cache so TexturePool eviction can rehydrate without re-rasterizing.
+    static RASTER_CPU: RefCell<HashMap<String, PathCpuEntry>> = RefCell::new(HashMap::new());
+    static RASTER_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static SCENE_STORE: RefCell<HashMap<u64, PathScene>> = RefCell::new(HashMap::new());
 }
 
@@ -1212,6 +1220,7 @@ pub(crate) fn paint_path_premul(
 }
 
 /// 光栅并排队 GPU 贴图；相同内容复用 `rui_path:{hash}`。
+/// CPU 像素保留在缓存中，供 [`flush_path_textures`] 在 TexturePool 驱逐后回补。
 pub fn ensure_raster_texture(
     layers: &[(Vec<PathCommand>, PathStyle)],
     markers: &[Point2],
@@ -1241,22 +1250,53 @@ pub fn ensure_raster_texture(
     }
     let key = hasher.finish();
     let tex_id = format!("rui_path:{key:016x}");
-    let mut miss = false;
-    RASTER_CACHE.with(|c| {
+    RASTER_CPU.with(|c| {
         let mut g = c.borrow_mut();
-        if g.len() >= MAX_RASTER_CACHE {
-            g.clear();
-        }
-        if g.insert(key, ()).is_none() {
-            miss = true;
+        if !g.contains_key(&tex_id) {
+            if g.len() >= MAX_RASTER_CACHE {
+                g.clear();
+            }
+            let rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
+            g.insert(
+                tex_id.clone(),
+                PathCpuEntry {
+                    width,
+                    height,
+                    rgba,
+                },
+            );
         }
     });
-    if miss {
-        let rgba = rasterize_layers_rgba(layers, markers, marker_radius, width, height, ssaa);
-        // TexturedQuadPipeline: rect top → uv.y=0, matching this buffer's y-down row order.
-        crate::queue_image_rgba8(tex_id.clone(), width, height, rgba);
-    }
+    RASTER_NEEDED.with(|n| {
+        n.borrow_mut().insert(tex_id.clone());
+    });
     Some(tex_id)
+}
+
+/// Re-queue path rasters that are missing from the GPU pool (after LRU eviction).
+pub fn flush_path_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
+    let needed: Vec<String> = RASTER_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+        .into_iter()
+        .collect();
+    let mut any = false;
+    RASTER_CPU.with(|c| {
+        let map = c.borrow();
+        for key in needed {
+            if has_gpu(&key) {
+                continue;
+            }
+            if let Some(entry) = map.get(&key) {
+                crate::app::pending_images::queue_image_rgba8(
+                    &key,
+                    entry.width,
+                    entry.height,
+                    entry.rgba.clone(),
+                );
+                any = true;
+            }
+        }
+    });
+    any
 }
 
 /// RGBA8 行互换：缓冲顶行 ↔ 底行（仅测试 / 调试用；上传路径不再翻转）。
