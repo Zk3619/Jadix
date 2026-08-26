@@ -4,8 +4,8 @@
 //!
 //! ```text
 //! Tabs                      // Root；horizontal=column / vertical=row
-//! ├── TabsList              // default：bg-muted 圆角条；line：透明 + 底边指示
-//! │   └── TabsTrigger       // 选中：bg-background + shadow-sm（default）
+//! ├── TabsList              // default：bg-muted 圆角条（横向 w-full + wrap）；line：透明 + 底边指示
+//! │   └── TabsTrigger       // 内容宽优先（ContentBox + flex_shrink=0）；选中：bg-background + shadow-sm
 //! └── TabsContent           // 仅当前 value 挂载（宏走 tabs_content：0×0 + Display::None）
 //! ```
 //!
@@ -258,11 +258,24 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     // 单节点 ContentBox：padding 在测宽外侧；文字在完整边框盒上 Center（勿再 paint inset，
     // 否则原点已缩进却仍按边框宽居中 → 严重偏右）。竖直靠 prepare_text 的 dy 居中。
     // 不嵌 Button；勿用「外壳+缩叶子叶」——测宽叶左对齐会相对白底偏右。
+    // 芯片优先内容宽：禁止 flex 均分/挤压（否则窄 TabsList 里字被 padding 吃光）。
     const PAD_X: f32 = 12.0;
     const PAD_Y: f32 = 8.0;
 
     if el.style.box_sizing != taffy::style::BoxSizing::ContentBox {
         el.style.box_sizing = taffy::style::BoxSizing::ContentBox;
+        layout = true;
+    }
+    if (el.style.flex_shrink - 0.0).abs() > f32::EPSILON {
+        el.style.flex_shrink = 0.0;
+        layout = true;
+    }
+    if (el.style.flex_grow - 0.0).abs() > f32::EPSILON {
+        el.style.flex_grow = 0.0;
+        layout = true;
+    }
+    if !el.style.size.width.is_auto() {
+        el.style.size.width = taffy::style::Dimension::auto();
         layout = true;
     }
     if el.style.flex_direction != FlexDirection::Row {
@@ -356,6 +369,7 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
     let selected = ctx.value.peek() == value;
     let (bg, fg) = trigger_colors(selected, disabled, false);
     let mut chip: Element = hstack()
+        .w("auto")
         .px("0.75rem")
         .py("0.5rem")
         .items_center()
@@ -472,6 +486,11 @@ pub fn tabs_scope(
 /// 多个 Content 并排在带 `gap` 的 Tabs 列里时，未选中槽若仍参与 flex / 残留叶测高，
 /// 会在芯片条与当前面板文案之间挤出一整块空白。这里用 `0×0` 壳 + `Display::None`，
 /// 与非宏 [`TabsContent`] 的显隐策略对齐。
+///
+/// 选中分支必须把 `body()` 包进壳层：`reactive_anchor` 会把 fragment 的 `template_id`
+/// 改写成 `{tabs}:content:{value}`。若直接返回 DatePicker / ColorPicker 等
+/// [`crate::app::reactive::reactive_component_live`] 根节点，其 `__view` id 被覆盖后
+/// 内部 effect 在树上找不到锚点，面板永远空着（芯片正常、内容丢失）。
 pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tabs("TabsContent");
     let value = value.into();
@@ -481,10 +500,26 @@ pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'stat
     let effect_anchor = anchor.clone();
     reactive_anchor(effect_anchor, move || {
         if selected.get() == want {
-            body()
+            let mut wrap: Element = vstack()
+                .w("100%")
+                .min_w(0.0)
+                .child(body())
+                .into();
+            wrap.attrs
+                .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+            wrap.attrs
+                .insert(ATTR_TABS_VALUE.to_string(), want.clone());
+            wrap = wrap.accesskit_role("tabpanel");
+            wrap
         } else {
             let mut hidden = Element::new();
             hidden.style.display = Display::None;
+            hidden
+                .attrs
+                .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+            hidden
+                .attrs
+                .insert(ATTR_TABS_VALUE.to_string(), want.clone());
             hidden
         }
     });
@@ -566,15 +601,18 @@ pub fn TabsList(
             .children(kids)
             .into()
     } else {
-        let mut row = hstack().items_center();
+        // 横向：条带吃满父宽并允许折行；芯片自身 w-auto + flex_shrink=0（内容宽优先），
+        // 避免 w(auto)+nowrap 撑出 Card 后被 ScrollArea 裁掉后半段标签。
+        let mut row = hstack().items_center().wrap("wrap");
         row = if line {
             row.gap("0.25rem")
         } else {
-            row.gap(0.0)
+            // 同行仍连体（column gap 0）；折行后略留行距，避免两行芯片贴死。
+            row.column_gap(0.0).row_gap("0.25rem")
         };
-        row.w("auto")
-            .flex_shrink(0.0)
-            .align_self_kw("start")
+        row.w("100%")
+            .min_w(0.0)
+            .max_w("100%")
             .children(kids)
             .into()
     };
@@ -582,7 +620,7 @@ pub fn TabsList(
     if line {
         list = list.bg(parse_color("transparent"));
     } else {
-        // h-fit：高度随芯片；list padding 让选中白底四边略缩。
+        // h-fit：高度随芯片（含折行）；list padding 让选中白底四边略缩。
         list = list
             .h("auto")
             .rounded("0.375rem")
@@ -862,6 +900,16 @@ pub(crate) fn sync_tabs_trigger_subtree(
     impact: &mut LayoutStatus,
 ) {
     if is_tabs_trigger(el) {
+        // Heal frames where radio sync mistakenly nested a Radio Indicator under the chip
+        // (shared `radio_selected_sync` without `rui_radio_value`). That turns the text leaf
+        // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
+        let before = el.children.len();
+        el.children.retain(|c| {
+            c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator")
+        });
+        if el.children.len() != before {
+            *impact = impact.merge(LayoutStatus::StructureChanged);
+        }
         if let Some(sel) = el.radio_selected_sync {
             let item_value = el
                 .attrs
@@ -1130,5 +1178,400 @@ mod tests {
                 taffy::style::Dimension::length(0.0)
             );
         }
+    }
+
+    #[test]
+    fn tabs_chips_prefer_intrinsic_content_width_in_narrow_parent() {
+        let value = use_signal("tabs_intrinsic_w_value", || "sketch".to_string());
+        let labels = [
+            "Sketch",
+            "Chrome",
+            "GitHub",
+            "Twitter",
+            "Material",
+            "Block",
+            "Circle",
+            "Slider",
+            "Compact",
+        ];
+        let scope = tabs_scope(
+            "intrinsic-w",
+            Some(value),
+            "sketch",
+            "horizontal",
+            false,
+            || {
+                let triggers: Vec<_> = labels
+                    .iter()
+                    .map(|lab| {
+                        TabsTrigger(TabsTriggerProps {
+                            value: Some(lab.to_lowercase()),
+                            disabled: None,
+                            children: Some(Element::new().text(*lab)),
+                            base: None,
+                        })
+                    })
+                    .collect();
+                let list = TabsList(TabsListProps {
+                    id: String::new(),
+                    variant: None,
+                    value: None,
+                    default_value: None,
+                    options: None,
+                    children: Some({
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(triggers)
+                    }),
+                    base: None,
+                });
+                let mut root = Element::new();
+                root.set_attr("rui_fragment", "1");
+                root.children(vec![list])
+            },
+        );
+        // Gallery MyCard 形状：窄列 + min_w(0) + padding。
+        let mut root = Element::new().w(360.0).h(240.0).child(
+            Element::new()
+                .w("100%")
+                .min_w(0.0)
+                .p(16.0)
+                .child(scope),
+        );
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 360.0, 240.0, [-1.0, -1.0]);
+
+        fn collect_triggers<'a>(el: &'a Element, out: &mut Vec<&'a Element>) {
+            if is_tabs_trigger(el) {
+                out.push(el);
+            }
+            for c in &el.children {
+                collect_triggers(c, out);
+            }
+        }
+        fn find_list<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LIST) {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_list)
+        }
+        let mut triggers = Vec::new();
+        collect_triggers(&root, &mut triggers);
+        assert_eq!(triggers.len(), labels.len());
+
+        let list = find_list(&root).expect("tabs list");
+        let list_w = list.layout_bounds[2];
+        assert!(
+            list_w <= 360.0 - 16.0 * 2.0 + 1.0,
+            "TabsList must fit parent content (got {list_w})"
+        );
+        assert_eq!(list.style.flex_wrap, taffy::style::FlexWrap::Wrap);
+
+        let mut ys: Vec<i32> = triggers
+            .iter()
+            .map(|t| t.layout_bounds[1].round() as i32)
+            .collect();
+        ys.sort_unstable();
+        ys.dedup();
+        assert!(
+            ys.len() >= 2,
+            "nine content-sized chips in ~328px must wrap to ≥2 rows, ys={ys:?}"
+        );
+
+        for (t, lab) in triggers.iter().zip(labels.iter()) {
+            let w = t.layout_bounds[2];
+            eprintln!(
+                "chip '{lab}' x={:.1} y={:.1} w={w:.1} h={:.1}",
+                t.layout_bounds[0], t.layout_bounds[1], t.layout_bounds[3]
+            );
+            assert!(
+                (t.style.flex_shrink - 0.0).abs() < f32::EPSILON,
+                "{lab}: flex_shrink must stay 0 so content width wins"
+            );
+            assert!(
+                w >= 40.0,
+                "{lab}: chip crushed to {w} — should size to label+padding"
+            );
+            let tn = result
+                .text_nodes
+                .iter()
+                .find(|n| n.text == *lab)
+                .unwrap_or_else(|| panic!("missing text node for {lab}"));
+            assert!(
+                tn.width >= 20.0,
+                "{lab}: painted text width lost ({})",
+                tn.width
+            );
+            // Chip right edge must stay inside the list (no clip / 内容丢失).
+            let chip_r = t.layout_bounds[0] + t.layout_bounds[2];
+            let list_r = list.layout_bounds[0] + list.layout_bounds[2];
+            assert!(
+                chip_r <= list_r + 1.0,
+                "{lab}: chip overflows list (chip_r={chip_r} list_r={list_r})"
+            );
+        }
+
+        // Gallery symptom: all labels stacked at the same x — must not share one origin.
+        let mut xs: Vec<i32> = triggers
+            .iter()
+            .map(|t| t.layout_bounds[0].round() as i32)
+            .collect();
+        xs.sort_unstable();
+        let unique_x = {
+            let mut u = xs.clone();
+            u.dedup();
+            u
+        };
+        assert!(
+            unique_x.len() >= 3,
+            "chips must spread horizontally (or wrap); got xs={xs:?} — gallery overlap bug"
+        );
+        for i in 1..triggers.len() {
+            let a = triggers[i - 1].layout_bounds;
+            let b = triggers[i].layout_bounds;
+            let same_row = (a[1] - b[1]).abs() < 1.0;
+            if same_row {
+                assert!(
+                    b[0] + 0.5 >= a[0] + a[2],
+                    "same-row chips must not overlap: '{}'@x={}w={} vs '{}'@x={}w={}",
+                    labels[i - 1],
+                    a[0],
+                    a[2],
+                    labels[i],
+                    b[0],
+                    b[2]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn radio_sync_must_not_nest_indicator_under_tabs_trigger() {
+        // TabsTrigger reuses `radio_selected_sync` for the selected value signal but is not a
+        // Radio control (no `rui_radio_value`). Global radio sync must not inject the size-4
+        // Indicator — that destroys the text leaf and piles chip labels at x≈0 in gallery.
+        let value = use_signal("tabs_radio_sync_guard", || "date".to_string());
+        let mut el = tabs_scope(
+            "radio-guard",
+            Some(value),
+            "date",
+            "horizontal",
+            false,
+            || {
+                let list = TabsList(TabsListProps {
+                    id: String::new(),
+                    variant: None,
+                    value: None,
+                    default_value: None,
+                    options: None,
+                    children: Some({
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(vec![
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("date".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("Date")),
+                                base: None,
+                            }),
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("datetime".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("DateTime")),
+                                base: None,
+                            }),
+                            TabsTrigger(TabsTriggerProps {
+                                value: Some("time".into()),
+                                disabled: None,
+                                children: Some(Element::new().text("Time")),
+                                base: None,
+                            }),
+                        ])
+                    }),
+                    base: None,
+                });
+                let mut root = Element::new();
+                root.set_attr("rui_fragment", "1");
+                root.children(vec![list])
+            },
+        );
+
+        let mut layout_tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        crate::components::radio_group::sync_radio_checked_subtree(
+            &mut el,
+            &mut layout_tree,
+            &mut impact,
+        );
+        sync_tabs_trigger_subtree(&mut el, &mut layout_tree, &mut impact);
+
+        fn collect_triggers<'a>(node: &'a Element, out: &mut Vec<&'a Element>) {
+            if is_tabs_trigger(node) {
+                out.push(node);
+            }
+            for c in &node.children {
+                collect_triggers(c, out);
+            }
+        }
+        let mut triggers = Vec::new();
+        collect_triggers(&el, &mut triggers);
+        assert_eq!(triggers.len(), 3);
+        for t in &triggers {
+            assert!(
+                t.children.iter().all(|c| {
+                    c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator")
+                }),
+                "TabsTrigger must stay a text leaf — radio Indicator would crush content width"
+            );
+            assert!(
+                t.text.as_deref().is_some_and(|s| !s.is_empty()),
+                "chip label must remain on the trigger element"
+            );
+        }
+
+        let mut root = Element::new().w(480.0).h(80.0).child(el);
+        let _ = layout_tree.build_and_layout(&mut root, 480.0, 80.0, [-1.0, -1.0]);
+        let mut laid = Vec::new();
+        collect_triggers(&root, &mut laid);
+        let mut xs: Vec<f32> = laid.iter().map(|t| t.layout_bounds[0]).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            (xs[2] - xs[0]).abs() > 40.0,
+            "after radio+tabs sync, chips must still spread (xs={xs:?})"
+        );
+        for w in laid.windows(2) {
+            let a = w[0].layout_bounds;
+            let b = w[1].layout_bounds;
+            if (a[1] - b[1]).abs() < 1.0 {
+                assert!(
+                    b[0] + 0.5 >= a[0] + a[2].min(8.0),
+                    "chips must not pile: {:?} vs {:?}",
+                    a,
+                    b
+                );
+            }
+        }
+    }
+
+    /// Gallery pickers/color-picker: chips OK but panel empty when tabs_content stole
+    /// nested `reactive_component_live` `template_id` (reconcile then miss forever).
+    #[test]
+    fn tabs_content_preserves_nested_reactive_component_anchor() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::reactive::{reactive_component_live, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let root: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&root));
+
+        let (handle, ()) = create_root(|| {
+            let root_e = Rc::clone(&root);
+            create_effect(move || {
+                let el = tabs_scope(
+                    "tc-nest",
+                    None,
+                    "date",
+                    "horizontal",
+                    false,
+                    || {
+                        tabs_content("date", || {
+                            reactive_component_live("tc-nest-picker__view", (), |_| {
+                                Element::new().text("Pick a date")
+                            })
+                        })
+                    },
+                );
+                *root_e.borrow_mut() = el;
+            });
+        });
+
+        fn find_tid(el: &Element, want: &str) -> bool {
+            if el.template_id.as_deref() == Some(want) {
+                return true;
+            }
+            el.children.iter().any(|c| find_tid(c, want))
+        }
+        fn find_text(el: &Element, want: &str) -> bool {
+            if el.text.as_deref() == Some(want) {
+                return true;
+            }
+            el.children.iter().any(|c| find_text(c, want))
+        }
+
+        {
+            let tree = root.borrow();
+            assert!(
+                find_tid(&tree, "tc-nest:content:date"),
+                "tabs content slot must remain the outer shell"
+            );
+            assert!(
+                find_tid(&tree, "tc-nest-picker__view"),
+                "nested reactive_component template_id must not be overwritten by tabs_content"
+            );
+            assert!(
+                find_text(&tree, "Pick a date"),
+                "nested component body must mount (panel must not stay empty)"
+            );
+        }
+
+        handle.dispose();
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn tabs_sync_strips_stray_radio_indicator_from_trigger() {
+        let value = use_signal("tabs_strip_indicator", || "a".to_string());
+        let mut el = tabs_scope(
+            "strip-ind",
+            Some(value),
+            "a",
+            "horizontal",
+            false,
+            || {
+                TabsTrigger(TabsTriggerProps {
+                    value: Some("a".into()),
+                    disabled: None,
+                    children: Some(Element::new().text("Alpha")),
+                    base: None,
+                })
+            },
+        );
+        fn find_trigger_mut(el: &mut Element) -> Option<&mut Element> {
+            if is_tabs_trigger(el) {
+                return Some(el);
+            }
+            for c in &mut el.children {
+                if let Some(t) = find_trigger_mut(c) {
+                    return Some(t);
+                }
+            }
+            None
+        }
+        let trigger = find_trigger_mut(&mut el).expect("trigger");
+        let mut ind = Element::new().w(16.0).h(16.0);
+        ind.attrs
+            .insert("data-slot".into(), "radio-indicator".into());
+        trigger.children.insert(0, ind);
+        assert_eq!(trigger.children.len(), 1);
+
+        let mut layout_tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_tabs_trigger_subtree(&mut el, &mut layout_tree, &mut impact);
+        assert!(matches!(
+            impact,
+            LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+        ));
+        let trigger = find_trigger_mut(&mut el).expect("trigger");
+        assert!(
+            trigger.children.is_empty(),
+            "tabs sync must remove stray radio Indicator so text leaf measure returns"
+        );
     }
 }

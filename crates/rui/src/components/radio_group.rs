@@ -551,7 +551,10 @@ pub(crate) fn sync_radio_checked_subtree(
     if let Some(sel) = el.radio_selected_sync {
         if !sel.is_alive() {
             el.radio_selected_sync = None;
-        } else {
+        } else if el.attrs.get(ATTR_RADIO_VALUE).is_some() {
+            // TabsTrigger / 菜单外复用 `radio_selected_sync` 只表示选中值，没有
+            // `rui_radio_value`。若仍走本分支会插入 size-4 Indicator，毁掉文案叶测宽，
+            // gallery TabsList 芯片会全部挤在左侧重叠（内容宽变成圆点宽）。
             let item_value = el
                 .attrs
                 .get(ATTR_RADIO_VALUE)
