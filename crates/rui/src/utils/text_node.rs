@@ -75,6 +75,40 @@ pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Elem
 }
 
 /// Lucide 图标字形节点（与宏 `<Icon>` 默认行为一致）。
+///
+/// 默认字色为主题 `foreground`（对齐 Tailwind v4 `text-foreground`），避免
+/// [`TextStyle::default`] 的白色在浅色底上看不见。
 pub fn build_icon_text_node(glyph: impl Into<String>) -> Element {
-    Element::new().font_family("lucide").text(glyph.into())
+    Element::new()
+        .font_family("lucide")
+        .text(glyph.into())
+        .text_color(parse_text_color("foreground"))
+        // SVG-only MDN keyword：命中自身布局盒（容器）。
+        .pointer_events("bounding-box")
+}
+
+/// Like [`build_icon_text_node`] plus `rui_icon_name` for SVG path lookup on spin.
+pub fn build_named_icon_text_node(name: impl AsRef<str>, glyph: impl Into<String>) -> Element {
+    let mut el = build_icon_text_node(glyph);
+    el.set_attr(crate::utils::ATTR_ICON_NAME, name.as_ref());
+    // Icon 叶：默认命中自身布局盒（MDN SVG `bounding-box`）。
+    // 显式 `pointer-events="none"` / 其他值仍可覆盖。
+    el
+}
+
+#[cfg(test)]
+mod icon_defaults_tests {
+    use super::*;
+    use crate::core::tree::PointerEvents;
+
+    #[test]
+    fn icon_defaults_to_text_foreground() {
+        let el = build_icon_text_node("\u{ea0e}");
+        let fg = parse_text_color("foreground");
+        assert_eq!(el.text_style.color, fg);
+        assert_eq!(el.text_style.font_family.as_deref(), Some("lucide"));
+        assert_eq!(el.pointer_events_mode(), PointerEvents::BoundingBox);
+        assert!(el.pointer_events_mode().is_svg_only());
+        assert!(el.pointer_events_mode().targets_self());
+    }
 }

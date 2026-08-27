@@ -519,6 +519,22 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
+        // Number input 增减触发器长按连发。
+        if crate::components::input::tick_number_step_hold() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+        if let Some(wake) = crate::components::input::number_step_hold_next_wake_at() {
+            if wake <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
         for sec in self.secondaries.borrow().values() {
             if let Some(at) = sec.ime_os_blur_at {
                 if at <= now {

@@ -62,21 +62,99 @@ fn expr_as_bool_compat(value: &Expr) -> Option<bool> {
 }
 
 fn is_svg_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "svg"
-            | "Svg"
-            | "circle"
-            | "Circle"
-            | "path"
-            | "Path"
-            | "rect"
-            | "line"
-            | "Line"
-            | "polyline"
-            | "Polyline"
-            | "g"
-    )
+    svg_tag_canonical(name).is_some()
+}
+
+/// Map RSX tag → canonical SVG element name (excludes script / foreignObject).
+fn svg_tag_canonical(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "svg" | "Svg" => "svg",
+        "defs" | "Defs" => "defs",
+        "use" | "Use" => "use",
+        "clipPath" | "ClipPath" => "clipPath",
+        "linearGradient" | "LinearGradient" => "linearGradient",
+        "radialGradient" | "RadialGradient" => "radialGradient",
+        "symbol" | "Symbol" => "symbol",
+        "stop" | "Stop" => "stop",
+        "animate" | "Animate" => "animate",
+        "animateTransform" | "AnimateTransform" => "animateTransform",
+        "animateMotion" | "AnimateMotion" => "animateMotion",
+        "mpath" | "Mpath" | "MPath" => "mpath",
+        "set" | "Set" => "set",
+        "circle" | "Circle" => "circle",
+        "ellipse" | "Ellipse" => "ellipse",
+        "path" | "Path" => "path",
+        "rect" | "Rect" => "rect",
+        "line" | "Line" => "line",
+        "polyline" | "Polyline" => "polyline",
+        "polygon" | "Polygon" => "polygon",
+        "g" => "g",
+        // Lowercase-only where PascalCase is a UI component (`Text`/`Image`/`Switch`/…).
+        "text" => "text",
+        "tspan" | "Tspan" | "TSpan" => "tspan",
+        "textPath" | "TextPath" => "textPath",
+        "image" => "image",
+        "mask" | "Mask" => "mask",
+        "pattern" | "Pattern" => "pattern",
+        "marker" | "Marker" => "marker",
+        "filter" | "Filter" => "filter",
+        "title" | "Title" => "title",
+        "desc" | "Desc" => "desc",
+        "metadata" | "Metadata" => "metadata",
+        "switch" => "switch",
+        "a" => "a",
+        "view" => "view",
+        "style" => "style",
+        "feBlend" | "FeBlend" => "feBlend",
+        "feColorMatrix" | "FeColorMatrix" => "feColorMatrix",
+        "feComponentTransfer" | "FeComponentTransfer" => "feComponentTransfer",
+        "feComposite" | "FeComposite" => "feComposite",
+        "feConvolveMatrix" | "FeConvolveMatrix" => "feConvolveMatrix",
+        "feDiffuseLighting" | "FeDiffuseLighting" => "feDiffuseLighting",
+        "feDisplacementMap" | "FeDisplacementMap" => "feDisplacementMap",
+        "feDistantLight" | "FeDistantLight" => "feDistantLight",
+        "feDropShadow" | "FeDropShadow" => "feDropShadow",
+        "feFlood" | "FeFlood" => "feFlood",
+        "feFuncA" | "FeFuncA" => "feFuncA",
+        "feFuncB" | "FeFuncB" => "feFuncB",
+        "feFuncG" | "FeFuncG" => "feFuncG",
+        "feFuncR" | "FeFuncR" => "feFuncR",
+        "feGaussianBlur" | "FeGaussianBlur" => "feGaussianBlur",
+        "feImage" | "FeImage" => "feImage",
+        "feMerge" | "FeMerge" => "feMerge",
+        "feMergeNode" | "FeMergeNode" => "feMergeNode",
+        "feMorphology" | "FeMorphology" => "feMorphology",
+        "feOffset" | "FeOffset" => "feOffset",
+        "fePointLight" | "FePointLight" => "fePointLight",
+        "feSpecularLighting" | "FeSpecularLighting" => "feSpecularLighting",
+        "feSpotLight" | "FeSpotLight" => "feSpotLight",
+        "feTile" | "FeTile" => "feTile",
+        "feTurbulence" | "FeTurbulence" => "feTurbulence",
+        _ => return None,
+    })
+}
+
+fn svg_attr_emit_name(attr: &str) -> String {
+    match attr {
+        "xlink_href" => "xlink:href".to_string(),
+        other => other.replace('_', "-"),
+    }
+}
+
+/// After the first attr Ident, consume `-ident` segments (HTML kebab) and return a
+/// Rust-friendly name (`stroke-width` → `stroke_width`).
+fn finish_kebab_attr_name(input: ParseStream, first: Ident) -> syn::Result<Ident> {
+    if !input.peek(Token![-]) {
+        return Ok(first);
+    }
+    let span = first.span();
+    let mut parts = vec![first.to_string()];
+    while input.peek(Token![-]) {
+        input.parse::<Token![-]>()?;
+        let next: Ident = input.parse()?;
+        parts.push(next.to_string());
+    }
+    Ok(Ident::new(&parts.join("_"), span))
 }
 
 fn is_canvas_tag(name: &str) -> bool {
@@ -89,6 +167,8 @@ fn is_boolish_attr(name: &str) -> bool {
         "clearable"
             | "password_toggle"
             | "passwordToggle"
+            | "number_steppers"
+            | "numberSteppers"
             | "disabled"
             | "invalid"
             | "absolute"
@@ -96,6 +176,8 @@ fn is_boolish_attr(name: &str) -> bool {
             | "checked"
             | "open"
             | "active"
+            | "is_active"
+            | "isActive"
             | "required"
             | "readonly"
             | "read_only"
@@ -218,9 +300,10 @@ impl Parse for RsxNode {
                 })?;
                 proc_macro2::Ident::new_raw("for", proc_macro2::Span::call_site())
             } else {
-                input
+                let first: Ident = input
                     .parse()
-                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?
+                    .map_err(|e| syn::Error::new(e.span(), format!("Failed at attr_name {}", e)))?;
+                finish_kebab_attr_name(input, first)?
             };
             input.parse::<Token![=]>().map_err(|e| {
                 syn::Error::new(e.span(), format!("Failed at = after attr {}", attr_name))
@@ -782,6 +865,8 @@ fn expand_node(
                 name_str.as_str(),
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
+            // 复合壳若只需 `*Props`（无 scope）：Pagination / Navbar / Badge / Card 等走下方
+            // 通用 PascalCase 展开，勿加入本特殊列表。
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
@@ -808,6 +893,9 @@ fn expand_node(
                 || name_str == "MenubarSub"
                 || name_str == "MenubarSubContent"
                 || name_str == "MenubarRadioGroup"
+                || name_str == "NavigationMenu"
+                || name_str == "NavigationMenuItem"
+                || name_str == "NavigationMenuContent"
                 || select_is_compound
                 || name_str == "SelectContent"
                 || combobox_is_compound
@@ -1203,6 +1291,94 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::menubar_scope(#id_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "NavigationMenu" {
+                    let id_expr = get_attr("id");
+                    let viewport_expr = get_attr("viewport");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:NavigationMenu#{}", file!(), line!(), #idx) }
+                    };
+                    let viewport_ts = if let Some(v) = viewport_expr {
+                        quote! {
+                            {
+                                let __v = (#v);
+                                let __s = format!("{}", __v).to_ascii_lowercase();
+                                !(__s == "false" || __s == "0" || __s == "no" || __s == "off")
+                            }
+                        }
+                    } else {
+                        quote! { true }
+                    };
+                    return quote! {
+                        rui::components::navigation_menu_scope(#id_ts, #viewport_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "NavigationMenuItem" {
+                    let value_expr = get_attr("value");
+                    let class_expr = get_attr("class");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let value_ts = if let Some(v) = value_expr {
+                        quote! { Some((#v).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::navigation_menu_item(#value_ts, #class_ts, || #child_el)
                     };
                 }
 
@@ -2233,6 +2409,42 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "NavigationMenuContent" {
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::navigation_menu_content(
+                            rui::components::NavigationMenuContentOpts {
+                                class: #class,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "ContextMenuSubContent" {
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
@@ -3025,18 +3237,51 @@ fn expand_node(
                     "HStack",
                     "GStack",
                     "Grid",
-                    "Rect",
                     "Icon",
+                    "AnimatedIcon",
                     "Box",
+                    "Div",
                     "Text",
                     "Interactive",
                     "Svg",
                     "Circle",
+                    "Ellipse",
                     "Path",
+                    "Rect",
                     "Line",
                     "Polyline",
+                    "Polygon",
                     "Canvas",
                     "Scene3d",
+                    "Defs",
+                    "Use",
+                    "ClipPath",
+                    "LinearGradient",
+                    "RadialGradient",
+                    "Symbol",
+                    "Stop",
+                    "Animate",
+                    "AnimateTransform",
+                    "AnimateMotion",
+                    "Set",
+                    "Mask",
+                    "Pattern",
+                    "Marker",
+                    "Filter",
+                    "Title",
+                    "Desc",
+                    "Metadata",
+                    "Tspan",
+                    "TSpan",
+                    "TextPath",
+                    "FeGaussianBlur",
+                    "FeDropShadow",
+                    "FeOffset",
+                    "FeBlend",
+                    "FeColorMatrix",
+                    "FeFlood",
+                    "FeMerge",
+                    "FeMergeNode",
                 ]
                 .contains(&name_str.as_str());
 
@@ -3769,6 +4014,12 @@ fn expand_node(
                                 "ariaInvalid" | "aria_invalid" => {
                                     syn::Ident::new("invalid", attr.span())
                                 }
+                                "passwordToggle" => {
+                                    syn::Ident::new("password_toggle", attr.span())
+                                }
+                                "numberSteppers" => {
+                                    syn::Ident::new("number_steppers", attr.span())
+                                }
                                 // Calendar / DatePicker / ColorPicker / Command（Aria + Reader）
                                 "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
                                 "valueSignal" => syn::Ident::new("value_signal", attr.span()),
@@ -3954,20 +4205,72 @@ fn expand_node(
                     "HStack" => quote! { rui::primitives::hstack() },
                     // Grid 为 GStack 的 HTML/Solid 风格别名。
                     "GStack" | "Grid" => quote! { rui::primitives::gstack() },
-                    "Box" | "Rect" => quote! { rui::primitives::r#box() },
+                    // Layout container (HTML-ish). `Rect` is SVG — use `<div>` / `<Div>` / `<Box>`.
+                    "Box" | "Div" | "div" => quote! { rui::primitives::div() },
                     "Interactive" => {
                         quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
                     }
                     "Text" => quote! { rui::primitives::text("") },
                     "svg" | "Svg" => quote! { rui::primitives::svg() },
                     "circle" | "Circle" => quote! { rui::primitives::svg::circle() },
+                    "ellipse" | "Ellipse" => quote! { rui::primitives::svg::ellipse() },
                     "path" | "Path" => quote! { rui::primitives::svg::path() },
-                    "rect" => quote! { rui::primitives::svg::rect() },
+                    "rect" | "Rect" => quote! { rui::primitives::svg::rect() },
                     "line" | "Line" => quote! { rui::primitives::svg::line() },
                     "polyline" | "Polyline" => quote! { rui::primitives::svg::polyline() },
+                    "polygon" | "Polygon" => quote! { rui::primitives::svg::polygon() },
                     "g" => quote! { rui::primitives::svg::g() },
+                    "defs" | "Defs" => quote! { rui::primitives::svg::defs() },
+                    "use" | "Use" => quote! { rui::primitives::svg::svg_use() },
+                    "clipPath" | "ClipPath" => quote! { rui::primitives::svg::clip_path() },
+                    "linearGradient" | "LinearGradient" => {
+                        quote! { rui::primitives::svg::linear_gradient() }
+                    }
+                    "radialGradient" | "RadialGradient" => {
+                        quote! { rui::primitives::svg::radial_gradient() }
+                    }
+                    "symbol" | "Symbol" => quote! { rui::primitives::svg::symbol() },
+                    "stop" | "Stop" => quote! { rui::primitives::svg::stop() },
+                    "animate" | "Animate" => quote! { rui::primitives::svg::animate() },
+                    "animateTransform" | "AnimateTransform" => {
+                        quote! { rui::primitives::svg::animate_transform() }
+                    }
+                    "animateMotion" | "AnimateMotion" => {
+                        quote! { rui::primitives::svg::animate_motion() }
+                    }
+                    "mpath" | "Mpath" | "MPath" => quote! { rui::primitives::svg::mpath() },
+                    "set" | "Set" => quote! { rui::primitives::svg::set_el() },
+                    "text" => quote! { rui::primitives::svg::svg_text() },
+                    "tspan" | "Tspan" | "TSpan" => quote! { rui::primitives::svg::tspan() },
+                    "textPath" | "TextPath" => quote! { rui::primitives::svg::text_path() },
+                    "image" => quote! { rui::primitives::svg::image() },
+                    "mask" | "Mask" => quote! { rui::primitives::svg::mask() },
+                    "pattern" | "Pattern" => quote! { rui::primitives::svg::pattern() },
+                    "marker" | "Marker" => quote! { rui::primitives::svg::marker() },
+                    "filter" | "Filter" => quote! { rui::primitives::svg::filter() },
+                    "title" | "Title" => quote! { rui::primitives::svg::title() },
+                    "desc" | "Desc" => quote! { rui::primitives::svg::desc() },
+                    "feGaussianBlur" | "FeGaussianBlur" => {
+                        quote! { rui::primitives::svg::fe_gaussian_blur() }
+                    }
+                    "feDropShadow" | "FeDropShadow" => {
+                        quote! { rui::primitives::svg::fe_drop_shadow() }
+                    }
+                    "feOffset" | "FeOffset" => quote! { rui::primitives::svg::fe_offset() },
+                    "feBlend" | "FeBlend" => quote! { rui::primitives::svg::fe_blend() },
+                    "feColorMatrix" | "FeColorMatrix" => {
+                        quote! { rui::primitives::svg::fe_color_matrix() }
+                    }
+                    "feFlood" | "FeFlood" => quote! { rui::primitives::svg::fe_flood() },
+                    "feMerge" | "FeMerge" => quote! { rui::primitives::svg::fe_merge() },
+                    "feMergeNode" | "FeMergeNode" => {
+                        quote! { rui::primitives::svg::fe_merge_node() }
+                    }
                     "canvas" | "Canvas" => quote! { rui::primitives::canvas() },
                     "scene3d" | "Scene3d" => quote! { rui::primitives::scene3d() },
+                    other if let Some(tag) = svg_tag_canonical(other) => {
+                        quote! { rui::primitives::svg::svg_el(#tag) }
+                    }
                     _ => quote! { rui::core::tree::Element::new() },
                 }
             };
@@ -3975,6 +4278,7 @@ fn expand_node(
             let mut pending_icon_bind: Option<proc_macro2::TokenStream> = None;
             if name_str == "Icon" {
                 let mut icon_code = "ea0e".to_string(); // fallback to an album icon
+                let mut static_icon_name: Option<String> = None;
                 let mut dynamic_name: Option<&syn::Expr> = None;
                 for (attr, value) in &el.attributes {
                     if *attr == "name" {
@@ -3994,6 +4298,7 @@ fn expand_node(
                                 .get_or_init(|| serde_json::from_str(json_str).unwrap_or_default());
                             if let Some(code) = map.get(&name_str) {
                                 icon_code = code.clone();
+                                static_icon_name = Some(name_str);
                             } else {
                                 panic!(
                                     "Icon '{}' not found in lucide.json. Ensure the name is correct.",
@@ -4010,12 +4315,13 @@ fn expand_node(
                     // Initial glyph via untrack; subsequent updates via bind_attr.
                     element = quote! {
                         {
-                            let __glyph = rui::core::reactivity::untrack(|| {
+                            let (__glyph, __n) = rui::core::reactivity::untrack(|| {
                                 let __n = (#name_expr).to_string();
-                                rui::utils::lucide_glyph(__n.as_str())
-                                    .unwrap_or_else(|| "\u{ea0e}".to_string())
+                                let __g = rui::utils::lucide_glyph(__n.as_str())
+                                    .unwrap_or_else(|| "\u{ea0e}".to_string());
+                                (__g, __n)
                             });
-                            rui::utils::text_node::build_icon_text_node(__glyph)
+                            rui::utils::text_node::build_named_icon_text_node(__n, __glyph)
                         }
                     };
                     pending_icon_bind = Some(quote! {
@@ -4030,8 +4336,61 @@ fn expand_node(
                     && let Some(c) = std::char::from_u32(cp)
                 {
                     let c_str = c.to_string();
-                    element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
+                    if let Some(ref iname) = static_icon_name {
+                        element = quote! {
+                            rui::utils::text_node::build_named_icon_text_node(#iname, #c_str)
+                        };
+                    } else {
+                        element = quote! { rui::utils::text_node::build_icon_text_node(#c_str) };
+                    }
                 }
+            }
+
+            if name_str == "AnimatedIcon" {
+                let mut name_ts = quote! { "heart" };
+                let mut size_ts = quote! { 24.0_f32 };
+                let mut controlled_ts = quote! { false };
+                let mut pointer_events_ts: Option<proc_macro2::TokenStream> = None;
+                for (attr, value) in &el.attributes {
+                    match attr.to_string().as_str() {
+                        "name" => {
+                            if let syn::Expr::Lit(expr_lit) = value
+                                && let syn::Lit::Str(lit_str) = &expr_lit.lit
+                            {
+                                let n = lit_str.value();
+                                name_ts = quote! { #n };
+                            } else {
+                                name_ts = quote! { (#value).to_string() };
+                            }
+                        }
+                        "size" => {
+                            size_ts = quote! { rui::core::tree::IntoF32::into_f32(#value) };
+                        }
+                        "controlled" => {
+                            controlled_ts = quote! { #value };
+                        }
+                        "pointer_events" | "pointerEvents" | "pointer-events" => {
+                            pointer_events_ts = Some(quote! { #value });
+                        }
+                        _ => {}
+                    }
+                }
+                let pe_chain = if let Some(pe) = pointer_events_ts {
+                    quote! { __b = __b.pointer_events(#pe); }
+                } else {
+                    quote! {}
+                };
+                element = quote! {
+                    {
+                        let mut __b = rui::utils::animated_icon(#name_ts)
+                            .size_px(#size_ts);
+                        if #controlled_ts {
+                            __b = __b.controlled(true);
+                        }
+                        #pe_chain
+                        rui::core::tree::Element::from(__b)
+                    }
+                };
             }
 
             let mut utility_calls: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -4077,7 +4436,8 @@ fn expand_node(
                         "ScrollArea"
                             | "ScrollViewport"
                             | "Box"
-                            | "Rect"
+                            | "Div"
+                            | "div"
                             | "VStack"
                             | "HStack"
                             | "GStack"
@@ -4107,6 +4467,14 @@ fn expand_node(
                         }
                         "r" => {
                             element = quote! { #element.r(#value) };
+                            continue;
+                        }
+                        "rx" => {
+                            element = quote! { #element.rx(#value) };
+                            continue;
+                        }
+                        "ry" => {
+                            element = quote! { #element.ry(#value) };
                             continue;
                         }
                         "d" => {
@@ -4153,6 +4521,74 @@ fn expand_node(
                             element = quote! { #element.stroke_width(#value) };
                             continue;
                         }
+                        "stroke_linecap" | "strokeLinecap" => {
+                            element = quote! { #element.stroke_linecap(#value) };
+                            continue;
+                        }
+                        "stroke_linejoin" | "strokeLinejoin" => {
+                            element = quote! { #element.stroke_linejoin(#value) };
+                            continue;
+                        }
+                        "fill_rule" | "fillRule" => {
+                            element = quote! { #element.fill_rule(#value) };
+                            continue;
+                        }
+                        "id" => {
+                            element = quote! { #element.id(#value) };
+                            continue;
+                        }
+                        "clip_path" | "clipPath" => {
+                            element = quote! { #element.clip_path(#value) };
+                            continue;
+                        }
+                        "href" | "xlink:href" => {
+                            element = quote! { #element.href(#value) };
+                            continue;
+                        }
+                        "offset" => {
+                            element = quote! { #element.offset(#value) };
+                            continue;
+                        }
+                        "stop_color" | "stopColor" => {
+                            element = quote! { #element.stop_color(#value) };
+                            continue;
+                        }
+                        "stop_opacity" | "stopOpacity" => {
+                            element = quote! { #element.stop_opacity(#value) };
+                            continue;
+                        }
+                        "gradient_units" | "gradientUnits" => {
+                            element = quote! { #element.gradient_units(#value) };
+                            continue;
+                        }
+                        "attribute_name" | "attributeName" => {
+                            element = quote! { #element.attribute_name(#value) };
+                            continue;
+                        }
+                        "from" => {
+                            element = quote! { #element.from_val(#value) };
+                            continue;
+                        }
+                        "to" => {
+                            element = quote! { #element.to_val(#value) };
+                            continue;
+                        }
+                        "dur" => {
+                            element = quote! { #element.dur(#value) };
+                            continue;
+                        }
+                        "repeat_count" | "repeatCount" => {
+                            element = quote! { #element.repeat_count(#value) };
+                            continue;
+                        }
+                        "begin" => {
+                            element = quote! { #element.begin(#value) };
+                            continue;
+                        }
+                        "type" => {
+                            element = quote! { #element.anim_type(#value) };
+                            continue;
+                        }
                         "transform" => {
                             element = quote! { #element.transform(#value) };
                             continue;
@@ -4161,7 +4597,46 @@ fn expand_node(
                             element = quote! { #element.opacity(#value) };
                             continue;
                         }
-                        _ => {}
+                        "font_size" | "fontSize" => {
+                            element = quote! { #element.font_size(#value) };
+                            continue;
+                        }
+                        "text_anchor" | "textAnchor" => {
+                            element = quote! { #element.text_anchor(#value) };
+                            continue;
+                        }
+                        "fill_opacity" | "fillOpacity" => {
+                            element = quote! { #element.fill_opacity(#value) };
+                            continue;
+                        }
+                        "stroke_opacity" | "strokeOpacity" => {
+                            element = quote! { #element.stroke_opacity(#value) };
+                            continue;
+                        }
+                        "stroke_dasharray" | "strokeDasharray" => {
+                            element = quote! { #element.stroke_dasharray(#value) };
+                            continue;
+                        }
+                        "mask" => {
+                            element = quote! { #element.mask_attr(#value) };
+                            continue;
+                        }
+                        "filter" => {
+                            element = quote! { #element.filter_attr(#value) };
+                            continue;
+                        }
+                        _ => {
+                            // `svg` root uses SvgBuilder (w/h/…), not SvgShapeBuilder::attr.
+                            if matches!(name_str.as_str(), "svg" | "Svg") {
+                                // fall through to general attribute handlers
+                            } else {
+                                let emit_name = svg_attr_emit_name(&attr_str);
+                                element = quote! {
+                                    #element.attr(#emit_name, (#value).to_string())
+                                };
+                                continue;
+                            }
+                        }
                     }
                 }
                 if is_canvas_tag(&name_str) && attr_str.as_str() == "paint" {
@@ -4571,12 +5046,16 @@ fn expand_node(
                         }
                     }
                     "size" => {
-                        if is_custom || name_str == "Button" || name_str == "Input" {
+                        if name_str == "AnimatedIcon" {
+                            // Consumed by AnimatedIcon pre-pass (builder size_px).
+                        } else if is_custom || name_str == "Button" || name_str == "Input" {
                             element = quote! { #element.size(#value) }
                         } else {
                             element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
                         }
                     }
+                    "controlled" if name_str == "AnimatedIcon" => {}
+                    "pointer_events" | "pointerEvents" | "pointer-events" if name_str == "AnimatedIcon" => {}
                     "text_size" | "font_size" => {
                         element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
@@ -4880,7 +5359,7 @@ fn expand_node(
                     }
                     // Consumed by a dedicated pre-pass above, so reaching the fallback here would
                     // be a false "unknown attribute" report.
-                    "name" if name_str == "Icon" => {}
+                    "name" if name_str == "Icon" || name_str == "AnimatedIcon" => {}
                     _ => {
                         if expr_reads_get(value) {
                             let idx = *node_counter;
@@ -4913,6 +5392,44 @@ fn expand_node(
 
             for child in &el.children {
                 match child {
+                    RsxNode::Expr(expr)
+                        if is_svg_tag(&name_str) && name_str != "svg" && name_str != "Svg" =>
+                    {
+                        let text_tags = matches!(
+                            name_str.as_str(),
+                            "text"
+                                | "tspan"
+                                | "Tspan"
+                                | "TSpan"
+                                | "textPath"
+                                | "TextPath"
+                                | "title"
+                                | "Title"
+                                | "desc"
+                                | "Desc"
+                        );
+                        let is_str_lit = matches!(
+                            expr,
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Str(_),
+                                ..
+                            })
+                        );
+                        if is_str_lit {
+                            element = quote! { #element.text_content(#expr) };
+                        } else if text_tags {
+                            element = quote! { #element.text_content((#expr).to_string()) };
+                        } else {
+                            let expanded_child =
+                                expand_node(child, node_counter, in_reactive_boundary);
+                            element = quote! {
+                                {
+                                    use rui::core::tree::IntoElementList;
+                                    #element.children((#expanded_child).into_element_list())
+                                }
+                            };
+                        }
+                    }
                     RsxNode::Expr(_expr) => {
                         let expanded_child = expand_node(child, node_counter, in_reactive_boundary);
                         element = quote! {
@@ -5078,20 +5595,20 @@ mod rsx_lowering_tests {
     #[test]
     fn match_when_emits_match_when_reactive() {
         let s = expand(
-            r#"<Match fallback={fallback}><MatchArm when={ok.get()}><Rect></Rect></MatchArm></Match>"#,
+            r#"<Match fallback={fallback}><MatchArm when={ok.get()}><div></div></MatchArm></Match>"#,
         );
         assert!(s.contains("match_when_reactive"), "{s}");
     }
 
     #[test]
     fn reactive_island_emits_bind_text() {
-        let s = expand(r#"<Reactive id={"isle"}><Rect>{ label.get() }</Rect></Reactive>"#);
+        let s = expand(r#"<Reactive id={"isle"}><div>{ label.get() }</div></Reactive>"#);
         assert!(s.contains("bind_text"), "{s}");
     }
 
     #[test]
     fn unknown_attr_emits_bind_attr() {
-        let s = expand("<Rect data_status={status.get()} />");
+        let s = expand("<div data_status={status.get()} />");
         assert!(s.contains("bind_attr"), "{s}");
         assert!(s.contains("apply_bound_attr"), "{s}");
     }
@@ -5099,7 +5616,7 @@ mod rsx_lowering_tests {
     #[test]
     fn animation_play_state_get_emits_bind_prop() {
         let s = expand(
-            r#"<Rect animation="1s linear infinite spin" animation_play_state={ if play.get() { "running" } else { "paused" } } />"#,
+            r#"<div animation="1s linear infinite spin" animation_play_state={ if play.get() { "running" } else { "paused" } } />"#,
         );
         assert!(s.contains("bind_prop"), "{s}");
         assert!(s.contains("apply_bound_animation_play_state"), "{s}");
@@ -5108,16 +5625,16 @@ mod rsx_lowering_tests {
     #[test]
     fn for_key_fallback_emits_keyed_with_fallback() {
         let s = expand(
-            r#"<For each={items.get()} key={*item} item={item} fallback={empty}><Rect></Rect></For>"#,
+            r#"<For each={items.get()} key={*item} item={item} fallback={empty}><div></div></For>"#,
         );
         assert!(s.contains("for_keyed_reactive_with_fallback"), "{s}");
     }
 
     #[test]
     fn with_emits_bind_text_peek_does_not() {
-        let with_s = expand("<Rect>{ label.with(|s| s.clone()) }</Rect>");
+        let with_s = expand("<div>{ label.with(|s| s.clone()) }</div>");
         assert!(with_s.contains("bind_text"), "{with_s}");
-        let peek_s = expand("<Rect>{ label.peek() }</Rect>");
+        let peek_s = expand("<div>{ label.peek() }</div>");
         assert!(!peek_s.contains("bind_text"), "{peek_s}");
     }
 }

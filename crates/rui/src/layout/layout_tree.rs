@@ -47,11 +47,12 @@ const ATTR_HOISTED_MOUNT: &str = "rui_portal_hoisted_mount";
 /// Opt out of ancestor overflow clip (Command / Dialog stages that must paint over the sidebar).
 pub const ATTR_ESCAPE_OVERFLOW_CLIP: &str = "rui_escape_overflow_clip";
 
-/// Portal stacking shells must not steal pointer / wheel hits from content underneath.
+/// Portal stacking shells that intentionally pass hits to content underneath.
 ///
 /// True when the node opts into [`PointerEvents::BoxNone`], or is the root
-/// [`PORTAL_LAYER_ID`] mount. Interactive hoisted surfaces (`portal_panel` underlays)
-/// stay `auto` so they still receive clicks.
+/// [`PORTAL_LAYER_ID`] mount. Hoisted overlays (menus / dialogs / underlays) keep
+/// `auto` by default so their silhouette blocks click-through; only explicit
+/// `box-none` / `none` (viewport stage chrome, empty anchors, Toast host) pass.
 #[inline]
 pub fn portal_hit_passthrough(el: &Element) -> bool {
     use crate::core::tree::PointerEvents;
@@ -303,14 +304,11 @@ fn prepare_hoisted_node(node: &mut Element, key: &str) {
     if !mount.trim().is_empty() {
         node.set_attr(ATTR_HOISTED_MOUNT, mount.trim());
     }
-    if node.pointer_events_mode() == crate::core::tree::PointerEvents::Auto
-        && portal_root_defaults_to_box_none(node)
-    {
-        node.set_attr(
-            crate::core::tree::ATTR_POINTER_EVENTS,
-            crate::core::tree::PointerEvents::BoxNone.as_str(),
-        );
-    }
+    // Popovers / menus / dialogs / color panels must claim their silhouette by
+    // default (`pointer-events: auto`). Never coerce Auto → box-none here: gaps
+    // between children would click through to page content under the portal layer.
+    // Opt *out* explicitly with `.pointer_events_box_none()` / `.pointer_events_none()`
+    // (viewport centering stage, empty 0×0 anchors, Toast host, Portal wrapper).
     if node.style.position != taffy::style::Position::Absolute {
         node.style.position = taffy::style::Position::Absolute;
     }
@@ -465,14 +463,6 @@ fn take_hoisted_from_hosts(node: &mut Element, out: &mut HashMap<String, Element
             i += 1;
         }
     }
-}
-
-fn portal_root_defaults_to_box_none(el: &Element) -> bool {
-    el.on_click.is_none()
-        && el.on_mousedown.is_none()
-        && el.on_mouseup.is_none()
-        && el.on_context_menu.is_none()
-        && el.on_double_click.is_none()
 }
 
 fn ensure_portal_layer(root: &mut Element) -> usize {
@@ -1697,10 +1687,11 @@ fn measured_text_leaf_size(
             let gaps = blob.chars().count().saturating_sub(1) as f32;
             intrinsic_w = (intrinsic_w + gaps * m.letter_spacing).max(0.0);
         }
+        let intrinsic_w = crate::text::snap_content_text_width(intrinsic_w);
         let min_content = if m.nowrap {
-            intrinsic_w.max(1.0)
+            intrinsic_w
         } else {
-            prepared.max_segment_width.min(intrinsic_w).max(1.0)
+            crate::text::snap_content_text_width(prepared.max_segment_width.min(intrinsic_w))
         };
         let width = if m.clip_to_box {
             known_dimensions
@@ -3063,6 +3054,19 @@ impl LayoutTree {
                     }
                     path_tex_drawn = true;
                 } else if let Some((tex_key, dw, dh)) =
+                    crate::primitives::svg::svg_raster_from_element_attrs(
+                        &element.attrs,
+                        vis_w,
+                        vis_h,
+                    )
+                {
+                    if let Some(draw) =
+                        TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                    {
+                        textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                        path_tex_drawn = true;
+                    }
+                } else if let Some((tex_key, dw, dh)) =
                     crate::primitives::path::path_raster_from_element_attrs(
                         &element.attrs,
                         vis_w,
@@ -3075,6 +3079,19 @@ impl LayoutTree {
                         textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                         path_tex_drawn = true;
                     }
+                }
+            } else if let Some((tex_key, dw, dh)) =
+                crate::primitives::svg::svg_raster_from_element_attrs(
+                    &element.attrs,
+                    vis_w,
+                    vis_h,
+                )
+            {
+                if let Some(draw) =
+                    TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
+                {
+                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
                 crate::primitives::path::path_raster_from_element_attrs(
@@ -3284,16 +3301,24 @@ impl LayoutTree {
             };
             let text_x = text_x0 - text_style.scroll_x.max(0.0) * text_scale;
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
+            let is_animated_icon = element
+                .attrs
+                .contains_key(crate::utils::ATTR_ANIMATED_ICON);
             // Glyphon cannot rotate. Lucide + spin/rotate → cached glyph texture + element
-            // transform (vector/SVG path is the long-term home; same TexturedDraw path).
-            let icon_needs_xform = is_icon
-                && (element.style.rotate_deg.abs() > 0.5
-                    || element
-                        .style
-                        .animations
-                        .iter()
-                        .any(|e| e.name == "spin" && e.is_named())
-                    || element.style.transform.as_ref().is_some_and(|t| !t.is_empty()));
+            // transform. lucide-animated always uses the same TexturedDraw path (frame bake).
+            let icon_needs_xform = is_animated_icon
+                || (is_icon
+                    && (element.style.rotate_deg.abs() > 0.5
+                        || element
+                            .style
+                            .animations
+                            .iter()
+                            .any(|e| e.name == "spin" && e.is_named())
+                        || element
+                            .style
+                            .transform
+                            .as_ref()
+                            .is_some_and(|t| !t.is_empty())));
             if icon_needs_xform {
                 let side = lay_w
                     .max(lay_h)
@@ -3316,14 +3341,37 @@ impl LayoutTree {
                     side,
                 );
                 let icon_xf = crate::style::mat2d_linear(&full_xf);
-                if let Some(glyph) = element.text.as_deref() {
-                    // Rasterize at layout side so EM center == draw-rect center (no 0.85 shrink).
-                    if let Some((tex_key, _)) = crate::utils::icon_texture::ensure_lucide_glyph_texture(
+                if element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+                    if let Some((tex_key, _)) =
+                        crate::utils::lucide_animated::ensure_animated_icon_texture(
+                            element,
+                            side,
+                            text_style.color,
+                            2.0,
+                        )
+                    {
+                        textured_draws.push(crate::renderer::TexturedDraw {
+                            rect: full,
+                            uv_offset: [0.0, 0.0],
+                            uv_scale: [1.0, 1.0],
+                            texture_key: tex_key,
+                            opacity,
+                            transform: icon_xf,
+                        });
+                    }
+                } else if let Some(glyph) = element.text.as_deref() {
+                    let icon_name = element
+                        .attrs
+                        .get(crate::utils::ATTR_ICON_NAME)
+                        .map(|s| s.as_str());
+                    // 2× supersample for crisp spin; draw into layout `side` square.
+                    if let Some((tex_key, _)) = crate::utils::icon_texture::ensure_lucide_icon_texture(
+                        icon_name,
                         glyph,
                         side,
                         text_style.color,
+                        2.0,
                     ) {
-                        // Do not `clipped()`-shrink the rect: that moves the pivot off-center.
                         textured_draws.push(crate::renderer::TexturedDraw {
                             rect: full,
                             uv_offset: [0.0, 0.0],
@@ -4952,6 +5000,117 @@ mod portal_hoist_tests {
         assert!(
             layer_children(&root)[0].style.bg_color[3] > 0.99,
             "panel background must stay opaque"
+        );
+    }
+
+    #[test]
+    fn hoisted_portal_without_handlers_keeps_auto_and_occludes() {
+        use crate::app::pointer_events::hit_path;
+        use crate::core::tree::PointerEvents;
+        use crate::utils::popup::portal_panel;
+
+        // Raw portal surface (no swallow_clicks / no floating attrs): must still
+        // claim its box after hoist — never auto-coerce to box-none.
+        let mut panel = Element::new()
+            .w(200.0)
+            .h(200.0)
+            .bg([0.0, 1.0, 0.0, 1.0])
+            .absolute()
+            .left(100.0)
+            .top(100.0);
+        panel.set_attr(ATTR_PORTAL_KEY, "panel:plain");
+        panel = portal_panel(panel, 1001);
+
+        let under = Element::new()
+            .w(400.0)
+            .h(400.0)
+            .bg([1.0, 0.0, 0.0, 1.0])
+            .focus_id("under-btn")
+            .on_click(|| {});
+
+        let mut root = Element::new().w(400.0).h(400.0).child(under).child(panel);
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+
+        let hoisted = &layer_children(&root)[0];
+        assert_eq!(
+            hoisted.pointer_events_mode(),
+            PointerEvents::Auto,
+            "plain portal panel must stay auto after hoist"
+        );
+        let path = hit_path(&root, 200.0, 200.0);
+        assert!(
+            path.iter().any(|e| e.portal_key.as_deref() == Some("panel:plain")),
+            "hit must land on the hoisted panel; path={:?}",
+            path.iter()
+                .map(|e| (e.focus_id.clone(), e.portal_key.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            path.iter().all(|e| e.focus_id.as_deref() != Some("under-btn")),
+            "page control under the panel must not receive the hit"
+        );
+    }
+
+    #[test]
+    fn viewport_stage_box_none_still_passes_empty_chrome() {
+        use crate::app::pointer_events::hit_path;
+        use crate::core::reactivity::Signal;
+        use crate::core::tree::PointerEvents;
+        use crate::utils::popup::{
+            mount_modal_layer, mount_viewport_portal_stage, swallow_clicks,
+            underlay_close_on_click,
+        };
+
+        // Special-purpose pass-through: empty stage chrome → underlay, not page.
+        let panel = swallow_clicks(
+            Element::new()
+                .w(120.0)
+                .h(80.0)
+                .bg([0.0, 1.0, 0.0, 1.0])
+                .focus_id("dlg-panel"),
+        );
+        let stage = Element::new()
+            .w("100%")
+            .h("100%")
+            .items_center()
+            .justify_center()
+            .child(panel);
+        let underlay = underlay_close_on_click(Signal::new(true), 1000);
+        let mut root = Element::new()
+            .w(400.0)
+            .h(400.0)
+            .child(mount_modal_layer(
+                underlay,
+                mount_viewport_portal_stage(stage, 1001),
+            ));
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+
+        let stage_el = layer_children(&root)
+            .iter()
+            .find(|c| c.attrs.get(ATTR_PORTAL_KEY).map(|s| s.as_str()) == Some("panel:1001"))
+            .expect("stage on portal layer");
+        assert_eq!(
+            stage_el.pointer_events_mode(),
+            PointerEvents::BoxNone,
+            "viewport stage must keep explicit box-none"
+        );
+
+        // Corner of the fullscreen stage (outside the centered panel).
+        let path = hit_path(&root, 8.0, 8.0);
+        assert!(
+            path.iter().any(|e| {
+                e.portal_key
+                    .as_deref()
+                    .is_some_and(|k| k.starts_with("underlay:"))
+            }),
+            "empty stage chrome must hit underlay; path={:?}",
+            path.iter()
+                .map(|e| e.portal_key.clone())
+                .collect::<Vec<_>>()
         );
     }
 

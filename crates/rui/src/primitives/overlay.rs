@@ -68,8 +68,9 @@ impl From<OverlayBuilder> for Element {
             color[3] = a;
         }
 
-        // Always attach a click handler so hoist does not default the portal root to
-        // `pointer-events: box-none` (which would let hover/clicks reach content below).
+        // Underlay must claim its fullscreen silhouette (hoist keeps `auto` by default).
+        // Always attach a click handler: either dismiss `open`, or a no-op swallow so
+        // the dimmed area still eats presses instead of leaking to page content.
         let mut el: Element = if let Some(open) = close_on_click {
             interactive(r#box().into())
                 .on_click(move || {

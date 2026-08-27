@@ -191,6 +191,17 @@ impl ColorPickerVariant {
             _ => 6,
         }
     }
+
+    /// Fixed chip edge length. `aspect-ratio` is not applied by layout yet, so
+    /// swatches must set both axes explicitly (react-color Github ≈ 25px).
+    pub(super) fn swatch_chip_size(self) -> &'static str {
+        match self {
+            Self::Circle => "1.75rem",
+            Self::Block => "2rem",
+            Self::Github => "1.5rem",
+            _ => "1.5rem",
+        }
+    }
 }
 
 pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {

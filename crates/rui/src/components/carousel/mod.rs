@@ -86,7 +86,7 @@ pub(crate) use drag::is_carousel_dragging;
 
 
 use autoplay::{decide_autoplay, AutoplayAction};
-use loop_anim::LoopAnim;
+use loop_anim::{loop_reached, LoopAnim};
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_CAROUSEL: &str = "carousel";

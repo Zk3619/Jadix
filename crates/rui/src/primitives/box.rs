@@ -1,6 +1,7 @@
 //! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
 //!
-//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` / `Rect` 由宏映射到
+//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` / `Div` / `div` 由宏映射到
+//! 本 Builder；SVG 形状用小写/Pascal `<rect>` / `<Rect>`（见 `primitives::svg`）。
 //! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]。
 
 use crate::layout::GridTrack;
@@ -888,6 +889,11 @@ impl crate::core::tree::IntoElementList for BoxBuilder {
 
 pub fn r#box() -> BoxBuilder {
     BoxBuilder::new()
+}
+
+/// HTML-ish alias for [`r#box`] — preferred in `ui!` as `<div>` / `<Div>`.
+pub fn div() -> BoxBuilder {
+    r#box()
 }
 
 pub fn hstack() -> BoxBuilder {

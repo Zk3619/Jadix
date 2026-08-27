@@ -24,6 +24,7 @@ pub mod path;
 pub mod portal;
 pub mod scene3d;
 pub mod svg;
+pub mod svg_smil;
 pub mod text;
 
 pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
@@ -32,21 +33,27 @@ pub use interactive::{interactive, InteractiveBuilder};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
     attach_path, attach_polyline, decode_path_d, draw_polyline_batch, draw_polyline_batch_stub,
-    encode_path_d, encode_points, ensure_raster_texture, filled_circle,
-    path_quads_from_element_attrs, path_raster_from_element_attrs, path_target_leaf_size, pie_ring,
-    pie_sector, polygon, polyline, rasterize_layers_rgba, rasterize_path_rgba, tessellate_path,
-    PathCommand, PathQuad, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF,
-    ATTR_PATH_KIND, ATTR_PATH_MARKERS, ATTR_PATH_POINTS, ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH,
-    ATTR_PATH_VIEWBOX,
+    element_has_path_geometry, encode_path_d, encode_points, ensure_raster_texture, filled_circle,
+    path_pointer_hit, path_quads_from_element_attrs, path_raster_from_element_attrs,
+    path_target_leaf_size, pie_ring, pie_sector, polygon, polyline, rasterize_layers_rgba,
+    rasterize_path_rgba, tessellate_path, PathCommand, PathQuad, PathStyle, Point2, ATTR_PATH_D,
+    ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF, ATTR_PATH_KIND, ATTR_PATH_MARKERS, ATTR_PATH_POINTS,
+    ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
 pub use portal::{Portal, PortalProps};
-pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
+pub use r#box::{div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };
 pub use svg::{
-    circle, g, line, path as svg_path, polyline as svg_polyline, rect as svg_rect, svg,
-    CircleBuilder, GroupBuilder, LineBuilder, PathBuilder, PolylineBuilder, RectBuilder,
-    SvgBuilder, SvgShapeBuilder, ATTR_SVG_KIND,
+    animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse,
+    fe_blend, fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
+    fe_offset, filter, g, image, line, linear_gradient, marker, mask, mpath, path as svg_path,
+    pattern, polygon as svg_polygon, polyline as svg_polyline, radial_gradient, rect, set_el, stop,
+    svg, svg_el, svg_text, svg_use, symbol, text_path, title, tspan, AnimateBuilder, CircleBuilder,
+    ClipPathBuilder, DefsBuilder, EllipseBuilder, GroupBuilder, LineBuilder, LinearGradientBuilder,
+    PathBuilder, PolygonBuilder, PolylineBuilder, RadialGradientBuilder, RectBuilder, SetBuilder,
+    StopBuilder, SvgBuilder, SvgShapeBuilder, SymbolBuilder, UseBuilder, ATTR_SVG_HAS_SMIL,
+    ATTR_SVG_KIND, ATTR_SVG_SCENE, ATTR_SVG_TEXT,
 };
 pub use text::{icon, text, TextBuilder};

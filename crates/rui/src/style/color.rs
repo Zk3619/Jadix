@@ -933,7 +933,8 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
     }
     Some(match s {
         "background" => colors.background,
-        "foreground" => colors.foreground,
+        // Tailwind v4 `text-foreground` → color token `foreground`.
+        "foreground" | "text-foreground" => colors.foreground,
         "card" => colors.card,
         "card-foreground" => colors.card_foreground,
         "popover" => colors.popover,

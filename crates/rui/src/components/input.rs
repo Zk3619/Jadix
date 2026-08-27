@@ -8,7 +8,7 @@
 //! ```ignore
 //! <Input id="email" type="email" clearable=true />
 //! <Input id="pw" type="password" password_toggle=true clearable=true placeholder="密码" />
-//! <Input id="n" type="number" />
+//! <Input id="n" type="number" number_steppers=true />
 //! <Input id="q" type="search" clearable=true />
 //! ```
 //!
@@ -17,15 +17,16 @@
 //! |----|------|
 //! | `text`（默认） | 明文 |
 //! | `password` | 显示为 `•`，底层仍存原文；**禁用 IME**、仅 ASCII；可选 `password_toggle` |
-//! | `number` | 仅允许数字、可选 `-` / `.`；非法非空 → 自动 invalid |
+//! | `number` | 仅允许数字、可选 `-` / `.`；非法非空 → 自动 invalid；可选 `number_steppers` 增减触发器 |
 //! | `tel` | 过滤电话字符；非空格式失败 → 自动 invalid |
 //! | `email` / `url` | 宽松字符过滤；非空格式失败 → 自动 invalid |
 //! | `search` | 同 text；空 placeholder 默认 `Search…` |
 //!
 //! ## 可选尾饰
-//! - `clearable`：有内容时显示叉号，点击清空。
+//! - `clearable`：有内容时显示叉号，点击清空（缺省 `false`）。
 //! - 编辑快捷键（Ctrl/Cmd）：全选 A、复制 C、粘贴 V、剪切 X；Shift+方向键扩展选区。
-//! - `password_toggle`：仅 `type=password`；切换掩码 / 明文。
+//! - `password_toggle`：仅 `type=password`；切换掩码 / 明文（缺省 `false`）。
+//! - `number_steppers`：仅 `type=number`；右侧上下增减触发器（solid-ui `NumberField` 风格）；`step` 默认 `1`；可长按连发（缺省 `false`）。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
@@ -36,15 +37,20 @@
 //! - 单行编辑默认 [`crate::style::TextOverflow::Hidden`]（原生 `<input>`：裁切溢出，光标/选区可滚出）。
 //!   `truncate` / `text-overflow: ellipsis|clip|newline` 用于 Label、Button 等不可编辑文本，**不会**作用在 Input 上。
 
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
+use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::utils::lucide::lucide_glyph;
+use crate::utils::text_field::commit_value;
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
+use winit::event::MouseButton;
 
 pub use crate::utils::text_field::{
     bind_controlled_value, input_caret_signal_key, input_focus_id as focus_id_for_input,
@@ -54,8 +60,25 @@ pub use crate::utils::text_field::{
 };
 
 pub(crate) use crate::utils::text_field::{
-    input_clear_template_id, input_reveal_template_id, input_text_template_id,
+    input_clear_template_id, input_number_dec_template_id, input_number_inc_template_id,
+    input_reveal_template_id, input_text_template_id,
 };
+
+/// 长按步进：首次按下后延迟再开始连发。
+const NUMBER_STEP_HOLD_DELAY: Duration = Duration::from_millis(400);
+/// 长按连发间隔。
+const NUMBER_STEP_HOLD_INTERVAL: Duration = Duration::from_millis(50);
+
+struct NumberStepHold {
+    field_id: String,
+    delta: f64,
+    started: Instant,
+    last_fire: Instant,
+}
+
+thread_local! {
+    static NUMBER_STEP_HOLD: RefCell<Option<NumberStepHold>> = const { RefCell::new(None) };
+}
 
 /// 全局：当前会话是否收到过 IME `Enabled`（用于区分直输与组字）。
 pub const IME_ACTIVE_SIGNAL: &str = "__rui_ime_active";
@@ -306,6 +329,103 @@ fn validate_number(v: &str) -> bool {
     true
 }
 
+/// 将步进后的数值格式化为输入框字符串（整步优先整数，否则去掉尾随零）。
+pub fn format_number_step_result(value: f64, step: f64) -> String {
+    if !value.is_finite() {
+        return String::new();
+    }
+    let step_is_int = step.is_finite() && (step - step.round()).abs() < 1e-9;
+    let value_is_int = (value - value.round()).abs() < 1e-9;
+    if step_is_int && value_is_int {
+        format!("{}", value.round() as i64)
+    } else {
+        let s = format!("{value:.10}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
+/// `type=number` 按 `delta`（通常为 ±step）增减当前值并写回 store / 受控 Signal。
+pub fn step_number_value(field_id: &str, delta: f64) {
+    if !delta.is_finite() || delta == 0.0 {
+        return;
+    }
+    let store = use_signal(&input_value_signal_key(field_id), String::new);
+    let raw = store.peek();
+    let current = raw.trim().parse::<f64>().unwrap_or(0.0);
+    let next = current + delta;
+    let text = format_number_step_result(next, delta.abs());
+    commit_value(field_id, text.clone());
+    use_signal(&input_preedit_signal_key(field_id), String::new).set(String::new());
+    use_signal(&input_preedit_sel_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set(None);
+    use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set(None);
+    use_signal(&input_ime_anchor_signal_key(field_id), || None::<usize>).set(None);
+    use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(text.len()));
+}
+
+fn begin_number_step_hold(field_id: String, delta: f64) {
+    let now = Instant::now();
+    NUMBER_STEP_HOLD.with(|h| {
+        *h.borrow_mut() = Some(NumberStepHold {
+            field_id,
+            delta,
+            started: now,
+            last_fire: now,
+        });
+    });
+}
+
+/// 结束增减触发器的长按连发（指针抬起 / 失焦）。
+pub(crate) fn end_number_step_hold() {
+    NUMBER_STEP_HOLD.with(|h| {
+        *h.borrow_mut() = None;
+    });
+    crate::app::release_pointer_capture();
+}
+
+/// 推进长按连发；有步进时返回 `true`（需重绘）。
+pub(crate) fn tick_number_step_hold() -> bool {
+    NUMBER_STEP_HOLD.with(|h| {
+        let mut slot = h.borrow_mut();
+        let Some(hold) = slot.as_mut() else {
+            return false;
+        };
+        let now = Instant::now();
+        if now.duration_since(hold.started) < NUMBER_STEP_HOLD_DELAY {
+            return false;
+        }
+        if now.duration_since(hold.last_fire) < NUMBER_STEP_HOLD_INTERVAL {
+            return false;
+        }
+        hold.last_fire = now;
+        let id = hold.field_id.clone();
+        let delta = hold.delta;
+        drop(slot);
+        step_number_value(&id, delta);
+        true
+    })
+}
+
+/// 下一次长按连发唤醒时刻。
+pub(crate) fn number_step_hold_next_wake_at() -> Option<Instant> {
+    NUMBER_STEP_HOLD.with(|h| {
+        let slot = h.borrow();
+        let hold = slot.as_ref()?;
+        let after_delay = hold.started + NUMBER_STEP_HOLD_DELAY;
+        let now = Instant::now();
+        if now < after_delay {
+            Some(after_delay)
+        } else {
+            Some(hold.last_fire + NUMBER_STEP_HOLD_INTERVAL)
+        }
+    })
+}
+
 pub(crate) fn resolve_placeholder(explicit: &str, ty: InputType) -> String {
     if explicit.is_empty() {
         ty.default_placeholder().to_string()
@@ -398,6 +518,10 @@ pub struct InputBuilder {
     input_type: InputType,
     clearable: bool,
     password_toggle: bool,
+    /// `type=number` 时显示增减触发器。
+    number_steppers: bool,
+    /// `type=number` 步进量；默认 `1`。
+    step: f64,
     text_size_px: f32,
     font_weight: u16,
     line_height_px: Option<f32>,
@@ -415,7 +539,9 @@ pub fn Input(
     invalid: bool,
     clearable: bool,
     password_toggle: bool,
+    number_steppers: bool,
     input_type: Option<String>,
+    step: Option<f32>,
     text_size: Option<f32>,
     value: Option<Signal<String>>,
     truncate: bool,
@@ -429,10 +555,14 @@ pub fn Input(
         .disabled(disabled)
         .invalid(invalid)
         .clearable(clearable)
-        .password_toggle(password_toggle);
+        .password_toggle(password_toggle)
+        .number_steppers(number_steppers);
     let _ = (truncate, text_overflow);
     if let Some(t) = input_type {
         builder = builder.input_type(t);
+    }
+    if let Some(s) = step {
+        builder = builder.step(s);
     }
 
     if let Some(s) = text_size {
@@ -491,6 +621,8 @@ pub fn input(id: &str) -> InputBuilder {
         input_type: InputType::Text,
         clearable: false,
         password_toggle: false,
+        number_steppers: false,
+        step: 1.0,
         // shadcn/ui Input：`text-sm`；类名通常不含 font-medium → 400。
         text_size_px: 0.875 * 16.0,
         font_weight: 400,
@@ -526,6 +658,17 @@ impl InputBuilder {
     /// `type=password` 时显示睁眼/闭眼切换。
     pub fn password_toggle(mut self, v: bool) -> Self {
         self.password_toggle = v;
+        self
+    }
+    /// `type=number` 时显示右侧上下增减触发器。
+    pub fn number_steppers(mut self, v: bool) -> Self {
+        self.number_steppers = v;
+        self
+    }
+    /// `type=number` 增减步进；≤0 时回退为 `1`。
+    pub fn step(mut self, v: impl IntoF32) -> Self {
+        let s = v.into_f32() as f64;
+        self.step = if s.is_finite() && s > 0.0 { s } else { 1.0 };
         self
     }
     pub fn w(mut self, width: impl IntoCssDim) -> Self {
@@ -640,6 +783,56 @@ pub(crate) fn input_adornment_button(
     }
 }
 
+/// solid-ui `NumberFieldIncrement/DecrementTrigger`：`size-4` 上下箭头。
+pub(crate) fn input_number_step_button(
+    template_id: String,
+    glyph: String,
+    disabled: bool,
+    field_id: String,
+    focus_id: String,
+    delta: f64,
+) -> Element {
+    let icon = build_icon_text_node(glyph)
+        .text_size(16.0)
+        .text_color(parse_text_color("muted-foreground"))
+        .pointer_events_none();
+    let mut btn: Element = r#box()
+        .flex_shrink(0.0)
+        .w("1rem")
+        .h("1rem")
+        .min_w("1rem")
+        .items_center()
+        .justify_center()
+        .into();
+    btn = btn.child(icon);
+    btn.template_id = Some(template_id.clone());
+    btn.focus_id = Some(template_id.clone());
+    if disabled {
+        return btn.cursor_not_allowed();
+    }
+    let capture_id = template_id;
+    let id_down = field_id;
+    let fid_down = focus_id;
+    btn.cursor_kind(crate::core::tree::CursorKind::Pointer)
+        .on_pointer_down(move |e: &PointerEvent| {
+            if e.button != MouseButton::Left {
+                return;
+            }
+            if e.phase == EventPhase::Capture {
+                return;
+            }
+            step_number_value(&id_down, delta);
+            use_signal("__rui_button_focus_id", String::new).set(fid_down.clone());
+            use_signal("__rui_focus_visible", || false).set(true);
+            begin_number_step_hold(id_down.clone(), delta);
+            crate::app::set_pointer_capture(capture_id.clone());
+            e.stop_propagation();
+        })
+        .on_pointer_up(move |_e: &PointerEvent| {
+            end_number_step_hold();
+        })
+}
+
 pub(crate) fn set_adornment_visible(btn: &mut Element, visible: bool) -> bool {
     let mut changed = false;
     let want_opacity = if visible { 1.0 } else { 0.0 };
@@ -704,6 +897,8 @@ impl From<InputBuilder> for Element {
             input_type: builder.input_type,
             clearable: builder.clearable,
             password_toggle: builder.password_toggle,
+            number_steppers: builder.number_steppers,
+            step: builder.step,
             text_size_px: builder.text_size_px,
             font_weight: builder.font_weight,
             line_height_px: builder.line_height_px,
@@ -819,5 +1014,85 @@ mod tests {
         let pulled =
             crate::utils::text_field::pull_controlled_into_store("wp38-in", "hello", false);
         assert_eq!(pulled.as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn number_step_formats_and_commits() {
+        let id = "num-step-fmt";
+        use_signal(&input_value_signal_key(id), String::new).set("3".into());
+        step_number_value(id, 1.0);
+        assert_eq!(
+            use_signal(&input_value_signal_key(id), String::new).peek(),
+            "4"
+        );
+        step_number_value(id, -2.0);
+        assert_eq!(
+            use_signal(&input_value_signal_key(id), String::new).peek(),
+            "2"
+        );
+        assert_eq!(format_number_step_result(1.5, 0.5), "1.5");
+        assert_eq!(format_number_step_result(2.0, 1.0), "2");
+    }
+
+    #[test]
+    fn number_input_builds_inc_dec_triggers() {
+        let id = "num-step-ui";
+        use_signal(&input_value_signal_key(id), String::new).set("0".into());
+        let el: Element = input(id)
+            .input_type(InputType::Number)
+            .number_steppers(true)
+            .into();
+        let inc_tid = input_number_inc_template_id(id);
+        let dec_tid = input_number_dec_template_id(id);
+        fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_tid(c, tid))
+        }
+        let inc = find_tid(&el, &inc_tid).expect("inc trigger");
+        let dec = find_tid(&el, &dec_tid).expect("dec trigger");
+        assert!(inc.on_mousedown.is_some());
+        assert!(dec.on_mousedown.is_some());
+        // Fire down handler once via the stored callback.
+        let mut pev = crate::app::pointer_events::PointerEvent::new(
+            0.0,
+            0.0,
+            winit::event::MouseButton::Left,
+            1,
+        );
+        pev.phase = crate::app::pointer_events::EventPhase::Target;
+        (*inc.on_mousedown.as_ref().unwrap().borrow_mut())(&pev);
+        assert_eq!(
+            use_signal(&input_value_signal_key(id), String::new).peek(),
+            "1"
+        );
+        end_number_step_hold();
+        (*dec.on_mousedown.as_ref().unwrap().borrow_mut())(&pev);
+        assert_eq!(
+            use_signal(&input_value_signal_key(id), String::new).peek(),
+            "0"
+        );
+        end_number_step_hold();
+    }
+
+    #[test]
+    fn number_steppers_opt_in_only() {
+        let id = "num-step-opt";
+        let el: Element = input(id).input_type(InputType::Number).into();
+        fn find_tid(el: &Element, tid: &str) -> bool {
+            if el.template_id.as_deref() == Some(tid) {
+                return true;
+            }
+            el.children.iter().any(|c| find_tid(c, tid))
+        }
+        assert!(!find_tid(
+            &el,
+            &input_number_inc_template_id(id)
+        ));
+        assert!(!find_tid(
+            &el,
+            &input_number_dec_template_id(id)
+        ));
     }
 }

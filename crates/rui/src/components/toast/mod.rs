@@ -52,7 +52,6 @@
 //!   堆高度 `LayoutChanged` 由框架按 portal 局部 dirty 处理（不全窗 remasure / FullClear）。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
 mod queue;
 mod swipe;
 mod timer;
@@ -78,16 +77,8 @@ use crate::style::{
 };
 use crate::tokens;
 use crate::utils::lucide_glyph;
-use crate::utils::keyed_overlay::{
-    item_template_id, mount_reactive_anchor, viewport_portal_stage, TOAST_CARD_SCOPE,
-};
-use crate::utils::layout_group::{
-    linear_slot_offset, slot_list_pose, slot_visual_offset, SlotListConfig,
-};
-use crate::utils::motion::{
-    ensure_motion_transitions, motion_sync_status, prepare_motion_sync, snap_motion_baseline,
-    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform,
-};
+use crate::utils::keyed_overlay::{item_template_id, TOAST_CARD_SCOPE};
+use crate::utils::layout_group::linear_slot_offset;
 
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -239,34 +230,12 @@ impl ToastPosition {
 
 fn swipe_dirs_for_position(pos: ToastPosition) -> ToastSwipeDirs {
     match pos {
-        ToastPosition::TopLeft => ToastSwipeDirs {
-            up: true,
-            left: true,
-            ..ToastSwipeDirs::default()
-        },
-        ToastPosition::TopCenter => ToastSwipeDirs {
-            up: true,
-            ..ToastSwipeDirs::default()
-        },
-        ToastPosition::TopRight => ToastSwipeDirs {
-            up: true,
-            right: true,
-            ..ToastSwipeDirs::default()
-        },
-        ToastPosition::BottomLeft => ToastSwipeDirs {
-            down: true,
-            left: true,
-            ..ToastSwipeDirs::default()
-        },
-        ToastPosition::BottomCenter => ToastSwipeDirs {
-            down: true,
-            ..ToastSwipeDirs::default()
-        },
-        ToastPosition::BottomRight => ToastSwipeDirs {
-            down: true,
-            right: true,
-            ..ToastSwipeDirs::default()
-        },
+        ToastPosition::TopLeft => ToastSwipeDirs::for_edge(true, false, true, false),
+        ToastPosition::TopCenter => ToastSwipeDirs::for_edge(true, false, false, false),
+        ToastPosition::TopRight => ToastSwipeDirs::for_edge(true, false, false, true),
+        ToastPosition::BottomLeft => ToastSwipeDirs::for_edge(false, true, true, false),
+        ToastPosition::BottomCenter => ToastSwipeDirs::for_edge(false, true, false, false),
+        ToastPosition::BottomRight => ToastSwipeDirs::for_edge(false, true, false, true),
     }
 }
 
@@ -1354,12 +1323,10 @@ fn toast_push_item(
 pub fn toast_dismiss(id: u64) {
     begin_toast_exit(id, None);
 }
-pub(crate) use host::paint_toast_host;
-
 
 #[cfg(test)]
 mod tests {
-    use super::host::{toaster, TOAST_HOST_VIEW};
+    use super::host::{paint_toast_host, toaster, TOAST_HOST_VIEW};
     use super::motion::{
         exit_target, stack_lift_visual, toast_enter_offset_y, toast_exit_offset_y,
         toast_motion_pose, tone_shadow, ToastStackMotion,

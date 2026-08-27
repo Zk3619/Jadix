@@ -2,7 +2,8 @@
 
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
-    input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
+    input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
+    input_number_step_button, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_type_signal_key,
     input_value_signal_key, lucide_named, map_byte_index_to_masked, map_byte_range_to_masked,
@@ -11,7 +12,7 @@ use crate::components::input::{
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
+use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::style::InputCaretDraw;
 use crate::utils::text_field::{bind_controlled_value, focus_id_for_text_edit};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -23,6 +24,10 @@ pub(crate) struct TextEditBuildParams {
     pub input_type: InputType,
     pub clearable: bool,
     pub password_toggle: bool,
+    /// `type=number` 时显示增减触发器。
+    pub number_steppers: bool,
+    /// `type=number` 步进量。
+    pub step: f64,
     pub text_size_px: f32,
     pub font_weight: u16,
     pub line_height_px: Option<f32>,
@@ -47,6 +52,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         input_type,
         clearable,
         password_toggle,
+        number_steppers,
+        step,
         text_size_px,
         font_weight,
         line_height_px,
@@ -378,7 +385,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     };
 
     let show_password_toggle = !multiline && password_toggle && input_type.is_password();
-    let has_adornments = !multiline && (clearable || show_password_toggle);
+    let show_number_steppers = !multiline && number_steppers && input_type.is_number();
+    let has_adornments = !multiline && (clearable || show_password_toggle || show_number_steppers);
     if has_adornments {
         container = container.gap("0.25rem");
     }
@@ -550,6 +558,40 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         );
         let _ = set_adornment_visible(&mut reveal_btn, is_focused && !disabled);
         el = el.child(reveal_btn);
+    }
+
+    if show_number_steppers {
+        // solid-ui NumberField：右侧上下 size-4 增减触发器；支持长按连发。
+        let step = if step.is_finite() && step > 0.0 {
+            step
+        } else {
+            1.0
+        };
+        let inc = input_number_step_button(
+            input_number_inc_template_id(&field_id),
+            lucide_named("chevron-up"),
+            disabled,
+            field_id.clone(),
+            fid.clone(),
+            step,
+        );
+        let dec = input_number_step_button(
+            input_number_dec_template_id(&field_id),
+            lucide_named("chevron-down"),
+            disabled,
+            field_id.clone(),
+            fid.clone(),
+            -step,
+        );
+        let steppers: Element = vstack()
+            .flex_shrink(0.0)
+            .items_center()
+            .justify_center()
+            .gap(0.0)
+            .child(inc)
+            .child(dec)
+            .into();
+        el = el.child(steppers);
     }
 
     el = if disabled {

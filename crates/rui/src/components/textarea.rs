@@ -137,6 +137,8 @@ impl From<TextareaBuilder> for Element {
             input_type: InputType::Text,
             clearable: false,
             password_toggle: false,
+            number_steppers: false,
+            step: 1.0,
             text_size_px: DEFAULT_TEXT_SIZE_PX,
             font_weight: DEFAULT_FONT_WEIGHT,
             line_height_px: None,

@@ -3,6 +3,7 @@
 use rui::core::tree::LayoutTree;
 use rui::prelude::*;
 use rui::primitives::path::{ATTR_PATH_D, ATTR_PATH_SCENE};
+use rui::primitives::svg::ATTR_SVG_SCENE;
 
 #[test]
 fn svg_builder_builds_a_leaf() {
@@ -30,6 +31,10 @@ fn svg_builder_builds_a_leaf() {
     assert!(el.children.is_empty());
     assert!(el.get_attr(ATTR_PATH_SCENE).is_some());
     assert!(el.get_attr(ATTR_PATH_D).is_some());
+    assert!(
+        el.get_attr(ATTR_SVG_SCENE).is_some(),
+        "public <svg> must register resvg scene"
+    );
 }
 
 #[test]
@@ -49,8 +54,27 @@ fn svg_ui_tag_builds_a_leaf() {
         el.get_attr(ATTR_PATH_SCENE).is_some(),
         "ui! svg must compile to the shared path scene"
     );
+    assert!(el.get_attr(ATTR_SVG_SCENE).is_some());
     let d = el.get_attr(ATTR_PATH_D).expect("d");
     assert!(d.contains('M') && d.contains('L'), "{d}");
+}
+
+#[test]
+fn svg_ui_text_and_filter_leaf() {
+    let el: Element = ui! {
+        <svg viewBox="0 0 100 100" w={120.0} h={120.0}>
+            <filter id="blur">
+                <feGaussianBlur stdDeviation="2" />
+            </filter>
+            <circle cx="50" cy="50" r="30" fill="primary" filter="url(#blur)" />
+            <text x="10" y="90" font_size="12">Hi</text>
+        </svg>
+    };
+    assert!(el.children.is_empty());
+    assert!(
+        el.get_attr(ATTR_SVG_SCENE).is_some(),
+        "text/filter svg must register ATTR_SVG_SCENE"
+    );
 }
 
 #[test]
@@ -72,10 +96,9 @@ fn svg_ui_leaf_layout_bounds() {
         leaf.layout_bounds
     );
     assert!(
-        result
-            .textured_draws
-            .iter()
-            .any(|d| d.texture_key.starts_with("rui_path:")),
+        result.textured_draws.iter().any(|d| {
+            d.texture_key.starts_with("rui_svg:") || d.texture_key.starts_with("rui_path:")
+        }),
         "draws={:?}",
         result.textured_draws
     );

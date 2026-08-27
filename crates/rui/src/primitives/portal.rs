@@ -22,14 +22,14 @@
 //! // Default: root portal layer (Solid `<Portal>` → document.body)
 //! <Portal id="overlay-root">
 //!   <Show when={open.get()}>
-//!     <Rect absolute=true inset="0" z_index="900">…</Rect>
+//!     <div absolute=true inset="0" z_index="900">…</div>
 //!   </Show>
 //! </Portal>
 //!
 //! // Local: mount into a host by template_id (Solid `<Portal mount={el}>`)
-//! <Rect id="card-host" relative=true w="100%" h="12rem">…</Rect>
+//! <div id="card-host" relative=true w="100%" h="12rem">…</div>
 //! <Portal id="card-overlay" mount="card-host">
-//!   <Rect absolute=true inset="0" bg="black">…</Rect>
+//!   <div absolute=true inset="0" bg="black">…</div>
 //! </Portal>
 //! ```
 //!

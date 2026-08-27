@@ -2249,6 +2249,9 @@ impl super::App {
         };
 
         let window = state.window.clone();
+        crate::utils::lucide_animated::sync_animated_icon_hover(&mut state.root_element);
+        let anim_icons =
+            crate::utils::lucide_animated::tick_animated_icons_subtree(&mut state.root_element, anim_dt);
         drop(state_borrow);
 
         if input_drag_keep {
@@ -2258,7 +2261,7 @@ impl super::App {
         crate::style::utility::set_frame_dt(dt.max(0.0));
         let anim_tick = crate::style::tick_animations(anim_dt);
         let nav_animating = crate::app::navigator::tick_active(anim_dt);
-        if anim_tick.any || nav_animating {
+        if anim_tick.any || nav_animating || anim_icons {
             window.request_redraw();
         }
         let mut smooth_scroll_animating = false;
@@ -2815,6 +2818,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .text_nodes
                     .iter()
                     .any(|n| n.style.input_caret.is_some());
+                let svg_smil_active =
+                    crate::primitives::svg::subtree_has_svg_smil(&state.root_element);
+                let anim_icon_active = crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
+                    &state.root_element,
+                );
 
                 drop(re_borrow); // CRITICAL: Free the borrow before updating signals!
 
@@ -3188,6 +3196,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let ui_anim_active = crate::style::any_ui_animation_active();
                 if smooth_scroll_animating
                     || scrollbar_fade_animating
+                    || svg_smil_active
+                    || anim_icon_active
                     || super::scroll_support::has_pending_scroll_item_align()
                     // `any_ui_animation_active()` is a post-tick safety net for late-set tweens.
                     // Gate it with `force_redraw_count` to avoid long-running stale animation

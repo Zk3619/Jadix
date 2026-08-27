@@ -16,19 +16,56 @@ pub use crate::style::{
 };
 pub use crate::style::{Style, UnitSlot};
 
-/// Pointer hit policy for [`Element`] (`rui_pointer_events`), RN-aligned subset.
+/// Pointer hit policy for [`Element`] (`rui_pointer_events`).
+///
+/// Aligns with CSS [`pointer-events`](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events):
+///
+/// **通用（所有元素）**
+/// - [`Auto`](Self::Auto) — 默认；未指定时的行为
+/// - [`None`](Self::None) — 自身与子树均不作为目标（事件穿透）
+///
+/// **布局扩展（RUI / RN，非 CSS 标准）**
+/// - [`BoxNone`](Self::BoxNone) — 自身不命中，子节点仍可命中
+///
+/// **SVG 专用**（[MDN：SVG only](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events#svg_only_experimental_for_html)；
+/// 在非 Svg/Icon 叶上仍可写入，命中语义回退为布局盒）
+/// - [`BoundingBox`](Self::BoundingBox) — 命中元素边界盒（Icon / 公开 `<svg>` 叶推荐默认）
+/// - [`VisiblePainted`](Self::VisiblePainted) … [`All`](Self::All) — 标准 SVG 关键字；
+///   有 path 场景时按 fill/stroke 几何命中；无几何（纯纹理 Icon）回退边界盒
 ///
 /// | Mode | Self | Children |
 /// |------|------|----------|
-/// | [`Auto`](Self::Auto) | yes | yes |
-/// | [`None`](Self::None) | no | no |
-/// | [`BoxNone`](Self::BoxNone) | no | yes |
+/// | Auto / SVG 几何类 | yes | yes |
+/// | None | no | no |
+/// | BoxNone | no | yes |
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PointerEvents {
+    /// CSS / HTML：`auto`。SVG 中与 `visiblePainted` 同效（MDN）。
     #[default]
     Auto,
+    /// CSS：`none`。
     None,
+    /// RUI / React Native：`box-none`（非 CSS 关键字）。
     BoxNone,
+    // —— SVG only （MDN）——
+    /// SVG：`bounding-box` — 命中边界盒。
+    BoundingBox,
+    /// SVG：`visiblePainted`。
+    VisiblePainted,
+    /// SVG：`visibleFill`。
+    VisibleFill,
+    /// SVG：`visibleStroke`。
+    VisibleStroke,
+    /// SVG：`visible`。
+    Visible,
+    /// SVG：`painted`。
+    Painted,
+    /// SVG：`fill`。
+    Fill,
+    /// SVG：`stroke`。
+    Stroke,
+    /// SVG：`all`。
+    All,
 }
 
 pub const ATTR_POINTER_EVENTS: &str = "rui_pointer_events";
@@ -36,9 +73,21 @@ pub const ATTR_POINTER_EVENTS: &str = "rui_pointer_events";
 impl PointerEvents {
     pub fn parse(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
+            // —— 通用 CSS ——
             "none" => Self::None,
-            "box-none" | "box_none" => Self::BoxNone,
             "auto" | "" => Self::Auto,
+            // —— RUI / RN ——
+            "box-none" | "box_none" => Self::BoxNone,
+            // —— SVG only（MDN）——
+            "bounding-box" | "boundingbox" => Self::BoundingBox,
+            "visiblepainted" => Self::VisiblePainted,
+            "visiblefill" => Self::VisibleFill,
+            "visiblestroke" => Self::VisibleStroke,
+            "visible" => Self::Visible,
+            "painted" => Self::Painted,
+            "fill" => Self::Fill,
+            "stroke" => Self::Stroke,
+            "all" => Self::All,
             _ => Self::Auto,
         }
     }
@@ -48,8 +97,112 @@ impl PointerEvents {
             Self::Auto => "auto",
             Self::None => "none",
             Self::BoxNone => "box-none",
+            Self::BoundingBox => "bounding-box",
+            Self::VisiblePainted => "visiblePainted",
+            Self::VisibleFill => "visibleFill",
+            Self::VisibleStroke => "visibleStroke",
+            Self::Visible => "visible",
+            Self::Painted => "painted",
+            Self::Fill => "fill",
+            Self::Stroke => "stroke",
+            Self::All => "all",
         }
     }
+
+    /// 是否属于 MDN 标注的 SVG-only 关键字（不含通用 `auto` / `none`）。
+    #[inline]
+    pub fn is_svg_only(self) -> bool {
+        !matches!(self, Self::Auto | Self::None | Self::BoxNone)
+    }
+
+    /// 自身是否可作为指针目标（布局盒命中；路径级细分后续）。
+    #[inline]
+    pub fn targets_self(self) -> bool {
+        !matches!(self, Self::None | Self::BoxNone)
+    }
+
+    /// 是否允许命中测试进入子树。
+    #[inline]
+    pub fn targets_children(self) -> bool {
+        self != Self::None
+    }
+
+    /// MDN：`visible*` 族要求 `visibility: visible`（RUI 用 `opacity > 0` 近似）。
+    #[inline]
+    pub fn requires_visibility(self) -> bool {
+        matches!(
+            self,
+            Self::VisiblePainted
+                | Self::VisibleFill
+                | Self::VisibleStroke
+                | Self::Visible
+        )
+    }
+
+    /// 是否需对 fill/stroke 几何做路径级命中（不含 `auto`：SVG 叶上 `auto` 在命中处映射为 `visiblePainted`）。
+    #[inline]
+    pub fn uses_path_geometry(self) -> bool {
+        matches!(
+            self,
+            Self::VisiblePainted
+                | Self::VisibleFill
+                | Self::VisibleStroke
+                | Self::Visible
+                | Self::Painted
+                | Self::Fill
+                | Self::Stroke
+                | Self::All
+        )
+    }
+
+    /// SVG 路径级命中策略（MDN）。`auto` / `bounding-box` / `none` / `box-none` 不走此表。
+    #[inline]
+    pub fn path_hit_policy(self) -> Option<PathHitPolicy> {
+        match self {
+            Self::VisiblePainted => Some(PathHitPolicy {
+                test_fill: true,
+                test_stroke: true,
+                require_fill_painted: true,
+                require_stroke_painted: true,
+            }),
+            Self::VisibleFill | Self::Fill => Some(PathHitPolicy {
+                test_fill: true,
+                test_stroke: false,
+                require_fill_painted: false,
+                require_stroke_painted: false,
+            }),
+            Self::VisibleStroke | Self::Stroke => Some(PathHitPolicy {
+                test_fill: false,
+                test_stroke: true,
+                require_fill_painted: false,
+                require_stroke_painted: false,
+            }),
+            Self::Visible | Self::All => Some(PathHitPolicy {
+                test_fill: true,
+                test_stroke: true,
+                require_fill_painted: false,
+                require_stroke_painted: false,
+            }),
+            Self::Painted => Some(PathHitPolicy {
+                test_fill: true,
+                test_stroke: true,
+                require_fill_painted: true,
+                require_stroke_painted: true,
+            }),
+            Self::Auto | Self::BoundingBox | Self::None | Self::BoxNone => None,
+        }
+    }
+}
+
+/// SVG 路径级 `pointer-events` 几何策略（对齐 MDN）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathHitPolicy {
+    pub test_fill: bool,
+    pub test_stroke: bool,
+    /// `visiblePainted` / `painted`：仅当 fill ≠ none 时测填充。
+    pub require_fill_painted: bool,
+    /// `visiblePainted` / `painted`：仅当 stroke ≠ none 时测描边。
+    pub require_stroke_painted: bool,
 }
 
 /// Parse HTML-ish bool literals for RSX attrs (`clearable="true"`, `absolute="1"`, …).
@@ -293,13 +446,13 @@ pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntr
 }
 
 pub fn pointer_events_targets_self(el: &Element) -> bool {
-    el.pointer_events_mode() == PointerEvents::Auto
+    el.pointer_events_mode().targets_self()
 }
 
 /// Whether hit-testing may descend into children.
 #[inline]
 pub fn pointer_events_targets_children(el: &Element) -> bool {
-    el.pointer_events_mode() != PointerEvents::None
+    el.pointer_events_mode().targets_children()
 }
 
 /// [`Element::button_hover_paint`]：用于无整树重建的按钮 hover / focus 环同步（见 `components/button.rs`）。
@@ -982,20 +1135,18 @@ impl Element {
         self
     }
 
-    /// `rui_pointer_events`：命中策略（对齐 RN / 实用 CSS 子集）。
+    /// `rui_pointer_events`：命中策略。
     ///
-    /// - `auto`（默认）：自身与子节点都可命中
-    /// - `none`：自身与子树均不命中（埋层页面等）
-    /// - `box-none`：自身不作为目标，仍命中子节点（portal 壳、装饰层）
+    /// 对齐 [CSS `pointer-events`](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)：
+    /// - **通用**：`auto`（默认）| `none`
+    /// - **布局扩展**：`box-none`（RUI / RN）
+    /// - **SVG 专用**：`bounding-box` | `visiblePainted` | `visibleFill` | `visibleStroke` |
+    ///   `visible` | `painted` | `fill` | `stroke` | `all`  
+    ///   （Icon / `<svg>` 叶推荐 `bounding-box`；有 path 场景时 SVG 关键字走 fill/stroke 几何）
     pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
-        match PointerEvents::parse(mode.as_ref()) {
-            PointerEvents::Auto => {
-                self.attrs.remove(ATTR_POINTER_EVENTS);
-            }
-            other => {
-                self.set_attr(ATTR_POINTER_EVENTS, other.as_str());
-            }
-        }
+        let parsed = PointerEvents::parse(mode.as_ref());
+        // Always persist（含 `auto`），以便 Svg 叶区分「显式 auto」与「未设置 → 默认 bounding-box」。
+        self.set_attr(ATTR_POINTER_EVENTS, parsed.as_str());
         self
     }
 
@@ -2843,6 +2994,10 @@ pub(crate) struct ReactiveSyncCollect {
 }
 
 /// Run generic component-owned reactive synchronizers for the mounted tree.
+///
+/// Prefer [`sync_reactive_elements_subtree_ex`] on the frame path; this wrapper is
+/// kept for crate tests / `test_support`.
+#[allow(dead_code)]
 pub(crate) fn sync_reactive_elements_subtree(
     element: &mut Element,
     layout_tree: &mut LayoutTree,

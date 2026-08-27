@@ -948,12 +948,15 @@ fn collect_floating_triggers(el: &Element, out: &mut std::collections::HashSet<S
     }
 }
 
-/// 吞掉点击，避免穿透到 underlay（不 portal；用于已在 portal 舞台内的面板）。
+/// 吞掉点击，避免事件落到 underlay / 下层页面（不 portal；用于已在 portal 舞台内的面板）。
 pub fn swallow_clicks(inner: Element) -> Element {
     inner.on_click(|| {})
 }
 
-/// 面板包装：吞掉点击，避免穿透到 underlay；并 portal 提升。
+/// 面板包装：吞掉点击 + portal 提升（锚定浮层默认路径）。
+///
+/// Hoist 后保持 `pointer-events: auto`，面板轮廓挡住点击穿透；勿依赖「无 handler →
+/// box-none」的旧默认。特殊透传（Toast / 空锚 / 视口舞台）请显式 `.pointer_events_*`。
 ///
 /// 勿再包一层 [`portal_panel`]：嵌套 `rui_portal` 会把内层面板 hoist 出居中舞台。
 pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
@@ -967,6 +970,13 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
             .map(|id| format!("panel:{id}"))
             .unwrap_or_else(|| format!("panel:{z}"));
         inner.set_attr(ATTR_PORTAL_KEY, key);
+    }
+    // Ensure Auto even if a caller accidentally set box-none on the panel chrome.
+    if inner.pointer_events_mode() != crate::core::tree::PointerEvents::Auto {
+        inner.set_attr(
+            crate::core::tree::ATTR_POINTER_EVENTS,
+            crate::core::tree::PointerEvents::Auto.as_str(),
+        );
     }
     portal_panel(swallow_clicks(inner), z)
 }
@@ -997,6 +1007,7 @@ pub fn mount_anchored_overlay(panel: Element, panel_z: i32) -> Element {
 
 /// 视口固定 portal 舞台（Dialog / Sheet / CommandOverlay）。
 ///
+/// 舞台本身是全屏居中壳：显式 `box-none`，空白区点击落到 underlay（关闭）。
 /// 舞台内面板只用 [`swallow_clicks`]，**禁止**再包 [`panel_block_clicks`]（会嵌套
 /// `rui_portal`，把面板 hoist 出舞台）。
 pub fn mount_viewport_portal_stage(mut stage: Element, panel_z: i32) -> Element {
@@ -1010,6 +1021,7 @@ pub fn mount_viewport_portal_stage(mut stage: Element, panel_z: i32) -> Element 
     {
         stage.set_attr(ATTR_PORTAL_KEY, format!("panel:{panel_z}"));
     }
+    // Special-purpose pass-through: empty stage chrome must not occlude the underlay.
     portal_panel(stage, panel_z).pointer_events_box_none()
 }
 
@@ -1666,5 +1678,102 @@ mod tests {
         }
         count(&root, &mut n);
         assert_eq!(n, 2, "underlay + stage each portal once");
+    }
+
+    #[test]
+    fn floating_panel_after_hoist_occludes_page_hits() {
+        use crate::app::pointer_events::hit_path;
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+        };
+        use crate::core::reactivity::{create_root, Signal};
+        use crate::core::tree::PointerEvents;
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+        };
+
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let oz = portal_sync("cp-hit", open, OverlayKind::Popover, OverlayMode::Stacked)
+                .expect("stacked popover");
+
+            // Full-page button under the future panel silhouette.
+            let under = Element::new()
+                .w(400.0)
+                .h(400.0)
+                .bg([1.0, 0.0, 0.0, 1.0])
+                .focus_id("under-btn")
+                .on_click(|| {});
+
+            // Minimal floating panel (ColorPicker / Select chrome). Gaps between
+            // children must still hit the panel — not the page underneath.
+            let mut panel = Element::new()
+                .w(200.0)
+                .h(200.0)
+                .bg([0.0, 1.0, 0.0, 1.0])
+                .absolute()
+                .left(100.0)
+                .top(100.0)
+                .child(
+                    Element::new()
+                        .w(200.0)
+                        .h(40.0)
+                        .bg([0.0, 0.0, 1.0, 1.0])
+                        .pointer_events_none(),
+                )
+                .child(Element::new().w(200.0).h(40.0).bg([0.0, 0.5, 1.0, 1.0]));
+            mark_floating(
+                &mut panel,
+                "cp-hit",
+                "cp-hit:trigger",
+                PopupPlacement::BottomStart,
+            );
+            let overlay = mount_anchored_overlay(panel, oz.panel);
+            Element::new().w(400.0).h(400.0).child(under).child(overlay)
+        });
+
+        assert!(hoist_portal_subtrees(&mut root) >= 1);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+
+        let layer = root
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        let hoisted = layer
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1"))
+            .expect("hoisted panel");
+        assert_eq!(
+            hoisted.pointer_events_mode(),
+            PointerEvents::Auto,
+            "floating panel must claim its box after hoist"
+        );
+        assert!(
+            hoisted.on_click.is_some(),
+            "swallow_clicks must survive hoist"
+        );
+
+        // Mid-panel, between the two children (gap / chrome) — previously box-none
+        // would miss here and hit `under-btn`.
+        let path = hit_path(&root, 200.0, 180.0);
+        assert!(
+            path.iter().any(|e| {
+                e.floating_id.as_deref() == Some("cp-hit")
+                    || e.portal_key.as_deref() == Some("panel:cp-hit")
+            }),
+            "hit must stay on floating panel; path={:?}",
+            path.iter()
+                .map(|e| (e.focus_id.clone(), e.floating_id.clone(), e.portal_key.clone()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            path.iter().all(|e| e.focus_id.as_deref() != Some("under-btn")),
+            "page control under the panel must not receive the hit"
+        );
+        clear_overlay_stack();
     }
 }

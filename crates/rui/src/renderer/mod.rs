@@ -153,7 +153,7 @@ pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
 #[derive(Clone, Debug)]
 pub struct TexturedDraw {
     pub rect: [f32; 4],
-    /// 贴图 UV 起点（已计入 Y 翻转，见 [`uv_for_subrect`]）。
+    /// 贴图 UV 起点（与 [`uv_for_subrect`] 一致：rect 顶 → `uv.y=0`）。
     pub uv_offset: [f32; 2],
     pub uv_scale: [f32; 2],
     pub texture_key: String,

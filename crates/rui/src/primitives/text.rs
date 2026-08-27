@@ -115,7 +115,11 @@ pub fn text(content: impl Into<String>) -> TextBuilder {
 }
 
 pub fn icon(glyph: impl Into<String>) -> TextBuilder {
-    TextBuilder::new(glyph).family("lucide")
+    let mut b = TextBuilder::new(glyph)
+        .family("lucide")
+        .color(crate::style::parse_text_color("foreground"));
+    b.el = b.el.pointer_events("bounding-box");
+    b
 }
 
 #[cfg(test)]

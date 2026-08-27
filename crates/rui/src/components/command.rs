@@ -1417,7 +1417,8 @@ mod tests {
 
     #[test]
     fn command_overlay_close_then_toast_does_not_leave_underlay() {
-        use crate::components::toast::{paint_toast_host, toast_push};
+        use crate::components::toast::host::paint_toast_host;
+        use crate::components::toast::toast_push;
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
             let open = Signal::new(true);

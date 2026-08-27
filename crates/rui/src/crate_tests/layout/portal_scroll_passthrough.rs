@@ -103,11 +103,15 @@ fn hoist_then_layout_keeps_scroll_chain_under_empty_portals() {
             .focus_id(format!("{SCROLL_AREA_FOCUS_PREFIX}root-scroll"))
             .template_id("main")
             .child({
+                // Empty fullscreen portal shell: must opt into pass-through
+                // (same as [`crate::primitives::portal::Portal`]). Hoist no longer
+                // auto-coerces Auto → box-none — popups/menus keep Auto by default.
                 let mut portal = Element::new()
                     .absolute()
                     .inset(0.0)
                     .w("100%")
                     .h("100%")
+                    .pointer_events_box_none()
                     .template_id("page-portal");
                 portal.set_attr("rui_portal", "1");
                 portal

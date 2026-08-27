@@ -77,6 +77,7 @@ pub use model::{
     ColorPickerVariant, Rgba,
 };
 pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag};
+pub(crate) use view::flush_color_picker_textures;
 use view::{build_color_picker_view, follow_hue_into_rgba, ColorPickerRenderProps};
 
 /// HTML `input type="color"` + Reader 式 HSV 面板。
@@ -208,32 +209,34 @@ mod tests {
     use super::*;
     use super::drag::{apply_color_pointer, ColorDrag, ColorDragKind};
     use super::view::{
-        format_value_row, place_sv_knob, sv_area, sv_knob_frac, sync_trigger_preview, ATTR_CP_SLOT,
-        SLOT_SV_KNOB, SLOT_SV_TEX, SV_KNOB_HALF_PX, TEX_KEYS,
+        format_value_row, place_sv_knob, sv_area, sv_knob_frac, sv_texture_mid_column_luma,
+        swatch_grid, sync_trigger_preview, tex_sv_cpu_count, ATTR_CP_SLOT, SLOT_SV_KNOB,
+        SLOT_SV_TEX, SV_KNOB_HALF_PX,
     };
+    use super::model::SWATCHES_GITHUB;
 
     #[test]
     fn closed_color_picker_defers_sv_texture_until_panel() {
         use crate::core::reactivity::create_root;
-        let before = TEX_KEYS.with(|s| {
-            s.borrow()
-                .iter()
-                .filter(|k| k.starts_with("rui_cp_sv:"))
-                .count()
-        });
+        let before = tex_sv_cpu_count();
         let (_h, _el) = create_root(|| {
             let _: Element = color_picker("defer-sv-closed").into();
         });
-        let after = TEX_KEYS.with(|s| {
-            s.borrow()
-                .iter()
-                .filter(|k| k.starts_with("rui_cp_sv:"))
-                .count()
-        });
+        let after = tex_sv_cpu_count();
         assert_eq!(
             before, after,
             "closed ColorPicker must not generate SV texture at mount"
         );
+    }
+
+    #[test]
+    fn sv_texture_top_row_is_bright_bottom_is_dark() {
+        let (top_luma, bot_luma) = sv_texture_mid_column_luma("orient_sv", 0.0);
+        assert!(
+            top_luma > bot_luma + 200,
+            "SV row0 (widget top) must be brighter than last row; top={top_luma} bot={bot_luma}"
+        );
+        assert!(bot_luma < 24, "bottom row should be near black, got {bot_luma}");
     }
 
     #[test]
@@ -290,6 +293,59 @@ mod tests {
         );
         assert_eq!(ColorPickerVariant::parse("default").as_str(), "default");
         assert_eq!(ColorPickerVariant::Default.swatch_columns(), 6);
+        assert_eq!(ColorPickerVariant::Github.swatch_chip_size(), "1.5rem");
+        assert_eq!(ColorPickerVariant::Github.swatch_columns(), 8);
+    }
+
+    #[test]
+    fn github_swatch_grid_chips_have_explicit_square_size() {
+        let (_handle, grid) = crate::core::reactivity::create_root(|| {
+            let rgba = use_signal("gh_sw_rgba", || Rgba::opaque(0, 77, 207));
+            let hue = use_signal("gh_sw_hue", || 220.0f32);
+            let sat = use_signal("gh_sw_sat", || 1.0f32);
+            let val = use_signal("gh_sw_val", || 0.8f32);
+            let fmt = use_signal("gh_sw_fmt", || ColorFormat::Hex);
+            let out = use_signal("gh_sw_out", || "#004dcf".into());
+            let open = use_signal("gh_sw_open", || true);
+            swatch_grid(
+                "gh_sw",
+                ColorPickerVariant::Github,
+                rgba,
+                hue,
+                sat,
+                val,
+                fmt,
+                out,
+                open,
+                "9999px",
+            )
+        });
+        assert_eq!(
+            grid.children.len(),
+            SWATCHES_GITHUB.len(),
+            "github ships 16 preset chips"
+        );
+        for (i, btn) in grid.children.iter().enumerate() {
+            let h = crate::layout::dim_length_px(btn.style.size.height);
+            let w = crate::layout::dim_length_px(btn.style.size.width);
+            assert!(
+                h.is_some_and(|v| v >= 20.0),
+                "swatch {i} height must be explicit (≥1.5rem), got {:?}",
+                btn.style.size.height
+            );
+            assert!(
+                w.is_some_and(|v| v >= 20.0),
+                "swatch {i} width must be explicit (≥1.5rem), got {:?}",
+                btn.style.size.width
+            );
+            let chip = btn.children.first().expect("chip child");
+            let ch = crate::layout::dim_length_px(chip.style.size.height);
+            assert!(
+                ch.is_some_and(|v| v >= 20.0),
+                "chip {i} must not rely on unwired aspect-ratio; h={:?}",
+                chip.style.size.height
+            );
+        }
     }
 
     #[test]

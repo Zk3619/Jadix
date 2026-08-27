@@ -426,11 +426,7 @@ fn class_variant_hover_needs_frame_inner(
     let ly = b[1] - scroll_acc[1] + el.sticky_visual_offset[1];
     let layout_box = [lx, ly, b[2], b[3]];
     let vis_box = crate::core::tree::visual_paint_aabb(el, scroll_acc);
-    let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
-    let in_clip = clip.map_or(true, |c| {
-        c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
-    });
-    let inside = in_box && in_clip;
+    let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
 
     if let Some(cs) = el.class_set.as_ref() {
         if !cs.variants.is_empty() {
@@ -461,6 +457,31 @@ fn class_variant_hover_needs_frame_inner(
         }
     }
     false
+}
+
+fn pointer_inside_for_class_hover(
+    el: &Element,
+    mouse_pos: [f32; 2],
+    vis_box: [f32; 4],
+    clip: Option<[f32; 4]>,
+) -> bool {
+    let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
+    let in_clip = clip.map_or(true, |c| {
+        c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
+    });
+    if !(in_box && in_clip) {
+        return false;
+    }
+    if crate::primitives::path::element_has_path_geometry(&el.attrs) {
+        return crate::app::tree_hit::element_self_pointer_hit(
+            el,
+            mouse_pos[0],
+            mouse_pos[1],
+            vis_box[0],
+            vis_box[1],
+        );
+    }
+    true
 }
 
 fn intersect_clip(clip: Option<[f32; 4]>, rect: [f32; 4]) -> Option<[f32; 4]> {
@@ -514,11 +535,8 @@ fn sync_class_variants_subtree_inner(
     // Clip `:hover` to ancestor overflow / scroll viewports (layout border box).
     // The node's own hover uses the painted AABB so `hover:scale-*` stays hovered
     // while the pointer is on the scaled ink (not the unscaled Taffy box).
-    let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
-    let in_clip = clip.map_or(true, |c| {
-        c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
-    });
-    let inside = in_box && in_clip;
+    // SVG path leaves further refine via `pointer-events` fill/stroke geometry.
+    let inside = pointer_inside_for_class_hover(el, mouse_pos, vis_box, clip);
 
     let child_clip = if is_portal {
         None

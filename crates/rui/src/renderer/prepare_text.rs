@@ -1987,7 +1987,16 @@ pub fn prepare_text_frame(
                 )
             }
         } else {
-            info.width.max(1.0)
+            // Absorb ≤1px shortfall vs an unbreakable segment so Word-wrap does not
+            // orphan the last glyph when the leaf was sized to a fractional intrinsic.
+            let mut w = info.width.max(1.0);
+            if let Some(p) = info.prepared.as_ref() {
+                let seg = p.max_segment_width;
+                if seg > w && seg <= w + 1.0 {
+                    w = seg;
+                }
+            }
+            crate::text::snap_content_text_width(w).max(info.width.max(1.0))
         };
         let soft_w_target = (layout_w * ui_scale).max(1.0);
         let metrics = info

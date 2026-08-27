@@ -1988,7 +1988,13 @@ impl AppState {
         let _ = crate::primitives::path::flush_path_textures(|key| {
             self.image_textures.get(key).is_some()
         });
+        let _ = crate::media::svg_raster::flush_svg_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
         let _ = super::pending_images::flush_src_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
+        let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
             self.image_textures.get(key).is_some()
         });
 

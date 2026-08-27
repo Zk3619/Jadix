@@ -12,20 +12,133 @@ pub(super) fn hue_texture_key() -> &'static str {
     "rui_cp_hue_ramp"
 }
 
-thread_local! {
-    pub(super) static TEX_KEYS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+struct TexCpuEntry {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    /// Content fingerprint; when it changes, pixels are rebuilt and re-uploaded
+    /// under the same key (avoids per-RGB key thrash on the alpha track).
+    tag: u64,
 }
 
+thread_local! {
+    /// CPU backup for ColorPicker ramps — TexturePool eviction can rehydrate via
+    /// [`flush_color_picker_textures`] (same pattern as gradients / path rasters).
+    pub(super) static TEX_CPU: RefCell<std::collections::HashMap<String, TexCpuEntry>> =
+        RefCell::new(std::collections::HashMap::new());
+    static TEX_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+/// Test/diagnostic: how many SV keys currently sit in the CPU cache.
+#[cfg(test)]
+pub(super) fn tex_sv_cpu_count() -> usize {
+    TEX_CPU.with(|c| {
+        c.borrow()
+            .keys()
+            .filter(|k| k.starts_with("rui_cp_sv:"))
+            .count()
+    })
+}
+
+/// Mid-column luma at first vs last row of an SV ramp (for orientation tests).
+#[cfg(test)]
+pub(super) fn sv_texture_mid_column_luma(id: &str, hue: f32) -> (i32, i32) {
+    let key = ensure_sv_texture(id, hue);
+    TEX_CPU.with(|c| {
+        let map = c.borrow();
+        let entry = map.get(&key).expect("sv cpu");
+        let w = entry.width as usize;
+        let h = entry.height as usize;
+        let mid = w / 2;
+        let top = mid * 4;
+        let bot = ((h - 1) * w + mid) * 4;
+        let top_luma =
+            entry.rgba[top] as i32 + entry.rgba[top + 1] as i32 + entry.rgba[top + 2] as i32;
+        let bot_luma =
+            entry.rgba[bot] as i32 + entry.rgba[bot + 1] as i32 + entry.rgba[bot + 2] as i32;
+        (top_luma, bot_luma)
+    })
+}
+
+/// Rasterize once (immutable key → pixels), mark needed for this frame.
 pub(super) fn tex_cached(key: String, build: impl FnOnce() -> (u32, u32, Vec<u8>)) -> String {
-    let hit = TEX_KEYS.with(|s| s.borrow().contains(&key));
-    if !hit {
-        let (w, h, rgba) = build();
-        TEX_KEYS.with(|s| {
-            s.borrow_mut().insert(key.clone());
-        });
-        crate::queue_image_rgba8(key.clone(), w, h, rgba);
-    }
+    TEX_CPU.with(|c| {
+        let mut map = c.borrow_mut();
+        if !map.contains_key(&key) {
+            let (w, h, rgba) = build();
+            map.insert(
+                key.clone(),
+                TexCpuEntry {
+                    width: w,
+                    height: h,
+                    rgba,
+                    tag: 0,
+                },
+            );
+        }
+    });
+    TEX_NEEDED.with(|n| {
+        n.borrow_mut().insert(key.clone());
+    });
     key
+}
+
+/// Stable key with replaceable pixels: rebuild + queue when `tag` changes.
+pub(super) fn tex_cached_tagged(
+    key: String,
+    tag: u64,
+    build: impl FnOnce() -> (u32, u32, Vec<u8>),
+) -> String {
+    let mut queued = false;
+    TEX_CPU.with(|c| {
+        let mut map = c.borrow_mut();
+        let rebuild = map.get(&key).map(|e| e.tag != tag).unwrap_or(true);
+        if rebuild {
+            let (w, h, rgba) = build();
+            crate::queue_image_rgba8(key.clone(), w, h, rgba.clone());
+            map.insert(
+                key.clone(),
+                TexCpuEntry {
+                    width: w,
+                    height: h,
+                    rgba,
+                    tag,
+                },
+            );
+            queued = true;
+        }
+    });
+    let _ = queued;
+    TEX_NEEDED.with(|n| {
+        n.borrow_mut().insert(key.clone());
+    });
+    key
+}
+
+/// Re-queue ColorPicker ramps missing from the GPU pool after eviction.
+pub(crate) fn flush_color_picker_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
+    let needed: Vec<String> = TEX_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+        .into_iter()
+        .collect();
+    let mut any = false;
+    TEX_CPU.with(|c| {
+        let map = c.borrow();
+        for key in needed {
+            if has_gpu(&key) {
+                continue;
+            }
+            if let Some(entry) = map.get(&key) {
+                crate::app::pending_images::queue_image_rgba8(
+                    &key,
+                    entry.width,
+                    entry.height,
+                    entry.rgba.clone(),
+                );
+                any = true;
+            }
+        }
+    });
+    any
 }
 
 pub(super) fn apply_rounded_rect_alpha(rgba: &mut [u8], w: u32, h: u32, radius: f32) {
@@ -58,9 +171,9 @@ pub(super) fn ensure_sv_texture(id: &str, hue: f32) -> String {
         let h = 144u32;
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
-            // Textured-quad UV maps widget top → texture v=1 (last row). Row 0 is the
-            // widget bottom, so value 0 (black) lives here to match pointer `1 - ty`.
-            let v = y as f32 / (h - 1).max(1) as f32;
+            // `uv_for_subrect`: widget top → texture uv.y=0 (row 0). Pointer uses
+            // `val = 1 - ty`, so row 0 must be value 1 (bright), last row value 0.
+            let v = 1.0 - y as f32 / (h - 1).max(1) as f32;
             for x in 0..w {
                 let s = x as f32 / (w - 1).max(1) as f32;
                 let (r, g, b) = hsv_to_rgb(hue, s, v);
@@ -76,7 +189,7 @@ pub(super) fn ensure_sv_texture(id: &str, hue: f32) -> String {
     })
 }
 
-pub(super) fn ensure_hue_texture() {
+pub(super) fn ensure_hue_texture() -> String {
     tex_cached(hue_texture_key().to_string(), || {
         let w = 180u32;
         let h = 8u32;
@@ -94,15 +207,16 @@ pub(super) fn ensure_hue_texture() {
         }
         apply_rounded_rect_alpha(&mut rgba, w, h, h as f32 * 0.5);
         (w, h, rgba)
-    });
+    })
 }
 
-pub(super) fn alpha_texture_key(c: Rgba) -> String {
-    format!("rui_cp_alpha:{}:{}:{}", c.r, c.g, c.b)
+pub(super) fn alpha_texture_key(id: &str) -> String {
+    format!("rui_cp_alpha:{id}")
 }
 
-pub(super) fn ensure_alpha_texture(c: Rgba) -> String {
-    tex_cached(alpha_texture_key(c), move || {
+pub(super) fn ensure_alpha_texture(id: &str, c: Rgba) -> String {
+    let tag = ((c.r as u64) << 16) | ((c.g as u64) << 8) | (c.b as u64);
+    tex_cached_tagged(alpha_texture_key(id), tag, move || {
         let w = 180u32;
         let h = 8u32;
         let mut rgba = vec![0u8; (w * h * 4) as usize];
@@ -538,13 +652,14 @@ pub(super) fn hue_slider(
     _out: Signal<String>,
     disabled: bool,
 ) -> Element {
-    ensure_hue_texture();
     slider(format!("{id}:hue"))
         .min(0.0)
         .max(360.0)
         .step(1.0)
         .value_signal(hue)
-        .track_texture(hue_texture_key())
+        .track_texture(ensure_hue_texture())
+        // Re-mark needed each sync so TexturePool eviction rehydrates the ramp.
+        .track_texture_fn(|| ensure_hue_texture())
         .disabled(disabled)
         .thumb_fill({
             let hue = hue;
@@ -585,15 +700,17 @@ pub(super) fn alpha_slider(
             sync_string_from_rgba(out, next, fmt_sig.peek());
         }
     });
+    let alpha_id = id.to_string();
     slider(format!("{id}:alpha"))
         .min(0.0)
         .max(1.0)
         .step(0.01)
         .value_signal(alpha)
-        .track_texture(ensure_alpha_texture(rgba.peek()))
+        .track_texture(ensure_alpha_texture(id, rgba.peek()))
         .track_texture_fn({
             let rgba = rgba;
-            move || ensure_alpha_texture(rgba.peek())
+            let alpha_id = alpha_id;
+            move || ensure_alpha_texture(&alpha_id, rgba.peek())
         })
         .disabled(disabled)
         .thumb_fill({
@@ -983,6 +1100,7 @@ pub(super) fn swatch_grid(
     round: &str,
 ) -> Element {
     let cols = variant.swatch_columns();
+    let chip_size = variant.swatch_chip_size();
     let mut swatches: Element = r#box()
         .w("100%")
         .grid_cols_equal(cols)
@@ -992,9 +1110,10 @@ pub(super) fn swatch_grid(
     let radius = if circle { "9999px" } else { round };
     for (i, sw) in variant.swatches().iter().enumerate() {
         let parsed = parse_color_str(sw).unwrap_or(Rgba::opaque(59, 130, 246));
-        let mut chip: Element = r#box().w("100%").rounded(radius).into();
+        // Prefer explicit w×h for swatches: `w:100%` + `aspect-ratio` inside a
+        // `h:auto` / `min-h:0` grid cell often collapses (auto track min contribution).
+        let mut chip: Element = r#box().w(chip_size).h(chip_size).rounded(radius).into();
         chip = chip
-            .aspect_ratio(1.0)
             .bg(parsed.to_f32())
             .border(tokens::border(), 1.0);
         let rgba_s = rgba;
@@ -1007,10 +1126,10 @@ pub(super) fn swatch_grid(
         let close = variant.close_on_swatch();
         let mut btn: Element = button(format!("{id}:sw{i}"))
             .variant("ghost")
-            .size("sm")
+            .size("icon-xs")
             .p("0")
-            .w("100%")
-            .h("auto")
+            .w(chip_size)
+            .h(chip_size)
             .on_click(move || {
                 apply_parsed(parsed, rgba_s, hue_s, sat_s, val_s, out_s, fmt_s.peek());
                 if close {
@@ -1019,7 +1138,7 @@ pub(super) fn swatch_grid(
             })
             .child(chip)
             .into();
-        btn = btn.min_h(0.0);
+        btn = btn.min_h(chip_size).min_w(chip_size).flex_shrink(0.0);
         swatches = swatches.child(btn);
     }
     swatches

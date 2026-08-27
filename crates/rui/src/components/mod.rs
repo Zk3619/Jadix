@@ -28,8 +28,8 @@
 //! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
-//! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令。
-//!   页面栈宿主在 [`crate::app::navigator::navigation_host`]（非本层、非 NavigationMenu）。
+//! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令；
+//!   [`pagination`] 数据分页导航（ShadCN）。页面栈宿主在 [`crate::app::navigator::navigation_host`]。
 #![allow(non_snake_case)]
 
 /// 组件库私有实现（不进产品面）。
@@ -58,6 +58,7 @@ pub mod label;
 pub mod menubar;
 pub mod navbar;
 pub mod navigation_menu;
+pub mod pagination;
 pub mod popover;
 pub mod progress;
 pub mod radio_group;
@@ -204,9 +205,23 @@ pub use menubar::{
     MenubarShortcutProps, MenubarSubTrigger, MenubarSubTriggerProps, MenubarTrigger,
     MenubarTriggerProps,
 };
-pub use navbar::{navbar, NavbarBuilder};
+pub use navbar::{
+    navbar, Navbar, NavbarActions, NavbarActionsProps, NavbarBrand, NavbarBrandProps, NavbarBuilder,
+    NavbarCenter, NavbarCenterProps, NavbarProps,
+};
 pub use navigation_menu::{
-    navigation_menu, NavigationMenuBuilder, NavigationMenuItem, NavigationMenuLink,
+    navigation_menu, navigation_menu_content, navigation_menu_item, navigation_menu_scope,
+    use_navigation_menu, use_navigation_menu_item, NavigationMenuBuilder,
+    NavigationMenuContentOpts, NavigationMenuCtx, NavigationMenuEntry, NavigationMenuItem,
+    NavigationMenuItemCtx, NavigationMenuItemProps, NavigationMenuLink, NavigationMenuLinkData,
+    NavigationMenuLinkProps, NavigationMenuList, NavigationMenuListProps, NavigationMenuTrigger,
+    NavigationMenuTriggerProps, NavigationMenuViewport, NavigationMenuViewportProps,
+};
+pub use pagination::{
+    pagination, pagination_range, Pagination, PaginationBuilder, PaginationContent,
+    PaginationContentProps, PaginationEllipsis, PaginationEllipsisProps, PaginationItem,
+    PaginationItemProps, PaginationLink, PaginationLinkProps, PaginationNext, PaginationNextProps,
+    PaginationPage, PaginationPrevious, PaginationPreviousProps, PaginationProps,
 };
 pub use popover::{popover_panel, PopoverBuilder};
 pub use progress::{progress, Progress, ProgressBuilder, ProgressProps};

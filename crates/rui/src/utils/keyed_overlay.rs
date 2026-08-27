@@ -14,7 +14,7 @@ use std::fmt::Display;
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::tree::Element;
 use crate::layout::layout_tree::ATTR_PORTAL_KEY;
-use crate::style::{css_transition_needs_frame, TransitionSnapshot};
+use crate::style::css_transition_needs_frame;
 use crate::utils::popup::portal_panel;
 
 /// 通用 keyed 项前缀（新组件推荐 `ko:{scope}`）。

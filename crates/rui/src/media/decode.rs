@@ -678,40 +678,11 @@ fn decode_webp(_bytes: &[u8]) -> Option<DecodedImage> {
 
 #[cfg(feature = "svg")]
 fn decode_svg(bytes: &[u8], max_edge: u32) -> Option<DecodedImage> {
-    use std::cell::RefCell;
-
-    use resvg::{tiny_skia, usvg};
-
-    thread_local! {
-        static SVG_OPT: RefCell<Option<usvg::Options<'static>>> = const { RefCell::new(None) };
-    }
-
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    let tree = SVG_OPT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            let mut opt = usvg::Options::default();
-            opt.fontdb_mut().load_system_fonts();
-            opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
-            *slot = Some(opt);
-        }
-        usvg::Tree::from_data(bytes, slot.as_ref().unwrap()).ok()
-    })?;
-    let size = tree.size();
-    let nw = size.width().max(1.0);
-    let nh = size.height().max(1.0);
-    let longest = nw.max(nh);
-    let max = max_edge as f32;
-    let scale = if longest > max { max / longest } else { 1.0 };
-    let out_w = (nw * scale).round().clamp(1.0, max) as u32;
-    let out_h = (nh * scale).round().clamp(1.0, max) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(out_w, out_h)?;
-    let transform = tiny_skia::Transform::from_scale(out_w as f32 / nw, out_h as f32 / nh);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let (out_w, out_h, rgba) = crate::media::svg_raster::rasterize_svg_fit(bytes, max_edge)?;
     Some(DecodedImage {
         width: out_w,
         height: out_h,
-        rgba: pixmap.data().to_vec(),
+        rgba,
         intrinsic_hotspot: None,
     })
 }

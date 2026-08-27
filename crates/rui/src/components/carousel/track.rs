@@ -2,6 +2,8 @@
 //!
 //! CSS / 变体壳留在 `carousel/mod.rs`；此处只算 ideal / clamp / index。
 
+use super::snap;
+
 /// Stack coverflow 侧移步长（与卡宽公式一致：视口 × 0.46 × 0.52）。
 pub fn stack_step_px(viewport_w: f32) -> f32 {
     const CARD_WIDTH_FRAC: f32 = 0.46;
@@ -51,7 +53,7 @@ pub fn ideal_offset(input: IdealOffsetInput) -> f32 {
 
     if is_stack {
         let i = index.min(max_index);
-        let raw = -((i + clone_count) as f32) * step;
+        let raw = snap::snap_target_for_index(i, step, clone_count);
         return if wraps_nav {
             raw
         } else {
@@ -65,11 +67,11 @@ pub fn ideal_offset(input: IdealOffsetInput) -> f32 {
         return (-k * page).clamp(min_offset, 0.0);
     }
     let i = index.min(max_index);
-    let raw = ((i + clone_count) as f32) * step;
+    let raw = snap::snap_target_for_index(i, step, clone_count);
     if !track_loops {
-        return (-raw).clamp(min_offset, 0.0);
+        return raw.clamp(min_offset, 0.0);
     }
-    -raw
+    raw
 }
 
 pub fn clamp_linear_offset(off: f32, min_offset: f32, track_loops: bool) -> f32 {

@@ -5,6 +5,7 @@
 //! 不发起 `http(s)` 请求。
 
 mod decode;
+pub mod svg_raster;
 
 pub use decode::{
     decode_bytes, decode_data_url, load_src, resolve_asset_path, DecodeOptions, DecodedImage,

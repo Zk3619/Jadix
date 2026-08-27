@@ -27,9 +27,9 @@
 //! ui! {
 //!     <ContextMenu id="ctx">
 //!         <ContextMenuTrigger>
-//!             <Rect p="0.75rem" bg="muted" class="rounded-md">
+//!             <div p="0.75rem" bg="muted" class="rounded-md">
 //!                 <Label>"右键打开"</Label>
-//!             </Rect>
+//!             </div>
 //!         </ContextMenuTrigger>
 //!         <ContextMenuContent>
 //!             <ContextMenuLabel>"Actions"</ContextMenuLabel>

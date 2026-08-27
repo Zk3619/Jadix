@@ -7,6 +7,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::core::tree::{
     pointer_events_targets_children, pointer_events_targets_self, CursorKind, CursorValue, Element,
+    PointerEvents,
 };
 use crate::layout::layout_tree::portal_hit_passthrough;
 
@@ -68,6 +69,50 @@ fn pointer_events_blocked(el: &Element) -> bool {
 #[inline]
 fn claims_own_bounds(el: &Element) -> bool {
     pointer_events_targets_self(el) && !portal_hit_passthrough(el)
+}
+
+/// 自身指针命中：AABB +（若适用）SVG path fill/stroke 几何（MDN `pointer-events`）。
+#[inline]
+pub(crate) fn element_self_pointer_hit(
+    el: &Element,
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+) -> bool {
+    if !claims_own_bounds(el) {
+        return false;
+    }
+    let b = el.layout_bounds;
+    if x < vx || x > vx + b[2] || y < vy || y > vy + b[3] {
+        return false;
+    }
+    let mode = el.pointer_events_mode();
+    if mode == PointerEvents::BoundingBox {
+        return true;
+    }
+    // SVG 叶上 CSS `auto` ≡ `visiblePainted`（MDN）。
+    let geom_mode = if mode == PointerEvents::Auto
+        && crate::primitives::path::element_has_path_geometry(&el.attrs)
+    {
+        PointerEvents::VisiblePainted
+    } else if mode.uses_path_geometry() {
+        mode
+    } else {
+        return true;
+    };
+    if geom_mode.requires_visibility() && el.style.opacity <= 0.0 {
+        return false;
+    }
+    let Some(policy) = geom_mode.path_hit_policy() else {
+        return true;
+    };
+    if !crate::primitives::path::element_has_path_geometry(&el.attrs) {
+        // 纯纹理 Icon / AnimatedIcon：无 path 层时回退边界盒。
+        return true;
+    }
+    let local = (x - vx, y - vy);
+    crate::primitives::path::path_pointer_hit(&el.attrs, [b[2], b[3]], local, policy)
 }
 
 /// Preserve `input:` / `textarea:` focus through inner scroll viewports (`scroll:`).
@@ -284,10 +329,7 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
         }
     }
 
-    if inside {
-        if !claims_own_bounds(el) {
-            return LayerHit::Miss;
-        }
+    if element_self_pointer_hit(el, x, y, vx, vy) {
         // Claiming bounds occludes lower siblings even without a cursor kind.
         LayerHit::Hit(el.cursor.clone())
     } else {
@@ -386,10 +428,7 @@ fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> L
         }
     }
 
-    if inside {
-        if !claims_own_bounds(el) {
-            return LayerHit::Miss;
-        }
+    if element_self_pointer_hit(el, x, y, vx, vy) {
         // Claiming bounds occludes lower siblings (modal underlay vs gallery scrollbars).
         LayerHit::Hit(el.focus_id.clone())
     } else {
@@ -477,56 +516,80 @@ pub(super) fn find_input_text_at(
     [f32; 2],
     String,
 )> {
+    find_input_text_at_hit(el, text_edit_fid, x, y, scroll_acc).into_option()
+}
+
+fn find_input_text_at_hit(
+    el: &Element,
+    text_edit_fid: Option<&str>,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> LayerHit<(
+    String,
+    [f32; 4],
+    String,
+    crate::style::TextStyle,
+    [f32; 2],
+    String,
+)> {
     if pointer_events_blocked(el) {
-        return None;
+        return LayerHit::Miss;
     }
+    let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
+    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if crate::core::tree::element_clips_overflow(el)
-        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
-    {
-        return None;
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
+        return LayerHit::Miss;
     }
 
-    let next_acc = next_hit_scroll_acc(el, scroll_acc);
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     let child_text_edit_fid = inherit_text_edit_focus_id(el, text_edit_fid);
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_input_text_at(child, child_text_edit_fid, x, y, next_acc) {
-                return Some(r);
+            match find_input_text_at_hit(child, child_text_edit_fid, x, y, next_acc) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     } else {
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_input_text_at(child, child_text_edit_fid, x, y, next_acc) {
-                return Some(r);
+            match find_input_text_at_hit(child, child_text_edit_fid, x, y, next_acc) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     }
     if let Some(text) = &el.text {
         // Clear / reveal adornments use Lucide icon glyphs — not editable field text.
-        if el.text_style.font_family.as_deref() == Some("lucide") {
-            return None;
-        }
-        if let Some(id) = child_text_edit_fid {
-            let rest = id
-                .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
-                .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
-            if let Some(rest) = rest {
-                if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
-                    // Fourth tuple slot carries the full focus_id so callers keep `textarea:` vs `input:`.
-                    return Some((
-                        rest.to_string(),
-                        [vx, vy, b[2], b[3]],
-                        text.clone(),
-                        el.text_style.clone(),
-                        el.scroll_offset,
-                        id.to_string(),
-                    ));
+        if el.text_style.font_family.as_deref() != Some("lucide") {
+            if let Some(id) = child_text_edit_fid {
+                let rest = id
+                    .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
+                    .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
+                if let Some(rest) = rest {
+                    if inside {
+                        // Fourth tuple slot carries the full focus_id so callers keep `textarea:` vs `input:`.
+                        return LayerHit::Hit(Some((
+                            rest.to_string(),
+                            [vx, vy, b[2], b[3]],
+                            text.clone(),
+                            el.text_style.clone(),
+                            el.scroll_offset,
+                            id.to_string(),
+                        )));
+                    }
                 }
             }
         }
@@ -539,28 +602,29 @@ pub(super) fn find_input_text_at(
             .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
             .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
         if let Some(rest) = rest {
-            if x >= vx
-                && x <= vx + b[2]
-                && y >= vy
-                && y <= vy + b[3]
-                && !pointer_on_text_edit_adornment(el, x, y, scroll_acc)
-            {
+            if inside && !pointer_on_text_edit_adornment(el, x, y, scroll_acc) {
                 if let Some((bounds, text, style, scroll)) =
                     find_input_text_leaf_for_rest_acc(el, Some(id), rest, scroll_acc)
                 {
-                    return Some((
+                    return LayerHit::Hit(Some((
                         rest.to_string(),
                         bounds,
                         text,
                         style,
                         scroll,
                         id.to_string(),
-                    ));
+                    )));
                 }
             }
         }
     }
-    None
+    if element_self_pointer_hit(el, x, y, vx, vy) {
+        // Claiming overlay (popover / color panel / underlay) occludes page inputs —
+        // do not keep searching lower siblings for a textarea under the floating UI.
+        LayerHit::Hit(None)
+    } else {
+        LayerHit::Miss
+    }
 }
 
 fn is_text_edit_focus_id(id: &str) -> bool {
@@ -664,49 +728,70 @@ pub(super) fn find_selectable_text_at(
     y: f32,
     scroll_acc: [f32; 2],
 ) -> Option<(String, [f32; 4], String, crate::style::TextStyle, [f32; 2])> {
+    find_selectable_text_at_hit(el, x, y, scroll_acc).into_option()
+}
+
+fn find_selectable_text_at_hit(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> LayerHit<(String, [f32; 4], String, crate::style::TextStyle, [f32; 2])> {
     if pointer_events_blocked(el) {
-        return None;
+        return LayerHit::Miss;
     }
+    let scroll_acc = escape_scroll_acc(el, scroll_acc);
     let b = el.layout_bounds;
     let [vx, vy] = visual_xy(el, scroll_acc);
+    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
 
-    if crate::core::tree::element_clips_overflow(el)
-        && (x < vx || x > vx + b[2] || y < vy || y > vy + b[3])
-    {
-        return None;
+    let is_body_portal =
+        el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    if !is_body_portal && crate::core::tree::element_clips_overflow(el) && !inside {
+        return LayerHit::Miss;
     }
 
-    let next_acc = next_hit_scroll_acc(el, scroll_acc);
+    let next_acc = if is_body_portal {
+        scroll_acc
+    } else {
+        next_hit_scroll_acc(el, scroll_acc)
+    };
 
     if children_share_same_z_index(el) {
         for child in el.children.iter().rev() {
-            if let Some(r) = find_selectable_text_at(child, x, y, next_acc) {
-                return Some(r);
+            match find_selectable_text_at_hit(child, x, y, next_acc) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     } else {
         let order = hit_test_child_indices(el);
         for i in order.into_iter().rev() {
             let child = &el.children[i];
-            if let Some(r) = find_selectable_text_at(child, x, y, next_acc) {
-                return Some(r);
+            match find_selectable_text_at_hit(child, x, y, next_acc) {
+                LayerHit::Miss => {}
+                hit => return hit,
             }
         }
     }
-    if is_selectable_static_text(el) && x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
+    if is_selectable_static_text(el) && inside {
         if let Some(key) = crate::components::label::selectable_text_key(el) {
             if let Some(text) = &el.text {
-                return Some((
+                return LayerHit::Hit(Some((
                     key,
                     [vx, vy, b[2], b[3]],
                     text.clone(),
                     el.text_style.clone(),
                     el.scroll_offset,
-                ));
+                )));
             }
         }
     }
-    None
+    if element_self_pointer_hit(el, x, y, vx, vy) {
+        LayerHit::Hit(None)
+    } else {
+        LayerHit::Miss
+    }
 }
 
 pub(super) fn update_hovers(
@@ -801,6 +886,7 @@ pub(crate) fn invalidate_hover_handlers() {
 ///
 /// Prefer [`invalidate_hover_handlers`] on live rebuild paths — hard leave here races with
 /// same-frame re-enter and spring ticks, which flickered gallery sidebar hover.
+#[cfg(test)]
 pub(super) fn clear_hover_tracking() {
     HOVER_NEEDS_RESYNC.set(true);
     HOVER_MISS_STREAK.set(0);
@@ -887,11 +973,21 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
         }
     }
 
-    if inside {
-        if !claims_own_bounds(el) {
-            return HoverHit::Miss;
+    // Scaled visual box gates hover (avoids scale↔layout ring thrash). Path policy still
+    // runs in layout space when the pointer is inside the unscaled box.
+    if !inside {
+        return HoverHit::Miss;
+    }
+    let [vx, vy] = visual_xy(el, scroll_acc);
+    let in_layout = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
+    if in_layout {
+        if element_self_pointer_hit(el, x, y, vx, vy) {
+            HoverHit::Hit(hover_slot_for(el))
+        } else {
+            HoverHit::Miss
         }
-        // Claiming bounds absorbs sibling search even without `on_hover` (modal underlay).
+    } else if claims_own_bounds(el) {
+        // scale > 1: outside layout box but inside scaled visual.
         HoverHit::Hit(hover_slot_for(el))
     } else {
         HoverHit::Miss
@@ -933,10 +1029,7 @@ pub(crate) fn find_click(
             }
         }
     }
-    if x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3] {
-        if !claims_own_bounds(el) {
-            return None;
-        }
+    if element_self_pointer_hit(el, x, y, vx, vy) {
         if let Some(cb) = &el.on_click {
             return Some(cb.clone());
         }
@@ -1338,6 +1431,51 @@ mod hover_occlusion_tests {
         assert!(
             chain.is_empty(),
             "gallery scroll area under underlay must not enter hover/wheel chain"
+        );
+    }
+
+    #[test]
+    fn claiming_overlay_blocks_input_text_hit_underneath() {
+        use crate::components::TEXTAREA_FOCUS_PREFIX;
+        use crate::layout::layout_tree::PORTAL_LAYER_ID;
+
+        // Page textarea under a color-picker-like portal panel (claims via on_click).
+        let mut leaf = Element::new().w(200.0).h(80.0);
+        leaf.layout_bounds = [40.0, 40.0, 200.0, 80.0];
+        leaf.text = Some("hello".into());
+        leaf.focus_id = Some(format!("{TEXTAREA_FOCUS_PREFIX}under-ta"));
+
+        let mut field = Element::new().w(200.0).h(80.0).on_click(|| {}).cursor_text();
+        field.layout_bounds = [40.0, 40.0, 200.0, 80.0];
+        field.focus_id = Some(format!("{TEXTAREA_FOCUS_PREFIX}under-ta"));
+        field = field.child(leaf);
+
+        let mut panel = Element::new().w(180.0).h(160.0).on_click(|| {});
+        panel.layout_bounds = [60.0, 20.0, 180.0, 160.0];
+        panel.style.z_index = 1001;
+        panel.set_attr(crate::layout::layout_tree::ATTR_HOISTED_PORTAL, "1");
+
+        let mut layer = Element::new()
+            .w(400.0)
+            .h(400.0)
+            .pointer_events_box_none()
+            .template_id(PORTAL_LAYER_ID)
+            .child(panel);
+        layer.layout_bounds = [0.0, 0.0, 400.0, 400.0];
+
+        let mut root = Element::new().w(400.0).h(400.0).child(field).child(layer);
+        root.layout_bounds = [0.0, 0.0, 400.0, 400.0];
+
+        // Before the LayerHit fix, find_input_text_at walked past the empty panel
+        // and focused the textarea under the SV / popover silhouette.
+        assert!(
+            find_input_text_at(&root, None, 120.0, 80.0, [0.0, 0.0]).is_none(),
+            "textarea under a claiming floating panel must not win input hit-test"
+        );
+        assert_eq!(
+            find_focus_id_at(&root, 120.0, 80.0, [0.0, 0.0]),
+            None,
+            "focus hit-test must also stop on the claiming panel"
         );
     }
 
@@ -1870,7 +2008,9 @@ mod drag_select_bounds_tests {
         leaf.focus_id = Some("textarea:ta-scroll-sel".into());
 
         let mut viewport = Element::new().w(400.0).h(200.0);
-        viewport.style.overflow.y = Overflow::Hidden;
+        // Must be Scroll (not Hidden): `next_hit_scroll_acc` only accumulates
+        // scroll offset for Scroll/scroll-viewport ids.
+        viewport.style.overflow.y = Overflow::Scroll;
         viewport.scroll_offset = [0.0, 100.0];
         viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
         viewport = viewport.child(leaf);

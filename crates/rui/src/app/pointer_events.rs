@@ -12,8 +12,7 @@ use std::rc::Rc;
 
 use winit::event::MouseButton;
 
-use crate::core::tree::{pointer_events_targets_children, pointer_events_targets_self, Element};
-use crate::layout::layout_tree::portal_hit_passthrough;
+use crate::core::tree::{pointer_events_targets_children, Element};
 
 use super::tree_hit;
 
@@ -343,11 +342,6 @@ fn pointer_events_blocked(el: &Element) -> bool {
     !pointer_events_targets_children(el)
 }
 
-#[inline]
-fn claims_own_bounds(el: &Element) -> bool {
-    pointer_events_targets_self(el) && !portal_hit_passthrough(el)
-}
-
 fn hit_path_rec(
     el: &Element,
     x: f32,
@@ -410,12 +404,8 @@ fn hit_path_rec(
         }
     }
 
-    let inside = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
-    let hit = if claims_own_bounds(el) {
-        child_hit || inside
-    } else {
-        child_hit
-    };
+    let self_hit = tree_hit::element_self_pointer_hit(el, x, y, vx, vy);
+    let hit = child_hit || self_hit;
     if hit {
         true
     } else {
@@ -669,7 +659,8 @@ mod tests {
         leaf.focus_id = Some("plot".into());
         leaf.on_mousedown = Some(Rc::new(RefCell::new(|_e: &PointerEvent| {})));
 
-        let mut viewport = Element::new().overflow("hidden");
+        // Scroll contribution only applies for Scroll/Auto (not Hidden/Clip).
+        let mut viewport = Element::new().overflow("scroll");
         viewport.layout_bounds = [0.0, 0.0, 100.0, 100.0];
         viewport.scroll_offset = [0.0, 180.0];
         viewport.children.push(leaf);

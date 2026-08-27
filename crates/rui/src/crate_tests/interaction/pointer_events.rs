@@ -1,4 +1,4 @@
-//! `pointer-events` auto / none / box-none hit + scroll semantics.
+//! `pointer-events`：CSS 通用 + RUI `box-none` + MDN SVG-only 关键字。
 
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
 use crate::app::tree_hit::find_click;
@@ -10,10 +10,46 @@ use crate::style::apply_class_list;
 
 #[test]
 fn pointer_events_parse_modes() {
+    // CSS 通用
     assert_eq!(PointerEvents::parse("none"), PointerEvents::None);
+    assert_eq!(PointerEvents::parse("auto"), PointerEvents::Auto);
+    assert!(!PointerEvents::Auto.is_svg_only());
+    assert!(!PointerEvents::None.is_svg_only());
+
+    // RUI / RN
     assert_eq!(PointerEvents::parse("box-none"), PointerEvents::BoxNone);
     assert_eq!(PointerEvents::parse("box_none"), PointerEvents::BoxNone);
-    assert_eq!(PointerEvents::parse("auto"), PointerEvents::Auto);
+    assert!(!PointerEvents::BoxNone.is_svg_only());
+
+    // MDN SVG-only — 保留独立变体，不折叠成 Auto
+    assert_eq!(
+        PointerEvents::parse("bounding-box"),
+        PointerEvents::BoundingBox
+    );
+    assert_eq!(
+        PointerEvents::parse("visiblePainted"),
+        PointerEvents::VisiblePainted
+    );
+    assert_eq!(
+        PointerEvents::parse("visibleFill"),
+        PointerEvents::VisibleFill
+    );
+    assert_eq!(
+        PointerEvents::parse("visibleStroke"),
+        PointerEvents::VisibleStroke
+    );
+    assert_eq!(PointerEvents::parse("visible"), PointerEvents::Visible);
+    assert_eq!(PointerEvents::parse("painted"), PointerEvents::Painted);
+    assert_eq!(PointerEvents::parse("fill"), PointerEvents::Fill);
+    assert_eq!(PointerEvents::parse("stroke"), PointerEvents::Stroke);
+    assert_eq!(PointerEvents::parse("all"), PointerEvents::All);
+    assert!(PointerEvents::BoundingBox.is_svg_only());
+    assert!(PointerEvents::Fill.is_svg_only());
+    assert!(PointerEvents::BoundingBox.targets_self());
+    assert!(!PointerEvents::None.targets_self());
+    assert!(!PointerEvents::BoxNone.targets_self());
+    assert!(PointerEvents::BoxNone.targets_children());
+
     assert_eq!(
         Element::new().pointer_events_none().pointer_events_mode(),
         PointerEvents::None
@@ -24,6 +60,18 @@ fn pointer_events_parse_modes() {
             .pointer_events_mode(),
         PointerEvents::BoxNone
     );
+    assert_eq!(
+        Element::new()
+            .pointer_events("bounding-box")
+            .pointer_events_mode(),
+        PointerEvents::BoundingBox
+    );
+    assert!(pointer_events_targets_self(
+        &Element::new().pointer_events("bounding-box")
+    ));
+    assert!(pointer_events_targets_self(
+        &Element::new().pointer_events("fill")
+    ));
 }
 
 #[test]

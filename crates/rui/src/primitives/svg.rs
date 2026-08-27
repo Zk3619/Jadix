@@ -1,23 +1,63 @@
-//! # 公开 `<svg>` 叶（WP-3.11）
+//! # å¬å¼ `<svg>` å¶ï¼WP-3.11ï¼
 //!
-//! HTML `<svg viewBox>` 心智，但是 **RUI Element 叶内的矢量场景图**，不是 DOM。
-//! 子形状（`path` / `circle` / `rect` / `line` / `polyline` / `g`）**不**各占 taffy 节点。
-//! 绘制走与 Chart 同一 [`PathCommand`] 核（CPU 覆盖率光栅贴图）。emoji-svg / resvg **不算**本包。
+//! HTML `<svg viewBox>` å¿æºï¼ä½æ¯ **RUI Element å¶åçç¢éåºæ¯å¾**ï¼ä¸æ¯ DOMã
+//! å­å½¢ç¶ï¼`path` / `circle` / `ellipse` / `rect` / `line` / `polyline` / `polygon` / `g`ï¼**ä¸**åå  taffy èç¹ã
+//! ç»å¶èµ°ä¸ Chart åä¸ [`PathCommand`] æ ¸ï¼CPU è¦ççåæ è´´å¾ï¼ï¼`<path d>` ä¸­æ²çº¿å¨ [`decode_path_d`] å±å¹³ä¸º M/L/Zã
+//! emoji-svg / resvg **ä¸ç®**æ¬åã
 //!
-//! 双书写：[`svg`] Builder；`ui!` `<svg>` / `<circle>` / `<path>`…（见 `rui_macros`）。
+//! åä¹¦åï¼[`svg`] Builderï¼`ui!` `<svg>` / `<circle>` / `<path>`â¦ï¼è§ `rui_macros`ï¼ã
+
+use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::core::tree::{Element, IntoCssDim, IntoElementList};
 use crate::primitives::path::{
     decode_path_d, encode_path_d, ensure_raster_texture, filled_circle, filled_rect,
-    polyline as path_polyline, register_path_scene, PathCommand, PathStyle, Point2, ATTR_PATH_D,
+    polygon as path_polygon, polyline as path_polyline, register_path_scene, FillRule,
+    PathCommand, PathStyle, Point2, StrokeLinecap, StrokeLinejoin, ATTR_PATH_D,
     ATTR_PATH_FIT_LEAF, ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
 };
 use crate::style::parse_color;
 
-/// 子形状 Element 标记（场景图编译时消费，不进布局）。
+/// å­å½¢ç¶ Element æ è®°ï¼åºæ¯å¾ç¼è¯æ¶æ¶è´¹ï¼ä¸è¿å¸å±ï¼ã
 pub const ATTR_SVG_KIND: &str = "rui_svg_kind";
+/// Stored resvg scene (`register_svg_scene` hex id).
+pub const ATTR_SVG_SCENE: &str = "rui_svg_scene";
+pub const ATTR_SVG_HAS_SMIL: &str = "rui_svg_has_smil";
+/// Text content for `<text>` / `<title>` / `<desc>` / `<tspan>` (`text_content` Builder).
+pub const ATTR_SVG_TEXT: &str = "rui_svg_text";
 
-/// SVG 用户坐标 / 字面量 → f32（`cx={50}` / `cx="50"` / `50.0`）。
+/// Tags that must not enter the public SVG surface (no DOM / no host HTML).
+fn is_blocked_svg_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "script" | "Script" | "foreignObject" | "ForeignObject" | "foreignobject"
+    )
+}
+
+/// Paint / never-rendered tags that belong in `<defs>` when not under an explicit `<defs>`.
+fn is_elem_defs_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "filter"
+            | "mask"
+            | "pattern"
+            | "marker"
+            | "style"
+            | "metadata"
+            | "title"
+            | "desc"
+            | "mpath"
+            | "linearGradient"
+            | "radialGradient"
+            | "clipPath"
+            | "symbol"
+    ) || tag.starts_with("fe")
+}
+
+/// SVG ç¨æ·åæ  / å­é¢é â f32ï¼`cx={50}` / `cx="50"` / `50.0`ï¼ã
 pub trait IntoSvgNum {
     fn into_svg_num(self) -> f32;
 }
@@ -58,6 +98,37 @@ impl IntoSvgNum for &str {
 impl IntoSvgNum for String {
     fn into_svg_num(self) -> f32 {
         self.as_str().into_svg_num()
+    }
+}
+
+/// SVG coordinate or gradient stop position (`50` / `"50%"` / `"0.5"`).
+pub trait IntoSvgCoord {
+    fn into_svg_coord(self) -> String;
+}
+
+impl IntoSvgCoord for f32 {
+    fn into_svg_coord(self) -> String {
+        self.to_string()
+    }
+}
+impl IntoSvgCoord for f64 {
+    fn into_svg_coord(self) -> String {
+        self.to_string()
+    }
+}
+impl IntoSvgCoord for i32 {
+    fn into_svg_coord(self) -> String {
+        self.to_string()
+    }
+}
+impl IntoSvgCoord for &str {
+    fn into_svg_coord(self) -> String {
+        self.to_string()
+    }
+}
+impl IntoSvgCoord for String {
+    fn into_svg_coord(self) -> String {
+        self
     }
 }
 
@@ -125,7 +196,7 @@ impl Affine {
         )
     }
 
-    /// `self` 在左：先 `other`，再 `self`（父变换包住子变换）。
+    /// `self` å¨å·¦ï¼å `other`ï¼å `self`ï¼ç¶åæ¢åä½å­åæ¢ï¼ã
     fn mul(self, other: Self) -> Self {
         Self {
             a: self.a * other.a + self.c * other.b,
@@ -222,7 +293,216 @@ fn parse_paint(raw: Option<&str>) -> Option<[f32; 4]> {
     if s.is_empty() || s.eq_ignore_ascii_case("none") {
         return None;
     }
+    if parse_url_paint_id(s).is_some() {
+        // Resolved via paint defs in `resolve_style`.
+        return None;
+    }
     Some(parse_color(s))
+}
+
+fn parse_url_paint_id(raw: &str) -> Option<&str> {
+    let s = raw.trim();
+    let inner = s.strip_prefix("url(")?.trim();
+    let inner = inner.strip_suffix(')')?.trim();
+    let id = inner.trim_matches(|c| c == '"' || c == '\'').trim();
+    let id = id.strip_prefix('#').unwrap_or(id).trim();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id)
+    }
+}
+
+fn parse_grad_unit(raw: &str) -> f32 {
+    let t = raw.trim();
+    if let Some(p) = t.strip_suffix('%') {
+        p.trim().parse::<f32>().unwrap_or(0.0) / 100.0
+    } else {
+        t.parse::<f32>().unwrap_or(0.0)
+    }
+}
+
+fn svg_stops_to_css(stops: &[GradientStop]) -> Vec<crate::style::ColorStop> {
+    stops
+        .iter()
+        .map(|s| {
+            let mut c = parse_color(&s.color);
+            c[3] = (c[3] * s.opacity).clamp(0.0, 1.0);
+            crate::style::ColorStop::at(c, parse_grad_unit(&s.offset).clamp(0.0, 1.0))
+        })
+        .collect()
+}
+
+fn linear_gradient_to_css(
+    x1: &str,
+    y1: &str,
+    x2: &str,
+    y2: &str,
+    stops: &[GradientStop],
+) -> crate::style::Gradient {
+    let x1 = parse_grad_unit(x1);
+    let y1 = parse_grad_unit(y1);
+    let x2 = parse_grad_unit(x2);
+    let y2 = parse_grad_unit(y2);
+    // PathStyle sampling uses the same convention as CSS linear: 0° = left→right.
+    let angle_deg = (y2 - y1).atan2(x2 - x1).to_degrees();
+    crate::style::Gradient::Linear(crate::style::LinearGradient {
+        angle_deg,
+        stops: svg_stops_to_css(stops),
+        hints: Vec::new(),
+        repeating: false,
+    })
+}
+
+fn radial_gradient_to_css(
+    cx: &str,
+    cy: &str,
+    r: &str,
+    stops: &[GradientStop],
+) -> crate::style::Gradient {
+    let cx = parse_grad_unit(cx);
+    let cy = parse_grad_unit(cy);
+    let r = parse_grad_unit(r).max(0.01);
+    crate::style::Gradient::Radial(crate::style::RadialGradient {
+        shape: crate::style::RadialShape::Circle,
+        extent: crate::style::RadialExtent::Circle(r),
+        position: crate::style::GradientPosition { x: cx, y: cy },
+        stops: svg_stops_to_css(stops),
+        hints: Vec::new(),
+        repeating: false,
+    })
+}
+
+fn collect_paint_defs(nodes: &[SvgNode], out: &mut HashMap<String, crate::style::Gradient>) {
+    for n in nodes {
+        match n {
+            SvgNode::Defs { children }
+            | SvgNode::Group { children, .. }
+            | SvgNode::ClipPath { children, .. }
+            | SvgNode::Symbol { children, .. } => collect_paint_defs(children, out),
+            SvgNode::LinearGradient {
+                id,
+                x1,
+                y1,
+                x2,
+                y2,
+                stops,
+                ..
+            } => {
+                if !id.is_empty() {
+                    out.insert(
+                        id.clone(),
+                        linear_gradient_to_css(x1, y1, x2, y2, stops),
+                    );
+                }
+            }
+            SvgNode::RadialGradient {
+                id,
+                cx,
+                cy,
+                r,
+                stops,
+                ..
+            } => {
+                if !id.is_empty() {
+                    out.insert(id.clone(), radial_gradient_to_css(cx, cy, r, stops));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn resolve_style(
+    fill_raw: Option<&str>,
+    stroke_raw: Option<&str>,
+    stroke_width: f32,
+    opacity: f32,
+    default_fill: bool,
+    default_stroke: bool,
+    linecap: StrokeLinecap,
+    linejoin: StrokeLinejoin,
+    fill_rule: FillRule,
+    xf: Affine,
+    paints: &HashMap<String, crate::style::Gradient>,
+) -> Option<PathStyle> {
+    let mut fill_gradient = None;
+    let fill = if let Some(raw) = fill_raw.map(str::trim).filter(|s| !s.is_empty()) {
+        if raw.eq_ignore_ascii_case("none") {
+            None
+        } else if let Some(id) = parse_url_paint_id(raw) {
+            fill_gradient = paints.get(id).cloned();
+            // Opacity carrier for gradient fills.
+            fill_gradient.as_ref().map(|_| [1.0, 1.0, 1.0, 1.0])
+        } else {
+            Some(parse_color(raw))
+        }
+    } else if default_fill {
+        Some(parse_color("foreground"))
+    } else {
+        None
+    };
+    let stroke = parse_paint(stroke_raw).or_else(|| {
+        if default_stroke && stroke_raw.is_none() {
+            Some(parse_color("foreground"))
+        } else {
+            None
+        }
+    });
+    if fill.is_none() && fill_gradient.is_none() && stroke.is_none() {
+        return None;
+    }
+    let sw = (if stroke.is_some() {
+        if stroke_width > 0.0 {
+            stroke_width
+        } else {
+            1.0
+        }
+    } else {
+        0.0
+    }) * xf.scale_avg();
+    Some(PathStyle {
+        fill: fill.map(|c| mul_alpha(c, opacity)),
+        fill_gradient,
+        stroke: stroke.map(|c| mul_alpha(c, opacity)),
+        stroke_width: sw,
+        stroke_linecap: linecap,
+        stroke_linejoin: linejoin,
+        fill_rule,
+    })
+}
+
+fn push_styled(
+    out: &mut Vec<(Vec<PathCommand>, PathStyle)>,
+    cmds: &[PathCommand],
+    fill: Option<&str>,
+    stroke: Option<&str>,
+    stroke_width: f32,
+    opacity: f32,
+    default_fill: bool,
+    default_stroke: bool,
+    linecap: StrokeLinecap,
+    linejoin: StrokeLinejoin,
+    fill_rule: FillRule,
+    xf: Affine,
+    paints: &HashMap<String, crate::style::Gradient>,
+) {
+    let Some(style) = resolve_style(
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
+        default_fill,
+        default_stroke,
+        linecap,
+        linejoin,
+        fill_rule,
+        xf,
+        paints,
+    ) else {
+        return;
+    };
+    out.push((apply_affine(cmds, xf), style));
 }
 
 fn parse_svg_points(s: &str) -> Vec<Point2> {
@@ -261,69 +541,93 @@ fn mul_alpha(c: [f32; 4], opacity: f32) -> [f32; 4] {
     [c[0], c[1], c[2], (c[3] * opacity).clamp(0.0, 1.0)]
 }
 
-fn resolve_style(
-    fill_raw: Option<&str>,
-    stroke_raw: Option<&str>,
-    stroke_width: f32,
-    opacity: f32,
-    default_fill: bool,
-    default_stroke: bool,
-    xf: Affine,
-) -> Option<PathStyle> {
-    let fill = parse_paint(fill_raw).or_else(|| {
-        if default_fill && fill_raw.is_none() {
-            Some(parse_color("foreground"))
-        } else {
-            None
-        }
-    });
-    let stroke = parse_paint(stroke_raw).or_else(|| {
-        if default_stroke && stroke_raw.is_none() {
-            Some(parse_color("foreground"))
-        } else {
-            None
-        }
-    });
-    if fill.is_none() && stroke.is_none() {
-        return None;
-    }
-    let sw = (if stroke.is_some() {
-        if stroke_width > 0.0 {
-            stroke_width
-        } else {
-            1.0
-        }
-    } else {
-        0.0
-    }) * xf.scale_avg();
-    Some(PathStyle {
-        fill: fill.map(|c| mul_alpha(c, opacity)),
-        stroke: stroke.map(|c| mul_alpha(c, opacity)),
-        stroke_width: sw,
-    })
+fn stroke_attrs(el: &Element) -> (StrokeLinecap, StrokeLinejoin, FillRule) {
+    let linecap = el
+        .get_attr("stroke-linecap")
+        .or_else(|| el.get_attr("stroke_linecap"))
+        .map(|s| StrokeLinecap::parse(s))
+        .unwrap_or_default();
+    let linejoin = el
+        .get_attr("stroke-linejoin")
+        .or_else(|| el.get_attr("stroke_linejoin"))
+        .map(|s| StrokeLinejoin::parse(s))
+        .unwrap_or_default();
+    let fill_rule = el
+        .get_attr("fill-rule")
+        .or_else(|| el.get_attr("fill_rule"))
+        .map(|s| FillRule::parse(s))
+        .unwrap_or_default();
+    (linecap, linejoin, fill_rule)
 }
 
-#[derive(Clone)]
-enum SvgNode {
+fn filled_ellipse(cx: f32, cy: f32, rx: f32, ry: f32, segments: usize) -> Vec<PathCommand> {
+    let n = segments.max(8);
+    let rx = rx.max(0.0);
+    let ry = ry.max(0.0);
+    let mut pts = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = std::f32::consts::TAU * (i as f32) / (n as f32);
+        pts.push((cx + rx * a.cos(), cy + ry * a.sin()));
+    }
+    path_polygon(&pts)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GradientStop {
+    pub offset: String,
+    pub color: String,
+    pub opacity: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum SvgNode {
     Circle {
+        id: Option<String>,
+        clip_path: Option<String>,
         cx: f32,
         cy: f32,
         r: f32,
         fill: Option<String>,
         stroke: Option<String>,
         stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
+        fill_rule: FillRule,
+        opacity: f32,
+        transform: String,
+    },
+    Ellipse {
+        id: Option<String>,
+        clip_path: Option<String>,
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        fill: Option<String>,
+        stroke: Option<String>,
+        stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
+        fill_rule: FillRule,
         opacity: f32,
         transform: String,
     },
     Path {
+        id: Option<String>,
+        clip_path: Option<String>,
         d: String,
         fill: Option<String>,
         stroke: Option<String>,
         stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
+        fill_rule: FillRule,
         opacity: f32,
         transform: String,
     },
     Rect {
+        id: Option<String>,
+        clip_path: Option<String>,
         x: f32,
         y: f32,
         w: f32,
@@ -331,24 +635,37 @@ enum SvgNode {
         fill: Option<String>,
         stroke: Option<String>,
         stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
+        fill_rule: FillRule,
         opacity: f32,
         transform: String,
     },
     Line {
+        id: Option<String>,
+        clip_path: Option<String>,
         x1: f32,
         y1: f32,
         x2: f32,
         y2: f32,
         stroke: Option<String>,
         stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
         opacity: f32,
         transform: String,
     },
     Polyline {
+        id: Option<String>,
+        clip_path: Option<String>,
         points: Vec<Point2>,
+        closed: bool,
         fill: Option<String>,
         stroke: Option<String>,
         stroke_width: f32,
+        linecap: StrokeLinecap,
+        linejoin: StrokeLinejoin,
+        fill_rule: FillRule,
         opacity: f32,
         transform: String,
     },
@@ -357,14 +674,223 @@ enum SvgNode {
         opacity: f32,
         children: Vec<SvgNode>,
     },
+    Defs {
+        children: Vec<SvgNode>,
+    },
+    Use {
+        id: Option<String>,
+        href: String,
+        x: f32,
+        y: f32,
+        width: Option<f32>,
+        height: Option<f32>,
+        opacity: f32,
+        transform: String,
+    },
+    ClipPath {
+        id: String,
+        clip_rule: String,
+        children: Vec<SvgNode>,
+    },
+    LinearGradient {
+        id: String,
+        x1: String,
+        y1: String,
+        x2: String,
+        y2: String,
+        gradient_units: String,
+        stops: Vec<GradientStop>,
+    },
+    RadialGradient {
+        id: String,
+        cx: String,
+        cy: String,
+        r: String,
+        fx: Option<String>,
+        fy: Option<String>,
+        gradient_units: String,
+        stops: Vec<GradientStop>,
+    },
+    Symbol {
+        id: String,
+        view_box: Option<String>,
+        children: Vec<SvgNode>,
+    },
+    Animate {
+        attribute_name: String,
+        from: String,
+        to: String,
+        dur: String,
+        repeat_count: String,
+        /// Parsed for future begin-offset support; not yet applied in SMIL eval.
+        #[allow(dead_code)]
+        begin: String,
+    },
+    AnimateTransform {
+        transform_type: String,
+        from: String,
+        to: String,
+        dur: String,
+        repeat_count: String,
+        /// Parsed for future begin-offset support; not yet applied in SMIL eval.
+        #[allow(dead_code)]
+        begin: String,
+    },
+    Set {
+        attribute_name: String,
+        to: String,
+        /// Parsed for future begin-offset support; not yet applied in SMIL eval.
+        #[allow(dead_code)]
+        begin: String,
+    },
+    /// Passthrough element for resvg (text/image/mask/filter/fe*/…); not compiled to PathCommand.
+    Elem {
+        tag: String,
+        attrs: Vec<(String, String)>,
+        children: Vec<SvgNode>,
+        text: Option<String>,
+    },
 }
 
 fn opt_attr(el: &Element, key: &str) -> Option<String> {
     el.get_attr(key).filter(|s| !s.trim().is_empty()).cloned()
 }
 
+fn shape_id_clip(el: &Element) -> (Option<String>, Option<String>) {
+    (
+        opt_attr(el, "id"),
+        opt_attr(el, "clip-path").or_else(|| opt_attr(el, "clip_path")),
+    )
+}
+
+fn href_from_element(el: &Element) -> String {
+    opt_attr(el, "href")
+        .or_else(|| opt_attr(el, "xlink:href"))
+        .unwrap_or_default()
+}
+
+fn nodes_from_children(el: &Element) -> Vec<SvgNode> {
+    el.children.iter().filter_map(node_from_element).collect()
+}
+
+fn stop_from_element(el: &Element) -> Option<GradientStop> {
+    if el.get_attr(ATTR_SVG_KIND)?.as_str() != "stop" {
+        return None;
+    }
+    Some(GradientStop {
+        offset: opt_attr(el, "offset").unwrap_or_else(|| "0".into()),
+        color: opt_attr(el, "stop-color")
+            .or_else(|| opt_attr(el, "stop_color"))
+            .unwrap_or_else(|| "black".into()),
+        opacity: opt_attr(el, "stop-opacity")
+            .or_else(|| opt_attr(el, "stop_opacity"))
+            .map(|s| s.as_str().into_svg_num())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0),
+    })
+}
+
+fn is_smil_node(node: &SvgNode) -> bool {
+    match node {
+        SvgNode::Animate { .. } | SvgNode::AnimateTransform { .. } | SvgNode::Set { .. } => true,
+        SvgNode::Elem { tag, .. } => matches!(
+            tag.as_str(),
+            "animate" | "animateTransform" | "animateMotion" | "set" | "mpath"
+        ),
+        _ => false,
+    }
+}
+
+/// SMIL nodes that are baked by `svg_smil` and must not be re-emitted for resvg.
+fn is_baked_smil_node(node: &SvgNode) -> bool {
+    matches!(
+        node,
+        SvgNode::Animate { .. } | SvgNode::AnimateTransform { .. } | SvgNode::Set { .. }
+    )
+}
+
+/// Shape Elements may nest SMIL children (`<circle><animate/></circle>`). Fold them into a
+/// synthetic `<g>` so [`svg_smil::apply_smil`] can bake attributes onto the shape.
+fn wrap_shape_with_smil(shape: SvgNode, el: &Element) -> SvgNode {
+    let smil: Vec<SvgNode> = el
+        .children
+        .iter()
+        .filter_map(node_from_element)
+        .filter(is_smil_node)
+        .collect();
+    if smil.is_empty() {
+        return shape;
+    }
+    let mut children = Vec::with_capacity(1 + smil.len());
+    children.push(shape);
+    children.extend(smil);
+    SvgNode::Group {
+        transform: String::new(),
+        opacity: 1.0,
+        children,
+    }
+}
+
+fn is_defs_only_node(node: &SvgNode) -> bool {
+    match node {
+        SvgNode::Defs { .. }
+        | SvgNode::LinearGradient { .. }
+        | SvgNode::RadialGradient { .. }
+        | SvgNode::ClipPath { .. }
+        | SvgNode::Symbol { .. } => true,
+        SvgNode::Elem { tag, .. } => is_elem_defs_tag(tag),
+        _ => false,
+    }
+}
+
+fn elem_attrs_from_element(el: &Element) -> Vec<(String, String)> {
+    let mut attrs: Vec<(String, String)> = el
+        .attrs
+        .iter()
+        .filter(|(k, _)| {
+            k.as_str() != ATTR_SVG_KIND
+                && k.as_str() != ATTR_SVG_TEXT
+                && !k.starts_with("rui_")
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    attrs.sort_by(|a, b| a.0.cmp(&b.0));
+    attrs
+}
+
+fn elem_text_from_element(el: &Element) -> Option<String> {
+    if let Some(t) = el.get_attr(ATTR_SVG_TEXT).filter(|s| !s.is_empty()) {
+        return Some(t.clone());
+    }
+    el.text
+        .as_ref()
+        .map(|s| s.as_str().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn elem_from_element(el: &Element, tag: &str) -> Option<SvgNode> {
+    if is_blocked_svg_tag(tag) {
+        return None;
+    }
+    Some(SvgNode::Elem {
+        tag: tag.to_string(),
+        attrs: elem_attrs_from_element(el),
+        children: nodes_from_children(el),
+        text: elem_text_from_element(el),
+    })
+}
+
 fn node_from_element(el: &Element) -> Option<SvgNode> {
-    let kind = el.get_attr(ATTR_SVG_KIND)?.as_str();
+    let kind_owned = el.get_attr(ATTR_SVG_KIND)?.clone();
+    let kind = kind_owned.as_str();
+    // filter/mask are presentation effects typed CPU shapes don't model → Elem + resvg.
+    if matches!(
+        kind,
+        "circle" | "ellipse" | "path" | "rect" | "line" | "polyline" | "polygon" | "g"
+    ) && (opt_attr(el, "filter").is_some() || opt_attr(el, "mask").is_some())
+    {
+        return elem_from_element(el, kind);
+    }
     let opacity = el
         .get_attr("opacity")
         .map(|s| s.as_str().into_svg_num())
@@ -378,69 +904,238 @@ fn node_from_element(el: &Element) -> Option<SvgNode> {
         .or_else(|| el.get_attr("stroke_width"))
         .map(|s| s.as_str().into_svg_num())
         .unwrap_or(0.0);
+    let (linecap, linejoin, fill_rule) = stroke_attrs(el);
+    let (id, clip_path) = shape_id_clip(el);
     match kind {
-        "circle" => Some(SvgNode::Circle {
-            cx: attr_f32(el, "cx"),
-            cy: attr_f32(el, "cy"),
-            r: attr_f32(el, "r").max(0.0),
-            fill,
-            stroke,
-            stroke_width,
-            opacity,
-            transform,
-        }),
-        "path" => Some(SvgNode::Path {
-            d: el.get_attr("d").cloned().unwrap_or_default(),
-            fill,
-            stroke,
-            stroke_width,
-            opacity,
-            transform,
-        }),
-        "rect" => Some(SvgNode::Rect {
-            x: attr_f32(el, "x"),
-            y: attr_f32(el, "y"),
-            w: el
-                .get_attr("width")
-                .map(|s| s.as_str().into_svg_num())
-                .unwrap_or(0.0),
-            h: el
-                .get_attr("height")
-                .map(|s| s.as_str().into_svg_num())
-                .unwrap_or(0.0),
-            fill,
-            stroke,
-            stroke_width,
-            opacity,
-            transform,
-        }),
-        "line" => Some(SvgNode::Line {
-            x1: attr_f32(el, "x1"),
-            y1: attr_f32(el, "y1"),
-            x2: attr_f32(el, "x2"),
-            y2: attr_f32(el, "y2"),
-            stroke,
-            stroke_width,
-            opacity,
-            transform,
-        }),
-        "polyline" => Some(SvgNode::Polyline {
-            points: el
-                .get_attr("points")
-                .map(|s| parse_svg_points(s))
-                .unwrap_or_default(),
-            fill,
-            stroke,
-            stroke_width,
-            opacity,
-            transform,
-        }),
+        "circle" => Some(wrap_shape_with_smil(
+            SvgNode::Circle {
+                id,
+                clip_path,
+                cx: attr_f32(el, "cx"),
+                cy: attr_f32(el, "cy"),
+                r: attr_f32(el, "r").max(0.0),
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "ellipse" => Some(wrap_shape_with_smil(
+            SvgNode::Ellipse {
+                id,
+                clip_path,
+                cx: attr_f32(el, "cx"),
+                cy: attr_f32(el, "cy"),
+                rx: attr_f32(el, "rx").max(0.0),
+                ry: attr_f32(el, "ry").max(0.0),
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "path" => Some(wrap_shape_with_smil(
+            SvgNode::Path {
+                id,
+                clip_path,
+                d: el.get_attr("d").cloned().unwrap_or_default(),
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "rect" => Some(wrap_shape_with_smil(
+            SvgNode::Rect {
+                id,
+                clip_path,
+                x: attr_f32(el, "x"),
+                y: attr_f32(el, "y"),
+                w: el
+                    .get_attr("width")
+                    .map(|s| s.as_str().into_svg_num())
+                    .unwrap_or(0.0),
+                h: el
+                    .get_attr("height")
+                    .map(|s| s.as_str().into_svg_num())
+                    .unwrap_or(0.0),
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "line" => Some(wrap_shape_with_smil(
+            SvgNode::Line {
+                id,
+                clip_path,
+                x1: attr_f32(el, "x1"),
+                y1: attr_f32(el, "y1"),
+                x2: attr_f32(el, "x2"),
+                y2: attr_f32(el, "y2"),
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "polyline" => Some(wrap_shape_with_smil(
+            SvgNode::Polyline {
+                id,
+                clip_path,
+                points: el
+                    .get_attr("points")
+                    .map(|s| parse_svg_points(s))
+                    .unwrap_or_default(),
+                closed: false,
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "polygon" => Some(wrap_shape_with_smil(
+            SvgNode::Polyline {
+                id,
+                clip_path,
+                points: el
+                    .get_attr("points")
+                    .map(|s| parse_svg_points(s))
+                    .unwrap_or_default(),
+                closed: true,
+                fill,
+                stroke,
+                stroke_width,
+                linecap,
+                linejoin,
+                fill_rule,
+                opacity,
+                transform,
+            },
+            el,
+        )),
         "g" => Some(SvgNode::Group {
             transform,
             opacity,
-            children: el.children.iter().filter_map(node_from_element).collect(),
+            children: nodes_from_children(el),
         }),
-        _ => None,
+        "defs" => Some(SvgNode::Defs {
+            children: nodes_from_children(el),
+        }),
+        "use" => Some(wrap_shape_with_smil(
+            SvgNode::Use {
+                id,
+                href: href_from_element(el),
+                x: attr_f32(el, "x"),
+                y: attr_f32(el, "y"),
+                width: opt_attr(el, "width").map(|s| s.as_str().into_svg_num()),
+                height: opt_attr(el, "height").map(|s| s.as_str().into_svg_num()),
+                opacity,
+                transform,
+            },
+            el,
+        )),
+        "clippath" | "clipPath" => Some(SvgNode::ClipPath {
+            id: opt_attr(el, "id").unwrap_or_default(),
+            clip_rule: opt_attr(el, "clip-rule")
+                .or_else(|| opt_attr(el, "clip_rule"))
+                .unwrap_or_else(|| "nonzero".into()),
+            children: nodes_from_children(el),
+        }),
+        "lineargradient" | "linearGradient" => Some(SvgNode::LinearGradient {
+            id: opt_attr(el, "id").unwrap_or_default(),
+            x1: opt_attr(el, "x1").unwrap_or_else(|| "0%".into()),
+            y1: opt_attr(el, "y1").unwrap_or_else(|| "0%".into()),
+            x2: opt_attr(el, "x2").unwrap_or_else(|| "100%".into()),
+            y2: opt_attr(el, "y2").unwrap_or_else(|| "0%".into()),
+            gradient_units: opt_attr(el, "gradientUnits")
+                .or_else(|| opt_attr(el, "gradient_units"))
+                .unwrap_or_else(|| "objectBoundingBox".into()),
+            stops: el
+                .children
+                .iter()
+                .filter_map(stop_from_element)
+                .collect(),
+        }),
+        "radialgradient" | "radialGradient" => Some(SvgNode::RadialGradient {
+            id: opt_attr(el, "id").unwrap_or_default(),
+            cx: opt_attr(el, "cx").unwrap_or_else(|| "50%".into()),
+            cy: opt_attr(el, "cy").unwrap_or_else(|| "50%".into()),
+            r: opt_attr(el, "r").unwrap_or_else(|| "50%".into()),
+            fx: opt_attr(el, "fx"),
+            fy: opt_attr(el, "fy"),
+            gradient_units: opt_attr(el, "gradientUnits")
+                .or_else(|| opt_attr(el, "gradient_units"))
+                .unwrap_or_else(|| "objectBoundingBox".into()),
+            stops: el
+                .children
+                .iter()
+                .filter_map(stop_from_element)
+                .collect(),
+        }),
+        "symbol" => Some(SvgNode::Symbol {
+            id: opt_attr(el, "id").unwrap_or_default(),
+            view_box: opt_attr(el, "viewBox").or_else(|| opt_attr(el, "view_box")),
+            children: nodes_from_children(el),
+        }),
+        "animate" => Some(SvgNode::Animate {
+            attribute_name: opt_attr(el, "attributeName")
+                .or_else(|| opt_attr(el, "attribute_name"))
+                .unwrap_or_default(),
+            from: opt_attr(el, "from").unwrap_or_default(),
+            to: opt_attr(el, "to").unwrap_or_default(),
+            dur: opt_attr(el, "dur").unwrap_or_else(|| "1s".into()),
+            repeat_count: opt_attr(el, "repeatCount")
+                .or_else(|| opt_attr(el, "repeat_count"))
+                .unwrap_or_else(|| "1".into()),
+            begin: opt_attr(el, "begin").unwrap_or_default(),
+        }),
+        "animatetransform" | "animateTransform" => Some(SvgNode::AnimateTransform {
+            transform_type: opt_attr(el, "type").unwrap_or_else(|| "rotate".into()),
+            from: opt_attr(el, "from").unwrap_or_default(),
+            to: opt_attr(el, "to").unwrap_or_default(),
+            dur: opt_attr(el, "dur").unwrap_or_else(|| "1s".into()),
+            repeat_count: opt_attr(el, "repeatCount")
+                .or_else(|| opt_attr(el, "repeat_count"))
+                .unwrap_or_else(|| "1".into()),
+            begin: opt_attr(el, "begin").unwrap_or_default(),
+        }),
+        "set" => Some(SvgNode::Set {
+            attribute_name: opt_attr(el, "attributeName")
+                .or_else(|| opt_attr(el, "attribute_name"))
+                .unwrap_or_default(),
+            to: opt_attr(el, "to").unwrap_or_default(),
+            begin: opt_attr(el, "begin").unwrap_or_default(),
+        }),
+        other => elem_from_element(el, other),
     }
 }
 
@@ -448,6 +1143,7 @@ fn compile_node(
     node: &SvgNode,
     parent: Affine,
     parent_opacity: f32,
+    paints: &HashMap<String, crate::style::Gradient>,
     out: &mut Vec<(Vec<PathCommand>, PathStyle)>,
 ) {
     match node {
@@ -459,9 +1155,22 @@ fn compile_node(
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
             for c in children {
-                compile_node(c, xf, o, out);
+                if is_smil_node(c) {
+                    continue;
+                }
+                compile_node(c, xf, o, paints, out);
             }
         }
+        SvgNode::Defs { .. }
+        | SvgNode::Use { .. }
+        | SvgNode::ClipPath { .. }
+        | SvgNode::LinearGradient { .. }
+        | SvgNode::RadialGradient { .. }
+        | SvgNode::Symbol { .. }
+        | SvgNode::Animate { .. }
+        | SvgNode::AnimateTransform { .. }
+        | SvgNode::Set { .. }
+        | SvgNode::Elem { .. } => {}
         SvgNode::Circle {
             cx,
             cy,
@@ -469,35 +1178,81 @@ fn compile_node(
             fill,
             stroke,
             stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
             opacity,
             transform,
+            ..
         } => {
             if *r <= 0.0 {
                 return;
             }
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
-            let Some(style) = resolve_style(
+            push_styled(
+                out,
+                &filled_circle(*cx, *cy, *r, 32),
                 fill.as_deref(),
                 stroke.as_deref(),
                 *stroke_width,
                 o,
                 true,
                 false,
+                *linecap,
+                *linejoin,
+                *fill_rule,
                 xf,
-            ) else {
+                paints,
+            );
+        }
+        SvgNode::Ellipse {
+            cx,
+            cy,
+            rx,
+            ry,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+            ..
+        } => {
+            if *rx <= 0.0 || *ry <= 0.0 {
                 return;
-            };
-            let cmds = apply_affine(&filled_circle(*cx, *cy, *r, 32), xf);
-            out.push((cmds, style));
+            }
+            let xf = parent.mul(parse_transform(transform));
+            let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
+            push_styled(
+                out,
+                &filled_ellipse(*cx, *cy, *rx, *ry, 32),
+                fill.as_deref(),
+                stroke.as_deref(),
+                *stroke_width,
+                o,
+                true,
+                false,
+                *linecap,
+                *linejoin,
+                *fill_rule,
+                xf,
+                paints,
+            );
         }
         SvgNode::Path {
             d,
             fill,
             stroke,
             stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
             opacity,
             transform,
+            ..
         } => {
             let raw = decode_path_d(d);
             if raw.is_empty() {
@@ -505,18 +1260,21 @@ fn compile_node(
             }
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
-            let Some(style) = resolve_style(
+            push_styled(
+                out,
+                &raw,
                 fill.as_deref(),
                 stroke.as_deref(),
                 *stroke_width,
                 o,
                 true,
                 false,
+                *linecap,
+                *linejoin,
+                *fill_rule,
                 xf,
-            ) else {
-                return;
-            };
-            out.push((apply_affine(&raw, xf), style));
+                paints,
+            );
         }
         SvgNode::Rect {
             x,
@@ -526,26 +1284,33 @@ fn compile_node(
             fill,
             stroke,
             stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
             opacity,
             transform,
+            ..
         } => {
             if *w <= 0.0 || *h <= 0.0 {
                 return;
             }
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
-            let Some(style) = resolve_style(
+            push_styled(
+                out,
+                &filled_rect(*x, *y, *w, *h),
                 fill.as_deref(),
                 stroke.as_deref(),
                 *stroke_width,
                 o,
                 true,
                 false,
+                *linecap,
+                *linejoin,
+                *fill_rule,
                 xf,
-            ) else {
-                return;
-            };
-            out.push((apply_affine(&filled_rect(*x, *y, *w, *h), xf), style));
+                paints,
+            );
         }
         SvgNode::Line {
             x1,
@@ -554,52 +1319,68 @@ fn compile_node(
             y2,
             stroke,
             stroke_width,
+            linecap,
+            linejoin,
             opacity,
             transform,
+            ..
         } => {
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
-            let Some(style) = resolve_style(
+            push_styled(
+                out,
+                &path_polyline(&[(*x1, *y1), (*x2, *y2)]),
                 Some("none"),
                 stroke.as_deref(),
                 *stroke_width,
                 o,
                 false,
                 true,
+                *linecap,
+                *linejoin,
+                FillRule::default(),
                 xf,
-            ) else {
-                return;
-            };
-            out.push((
-                apply_affine(&path_polyline(&[(*x1, *y1), (*x2, *y2)]), xf),
-                style,
-            ));
+                paints,
+            );
         }
         SvgNode::Polyline {
             points,
+            closed,
             fill,
             stroke,
             stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
             opacity,
             transform,
+            ..
         } => {
             if points.len() < 2 {
                 return;
             }
             let xf = parent.mul(parse_transform(transform));
             let o = (parent_opacity * *opacity).clamp(0.0, 1.0);
-            let Some(style) = resolve_style(
+            let cmds = if *closed {
+                path_polygon(points)
+            } else {
+                path_polyline(points)
+            };
+            push_styled(
+                out,
+                &cmds,
                 fill.as_deref(),
                 stroke.as_deref(),
                 *stroke_width,
                 o,
-                false,
+                *closed,
                 true,
+                *linecap,
+                *linejoin,
+                *fill_rule,
                 xf,
-            ) else {
-                return;
-            };
-            out.push((apply_affine(&path_polyline(points), xf), style));
+                paints,
+            );
         }
     }
 }
@@ -612,9 +1393,11 @@ fn compile_layers(
     nodes: &[SvgNode],
     view_box: Option<&str>,
 ) -> (Vec<(Vec<PathCommand>, PathStyle)>, [f32; 4]) {
+    let mut paints = HashMap::new();
+    collect_paint_defs(nodes, &mut paints);
     let mut layers = Vec::new();
     for n in nodes {
-        compile_node(n, Affine::identity(), 1.0, &mut layers);
+        compile_node(n, Affine::identity(), 1.0, &paints, &mut layers);
     }
     let vb = view_box
         .and_then(parse_view_box)
@@ -628,10 +1411,638 @@ fn compile_layers(
     (layers, [0.0, 0.0, vb[2].max(1.0), vb[3].max(1.0)])
 }
 
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+}
+
+fn push_transform(buf: &mut String, transform: &str) {
+    if !transform.trim().is_empty() {
+        push_attr(buf, "transform", Some(transform));
+    }
+}
+
+fn push_attr(buf: &mut String, name: &str, val: Option<&str>) {
+    if let Some(v) = val.filter(|s| !s.trim().is_empty()) {
+        buf.push(' ');
+        buf.push_str(name);
+        buf.push_str("=\"");
+        buf.push_str(&xml_escape(v));
+        buf.push('"');
+    }
+}
+
+fn push_f_attr(buf: &mut String, name: &str, val: f32) {
+    if val.is_finite() {
+        push_attr(buf, name, Some(&format!("{val}")));
+    }
+}
+
+fn emit_stroke_attrs(
+    buf: &mut String,
+    stroke: &Option<String>,
+    stroke_width: f32,
+    linecap: StrokeLinecap,
+    linejoin: StrokeLinejoin,
+    fill_rule: FillRule,
+) {
+    push_attr(buf, "fill-rule", Some(fill_rule.as_str()));
+    push_attr(buf, "stroke-linecap", Some(linecap.as_str()));
+    push_attr(buf, "stroke-linejoin", Some(linejoin.as_str()));
+    push_attr(buf, "stroke", stroke.as_deref());
+    if stroke.is_some() && stroke_width > 0.0 {
+        push_f_attr(buf, "stroke-width", stroke_width);
+    }
+}
+
+fn emit_points_attr(buf: &mut String, points: &[Point2]) {
+    if points.is_empty() {
+        return;
+    }
+    let mut s = String::new();
+    for (i, (x, y)) in points.iter().enumerate() {
+        if i > 0 {
+            s.push(' ');
+        }
+        use std::fmt::Write;
+        let _ = write!(s, "{x},{y}");
+    }
+    push_attr(buf, "points", Some(&s));
+}
+
+fn push_id_clip(buf: &mut String, id: &Option<String>, clip_path: &Option<String>) {
+    push_attr(buf, "id", id.as_deref());
+    push_attr(buf, "clip-path", clip_path.as_deref());
+}
+
+fn emit_gradient_stops(buf: &mut String, stops: &[GradientStop]) {
+    for st in stops {
+        buf.push_str("<stop");
+        push_attr(buf, "offset", Some(&st.offset));
+        push_attr(buf, "stop-color", Some(&st.color));
+        if st.opacity < 1.0 {
+            push_f_attr(buf, "stop-opacity", st.opacity);
+        }
+        buf.push_str("/>");
+    }
+}
+
+fn split_defs_body(nodes: &[SvgNode]) -> (Vec<SvgNode>, Vec<SvgNode>) {
+    let mut defs = Vec::new();
+    let mut body = Vec::new();
+    for n in nodes {
+        match n {
+            SvgNode::Defs { children } => defs.extend(children.clone()),
+            other if is_defs_only_node(other) => defs.push(other.clone()),
+            other => body.push(other.clone()),
+        }
+    }
+    (defs, body)
+}
+
+fn emit_svg_node(buf: &mut String, node: &SvgNode) {
+    match node {
+        SvgNode::Group {
+            transform,
+            opacity,
+            children,
+        } => {
+            buf.push_str("<g");
+            push_transform(buf, transform);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            buf.push('>');
+            for c in children {
+                if is_baked_smil_node(c) {
+                    continue;
+                }
+                emit_svg_node(buf, c);
+            }
+            buf.push_str("</g>");
+        }
+        SvgNode::Defs { children } => {
+            buf.push_str("<defs>");
+            for c in children {
+                emit_svg_node(buf, c);
+            }
+            buf.push_str("</defs>");
+        }
+        SvgNode::Use {
+            id,
+            href,
+            x,
+            y,
+            width,
+            height,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<use");
+            push_attr(buf, "id", id.as_deref());
+            let href_attr = if href.starts_with('#') {
+                href.clone()
+            } else if href.is_empty() {
+                String::new()
+            } else {
+                format!("#{href}")
+            };
+            if !href_attr.is_empty() {
+                push_attr(buf, "href", Some(&href_attr));
+                push_attr(buf, "xlink:href", Some(&href_attr));
+            }
+            push_f_attr(buf, "x", *x);
+            push_f_attr(buf, "y", *y);
+            if let Some(w) = width {
+                push_f_attr(buf, "width", *w);
+            }
+            if let Some(h) = height {
+                push_f_attr(buf, "height", *h);
+            }
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::ClipPath {
+            id,
+            clip_rule,
+            children,
+        } => {
+            buf.push_str("<clipPath");
+            push_attr(buf, "id", Some(id));
+            push_attr(buf, "clip-rule", Some(clip_rule));
+            buf.push('>');
+            for c in children {
+                emit_svg_node(buf, c);
+            }
+            buf.push_str("</clipPath>");
+        }
+        SvgNode::LinearGradient {
+            id,
+            x1,
+            y1,
+            x2,
+            y2,
+            gradient_units,
+            stops,
+        } => {
+            buf.push_str("<linearGradient");
+            push_attr(buf, "id", Some(id));
+            push_attr(buf, "x1", Some(x1));
+            push_attr(buf, "y1", Some(y1));
+            push_attr(buf, "x2", Some(x2));
+            push_attr(buf, "y2", Some(y2));
+            push_attr(buf, "gradientUnits", Some(gradient_units));
+            buf.push('>');
+            emit_gradient_stops(buf, stops);
+            buf.push_str("</linearGradient>");
+        }
+        SvgNode::RadialGradient {
+            id,
+            cx,
+            cy,
+            r,
+            fx,
+            fy,
+            gradient_units,
+            stops,
+        } => {
+            buf.push_str("<radialGradient");
+            push_attr(buf, "id", Some(id));
+            push_attr(buf, "cx", Some(cx));
+            push_attr(buf, "cy", Some(cy));
+            push_attr(buf, "r", Some(r));
+            push_attr(buf, "fx", fx.as_deref());
+            push_attr(buf, "fy", fy.as_deref());
+            push_attr(buf, "gradientUnits", Some(gradient_units));
+            buf.push('>');
+            emit_gradient_stops(buf, stops);
+            buf.push_str("</radialGradient>");
+        }
+        SvgNode::Symbol {
+            id,
+            view_box,
+            children,
+        } => {
+            buf.push_str("<symbol");
+            push_attr(buf, "id", Some(id));
+            push_attr(buf, "viewBox", view_box.as_deref());
+            buf.push('>');
+            for c in children {
+                emit_svg_node(buf, c);
+            }
+            buf.push_str("</symbol>");
+        }
+        SvgNode::Circle {
+            id,
+            clip_path,
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<circle");
+            push_id_clip(buf, id, clip_path);
+            push_f_attr(buf, "cx", *cx);
+            push_f_attr(buf, "cy", *cy);
+            push_f_attr(buf, "r", *r);
+            push_attr(buf, "fill", fill.as_deref());
+            emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Ellipse {
+            id,
+            clip_path,
+            cx,
+            cy,
+            rx,
+            ry,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<ellipse");
+            push_id_clip(buf, id, clip_path);
+            push_f_attr(buf, "cx", *cx);
+            push_f_attr(buf, "cy", *cy);
+            push_f_attr(buf, "rx", *rx);
+            push_f_attr(buf, "ry", *ry);
+            push_attr(buf, "fill", fill.as_deref());
+            emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Path {
+            id,
+            clip_path,
+            d,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<path");
+            push_id_clip(buf, id, clip_path);
+            push_attr(buf, "d", Some(d));
+            push_attr(buf, "fill", fill.as_deref());
+            emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Rect {
+            id,
+            clip_path,
+            x,
+            y,
+            w,
+            h,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<rect");
+            push_id_clip(buf, id, clip_path);
+            push_f_attr(buf, "x", *x);
+            push_f_attr(buf, "y", *y);
+            push_f_attr(buf, "width", *w);
+            push_f_attr(buf, "height", *h);
+            push_attr(buf, "fill", fill.as_deref());
+            emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Line {
+            id,
+            clip_path,
+            x1,
+            y1,
+            x2,
+            y2,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            opacity,
+            transform,
+        } => {
+            buf.push_str("<line");
+            push_id_clip(buf, id, clip_path);
+            push_f_attr(buf, "x1", *x1);
+            push_f_attr(buf, "y1", *y1);
+            push_f_attr(buf, "x2", *x2);
+            push_f_attr(buf, "y2", *y2);
+            push_attr(buf, "stroke", stroke.as_deref());
+            if stroke.is_some() && *stroke_width > 0.0 {
+                push_f_attr(buf, "stroke-width", *stroke_width);
+            }
+            push_attr(buf, "stroke-linecap", Some(linecap.as_str()));
+            push_attr(buf, "stroke-linejoin", Some(linejoin.as_str()));
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Polyline {
+            id,
+            clip_path,
+            points,
+            closed,
+            fill,
+            stroke,
+            stroke_width,
+            linecap,
+            linejoin,
+            fill_rule,
+            opacity,
+            transform,
+        } => {
+            let tag = if *closed { "polygon" } else { "polyline" };
+            buf.push('<');
+            buf.push_str(tag);
+            push_id_clip(buf, id, clip_path);
+            emit_points_attr(buf, points);
+            push_attr(buf, "fill", fill.as_deref());
+            emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
+            if *opacity < 1.0 {
+                push_f_attr(buf, "opacity", *opacity);
+            }
+            push_transform(buf, transform);
+            buf.push_str("/>");
+        }
+        SvgNode::Animate { .. } | SvgNode::AnimateTransform { .. } | SvgNode::Set { .. } => {}
+        SvgNode::Elem {
+            tag,
+            attrs,
+            children,
+            text,
+        } => {
+            buf.push('<');
+            buf.push_str(tag);
+            for (k, v) in attrs {
+                push_attr(buf, k, Some(v.as_str()));
+            }
+            let empty = children.is_empty() && text.as_ref().map(|s| s.is_empty()).unwrap_or(true);
+            if empty {
+                buf.push_str("/>");
+            } else {
+                buf.push('>');
+                if let Some(t) = text {
+                    escape_xml_text(buf, t);
+                }
+                for c in children {
+                    emit_svg_node(buf, c);
+                }
+                buf.push_str("</");
+                buf.push_str(tag);
+                buf.push('>');
+            }
+        }
+    }
+}
+
+fn escape_xml_text(buf: &mut String, s: &str) {
+    for ch in s.chars() {
+        match ch {
+            '&' => buf.push_str("&amp;"),
+            '<' => buf.push_str("&lt;"),
+            '>' => buf.push_str("&gt;"),
+            '"' => buf.push_str("&quot;"),
+            '\'' => buf.push_str("&apos;"),
+            c => buf.push(c),
+        }
+    }
+}
+
+/// Whether any descendant `<svg>` leaf uses SMIL (needs per-frame resvg bake).
+pub fn subtree_has_svg_smil(el: &crate::core::tree::Element) -> bool {
+    if el.get_attr(ATTR_SVG_HAS_SMIL).is_some() {
+        return true;
+    }
+    el.children.iter().any(subtree_has_svg_smil)
+}
+
+/// Serialize scene graph to SVG document (preserves curve `d`, defs, gradients).
+#[allow(dead_code)] // kept for tests / non-`svg` builds; raster path uses `emit_svg_document_at`
+pub(crate) fn emit_svg_document(nodes: &[SvgNode], vb: [f32; 4]) -> String {
+    emit_svg_document_at(nodes, vb, None)
+}
+
+pub(crate) fn emit_svg_document_at(nodes: &[SvgNode], vb: [f32; 4], smil_t: Option<f32>) -> String {
+    let nodes = if let Some(t) = smil_t {
+        crate::primitives::svg_smil::apply_smil(nodes, t)
+    } else {
+        nodes.to_vec()
+    };
+    let (defs, body) = split_defs_body(&nodes);
+    let mut doc = String::new();
+    if !defs.is_empty() {
+        doc.push_str("<defs>");
+        for d in &defs {
+            emit_svg_node(&mut doc, d);
+        }
+        doc.push_str("</defs>");
+    }
+    for n in &body {
+        emit_svg_node(&mut doc, n);
+    }
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="{} {} {} {}" color="{}" fill="none">{doc}</svg>"#,
+        vb[0],
+        vb[1],
+        vb[2],
+        vb[3],
+        foreground_css_color(),
+    )
+}
+
+/// Theme `foreground` as CSS color for SVG `currentColor` / default stroke (Tailwind `text-foreground`).
+fn foreground_css_color() -> String {
+    let c = crate::style::parse_text_color("foreground");
+    if c[3] == 255 {
+        format!("rgb({},{},{})", c[0], c[1], c[2])
+    } else {
+        format!(
+            "rgba({},{},{},{:.4})",
+            c[0],
+            c[1],
+            c[2],
+            c[3] as f32 / 255.0
+        )
+    }
+}
+
+#[derive(Clone)]
+#[allow(dead_code)] // `nodes`/`vb` read under `feature = "svg"` raster path
+struct StoredSvgScene {
+    nodes: Vec<SvgNode>,
+    vb: [f32; 4],
+    has_smil: bool,
+}
+
+thread_local! {
+    static SVG_SCENE_STORE: RefCell<HashMap<u64, StoredSvgScene>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn register_svg_scene(nodes: Vec<SvgNode>, vb: [f32; 4], has_smil: bool) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for n in &nodes {
+        hash_svg_node(&mut hasher, n);
+    }
+    vb[0].to_bits().hash(&mut hasher);
+    vb[1].to_bits().hash(&mut hasher);
+    vb[2].to_bits().hash(&mut hasher);
+    vb[3].to_bits().hash(&mut hasher);
+    has_smil.hash(&mut hasher);
+    let id = hasher.finish();
+    SVG_SCENE_STORE.with(|s| {
+        let mut g = s.borrow_mut();
+        if g.len() >= 64 {
+            g.clear();
+        }
+        g.insert(id, StoredSvgScene { nodes, vb, has_smil });
+    });
+    id
+}
+
+fn hash_svg_node(h: &mut DefaultHasher, node: &SvgNode) {
+    use SvgNode::*;
+    match node {
+        Circle { cx, cy, r, fill, stroke, .. } => {
+            "circle".hash(h);
+            cx.to_bits().hash(h);
+            cy.to_bits().hash(h);
+            r.to_bits().hash(h);
+            fill.hash(h);
+            stroke.hash(h);
+        }
+        Path { d, fill, stroke, .. } => {
+            "path".hash(h);
+            d.hash(h);
+            fill.hash(h);
+            stroke.hash(h);
+        }
+        Defs { children } | Group { children, .. } => {
+            "container".hash(h);
+            for c in children {
+                hash_svg_node(h, c);
+            }
+        }
+        LinearGradient { id, stops, .. } => {
+            "linearGradient".hash(h);
+            id.hash(h);
+            stops.len().hash(h);
+        }
+        Use { href, .. } => {
+            "use".hash(h);
+            href.hash(h);
+        }
+        Elem {
+            tag,
+            attrs,
+            children,
+            text,
+        } => {
+            "elem".hash(h);
+            tag.hash(h);
+            for (k, v) in attrs {
+                k.hash(h);
+                v.hash(h);
+            }
+            text.hash(h);
+            for c in children {
+                hash_svg_node(h, c);
+            }
+        }
+        _ => {
+            "other".hash(h);
+        }
+    }
+}
+
+/// Unified resvg raster path for `<svg>` leaves (SMIL-aware).
+pub fn svg_raster_from_element_attrs(
+    attrs: &std::collections::HashMap<String, String>,
+    leaf_w: f32,
+    leaf_h: f32,
+) -> Option<(String, f32, f32)> {
+    let scene_hex = attrs.get(ATTR_SVG_SCENE)?;
+    let id = u64::from_str_radix(scene_hex.trim(), 16).ok()?;
+    let scene = SVG_SCENE_STORE.with(|s| s.borrow().get(&id).cloned())?;
+    let target = crate::primitives::path::path_target_leaf_size(attrs, [leaf_w, leaf_h]);
+    let w = target[0].round().max(2.0) as u32;
+    let h = target[1].round().max(2.0) as u32;
+    let smil_t = scene.has_smil.then(crate::primitives::svg_smil::smil_time_secs);
+    #[cfg(feature = "svg")]
+    {
+        let doc = emit_svg_document_at(&scene.nodes, scene.vb, smil_t);
+        let tex = if scene.has_smil {
+            // SMIL: include time bucket in cache key via fresh raster each ~frame
+            let frame = (smil_t.unwrap_or(0.0) * 60.0) as u64;
+            let mut hasher = DefaultHasher::new();
+            doc.hash(&mut hasher);
+            w.hash(&mut hasher);
+            h.hash(&mut hasher);
+            frame.hash(&mut hasher);
+            let key = format!("rui_svg_anim:{:016x}", hasher.finish());
+            let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, w, h)?;
+            crate::app::pending_images::queue_image_rgba8(&key, w, h, rgba);
+            key
+        } else {
+            crate::media::svg_raster::ensure_svg_document_texture(&doc, w, h)?
+        };
+        return Some((tex, target[0], target[1]));
+    }
+    #[cfg(not(feature = "svg"))]
+    {
+        let _ = (scene, smil_t, w, h);
+        None
+    }
+}
+
 fn attach_svg_scene(
     mut el: Element,
+    nodes: &[SvgNode],
     layers: &[(Vec<PathCommand>, PathStyle)],
     vb: [f32; 4],
+    view_box_raw: Option<&str>,
 ) -> Element {
     el.children.clear();
     el.set_attr(ATTR_PATH_FIT_LEAF, "1");
@@ -639,25 +2050,49 @@ fn attach_svg_scene(
         ATTR_PATH_VIEWBOX,
         format!("{} {} {} {}", vb[0], vb[1], vb[2], vb[3]),
     );
-    if layers.is_empty() {
-        return el;
-    }
-    let id = register_path_scene(layers.to_vec(), Vec::new(), 0.0, vb[2], vb[3]);
-    el.set_attr(ATTR_PATH_SCENE, format!("{id:016x}"));
-    if let Some((cmds, _)) = layers.first() {
-        if !cmds.is_empty() {
-            el.set_attr(ATTR_PATH_D, encode_path_d(cmds));
+    // Path-kernel fallback for Chart / no-`svg` feature. Defs/use/gradient scenes may
+    // compile to zero path layers — still register the resvg scene below.
+    if !layers.is_empty() {
+        let id = register_path_scene(layers.to_vec(), Vec::new(), 0.0, vb[2], vb[3]);
+        el.set_attr(ATTR_PATH_SCENE, format!("{id:016x}"));
+        if let Some((cmds, _)) = layers.first() {
+            if !cmds.is_empty() {
+                el.set_attr(ATTR_PATH_D, encode_path_d(cmds));
+            }
         }
+    }
+    if nodes.is_empty() {
+        return el;
     }
     let dim_w = vb[2].round().max(16.0) as u32;
     let dim_h = vb[3].round().max(16.0) as u32;
-    if let Some(tex) = ensure_raster_texture(layers, &[], 0.0, dim_w, dim_h, 2) {
-        el = el.image_texture(tex);
+    let vb_raw = view_box_raw
+        .and_then(parse_view_box)
+        .unwrap_or([0.0, 0.0, vb[2], vb[3]]);
+    let has_smil = crate::primitives::svg_smil::scene_has_smil(nodes);
+    let svg_id = register_svg_scene(nodes.to_vec(), vb_raw, has_smil);
+    el.set_attr(ATTR_SVG_SCENE, format!("{svg_id:016x}"));
+    if has_smil {
+        el.set_attr(ATTR_SVG_HAS_SMIL, "1");
+    }
+    #[cfg(feature = "svg")]
+    {
+        let doc = emit_svg_document_at(nodes, vb_raw, None);
+        if let Some(tex) = crate::media::svg_raster::ensure_svg_document_texture(&doc, dim_w, dim_h)
+        {
+            el = el.image_texture(tex);
+            return el;
+        }
+    }
+    if !layers.is_empty() {
+        if let Some(tex) = ensure_raster_texture(layers, &[], 0.0, dim_w, dim_h, 2) {
+            el = el.image_texture(tex);
+        }
     }
     el
 }
 
-/// 公开 Svg 根。
+/// å¬å¼ Svg æ ¹ã
 pub struct SvgBuilder {
     el: Element,
     view_box: Option<String>,
@@ -689,6 +2124,13 @@ impl SvgBuilder {
     pub fn h(mut self, h: impl IntoCssDim) -> Self {
         self.has_h = true;
         self.el = self.el.h(h);
+        self
+    }
+
+    /// Hit policy on the Svg leaf（[CSS pointer-events](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)）。
+    /// 默认在 [`From`] 中设为 SVG 专用 `bounding-box`；可覆盖为通用 `auto`/`none` 或其它 SVG 关键字（路径级 fill/stroke）。
+    pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
+        self.el = self.el.pointer_events(mode);
         self
     }
 
@@ -726,7 +2168,15 @@ impl From<SvgBuilder> for Element {
         if !builder.has_h {
             el = el.h(100.0);
         }
-        attach_svg_scene(el, &layers, vb)
+        // Default color token = text-foreground（供 currentColor / 主题对齐）.
+        if el.text_style.color == crate::style::TextStyle::default().color {
+            el.text_style.color = crate::style::parse_text_color("foreground");
+        }
+        // SVG 叶默认 `bounding-box`（MDN SVG-only：命中容器）；调用方可覆盖。
+        if el.attrs.get(crate::core::tree::ATTR_POINTER_EVENTS).is_none() {
+            el = el.pointer_events("bounding-box");
+        }
+        attach_svg_scene(el, &nodes, &layers, vb, builder.view_box.as_deref())
     }
 }
 
@@ -736,30 +2186,112 @@ impl IntoElementList for SvgBuilder {
     }
 }
 
-/// 子形状 Builder（`circle` / `path` / `rect` / `line` / `polyline` / `g`）。
+/// å­å½¢ç¶ Builderï¼`circle` / `ellipse` / `path` / `rect` / `line` / `polyline` / `polygon` / `g`ï¼ã
 pub struct SvgShapeBuilder {
-    kind: &'static str,
-    attrs: Vec<(&'static str, String)>,
+    kind: String,
+    attrs: Vec<(String, String)>,
     children: Vec<Element>,
+    text: Option<String>,
 }
 
 pub type CircleBuilder = SvgShapeBuilder;
+pub type EllipseBuilder = SvgShapeBuilder;
 pub type PathBuilder = SvgShapeBuilder;
 pub type RectBuilder = SvgShapeBuilder;
 pub type LineBuilder = SvgShapeBuilder;
 pub type PolylineBuilder = SvgShapeBuilder;
+pub type PolygonBuilder = SvgShapeBuilder;
 pub type GroupBuilder = SvgShapeBuilder;
+pub type DefsBuilder = SvgShapeBuilder;
+pub type UseBuilder = SvgShapeBuilder;
+pub type ClipPathBuilder = SvgShapeBuilder;
+pub type LinearGradientBuilder = SvgShapeBuilder;
+pub type RadialGradientBuilder = SvgShapeBuilder;
+pub type SymbolBuilder = SvgShapeBuilder;
+pub type StopBuilder = SvgShapeBuilder;
+pub type AnimateBuilder = SvgShapeBuilder;
+pub type SetBuilder = SvgShapeBuilder;
 
-fn shape(kind: &'static str) -> SvgShapeBuilder {
+fn shape(kind: &str) -> SvgShapeBuilder {
     SvgShapeBuilder {
-        kind,
+        kind: kind.to_string(),
         attrs: Vec::new(),
         children: Vec::new(),
+        text: None,
     }
+}
+
+/// Generic SVG element for MDN tags without a dedicated typed constructor.
+pub fn svg_el(tag: impl AsRef<str>) -> SvgShapeBuilder {
+    shape(tag.as_ref())
+}
+
+pub fn svg_text() -> SvgShapeBuilder {
+    shape("text")
+}
+pub fn tspan() -> SvgShapeBuilder {
+    shape("tspan")
+}
+pub fn text_path() -> SvgShapeBuilder {
+    shape("textPath")
+}
+pub fn image() -> SvgShapeBuilder {
+    shape("image")
+}
+pub fn mask() -> SvgShapeBuilder {
+    shape("mask")
+}
+pub fn pattern() -> SvgShapeBuilder {
+    shape("pattern")
+}
+pub fn marker() -> SvgShapeBuilder {
+    shape("marker")
+}
+pub fn filter() -> SvgShapeBuilder {
+    shape("filter")
+}
+pub fn title() -> SvgShapeBuilder {
+    shape("title")
+}
+pub fn desc() -> SvgShapeBuilder {
+    shape("desc")
+}
+pub fn animate_motion() -> SvgShapeBuilder {
+    shape("animateMotion")
+}
+pub fn mpath() -> SvgShapeBuilder {
+    shape("mpath")
+}
+pub fn fe_gaussian_blur() -> SvgShapeBuilder {
+    shape("feGaussianBlur")
+}
+pub fn fe_drop_shadow() -> SvgShapeBuilder {
+    shape("feDropShadow")
+}
+pub fn fe_offset() -> SvgShapeBuilder {
+    shape("feOffset")
+}
+pub fn fe_blend() -> SvgShapeBuilder {
+    shape("feBlend")
+}
+pub fn fe_color_matrix() -> SvgShapeBuilder {
+    shape("feColorMatrix")
+}
+pub fn fe_flood() -> SvgShapeBuilder {
+    shape("feFlood")
+}
+pub fn fe_merge() -> SvgShapeBuilder {
+    shape("feMerge")
+}
+pub fn fe_merge_node() -> SvgShapeBuilder {
+    shape("feMergeNode")
 }
 
 pub fn circle() -> CircleBuilder {
     shape("circle")
+}
+pub fn ellipse() -> EllipseBuilder {
+    shape("ellipse")
 }
 pub fn path() -> PathBuilder {
     shape("path")
@@ -773,18 +2305,63 @@ pub fn line() -> LineBuilder {
 pub fn polyline() -> PolylineBuilder {
     shape("polyline")
 }
+pub fn polygon() -> PolygonBuilder {
+    shape("polygon")
+}
 pub fn g() -> GroupBuilder {
     shape("g")
 }
+pub fn defs() -> DefsBuilder {
+    shape("defs")
+}
+pub fn svg_use() -> UseBuilder {
+    shape("use")
+}
+pub fn clip_path() -> ClipPathBuilder {
+    shape("clipPath")
+}
+pub fn linear_gradient() -> LinearGradientBuilder {
+    shape("linearGradient")
+}
+pub fn radial_gradient() -> RadialGradientBuilder {
+    shape("radialGradient")
+}
+pub fn symbol() -> SymbolBuilder {
+    shape("symbol")
+}
+pub fn stop() -> StopBuilder {
+    shape("stop")
+}
+pub fn animate() -> AnimateBuilder {
+    shape("animate")
+}
+pub fn animate_transform() -> AnimateBuilder {
+    shape("animateTransform")
+}
+pub fn set_el() -> SetBuilder {
+    shape("set")
+}
 
 impl SvgShapeBuilder {
-    fn set(mut self, key: &'static str, value: impl Into<String>) -> Self {
+    fn set(mut self, key: &str, value: impl Into<String>) -> Self {
+        let key = key.to_string();
         let v = value.into();
         if let Some((_, slot)) = self.attrs.iter_mut().find(|(k, _)| *k == key) {
             *slot = v;
         } else {
             self.attrs.push((key, v));
         }
+        self
+    }
+
+    /// Arbitrary SVG attribute (MDN long-tail); emitted as-is for resvg.
+    pub fn attr(self, name: impl AsRef<str>, value: impl Into<String>) -> Self {
+        self.set(name.as_ref(), value)
+    }
+
+    /// Character data for text-bearing elements (`<text>`, `<title>`, …).
+    pub fn text_content(mut self, s: impl Into<String>) -> Self {
+        self.text = Some(s.into());
         self
     }
 
@@ -796,6 +2373,12 @@ impl SvgShapeBuilder {
     }
     pub fn r(self, v: impl IntoSvgNum) -> Self {
         self.set("r", v.into_svg_num().to_string())
+    }
+    pub fn rx(self, v: impl IntoSvgNum) -> Self {
+        self.set("rx", v.into_svg_num().to_string())
+    }
+    pub fn ry(self, v: impl IntoSvgNum) -> Self {
+        self.set("ry", v.into_svg_num().to_string())
     }
     pub fn d(self, d: impl Into<String>) -> Self {
         self.set("d", d)
@@ -812,17 +2395,17 @@ impl SvgShapeBuilder {
     pub fn h(self, v: impl IntoSvgNum) -> Self {
         self.set("height", v.into_svg_num().to_string())
     }
-    pub fn x1(self, v: impl IntoSvgNum) -> Self {
-        self.set("x1", v.into_svg_num().to_string())
+    pub fn x1(self, v: impl IntoSvgCoord) -> Self {
+        self.set("x1", v.into_svg_coord())
     }
-    pub fn y1(self, v: impl IntoSvgNum) -> Self {
-        self.set("y1", v.into_svg_num().to_string())
+    pub fn y1(self, v: impl IntoSvgCoord) -> Self {
+        self.set("y1", v.into_svg_coord())
     }
-    pub fn x2(self, v: impl IntoSvgNum) -> Self {
-        self.set("x2", v.into_svg_num().to_string())
+    pub fn x2(self, v: impl IntoSvgCoord) -> Self {
+        self.set("x2", v.into_svg_coord())
     }
-    pub fn y2(self, v: impl IntoSvgNum) -> Self {
-        self.set("y2", v.into_svg_num().to_string())
+    pub fn y2(self, v: impl IntoSvgCoord) -> Self {
+        self.set("y2", v.into_svg_coord())
     }
     pub fn points(self, pts: impl Into<String>) -> Self {
         self.set("points", pts)
@@ -836,11 +2419,89 @@ impl SvgShapeBuilder {
     pub fn stroke_width(self, w: impl IntoSvgNum) -> Self {
         self.set("stroke-width", w.into_svg_num().to_string())
     }
+    pub fn stroke_linecap(self, c: impl AsRef<str>) -> Self {
+        self.set("stroke-linecap", c.as_ref())
+    }
+    pub fn stroke_linejoin(self, j: impl AsRef<str>) -> Self {
+        self.set("stroke-linejoin", j.as_ref())
+    }
+    pub fn fill_rule(self, r: impl AsRef<str>) -> Self {
+        self.set("fill-rule", r.as_ref())
+    }
+    pub fn fill_opacity(self, o: impl IntoSvgNum) -> Self {
+        self.set("fill-opacity", o.into_svg_num().to_string())
+    }
+    pub fn stroke_opacity(self, o: impl IntoSvgNum) -> Self {
+        self.set("stroke-opacity", o.into_svg_num().to_string())
+    }
+    pub fn stroke_dasharray(self, v: impl Into<String>) -> Self {
+        self.set("stroke-dasharray", v)
+    }
+    pub fn font_size(self, v: impl IntoSvgNum) -> Self {
+        self.set("font-size", v.into_svg_num().to_string())
+    }
+    pub fn text_anchor(self, v: impl AsRef<str>) -> Self {
+        self.set("text-anchor", v.as_ref())
+    }
+    pub fn mask_attr(self, v: impl Into<String>) -> Self {
+        self.set("mask", v)
+    }
+    pub fn filter_attr(self, v: impl Into<String>) -> Self {
+        self.set("filter", v)
+    }
     pub fn opacity(self, o: impl IntoSvgNum) -> Self {
         self.set("opacity", o.into_svg_num().to_string())
     }
     pub fn transform(self, t: impl Into<String>) -> Self {
         self.set("transform", t)
+    }
+    pub fn id(self, id: impl Into<String>) -> Self {
+        self.set("id", id)
+    }
+    pub fn clip_path(self, v: impl Into<String>) -> Self {
+        self.set("clip-path", v)
+    }
+    pub fn href(self, v: impl Into<String>) -> Self {
+        self.set("href", v)
+    }
+    pub fn offset(self, v: impl Into<String>) -> Self {
+        self.set("offset", v)
+    }
+    pub fn stop_color(self, v: impl Into<String>) -> Self {
+        self.set("stop-color", v)
+    }
+    pub fn stop_opacity(self, v: impl IntoSvgNum) -> Self {
+        self.set("stop-opacity", v.into_svg_num().to_string())
+    }
+    pub fn gradient_units(self, v: impl Into<String>) -> Self {
+        self.set("gradientUnits", v)
+    }
+    pub fn attribute_name(self, v: impl Into<String>) -> Self {
+        self.set("attributeName", v)
+    }
+    pub fn transform_type(self, v: impl Into<String>) -> Self {
+        self.set("type", v)
+    }
+    pub fn from_val(self, v: impl Into<String>) -> Self {
+        self.set("from", v)
+    }
+    pub fn to_val(self, v: impl Into<String>) -> Self {
+        self.set("to", v)
+    }
+    pub fn dur(self, v: impl Into<String>) -> Self {
+        self.set("dur", v)
+    }
+    pub fn repeat_count(self, v: impl Into<String>) -> Self {
+        self.set("repeatCount", v)
+    }
+    pub fn begin(self, v: impl Into<String>) -> Self {
+        self.set("begin", v)
+    }
+    pub fn anim_type(self, v: impl Into<String>) -> Self {
+        self.set("type", v)
+    }
+    pub fn view_box(self, vb: impl AsRef<str>) -> Self {
+        self.set("viewBox", vb.as_ref().replace(',', " "))
     }
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
@@ -859,6 +2520,9 @@ impl From<SvgShapeBuilder> for Element {
         el.set_attr(ATTR_SVG_KIND, b.kind);
         for (k, v) in b.attrs {
             el.set_attr(k, v);
+        }
+        if let Some(t) = b.text {
+            el.set_attr(ATTR_SVG_TEXT, t);
         }
         el.children = b.children;
         el
@@ -1024,5 +2688,419 @@ mod tests {
             (cx - 40.0).abs() < 1.5,
             "translated circle centroid x should be ~40, got {cx}"
         );
+    }
+
+    #[test]
+    fn defs_gradient_clip_use_emit_document() {
+        let builder = svg()
+            .view_box("0 0 100 100")
+            .child(
+                defs()
+                    .child(
+                        linear_gradient()
+                            .id("g1")
+                            .x1("0%")
+                            .y1("0%")
+                            .x2("100%")
+                            .y2("0%")
+                            .child(stop().offset("0%").stop_color("#2563eb"))
+                            .child(stop().offset("100%").stop_color("#dc2626")),
+                    )
+                    .child(
+                        clip_path()
+                            .id("clip1")
+                            .child(rect().x(10).y(10).w(80).h(80)),
+                    )
+                    .child(
+                        symbol()
+                            .id("icon")
+                            .view_box("0 0 24 24")
+                            .child(circle().cx(12).cy(12).r(10).fill("url(#g1)")),
+                    ),
+            )
+            .child(
+                svg_use()
+                    .href("#icon")
+                    .x(0)
+                    .y(0)
+                    .w(100)
+                    .h(100)
+                    .clip_path("url(#clip1)"),
+            );
+        let nodes: Vec<SvgNode> = builder
+            .el
+            .children
+            .iter()
+            .filter_map(node_from_element)
+            .collect();
+        let el: Element = builder.into();
+        assert!(el.get_attr(super::ATTR_SVG_SCENE).is_some());
+        let out = emit_svg_document(&nodes, [0.0, 0.0, 100.0, 100.0]);
+        assert!(out.contains("<linearGradient"), "{out}");
+        assert!(out.contains("<clipPath"), "{out}");
+        assert!(out.contains("<use"), "{out}");
+        assert!(out.contains("url(#g1)"), "{out}");
+    }
+
+    #[test]
+    fn smil_rotate_bakes_transform_at_time() {
+        let g_el: Element = g()
+            .child(
+                animate_transform()
+                    .attribute_name("transform")
+                    .transform_type("rotate")
+                    .from_val("0 50 50")
+                    .to_val("90 50 50")
+                    .dur("1s")
+                    .repeat_count("indefinite"),
+            )
+            .child(circle().cx(50).cy(50).r(20).fill("#111111"))
+            .into();
+        let node = node_from_element(&g_el).unwrap();
+        assert!(crate::primitives::svg_smil::node_has_smil(&node));
+        let baked = crate::primitives::svg_smil::apply_smil(&[node], 0.25);
+        let doc = emit_svg_document_at(&baked, [0.0, 0.0, 100.0, 100.0], None);
+        assert!(
+            doc.contains("rotate(22.5") || doc.contains("rotate(22.5 "),
+            "{doc}"
+        );
+    }
+
+    #[test]
+    fn smil_animate_r_bakes_on_circle() {
+        let el: Element = circle()
+            .cx(40)
+            .cy(40)
+            .r(10)
+            .fill("#111111")
+            .child(
+                animate()
+                    .attribute_name("r")
+                    .from_val("10")
+                    .to_val("30")
+                    .dur("1s")
+                    .repeat_count("1"),
+            )
+            .into();
+        let node = node_from_element(&el).unwrap();
+        assert!(crate::primitives::svg_smil::node_has_smil(&node));
+        let baked = crate::primitives::svg_smil::apply_smil(&[node], 0.5);
+        let (layers, _) = compile_layers(&baked, Some("0 0 80 80"));
+        assert!(!layers.is_empty());
+        let pts = points_from_commands(&layers[0].0);
+        let n = pts.len().max(1) as f32;
+        let mean_r = pts
+            .iter()
+            .map(|(x, y)| ((x - 40.0).hypot(y - 40.0)))
+            .sum::<f32>()
+            / n;
+        assert!(
+            (mean_r - 20.0).abs() < 2.0,
+            "r should lerp to ~20 at t=0.5, got {mean_r}"
+        );
+    }
+
+    #[test]
+    fn smil_set_opacity_bakes_on_group() {
+        let el: Element = g()
+            .child(set_el().attribute_name("opacity").to_val("0.25"))
+            .child(circle().cx(10).cy(10).r(5).fill("#ffffff"))
+            .into();
+        let node = node_from_element(&el).unwrap();
+        let baked = crate::primitives::svg_smil::apply_smil(&[node], 0.0);
+        match &baked[0] {
+            SvgNode::Group { opacity, .. } => {
+                assert!((*opacity - 0.25).abs() < 1e-3, "opacity={opacity}");
+            }
+            other => panic!("expected group, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cpu_path_resolves_url_linear_gradient_fill() {
+        let nodes = vec![
+            node_from_element(
+                &defs()
+                    .child(
+                        linear_gradient()
+                            .id("g")
+                            .x1("0%")
+                            .y1("0%")
+                            .x2("100%")
+                            .y2("0%")
+                            .child(stop().offset("0%").stop_color("#0000ff"))
+                            .child(stop().offset("100%").stop_color("#ff0000")),
+                    )
+                    .into(),
+            )
+            .unwrap(),
+            node_from_element(&rect().x(0).y(0).w(64).h(64).fill("url(#g)").into()).unwrap(),
+        ];
+        let (layers, _) = compile_layers(&nodes, Some("0 0 64 64"));
+        assert_eq!(layers.len(), 1);
+        assert!(
+            layers[0].1.fill_gradient.is_some(),
+            "url(#g) must resolve to fill_gradient"
+        );
+        let rgba = rasterize_layers_rgba(&layers, &[], 0.0, 64, 64, 1);
+        let px = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3])
+        };
+        let (lr, _, lb, la) = px(4, 32);
+        let (rr, _, _, ra) = px(60, 32);
+        assert!(la > 180 && lb > lr + 40, "left blue, got {lr},{lb},{la}");
+        assert!(ra > 180 && rr > lb, "right red, got {rr},{ra}");
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn resvg_rasterizes_linear_gradient_fill() {
+        let builder = svg()
+            .view_box("0 0 64 64")
+            .child(
+                defs().child(
+                    linear_gradient()
+                        .id("g")
+                        .x1("0%")
+                        .y1("0%")
+                        .x2("100%")
+                        .y2("0%")
+                        .child(stop().offset("0%").stop_color("#0000ff"))
+                        .child(stop().offset("100%").stop_color("#ff0000")),
+                ),
+            )
+            .child(rect().x(0).y(0).w(64).h(64).fill("url(#g)"));
+        let nodes: Vec<SvgNode> = builder
+            .el
+            .children
+            .iter()
+            .filter_map(node_from_element)
+            .collect();
+        assert!(!nodes.is_empty(), "gradient scene must parse to SvgNode");
+        let el: Element = builder.into();
+        assert!(el.get_attr(ATTR_SVG_SCENE).is_some());
+        let doc = emit_svg_document(&nodes, [0.0, 0.0, 64.0, 64.0]);
+        assert!(doc.contains("linearGradient"), "{doc}");
+        let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, 64, 64).expect("resvg");
+        let px = |x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3])
+        };
+        let (lr, _, lb, la) = px(4, 32);
+        let (rr, _, _, ra) = px(60, 32);
+        assert!(la > 180 && lb > lr + 40, "left should be blue, got {lr},{lb},{la}");
+        assert!(ra > 180 && rr > lb, "right should be red, got {rr},{ra}");
+    }
+
+    #[test]
+    fn elem_text_tspan_emits_font_size() {
+        let nodes = vec![
+            node_from_element(
+                &svg_text()
+                    .attr("x", "10")
+                    .attr("y", "20")
+                    .font_size(14.0)
+                    .text_content("Hello ")
+                    .child(tspan().font_size(18.0).text_content("World"))
+                    .into(),
+            )
+            .unwrap(),
+        ];
+        let doc = emit_svg_document(&nodes, [0.0, 0.0, 100.0, 40.0]);
+        assert!(doc.contains("<text"), "{doc}");
+        assert!(doc.contains("font-size"), "{doc}");
+        assert!(doc.contains("Hello "), "{doc}");
+        assert!(doc.contains("<tspan"), "{doc}");
+        assert!(doc.contains("World"), "{doc}");
+    }
+
+    #[test]
+    fn filter_fe_gaussian_nested_in_defs() {
+        let nodes = vec![
+            node_from_element(
+                &filter()
+                    .id("blur")
+                    .child(
+                        fe_gaussian_blur()
+                            .attr("in", "SourceGraphic")
+                            .attr("stdDeviation", "2"),
+                    )
+                    .into(),
+            )
+            .unwrap(),
+            node_from_element(
+                &circle()
+                    .cx(32)
+                    .cy(32)
+                    .r(20)
+                    .fill("#2563eb")
+                    .filter_attr("url(#blur)")
+                    .into(),
+            )
+            .unwrap(),
+        ];
+        assert!(is_defs_only_node(&nodes[0]));
+        let doc = emit_svg_document(&nodes, [0.0, 0.0, 64.0, 64.0]);
+        assert!(doc.contains("<defs>"), "{doc}");
+        assert!(doc.contains("<filter"), "{doc}");
+        assert!(doc.contains("feGaussianBlur"), "{doc}");
+        assert!(doc.contains("filter=\"url(#blur)\""), "{doc}");
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn resvg_rasterizes_filter_blur_scene() {
+        let builder = svg()
+            .view_box("0 0 64 64")
+            .child(
+                filter().id("blur").child(
+                    fe_gaussian_blur()
+                        .attr("in", "SourceGraphic")
+                        .attr("stdDeviation", "1.5"),
+                ),
+            )
+            .child(
+                circle()
+                    .cx(32)
+                    .cy(32)
+                    .r(18)
+                    .fill("#2563eb")
+                    .filter_attr("url(#blur)"),
+            );
+        let nodes: Vec<SvgNode> = builder
+            .el
+            .children
+            .iter()
+            .filter_map(node_from_element)
+            .collect();
+        let el: Element = builder.into();
+        assert!(el.get_attr(ATTR_SVG_SCENE).is_some());
+        let doc = emit_svg_document(&nodes, [0.0, 0.0, 64.0, 64.0]);
+        let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, 64, 64).expect("resvg");
+        let nonempty = rgba.chunks(4).any(|px| px[3] > 20);
+        assert!(nonempty, "filter scene should rasterize non-empty pixels");
+    }
+
+    #[test]
+    fn scene_has_smil_detects_elem_animate_motion() {
+        let n = node_from_element(
+            &animate_motion()
+                .attr("path", "M0 0 L10 10")
+                .attr("dur", "1s")
+                .into(),
+        )
+        .unwrap();
+        assert!(crate::primitives::svg_smil::node_has_smil(&n));
+    }
+
+    #[test]
+    fn pointer_events_fill_hits_interior_not_box_corner() {
+        use crate::app::pointer_events::hit_path;
+        use crate::core::tree::PointerEvents;
+
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("fill")
+            .child(circle().cx(50.0).cy(50.0).r(20.0).fill("#f00"))
+            .into();
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        assert_eq!(el.pointer_events_mode(), PointerEvents::Fill);
+        assert!(crate::primitives::path::element_has_path_geometry(&el.attrs));
+
+        let center = hit_path(&el, 50.0, 50.0);
+        assert!(
+            !center.is_empty(),
+            "fill mode must hit circle interior"
+        );
+        let corner = hit_path(&el, 95.0, 95.0);
+        assert!(
+            corner.is_empty(),
+            "fill mode must miss outside the circle (inside leaf box)"
+        );
+    }
+
+    #[test]
+    fn pointer_events_stroke_hits_perimeter_not_center() {
+        use crate::app::pointer_events::hit_path;
+
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("stroke")
+            .child(
+                circle()
+                    .cx(50.0)
+                    .cy(50.0)
+                    .r(30.0)
+                    .fill("none")
+                    .stroke("#0f0")
+                    .stroke_width(6.0),
+            )
+            .into();
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let rim = hit_path(&el, 50.0, 20.0); // top of circle
+        assert!(!rim.is_empty(), "stroke mode must hit perimeter");
+        let center = hit_path(&el, 50.0, 50.0);
+        assert!(
+            center.is_empty(),
+            "stroke mode must miss hollow interior"
+        );
+    }
+
+    #[test]
+    fn pointer_events_bounding_box_hits_empty_corner() {
+        use crate::app::pointer_events::hit_path;
+
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("bounding-box")
+            .child(circle().cx(50.0).cy(50.0).r(10.0).fill("#00f"))
+            .into();
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        let corner = hit_path(&el, 2.0, 2.0);
+        assert!(
+            !corner.is_empty(),
+            "bounding-box must hit entire leaf"
+        );
+    }
+
+    #[test]
+    fn pointer_events_none_misses_everywhere() {
+        use crate::app::pointer_events::hit_path;
+
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("none")
+            .child(circle().cx(50.0).cy(50.0).r(40.0).fill("#00f"))
+            .into();
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        assert!(hit_path(&el, 50.0, 50.0).is_empty());
+    }
+
+    #[test]
+    fn pointer_events_auto_on_svg_equals_visible_painted() {
+        use crate::app::pointer_events::hit_path;
+
+        // auto on SVG leaf → visiblePainted: fill painted ⇒ interior hits; empty corner misses.
+        let mut el: Element = svg()
+            .view_box("0 0 100 100")
+            .w(100.0)
+            .h(100.0)
+            .pointer_events("auto")
+            .child(circle().cx(50.0).cy(50.0).r(20.0).fill("#f00"))
+            .into();
+        el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        assert!(!hit_path(&el, 50.0, 50.0).is_empty());
+        assert!(hit_path(&el, 95.0, 95.0).is_empty());
     }
 }

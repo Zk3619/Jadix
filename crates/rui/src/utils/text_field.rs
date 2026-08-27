@@ -447,6 +447,12 @@ pub(crate) fn input_clear_template_id(id: &str) -> String {
 pub(crate) fn input_reveal_template_id(id: &str) -> String {
     format!("__rui_input:{id}:reveal")
 }
+pub(crate) fn input_number_inc_template_id(id: &str) -> String {
+    format!("__rui_input:{id}:num_inc")
+}
+pub(crate) fn input_number_dec_template_id(id: &str) -> String {
+    format!("__rui_input:{id}:num_dec")
+}
 
 thread_local! {
     static CONTROLLED_VALUES: RefCell<HashMap<String, Signal<String>>> =

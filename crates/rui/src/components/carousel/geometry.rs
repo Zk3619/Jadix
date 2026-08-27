@@ -323,7 +323,7 @@ pub(super) fn maybe_finish_loop_snap(ctx: &CarouselCtx, visual: f32) {
     let Some(anim) = loop_anim(&ctx.id) else {
         return;
     };
-    if (visual - anim.target_offset).abs() <= 1.0 {
+    if loop_reached(visual, anim.target_offset, 1.0) {
         finish_loop_anim(&ctx.id, ctx.index);
     }
 }

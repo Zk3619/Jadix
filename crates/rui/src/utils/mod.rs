@@ -13,6 +13,7 @@ pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
+pub mod lucide_animated;
 pub mod icon_texture;
 pub mod motion;
 pub mod pointer_drag;
@@ -38,7 +39,13 @@ pub use focus_trap::{
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
 pub use instance_id::resolve_instance_id;
-pub use lucide::{apply_bound_icon_name, lucide_glyph};
+pub use lucide::{apply_bound_icon_name, lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
+pub use lucide_animated::{
+    animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
+    start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,
+    sync_animated_icon_hover, tick_animated_icons_subtree, AnimatedIcon, AnimatedIconBuilder,
+    ATTR_ANIMATED_ICON, ATTR_ANIMATED_ICON_STATE,
+};
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
     compute_cursor_menu_placement, disarm_underlay_close, floating_portal_anchor, mark_floating,

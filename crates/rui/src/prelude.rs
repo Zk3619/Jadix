@@ -78,10 +78,19 @@ pub use crate::core::tree::{Element, LayoutStatus};
 // ---------------------------------------------------------------------------
 
 pub use crate::primitives::{
-    canvas, circle, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, svg, svg_path,
-    svg_rect, text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder,
-    EffectWrapBuilder, InteractiveBuilder, PathBuilder, Portal, PortalProps, Scene3dBuilder,
-    Scene3dCamera, Scene3dLight, Scene3dMaterial, SvgBuilder, TextBuilder,
+    animate, animate_motion, animate_transform, canvas, circle, clip_path, defs, desc, ellipse,
+    fe_blend, fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
+    fe_offset, filter, effect_wrap, g, gstack, hstack, icon, image, interactive, line,
+    linear_gradient, marker, mask, mpath, pattern, r#box, div, rect, scene3d, set_el, stop, svg, svg_el,
+    svg_path, svg_text, svg_use, symbol, text, text_path, title, tspan, vstack, BoxBuilder,
+    Canvas2D, CanvasBuilder, CanvasSize, CircleBuilder, EffectWrapBuilder, InteractiveBuilder,
+    PathBuilder, Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
+    SvgBuilder, TextBuilder,
+};
+
+pub use crate::utils::{
+    animated_icon, animated_icon_names, animated_icon_recipe, start_animated_icon,
+    stop_animated_icon, AnimatedIcon, AnimatedIconBuilder,
 };
 
 // ---------------------------------------------------------------------------
@@ -181,9 +190,16 @@ pub use crate::components::{
     menubar_sub,
     menubar_sub_content,
     use_menubar,
-    // Navbar / NavigationMenu / Sidebar
+    // Navbar / NavigationMenu / Pagination / Sidebar
     navbar,
     navigation_menu,
+    navigation_menu_content,
+    navigation_menu_item,
+    navigation_menu_scope,
+    use_navigation_menu,
+    use_navigation_menu_item,
+    pagination,
+    pagination_range,
     pie,
     pie_chart,
     // Progress
@@ -460,10 +476,31 @@ pub use crate::components::{
     MenubarShortcut,
     MenubarSubTrigger,
     MenubarTrigger,
+    Navbar,
+    NavbarActions,
+    NavbarBrand,
     NavbarBuilder,
+    NavbarCenter,
     NavigationMenuBuilder,
+    NavigationMenuContentOpts,
+    NavigationMenuCtx,
+    NavigationMenuEntry,
     NavigationMenuItem,
+    NavigationMenuItemCtx,
     NavigationMenuLink,
+    NavigationMenuLinkData,
+    NavigationMenuList,
+    NavigationMenuTrigger,
+    NavigationMenuViewport,
+    Pagination,
+    PaginationBuilder,
+    PaginationContent,
+    PaginationEllipsis,
+    PaginationItem,
+    PaginationLink,
+    PaginationNext,
+    PaginationPage,
+    PaginationPrevious,
     PieChart,
     PieChartBuilder,
     PieChartProps,

@@ -39,7 +39,7 @@ pub mod reactivity {
     pub use crate::core::resource::{Resource, ResourceState};
 }
 
-pub use core::tree::{CursorKind, CursorValue, PointerEvents};
+pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
 pub use rui_macros::*;
 
 /// Default stable anchor id for [`app::reactive::reactive_anchor`] / [`app::reactive::reactive_placeholder`]

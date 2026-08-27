@@ -806,6 +806,7 @@ pub fn flush_gradient_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
 /// Whether strip painting can approximate this gradient well — **deprecated**:
 /// always prefer texture paint (strips leave seams with corner radii).
 #[deprecated(note = "always use ensure_gradient_texture")]
+#[allow(dead_code)]
 pub fn prefers_strip_paint(_grad: &Gradient) -> bool {
     false
 }

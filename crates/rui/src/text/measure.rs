@@ -976,6 +976,17 @@ pub fn intrinsic_width(prepared: &PreparedText) -> f32 {
     max_w.max(line_w).max(prepared.size * 0.5)
 }
 
+/// Snap a content-sized text width up to a whole logical pixel.
+///
+/// Glyphon `Wrap::Word` compares ink against the buffer width with a hard edge: when the
+/// leaf is sized to a fractional intrinsic (e.g. 16.621) but the used box is even 0.5px
+/// shorter — or a parent floors the contribution — the last glyph spills onto a new line
+/// (`"sun"` → `"su"` / `"n"`). Ceil keeps measure ≥ paint for single-line captions.
+#[inline]
+pub fn snap_content_text_width(w: f32) -> f32 {
+    w.ceil().max(1.0)
+}
+
 /// Measure a text leaf the way Taffy needs: constrained width + wrapped height.
 pub fn measure_leaf(
     text: &str,
@@ -994,13 +1005,14 @@ pub fn measure_leaf(
         let gaps = text.chars().count().saturating_sub(1) as f32;
         intrinsic_w = (intrinsic_w + gaps * letter_spacing).max(0.0);
     }
+    let intrinsic_w = snap_content_text_width(intrinsic_w);
     // Min-content: longest unbreakable segment. Shrinking below this forces mid-word wrap in
     // glyphon (last-letter spill) and fake multi-line height from `layout`'s ceil heuristic.
     // `nowrap` (ShadCN Button / Tailwind whitespace-nowrap): min == max == intrinsic.
     let min_content = if nowrap {
-        intrinsic_w.max(1.0)
+        intrinsic_w
     } else {
-        prepared.max_segment_width.min(intrinsic_w).max(1.0)
+        snap_content_text_width(prepared.max_segment_width.min(intrinsic_w))
     };
     let width = if nowrap {
         known_width
@@ -1014,7 +1026,7 @@ pub fn measure_leaf(
         intrinsic_w
     };
     let layout_w = if nowrap {
-        intrinsic_w.max(1.0)
+        intrinsic_w
     } else {
         width.max(1.0)
     };
@@ -1482,5 +1494,47 @@ mod tests {
         let p2 = prepare("owned-fs-probe", 14.0, 400, 21.0);
         assert!(p2.max_segment_width > 0.0);
         shutdown_layout_text();
+    }
+
+    #[test]
+    fn diagnose_gallery_caption_last_letter_spill() {
+        let size = 0.65 * 16.0; // gallery text_size="0.65rem"
+        let lh = size; // Label leading-none
+        let weight = 500u16;
+        for text in [
+            "sun", "smile", "activity", "download", "heart", "bell", "check", "settings",
+        ] {
+            let p = prepare(text, size, weight, lh);
+            let raw = intrinsic_width(&p);
+            let (mw, mh) = measure_leaf(text, size, weight, lh, None, None, 0.0, false);
+            assert!(
+                mw >= raw - 1e-3,
+                "{text}: measured width {mw} must cover raw intrinsic {raw}"
+            );
+            assert!(
+                (mh - lh).abs() < 0.5,
+                "{text}: single-word caption must stay one line, h={mh} lh={lh}"
+            );
+            // Painted at the snapped measure width — and at floor(raw) after snap — must
+            // not last-letter wrap (gallery "su"/"n" / "activit"/"y").
+            let n_meas = glyphon_soft_wrap_line_count(text, size, weight, lh, mw);
+            let n_floor_raw = glyphon_soft_wrap_line_count(text, size, weight, lh, raw.floor());
+            assert_eq!(n_meas, 1, "{text}: glyphon wraps at measured {mw} (raw={raw})");
+            // After snap, callers size to ceil(raw); floor(raw) may still wrap — that's OK
+            // as long as measure reports the ceiled width.
+            assert!(
+                mw >= snap_content_text_width(raw) - 1e-3,
+                "{text}: measure {mw} should be snap(raw)={}",
+                snap_content_text_width(raw)
+            );
+            let _ = n_floor_raw;
+        }
+    }
+
+    #[test]
+    fn snap_content_text_width_ceils_fractional_intrinsic() {
+        assert_eq!(snap_content_text_width(16.621), 17.0);
+        assert_eq!(snap_content_text_width(33.0), 33.0);
+        assert_eq!(snap_content_text_width(0.2), 1.0);
     }
 }

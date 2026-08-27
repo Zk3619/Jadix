@@ -48,12 +48,12 @@ fn prelude_aspect_ratio_dual_surface_compiles() {
     let el = ui! {
         <HStack gap="0.5rem" w="20rem">
             <AspectRatio ratio="16/9" w="10rem">
-                <Rect w="100%" h="100%" bg="muted" />
+                <div w="100%" h="100%" bg="muted" />
             </AspectRatio>
             { Element::from(aspect_ratio().ratio("1/1").child(Element::new().w("100%").h("100%")))
                 .w("6rem") }
             <Image texture="demo" w="6rem" aspect_ratio="4/3" />
-            <Rect w="6rem" aspect_ratio={1.5} bg="muted" />
+            <div w="6rem" aspect_ratio={1.5} bg="muted" />
         </HStack>
     };
     let _: Element = el;

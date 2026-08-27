@@ -30,8 +30,9 @@ pub use measure::{
     invalidate_prepare_cache, layout, layout_lines, layout_text_fast_mode, layout_wrap_target,
     layout_wrap_target_prewrap, measure_leaf, measure_prefix_advance, note_fit_needs_relayout,
     prepare, prepare_rich, prepare_with_family, set_layout_text_fast_mode, shared_font_system_ptr,
-    shutdown_layout_text, take_fit_needs_relayout, try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap,
-    PreparedLine, PreparedText, TextLayoutMetrics, LINE_WIDTH_EPS,
+    shutdown_layout_text, snap_content_text_width, take_fit_needs_relayout,
+    try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, PreparedLine, PreparedText, TextLayoutMetrics,
+    LINE_WIDTH_EPS,
 };
 pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};
 pub use visual_lines::{
