@@ -449,11 +449,11 @@ mod tests {
 
     #[test]
     fn custom_emoji_bottom_must_fit_leaf_clip_with_leading_normal() {
-        // Production: leaf height ≈ line_height (leading-normal). Custom quad is em-square,
-        // centered in the line. Any clip shorter than line_height will flatten faces.
+        // Production: leaf height ≈ line_height (leading-normal). Ink ≈ 1.1em, optically
+        // centered. Any clip shorter than line_height will flatten faces.
         let size = 14.0_f32;
         let lh = size * 1.5;
-        let emoji_h = size;
+        let emoji_h = size * crate::renderer::emoji_layout::EMOJI_INK_EM;
         let top = (lh - emoji_h) * 0.5;
         let bottom = top + emoji_h;
         // Simulated tight clip mistaken for "font-size tall" leaf (leading-none residual).
@@ -464,13 +464,13 @@ mod tests {
             overshoot_if_tight > 1.0,
             "documents the failure mode when leaf clip ≈ font-size"
         );
-        // Correct clip must be at least line_height.
+        // Correct clip must be at least line_height (ink may lightly overflow; still < lh here).
         assert!(bottom <= lh + 0.01);
     }
 
     #[test]
     fn custom_emoji_quad_vs_line_box_clip_signal() {
-        // Centered placement must keep the em-square inside the line box.
+        // Optical centering: 1.1em ink stays inside leading-normal line box.
         let mut fs = font_loader::create_font_system();
         font_loader::apply_default_families(fs.db_mut());
         let ui = best_font_family(&fs);
@@ -484,23 +484,27 @@ mod tests {
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(400.0), Some(lh + 2.0));
-        buffer.set_text(
+        let attrs = glyphon::Attrs::new().family(ui);
+        crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+            &mut buffer,
             &layout,
-            &glyphon::Attrs::new().family(ui),
+            &attrs,
             glyphon::Shaping::Advanced,
-            None,
+            size,
+            lh,
         );
         buffer.shape_until_scroll(&mut fs, false);
 
+        let ink = size * crate::renderer::emoji_layout::EMOJI_INK_EM;
         let (left, top) = crate::renderer::emoji_layout::custom_emoji_left_centered_top(
             &buffer,
             &layout,
             emoji_start,
-            size,
-            size,
+            ink,
+            ink,
         )
         .expect("emoji slot position");
-        let bottom = top + size;
+        let bottom = top + ink;
         let mut line_top = 0.0_f32;
         let mut line_bottom = lh;
         for run in buffer.layout_runs() {
@@ -511,8 +515,8 @@ mod tests {
             "centered left={left:.2} top={top:.2} bottom={bottom:.2} | line_top={line_top:.2} line_bottom={line_bottom:.2}"
         );
         assert!(
-            top >= line_top - 0.1 && bottom <= line_bottom + 0.1,
-            "centered emoji must fit in line box; top={top} bottom={bottom} line=[{line_top},{line_bottom}]"
+            top >= line_top - 0.5 && bottom <= line_bottom + 0.5,
+            "centered emoji should stay near line box; top={top} bottom={bottom} line=[{line_top},{line_bottom}]"
         );
     }
 
@@ -534,11 +538,14 @@ mod tests {
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(1200.0), Some(lh * 2.0));
-        buffer.set_text(
+        let attrs = glyphon::Attrs::new().family(ui);
+        crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+            &mut buffer,
             &layout,
-            &glyphon::Attrs::new().family(ui),
+            &attrs,
             glyphon::Shaping::Advanced,
-            None,
+            size,
+            lh,
         );
         buffer.shape_until_scroll(&mut fs, false);
 
@@ -566,8 +573,9 @@ mod tests {
             let name = twemoji_name::twemoji_stem(g);
             println!("slot emoji={name} advance={advance:.1} ratio={ratio:.2}");
             assert!(
-                ratio > 0.85 && ratio < 1.35,
-                "{name}: expected ~1em slot advance after plan, got ratio={ratio}"
+                ratio > 1.0 && ratio < 1.45,
+                "{name}: expected ~ADVANCE_EM≈{} slot advance, got ratio={ratio}",
+                crate::renderer::emoji_layout::EMOJI_ADVANCE_EM
             );
         }
         let _ = EMOJI_GPU_COMPAT_SECTION1_SAMPLES;
@@ -713,11 +721,14 @@ mod tests {
 
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(avail), Some(lh * 8.0));
-        buffer.set_text(
+        let attrs = glyphon::Attrs::new().family(ui);
+        crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+            &mut buffer,
             &layout,
-            &glyphon::Attrs::new().family(ui),
+            &attrs,
             glyphon::Shaping::Advanced,
-            None,
+            size,
+            lh,
         );
         buffer.shape_until_scroll(&mut fs, false);
 
@@ -727,7 +738,8 @@ mod tests {
             "narrow gallery emoji row should soft-wrap, got {runs} runs"
         );
 
-        let slot = size;
+        let ink = size * crate::renderer::emoji_layout::EMOJI_INK_EM;
+        let advance = size * crate::renderer::emoji_layout::EMOJI_ADVANCE_EM;
         let mut cursor = 0.0_f32;
         let mut line_top = None;
         let mut positions = Vec::new();
@@ -742,13 +754,13 @@ mod tests {
                 continue;
             }
             let (left, top) = crate::renderer::emoji_layout::custom_emoji_left_centered_top(
-                &buffer, &layout, start, slot, slot,
+                &buffer, &layout, start, ink, ink,
             )
             .unwrap_or_else(|| panic!("emoji slot miss g={g:?} start={start}"));
             let left = crate::renderer::emoji_layout::advance_emoji_left_cursor(
                 left,
                 top,
-                slot,
+                advance,
                 &mut cursor,
                 &mut line_top,
             );
@@ -770,7 +782,7 @@ mod tests {
             by_line.len()
         );
         for (top, xs) in &by_line {
-            let max_right = xs.iter().cloned().fold(0.0_f32, f32::max) + slot;
+            let max_right = xs.iter().cloned().fold(0.0_f32, f32::max) + ink;
             assert!(
                 max_right <= avail + 1.0,
                 "emoji quads must stay inside avail={avail}, right={max_right:.1} top={top:.1}"
@@ -779,7 +791,7 @@ mod tests {
         for (top, xs) in by_line.iter().skip(1) {
             let first = xs[0];
             assert!(
-                first < slot * 1.5,
+                first < advance * 1.5,
                 "first emoji on wrapped line must return to left margin, left={first:.1} \
                  top={top:.1} (stair-step regression)"
             );

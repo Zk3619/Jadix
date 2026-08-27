@@ -527,6 +527,8 @@ pub struct InputBuilder {
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
     value: Option<Signal<String>>,
+    /// CSS `text-align`（默认 `start`）。
+    text_align: crate::style::TextAlign,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -629,6 +631,7 @@ pub fn input(id: &str) -> InputBuilder {
         line_height_px: None,
         leading_scale: None,
         value: None,
+        text_align: crate::style::TextAlign::Start,
     }
 }
 
@@ -724,6 +727,16 @@ impl InputBuilder {
     /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
+        self
+    }
+    /// CSS `text-align`（如 `"center"` / `"start"` / `"justify"`）。
+    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+        self.text_align = crate::style::TextAlign::parse(align.as_ref());
+        self
+    }
+    /// 覆盖默认水平内边距（默认 `0.75rem`）。
+    pub fn px(mut self, p: impl IntoCssDim) -> Self {
+        self.container = self.container.px(p);
         self
     }
     /// Ignored: single-line Input always uses [`crate::style::TextOverflow::Hidden`].
@@ -904,6 +917,7 @@ impl From<InputBuilder> for Element {
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
             value: builder.value,
+            text_align: builder.text_align,
             single_line_container: Some(builder.container),
             multiline: false,
             rows: 1,

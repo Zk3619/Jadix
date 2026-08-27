@@ -158,6 +158,9 @@ impl EffectPassGpu {
     }
 
     /// Render capture slices then apply queued effect jobs. Returns true if any work ran.
+    ///
+    /// When `text` is provided, capture jobs that include [`CaptureJob::text_nodes`] are
+    /// reshaped and drawn into the RT (offscreen text-xform fallback).
     pub fn flush(
         &mut self,
         device: &wgpu::Device,
@@ -170,18 +173,23 @@ impl EffectPassGpu {
         pointer: [f32; 2],
         ui_scale: f32,
         rect_pipeline: &super::RuiPipeline,
+        mut text: Option<&mut super::text::RuiTextRenderer>,
     ) -> bool {
         if captures.is_empty() && effects.is_empty() {
             return false;
         }
         let mut any = false;
         for cap in captures {
-            if cap.instances.is_empty() && cap.textured_draws.is_empty() {
+            if cap.instances.is_empty()
+                && cap.textured_draws.is_empty()
+                && cap.text_nodes.is_empty()
+            {
                 continue;
             }
-            let w = (cap.bounds[2] * ui_scale).round().max(2.0) as u32;
-            let h = (cap.bounds[3] * ui_scale).round().max(2.0) as u32;
-            // CSS filter captures are content-keyed (no screen x/y). Reuse across scroll.
+            let scale = ui_scale;
+            let w = (cap.bounds[2] * scale).round().max(2.0) as u32;
+            let h = (cap.bounds[3] * scale).round().max(2.0) as u32;
+            // CSS filter captures: content-keyed reuse across scroll.
             let filter_cap = cap.key.starts_with("rui_filter_cap:");
             let sources_ready = cap
                 .textured_draws
@@ -205,7 +213,8 @@ impl EffectPassGpu {
                 cap,
                 w,
                 h,
-                ui_scale,
+                scale,
+                text.as_deref_mut(),
             ) {
                 any = true;
                 if filter_cap && sources_ready {
@@ -256,6 +265,7 @@ impl EffectPassGpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
+            // Must match SDF / glyphon pipelines (surface sRGB).
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
@@ -283,6 +293,7 @@ impl EffectPassGpu {
         w: u32,
         h: u32,
         ui_scale: f32,
+        mut text: Option<&mut super::text::RuiTextRenderer>,
     ) -> bool {
         let Some(gpu_img) = images.get(&cap.key) else {
             return false;
@@ -325,20 +336,119 @@ impl EffectPassGpu {
         let tex_insts: Vec<TexturedInstanceInput> = cap
             .textured_draws
             .iter()
-            .map(|d| TexturedInstanceInput {
-                rect_pos: [(d.rect[0] - ox) * ui_scale, (d.rect[1] - oy) * ui_scale],
-                rect_size: [d.rect[2] * ui_scale, d.rect[3] * ui_scale],
-                tint: [1.0, 1.0, 1.0, d.opacity],
-                uv_offset: d.uv_offset,
-                uv_scale: d.uv_scale,
-                transform: {
-                    let mut t = d.transform;
-                    t[4] *= ui_scale;
-                    t[5] *= ui_scale;
-                    t
-                },
+            .map(|d| {
+                let flags = if d
+                    .texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+                {
+                    1.0
+                } else {
+                    0.0
+                };
+                TexturedInstanceInput {
+                    rect_pos: [(d.rect[0] - ox) * ui_scale, (d.rect[1] - oy) * ui_scale],
+                    rect_size: [d.rect[2] * ui_scale, d.rect[3] * ui_scale],
+                    tint: [
+                        d.tint_rgb[0],
+                        d.tint_rgb[1],
+                        d.tint_rgb[2],
+                        d.opacity,
+                    ],
+                    uv_offset: d.uv_offset,
+                    uv_scale: d.uv_scale,
+                    transform: {
+                        let mut t = d.transform;
+                        t[4] *= ui_scale;
+                        t[5] *= ui_scale;
+                        t
+                    },
+                    flags,
+                    _pad: [0.0; 3],
+                }
             })
             .collect();
+
+        // Shape capture text into glyphon buffers (axis-aligned; blit applies the matrix).
+        // Match main prepare_text attrs (family / weight / align) so capture ink matches
+        // unrotated labels — incomplete Attrs previously made strokes look thin/wrong.
+        let mut capture_buffers: Vec<glyphon::Buffer> = Vec::new();
+        if let Some(tr) = text.as_mut() {
+            if !cap.text_nodes.is_empty() {
+                let fs = tr.font_system;
+                for info in &cap.text_nodes {
+                    let size = (info.style.size * ui_scale).max(1.0);
+                    let lh = if let Some(px) = info.style.line_height_px {
+                        px * ui_scale
+                    } else if let Some(sc) = info.style.line_height_scale {
+                        size * sc
+                    } else {
+                        size * crate::style::tailwind_default_leading_scale(info.style.size)
+                    };
+                    let family = if let Some(ref name) = info.style.font_family {
+                        crate::utils::font::resolve_family(unsafe { &*fs }.db(), name)
+                    } else {
+                        crate::renderer::text_hit::best_font_family(unsafe { &*fs })
+                    };
+                    let weight = crate::utils::font::normalize_weight_for_family(
+                        unsafe { &*fs }.db(),
+                        family,
+                        info.style.weight,
+                    );
+                    let mut buffer =
+                        glyphon::Buffer::new(unsafe { &mut *fs }, glyphon::Metrics::new(size, lh));
+                    let color = info.style.color;
+                    let attrs = glyphon::Attrs::new()
+                        .family(family)
+                        .weight(glyphon::fontdb::Weight(weight))
+                        .color(glyphon::Color::rgba(
+                            color[0], color[1], color[2], color[3],
+                        ));
+                    buffer.set_text(&info.text, &attrs, glyphon::Shaping::Advanced, None);
+                    let align = info.style.align.to_glyphon(info.style.direction);
+                    for line in buffer.lines.iter_mut() {
+                        line.set_align(Some(align));
+                    }
+                    let bw = (info.width * ui_scale).max(1.0);
+                    let bh = (info.height * ui_scale).max(1.0);
+                    buffer.set_size(Some(bw), Some(bh));
+                    buffer.shape_until_scroll(unsafe { &mut *fs }, false);
+                    capture_buffers.push(buffer);
+                }
+                let mut areas: Vec<glyphon::TextArea<'_>> =
+                    Vec::with_capacity(capture_buffers.len());
+                for (info, buffer) in cap.text_nodes.iter().zip(capture_buffers.iter()) {
+                    let left = (info.x - ox) * ui_scale;
+                    let top = (info.y - oy) * ui_scale;
+                    let ps = if info.paint_scale.is_finite() && info.paint_scale > 0.0 {
+                        info.paint_scale
+                    } else {
+                        1.0
+                    };
+                    areas.push(glyphon::TextArea {
+                        buffer,
+                        left,
+                        top,
+                        scale: ps,
+                        bounds: glyphon::TextBounds {
+                            left: 0,
+                            top: 0,
+                            right: w as i32,
+                            bottom: h as i32,
+                        },
+                        default_color: glyphon::Color::rgba(
+                            info.style.color[0],
+                            info.style.color[1],
+                            info.style.color[2],
+                            info.style.color[3],
+                        ),
+                        custom_glyphs: &[],
+                        transform: glyphon::TEXT_TRANSFORM_IDENTITY,
+                        transform_origin: [0.0, 0.0],
+                    });
+                }
+                tr.prepare_resolution(device, queue, w, h, areas.into_iter());
+            }
+        }
 
         rect_pipeline.update_resolution(queue, w, h);
         textured.update_resolution(queue, w, h);
@@ -413,6 +523,11 @@ impl EffectPassGpu {
                     );
                     pass.draw_indexed(0..textured.num_indices, 0, ti as u32..(ti + run) as u32);
                     ti += run;
+                }
+            }
+            if let Some(tr) = text.as_ref() {
+                if !cap.text_nodes.is_empty() {
+                    tr.render(&mut pass);
                 }
             }
         }

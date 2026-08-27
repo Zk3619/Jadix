@@ -937,9 +937,12 @@ pub fn prepare_compose_anchor(
 }
 
 /// 估算 caret 相对字段左缘的逻辑 X（优先测宽；失败则用 padding 启发式）。
+///
+/// `line_full`：caret 所在硬行全文，用于 CSS `text-align` 水平偏移（与绘制/命中一致）。
 pub(crate) fn estimate_caret_x_in_field(
     font_system: Option<&mut glyphon::FontSystem>,
     display_prefix: &str,
+    line_full: &str,
     text_style: &crate::style::TextStyle,
     field_visual: [f32; 4],
     ui_scale: f32,
@@ -947,38 +950,43 @@ pub(crate) fn estimate_caret_x_in_field(
 ) -> f32 {
     let scale = ui_scale.max(0.001);
     let content_w = (field_visual[2] - pad_left_logical).max(1.0);
-    if let Some(fs) = font_system {
-        if !display_prefix.is_empty() {
-            let scaled_size = text_style.size * scale;
-            let line_height = if let Some(lh) = text_style.line_height_px {
-                lh * scale
-            } else {
-                let leading = text_style.line_height_scale.unwrap_or_else(|| {
-                    crate::style::tailwind_default_leading_scale(text_style.size)
-                });
-                scaled_size * leading
-            };
-            let family = if let Some(ref f) = text_style.font_family {
-                crate::utils::font::resolve_family(fs.db(), f)
-            } else {
-                glyphon::Family::SansSerif
-            };
-            let weight =
-                crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
-            let prefix_w_phys = crate::renderer::text_hit::measure_prefix_width(
-                fs,
-                display_prefix,
-                scaled_size,
-                line_height,
-                weight,
-                family,
-                content_w * scale,
-            );
-            return pad_left_logical
-                + ((prefix_w_phys / scale) - text_style.scroll_x.max(0.0)).clamp(0.0, content_w);
+    let Some(fs) = font_system else {
+        return pad_left_logical;
+    };
+    let scaled_size = text_style.size * scale;
+    let line_height = if let Some(lh) = text_style.line_height_px {
+        lh * scale
+    } else {
+        let leading = text_style
+            .line_height_scale
+            .unwrap_or_else(|| crate::style::tailwind_default_leading_scale(text_style.size));
+        scaled_size * leading
+    };
+    let family = if let Some(ref f) = text_style.font_family {
+        crate::utils::font::resolve_family(fs.db(), f)
+    } else {
+        glyphon::Family::SansSerif
+    };
+    let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
+    let measure_one = |fs: &mut glyphon::FontSystem, text: &str| -> f32 {
+        if text.is_empty() {
+            return 0.0;
         }
-    }
+        crate::renderer::text_hit::measure_prefix_width(
+            fs,
+            text,
+            scaled_size,
+            line_height,
+            weight,
+            family,
+            content_w * scale,
+        ) / scale
+    };
+    let line_w = measure_one(fs, line_full);
+    let prefix_w = measure_one(fs, display_prefix);
+    let align_dx = text_style.align_inline_offset(line_w, content_w);
     pad_left_logical
+        + (align_dx + prefix_w - text_style.scroll_x.max(0.0)).clamp(0.0, content_w)
 }
 
 #[cfg(test)]
@@ -1171,6 +1179,9 @@ mod tests {
                 prepared: None,
                 glyph_fx: None,
                 paint_scale: 1.0,
+                paint_transform: crate::style::MAT2D_IDENTITY,
+                paint_origin: [0.0, 0.0],
+                glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
             },
             TextLayoutInfo {
                 text: "啊a".into(),
@@ -1186,6 +1197,9 @@ mod tests {
                 prepared: None,
                 glyph_fx: None,
                 paint_scale: 1.0,
+                paint_transform: crate::style::MAT2D_IDENTITY,
+                paint_origin: [0.0, 0.0],
+                glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
             },
         ];
         let b = painted_text_edit_visual_bounds(&nodes, "input:gal").expect("bounds");

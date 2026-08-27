@@ -12,6 +12,7 @@ struct InstanceInput {
     @location(7) transform_ab: vec2<f32>,   // [a, b]
     @location(8) transform_cd: vec2<f32>,   // [c, d]
     @location(9) transform_txty: vec2<f32>, // [tx, ty]
+    @location(10) flags: f32,               // >0.5 = SDF / MSDF sample
 };
 
 struct Globals {
@@ -32,10 +33,16 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) tint: vec4<f32>,
+    @location(2) @interpolate(flat) flags: f32,
 };
 
 fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ab.x * v.x + cd.x * v.y, ab.y * v.x + cd.y * v.y);
+}
+
+/// MSDF median (works for single-channel SDF packed as R=G=B too).
+fn median3(r: f32, g: f32, b: f32) -> f32 {
+    return max(min(r, g), min(max(r, g), b));
 }
 
 @vertex
@@ -45,9 +52,10 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     let cd = inst.transform_cd;
     let txty = inst.transform_txty;
 
-    // Local point relative to rect center; apply **linear** part only.
+    // Local point relative to rect center; apply **linear** part only (mat2 path).
     // CSS origin is handled by the SDF/textured convention: pivot = rect center,
     // so callers must zero matrix tx/ty (origin wrap lives in that pivot, not txty).
+    // 3D mat4 path: project billboard corners on CPU (scene3d) then feed this VS.
     let local = (v.position - 0.5) * inst.rect_size;
     let rotated = affine_linear(local, ab, cd);
     let center = inst.rect_pos + inst.rect_size * 0.5;
@@ -58,12 +66,27 @@ fn vs_main(v: VertexInput, inst: InstanceInput) -> VertexOutput {
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = inst.uv_offset + v.uv * inst.uv_scale;
     out.tint = inst.tint;
+    out.flags = inst.flags;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let c = textureSample(tex, tex_sampler, in.uv) * in.tint;
+    let sample = textureSample(tex, tex_sampler, in.uv);
+    var c: vec4<f32>;
+    if (in.flags > 0.5) {
+        // Median of RGB: true MSDF when channels diverge; single-channel SDF when R=G=B.
+        // Packing: 0.5 = edge, >0.5 inside (see text_texture / SDF_SPREAD).
+        let sd = median3(sample.r, sample.g, sample.b);
+        // Screen-space px range (MSDF-style): scale AA width by how fast the field changes.
+        let px_range = 2.0;
+        let dist_screen = fwidth(sd) * px_range;
+        let afwidth = max(dist_screen, 0.02);
+        let coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, sd);
+        c = vec4<f32>(in.tint.rgb, coverage * in.tint.a);
+    } else {
+        c = sample * in.tint;
+    }
     var rgb = c.rgb;
     if (globals.premultiply > 0.5) {
         rgb = rgb * c.a;

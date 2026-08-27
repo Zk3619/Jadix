@@ -98,6 +98,127 @@ pub enum TextDirection {
     Rtl,
 }
 
+/// CSS [`text-align`](https://developer.mozilla.org/docs/Web/CSS/text-align) specified value.
+///
+/// Keywords follow MDN: `start` | `end` | `left` | `right` | `center` | `justify` |
+/// `justify-all` | `match-parent`, plus vendor `-moz-center` / `-webkit-center` → [`Self::Center`].
+/// Global keywords (`inherit` / `initial` / `revert` / `revert-layer` / `unset`) are handled by
+/// [`Self::parse_declaration`] — not stored on this enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    /// CSS initial / writing-mode start edge.
+    #[default]
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+    /// Treated like [`Self::Justify`] for glyphon (no per-last-line force yet).
+    JustifyAll,
+    /// Resolve against the parent's `text-align` + direction at cascade time.
+    MatchParent,
+}
+
+/// Result of parsing a CSS `text-align` declaration (including global keywords).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextAlignDeclaration {
+    Value(TextAlign),
+    /// `inherit` / `unset` / `revert` / `revert-layer` — clear local declaration, cascade inherits.
+    Inherit,
+    /// `initial` → [`TextAlign::Start`].
+    Initial,
+}
+
+impl TextAlign {
+    /// Parse a keyword (case-insensitive). Unknown tokens fall back to [`Self::Start`].
+    pub fn parse(s: &str) -> Self {
+        match Self::parse_declaration(s) {
+            TextAlignDeclaration::Value(v) => v,
+            TextAlignDeclaration::Initial | TextAlignDeclaration::Inherit => Self::Start,
+        }
+    }
+
+    /// Full declaration parse including global CSS keywords and vendor centers.
+    pub fn parse_declaration(s: &str) -> TextAlignDeclaration {
+        let t = s.trim();
+        if t.is_empty() {
+            return TextAlignDeclaration::Value(Self::Start);
+        }
+        match t.to_ascii_lowercase().as_str() {
+            "inherit" | "unset" | "revert" | "revert-layer" => TextAlignDeclaration::Inherit,
+            "initial" => TextAlignDeclaration::Initial,
+            "start" => TextAlignDeclaration::Value(Self::Start),
+            "end" => TextAlignDeclaration::Value(Self::End),
+            "left" => TextAlignDeclaration::Value(Self::Left),
+            "right" => TextAlignDeclaration::Value(Self::Right),
+            "center" | "-moz-center" | "-webkit-center" => {
+                TextAlignDeclaration::Value(Self::Center)
+            }
+            "justify" => TextAlignDeclaration::Value(Self::Justify),
+            "justify-all" => TextAlignDeclaration::Value(Self::JustifyAll),
+            "match-parent" => TextAlignDeclaration::Value(Self::MatchParent),
+            _ => TextAlignDeclaration::Value(Self::Start),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::End => "end",
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Center => "center",
+            Self::Justify => "justify",
+            Self::JustifyAll => "justify-all",
+            Self::MatchParent => "match-parent",
+        }
+    }
+
+    /// CSS `match-parent`: inherit parent's align, but resolve `start`/`end` against the
+    /// **parent's** direction (then store absolute left/right).
+    pub fn resolve_match_parent(parent_align: Self, parent_dir: TextDirection) -> Self {
+        match parent_align {
+            Self::Start | Self::MatchParent => match parent_dir {
+                TextDirection::Rtl => Self::Right,
+                _ => Self::Left,
+            },
+            Self::End => match parent_dir {
+                TextDirection::Rtl => Self::Left,
+                _ => Self::Right,
+            },
+            other => other,
+        }
+    }
+
+    /// Used value → glyphon / cosmic-text `Align`.
+    pub fn to_glyphon(self, direction: TextDirection) -> glyphon::cosmic_text::Align {
+        match self {
+            Self::Start | Self::MatchParent => match direction {
+                TextDirection::Rtl => glyphon::cosmic_text::Align::Right,
+                _ => glyphon::cosmic_text::Align::Left,
+            },
+            Self::End => glyphon::cosmic_text::Align::End,
+            Self::Left => glyphon::cosmic_text::Align::Left,
+            Self::Right => glyphon::cosmic_text::Align::Right,
+            Self::Center => glyphon::cosmic_text::Align::Center,
+            Self::Justify | Self::JustifyAll => glyphon::cosmic_text::Align::Justified,
+        }
+    }
+}
+
+impl From<&str> for TextAlign {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for TextAlign {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
+
 /// Rich-inline span kind. Chip / Mention are atomic measure/break units.
 ///
 /// Cosmic-text `Attrs::metadata` convention (`rui_chip`): for Chip/Mention spans,
@@ -256,11 +377,15 @@ pub struct TextStyle {
     pub line_height_px: Option<f32>,
     /// Line-height scale relative to font size. `None` = default policy.
     pub line_height_scale: Option<f32>,
-    pub align: glyphon::cosmic_text::Align,
+    /// CSS `text-align` (see [`TextAlign`]).
+    pub align: TextAlign,
     /// Overflow when the box is too small (`clip` / `hidden` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
     pub white_space: WhiteSpace,
+    /// Mid-line break mode when soft-wrapping (`word` / `char` / `none`).
+    /// Must match paint + caret chrome (`wrap=char` → SoftChar visual lines).
+    pub wrap_mode: crate::text::WrapMode,
     /// Whether static text allows drag-select.
     pub selectable: bool,
     /// Paragraph direction (Auto / LTR / RTL).
@@ -292,14 +417,38 @@ impl Default for TextStyle {
             shadow_blur: 0.0,
             line_height_px: None,
             line_height_scale: None,
-            align: glyphon::cosmic_text::Align::Left,
+            align: TextAlign::Start,
             overflow: TextOverflow::Clip,
             white_space: WhiteSpace::Normal,
+            wrap_mode: crate::text::WrapMode::Word,
             selectable: false,
             direction: TextDirection::Auto,
             letter_spacing: 0.0,
             input_caret: None,
             scroll_x: 0.0,
+        }
+    }
+}
+
+impl TextStyle {
+    /// Horizontal offset of a line's ink origin inside `box_w` for CSS `text-align`.
+    ///
+    /// Matches glyphon / [`crate::renderer::prepare_text`]: when a nowrap/`hidden` line
+    /// overflows, `text-overflow` keeps the inline-start edge in view (offset = 0).
+    pub fn align_inline_offset(&self, line_content_w: f32, box_w: f32) -> f32 {
+        let nowrap = self.white_space == WhiteSpace::Nowrap || self.overflow.nowrap();
+        if self.overflow.start_align_when_line_overflows()
+            && nowrap
+            && line_content_w > box_w + 0.5
+        {
+            return 0.0;
+        }
+        match self.align.to_glyphon(self.direction) {
+            glyphon::cosmic_text::Align::Center => (box_w - line_content_w) * 0.5,
+            glyphon::cosmic_text::Align::Right | glyphon::cosmic_text::Align::End => {
+                box_w - line_content_w
+            }
+            _ => 0.0,
         }
     }
 }
@@ -363,7 +512,10 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_text_shadow, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace};
+    use super::{
+        parse_text_shadow, TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan,
+        TextSpanKind, TextStyle, WhiteSpace,
+    };
 
     #[test]
     fn text_span_chip_builder() {
@@ -400,6 +552,7 @@ mod tests {
         let s = TextStyle::default();
         assert_eq!(s.overflow, TextOverflow::Clip);
         assert_eq!(s.white_space, WhiteSpace::Normal);
+        assert_eq!(s.wrap_mode, crate::text::WrapMode::Word);
         assert!(!s.selectable);
         assert_eq!(s.direction, super::TextDirection::Auto);
         assert_eq!(s.letter_spacing, 0.0);
@@ -415,6 +568,65 @@ mod tests {
         assert_eq!(el.text_style.overflow, TextOverflow::Ellipsis);
         assert_eq!(el.text_style.white_space, WhiteSpace::Nowrap);
         assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+    }
+
+    #[test]
+    fn text_align_parse_mdn_keywords() {
+        assert_eq!(TextAlign::parse("start"), TextAlign::Start);
+        assert_eq!(TextAlign::parse("end"), TextAlign::End);
+        assert_eq!(TextAlign::parse("left"), TextAlign::Left);
+        assert_eq!(TextAlign::parse("right"), TextAlign::Right);
+        assert_eq!(TextAlign::parse("center"), TextAlign::Center);
+        assert_eq!(TextAlign::parse("JUSTIFY"), TextAlign::Justify);
+        assert_eq!(TextAlign::parse("justify-all"), TextAlign::JustifyAll);
+        assert_eq!(TextAlign::parse("match-parent"), TextAlign::MatchParent);
+        assert_eq!(TextAlign::parse("-moz-center"), TextAlign::Center);
+        assert_eq!(TextAlign::parse("-webkit-center"), TextAlign::Center);
+        assert_eq!(
+            TextAlign::parse_declaration("inherit"),
+            TextAlignDeclaration::Inherit
+        );
+        assert_eq!(
+            TextAlign::parse_declaration("initial"),
+            TextAlignDeclaration::Initial
+        );
+        assert_eq!(
+            TextAlign::parse_declaration("unset"),
+            TextAlignDeclaration::Inherit
+        );
+        assert_eq!(
+            TextAlign::parse_declaration("revert"),
+            TextAlignDeclaration::Inherit
+        );
+        assert_eq!(
+            TextAlign::parse_declaration("revert-layer"),
+            TextAlignDeclaration::Inherit
+        );
+        assert_eq!(
+            TextAlign::Start.to_glyphon(TextDirection::Ltr),
+            glyphon::cosmic_text::Align::Left
+        );
+        assert_eq!(
+            TextAlign::Start.to_glyphon(TextDirection::Rtl),
+            glyphon::cosmic_text::Align::Right
+        );
+        assert_eq!(
+            TextAlign::Left.to_glyphon(TextDirection::Rtl),
+            glyphon::cosmic_text::Align::Left
+        );
+        assert_eq!(
+            TextAlign::End.to_glyphon(TextDirection::Auto),
+            glyphon::cosmic_text::Align::End
+        );
+        assert_eq!(
+            TextAlign::Justify.to_glyphon(TextDirection::Auto),
+            glyphon::cosmic_text::Align::Justified
+        );
+        assert_eq!(
+            TextAlign::resolve_match_parent(TextAlign::Start, TextDirection::Rtl),
+            TextAlign::Right
+        );
+        assert_eq!(TextStyle::default().align, TextAlign::Start);
     }
 
     #[test]

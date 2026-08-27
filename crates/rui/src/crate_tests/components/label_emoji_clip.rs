@@ -112,38 +112,42 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
         "leaf height should track leading-normal line box; leaf_h={leaf_h} lh={lh}"
     );
 
-    // Shape with the same Metrics/line box paint uses, then place the custom quad.
+    // Shape with ADVANCE_EM slots + INK_EM quads (same as paint).
     let layout = emoji_layout::plan_emoji_layout_text(text);
     let emoji_start = layout.find(emoji_layout::EMOJI_LAYOUT_SLOT).unwrap();
     let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
     buffer.set_size(Some(info.width.max(1.0)), Some(lh + 2.0));
-    buffer.set_text(
+    let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
+    emoji_layout::set_buffer_with_emoji_slots(
+        &mut buffer,
         &layout,
-        &glyphon::Attrs::new().family(glyphon::Family::SansSerif),
+        &attrs,
         glyphon::Shaping::Advanced,
-        None,
+        size,
+        lh,
     );
     buffer.shape_until_scroll(&mut fs, false);
 
-    let pixel_size = crate::renderer::prepare_text::emoji_paint_pixel_size(size) as f32;
+    let ink = crate::renderer::prepare_text::emoji_paint_pixel_size(size) as f32;
     let (left, top) = emoji_layout::custom_emoji_left_centered_top(
         &buffer,
         &layout,
         emoji_start,
-        pixel_size,
-        pixel_size,
+        ink,
+        ink,
     )
     .expect("emoji slot");
-    let bottom = top + pixel_size;
-    let overshoot = clipped_bottom_overshoot(info.y, top, pixel_size, clip_y, clip_h);
+    let bottom = top + ink;
+    let overshoot = clipped_bottom_overshoot(info.y, top, ink, clip_y, clip_h);
 
     eprintln!(
         "[emoji-clip] quad left={left:.2} top={top:.2} bottom={bottom:.2} \
-         pixel={pixel_size} overshoot_px={overshoot}"
+         ink={ink} overshoot_px={overshoot}"
     );
 
+    // Leading-normal line box still fits 1.1em ink with optical centering; allow tiny float slack.
     assert!(
-        overshoot < 0.5,
+        overshoot < 1.0,
         "face emoji bottom must fit TextBounds; overshoot={overshoot} \
          (leaf_h={leaf_h} clip_h={clip_h} quad_bottom={bottom})"
     );

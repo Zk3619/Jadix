@@ -629,6 +629,15 @@ impl super::App {
         let caret_byte = display.floor_char_boundary(caret_byte);
         let caret_prefix = &display[..caret_byte];
         let compose_prefix = &display[..compose_byte];
+        // Hard line containing the caret — needed for CSS text-align inline offset.
+        let (_, caret_local) =
+            crate::utils::text_field::caret_line_and_local(&display, caret_byte);
+        let line_start = caret_byte.saturating_sub(caret_local);
+        let line_end = display[line_start..]
+            .find('\n')
+            .map(|i| line_start + i)
+            .unwrap_or(display.len());
+        let line_full = &display[line_start..line_end];
 
         fn first_text_style(el: &crate::core::tree::Element) -> Option<crate::style::TextStyle> {
             if el.text.is_some() {
@@ -659,6 +668,7 @@ impl super::App {
         let caret_x = super::ime_support::estimate_caret_x_in_field(
             font_system.as_deref_mut(),
             caret_prefix,
+            line_full,
             &text_style,
             visual,
             ui_scale,
@@ -670,6 +680,7 @@ impl super::App {
             super::ime_support::estimate_caret_x_in_field(
                 font_system.as_deref_mut(),
                 compose_prefix,
+                line_full,
                 &text_style,
                 visual,
                 ui_scale,
@@ -1138,10 +1149,12 @@ impl super::App {
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
         let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
         let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
+        let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
         if slider_dragging
             || toast_dragging
             || color_dragging
             || carousel_dragging
+            || resizable_dragging
             || crate::primitives::canvas::take_canvas_wants_redraw()
         {
             window.request_redraw();
@@ -1247,6 +1260,7 @@ impl super::App {
             && self.drag_reorder.is_none()
             && !crate::components::slider::is_slider_dragging()
             && !crate::components::color_picker::is_color_dragging()
+            && !crate::components::resizable::is_resizable_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -1874,6 +1888,7 @@ impl super::App {
             crate::components::toast::clear_toast_drag_if_any();
             crate::components::color_picker::clear_color_drag_if_any();
             crate::components::carousel::clear_carousel_drag_if_any();
+            crate::components::resizable::clear_resizable_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);

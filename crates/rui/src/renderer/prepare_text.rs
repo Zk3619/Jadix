@@ -132,6 +132,9 @@ struct FrameTextNodeMeta {
     text_size: f32,
     /// CSS/`ancestor_scale` → glyphon `TextArea.scale` (1 = identity).
     paint_scale: f32,
+    /// World linear `[a,b,c,d]` for glyphon TextArea.transform.
+    paint_transform_ab_cd: [f32; 4],
+    paint_origin: [f32; 2],
     align: glyphon::cosmic_text::Align,
     measured_text_w: f32,
     underline: bool,
@@ -567,6 +570,8 @@ fn correct_bidi_ink_spill(
             attrs_owned.as_attrs(),
             glyphon::Shaping::Advanced,
             emoji_custom_glyph_enabled(),
+            size * ui_scale,
+            line_height,
         );
         for (line, align) in buffer.lines.iter_mut().zip(aligns) {
             line.set_align(align);
@@ -866,26 +871,19 @@ fn direction_mark(dir: TextDirection) -> &'static str {
 }
 
 fn resolve_text_align(
-    align: glyphon::cosmic_text::Align,
+    align: crate::style::TextAlign,
     dir: TextDirection,
 ) -> glyphon::cosmic_text::Align {
-    match dir {
-        TextDirection::Rtl if matches!(align, glyphon::cosmic_text::Align::Left) => {
-            glyphon::cosmic_text::Align::Right
-        }
-        TextDirection::Ltr if matches!(align, glyphon::cosmic_text::Align::Right) => {
-            glyphon::cosmic_text::Align::Left
-        }
-        _ => align,
-    }
+    align.to_glyphon(dir)
 }
 
 /// Shape text for the UI FontSystem.
 ///
 /// When custom emoji glyphs are enabled, each emoji grapheme is replaced with a
-/// fixed-width non-whitespace slot so advances match the ~1em color quad. Painting
+/// fixed-width non-whitespace slot so layout advance = [`emoji_layout::EMOJI_ADVANCE_EM`]×fs
+/// while the color quad ink = [`emoji_layout::EMOJI_INK_EM`]×fs (positive bearing). Painting
 /// real emoji codepoints (even with alpha=0) is wrong for two reasons:
-/// 1) ZWJ/RI clusters expand to multiple Mask advances → holes beside a 1em quad
+/// 1) ZWJ/RI clusters expand to multiple Mask advances → holes beside the ink quad
 /// 2) glyphon ignores alpha on CBDT Color glyphs if a color-emoji face is present
 ///
 /// Slot must not be Unicode whitespace: cosmic-text strips leading spaces after soft-wrap,
@@ -897,6 +895,8 @@ fn set_shaped_buffer_text(
     attrs: glyphon::Attrs,
     shaping: glyphon::Shaping,
     hide_emoji_font_glyphs: bool,
+    font_size: f32,
+    line_height: f32,
 ) {
     if !hide_emoji_font_glyphs {
         buffer.set_text(text, &attrs, shaping, None);
@@ -906,86 +906,29 @@ fn set_shaped_buffer_text(
     // no emoji codepoints, so text_contains_emoji is false — still must paint slots
     // invisible or the ideograph stroke shows as a line through Twemoji quads.
     if text.contains(EMOJI_LAYOUT_SLOT) {
-        set_text_with_invisible_emoji_slots(buffer, text, attrs, shaping);
+        emoji_layout::set_buffer_with_emoji_slots(
+            buffer,
+            text,
+            &attrs,
+            shaping,
+            font_size,
+            line_height,
+        );
         return;
     }
     if !emoji_detect::text_contains_emoji(text) {
         buffer.set_text(text, &attrs, shaping, None);
         return;
     }
-    let (layout, segments) = plan_emoji_layout(text);
-    // Slot char (CJK `一`) must keep ~1em advance but paint invisible — otherwise the
-    // ideograph stroke shows as a black line through every Twemoji quad.
-    let invisible = attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0));
-    let slot_len = EMOJI_LAYOUT_SLOT.len_utf8();
-    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::new();
-    let mut cursor = 0usize;
-    for seg in &segments {
-        let TextSegment::Emoji { start, .. } = seg else {
-            continue;
-        };
-        if cursor < *start {
-            owned.push((layout[cursor..*start].to_string(), attrs.clone()));
-        }
-        let end = (*start + slot_len).min(layout.len());
-        owned.push((layout[*start..end].to_string(), invisible.clone()));
-        cursor = end;
-    }
-    if cursor < layout.len() {
-        owned.push((layout[cursor..].to_string(), attrs.clone()));
-    }
-    if owned.is_empty() {
-        buffer.set_text(&layout, &attrs, shaping, None);
-        return;
-    }
-    let rich: Vec<(&str, glyphon::Attrs)> =
-        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
-    buffer.set_rich_text(rich, &attrs, shaping, None);
-}
-
-/// Paint already-slotted layout text (`一` placeholders) with alpha-0 on each slot.
-fn set_text_with_invisible_emoji_slots(
-    buffer: &mut glyphon::Buffer,
-    text: &str,
-    attrs: glyphon::Attrs,
-    shaping: glyphon::Shaping,
-) {
-    let visible = glyphon::AttrsOwned::new(&attrs);
-    let invisible =
-        glyphon::AttrsOwned::new(&attrs.clone().color(glyphon::Color::rgba(0, 0, 0, 0)));
-    let mut owned: Vec<(String, glyphon::AttrsOwned)> = Vec::new();
-    let mut buf = String::new();
-    let mut slot_run = false;
-    let flush =
-        |owned: &mut Vec<(String, glyphon::AttrsOwned)>, buf: &mut String, slot_run: bool| {
-            if buf.is_empty() {
-                return;
-            }
-            let a = if slot_run {
-                invisible.clone()
-            } else {
-                visible.clone()
-            };
-            owned.push((std::mem::take(buf), a));
-        };
-    for c in text.chars() {
-        let is_slot = c == EMOJI_LAYOUT_SLOT;
-        if !buf.is_empty() && is_slot != slot_run {
-            flush(&mut owned, &mut buf, slot_run);
-        }
-        slot_run = is_slot;
-        buf.push(c);
-    }
-    flush(&mut owned, &mut buf, slot_run);
-    if owned.is_empty() {
-        buffer.set_text(text, &attrs, shaping, None);
-        return;
-    }
-    let rich: Vec<(&str, glyphon::Attrs)> = owned
-        .iter()
-        .map(|(t, a)| (t.as_str(), a.as_attrs()))
-        .collect();
-    buffer.set_rich_text(rich, &attrs, shaping, None);
+    let (layout, _segments) = plan_emoji_layout(text);
+    emoji_layout::set_buffer_with_emoji_slots(
+        buffer,
+        &layout,
+        &attrs,
+        shaping,
+        font_size,
+        line_height,
+    );
 }
 
 /// 与占位字形对齐后的额外垂直微调（仅当设置了 `RUI_EMOJI_BASELINE_FACTOR` 时非零）。
@@ -1287,20 +1230,20 @@ fn resize_rgba_nn(src: &super::text::EmojiRaster, dst_size: u16) -> super::text:
     super::text::EmojiRaster::new(dst as u16, dst as u16, out)
 }
 
-/// Fit a fallback/Twemoji raster into the em-square used by custom glyphs.
+/// Fit a fallback/Twemoji raster into the ink square used by custom glyphs.
 pub(crate) fn fit_emoji_to_pixel_square(
     src: &super::text::EmojiRaster,
     pixel_size: u16,
 ) -> super::text::EmojiRaster {
-    // Trim COLR/canvas pad first so the face fills the em-square (was ~0.64em yellow).
+    // Trim transparent pad first, then scale ink bbox → INK_EM (fills without empty pad).
     let trimmed = trim_rgba_to_ink(src);
     resize_rgba_nn(&trimmed, pixel_size)
 }
 
-/// Paint size for custom emoji quads — slightly above font-size so color emoji
-/// matches typical system UI (Segoe in Notepad/Chrome reads larger than the text em).
+/// Paint / raster edge for custom emoji quads = round([`emoji_layout::EMOJI_INK_EM`]×fs).
+/// Must equal glyphon's `RasterizeCustomGlyphRequest` width/height for the stored bitmap.
 pub(crate) fn emoji_paint_pixel_size(scaled_text_size: f32) -> u16 {
-    (scaled_text_size * 1.15).ceil().clamp(1.0, 512.0) as u16
+    emoji_layout::emoji_ink_pixel_size(scaled_text_size)
 }
 
 pub(crate) fn load_twemoji_raster(
@@ -2630,6 +2573,8 @@ pub fn prepare_text_frame(
                         attrs,
                         shaping,
                         emoji_custom_glyph_enabled() && has_emoji,
+                        scaled_size,
+                        line_height,
                     );
                 }
                 for line in buffer.lines.iter_mut() {
@@ -2719,14 +2664,17 @@ pub fn prepare_text_frame(
                     let TextSegment::Emoji { text, start } = seg else {
                         continue;
                     };
+                    let (ink, advance, _) = emoji_layout::emoji_metrics(scaled_size);
+                    // Raster + CustomGlyph must share this pixel size (glyphon requests
+                    // round(glyph.width * scale); mismatch → transparent placeholder).
                     let pixel_size = emoji_paint_pixel_size(scaled_size);
-                    let slot = pixel_size as f32;
+                    let ink_draw = (pixel_size as f32).min(ink);
                     let (left, top) = match emoji_layout::custom_emoji_left_centered_top(
                         &text_renderer.shaped_cache[i].buffer,
                         &layout_text,
                         start,
-                        slot,
-                        slot,
+                        ink_draw,
+                        ink_draw,
                     ) {
                         Some((l, t)) => (l, t + emoji_baseline_layout_tweak(scaled_size)),
                         None => {
@@ -2753,7 +2701,7 @@ pub fn prepare_text_frame(
                     let left = emoji_layout::advance_emoji_left_cursor(
                         left,
                         top,
-                        slot,
+                        advance,
                         &mut emoji_left_cursor,
                         &mut emoji_line_top,
                     );
@@ -2772,7 +2720,6 @@ pub fn prepare_text_frame(
                         (glyph_id, raster)
                     };
                     if let Some(raster) = raster {
-                        // Match logical quad to font size (raster already resized).
                         let width = pixel_size as f32;
                         let height = pixel_size as f32;
                         text_renderer.emoji_cache.stats.uploads += 1;
@@ -2937,7 +2884,14 @@ pub fn prepare_text_frame(
             } else {
                 1.0
             },
-            align: st.align,
+            paint_transform_ab_cd: [
+                info.paint_transform[0],
+                info.paint_transform[1],
+                info.paint_transform[2],
+                info.paint_transform[3],
+            ],
+            paint_origin: [info.paint_origin[0] * ui_scale, info.paint_origin[1] * ui_scale],
+            align,
             measured_text_w,
             underline: st.underline,
             overline: st.overline,
@@ -3109,6 +3063,8 @@ pub fn prepare_text_frame(
                                 .emoji_cache_key
                                 .as_ref()
                                 .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
+                            transform: tb.paint_transform_ab_cd,
+                            transform_origin: tb.paint_origin,
                         });
                     };
 
@@ -3192,6 +3148,8 @@ pub fn prepare_text_frame(
                 .emoji_cache_key
                 .as_ref()
                 .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
+            transform: tb.paint_transform_ab_cd,
+            transform_origin: tb.paint_origin,
         });
 
         if emoji_debug_enabled() {
@@ -3440,6 +3398,8 @@ pub fn prepare_text_frame(
                 },
                 default_color: glyphon::Color::rgba(0, 0, 0, 0),
                 custom_glyphs: &[],
+                transform: glyphon::TEXT_TRANSFORM_IDENTITY,
+                transform_origin: [0.0, 0.0],
             });
         }
         let fs = text_renderer.font_system;

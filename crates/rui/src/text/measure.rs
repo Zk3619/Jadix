@@ -308,13 +308,16 @@ fn measure_run_width(
         let layout = crate::renderer::emoji_layout::shape_text_for_layout(text);
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
         buffer.set_size(Some(16_384.0), Some(line_height + 2.0));
-        buffer.set_text(
+        let attrs = Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight));
+        crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+            &mut buffer,
             layout.as_ref(),
-            &Attrs::new()
-                .family(family)
-                .weight(glyphon::fontdb::Weight(weight)),
+            &attrs,
             shaping,
-            None,
+            size,
+            line_height,
         );
         buffer.shape_until_scroll(font_system, false);
         buffer
@@ -757,7 +760,14 @@ pub fn glyphon_fit_soft_wrap(
         let attrs = Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight));
-        buffer.set_text(shape_text.as_ref(), &attrs, shaping, None);
+        crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+            &mut buffer,
+            shape_text.as_ref(),
+            &attrs,
+            shaping,
+            size,
+            line_height,
+        );
         let tall = (line_height * 128.0).max(line_height + 2.0);
         buffer.set_size(Some(wrap_w), Some(tall));
         buffer.shape_until_scroll(font_system, false);

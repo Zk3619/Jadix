@@ -819,20 +819,12 @@ impl BoxBuilder {
         self
     }
 
-    pub fn text_center(mut self) -> Self {
-        self.el = self.el.text_center();
+    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+        self.el = self.el.text_align(align);
         self
     }
-    pub fn text_align(mut self, align: impl Into<String>) -> Self {
-        let s = align.into();
-        if s.eq_ignore_ascii_case("left") || s.eq_ignore_ascii_case("start") {
-            self.el = self.el.text_left();
-        } else if s.eq_ignore_ascii_case("center") {
-            self.el = self.el.text_center();
-        } else if s.eq_ignore_ascii_case("right") || s.eq_ignore_ascii_case("end") {
-            self.el = self.el.text_right();
-        }
-        self
+    pub fn text_center(self) -> Self {
+        self.text_align("center")
     }
 
     pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {

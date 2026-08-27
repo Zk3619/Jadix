@@ -141,6 +141,11 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 - **3D**：feature `scene3d`：`<scene3d>` / `scene3d()` 透视旋转立方 → `rui_scene3d:` 贴图；`camera` / `light` / `material` builder；默认构建无此 feature 仍绿；Gallery：`cargo run -p gallery --features scene3d`。
 - **B16 底座**：`effect_wrap("blur"|"glass"|"liquid"|"vhs"|…)` 捕获子树几何到离屏 → shader pass → 合成；**命中仍走 Element**。产品目录仍 experimental backlog。
 - **B17 底座**：`Timeline`（duration / easing / repeat）接入 `tick_animations`；`text().glyph_fx("split"|"blur"|…)` 在 glyphon prepare 前处理簇级 opacity/offset。不拆每字 DOM span。
+- **变换文字（Bake / SDF / Vector）**：
+  - **Coverage**：轴对齐小字 — glyphon + Nearest（默认）。
+  - **Bake**：`rotate` / `transition-transform` / spin 等 sticky 叶子 — 超采样 RGBA（`rui_text_xform_v2:`）+ Linear/mip + 与壳同 `world_linear`。
+  - **Msdf**：缩放越出约 0.5–2 或 3D label — 覆盖率→SDF（`rui_text_msdf_v1:`）+ FS `median`/`pxRange`；`scene3d().label` 经 mat4 投影 billboard。
+  - **Vector / Vello**：outline→`PathCommand`→`RUI_GPU_2D` 仅 spike（`utils/text_vector_spike.rs`）；Vello 对照不替换 glyphon。
 
 对照后续：[canvas-ui](https://github.com/DavidHDev/canvas-ui)（B16 包住子树）· [react-bits](https://github.com/DavidHDev/react-bits)（B17 文字/背景/动画 UI）依赖本层，本包不搬 HTML-in-canvas / CSS-in-JS。
 

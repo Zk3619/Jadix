@@ -767,6 +767,32 @@ fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflo
     }
 }
 
+fn apply_text_align_utility(el: &mut Element, kw: &str) -> LayoutStatus {
+    use crate::style::{TextAlign, TextAlignDeclaration};
+    let before = (el.text_style.align, el.attrs.contains_key("text_align"));
+    match TextAlign::parse_declaration(kw) {
+        TextAlignDeclaration::Inherit => {
+            el.attrs.remove("text_align");
+        }
+        TextAlignDeclaration::Initial => {
+            el.text_style.align = TextAlign::Start;
+            el.attrs
+                .insert("text_align".to_string(), "start".to_string());
+        }
+        TextAlignDeclaration::Value(v) => {
+            el.text_style.align = v;
+            el.attrs
+                .insert("text_align".to_string(), v.as_str().to_string());
+        }
+    }
+    let after = (el.text_style.align, el.attrs.contains_key("text_align"));
+    if before == after {
+        LayoutStatus::Clean
+    } else {
+        LayoutStatus::LayoutChanged
+    }
+}
+
 fn ensure_transition_entry(el: &mut Element, prop: crate::style::TransitionProperty) {
     if !el.style.transition.iter().any(|e| e.property == prop) {
         el.style.transition.push(crate::style::TransitionEntry {
@@ -1028,6 +1054,7 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         KnownUtility::TextOverflow(kw) => {
             apply_text_overflow_utility(el, crate::style::TextOverflow::parse(kw))
         }
+        KnownUtility::TextAlign(kw) => apply_text_align_utility(el, kw),
         KnownUtility::WhitespaceNowrap => {
             use crate::style::WhiteSpace;
             if el.text_style.white_space != WhiteSpace::Nowrap {
@@ -1587,6 +1614,26 @@ mod tests {
         assert_eq!(el.text_style.overflow, crate::style::TextOverflow::Hidden);
         assert_eq!(el.text_style.white_space, crate::style::WhiteSpace::Nowrap);
         assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
+    }
+
+    #[test]
+    fn apply_text_align_utilities() {
+        let mut el = Element::new();
+        apply_class_list(&mut el, "text-center");
+        assert_eq!(el.text_style.align, crate::style::TextAlign::Center);
+        assert_eq!(
+            el.attrs.get("text_align").map(String::as_str),
+            Some("center")
+        );
+
+        apply_class_list(&mut el, "text-start");
+        assert_eq!(el.text_style.align, crate::style::TextAlign::Start);
+
+        apply_class_list(&mut el, "text-justify");
+        assert_eq!(el.text_style.align, crate::style::TextAlign::Justify);
+
+        apply_class_list(&mut el, "text-end");
+        assert_eq!(el.text_style.align, crate::style::TextAlign::End);
     }
 
     #[test]

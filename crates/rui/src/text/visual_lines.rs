@@ -631,24 +631,18 @@ fn soft_visual_line_byte_ranges_segments_model(
     }
 }
 
-/// Compatibility: ranges only (same as historical `soft_visual_line_byte_ranges`).
+/// Soft-wrap visual line byte ranges for `source` (Word / Char / …).
 pub fn soft_visual_line_byte_ranges(
     text: &str,
     size: f32,
     weight: u16,
     line_height: f32,
     avail_width: f32,
+    source: LineBreakSource,
 ) -> Vec<(usize, usize)> {
-    build_visual_lines(
-        text,
-        size,
-        weight,
-        line_height,
-        avail_width,
-        LineBreakSource::SoftWord,
-    )
-    .ranges
-    .clone()
+    build_visual_lines(text, size, weight, line_height, avail_width, source)
+        .ranges
+        .clone()
 }
 
 // --- Textarea virtualization MVP -------------------------------------------------

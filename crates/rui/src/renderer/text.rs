@@ -153,7 +153,7 @@ impl EmojiGlyphCache {
     }
 
     pub fn rasterize(&self, input: RasterizeCustomGlyphRequest) -> Option<RasterizedCustomGlyph> {
-        let try_raster = |r: &EmojiRaster| -> Option<RasterizedCustomGlyph> {
+        let try_exact = |r: &EmojiRaster| -> Option<RasterizedCustomGlyph> {
             if r.width == input.width && r.height == input.height {
                 Some(RasterizedCustomGlyph {
                     data: (*r.rgba).to_vec(),
@@ -163,20 +163,48 @@ impl EmojiGlyphCache {
                 None
             }
         };
+        let try_any = |r: &EmojiRaster| -> Option<RasterizedCustomGlyph> {
+            if let Some(exact) = try_exact(r) {
+                return Some(exact);
+            }
+            // Size mismatch (e.g. paint quad ≠ cached Twemoji square): nearest-neighbor
+            // resize instead of a transparent placeholder that blanks every emoji.
+            if r.width == 0 || r.height == 0 || input.width == 0 || input.height == 0 {
+                return None;
+            }
+            let dw = input.width as usize;
+            let dh = input.height as usize;
+            let sw = r.width as usize;
+            let sh = r.height as usize;
+            let mut data = vec![0u8; dw * dh * 4];
+            for y in 0..dh {
+                let sy = y * sh / dh;
+                for x in 0..dw {
+                    let sx = x * sw / dw;
+                    let si = (sy * sw + sx) * 4;
+                    let di = (y * dw + x) * 4;
+                    data[di..di + 4].copy_from_slice(&r.rgba[si..si + 4]);
+                }
+            }
+            Some(RasterizedCustomGlyph {
+                data,
+                content_type: ContentType::Color,
+            })
+        };
         if let Some(r) = self.id_rasters.get(&input.id) {
-            if let Some(out) = try_raster(r) {
+            if let Some(out) = try_any(r) {
                 return Some(out);
             }
         }
         for entry in self.entries.values() {
             if let Some(r) = entry.rasters.get(&input.id) {
-                if let Some(out) = try_raster(r) {
+                if let Some(out) = try_any(r) {
                     return Some(out);
                 }
             }
         }
         // Glyphon asserts Some→None never happens for the same request. If an id was
-        // handed out but the bitmap is gone/mismatched, return a transparent placeholder.
+        // handed out but the bitmap is gone, return a transparent placeholder.
         let n = (input.width as usize)
             .saturating_mul(input.height as usize)
             .saturating_mul(4);
@@ -356,21 +384,18 @@ impl RuiTextRenderer {
         }
     }
 
-    pub fn prepare<'a>(
+    pub fn prepare_resolution<'a>(
         &mut self,
         device: &Device,
         queue: &Queue,
-        config: &SurfaceConfiguration,
+        width: u32,
+        height: u32,
         text_areas: impl Iterator<Item = TextArea<'a>>,
     ) {
         self.viewport.update(
             queue,
-            glyphon::Resolution {
-                width: config.width,
-                height: config.height,
-            },
+            glyphon::Resolution { width, height },
         );
-
         let font_system = self.font_system;
         if let Err(err) = self.text_renderer.prepare_with_custom(
             device,
@@ -384,6 +409,16 @@ impl RuiTextRenderer {
         ) {
             log::error!("glyphon TextRenderer::prepare failed: {err:?}");
         }
+    }
+
+    pub fn prepare<'a>(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        text_areas: impl Iterator<Item = TextArea<'a>>,
+    ) {
+        self.prepare_resolution(device, queue, config.width, config.height, text_areas);
     }
 
     pub fn render<'pass>(&'pass self, render_pass: &mut RenderPass<'pass>) {
@@ -513,6 +548,57 @@ mod tests {
             "glyphon requires Some after Some — id_rasters must outlive node LRU"
         );
         assert_eq!(out.unwrap().data.len(), 16 * 16 * 4);
+    }
+
+    #[test]
+    fn rasterize_resizes_when_request_size_differs_from_cache() {
+        let mut cache = EmojiGlyphCache::default();
+        let mut rgba = vec![0u8; 16 * 16 * 4];
+        // Mark center pixel opaque red so resize must preserve ink (not all-zero placeholder).
+        rgba[(8 * 16 + 8) * 4] = 255;
+        rgba[(8 * 16 + 8) * 4 + 3] = 255;
+        let key = EmojiCacheKey {
+            sequence_hash: 0xE1,
+            pixel_size: 16,
+            scale_bits: 1.0f32.to_bits(),
+            color_mode: 1,
+            wrap_width_q: 10,
+        };
+        cache.insert_emoji_node(
+            key,
+            EmojiGlyphEntry {
+                glyphs: vec![glyphon::CustomGlyph {
+                    id: 3,
+                    left: 0.0,
+                    top: 0.0,
+                    width: 14.0, // paint quad smaller than raster (old 1.15 bug shape)
+                    height: 14.0,
+                    color: None,
+                    snap_to_physical_pixel: true,
+                    metadata: 0,
+                }],
+                rasters: {
+                    let mut m = HashMap::new();
+                    m.insert(3, EmojiRaster::new(16, 16, rgba));
+                    m
+                },
+            },
+        );
+        let out = cache
+            .rasterize(RasterizeCustomGlyphRequest {
+                id: 3,
+                width: 14,
+                height: 14,
+                x_bin: glyphon::SubpixelBin::Zero,
+                y_bin: glyphon::SubpixelBin::Zero,
+                scale: 1.0,
+            })
+            .expect("must Some");
+        assert_eq!(out.data.len(), 14 * 14 * 4);
+        assert!(
+            out.data.iter().any(|&b| b != 0),
+            "size mismatch must NN-resize cached ink, not return transparent placeholder"
+        );
     }
 
     #[test]

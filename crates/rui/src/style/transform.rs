@@ -140,6 +140,16 @@ pub fn mat2d_linear(m: &Mat2d) -> Mat2d {
     [m[0], m[1], m[2], m[3], 0.0, 0.0]
 }
 
+/// True when the 2×2 part is (nearly) a positive axis-aligned scale — no rotate/skew.
+pub fn mat2d_is_axis_aligned(m: &Mat2d) -> bool {
+    m[1].abs() < 1e-5 && m[2].abs() < 1e-5
+}
+
+/// Apply only the 2×2 linear part (ignore translation).
+pub fn mat2d_transform_vec(m: &Mat2d, x: f32, y: f32) -> (f32, f32) {
+    (m[0] * x + m[2] * y, m[1] * x + m[3] * y)
+}
+
 pub fn mat2d_skew(ax: f32, ay: f32) -> Mat2d {
     [1.0, ay.tan(), ax.tan(), 1.0, 0.0, 0.0]
 }
@@ -805,6 +815,26 @@ mod tests {
         let m = resolve_transform_matrix(&list, &origin, 100.0, 100.0);
         let cos45 = 45.0f32.to_radians().cos();
         assert!((m[0] - cos45).abs() < 1e-3);
+    }
+
+    #[test]
+    fn cascade_linear_multiply_composes_rotates() {
+        let a = mat2d_rotate(45.0f32.to_radians());
+        let b = mat2d_rotate(45.0f32.to_radians());
+        let c = mat2d_multiply(&a, &b);
+        let expected = mat2d_rotate(90.0f32.to_radians());
+        for i in 0..4 {
+            assert!(
+                (c[i] - expected[i]).abs() < 1e-4,
+                "cascade linear mismatch at {i}: {} vs {}",
+                c[i],
+                expected[i]
+            );
+        }
+        assert!(!mat2d_is_axis_aligned(&a));
+        assert!(mat2d_is_axis_aligned(&MAT2D_IDENTITY));
+        let (vx, vy) = mat2d_transform_vec(&mat2d_rotate(90.0f32.to_radians()), 1.0, 0.0);
+        assert!((vx - 0.0).abs() < 1e-4 && (vy - 1.0).abs() < 1e-4);
     }
 
     #[test]

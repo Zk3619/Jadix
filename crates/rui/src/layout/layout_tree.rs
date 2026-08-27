@@ -870,6 +870,7 @@ fn push_border_image_draws(
             uv_scale: [sub_uw * uv_w, sub_vh * uv_h],
             texture_key: tex_key.clone(),
             opacity,
+            tint_rgb: [1.0, 1.0, 1.0],
             transform: crate::style::transform::MAT2D_IDENTITY,
         });
     };
@@ -924,6 +925,11 @@ fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextS
     if let Some(parent) = parent_style {
         if !node.attrs.contains_key("text_align") {
             node.text_style.align = parent.align;
+        } else if node.text_style.align == crate::style::TextAlign::MatchParent {
+            node.text_style.align = crate::style::TextAlign::resolve_match_parent(
+                parent.align,
+                parent.direction,
+            );
         }
         if !node.attrs.contains_key("text_color") {
             node.text_style.color = parent.color;
@@ -1477,6 +1483,12 @@ pub struct TextLayoutInfo {
     /// CSS/`ancestor_scale` paint scale for glyphon `TextArea.scale` (default 1).
     /// Keep [`Self::style`] font size at layout size so drag/coverflow does not reshape every frame.
     pub paint_scale: f32,
+    /// World 2×2 linear transform for glyphon (`[a,b,c,d,0,0]`). Identity when axis-aligned.
+    pub paint_transform: crate::style::Mat2d,
+    /// Pivot for [`Self::paint_transform`] in screen/logical px (typically text box center).
+    pub paint_origin: [f32; 2],
+    /// Coverage / Bake / Msdf — see [`crate::renderer::GlyphRasterMode`].
+    pub glyph_raster: crate::renderer::GlyphRasterMode,
 }
 
 /// 驱动 Taffy 并对 `Element` 树做 layout 与实例收集.
@@ -2277,6 +2289,8 @@ impl LayoutTree {
             mouse_pos,
             1.0,
             [1.0, 1.0],
+            crate::style::MAT2D_IDENTITY,
+            false,
             &mut scratch.instances,
             &mut scratch.textured_draws,
             &mut scratch.text_nodes,
@@ -2533,6 +2547,11 @@ impl LayoutTree {
         ancestor_opacity: f32,
         // Parent CSS `scale` product (CarouselStack shell → children). Default `[1,1]`.
         ancestor_scale: [f32; 2],
+        // Parent 2×2 linear cascade (rotate/skew). Default identity. Composed with local
+        // `mat2d_linear(compute_combined_transform)` for SDF / text / textured draws.
+        ancestor_linear: crate::style::Mat2d,
+        // Sticky Bake/Msdf for text under transform/transition (even at 0°).
+        ancestor_sticky_xform: bool,
         instances: &mut Vec<InstanceInput>,
         textured_draws: &mut Vec<TexturedDraw>,
         text_nodes: &mut Vec<TextLayoutInfo>,
@@ -2740,7 +2759,7 @@ impl LayoutTree {
         // transform 的 tx/ty。若矩阵再带 translate，不透明壳会双倍位移，而子树文字只经
         // `parent_tl` 单倍位移 → Toast/堆叠「壳与文分离」。矩阵只保留 rotate + transform 列表
         // （scale 已 bake 进 rect，传 [1,1]）。
-        let transform = crate::style::compute_combined_transform(
+        let local_full = crate::style::compute_combined_transform(
             &[0.0, 0.0],
             element.style.rotate_deg,
             &[1.0, 1.0],
@@ -2749,6 +2768,13 @@ impl LayoutTree {
             vis_w,
             vis_h,
         );
+        let local_linear = crate::style::mat2d_linear(&local_full);
+        let world_linear = crate::style::mat2d_multiply(&ancestor_linear, &local_linear);
+        // Always paint with composed linear about rect center (tx/ty = 0). Origin-baked
+        // `local_full` tx/ty diverged from text's clean `center + R*(p-center)` and made
+        // shell/text look split under rotate.
+        let transform = world_linear;
+        let text_world_linear = world_linear;
         let self_inst0 = instances.len();
         let self_tex0 = textured_draws.len();
 
@@ -3340,7 +3366,10 @@ impl LayoutTree {
                     side,
                     side,
                 );
-                let icon_xf = crate::style::mat2d_linear(&full_xf);
+                let icon_xf = crate::style::mat2d_multiply(
+                    &ancestor_linear,
+                    &crate::style::mat2d_linear(&full_xf),
+                );
                 if element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
                     if let Some((tex_key, _)) =
                         crate::utils::lucide_animated::ensure_animated_icon_texture(
@@ -3356,6 +3385,7 @@ impl LayoutTree {
                             uv_scale: [1.0, 1.0],
                             texture_key: tex_key,
                             opacity,
+                            tint_rgb: [1.0, 1.0, 1.0],
                             transform: icon_xf,
                         });
                     }
@@ -3378,10 +3408,88 @@ impl LayoutTree {
                             uv_scale: [1.0, 1.0],
                             texture_key: tex_key,
                             opacity,
+                            tint_rgb: [1.0, 1.0, 1.0],
                             transform: icon_xf,
                         });
                     }
                 }
+            } else {
+            // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
+            // Coverage (glyphon) for idle axis-aligned UI text only.
+            let sticky_xform = ancestor_sticky_xform
+                || crate::renderer::element_wants_sticky_xform(element);
+            let glyph_raster = crate::renderer::resolve_glyph_raster(
+                sticky_xform,
+                &text_world_linear,
+                text_scale,
+            );
+            let use_bake = matches!(
+                glyph_raster,
+                crate::renderer::GlyphRasterMode::Bake | crate::renderer::GlyphRasterMode::Msdf
+            ) && !text.trim().is_empty()
+                && text_w >= 1.0
+                && text_h >= 1.0
+                && element.text_spans.as_ref().map_or(true, |s| s.is_empty());
+
+            if use_bake {
+                let align = match text_style.align {
+                    crate::style::TextAlign::Left
+                    | crate::style::TextAlign::Start
+                    | crate::style::TextAlign::MatchParent => glyphon::cosmic_text::Align::Left,
+                    crate::style::TextAlign::Center => glyphon::cosmic_text::Align::Center,
+                    crate::style::TextAlign::Right | crate::style::TextAlign::End => {
+                        glyphon::cosmic_text::Align::Right
+                    }
+                    crate::style::TextAlign::Justify | crate::style::TextAlign::JustifyAll => {
+                        glyphon::cosmic_text::Align::Justified
+                    }
+                };
+                let as_sdf = matches!(glyph_raster, crate::renderer::GlyphRasterMode::Msdf);
+                let dpr = if as_sdf {
+                    3.5
+                } else {
+                    crate::renderer::BAKE_OVERSAMPLE
+                };
+                let draw_w = text_w * text_scale;
+                let draw_h = text_h * text_scale;
+                // Expand to line-height + ink pad; draw the padded quad so glyphs aren't
+                // clipped. Intersect only with ancestor scroll clip — not the text leaf's
+                // overflow:hidden (that would crop the pad we just added).
+                let (bake_w, bake_h, pad) = crate::utils::text_texture::text_xform_bake_box(
+                    draw_w.max(1.0),
+                    draw_h.max(1.0),
+                    text_style.size,
+                );
+                if let Some((tex_key, _)) = crate::utils::text_texture::ensure_text_xform_texture(
+                    text,
+                    text_style.size,
+                    text_style.weight,
+                    text_style.color,
+                    bake_w,
+                    bake_h,
+                    align,
+                    dpr,
+                    as_sdf,
+                ) {
+                    let full = [text_x - pad, text_y0 - pad, bake_w, bake_h];
+                    if let Some(draw) =
+                        TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
+                    {
+                        let mut draw = draw.with_transform(crate::style::mat2d_linear(
+                            &text_world_linear,
+                        ));
+                        if as_sdf {
+                            let c = text_style.color;
+                            draw = draw.with_tint_rgb([
+                                c[0] as f32 / 255.0,
+                                c[1] as f32 / 255.0,
+                                c[2] as f32 / 255.0,
+                            ]);
+                        }
+                        textured_draws.push(draw);
+                    }
+                }
+                // No glyphon TextLayoutInfo — bake owns the glyphs (avoid double-draw / clobber).
             } else {
             let prepared = if is_icon {
                 None
@@ -3441,6 +3549,12 @@ impl LayoutTree {
                 prepared,
                 glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
                 paint_scale: text_scale,
+                paint_transform: text_world_linear,
+                paint_origin: [
+                    text_x + text_w * text_scale * 0.5,
+                    text_y0 + text_h * text_scale * 0.5,
+                ],
+                glyph_raster,
             });
             let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                 hidden_input_text_clip(parent_clip, render_rect)
@@ -3461,6 +3575,7 @@ impl LayoutTree {
                 chrome_clip,
                 opacity,
             );
+            } // else !use_bake
             } // else !icon_spin_paint
         }
 
@@ -3573,9 +3688,16 @@ impl LayoutTree {
             abs_y + element.style.translate[1] + lay_h * element.style.translate_pct[1],
         ];
         let child_ancestor_scale = [paint_sx, paint_sy];
+        let child_ancestor_linear = world_linear;
+        let child_sticky_xform =
+            ancestor_sticky_xform || crate::renderer::element_wants_sticky_xform(element);
         let parent_scales = (paint_sx - 1.0).abs() > 1e-4 || (paint_sy - 1.0).abs() > 1e-4;
+        let parent_rotates = !crate::style::mat2d_is_axis_aligned(&local_linear)
+            || !crate::style::mat2d_is_axis_aligned(&ancestor_linear);
         // Parent CSS scale about center: place each child's layout box so its center
         // lands on the transformed point (then child bakes paint_sx via ancestor_scale).
+        // With rotate/skew, also apply the parent's local 2×2 to the offset vector so
+        // children orbit with the shell (text + nested rects follow).
         //
         // Must use `parent_tl` (pre-scroll layout space), NOT `render_x`/`render_y`.
         // `abs_offset` is always pre-scroll; children subtract `scroll_acc` when computing
@@ -3583,13 +3705,20 @@ impl LayoutTree {
         // shoves scaled subtrees (CarouselStack side cards / mid-tween) off the stage clip
         // — blank autoplay + missing stack sides once the page is scrolled.
         let child_pass_offset_for = |clx: f32, cly: f32, cw: f32, ch: f32| -> [f32; 2] {
-            if !parent_scales {
+            if !parent_scales && !parent_rotates {
                 return parent_tl;
             }
             let pcx = parent_tl[0] + lay_w * 0.5;
             let pcy = parent_tl[1] + lay_h * 0.5;
-            let ccx = pcx + (clx + cw * 0.5 - lay_w * 0.5) * paint_sx;
-            let ccy = pcy + (cly + ch * 0.5 - lay_h * 0.5) * paint_sy;
+            let mut dx = (clx + cw * 0.5 - lay_w * 0.5) * paint_sx;
+            let mut dy = (cly + ch * 0.5 - lay_h * 0.5) * paint_sy;
+            if parent_rotates {
+                let (rx, ry) = crate::style::mat2d_transform_vec(&local_linear, dx, dy);
+                dx = rx;
+                dy = ry;
+            }
+            let ccx = pcx + dx;
+            let ccy = pcy + dy;
             [ccx - cw * 0.5 - clx, ccy - ch * 0.5 - cly]
         };
         let child_pass_offset = parent_tl;
@@ -3614,7 +3743,8 @@ impl LayoutTree {
                     || element.style.translate[1].abs() > 0.05
                     || element.style.translate_pct[0].abs() > 0.001
                     || element.style.translate_pct[1].abs() > 0.001
-                    || parent_scales;
+                    || parent_scales
+                    || parent_rotates;
                 let is_carousel_track =
                     element.attrs.get("data-carousel-track").map(|s| s.as_str()) == Some("1");
                 if _scroll_only && !parent_translates && !is_carousel_track {
@@ -3737,6 +3867,8 @@ impl LayoutTree {
                     mouse_pos,
                     opacity,
                     child_ancestor_scale,
+                    child_ancestor_linear,
+                    child_sticky_xform,
                     instances,
                     textured_draws,
                     text_nodes,
@@ -3817,6 +3949,8 @@ impl LayoutTree {
                     mouse_pos,
                     opacity,
                     child_ancestor_scale,
+                    child_ancestor_linear,
+                    child_sticky_xform,
                     instances,
                     textured_draws,
                     text_nodes,
@@ -3846,7 +3980,7 @@ impl LayoutTree {
             textured_draws.truncate(cap_tex0);
             paint_rec.truncate_from(cap_inst0, cap_tex0);
             // Filter SourceGraphic should cover the element's paint box (not only the
-            // clip-intersected visible slice), so leaf `bg` rects are not empty.
+            // clip-intersected visible slice), so leaf `bg` / text ascent are not empty.
             let filter_bounds = if filter_capture {
                 [
                     render_rect[0],
@@ -3883,8 +4017,6 @@ impl LayoutTree {
                 if let Some(draw) = TexturedDraw::clipped(draw_rect, clip, out_key, opacity) {
                     let tex_i = textured_draws.len();
                     textured_draws.push(draw);
-                    // Capture truncated prior ops; re-register the filtered/fx textured result
-                    // or `draw_paint_ops` never paints it (empty slots / all-white).
                     paint_rec.push_textured(tex_i, 1);
                 }
             }
@@ -4330,6 +4462,7 @@ fn push_input_chrome_instances(
             style.weight,
             line_height.max(1.0),
             box_w.max(1.0),
+            style.wrap_mode.to_line_break_source(),
         )
     } else {
         Vec::new()
@@ -4442,6 +4575,9 @@ fn push_input_chrome_instances(
             let prefix_w =
                 prefix_width_logical(line_body, from, style.size, style.weight, line_height);
             let end_w = prefix_width_logical(line_body, to, style.size, style.weight, line_height);
+            let line_w =
+                prefix_width_logical(line_body, line_body.len(), style.size, style.weight, line_height);
+            let align_dx = style.align_inline_offset(line_w, box_w);
             let pan = style.overflow.allows_caret_scroll();
             let sel_w = if pan {
                 (end_w - prefix_w).max(0.0)
@@ -4453,9 +4589,9 @@ fn push_input_chrome_instances(
                     selection_out,
                     clip,
                     if pan {
-                        x + prefix_w
+                        x + align_dx + prefix_w
                     } else {
-                        x + prefix_w.min(box_w)
+                        x + align_dx + prefix_w.min(box_w)
                     },
                     line_top_y(line_i),
                     sel_w,
@@ -4475,8 +4611,11 @@ fn push_input_chrome_instances(
     let (line_i, local) = line_and_local(ix);
     let (_line_start, line_body) = line_body_at(line_i);
     let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
+    let line_w =
+        prefix_width_logical(line_body, line_body.len(), style.size, style.weight, line_height);
+    let align_dx = style.align_inline_offset(line_w, box_w);
     let caret_w = 2.0_f32;
-    let mut caret_x = x + prefix_w;
+    let mut caret_x = x + align_dx + prefix_w;
     if soft_wrap {
         // Soft-wrap: do not clamp to `box_w - caret_w` — that parked the hairline on the
         // last glyph when a visual line filled the leaf (gallery soft-wrap caret bug).
@@ -4524,6 +4663,9 @@ mod prepared_text_attach_tests {
             prepared: Some(prepared.clone()),
             glyph_fx: None,
             paint_scale: 1.0,
+            paint_transform: crate::style::MAT2D_IDENTITY,
+            paint_origin: [0.0, 0.0],
+            glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
         };
         let attached = info.prepared.as_ref().expect("prepared attached");
         assert_eq!(attached.segment_count(), prepared.segment_count());
@@ -4616,7 +4758,14 @@ mod prepared_text_attach_tests {
         let text = "padding: 8px 16px; background: #ffffff; border-width: 1px; border-radius: 6px";
         let lh = 21.0_f32;
         let box_w = 160.0_f32;
-        let ranges = crate::text::soft_visual_line_byte_ranges(text, 14.0, 400, lh, box_w);
+        let ranges = crate::text::soft_visual_line_byte_ranges(
+            text,
+            14.0,
+            400,
+            lh,
+            box_w,
+            crate::text::LineBreakSource::SoftWord,
+        );
         assert!(
             ranges.len() >= 2,
             "fixture must soft-wrap under {box_w}px, got {} lines",
@@ -4682,6 +4831,89 @@ mod prepared_text_attach_tests {
         assert!(
             (caret_x - full_w).abs() < 3.0,
             "caret x={caret_x} should sit at end of visual line (prefix≈{full_w}), not mid-glyph"
+        );
+    }
+
+    #[test]
+    fn wrap_char_caret_x_uses_soft_char_not_soft_word() {
+        // Gallery wrap=char sample: SoftChar mid-breaks the long token; SoftWord does not.
+        // Chrome must use wrap_mode so the caret before 😃 lands on the SoftChar visual line.
+        let text = "Supercalifragilisticexpialidocious_unbreakable_token_plus_中文emoji😃 —";
+        let lh = 21.0_f32;
+        let box_w = 280.0_f32;
+        let size = 14.0_f32;
+        let emoji = text.find('😃').expect("emoji");
+        let soft_char = crate::text::soft_visual_line_byte_ranges(
+            text,
+            size,
+            400,
+            lh,
+            box_w,
+            crate::text::LineBreakSource::SoftChar,
+        );
+        let soft_word = crate::text::soft_visual_line_byte_ranges(
+            text,
+            size,
+            400,
+            lh,
+            box_w,
+            crate::text::LineBreakSource::SoftWord,
+        );
+        assert_ne!(
+            soft_char, soft_word,
+            "fixture requires SoftChar ≠ SoftWord ranges"
+        );
+        let ci = crate::text::caret_visual_line_index(&soft_char, emoji);
+        let (cs, _) = soft_char[ci];
+        let expected_x = prefix_width_logical(&text[cs..emoji], emoji - cs, size, 400, lh);
+
+        let mut style = TextStyle::default();
+        style.size = size;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.white_space = crate::style::WhiteSpace::Normal;
+        style.wrap_mode = crate::text::WrapMode::Char;
+        style.color = [0, 0, 0, 255];
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: emoji,
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        let mut saw = false;
+        for _ in 0..8 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                0.0,
+                0.0,
+                box_w,
+                lh * soft_char.len() as f32 + 8.0,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+        }
+        assert!(saw, "wrap=char caret must draw within blink window");
+        let caret_x = chrome[0].rect_pos[0];
+        let caret_y = chrome[0].rect_pos[1];
+        let expected_y = ci as f32 * lh + (lh - chrome[0].rect_size[1]) * 0.5;
+        assert!(
+            (caret_y - expected_y).abs() < lh * 0.6,
+            "wrap=char caret y={caret_y} should sit on SoftChar visual line {ci} (≈{expected_y})"
+        );
+        assert!(
+            (caret_x - expected_x).abs() < 3.0,
+            "wrap=char caret x={caret_x} must match SoftChar prefix≈{expected_x} (not SoftWord)"
         );
     }
 
@@ -4795,6 +5027,68 @@ mod prepared_text_attach_tests {
         assert!(
             (caret_x - (10.0 + box_w - 2.0)).abs() < 2.0,
             "scrolled caret should land near the visible right edge, got {caret_x}"
+        );
+    }
+
+    #[test]
+    fn center_align_caret_offsets_into_box() {
+        let text = "42";
+        let lh = 21.0_f32;
+        let size = 14.0_f32;
+        let line_w = prefix_width_logical(text, text.len(), size, 400, lh);
+        let box_w = 80.0_f32;
+        assert!(
+            line_w + 8.0 < box_w,
+            "fixture must fit so center offset applies (line_w={line_w})"
+        );
+        let mut style = TextStyle::default();
+        style.size = size;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.color = [0, 0, 0, 255];
+        style.overflow = TextOverflow::Hidden;
+        style.align = crate::style::TextAlign::Center;
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: None,
+            selection_bg: [0, 0, 0, 0],
+            overwrite_highlight: None,
+        });
+        let origin = 10.0_f32;
+        let want_dx = style.align_inline_offset(line_w, box_w);
+        let mut chrome = Vec::new();
+        let mut unused = Vec::new();
+        let mut saw = false;
+        for _ in 0..8 {
+            chrome.clear();
+            push_input_chrome_instances(
+                &mut unused,
+                &mut chrome,
+                text,
+                &style,
+                origin,
+                0.0,
+                box_w,
+                lh,
+                None,
+                1.0,
+            );
+            if !chrome.is_empty() {
+                saw = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        assert!(saw, "center-align caret missing during blink ON");
+        let caret_x = chrome[0].rect_pos[0];
+        let expected = origin + want_dx + line_w;
+        assert!(
+            (caret_x - expected).abs() < 1.5,
+            "centered caret should sit after ink (x={caret_x}, expected={expected}, dx={want_dx})"
+        );
+        assert!(
+            want_dx > 4.0,
+            "center offset should be material for this fixture (dx={want_dx})"
         );
     }
 
@@ -5447,6 +5741,96 @@ mod portal_hoist_tests {
         assert!(
             tx.abs() < 0.01 && ty.abs() < 0.01,
             "transform tx/ty should be 0 when translate is baked into rect_pos, got [{tx}, {ty}]"
+        );
+    }
+
+    #[test]
+    fn rotated_parent_propagates_paint_transform_to_child_text() {
+        let mut shell = Element::new()
+            .bg([0.2, 0.4, 0.9, 1.0])
+            .w(120.0)
+            .h(48.0)
+            .absolute()
+            .left(40.0)
+            .top(40.0)
+            .child(Element::new().text("rotate-me").w(100.0).h(24.0));
+        shell.style.rotate_deg = 45.0;
+        let mut root = Element::new().w(400.0).h(300.0).child(shell);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 300.0, [0.0, 0.0]);
+        let cos45 = 45.0f32.to_radians().cos();
+        // Sticky Bake: rotated text is a textured quad, not a glyphon TextLayoutInfo.
+        assert!(
+            result.text_nodes.iter().all(|t| t.text != "rotate-me"),
+            "Bake path must not push glyphon text_nodes for rotated labels"
+        );
+        let bake = result
+            .textured_draws
+            .iter()
+            .find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            })
+            .expect("baked text textured draw");
+        assert!(
+            !crate::style::mat2d_is_axis_aligned(&bake.transform),
+            "child bake must inherit parent rotate via textured transform, got {:?}",
+            bake.transform
+        );
+        assert!(
+            (bake.transform[0] - cos45).abs() < 0.05,
+            "expected ~45° linear a={}, got {}",
+            cos45,
+            bake.transform[0]
+        );
+        // Draw height must include leading + pad so glyphs aren't vertically clipped.
+        let min_h = 24.0 * crate::style::tailwind_default_leading_scale(16.0);
+        // Child text "rotate-me" uses default ~16px; pad expands beyond layout 24px height.
+        assert!(
+            bake.rect[3] + 0.5 >= 24.0,
+            "bake draw h={} should be at least layout text h",
+            bake.rect[3]
+        );
+        let _ = min_h;
+    }
+
+    #[test]
+    fn bake_draw_taller_than_tight_font_box() {
+        let mut shell = Element::new()
+            .bg([0.2, 0.4, 0.9, 1.0])
+            .w(100.0)
+            .h(40.0)
+            .absolute()
+            .left(10.0)
+            .top(10.0)
+            .child({
+                let mut t = Element::new().text("45°").w(40.0).h(12.0);
+                t.text_style.size = 12.0;
+                t
+            });
+        shell.style.rotate_deg = 45.0;
+        let mut root = Element::new().w(200.0).h(200.0).child(shell);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 200.0, 200.0, [0.0, 0.0]);
+        let bake = result
+            .textured_draws
+            .iter()
+            .find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            })
+            .expect("bake draw");
+        let leading = 12.0 * crate::style::tailwind_default_leading_scale(12.0);
+        let pad = crate::utils::text_texture::text_xform_pad_px(12.0);
+        assert!(
+            bake.rect[3] + 0.01 >= leading + pad * 2.0,
+            "bake h={} must cover leading+pad ({}), got clip risk",
+            bake.rect[3],
+            leading + pad * 2.0
         );
     }
 

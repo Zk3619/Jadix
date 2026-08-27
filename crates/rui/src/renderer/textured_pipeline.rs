@@ -14,6 +14,9 @@ pub struct TexturedInstanceInput {
     pub uv_scale: [f32; 2],
     /// 2D affine `[a, b, c, d, tx, ty]` about rect center (identity = no rotate).
     pub transform: [f32; 6],
+    /// `1.0` = sample texture.r as SDF; `0.0` = normal RGBA tint multiply.
+    pub flags: f32,
+    pub _pad: [f32; 3],
 }
 
 impl TexturedInstanceInput {
@@ -61,6 +64,11 @@ impl TexturedInstanceInput {
                     offset: 64,
                     shader_location: 9,
                     format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 72,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32,
                 },
             ],
         }
@@ -132,6 +140,7 @@ impl TexturedQuadPipeline {
             label: Some("Rui image sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 

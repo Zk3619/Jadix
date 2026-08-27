@@ -36,9 +36,13 @@ impl TextBuilder {
         self
     }
 
-    pub fn align_center(mut self) -> Self {
-        self.el = self.el.text_center();
+    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+        self.el = self.el.text_align(align);
         self
+    }
+
+    pub fn align_center(self) -> Self {
+        self.text_align("center")
     }
 
     pub fn line_height(mut self, px: impl IntoF32) -> Self {

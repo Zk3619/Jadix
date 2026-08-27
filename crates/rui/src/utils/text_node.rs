@@ -14,7 +14,8 @@ pub struct TextNodeConfig {
     pub underline: bool,
     /// 与 CSS `text-underline-offset` 一致（逻辑像素）；`None` 用引擎默认。
     pub underline_offset_px: Option<f32>,
-    pub center: bool,
+    /// CSS `text-align`（见 [`crate::style::TextAlign`]）。
+    pub text_align: crate::style::TextAlign,
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
     pub font_family: Option<String>,
@@ -28,7 +29,7 @@ impl Default for TextNodeConfig {
             color: [0, 0, 0, 255],
             underline: false,
             underline_offset_px: None,
-            center: false,
+            text_align: crate::style::TextAlign::Start,
             line_height_px: None,
             leading_scale: None,
             font_family: None,
@@ -57,8 +58,8 @@ pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Elem
         .underline(cfg.underline)
         .text_color(cfg.color);
 
-    if cfg.center {
-        el = el.text_center();
+    if cfg.text_align != crate::style::TextAlign::Start {
+        el = el.text_align(cfg.text_align.as_str());
     }
     if let Some(px) = cfg.line_height_px {
         el = el.text_line_height(px);

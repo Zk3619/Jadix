@@ -493,6 +493,8 @@ pub struct TextEditPaintSync {
     pub resize_max_h: f32,
     /// Command 过滤框等：无边框/阴影/焦点环，视觉壳由外层提供。
     pub plain_chrome: bool,
+    /// CSS `text-align`（见 [`crate::style::TextAlign`]）。
+    pub text_align: crate::style::TextAlign,
     /// Textarea 单行溢出：软换行（默认）或横向滚动。
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
 }
@@ -1397,23 +1399,33 @@ impl Element {
         self.text_style.shadow_offset[1] = dy.into_f32();
         self
     }
-    pub fn text_center(mut self) -> Self {
-        self.text_style.align = glyphon::cosmic_text::Align::Center;
-        self.attrs
-            .insert("text_align".to_string(), "center".to_string());
+    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+        use crate::style::{TextAlign, TextAlignDeclaration};
+        match TextAlign::parse_declaration(align.as_ref()) {
+            TextAlignDeclaration::Inherit => {
+                self.attrs.remove("text_align");
+            }
+            TextAlignDeclaration::Initial => {
+                self.text_style.align = TextAlign::Start;
+                self.attrs
+                    .insert("text_align".to_string(), "start".to_string());
+            }
+            TextAlignDeclaration::Value(v) => {
+                self.text_style.align = v;
+                self.attrs
+                    .insert("text_align".to_string(), v.as_str().to_string());
+            }
+        }
         self
     }
-    pub fn text_left(mut self) -> Self {
-        self.text_style.align = glyphon::cosmic_text::Align::Left;
-        self.attrs
-            .insert("text_align".to_string(), "left".to_string());
-        self
+    pub fn text_center(self) -> Self {
+        self.text_align("center")
     }
-    pub fn text_right(mut self) -> Self {
-        self.text_style.align = glyphon::cosmic_text::Align::Right;
-        self.attrs
-            .insert("text_align".to_string(), "right".to_string());
-        self
+    pub fn text_left(self) -> Self {
+        self.text_align("left")
+    }
+    pub fn text_right(self) -> Self {
+        self.text_align("right")
     }
     pub fn text_line_height(mut self, line_height: impl IntoF32) -> Self {
         self.text_style.line_height_px = Some(line_height.into_f32().max(1.0));
@@ -1517,6 +1529,7 @@ impl Element {
         let mode = mode.into();
         self.attrs
             .insert("text_wrap".to_string(), mode.as_str().to_string());
+        self.text_style.wrap_mode = mode;
         match mode {
             crate::text::WrapMode::None => {
                 self.text_style.white_space = crate::style::WhiteSpace::Nowrap;

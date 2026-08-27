@@ -97,6 +97,7 @@ pub fn queue_css_filter_wrap(
             })
             .collect(),
         textured_draws,
+        text_nodes: Vec::new(),
     });
     queue_filter_job(FilterJob {
         graph,

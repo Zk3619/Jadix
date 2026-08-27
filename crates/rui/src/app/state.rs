@@ -93,6 +93,11 @@ pub(super) struct AppState {
     instance_buffer_capacity: usize,
     pub(super) layout_tree: LayoutTree,
     pub(super) text_renderer: RuiTextRenderer,
+    /// Dedicated glyphon pipeline for subtree-capture text (xform / fx). Must not share
+    /// prepare state with [`Self::text_renderer`] — capture runs before page prepare and
+    /// would otherwise clobber atlas/viewport when `text_cache_valid` skips the main prepare
+    /// (gallery 3b: flipped/clipped glyphs + spin stutter).
+    capture_text_renderer: RuiTextRenderer,
     /// Separate glyphon pipeline for portal overlay glyphs so page + overlay text can be
     /// prepared together and drawn in one Clear pass (page → overlay rects → overlay text)
     /// without a GLES-fragile `LoadOp::Load` second pass that erased sidebar chrome.
@@ -333,6 +338,12 @@ impl AppState {
                 && Self::approx_eq(x.width, y.width, TEXT_GEOM_EPS)
                 && Self::approx_eq(x.height, y.height, TEXT_GEOM_EPS)
                 && Self::approx_eq(x.paint_scale, y.paint_scale, 0.002)
+                && x.paint_transform
+                    .iter()
+                    .zip(y.paint_transform.iter())
+                    .all(|(a, b)| Self::approx_eq(*a, *b, 0.002))
+                && Self::approx_eq(x.paint_origin[0], y.paint_origin[0], TEXT_GEOM_EPS)
+                && Self::approx_eq(x.paint_origin[1], y.paint_origin[1], TEXT_GEOM_EPS)
         })
     }
 
@@ -588,6 +599,8 @@ impl AppState {
         // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
         crate::text::install_shared_font_system(text_renderer.font_system_mut());
         let font_ptr: *mut glyphon::FontSystem = text_renderer.font_system_mut();
+        let capture_text_renderer =
+            RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
         let overlay_text_renderer =
             RuiTextRenderer::new_sharing_font_system(&device, &queue, &config, font_ptr);
         log::debug!("new_bootstrap: after text_renderer");
@@ -616,6 +629,7 @@ impl AppState {
             instance_buffer_capacity: scaled_instances.len(),
             layout_tree,
             text_renderer,
+            capture_text_renderer,
             overlay_text_renderer,
             overlay_band_text_renderers: Vec::new(),
             page_stack_band_text_renderers: Vec::new(),
@@ -1997,16 +2011,34 @@ impl AppState {
         let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
             self.image_textures.get(key).is_some()
         });
+        let _ = crate::utils::text_texture::flush_text_xform_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
 
         for (id, rgba, w, h) in super::pending_images::take_pending() {
-            let gpu = super::image_registry::upload_rgba8(
-                &self.device,
-                &self.queue,
-                &self.textured_pipeline,
-                &rgba,
-                w,
-                h,
-            );
+            // Bake/MSDF text: Linear filter without mip chain. Mips + minify washed out
+            // supersample AA and blurred sticky 0° / rotate samples.
+            let is_text_xform = id.starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                || id.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX);
+            let gpu = if is_text_xform {
+                super::image_registry::upload_rgba8_linear(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &rgba,
+                    w,
+                    h,
+                )
+            } else {
+                super::image_registry::upload_rgba8(
+                    &self.device,
+                    &self.queue,
+                    &self.textured_pipeline,
+                    &rgba,
+                    w,
+                    h,
+                )
+            };
             self.image_textures.insert_with_size(id, gpu, w, h);
         }
         #[cfg(feature = "scene3d")]
@@ -2039,6 +2071,7 @@ impl AppState {
             mouse_pos,
             ui_scale,
             &self.pipeline,
+            Some(&mut self.capture_text_renderer),
         ) {
             fx_dirty = true;
         }
@@ -2714,6 +2747,8 @@ impl AppState {
                         uv_offset: [0.0, 0.0],
                         uv_scale: [1.0, 1.0],
                         transform: crate::style::transform::MAT2D_IDENTITY,
+                        flags: 0.0,
+                        _pad: [0.0; 3],
                     };
                     let shadow_inst_buf =
                         self.device
@@ -2886,6 +2921,8 @@ impl AppState {
                         uv_offset: [0.0, 0.0],
                         uv_scale: [1.0, 1.0],
                         transform: crate::style::transform::MAT2D_IDENTITY,
+                        flags: 0.0,
+                        _pad: [0.0; 3],
                     };
                     let shadow_inst_buf =
                         self.device

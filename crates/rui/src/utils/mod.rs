@@ -15,6 +15,8 @@ pub mod list_nav;
 pub mod lucide;
 pub mod lucide_animated;
 pub mod icon_texture;
+pub mod text_texture;
+pub mod text_vector_spike;
 pub mod motion;
 pub mod pointer_drag;
 pub mod popup;

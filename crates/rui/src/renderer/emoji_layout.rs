@@ -1,4 +1,19 @@
 //! 从已布局的 glyphon [`Buffer`] 推导自定义 emoji 贴图与占位字形对齐的 `CustomGlyph` 坐标。
+//!
+//! # Ink / bearing / advance（三数模型）
+//!
+//! 系统 UI（Segoe / Chrome）观感不是「1em 槽塞满」也不是「1.15 墨水溢出 1em 槽」：
+//!
+//! ```text
+//! |←──────────── advance ≈ 1.22em ────────────→|
+//! | bearing | ←──── ink ≈ 1.10em ────→ | bearing |
+//! ```
+//!
+//! - **ink**：trim 后墨水缩放到的视觉尺寸（`CustomGlyph` / 光栅）。
+//! - **bearing**：墨水与邻字/光标的正留白。
+//! - **advance**：布局/光标/选区宽度 = ink + 2×bearing（由公式导出，勿单独手改）。
+//!
+//! 水平方向墨水绝不越过 advance；垂直方向允许相对行盒轻微溢出（光学居中）。
 
 use glyphon::cosmic_text::LineIter;
 use unicode_segmentation::UnicodeSegmentation;
@@ -13,7 +28,56 @@ use super::emoji_detect;
 ///
 /// Paint path must color this slot with alpha=0 (`set_shaped_buffer_text`) — otherwise the
 /// ideograph stroke shows as a black line through every Twemoji quad.
+///
+/// Slot run uses [`emoji_slot_metrics`] so shaped advance ≈ [`EMOJI_ADVANCE_EM`]×font_size.
 pub const EMOJI_LAYOUT_SLOT: char = '\u{4E00}';
+
+/// Trim 后墨水视觉尺寸（相对正文 `font_size`）。
+pub const EMOJI_INK_EM: f32 = 1.10;
+/// 每侧呼吸感（相对正文 `font_size`）；光标/邻字与墨水的间隙。
+pub const EMOJI_BEARING_EM: f32 = 0.06;
+/// 布局 advance = ink + 2×bearing。勿单独改此常数——由上两项导出。
+pub const EMOJI_ADVANCE_EM: f32 = EMOJI_INK_EM + 2.0 * EMOJI_BEARING_EM;
+
+/// `(ink_px, advance_px, bearing_px)` in logical/physical font units for `font_size`.
+#[inline]
+pub fn emoji_metrics(font_size: f32) -> (f32, f32, f32) {
+    let fs = font_size.max(0.001);
+    (
+        fs * EMOJI_INK_EM,
+        fs * EMOJI_ADVANCE_EM,
+        fs * EMOJI_BEARING_EM,
+    )
+}
+
+/// Raster / `CustomGlyph` edge length — must match glyphon's request (= round(ink × scale)).
+#[inline]
+pub fn emoji_ink_pixel_size(font_size: f32) -> u16 {
+    (font_size.max(0.001) * EMOJI_INK_EM)
+        .round()
+        .clamp(1.0, 512.0) as u16
+}
+
+/// Metrics for an invisible [`EMOJI_LAYOUT_SLOT`] run: scale font_size so CJK `一`
+/// advances ≈ [`EMOJI_ADVANCE_EM`]×`font_size`, while keeping the paragraph `line_height`.
+#[inline]
+pub fn emoji_slot_metrics(font_size: f32, line_height: f32) -> glyphon::Metrics {
+    glyphon::Metrics::new(
+        (font_size.max(0.001) * EMOJI_ADVANCE_EM).max(1.0),
+        line_height.max(1.0),
+    )
+}
+
+/// Invisible attrs for a layout slot: alpha=0 + [`emoji_slot_metrics`].
+pub fn emoji_slot_attrs<'a>(
+    base: &'a glyphon::Attrs<'a>,
+    font_size: f32,
+    line_height: f32,
+) -> glyphon::Attrs<'a> {
+    base.clone()
+        .color(glyphon::Color::rgba(0, 0, 0, 0))
+        .metrics(emoji_slot_metrics(font_size, line_height))
+}
 
 /// Replace each emoji grapheme with [`EMOJI_LAYOUT_SLOT`] so layout advance ≈ custom quad.
 pub fn plan_emoji_layout_text(text: &str) -> String {
@@ -48,6 +112,58 @@ pub fn shape_text_for_layout(text: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(text)
     }
+}
+
+/// Shape `layout` (may contain [`EMOJI_LAYOUT_SLOT`]) with ADVANCE_EM metrics on slots.
+///
+/// Used by paint + measure so caret / wrap / ink share one advance.
+pub fn set_buffer_with_emoji_slots(
+    buffer: &mut glyphon::Buffer,
+    layout: &str,
+    attrs: &glyphon::Attrs,
+    shaping: glyphon::Shaping,
+    font_size: f32,
+    line_height: f32,
+) {
+    if !layout.contains(EMOJI_LAYOUT_SLOT) {
+        buffer.set_text(layout, attrs, shaping, None);
+        return;
+    }
+    let visible = glyphon::AttrsOwned::new(attrs);
+    let invisible = glyphon::AttrsOwned::new(&emoji_slot_attrs(attrs, font_size, line_height));
+    let mut owned: Vec<(String, glyphon::AttrsOwned)> = Vec::new();
+    let mut buf = String::new();
+    let mut slot_run = false;
+    let flush =
+        |owned: &mut Vec<(String, glyphon::AttrsOwned)>, buf: &mut String, slot_run: bool| {
+            if buf.is_empty() {
+                return;
+            }
+            let a = if slot_run {
+                invisible.clone()
+            } else {
+                visible.clone()
+            };
+            owned.push((std::mem::take(buf), a));
+        };
+    for c in layout.chars() {
+        let is_slot = c == EMOJI_LAYOUT_SLOT;
+        if !buf.is_empty() && is_slot != slot_run {
+            flush(&mut owned, &mut buf, slot_run);
+        }
+        slot_run = is_slot;
+        buf.push(c);
+    }
+    flush(&mut owned, &mut buf, slot_run);
+    if owned.is_empty() {
+        buffer.set_text(layout, attrs, shaping, None);
+        return;
+    }
+    let rich: Vec<(&str, glyphon::Attrs)> = owned
+        .iter()
+        .map(|(t, a)| (t.as_str(), a.as_attrs()))
+        .collect();
+    buffer.set_rich_text(rich, attrs, shaping, None);
 }
 
 /// `shape_text` 内 UTF-8 字节下标 →（buffer 行号, 该行内字节下标）。
@@ -110,22 +226,23 @@ pub fn custom_emoji_left_top(
     Some((left, top))
 }
 
-/// 水平对齐占位 glyph 的中心，垂直在行盒内居中放置 `emoji_width`×`emoji_height` 的方块。
+/// 将 `ink_w`×`ink_h` 墨水方块水平居中于占位 advance（`g.w`），垂直光学居中于行盒。
 ///
-/// 不依赖 Mask tofu 的 `placement`（避免底切），也不要求 swash 光栅。
-/// `emoji_width` 可略大于占位 advance（例如 1.15em），以贴近系统 emoji 视觉大小。
+/// - 水平：墨水不得越过 advance（`ink_w` 钳到 `g.w`）。
+/// - 垂直：允许相对 `line_height` 轻微溢出（系统 emoji 亦非坐死基线）。
 pub fn custom_emoji_left_centered_top(
     buffer: &glyphon::Buffer,
     layout_text: &str,
     global_byte: usize,
-    emoji_width: f32,
-    emoji_height: f32,
+    ink_w: f32,
+    ink_h: f32,
 ) -> Option<(f32, f32)> {
     let (line_i, local) = global_byte_to_line_local(layout_text, global_byte)?;
     let (run, g) = find_glyph_for_line_byte(buffer, line_i, local)?;
-    let left = g.x + (g.w - emoji_width) * 0.5;
-    let pad = (run.line_height - emoji_height).max(0.0) * 0.5;
-    let top = run.line_top + pad;
+    let ew = ink_w.min(g.w.max(0.0));
+    let eh = ink_h.max(0.0);
+    let left = g.x + (g.w - ew) * 0.5;
+    let top = run.line_top + (run.line_height - eh) * 0.5;
     Some((left, top))
 }
 
@@ -155,6 +272,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn advance_equals_ink_plus_bearings() {
+        assert!((EMOJI_ADVANCE_EM - (EMOJI_INK_EM + 2.0 * EMOJI_BEARING_EM)).abs() < 1e-6);
+        assert!(EMOJI_ADVANCE_EM > EMOJI_INK_EM);
+        assert!(EMOJI_BEARING_EM > 0.0);
+    }
+
+    #[test]
     fn newline_byte_maps_to_second_line() {
         let s = "a\n😀";
         let idx = s.find('😀').unwrap();
@@ -179,13 +303,11 @@ mod tests {
         let mut line_top = None;
         let l0 = advance_emoji_left_cursor(100.0, 0.0, slot, &mut cursor, &mut line_top);
         assert!((l0 - 100.0).abs() < f32::EPSILON);
-        // Same line: collapsed left is pushed forward.
         let l1 = advance_emoji_left_cursor(10.0, 0.0, slot, &mut cursor, &mut line_top);
         assert!(
             l1 + 0.1 >= 100.0,
             "same-line backstop should keep monotonic left, got {l1}"
         );
-        // Soft-wrap to next visual line: must return to the measured left (margin), not stair-step.
         let l2 = advance_emoji_left_cursor(4.0, 24.0, slot, &mut cursor, &mut line_top);
         assert!(
             (l2 - 4.0).abs() < 0.01,
@@ -226,7 +348,48 @@ mod tests {
         );
         assert!(
             ratio > 0.85 && ratio < 1.35,
-            "emoji layout slot must be ~1em after coverage, got ratio={ratio}"
+            "bare CJK slot (no ADVANCE metrics) must be ~1em after coverage, got ratio={ratio}"
+        );
+    }
+
+    #[test]
+    fn slot_attrs_advance_near_advance_em() {
+        use crate::renderer::font_loader;
+        use crate::renderer::text_hit::best_font_family;
+
+        let layout = plan_emoji_layout_text("a😀b");
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, &layout);
+        let ui = best_font_family(&fs);
+        let size = 14.0_f32;
+        let lh = size * 1.5;
+        let attrs = glyphon::Attrs::new().family(ui);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(Some(400.0), Some(lh + 2.0));
+        set_buffer_with_emoji_slots(
+            &mut buffer,
+            &layout,
+            &attrs,
+            glyphon::Shaping::Advanced,
+            size,
+            lh,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
+        let (line_i, local) = global_byte_to_line_local(&layout, slot_start).unwrap();
+        let (_run, g) = find_glyph_for_line_byte(&buffer, line_i, local).unwrap();
+        let ratio = g.w / size;
+        assert!(
+            (ratio - EMOJI_ADVANCE_EM).abs() < 0.2,
+            "slot advance should track ADVANCE_EM≈{EMOJI_ADVANCE_EM}, got ratio={ratio} g.w={}",
+            g.w
+        );
+        let ink = size * EMOJI_INK_EM;
+        assert!(
+            ink <= g.w + 0.5,
+            "ink must fit inside advance (ink={ink} adv={})",
+            g.w
         );
     }
 
@@ -254,21 +417,20 @@ mod tests {
         let visible = glyphon::Attrs::new()
             .family(ui)
             .color(glyphon::Color::rgba(0, 0, 0, 255));
-        let invisible = visible.clone().color(glyphon::Color::rgba(0, 0, 0, 0));
-        let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
-        let slot_end = slot_start + EMOJI_LAYOUT_SLOT.len_utf8();
-        let owned = [
-            (layout[..slot_start].to_string(), visible.clone()),
-            (layout[slot_start..slot_end].to_string(), invisible),
-            (layout[slot_end..].to_string(), visible.clone()),
-        ];
-        let rich: Vec<(&str, glyphon::Attrs)> =
-            owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
         let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(400.0), Some(lh * 2.0));
-        buffer.set_rich_text(rich, &visible, glyphon::Shaping::Advanced, None);
+        set_buffer_with_emoji_slots(
+            &mut buffer,
+            &layout,
+            &visible,
+            glyphon::Shaping::Advanced,
+            size,
+            lh,
+        );
         buffer.shape_until_scroll(&mut fs, false);
-        let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, size, size)
+        let slot_start = layout.find(EMOJI_LAYOUT_SLOT).unwrap();
+        let ink = size * EMOJI_INK_EM;
+        let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, ink, ink)
             .expect("alpha=0 slot must still produce a layout glyph for Twemoji alignment");
         assert!(left.is_finite() && left >= 0.0, "left={left}");
     }

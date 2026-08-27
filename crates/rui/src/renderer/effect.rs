@@ -85,13 +85,15 @@ thread_local! {
     static CAPTURES: RefCell<Vec<CaptureJob>> = const { RefCell::new(Vec::new()) };
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CaptureJob {
     pub key: String,
     pub bounds: [f32; 4],
     /// Child subtree geometry (logical px), replayed into the capture RT.
     pub instances: Vec<crate::renderer::InstanceInput>,
     pub textured_draws: Vec<crate::renderer::TexturedDraw>,
+    /// Text laid out in page space; remapped into the RT (identity transform inside RT).
+    pub text_nodes: Vec<crate::layout::layout_tree::TextLayoutInfo>,
 }
 
 pub fn queue_effect(job: EffectJob) {
@@ -135,6 +137,7 @@ pub fn queue_from_attrs(
         bounds,
         instances: Vec::new(),
         textured_draws: Vec::new(),
+        text_nodes: Vec::new(),
     });
     let in_key = input_key.unwrap_or(cap_key.as_str()).to_string();
     let out_key = format!(
@@ -187,6 +190,17 @@ pub fn queue_subtree_wrap(
     instances: Vec<crate::renderer::InstanceInput>,
     textured_draws: Vec<crate::renderer::TexturedDraw>,
 ) -> Option<String> {
+    queue_subtree_wrap_with_text(attrs, bounds, instances, textured_draws, Vec::new())
+}
+
+/// Like [`queue_subtree_wrap`], but also captures text for effect / filter SourceGraphic.
+pub fn queue_subtree_wrap_with_text(
+    attrs: &std::collections::HashMap<String, String>,
+    bounds: [f32; 4],
+    instances: Vec<crate::renderer::InstanceInput>,
+    textured_draws: Vec<crate::renderer::TexturedDraw>,
+    text_nodes: Vec<crate::layout::layout_tree::TextLayoutInfo>,
+) -> Option<String> {
     let raw = attrs.get(ATTR_EFFECT)?;
     let kind = EffectKind::parse(raw);
     if matches!(kind, EffectKind::Passthrough) && raw.trim().is_empty() {
@@ -206,6 +220,7 @@ pub fn queue_subtree_wrap(
         bounds,
         instances,
         textured_draws,
+        text_nodes,
     });
     let out_key = format!(
         "rui_fx:{}:{:.0}x{:.0}",

@@ -15,6 +15,8 @@ pub const ATTR_SCENE3D_BG: &str = "rui_scene3d_bg";
 pub const ATTR_SCENE3D_CAMERA_Z: &str = "rui_scene3d_camera_z";
 pub const ATTR_SCENE3D_LIGHT: &str = "rui_scene3d_light";
 pub const ATTR_SCENE3D_MATERIAL: &str = "rui_scene3d_material";
+/// Optional SDF/Bake text label drawn as a perspective billboard in the scene3d RT.
+pub const ATTR_SCENE3D_LABEL: &str = "rui_scene3d_label";
 
 /// Formal scene camera (perspective MVP inputs).
 #[derive(Clone, Copy, Debug)]
@@ -158,6 +160,12 @@ impl Scene3dBuilder {
         );
         self
     }
+
+    /// Perspective text billboard (SDF bake via [`crate::renderer::bake_text_texture_key_for_3d`]).
+    pub fn label(mut self, text: impl Into<String>) -> Self {
+        self.el.set_attr(ATTR_SCENE3D_LABEL, text.into());
+        self
+    }
 }
 
 impl From<Scene3dBuilder> for Element {
@@ -203,6 +211,8 @@ pub struct Scene3dJob {
     pub bg: [f32; 4],
     pub light: Scene3dLight,
     pub material: Scene3dMaterial,
+    /// Optional `rui_text_msdf_v1:` / bake key for a floating label billboard.
+    pub text_tex_key: Option<String>,
 }
 
 #[cfg(feature = "scene3d")]
@@ -306,6 +316,20 @@ pub fn scene3d_tex_from_element_attrs(
         .unwrap_or(2.35);
     let light = parse_light(attrs);
     let material = parse_material(attrs);
+    let text_tex_key = attrs.get(ATTR_SCENE3D_LABEL).and_then(|label| {
+        let label = label.trim();
+        if label.is_empty() {
+            return None;
+        }
+        crate::renderer::bake_text_texture_key_for_3d(
+            label,
+            22.0,
+            600,
+            [248, 250, 252, 255],
+            160.0,
+            36.0,
+        )
+    });
     JOBS.with(|j| {
         j.borrow_mut().push(Scene3dJob {
             key: key.clone(),
@@ -318,6 +342,7 @@ pub fn scene3d_tex_from_element_attrs(
             bg,
             light,
             material,
+            text_tex_key,
         });
     });
     // Do not call `runtime::request_redraw()` here: collect runs while `AppState` is

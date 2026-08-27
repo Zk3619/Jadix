@@ -57,13 +57,16 @@ fn measure_nowrap_ink(
     }
     let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
     buffer.set_wrap(Wrap::None);
-    buffer.set_text(
+    let attrs = Attrs::new()
+        .family(family)
+        .weight(glyphon::fontdb::Weight(weight));
+    crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+        &mut buffer,
         text,
-        &Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(weight)),
+        &attrs,
         shaping,
-        None,
+        size,
+        line_height,
     );
     buffer.set_size(None, Some(line_height + 2.0));
     buffer.shape_until_scroll(font_system, false);

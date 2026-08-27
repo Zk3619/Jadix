@@ -144,6 +144,7 @@ impl From<TextareaBuilder> for Element {
             line_height_px: None,
             leading_scale: None,
             value,
+            text_align: crate::style::TextAlign::Start,
             single_line_container: None,
             multiline: true,
             rows,

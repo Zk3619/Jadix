@@ -276,9 +276,13 @@ impl LabelBuilder {
         self
     }
 
-    pub fn text_center(mut self) -> Self {
-        self.inner = self.inner.align_center();
+    pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
+        self.inner = self.inner.text_align(align);
         self
+    }
+
+    pub fn text_center(self) -> Self {
+        self.text_align("center")
     }
 
     pub fn line_height(mut self, line_height: impl IntoF32) -> Self {

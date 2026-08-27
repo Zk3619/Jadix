@@ -74,16 +74,17 @@ fn vs_main(
     let cd = instance.transform_cd;
     let txty = instance.transform_txty;
 
-    // Extend quad: outset needs extra for blur/offset/spread; inset shadow lives inside the rect.
+    // +2px AA pad: outer SDF smoothstep fringe (esp. rounded corners where fwidth(d) grows)
+    // must stay inside the draw quad — otherwise 1px borders look broken at the apex.
     let shadow_blur = instance.shadow_params.x;
     let shadow_spread = instance.shadow_params.y;
     let shadow_inset = instance.shadow_params.z;
     let spread = max(0.0, shadow_spread);
     var ext = vec2<f32>(abs(instance.shadow_offset.x), abs(instance.shadow_offset.y))
-        + vec2<f32>(shadow_blur * 2.0 + instance.border_width + spread);
+        + vec2<f32>(shadow_blur * 2.0 + instance.border_width + spread + 2.0);
     if (shadow_inset > 0.5) {
         ext = vec2<f32>(
-            shadow_blur * 2.0 + instance.border_width + abs(shadow_spread)
+            shadow_blur * 2.0 + instance.border_width + abs(shadow_spread) + 2.0
         );
     }
 
@@ -296,8 +297,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // SDF distance to the edge of the shaped box
     let d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
 
-    // Anti-aliasing width
-    let aa = 1.0;
+    // Screen-space AA: fixed 1px fails under rotate/skew (derivatives stretch).
+    let aa = max(fwidth(d), 0.75);
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);

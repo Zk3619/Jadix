@@ -24,6 +24,7 @@ pub mod resources;
 pub mod text;
 pub mod text_hit;
 pub(crate) mod text_prepare_debug;
+pub mod text_xform;
 pub mod textured_pipeline;
 pub mod twemoji_name;
 pub(crate) mod wgpu_compat;
@@ -37,12 +38,19 @@ pub use css_filter::{
 };
 pub use effect::{
     enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
-    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob, EffectJob, EffectKind,
-    EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN, ATTR_EFFECT_STRENGTH,
+    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob,
+    EffectJob, EffectKind, EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN,
+    ATTR_EFFECT_STRENGTH,
 };
 pub use effect_pass::EffectPassGpu;
 pub use geometry2d::{gpu2d_enabled, path_to_instances, quads_to_instances};
 pub use glyph_fx::{GlyphFx, GlyphFxKind, ATTR_GLYPH_FX};
+pub use text_xform::{
+    bake_text_texture_key_for_3d, element_wants_sticky_xform, mat2d_uniform_scale, mat4_from_mat2d,
+    mat4_identity, mat4_mul, ndc_to_pixel, project_point_mat4, resolve_glyph_raster,
+    text_xform_mode, text_xform_offscreen, BAKE_OVERSAMPLE, BAKE_SCALE_MAX, BAKE_SCALE_MIN,
+    GlyphRasterMode, TextXformMode,
+};
 pub use graph::{
     env_dump_enabled as render_graph_dump_enabled, store_last_dump as store_render_graph_dump,
     PassKind, RenderGraph, RenderPassNode,
@@ -159,6 +167,8 @@ pub struct TexturedDraw {
     pub texture_key: String,
     /// Combined ancestor × element opacity for tint alpha.
     pub opacity: f32,
+    /// RGB tint (SDF text bake uses glyph color here; images stay white).
+    pub tint_rgb: [f32; 3],
     /// CSS/`compute_combined_transform` 矩阵（绕矩形中心）；默认单位阵。
     pub transform: [f32; 6],
 }
@@ -186,12 +196,18 @@ impl TexturedDraw {
             uv_scale,
             texture_key: texture_key.into(),
             opacity,
+            tint_rgb: [1.0, 1.0, 1.0],
             transform: crate::style::transform::MAT2D_IDENTITY,
         })
     }
 
     pub fn with_transform(mut self, transform: [f32; 6]) -> Self {
         self.transform = transform;
+        self
+    }
+
+    pub fn with_tint_rgb(mut self, rgb: [f32; 3]) -> Self {
+        self.tint_rgb = rgb;
         self
     }
 }
@@ -223,18 +239,34 @@ pub struct ScaledTexturedDraw {
     pub uv_scale: [f32; 2],
     pub texture_key: String,
     pub opacity: f32,
+    pub tint_rgb: [f32; 3],
     pub transform: [f32; 6],
 }
 
 impl ScaledTexturedDraw {
     pub fn to_instance(&self) -> TexturedInstanceInput {
+        let flags = if self
+            .texture_key
+            .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+        {
+            1.0
+        } else {
+            0.0
+        };
         TexturedInstanceInput {
             rect_pos: [self.rect[0], self.rect[1]],
             rect_size: [self.rect[2], self.rect[3]],
-            tint: [1.0, 1.0, 1.0, self.opacity],
+            tint: [
+                self.tint_rgb[0],
+                self.tint_rgb[1],
+                self.tint_rgb[2],
+                self.opacity,
+            ],
             uv_offset: self.uv_offset,
             uv_scale: self.uv_scale,
             transform: self.transform,
+            flags,
+            _pad: [0.0; 3],
         }
     }
 }
@@ -258,6 +290,7 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
                 uv_scale: d.uv_scale,
                 texture_key: d.texture_key.clone(),
                 opacity: d.opacity,
+                tint_rgb: d.tint_rgb,
                 transform: t,
             }
         })
@@ -289,6 +322,7 @@ mod textured_uv_tests {
                 uv_scale: [1.0, 1.0],
                 texture_key: "rui_path:line".into(),
                 opacity: 1.0,
+                tint_rgb: [1.0, 1.0, 1.0],
                 transform: crate::style::transform::MAT2D_IDENTITY,
             },
             TexturedDraw {
@@ -297,6 +331,7 @@ mod textured_uv_tests {
                 uv_scale: [1.0, 1.0],
                 texture_key: "rui_path:pie".into(),
                 opacity: 1.0,
+                tint_rgb: [1.0, 1.0, 1.0],
                 transform: crate::style::transform::MAT2D_IDENTITY,
             },
         ];

@@ -77,8 +77,8 @@ pub use tailwind_leading::{
     TAILWIND_TEXT_SM_LEADING_SCALE, TAILWIND_TEXT_XL_LEADING_SCALE, TAILWIND_TEXT_XS_LEADING_SCALE,
 };
 pub use text_style::{
-    parse_text_shadow, InputCaretDraw, TextDecorationStyle, TextDirection, TextOverflow, TextSpan,
-    TextSpanKind, TextStyle, WhiteSpace,
+    parse_text_shadow, InputCaretDraw, TextAlign, TextAlignDeclaration, TextDecorationStyle,
+    TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
 pub use theme::{
     focus_ring_style, get_theme, is_dark_theme, set_focus_ring_style, set_theme, set_theme_mode,
@@ -89,11 +89,11 @@ pub use timeline::{
     Timeline, TimelineInner,
 };
 pub use transform::{
-    compute_combined_transform, mat2d_inverse, mat2d_is_identity, mat2d_linear,
-    mat2d_transform_point, parse_transform, parse_transform_box, parse_transform_origin,
-    parse_transform_style, resolve_transform_matrix, Mat2d, TransformBox, TransformFunction,
-    TransformList, TransformOrigin, TransformOriginX, TransformOriginY, TransformStyle,
-    MAT2D_IDENTITY,
+    compute_combined_transform, mat2d_inverse, mat2d_is_axis_aligned, mat2d_is_identity,
+    mat2d_linear, mat2d_multiply, mat2d_transform_point, mat2d_transform_vec, parse_transform,
+    parse_transform_box, parse_transform_origin, parse_transform_style, resolve_transform_matrix,
+    Mat2d, TransformBox, TransformFunction, TransformList, TransformOrigin, TransformOriginX,
+    TransformOriginY, TransformStyle, MAT2D_IDENTITY,
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, class_variant_hover_needs_frame,

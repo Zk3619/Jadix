@@ -33,6 +33,8 @@ pub(crate) struct TextEditBuildParams {
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
     pub value: Option<Signal<String>>,
+    /// CSS `text-align`（默认 `start`）。
+    pub text_align: crate::style::TextAlign,
     /// Single-line: preconfigured BoxBuilder (hstack chrome).
     /// Multi-line: ignore; build relative flex_col box inside.
     pub single_line_container: Option<BoxBuilder>,
@@ -59,6 +61,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         line_height_px,
         leading_scale,
         value,
+        text_align,
         single_line_container,
         multiline,
         rows,
@@ -225,7 +228,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             color: text_color,
             underline: false,
             underline_offset_px: None,
-            center: false,
+            text_align,
             line_height_px: Some(line_box),
             leading_scale: None,
             font_family: None,
@@ -621,6 +624,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resize_min_h,
         resize_max_h,
         plain_chrome: false,
+        text_align,
         wrap_mode,
     };
 

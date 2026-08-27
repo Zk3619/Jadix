@@ -88,13 +88,16 @@ pub fn measure_prefix_width(
         Some(max_width.max(1.0))
     };
     buffer.set_size(width_opt, Some(line_height + 2.0));
-    buffer.set_text(
+    let attrs = glyphon::Attrs::new()
+        .family(family)
+        .weight(glyphon::fontdb::Weight(weight));
+    crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+        &mut buffer,
         layout.as_ref(),
-        &glyphon::Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(weight)),
+        &attrs,
         glyphon::Shaping::Advanced,
-        None,
+        scaled_size,
+        line_height,
     );
     buffer.shape_until_scroll(font_system, false);
     let measured = buffer
@@ -324,6 +327,7 @@ pub fn hit_test_input_text_index(
             style.weight,
             line_height_for_style(style, 1.0).max(1.0),
             avail,
+            style.wrap_mode.to_line_break_source(),
         );
         let line_i = ((my - y) / line_height_logical)
             .floor()
@@ -376,11 +380,7 @@ pub fn hit_test_input_text_index(
     } else {
         measured.min(box_w)
     };
-    let offset = match style.align {
-        glyphon::cosmic_text::Align::Center => (box_w - content_w) * 0.5,
-        glyphon::cosmic_text::Align::Right => box_w - content_w,
-        _ => 0.0,
-    };
+    let offset = style.align_inline_offset(content_w, box_w);
     let rel_x = (rel_in_box - offset).clamp(0.0, content_w.max(0.0));
     let local = hit_test_line_x(
         font_system,
@@ -439,6 +439,7 @@ pub fn hit_test_input_is_line_side_blank(
             style.weight,
             line_height_logical,
             avail,
+            style.wrap_mode.to_line_break_source(),
         );
         let line_i = ((my - y) / line_height_logical)
             .floor()
@@ -482,11 +483,7 @@ pub fn hit_test_input_is_line_side_blank(
     } else {
         measured.min(box_w)
     };
-    let offset = match style.align {
-        glyphon::cosmic_text::Align::Center => (box_w - content_w) * 0.5,
-        glyphon::cosmic_text::Align::Right => box_w - content_w,
-        _ => 0.0,
-    };
+    let offset = style.align_inline_offset(content_w, box_w);
     let rel_in_box = (mx - x + style.scroll_x.max(0.0)) * ui_scale;
     // Half-px slack so sitting on the first/last glyph edge is not treated as blank.
     const EPS: f32 = 0.5;
