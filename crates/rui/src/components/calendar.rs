@@ -45,8 +45,12 @@ const CELL: &str = "2rem";
 /// 星期行 + 6 周 × `CELL`，行距 `0.5rem`：`7×2rem + 6×0.5rem`。
 /// `__days` 占位 `h:auto` 在 reconcile 前会塌成 0，日按钮溢出盖住 DateTime `Separator`。
 const CALENDAR_DAY_GRID_MIN_H: &str = "17rem";
-/// 7×cell + p-3；dropdown caption Select 略宽，作浮层 w-fit 的固有下限。
-const CALENDAR_MIN_W: &str = "17.5rem";
+/// 7×cell + p-3；固定宽度，避免换月/换标题文案时浮层 w-fit 跟着抖。
+const CALENDAR_W: &str = "17.5rem";
+/// dropdown caption：容纳最长月名 `September`（触发器勿 `w:auto`）。
+const MONTH_SELECT_W: &str = "7.25rem";
+/// dropdown caption：四位年份。
+const YEAR_SELECT_W: &str = "4.75rem";
 const YEAR_SELECT_LO: i32 = 1900;
 const YEAR_SELECT_HI: i32 = 2100;
 
@@ -361,7 +365,7 @@ pub(crate) fn calendar_month_select(id: impl Into<String>, value: Signal<String>
         b = b.item(SelectItemData::new((i + 1).to_string(), *name));
     }
     let el: Element = b.into();
-    el.w("auto").flex_shrink(0.0)
+    el.w(MONTH_SELECT_W).flex_shrink(0.0)
 }
 
 /// Aria `CalendarYearPicker`：复用产品面 [`select`]。
@@ -383,7 +387,7 @@ pub(crate) fn calendar_year_select(
         b = b.item(SelectItemData::new(yy.to_string(), yy.to_string()));
     }
     let el: Element = b.into();
-    el.w("auto").flex_shrink(0.0)
+    el.w(YEAR_SELECT_W).flex_shrink(0.0)
 }
 
 fn build_calendar_view(
@@ -402,25 +406,43 @@ fn build_calendar_view(
         disabled,
         bordered,
     } = props;
-    let y = year.get();
-    let m = month.get();
-    // Select value_signal → caption month/year（nav/键盘须同步写 month_sel/year_sel）。
-    let ms = month_sel.get();
-    let ys = year_sel.get();
-    if let Ok(mm) = ms.parse::<u32>() {
-        if (1..=12).contains(&mm) && mm != m {
-            month.set(mm);
-            focus_day.set(clamp_day(y, mm, focus_day.peek()));
-        }
+
+    // Select → month/year：独立订阅。外层若 `.get()` month_sel/year_sel（或随之
+    // 改写的 year/month），会整树重建 caption Select → 选一次后再也打不开。
+    let sync_id = format!("{id}__cap_sync");
+    {
+        let year = year;
+        let month = month;
+        let focus_day = focus_day;
+        let month_sel = month_sel;
+        let year_sel = year_sel;
+        reactive_anchor(sync_id.clone(), move || {
+            let ms = month_sel.get();
+            let ys = year_sel.get();
+            let y = year.peek();
+            let m = month.peek();
+            if let Ok(mm) = ms.parse::<u32>() {
+                if (1..=12).contains(&mm) && mm != m {
+                    month.set(mm);
+                    focus_day.set(clamp_day(y, mm, focus_day.peek()));
+                }
+            }
+            if let Ok(yy) = ys.parse::<i32>() {
+                if yy != year.peek() {
+                    year.set(yy);
+                    focus_day.set(clamp_day(yy, month.peek(), focus_day.peek()));
+                }
+            }
+            Element::new().w(0.0).h(0.0)
+        });
     }
-    if let Ok(yy) = ys.parse::<i32>() {
-        if yy != y {
-            year.set(yy);
-            focus_day.set(clamp_day(yy, month.peek(), focus_day.peek()));
-        }
-    }
-    let y = year.peek();
-    let m = month.peek();
+
+    // Dropdown：外层只 peek，保留 Select 实例；Label：订 year/month 刷新标题。
+    let (y, m) = if caption == CalendarCaption::Dropdown {
+        (year.peek(), month.peek())
+    } else {
+        (year.get(), month.get())
+    };
 
     let y_sig = year;
     let m_sig = month;
@@ -431,7 +453,7 @@ fn build_calendar_view(
     let mut root: Element = vstack()
         .gap("1rem")
         .p("0.75rem")
-        .min_w(CALENDAR_MIN_W)
+        .w(CALENDAR_W)
         .overflow("hidden")
         .into();
     if bordered {
@@ -442,6 +464,9 @@ fn build_calendar_view(
             .border_width(1.0)
             .border_color(tokens::border());
     }
+    root = root.child(
+        reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
+    );
     if !disabled {
         let y_k = y_sig;
         let m_k = m_sig;
@@ -616,7 +641,7 @@ fn build_calendar_view(
         .into();
     root = root.child(header);
 
-    // 日网格单独订阅 val/focus，避免点日重建 caption Select（打开一次后无法再开）。
+    // 日网格单独订阅 val/focus/year/month，避免点日或换月重建 caption Select。
     let grid_id = format!("{id}__days");
     let grid_id_key = id.clone();
     let on_grid = on_select.clone();
@@ -766,7 +791,7 @@ impl From<CalendarBuilder> for Element {
             disabled,
             bordered,
         };
-        reactive_component_live_sized(view_id, props, "100%", "auto", move |p| {
+        reactive_component_live_sized(view_id, props, CALENDAR_W, "auto", move |p| {
             build_calendar_view(
                 p,
                 val,

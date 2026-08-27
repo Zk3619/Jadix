@@ -1,12 +1,14 @@
 //! # Button
 //!
-//! ShadCN 风格可点击按钮：变体（default / outline / ghost / link / …）、尺寸、禁用、
-//! hover 过渡与焦点环。
+//! ShadCN 风格可点击按钮：变体（default / outline / ghost / link / success /
+//! warning / destructive / …）、尺寸、禁用、hover 过渡与焦点环。
 //!
 //! ## 用法
 //! ```ignore
 //! <Button variant="outline" size="sm" on_click={move |_| { … }}>"保存"</Button>
 //! <Button id="hw-hover" variant="ghost">"悬停"</Button>
+//! <Button variant="success">"完成"</Button>
+//! <Button variant="warn">"注意"</Button> // warn ≡ warning
 //! // 或：Element::from(button("ok").variant("default").on_click(…))
 //! ```
 //!
@@ -168,10 +170,27 @@ fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32;
     out
 }
 
+/// Soft semantic tint（与 Toast 语义色同源，配方对齐 destructive）：
+/// `accent/10` → hover `accent/20`（暗色 `20/30`）；字色为不透明 accent。
+fn soft_semantic_chrome(
+    accent: [f32; 4],
+    text: [u8; 4],
+    hover_t: f32,
+    dark: bool,
+) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
+    let t = hover_t.clamp(0.0, 1.0);
+    let (rest_a, hover_a) = if dark { (0.2, 0.3) } else { (0.1, 0.2) };
+    let rest = color_mix_over_background(accent, rest_a);
+    let hover = color_mix_over_background(accent, hover_a);
+    let bg = lerp_display_srgb_linear(rest, hover, t);
+    (bg, text, None)
+}
+
 /// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
 /// - default: `bg-primary` → hover `primary/80`
 /// - secondary: `bg-secondary` → hover `color-mix(secondary, foreground 5%)`
-/// - destructive: `destructive/10` → hover `destructive/20`；字色为不透明 `destructive`
+/// - success / warning / destructive: soft tint（见 [`soft_semantic_chrome`]）；
+///   success=`green-600`、warning=`orange-600`（与 Toast tone 同源）、destructive token
 /// - outline / ghost / link：见各分支
 pub(crate) fn button_chrome_for_variant(
     variant: &str,
@@ -232,14 +251,24 @@ pub(crate) fn button_chrome_for_variant(
             );
             (bg, tc, None)
         }
-        "destructive" => {
-            let destructive = parse_color("destructive");
-            let (rest_a, hover_a) = if dark { (0.2, 0.3) } else { (0.1, 0.2) };
-            let rest = color_mix_over_background(destructive, rest_a);
-            let hover = color_mix_over_background(destructive, hover_a);
-            let bg = lerp_display_srgb_linear(rest, hover, t);
-            (bg, parse_text_color("destructive"), None)
-        }
+        "success" => soft_semantic_chrome(
+            parse_color("green-600"),
+            parse_text_color("green-600"),
+            t,
+            dark,
+        ),
+        "warning" => soft_semantic_chrome(
+            parse_color("orange-600"),
+            parse_text_color("orange-600"),
+            t,
+            dark,
+        ),
+        "destructive" => soft_semantic_chrome(
+            parse_color("destructive"),
+            parse_text_color("destructive"),
+            t,
+            dark,
+        ),
         "link" => ([0.0; 4], parse_text_color("primary"), None),
         _ => {
             let rest = parse_color("primary");
@@ -251,6 +280,7 @@ pub(crate) fn button_chrome_for_variant(
 }
 
 // ─── ShadCN-UI Button Variants ───────────────────────────────────────────────
+/// Button `variant`：ShadCN 基线 + 语义 soft tint（success / warning）+ Toast 同源色。
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ButtonVariant {
     #[default]
@@ -258,6 +288,8 @@ pub enum ButtonVariant {
     Secondary,
     Outline,
     Ghost,
+    Success,
+    Warning,
     Destructive,
     Link,
 }
@@ -278,11 +310,13 @@ impl std::str::FromStr for ButtonVariant {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
             "secondary" => Self::Secondary,
             "outline" => Self::Outline,
             "ghost" => Self::Ghost,
-            "destructive" => Self::Destructive,
+            "success" => Self::Success,
+            "warning" | "warn" => Self::Warning,
+            "destructive" | "error" => Self::Destructive,
             "link" => Self::Link,
             _ => Self::Default,
         })
@@ -296,6 +330,8 @@ impl ButtonVariant {
             Self::Secondary => "secondary",
             Self::Outline => "outline",
             Self::Ghost => "ghost",
+            Self::Success => "success",
+            Self::Warning => "warning",
             Self::Destructive => "destructive",
             Self::Link => "link",
         }
@@ -534,7 +570,7 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
             color: [255, 255, 255, 255],
             underline: false,
             underline_offset_px: None,
-            center: true,
+            text_align: crate::style::TextAlign::Center,
             line_height_px: None,
             leading_scale: None,
             font_family: None,
@@ -875,6 +911,11 @@ impl From<ButtonBuilder> for Element {
                     if let Some(hook) = child.on_unmount.take() {
                         text_node.on_unmount = Some(hook);
                     }
+                }
+                // Keep child hit policy (e.g. Pagination icon/caption `pointer-events: none`
+                // so clicks land on the Button interactive root).
+                if let Some(pe) = child.attrs.get(crate::core::tree::ATTR_POINTER_EVENTS) {
+                    text_node = text_node.pointer_events(pe.as_str());
                 }
                 el = el.child(text_node);
             } else {
@@ -1337,6 +1378,31 @@ mod chrome_tests {
         assert_eq!(hex(rest), hex(color_mix_over_background(destructive, 0.1)));
         assert_eq!(hex(hover), hex(color_mix_over_background(destructive, 0.2)));
         assert!(luminance(hover) < luminance(rest));
+    }
+
+    #[test]
+    fn success_and_warning_soft_tint_match_toast_accents() {
+        set_theme_mode(ThemeMode::Light);
+        let green = parse_color("green-600");
+        let orange = parse_color("orange-600");
+        let (s_rest, s_fg, _) = button_chrome_for_variant("success", 0.0);
+        let (s_hover, _, _) = button_chrome_for_variant("success", 1.0);
+        assert_eq!(s_fg, parse_text_color("green-600"));
+        assert_eq!(hex(s_rest), hex(color_mix_over_background(green, 0.1)));
+        assert_eq!(hex(s_hover), hex(color_mix_over_background(green, 0.2)));
+        let (w_rest, w_fg, _) = button_chrome_for_variant("warning", 0.0);
+        let (w_hover, _, _) = button_chrome_for_variant("warning", 1.0);
+        assert_eq!(w_fg, parse_text_color("orange-600"));
+        assert_eq!(hex(w_rest), hex(color_mix_over_background(orange, 0.1)));
+        assert_eq!(hex(w_hover), hex(color_mix_over_background(orange, 0.2)));
+        assert_eq!(
+            "warn".parse::<super::ButtonVariant>().unwrap(),
+            super::ButtonVariant::Warning
+        );
+        assert_eq!(
+            "error".parse::<super::ButtonVariant>().unwrap(),
+            super::ButtonVariant::Destructive
+        );
     }
 
     #[test]

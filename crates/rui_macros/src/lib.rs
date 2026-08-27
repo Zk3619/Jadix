@@ -188,6 +188,8 @@ fn is_boolish_attr(name: &str) -> bool {
             | "underline"
             | "box_shadow_inset"
             | "boxShadowInset"
+            | "with_handle"
+            | "withHandle"
     )
 }
 
@@ -870,8 +872,13 @@ fn expand_node(
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
+                || name_str == "PopoverContent"
+                || name_str == "Progress"
+                || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
+                || name_str == "Sheet"
+                || name_str == "SheetContent"
                 || name_str == "CommandDialog"
                 || name_str == "CommandOverlay"
                 || command_is_compound
@@ -919,6 +926,181 @@ fn expand_node(
                         .map(|(_, v)| v)
                 };
 
+                if name_str == "Progress" {
+                    // Provide context *before* Label/Value (eager props order); Track 由 scope 注入。
+                    let id_expr = get_attr("id");
+                    let value_sig = get_attr("value_signal")
+                        .or_else(|| get_attr("valueSignal"));
+                    let value_lit = get_attr("value");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Progress#{}", file!(), line!(), #idx) }
+                    };
+                    let value_ts = if let Some(sig) = value_sig {
+                        quote! { Some(#sig) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(v) = value_lit {
+                        quote! { (#v) as f32 }
+                    } else {
+                        quote! { 0.0f32 }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::progress_scope(
+                            #id_ts,
+                            #value_ts,
+                            #default_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "ResizablePanelGroup" {
+                    let id_expr = get_attr("id");
+                    let ori_expr = get_attr("orientation");
+                    let class_expr = get_attr("class");
+                    let h_expr = get_attr("h").or_else(|| get_attr("height"));
+                    let sizes_expr = get_attr("sizes")
+                        .or_else(|| get_attr("sizes_signal"))
+                        .or_else(|| get_attr("sizesSignal"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:ResizablePanelGroup#{}", file!(), line!(), #idx) }
+                    };
+                    let ori_ts = if let Some(o) = ori_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let height_ts = if let Some(h) = h_expr {
+                        quote! { Some((#h) as f32) }
+                    } else {
+                        quote! { None }
+                    };
+                    let sizes_ts = if let Some(s) = sizes_expr {
+                        quote! { Some(#s) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::resizable_panel_group_scope(
+                            #id_ts,
+                            #ori_ts,
+                            #class_ts,
+                            #height_ts,
+                            #sizes_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "Popover" {
+                    // Provide context *before* Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        // Fragment so Trigger can sit beside Content without an extra column.
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Popover#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::popover_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
                 if name_str == "Dialog" {
                     // Provide context *before* building Trigger/Content (eager props order).
                     let id_expr = get_attr("id");
@@ -960,6 +1142,50 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "Sheet" {
+                    // Provide context *before* building Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        // Fragment so Trigger can sit in parent HStack/VStack without an extra column.
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Sheet#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::sheet_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -1960,6 +2186,86 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "SheetContent" {
+                    let show_close = get_attr("show_close")
+                        .or_else(|| get_attr("showClose"))
+                        .or_else(|| get_attr("showCloseButton"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let side = get_attr("side")
+                        .map(|e| quote! { rui::components::SheetSide::from(#e) })
+                        .unwrap_or_else(|| {
+                            quote! { rui::components::SheetSide::Right }
+                        });
+                    let overlay_color = get_attr("overlay_color")
+                        .or_else(|| get_attr("overlayColor"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_opacity = get_attr("overlay_opacity")
+                        .or_else(|| get_attr("overlayOpacity"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_overlay = get_attr("close_on_overlay_click")
+                        .or_else(|| get_attr("closeOnOverlayClick"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let overlay_blur = get_attr("overlay_blur")
+                        .or_else(|| get_attr("overlayBlur"))
+                        .or_else(|| get_attr("backdrop_blur"))
+                        .or_else(|| get_attr("backdropBlur"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let width = get_attr("w")
+                        .or_else(|| get_attr("width"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let height = get_attr("h")
+                        .or_else(|| get_attr("height"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::sheet_content(
+                            rui::components::SheetContentOpts {
+                                side: #side,
+                                show_close: #show_close,
+                                overlay_color: #overlay_color,
+                                overlay_opacity: #overlay_opacity,
+                                close_on_overlay_click: #close_on_overlay,
+                                overlay_blur: #overlay_blur,
+                                width: #width,
+                                height: #height,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "TooltipContent" {
                     let side = get_attr("side")
                         .or_else(|| get_attr("placement"))
@@ -1996,6 +2302,66 @@ fn expand_node(
                             rui::components::TooltipContentOpts {
                                 side: #side,
                                 class: #class,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "PopoverContent" {
+                    let side = get_attr("side")
+                        .or_else(|| get_attr("placement"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom".to_string() });
+                    let align = get_attr("align")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "center".to_string() });
+                    let side_offset = get_attr("side_offset")
+                        .or_else(|| get_attr("sideOffset"))
+                        .map(|e| quote! { (#e) as f32 })
+                        .unwrap_or_else(|| quote! { 4.0f32 });
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let strategy = get_attr("strategy")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let width = get_attr("width")
+                        .or_else(|| get_attr("w"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rebuilt inside popover_content's reactive_anchor.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::popover_content(
+                            rui::components::PopoverContentOpts {
+                                side: #side,
+                                align: #align,
+                                side_offset: #side_offset,
+                                class: #class,
+                                strategy: #strategy,
+                                width: #width,
                             },
                             move || #child_el,
                         )
@@ -3011,40 +3377,6 @@ fn expand_node(
                     };
                 }
 
-                if name_str == "Popover" {
-                    let Some(open_expr) = get_attr("open") else {
-                        return quote! { compile_error!("<Popover> requires `open={...}` (`rui::Signal<bool>`)"); };
-                    };
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        // Body is rendered inside Popover's reactive_view effect.
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { rui::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                use rui::core::tree::IntoElementList;
-                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
-                                #( __list.extend((#expanded_children).into_element_list()); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = rui::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    rui::core::tree::Element::from(__v)
-                                }
-                            }
-                        }
-                    };
-                    return quote! {
-                        rui::core::tree::Element::from(
-                            rui::components::popover_panel(#open_expr).child(move || #child_el)
-                        )
-                    };
-                }
-
                 // For / ForKeyed
                 let scope_ts = if let Some(scope_expr) = get_attr("scope") {
                     quote! { #scope_expr }
@@ -4025,6 +4357,17 @@ fn expand_node(
                                 "valueSignal" => syn::Ident::new("value_signal", attr.span()),
                                 "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
                                 "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
+                                // Popover / Tooltip / floating
+                                "openSignal" => syn::Ident::new("open_signal", attr.span()),
+                                "sideOffset" => syn::Ident::new("side_offset", attr.span()),
+                                "alignOffset" => syn::Ident::new("align_offset", attr.span()),
+                                "anchorFocusId" => syn::Ident::new("anchor_focus_id", attr.span()),
+                                // Resizable
+                                "withHandle" => syn::Ident::new("with_handle", attr.span()),
+                                "defaultSize" => syn::Ident::new("default_size", attr.span()),
+                                "minSize" => syn::Ident::new("min_size", attr.span()),
+                                "maxSize" => syn::Ident::new("max_size", attr.span()),
+                                "sizesSignal" => syn::Ident::new("sizes", attr.span()),
                                 // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
                                 "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),
@@ -4268,10 +4611,13 @@ fn expand_node(
                     }
                     "canvas" | "Canvas" => quote! { rui::primitives::canvas() },
                     "scene3d" | "Scene3d" => quote! { rui::primitives::scene3d() },
-                    other if let Some(tag) = svg_tag_canonical(other) => {
-                        quote! { rui::primitives::svg::svg_el(#tag) }
+                    other => {
+                        if let Some(tag) = svg_tag_canonical(other) {
+                            quote! { rui::primitives::svg::svg_el(#tag) }
+                        } else {
+                            quote! { rui::core::tree::Element::new() }
+                        }
                     }
-                    _ => quote! { rui::core::tree::Element::new() },
                 }
             };
 

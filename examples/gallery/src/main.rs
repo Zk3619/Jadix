@@ -142,7 +142,7 @@ fn BadgeShowcase() -> rui::core::tree::Element {
         <MyCard title="1c) Badge 变体（ShadCN）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：<Badge variant> 与 badge().variant().text()；success / warning(=warn) / error≡destructive；Icon 用 name+animate-spin，图片请用 Image src"
+                    "双写法：<Badge variant> 与 badge().variant().text()；success / warning(=warn) / error≡destructive 为 Button soft tint；Icon 用 name+animate-spin，图片请用 Image src"
                 </Label>
                 <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">
                     <Badge>"Default"</Badge>
@@ -345,6 +345,12 @@ fn ButtonShowcase() -> rui::core::tree::Element {
                     </Button>
                     <Button variant="destructive" on_click={move || choose_variant(selected, "destructive")}>
                         "Destructive"
+                    </Button>
+                    <Button variant="success" on_click={move || choose_variant(selected, "success")}>
+                        "Success"
+                    </Button>
+                    <Button variant="warning" on_click={move || choose_variant(selected, "warning")}>
+                        "Warning"
                     </Button>
                     <Button variant="link" on_click={move || choose_variant(selected, "link")}>
                         "Link"
@@ -2210,6 +2216,50 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </HStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
+                    "3b · 旋转容器内文字（壳+字一同转 · sticky Bake）"
+                </Label>
+                <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
+                    <VStack gap="0.25rem" items="center">
+                        <div w="5.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-12 flex items-center justify-center">
+                            <Label text_size="0.7rem" color="primary-foreground" font_weight="600">"旋转文字"</Label>
+                        </div>
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-12 + Label"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <div w="5.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-45 flex items-center justify-center">
+                            <Label text_size="0.7rem" color="accent-foreground" font_weight="600">"45°"</Label>
+                        </div>
+                        <Label text_size="0.6rem" color="muted-foreground">"rotate-45 + Label"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Button class="rotate-[-15deg]" variant="outline">"倾斜按钮"</Button>
+                        <Label text_size="0.6rem" color="muted-foreground">"Button rotate"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <div w="5.5rem" h="3.5rem" bg="chart-1" rounded="0.375rem" class="animate-spin flex items-center justify-center">
+                            <Label text_size="0.7rem" color="primary-foreground" font_weight="600">"旋转中"</Label>
+                        </div>
+                        <Label text_size="0.6rem" color="muted-foreground">"animate-spin + Label"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <div w="5.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 flex items-center justify-center">
+                            <Label text_size="0.7rem" font_weight="600">"悬停转"</Label>
+                        </div>
+                        <Label text_size="0.6rem" color="muted-foreground">"hover:rotate-45 + Label"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Button class="animate-spin" variant="secondary">"Spin"</Button>
+                        <Label text_size="0.6rem" color="muted-foreground">"Button spin"</Label>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <div w="5.5rem" h="3.5rem" bg="secondary" rounded="0.375rem" class="scale-[3] flex items-center justify-center">
+                            <Label text_size="0.7rem" font_weight="600">"SDF"</Label>
+                        </div>
+                        <Label text_size="0.6rem" color="muted-foreground">"scale-3 → Msdf"</Label>
+                    </VStack>
+                </HStack>
+
+                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "4 · translate — px 偏移"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
@@ -2430,6 +2480,127 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                         </ScrollArea>
                     </div>
                 </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn ResizableShowcase() -> rui::core::tree::Element {
+    let builder_el: Element = resizable("gal-rz-builder")
+        .orientation("horizontal")
+        .height(160.0)
+        .default_sizes([35.0, 65.0])
+        .min_sizes([20.0, 20.0])
+        .with_handle(true)
+        .left(|| {
+            r#box()
+                .w("100%")
+                .h("100%")
+                .bg(rui::tokens::muted())
+                .p("0.75rem")
+                .child(
+                    rui::primitives::text::text("Builder left")
+                        .color(rui::style::parse_text_color("foreground")),
+                )
+                .into()
+        })
+        .right(|| {
+            r#box()
+                .w("100%")
+                .h("100%")
+                .bg(rui::tokens::background())
+                .p("0.75rem")
+                .child(
+                    rui::primitives::text::text("Builder right")
+                        .color(rui::style::parse_text_color("foreground")),
+                )
+                .into()
+        })
+        .into();
+
+    ui! {
+        <MyCard title="4b) Resizable（ShadCN PanelGroup）">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：复合 RSX（宏 → resizable_panel_group_scope；withHandle / defaultSize）与 Builder。拖拽中间握柄调整比例。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"A · RSX 水平 + withHandle"</Label>
+                <div w="100%" rounded="0.5rem" bg="border" p="1px">
+                    <div w="100%" overflow="hidden" rounded="0.4375rem">
+                        <ResizablePanelGroup id="gal-rz-h" orientation="horizontal" h={160.0}>
+                            <ResizablePanel defaultSize={30.0} minSize={15.0}>
+                                <div w="100%" h="100%" bg="muted" p="0.75rem">
+                                    <Label color="foreground">"Sidebar"</Label>
+                                </div>
+                            </ResizablePanel>
+                            <ResizableHandle withHandle={true} />
+                            <ResizablePanel defaultSize={70.0} minSize={20.0}>
+                                <div w="100%" h="100%" bg="background" p="0.75rem">
+                                    <Label color="foreground">"Content"</Label>
+                                </div>
+                            </ResizablePanel>
+                        </ResizablePanelGroup>
+                    </div>
+                </div>
+                <Label font_weight="700" text_size="0.875rem">"B · RSX 垂直三栏"</Label>
+                <div w="100%" rounded="0.5rem" bg="border" p="1px">
+                    <div w="100%" overflow="hidden" rounded="0.4375rem">
+                        <ResizablePanelGroup id="gal-rz-v" orientation="vertical" h={224.0}>
+                            <ResizablePanel defaultSize={25.0} minSize={10.0}>
+                                <div w="100%" h="100%" bg="muted" p="0.5rem">
+                                    <Label text_size="0.75rem" color="foreground">"Top"</Label>
+                                </div>
+                            </ResizablePanel>
+                            <ResizableHandle withHandle={true} />
+                            <ResizablePanel defaultSize={50.0} minSize={15.0}>
+                                <div w="100%" h="100%" bg="background" p="0.5rem">
+                                    <Label text_size="0.75rem" color="foreground">"Middle"</Label>
+                                </div>
+                            </ResizablePanel>
+                            <ResizableHandle withHandle={true} />
+                            <ResizablePanel defaultSize={25.0} minSize={10.0}>
+                                <div w="100%" h="100%" bg="secondary" p="0.5rem">
+                                    <Label text_size="0.75rem" color="foreground">"Bottom"</Label>
+                                </div>
+                            </ResizablePanel>
+                        </ResizablePanelGroup>
+                    </div>
+                </div>
+                <Label font_weight="700" text_size="0.875rem">"C · Builder 双写"</Label>
+                <div w="100%" rounded="0.5rem" bg="border" p="1px">
+                    <div w="100%" overflow="hidden" rounded="0.4375rem">
+                        { builder_el }
+                    </div>
+                </div>
+                <Label font_weight="700" text_size="0.875rem">"D · 横 + 纵嵌套"</Label>
+                <div w="100%" rounded="0.5rem" bg="border" p="1px">
+                    <div w="100%" overflow="hidden" rounded="0.4375rem">
+                        <ResizablePanelGroup id="gal-rz-nested" orientation="horizontal" h={240.0}>
+                            <ResizablePanel defaultSize={28.0} minSize={15.0}>
+                                <div w="100%" h="100%" bg="muted" p="0.75rem">
+                                    <Label text_size="0.75rem" color="foreground">"Sidebar"</Label>
+                                </div>
+                            </ResizablePanel>
+                            <ResizableHandle withHandle={true} />
+                            <ResizablePanel defaultSize={72.0} minSize={30.0}>
+                                <ResizablePanelGroup id="gal-rz-nested-v" orientation="vertical">
+                                    <ResizablePanel defaultSize={40.0} minSize={15.0}>
+                                        <div w="100%" h="100%" bg="background" p="0.5rem">
+                                            <Label text_size="0.75rem" color="foreground">"Editor"</Label>
+                                        </div>
+                                    </ResizablePanel>
+                                    <ResizableHandle withHandle={true} />
+                                    <ResizablePanel defaultSize={60.0} minSize={20.0}>
+                                        <div w="100%" h="100%" bg="secondary" p="0.5rem">
+                                            <Label text_size="0.75rem" color="foreground">"Terminal"</Label>
+                                        </div>
+                                    </ResizablePanel>
+                                </ResizablePanelGroup>
+                            </ResizablePanel>
+                        </ResizablePanelGroup>
+                    </div>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -3715,6 +3886,7 @@ fn RadioSliderShowcase() -> rui::core::tree::Element {
 fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
     let tab_idx = use_signal("gallery_tabs_idx", || 0usize);
     let pop_open = use_signal("gallery_popover_open", || false);
+    let pop_builder_open = use_signal("gallery_popover_builder_open", || false);
     let select_val = use_signal("gallery_select_plan", || "basic".to_string());
     let fruit_val = use_signal("gallery_select_fruit", || String::new());
 
@@ -3767,16 +3939,80 @@ fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                             ))
                             .item(SelectItemData::new("short", "Short")),
                     ) }
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        on_click={move || pop_open.set(!pop_open.peek())}
-                    >
-                        { if pop_open.get() { "Close popover" } else { "Open popover" } }
-                    </Button>
-                    <Popover open={pop_open}>
-                        <Label>"Popover panel — Escape closes (last-registered popup)."</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "Popover（RSX 复合：Trigger / Content / Header · sideOffset 宏别名）："
+                    </Label>
+                    <Popover id="gallery:popover" open={pop_open}>
+                        <PopoverTrigger>
+                            <Button variant="outline" size="sm">
+                                { if pop_open.get() { "Close popover" } else { "Open popover" } }
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent side="bottom" align="center" sideOffset={4.0}>
+                            <PopoverHeader>
+                                <PopoverTitle>"Dimensions"</PopoverTitle>
+                                <PopoverDescription>
+                                    "Set the dimensions for the layer. Escape closes (stacked overlay)."
+                                </PopoverDescription>
+                            </PopoverHeader>
+                            <Label text_size="0.875rem">"w-72 · p-4 · bg-popover · shadow-md"</Label>
+                        </PopoverContent>
                     </Popover>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "Popover Builder 双写（open_signal + PopoverTrigger / popover_content）："
+                    </Label>
+                    { Element::from(
+                        popover("gallery:popover_builder")
+                            .open_signal(pop_builder_open)
+                            .child(|| {
+                                let mut frag = Element::new();
+                                frag.set_attr("rui_fragment", "1");
+                                frag.children(vec![
+                                    PopoverTrigger(PopoverTriggerProps {
+                                        id: String::new(),
+                                        children: Some(
+                                            button("gallery:popover_builder_btn")
+                                                .variant("secondary")
+                                                .size("sm")
+                                                .text("Open (Builder)")
+                                                .into(),
+                                        ),
+                                        base: None,
+                                    }),
+                                    popover_content(
+                                        PopoverContentOpts {
+                                            side: "bottom".into(),
+                                            align: "start".into(),
+                                            side_offset: 4.0,
+                                            class: None,
+                                            strategy: None,
+                                            width: Some("18rem".into()),
+                                        },
+                                        || {
+                                            Element::from(
+                                                vstack()
+                                                    .w("100%")
+                                                    .gap("0.5rem")
+                                                    .child(PopoverTitle(PopoverTitleProps {
+                                                        children: Some(
+                                                            Element::new().text("Builder panel"),
+                                                        ),
+                                                        base: None,
+                                                    }))
+                                                    .child(PopoverDescription(
+                                                        PopoverDescriptionProps {
+                                                            children: Some(Element::new().text(
+                                                                "Same surface as RSX PopoverContent.",
+                                                            )),
+                                                            base: None,
+                                                        },
+                                                    )),
+                                            )
+                                        },
+                                    ),
+                                ])
+                            }),
+                    ) }
                     <VStack gap="0.75rem" w="100%">
                         <Label text_size="0.75rem" color="muted-foreground">
                             { format!(
@@ -4697,10 +4933,11 @@ fn OverlayFeedbackShowcase() -> Element {
     let dialog_open = use_signal("gal_dialog_open", || false);
     let dialog_select = use_signal("gal_dialog_select", || "opt-a".to_string());
     let sheet_open = use_signal("gal_sheet_open", || false);
+    let sheet_name = use_signal("gal_sheet_name", || "Pedro Duarte".to_string());
+    let sheet_user = use_signal("gal_sheet_user", || "@peduarte".to_string());
     let progress_val = use_signal("gal_progress", || 0.45f32);
     let open_cmd = cmd_open;
     let open_cmd_dlg = cmd_dlg_open;
-    let open_sheet = sheet_open;
     let bump = progress_val;
 
     let cmd_el: Element = ui! {
@@ -4935,20 +5172,198 @@ fn OverlayFeedbackShowcase() -> Element {
             </Dialog>
         }
     };
-    let sheet_el: Element = sheet("gal-sheet")
-        .open_signal(sheet_open)
-        .w("18rem")
-        .child(|| {
-            ui! {
-                <VStack gap="0.5rem" p="1rem">
-                    <Label font_weight="700">"Sheet"</Label>
-                    <Label text_size="0.875rem" color="muted-foreground">
-                        "侧滑面板；点遮罩或 Esc 关闭。"
-                    </Label>
-                </VStack>
-            }
-        })
-        .into();
+    let sheet_el: Element = {
+        let open = sheet_open;
+        let name = sheet_name;
+        let user = sheet_user;
+        ui! {
+            <Sheet id="gal-sheet" open={open}>
+                <SheetTrigger>
+                    <Button variant="outline" size="sm">Sheet</Button>
+                </SheetTrigger>
+                <SheetContent side="right" w="24rem">
+                    <SheetHeader>
+                        <SheetTitle>Edit profile</SheetTitle>
+                        <SheetDescription>
+                            "Make changes to your profile here. Click save when you're done."
+                        </SheetDescription>
+                    </SheetHeader>
+                    <SheetBody>
+                        <VStack gap="0.75rem" w="100%">
+                            <Label text_size="0.875rem" font_weight="600">"Name"</Label>
+                            <Input id="gal-sheet-name" value={name} class="w-full" />
+                            <Label text_size="0.875rem" font_weight="600">"Username"</Label>
+                            <Input id="gal-sheet-user" value={user} class="w-full" />
+                        </VStack>
+                    </SheetBody>
+                    <SheetFooter>
+                        <Button
+                            size="sm"
+                            on_click={move || {
+                                toast_push("Profile saved", 1500);
+                                open.set(false);
+                            }}
+                        >
+                            "Save changes"
+                        </Button>
+                        <SheetClose>
+                            <Button variant="outline" size="sm">Close</Button>
+                        </SheetClose>
+                    </SheetFooter>
+                </SheetContent>
+            </Sheet>
+        }
+    };
+    let sheet_sides_el: Element = {
+        let open_top = use_signal("gal_sheet_top", || false);
+        let open_right = use_signal("gal_sheet_right", || false);
+        let open_bottom = use_signal("gal_sheet_bottom", || false);
+        let open_left = use_signal("gal_sheet_left", || false);
+        let o_top = open_top;
+        let o_right = open_right;
+        let o_bottom = open_bottom;
+        let o_left = open_left;
+        ui! {
+            <HStack gap="0.5rem" wrap="wrap" items="center">
+                <Sheet id="gal-sheet-top" open={open_top}>
+                    <SheetTrigger>
+                        <Button variant="outline" size="sm">"top"</Button>
+                    </SheetTrigger>
+                    <SheetContent side="top">
+                        <SheetHeader>
+                            <SheetTitle>"Sheet · top"</SheetTitle>
+                            <SheetDescription>
+                                "贴边方向演示；长文滚动 + Footer 固定。点遮罩或 Esc 关闭。"
+                            </SheetDescription>
+                        </SheetHeader>
+                        <SheetBody>
+                            <VStack gap="0.5rem" w="100%">
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Duis aute irure dolor in reprehenderit in voluptate velit."
+                                </Label>
+                            </VStack>
+                        </SheetBody>
+                        <SheetFooter>
+                            <Button size="sm" on_click={move || { toast_push("Sheet confirmed", 1500); o_top.set(false); }}>
+                                "Save changes"
+                            </Button>
+                            <SheetClose>
+                                <Button variant="outline" size="sm">Cancel</Button>
+                            </SheetClose>
+                        </SheetFooter>
+                    </SheetContent>
+                </Sheet>
+                <Sheet id="gal-sheet-right" open={open_right}>
+                    <SheetTrigger>
+                        <Button variant="outline" size="sm">"right"</Button>
+                    </SheetTrigger>
+                    <SheetContent side="right">
+                        <SheetHeader>
+                            <SheetTitle>"Sheet · right"</SheetTitle>
+                            <SheetDescription>
+                                "贴边方向演示；长文滚动 + Footer 固定。点遮罩或 Esc 关闭。"
+                            </SheetDescription>
+                        </SheetHeader>
+                        <SheetBody>
+                            <VStack gap="0.5rem" w="100%">
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Duis aute irure dolor in reprehenderit in voluptate velit."
+                                </Label>
+                            </VStack>
+                        </SheetBody>
+                        <SheetFooter>
+                            <Button size="sm" on_click={move || { toast_push("Sheet confirmed", 1500); o_right.set(false); }}>
+                                "Save changes"
+                            </Button>
+                            <SheetClose>
+                                <Button variant="outline" size="sm">Cancel</Button>
+                            </SheetClose>
+                        </SheetFooter>
+                    </SheetContent>
+                </Sheet>
+                <Sheet id="gal-sheet-bottom" open={open_bottom}>
+                    <SheetTrigger>
+                        <Button variant="outline" size="sm">"bottom"</Button>
+                    </SheetTrigger>
+                    <SheetContent side="bottom">
+                        <SheetHeader>
+                            <SheetTitle>"Sheet · bottom"</SheetTitle>
+                            <SheetDescription>
+                                "贴边方向演示；长文滚动 + Footer 固定。点遮罩或 Esc 关闭。"
+                            </SheetDescription>
+                        </SheetHeader>
+                        <SheetBody>
+                            <VStack gap="0.5rem" w="100%">
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Duis aute irure dolor in reprehenderit in voluptate velit."
+                                </Label>
+                            </VStack>
+                        </SheetBody>
+                        <SheetFooter>
+                            <Button size="sm" on_click={move || { toast_push("Sheet confirmed", 1500); o_bottom.set(false); }}>
+                                "Save changes"
+                            </Button>
+                            <SheetClose>
+                                <Button variant="outline" size="sm">Cancel</Button>
+                            </SheetClose>
+                        </SheetFooter>
+                    </SheetContent>
+                </Sheet>
+                <Sheet id="gal-sheet-left" open={open_left}>
+                    <SheetTrigger>
+                        <Button variant="outline" size="sm">"left"</Button>
+                    </SheetTrigger>
+                    <SheetContent side="left">
+                        <SheetHeader>
+                            <SheetTitle>"Sheet · left"</SheetTitle>
+                            <SheetDescription>
+                                "贴边方向演示；长文滚动 + Footer 固定。点遮罩或 Esc 关闭。"
+                            </SheetDescription>
+                        </SheetHeader>
+                        <SheetBody>
+                            <VStack gap="0.5rem" w="100%">
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Ut enim ad minim veniam, quis nostrud exercitation ullamco."
+                                </Label>
+                                <Label text_size="0.875rem" leading="relaxed">
+                                    "Duis aute irure dolor in reprehenderit in voluptate velit."
+                                </Label>
+                            </VStack>
+                        </SheetBody>
+                        <SheetFooter>
+                            <Button size="sm" on_click={move || { toast_push("Sheet confirmed", 1500); o_left.set(false); }}>
+                                "Save changes"
+                            </Button>
+                            <SheetClose>
+                                <Button variant="outline" size="sm">Cancel</Button>
+                            </SheetClose>
+                        </SheetFooter>
+                    </SheetContent>
+                </Sheet>
+            </HStack>
+        }
+    };
     let tip: Element = ui! {
         <Tooltip id="gal-tip">
             <TooltipTrigger>
@@ -5140,7 +5555,7 @@ fn OverlayFeedbackShowcase() -> Element {
         <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Dropdown · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、侧滑、Toast、Tooltip、DropdownMenu、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
+                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、Sheet（复合 Trigger/Content/Side）、Toast、Tooltip、DropdownMenu、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
@@ -5150,9 +5565,7 @@ fn OverlayFeedbackShowcase() -> Element {
                         "Command Dialog"
                     </Button>
                     { dialog_el }
-                    <Button variant="outline" size="sm" on_click={move || open_sheet.set(true)}>
-                        "Sheet"
-                    </Button>
+                    { sheet_el }
                     <Button variant="default" size="sm" on_click={move || {
                         gallery_feedback_toast(
                             "Toast from Gallery",
@@ -5311,8 +5724,18 @@ fn OverlayFeedbackShowcase() -> Element {
                     { dd }
                 </HStack>
                 { ctx }
-                <VStack gap="0.35rem" w="100%">
+                <VStack gap="0.5rem" w="100%">
                     <Label font_weight="600" text_size="0.875rem">{ "Progress" }</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "ShadCN 复合（Label / Value + Track）；value ∈ 0..=1；Bump 演示受控。"
+                    </Label>
+                    <Progress id="gal-progress" valueSignal={progress_val}>
+                        <ProgressLabel>"Upload"</ProgressLabel>
+                        <ProgressValue />
+                    </Progress>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "Builder 双写（简单条，无 Label）："
+                    </Label>
                     { progress_el }
                     <Button variant="outline" size="sm" on_click={move || {
                         let v = bump.peek();
@@ -5322,7 +5745,13 @@ fn OverlayFeedbackShowcase() -> Element {
                 { cmd_inline }
                 { cmd_el }
                 { cmd_dlg_el }
-                { sheet_el }
+                <VStack gap="0.5rem" w="100%">
+                    <Label font_weight="600" text_size="0.875rem">{ "Sheet · sides" }</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "top / right / bottom / left 贴边；对齐 shadcn sheet-side。"
+                    </Label>
+                    { sheet_sides_el }
+                </VStack>
             </VStack>
         </MyCard>
     }
@@ -5583,12 +6012,12 @@ fn DrawingCanvasShowcase() -> Element {
 
 #[component]
 fn DrawingScene3dShowcase() -> Element {
-    let cube: Element = scene3d().w(220.0).h(160.0).into();
+    let cube: Element = scene3d().w(220.0).h(160.0).label("RUI 3D").into();
     ui! {
         <MyCard title="Scene3d · 透视立方（WP-3.13）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d"
+                    "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d。`.label(\"RUI 3D\")` → SDF bake（bake_text_texture_key_for_3d）经 mat4 投影成 billboard。"
                 </Label>
                 { cube }
             </VStack>
@@ -6333,60 +6762,81 @@ fn NavbarNavigationMenuShowcase() -> Element {
 #[component]
 fn PaginationShowcase() -> Element {
     let page_a = use_signal("gal_pagination_rsx", || 2usize);
-    let page_b = use_signal("gal_pagination_builder", || 5usize);
-    const COUNT_A: usize = 5;
-    const COUNT_B: usize = 12;
+    let page_b = use_signal("gal_pagination_builder", || 8usize);
+    const COUNT_A: usize = 12;
+    const COUNT_B: usize = 30;
+    // A：上限 left=1 / sibling=1 / right=1 → 换页格子数恒定
+    const RANGE_A: PaginationRangeOpts = PaginationRangeOpts {
+        left_count: 1,
+        sibling_count: 1,
+        right_count: 1,
+        max_items: None,
+    };
+    // B：左≤3 / 中 sibling≤2 / 右≤4；换页格子数尽量恒定
+    const RANGE_B: PaginationRangeOpts = PaginationRangeOpts {
+        left_count: 3,
+        sibling_count: 2,
+        right_count: 4,
+        max_items: None,
+    };
 
     // Gallery 分区体在 isolate_reads 下构建：`disabled={sig.get()…}` / `is_active={…}`
     // 会被宏 untrack 冻住。用 reactive! 岛订阅 page，在闭包内用局部页码重建零件。
     let rsx_bar = rui::reactive!("examples/gallery/PaginationShowcase:rsx", move || {
         let page = page_a.get();
+        let mut items: Vec<Element> = Vec::new();
+        items.push(ui! {
+            <PaginationItem>
+                <PaginationPrevious
+                    id="gal-pg-a-prev"
+                    text="上一页"
+                    disabled={page <= 1}
+                    on_click={move || {
+                        page_a.update(|p| *p = (*p).saturating_sub(1).max(1));
+                    }}
+                />
+            </PaginationItem>
+        });
+        for entry in pagination_range(page, COUNT_A, RANGE_A) {
+            match entry {
+                PaginationPage::Ellipsis => {
+                    items.push(ui! {
+                        <PaginationItem>
+                            <PaginationEllipsis />
+                        </PaginationItem>
+                    });
+                }
+                PaginationPage::Number(n) => {
+                    items.push(ui! {
+                        <PaginationItem>
+                            <PaginationLink
+                                id={format!("gal-pg-a-{n}")}
+                                is_active={page == n}
+                                on_click={move || page_a.set(n)}
+                            >{ n.to_string() }</PaginationLink>
+                        </PaginationItem>
+                    });
+                }
+            }
+        }
+        items.push(ui! {
+            <PaginationItem>
+                <PaginationNext
+                    id="gal-pg-a-next"
+                    text="下一页"
+                    disabled={page >= COUNT_A}
+                    on_click={move || {
+                        page_a.update(|p| *p = (*p + 1).min(COUNT_A));
+                    }}
+                />
+            </PaginationItem>
+        });
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
         ui! {
             <Pagination>
                 <PaginationContent>
-                    <PaginationItem>
-                        <PaginationPrevious
-                            disabled={page <= 1}
-                            on_click={move || {
-                                page_a.update(|p| *p = (*p).saturating_sub(1).max(1));
-                            }}
-                        />
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationLink
-                            is_active={page == 1}
-                            on_click={move || page_a.set(1)}
-                        >"1"</PaginationLink>
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationLink
-                            is_active={page == 2}
-                            on_click={move || page_a.set(2)}
-                        >"2"</PaginationLink>
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationLink
-                            is_active={page == 3}
-                            on_click={move || page_a.set(3)}
-                        >"3"</PaginationLink>
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationEllipsis />
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationLink
-                            is_active={page == COUNT_A}
-                            on_click={move || page_a.set(COUNT_A)}
-                        >{ COUNT_A.to_string() }</PaginationLink>
-                    </PaginationItem>
-                    <PaginationItem>
-                        <PaginationNext
-                            disabled={page >= COUNT_A}
-                            on_click={move || {
-                                page_a.update(|p| *p = (*p + 1).min(COUNT_A));
-                            }}
-                        />
-                    </PaginationItem>
+                    { frag.children(items) }
                 </PaginationContent>
             </Pagination>
         }
@@ -6396,17 +6846,23 @@ fn PaginationShowcase() -> Element {
     let builder_bar: Element = pagination("gal-pagination-builder")
         .page_count(COUNT_B)
         .page_signal(page_b)
-        .sibling_count(1)
+        .range_counts(RANGE_B.left_count, RANGE_B.sibling_count, RANGE_B.right_count)
         .previous_text("上一页")
         .next_text("下一页")
+        .jumper(true)
+        .jumper_button_text("跳转")
         .into();
 
     let status_a = rui::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
-        let t = format!("A · Page {} / {}", page_a.get(), COUNT_A);
+        let t = format!("A · Page {} / {}（left=1 sibling=1 right=1）", page_a.get(), COUNT_A);
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });
     let status_b = rui::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
-        let t = format!("B · Page {} / {}", page_b.get(), COUNT_B);
+        let t = format!(
+            "B · Page {} / {}（left=3 sibling=2 right=4 · auto-fit · jumper）",
+            page_b.get(),
+            COUNT_B
+        );
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });
 
@@ -6414,7 +6870,7 @@ fn PaginationShowcase() -> Element {
         <MyCard title="Pagination">
             <VStack w="100%" gap="1rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：复合 RSX（Pagination / Content / Item / Link / Previous / Next / Ellipsis，对齐 ShadCN）与 Builder（page 为 1-based；Table 的 page_index 为 0-based）。"
+                    "双写法：复合 RSX 与 Builder。左/中/右为上限页数；换页时格子数尽量恒定。Builder 默认按容器宽度自动压缩；可选 jumper 提供整数页码输入与跳转按钮。"
                 </Label>
 
                 <Label text_size="0.75rem" font_weight="600">"A. 复合 RSX"</Label>
@@ -6684,6 +7140,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <IdentityApiShowcase />
                     <BoxModelShowcase />
                     <ScrollShowcase />
+                    <ResizableShowcase />
                     <LogicalShowcase />
                     <UtilityClassShowcase />
                     <GridAndDragShowcase />

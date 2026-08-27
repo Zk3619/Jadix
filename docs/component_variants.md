@@ -12,12 +12,13 @@
 
 | 轴 | 合法值 | 未知 |
 |----|--------|------|
-| **variant** | `default` · `secondary` · `outline` · `ghost` · `destructive` · `link` | → `default` |
+| **variant** | `default` · `secondary` · `outline` · `ghost` · `success` · `warning`（=`warn`）· `destructive`（=`error`）· `link` | → `default` |
 | **size** | `xs` · `sm` · `default` · `lg` · `icon` · `icon-xs` · `icon-sm` · `icon-lg` | → `default` |
 
 - `outline` = **border**（盒模型），不是 CSS `outline`；焦点环用 theme `ring`（[`color.md`](color.md)）。  
+- `success` / `warning` / `destructive`：soft tint（浅 `accent/10→/20`，暗 `/20→/30`）；success=`green-600`、warning=`orange-600`（与 Toast tone 同源），destructive 用 theme token。`warn`≡`warning`，`error`≡`destructive`。  
 - Gallery「基础」已展示 variant 行 + size/icon 矩阵。  
-- 库测：`unknown_variant_and_size_fall_back_to_default`；`apply_bound_unknown_button_variant_falls_back_to_default`。
+- 库测：`unknown_variant_and_size_fall_back_to_default`；`success_and_warning_soft_tint_match_toast_accents`；`apply_bound_unknown_button_variant_falls_back_to_default`。
 
 ---
 
@@ -56,7 +57,9 @@ experimental 备注（不挡本包）：Toggle `default`/`outline` + `sm`/`defau
 
 | 语义 | Builder | RSX | verified |
 |------|---------|-----|----------|
-| 文本/选项值 | `value_signal` | `value` / `valueSignal` | Input · Textarea · Select · Combobox · RadioGroup · Slider · Tabs |
+| 文本/选项值 | `value_signal` | `value` / `valueSignal` | Input · Textarea · Select · Combobox · RadioGroup · Slider · Tabs · Progress |
+| 浮层开合 | `open` / `open_signal` | `open` / `openSignal` | Dialog · Popover · Tooltip · DropdownMenu · Sheet |
+| 浮层间距 | `side_offset` | `sideOffset` | Popover ·（Tooltip 用 `side`） |
 | 布尔开合（控件） | `checked_signal` | `checked` | Checkbox · Switch |
 | 浮层开合 | `open_signal` | `open` | Dialog · Tooltip |
 | 按钮变体绑定 | `apply_bound_button_variant` | `variant={sig.get()}` | Button |

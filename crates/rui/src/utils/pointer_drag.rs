@@ -11,6 +11,7 @@ pub enum DragKind {
     ColorPicker,
     Toast,
     Carousel,
+    Resizable,
 }
 
 #[derive(Clone, Debug)]

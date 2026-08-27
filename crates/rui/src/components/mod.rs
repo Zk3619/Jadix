@@ -218,19 +218,35 @@ pub use navigation_menu::{
     NavigationMenuTriggerProps, NavigationMenuViewport, NavigationMenuViewportProps,
 };
 pub use pagination::{
-    pagination, pagination_range, Pagination, PaginationBuilder, PaginationContent,
-    PaginationContentProps, PaginationEllipsis, PaginationEllipsisProps, PaginationItem,
-    PaginationItemProps, PaginationLink, PaginationLinkProps, PaginationNext, PaginationNextProps,
-    PaginationPage, PaginationPrevious, PaginationPreviousProps, PaginationProps,
+    estimate_jumper_chrome_px, fit_pagination_for_width, fit_pagination_for_width_ex, pagination,
+    pagination_range, pagination_range_simple, parse_jumper_page, Pagination, PaginationBuilder,
+    PaginationContent, PaginationContentProps, PaginationEllipsis, PaginationEllipsisProps,
+    PaginationItem, PaginationItemProps, PaginationJumper, PaginationJumperProps, PaginationLink,
+    PaginationLinkProps, PaginationNext, PaginationNextProps, PaginationPage, PaginationPrevious,
+    PaginationPreviousProps, PaginationProps, PaginationRangeOpts,
 };
-pub use popover::{popover_panel, PopoverBuilder};
-pub use progress::{progress, Progress, ProgressBuilder, ProgressProps};
+pub use popover::{
+    popover, popover_content, popover_panel, popover_scope, popover_side_align_to_placement,
+    popover_surface, use_popover, PopoverBuilder, PopoverContentOpts, PopoverCtx,
+    PopoverDescription, PopoverDescriptionProps, PopoverHeader, PopoverHeaderProps,
+    PopoverPanelBuilder, PopoverTitle, PopoverTitleProps, PopoverTrigger, PopoverTriggerProps,
+};
+pub use progress::{
+    progress, progress_scope, progress_track, use_progress, Progress, ProgressBuilder,
+    ProgressCtx, ProgressIndicator, ProgressIndicatorProps, ProgressLabel, ProgressLabelProps,
+    ProgressProps, ProgressTrack, ProgressTrackOpts, ProgressTrackProps, ProgressValue,
+    ProgressValueProps,
+};
 pub use radio_group::{
     radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx,
     RadioGroupItem, RadioGroupItemLabel, RadioGroupItemLabelProps, RadioGroupItemProps,
     RadioGroupProps,
 };
-pub use resizable::{resizable, ResizableBuilder};
+pub use resizable::{
+    resizable, resizable_panel_group_scope, use_resizable, ResizableBuilder, ResizableCtx,
+    ResizableHandle, ResizableHandleProps, ResizableOrientation, ResizablePanel,
+    ResizablePanelGroup, ResizablePanelGroupProps, ResizablePanelProps,
+};
 pub use scroll_area::{scroll_area, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps};
 pub use scroll_viewport::{
     scroll_viewport, scrollviewport, ScrollViewport, ScrollViewportBuilder, ScrollViewportProps,
@@ -247,7 +263,12 @@ pub use select::{
     SelectValue, SelectValueProps,
 };
 pub use separator::{separator, Separator, SeparatorBuilder, SeparatorProps};
-pub use sheet::{sheet, SheetBuilder, SheetSide};
+pub use sheet::{
+    sheet, sheet_close, sheet_content, sheet_open, sheet_scope, use_sheet, SheetBody,
+    SheetBodyProps, SheetBuilder, SheetClose, SheetCloseProps, SheetContentOpts, SheetCtx,
+    SheetDescription, SheetDescriptionProps, SheetFooter, SheetFooterProps, SheetHeader,
+    SheetHeaderProps, SheetSide, SheetTitle, SheetTitleProps, SheetTrigger, SheetTriggerProps,
+};
 pub use sidebar::{sidebar, SidebarBuilder};
 pub use slider::{slider, Slider, SliderBuilder, SliderProps};
 pub use stepper::{stepper, StepperBuilder};

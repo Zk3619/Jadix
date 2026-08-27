@@ -119,7 +119,7 @@ fn find_indicator_mut(el: &mut Element) -> Option<&mut Element> {
 
 fn apply_indicator_state(indicator: &mut Element, fg: [u8; 4]) -> bool {
     let want = check_glyph();
-    let want_align = glyphon::cosmic_text::Align::Center;
+    let want_align = crate::style::TextAlign::Center;
     let changed = indicator.text.as_deref() != Some(want.as_str())
         || indicator.text_style.color != fg
         || (indicator.text_style.size - CHECK_PX).abs() > f32::EPSILON

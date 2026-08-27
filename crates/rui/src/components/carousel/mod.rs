@@ -495,7 +495,8 @@ fn ensure_stack_card_css_transition(el: &mut Element) {
     });
 }
 
-/// 堆叠缩放写在壳上；子树保持 scale=1，由 collect 的 ancestor_scale 继承。
+/// 堆叠缩放写在壳上；子树保持 scale=1，由 collect 的 `ancestor_scale` /
+/// `ancestor_linear` 继承（文本走 `paint_scale` + glyphon 矩阵，与壳共用父级变换）。
 /// 这样矩形与文本共用同一父级缩放，避免各自绕中心缩放导致拖拽时文字脱节。
 fn reset_stack_descendant_scales(el: &mut Element) {
     for child in &mut el.children {
@@ -1882,7 +1883,7 @@ mod tests {
                 );
                 assert!(
                     (child_sc - 1.0).abs() < 0.01,
-                    "content scale stays 1; shell carries coverflow scale via ancestor_scale"
+                    "content scale stays 1; shell carries coverflow scale via ancestor_scale / paint_scale"
                 );
                 // 卡宽应为视口百分比（与 Single basis% 同模式），而非固定 px/rem。
                 assert!(

@@ -107,7 +107,9 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
                 el.style.translate[0] = tx;
                 changed = true;
             }
-            // 缩放写在壳上（与 translate 同一节点 / 同一 transition），子树 scale=1。
+            // 缩放写在壳上（与 translate 同一节点 / 同一 transition），子树 scale=1；
+            // collect 经 ancestor_scale / paint_scale 让文字跟壳一起缩放（含 rotate 时走
+            // ancestor_linear → glyphon TextArea.transform）。
             // 拖拽时无阈值：每帧写入，避免与矩形连续插值不同步。
             let scale_eps = if dragging { 0.0 } else { 0.001 };
             if (el.style.scale[0] - sc).abs() > scale_eps

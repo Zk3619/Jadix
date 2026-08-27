@@ -339,8 +339,8 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
             el.text_style.weight = 500;
             layout = true;
         }
-        if el.text_style.align != glyphon::cosmic_text::Align::Center {
-            el.text_style.align = glyphon::cosmic_text::Align::Center;
+        if el.text_style.align != crate::style::TextAlign::Center {
+            el.text_style.align = crate::style::TextAlign::Center;
             el.attrs
                 .insert("text_align".to_string(), "center".to_string());
             paint = true;
@@ -1078,7 +1078,7 @@ mod tests {
         );
         assert_eq!(
             trigger.text_style.align,
-            glyphon::cosmic_text::Align::Center
+            crate::style::TextAlign::Center
         );
         let tn = result
             .text_nodes

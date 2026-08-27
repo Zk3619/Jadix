@@ -142,7 +142,7 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 | 进 prelude | 不进 prelude |
 |------------|--------------|
 | 样式组件 PascalCase **与** 对应 `snake_case` / `*Builder` | [`utils::popup`](../crates/rui/src/utils/popup.rs) 低层几何 / placement |
-| `hstack` / `vstack` / `Portal` / `text` / `icon` | `popover_panel`（低层面板；按需 `components::popover`） |
+| `hstack` / `vstack` / `Portal` / `text` / `icon` | `popover_panel`（低层面板；复合面用 `popover` / `Popover*`） |
 | `ThemeMode` / `set_theme_mode` | `overlay` / `path`、`BaseComponentBuilder`、`apply_bound_*` |
 | `ui!` / `component` / `reactive!` 等宏 | `planned` 未落地组件；`internal/*` |
 
@@ -158,7 +158,7 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 4. **仅 Builder 的控件**（如部分 `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder），并进入 prelude。  
 5. **热重载**：`template_id` 主要服务含 `ui!` 的模板；纯 Builder 树仍是一等运行时能力，不因无热补丁而降级为「非推荐」。  
 6. **文档与示例**：Getting Started / 组件索引应**至少各给一种写法的完整片段**；标杆组件（Button、Input）两种都展示。  
-7. **RSX camelCase 别名**（`rui_macros`，对位 ShadCN）：`onClick` / `defaultValue` / `captionLayout` / `valueSignal` / `showAlpha` 等映射到 snake_case props；Builder **只**用 snake_case。
+7. **RSX camelCase 别名**（`rui_macros`，对位 ShadCN）：`onClick` / `defaultValue` / `captionLayout` / `valueSignal` / `showAlpha` / `sideOffset` / `openSignal` 等映射到 snake_case props；Builder **只**用 snake_case。
 
 ### 3.2 反例（禁止）
 
@@ -295,7 +295,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 约定 | 要求 |
 |------|------|
-| `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `destructive` / `link`…）；**冻结表** [`component_variants.md`](component_variants.md) |
+| `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；**冻结表** [`component_variants.md`](component_variants.md) |
 | `size` | `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
 | 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
 | `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](color.md) |

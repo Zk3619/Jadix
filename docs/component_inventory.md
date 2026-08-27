@@ -58,7 +58,7 @@
 | Card | `Card` / `CardHeader` / `CardTitle` / `CardDescription` / `CardAction` / `CardContent` / `CardFooter` | **verified** | **展示型不要求** | CV.1 可见性走查；复合分区对齐 solid-ui / shadcn；无用户 id API |
 | Toggle | `toggle` / `Toggle` | **experimental** | 可空；空 → `resolve_instance_id`；非受控 Owner 作用域 | WP-3.7 与 Checkbox/Switch 共用 `toggle_state`；不在 §5.2.1 |
 | ToggleGroup | `toggle_group` / `ToggleGroup` | **experimental** | 必填实例键 | reactive sync lib；≈ EUI `segmented` |
-| Progress | `progress` / `Progress` | **experimental** | 可选 / 展示偏多 | 不在 §5.2.1 |
+| Progress | `progress` / `Progress*` | **experimental** | 可选 / 展示偏多 | ShadCN 复合：Label/Value + Track；`value` ∈ 0..=1；`valueSignal` |
 | Image | `Image` | **experimental** | 可选（测试选择器） | 不在 §5.2.1 |
 
 ### 1.2 表单（Gallery `forms`）
@@ -87,8 +87,8 @@
 | Dialog | `dialog` / 复合 `Dialog*` / `use_dialog` | **verified** | 必填实例键（`{id}__open`）；子件可派生 | CV.1 开合/焦点陷阱走查；smoke#7；确认框直接组合 Header/Footer；模态壳在 `dialog.rs` |
 | Toast | `Toaster` / `toast` / `position`(六向) / `overflow`(`displace`\|`wait`) / `limit` | **verified** | 队列项 **仅内部自动** `u64`；host **展示型不要求** | CV.1 走查；**`limit`=展示上限**；displace 挤出进等待、有空位末尾回归；关闭/拖拽/退场动画；stack 冻全部 / list 冻单条 |
 | Tooltip | 复合 `Tooltip`/`TooltipTrigger`/`TooltipContent`（`tooltip_scope`）+ Builder | **verified** | 必填实例键；**锚点用 focus_id**；`ui!` 宏展开 | CV.1 走查（含浮层 Esc） |
-| Sheet | `sheet` / `SheetBuilder` | **experimental** | 必填实例键 | ≈ shadcn Sheet / EUI 侧滑；不在 §5.2.1 |
-| Popover | `popover_panel` / `PopoverBuilder` | **experimental** | **可选** `.id()`；**锚点用 focus_id** | 低层面板；可不进 prelude |
+| Sheet | `sheet` / 复合 `Sheet*` / `use_sheet` | **experimental** | 必填实例键（`{id}__open`）；子件可派生 | ≈ shadcn Sheet（Trigger/Content/Header/Footer/Close；`side` top\|right\|bottom\|left）；不在 §5.2.1 |
+| Popover | `popover` / `Popover*` · `popover_panel` | **experimental** | 复合面必填实例键；低层面板可选 `.id()` | ShadCN 复合：Trigger/Content/Header/Title/Description；`side`+`align`+`sideOffset`；低层面板兼容 |
 | Dropdown | `dropdown` / `DropdownBuilder` | **experimental** | 必填实例键；可选 `anchor_focus_id` | 暂仅 Builder |
 | ContextMenu | `context_menu` / `ContextMenuBuilder` | **experimental** | 必填实例键 | |
 | Command | `command` / 复合 `Command*` / `CommandOverlay`（顶部居中浮层）/ `CommandDialog`（复用 Dialog） / `CommandBuilder` | **experimental** | 必填实例键；动作项自有 id | 浮层默认；`.dialog()` 走 Dialog；↑↓ + Enter |
@@ -124,7 +124,7 @@
 | ScrollArea | `scroll_area` / `ScrollArea` | **verified**（含 Input 滚动） | 必填实例键（滚动信号 / `scroll:` focus） | smoke#4 |
 | Scrollbar | `scrollbar` / `Scrollbar` | **verified** | id 参数存在；常跟 target | CV.1 与 ScrollArea 连带走查 |
 | ScrollViewport | `scroll_viewport` / `ScrollViewport` | **experimental** | 必填；`SCROLL_VIEWPORT_FOCUS_PREFIX` | 产品封装；深度实验 |
-| Resizable | `resizable` / `ResizableBuilder` | **experimental** | 必填实例键 | 不在 §5.2.1 |
+| Resizable | `resizable` / 复合 `ResizablePanelGroup`+`Panel`+`Handle` | **experimental** | 可选实例键 | 不在 §5.2.1 |
 
 ### 1.7 文本（Gallery `text`）
 
@@ -151,7 +151,7 @@
 
 | 规划名（ShadCN） | 建议 Gallery 分区 | 优先级 | 建议 id 策略 | 依赖 / 笔记 |
 |------------------|-------------------|--------|--------------|-------------|
-| **Badge** | 基础 | experimental | 展示型不要求 | **已落地**：`badge` / `<Badge>`；variant=default/secondary/success/warning/destructive(=error)/outline/ghost/link |
+| **Badge** | 基础 | experimental | 展示型不要求 | **已落地**：`badge` / `<Badge>`；variant=default/secondary/success/warning/destructive(=error)/outline/ghost/link；语义色 soft tint 对齐 Button |
 | **AspectRatio** | 基础 | experimental | 展示型不要求 | **已落地**：`aspect_ratio` / `<AspectRatio ratio>`；CSS `aspect-ratio`（MDN）；Image/Box 亦可写 `aspect_ratio`/`aspectRatio` 属性或 utility `aspect-*` |
 | **Avatar** | 基础 | P1 | 可选 | Image + 占位字 / 回退；可组合非必须新原语 |
 | **Skeleton** | 基础 | P1 | 展示型不要求 | 加载占位；脉冲可用既有动效或静态灰块 |
@@ -326,7 +326,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`aspect_ratio`, `badge`, `button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(`popover_panel`), `progress`, `radio_group`, `resizable`, `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
+`aspect_ratio`, `badge`, `button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(+复合标签/`use_popover`/`popover_panel`), `progress`(+复合标签/`use_progress`), `radio_group`, `resizable`(+复合 `ResizablePanelGroup`/`Panel`/`Handle`/`use_resizable`), `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

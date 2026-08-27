@@ -631,7 +631,8 @@ fn build_date_picker_view(
             else {
                 return Element::new().w(0.0).h(0.0);
             };
-            if matches!(kind, DatePickerKind::Week | DatePickerKind::Month) {
+            if kind == DatePickerKind::Week {
+                // 周列表依赖年/月；Month 用 caption Select，勿订 year/month（否则换年重建 Select）。
                 let _ = year.get();
                 let _ = month.get();
             }
@@ -662,9 +663,9 @@ fn build_date_picker_floating_panel(
     minute: Signal<String>,
     second: Signal<String>,
 ) -> Element {
-    // Week/Month 导航要订 year/month；DateTime 只 peek，避免改日/时拆掉浮层。
+    // Week 导航要订 year/month；Month/DateTime 只 peek，避免改选项拆掉浮层内 Select。
     let (y, m) = match kind {
-        DatePickerKind::Week | DatePickerKind::Month => (year.get(), month.get()),
+        DatePickerKind::Week => (year.get(), month.get()),
         _ => (year.peek(), month.peek()),
     };
     let mut panel: Element = vstack().gap("0").into();
@@ -722,26 +723,42 @@ fn build_date_picker_floating_panel(
         DatePickerKind::Month => {
             let y_sel = use_signal(format!("{id}__dp_msel_y").as_str(), || y.to_string());
             let m_sel = use_signal(format!("{id}__dp_msel_m").as_str(), || m.to_string());
-            let ys = y_sel.get();
-            let ms = m_sel.get();
-            if let Ok(yy) = ys.parse::<i32>() {
-                if yy != y {
-                    year.set(yy);
-                }
-            }
-            if let Ok(mm) = ms.parse::<u32>() {
-                if (1..=12).contains(&mm) && mm != m {
-                    month.set(mm);
-                    val.set(format!("{:04}-{:02}", year.peek(), mm));
-                    close_picker(open, trigger_focus_id(&id));
-                }
-            }
-            let y_now = year.peek();
-            if y_sel.peek() != y_now.to_string() {
-                y_sel.set(y_now.to_string());
-            }
-            if m_sel.peek() != month.peek().to_string() {
-                m_sel.set(month.peek().to_string());
+            // Select → year/month：独立订阅，避免重建 caption Select。
+            let sync_id = format!("{id}__dp_month_sync");
+            {
+                let year = year;
+                let month = month;
+                let val = val;
+                let open = open;
+                let id = id.to_string();
+                let y_sel = y_sel;
+                let m_sel = m_sel;
+                reactive_anchor(sync_id.clone(), move || {
+                    let ys = y_sel.get();
+                    let ms = m_sel.get();
+                    let y_now = year.peek();
+                    let m_now = month.peek();
+                    if let Ok(yy) = ys.parse::<i32>() {
+                        if yy != y_now {
+                            year.set(yy);
+                        }
+                    }
+                    if let Ok(mm) = ms.parse::<u32>() {
+                        if (1..=12).contains(&mm) && mm != m_now {
+                            month.set(mm);
+                            val.set(format!("{:04}-{:02}", year.peek(), mm));
+                            close_picker(open, trigger_focus_id(&id));
+                        }
+                    }
+                    let y_now = year.peek();
+                    if y_sel.peek() != y_now.to_string() {
+                        y_sel.set(y_now.to_string());
+                    }
+                    if m_sel.peek() != month.peek().to_string() {
+                        m_sel.set(month.peek().to_string());
+                    }
+                    Element::new().w(0.0).h(0.0)
+                });
             }
             let header: Element = hstack()
                 .w("100%")
@@ -749,9 +766,17 @@ fn build_date_picker_floating_panel(
                 .justify_center()
                 .gap("0.375rem")
                 .child(calendar_month_select(format!("{id}:dp_m"), m_sel))
-                .child(calendar_year_select(format!("{id}:dp_y"), y_sel, y_now))
+                .child(calendar_year_select(format!("{id}:dp_y"), y_sel, year.peek()))
                 .into();
-            panel = panel.child(vstack().gap("1rem").p("0.75rem").child(header));
+            panel = panel.child(
+                vstack()
+                    .gap("1rem")
+                    .p("0.75rem")
+                    .child(
+                        reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
+                    )
+                    .child(header),
+            );
         }
         DatePickerKind::Week => {
             let (prev, next) = month_nav_buttons(&id, year, month);

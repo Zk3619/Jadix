@@ -65,7 +65,7 @@ fn counter_row(count_label: Element, on_inc: impl Fn() + 'static) -> Element {
 
 (Exact Builder method names follow each component’s `//!` docs; the point is **parity of capability**, not a second component system.)
 
-`ui!` accepts ShadCN-style camelCase aliases that the macro rewrites to snake_case props: `onClick`, `defaultValue`, `captionLayout`, `valueSignal`, `showAlpha`. Builders always use snake_case (`caption_layout`, `value_signal`, …).
+`ui!` accepts ShadCN-style camelCase aliases that the macro rewrites to snake_case props: `onClick`, `defaultValue`, `captionLayout`, `valueSignal`, `showAlpha`, `sideOffset`, `openSignal`. Builders always use snake_case (`caption_layout`, `value_signal`, `side_offset`, …).
 
 ### How it Works
 

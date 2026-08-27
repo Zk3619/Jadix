@@ -31,6 +31,7 @@
 //! - 结构为 chrome 容器 + 文案/图标叶（BorderBox），避免单节点 pad+center 的 ContentBox 陷阱。
 //! - `ui!` 多子节点会包成 `VStack`；Badge 会拆开并横排，同时按变体重着色（否则白字 + 裁切空壳）。
 //! - 动态 `variant={sig.get()}` 由宏降为 [`apply_bound_badge_variant`]（与 Button 同源）。
+//! - 语义色（success / warning / destructive）为 Button soft tint 的 rest 态，非实心填充。
 
 use crate::core::tree::{
     parse_color, parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus,
@@ -116,48 +117,38 @@ impl BadgeVariant {
 
 fn badge_chrome(variant: &str) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
     let dark = is_dark_theme();
+    // Soft tint 与 Button rest chrome 同源（浅 10% / 暗 20% 叠 background）。
+    let soft = |accent: [f32; 4]| -> [f32; 4] {
+        let a = if dark { 0.2 } else { 0.1 };
+        let bg = parse_color("background");
+        [
+            accent[0] * a + bg[0] * (1.0 - a),
+            accent[1] * a + bg[1] * (1.0 - a),
+            accent[2] * a + bg[2] * (1.0 - a),
+            1.0,
+        ]
+    };
     match variant {
         "secondary" => (
             parse_color("secondary"),
             parse_text_color("secondary-foreground"),
             None,
         ),
-        "success" => {
-            // 与 Toast success 同源：green-600 实心（暗色略透明）
-            let green = parse_color("green-600");
-            let bg = if dark {
-                let mut c = green;
-                c[3] *= 0.75;
-                c
-            } else {
-                green
-            };
-            (bg, [255, 255, 255, 255], None)
-        }
-        "warning" => {
-            // orange-500 实心；字色深色以保证琥珀色对比
-            let orange = parse_color("orange-500");
-            let bg = if dark {
-                let mut c = orange;
-                c[3] *= 0.85;
-                c
-            } else {
-                orange
-            };
-            (bg, parse_text_color("orange-950"), None)
-        }
-        "destructive" => {
-            let destructive = parse_color("destructive");
-            let bg = if dark {
-                // dark: bg-destructive/60 over page background feel
-                let mut c = destructive;
-                c[3] *= 0.6;
-                c
-            } else {
-                destructive
-            };
-            (bg, [255, 255, 255, 255], None)
-        }
+        "success" => (
+            soft(parse_color("green-600")),
+            parse_text_color("green-600"),
+            None,
+        ),
+        "warning" => (
+            soft(parse_color("orange-600")),
+            parse_text_color("orange-600"),
+            None,
+        ),
+        "destructive" => (
+            soft(parse_color("destructive")),
+            parse_text_color("destructive"),
+            None,
+        ),
         "outline" => (
             [0.0, 0.0, 0.0, 0.0],
             parse_text_color("foreground"),
@@ -241,7 +232,7 @@ pub fn badge() -> BadgeBuilder {
             color: [255, 255, 255, 255],
             underline: false,
             underline_offset_px: None,
-            center: true,
+            text_align: crate::style::TextAlign::Center,
             line_height_px: None,
             leading_scale: Some(1.0),
             font_family: None,
@@ -539,5 +530,37 @@ mod tests {
         assert!(el.style.border_width > 0.5);
         let again = apply_bound_badge_variant(&mut el, "outline");
         assert_eq!(again, LayoutStatus::Clean);
+    }
+
+    #[test]
+    fn semantic_badge_soft_tint_matches_button_rest() {
+        use crate::style::{set_theme_mode, ThemeMode};
+        set_theme_mode(ThemeMode::Light);
+        for (name, accent_token, text_token) in [
+            ("success", "green-600", "green-600"),
+            ("warning", "orange-600", "orange-600"),
+            ("destructive", "destructive", "destructive"),
+        ] {
+            let el: Element = badge().variant(name).text(name).into();
+            let accent = parse_color(accent_token);
+            let bg = parse_color("background");
+            let want_bg = [
+                accent[0] * 0.1 + bg[0] * 0.9,
+                accent[1] * 0.1 + bg[1] * 0.9,
+                accent[2] * 0.1 + bg[2] * 0.9,
+                1.0,
+            ];
+            assert!(
+                (0..4).all(|i| (el.style.bg_color[i] - want_bg[i]).abs() < 1e-4),
+                "{name} bg should match button soft rest"
+            );
+            let want_fg = parse_text_color(text_token);
+            let leaf = el
+                .children
+                .iter()
+                .find(|c| c.text.as_deref() == Some(name))
+                .expect("caption");
+            assert_eq!(leaf.text_style.color, want_fg);
+        }
     }
 }

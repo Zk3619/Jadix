@@ -298,6 +298,16 @@ impl ScrollAreaBuilder {
         self
     }
 
+    pub fn px(mut self, padding: impl IntoCssDim) -> Self {
+        self.base.el = self.base.el.px(padding);
+        self
+    }
+
+    pub fn py(mut self, padding: impl IntoCssDim) -> Self {
+        self.base.el = self.base.el.py(padding);
+        self
+    }
+
     pub fn bg(mut self, bg: [f32; 4]) -> Self {
         self.base = self.base.bg(bg);
         self

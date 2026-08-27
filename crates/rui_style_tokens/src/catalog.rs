@@ -105,6 +105,9 @@ pub enum KnownUtility<'a> {
     Truncate,
     /// CSS `text-overflow`: `clip` | `hidden` | `ellipsis` | `newline` (`text-overflow-*` classes).
     TextOverflow(&'a str),
+    /// CSS / Tailwind `text-align`: `text-left` | `text-center` | `text-right` | `text-start` |
+    /// `text-end` | `text-justify` | `text-justify-all`.
+    TextAlign(&'a str),
     /// Tailwind `whitespace-nowrap` — text leaf stays one line (ShadCN Button).
     WhitespaceNowrap,
     PositionFixed,
@@ -547,6 +550,12 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
                 }
                 _ => {}
             }
+        }
+        match rest {
+            "left" | "center" | "right" | "start" | "end" | "justify" | "justify-all" => {
+                return Some(KnownUtility::TextAlign(rest));
+            }
+            _ => {}
         }
         if let Some(px) = text_size_token_to_px(rest) {
             return Some(KnownUtility::TextSize(px));
@@ -1136,6 +1145,22 @@ mod tests {
         assert!(matches!(
             classify_utility("text-overflow-newline"),
             Some(KnownUtility::TextOverflow("newline"))
+        ));
+        assert!(matches!(
+            classify_utility("text-center"),
+            Some(KnownUtility::TextAlign("center"))
+        ));
+        assert!(matches!(
+            classify_utility("text-left"),
+            Some(KnownUtility::TextAlign("left"))
+        ));
+        assert!(matches!(
+            classify_utility("text-start"),
+            Some(KnownUtility::TextAlign("start"))
+        ));
+        assert!(matches!(
+            classify_utility("text-justify"),
+            Some(KnownUtility::TextAlign("justify"))
         ));
         assert!(is_known_utility("whitespace-nowrap"));
         assert!(matches!(
