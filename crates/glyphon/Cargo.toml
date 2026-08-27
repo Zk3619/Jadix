@@ -1,0 +1,19 @@
+[package]
+edition = "2021"
+name = "glyphon"
+version = "0.12.0"
+description = "Fast, simple 2D text rendering for wgpu (RUI vendor: TextArea 2D transform)"
+license = "MIT OR Apache-2.0 OR Zlib"
+repository = "https://github.com/grovesNL/glyphon.git"
+publish = false
+
+[lib]
+name = "glyphon"
+path = "src/lib.rs"
+
+[dependencies]
+cosmic-text = { workspace = true }
+etagere = "0.3.0"
+lru = { version = "0.16.2", default-features = false }
+rustc-hash = "2.1.1"
+wgpu = { workspace = true }
