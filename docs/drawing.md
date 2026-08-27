@@ -29,10 +29,11 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 | 能力 | 现状 | 缺口 |
 |------|------|------|
 | 矩形 / 圆角 / 阴影 / 渐变 SDF | wgpu 主路径 | — |
-| `primitives/path` | `PathCommand` + `rui_path_d`（M/L/Z）+ **CPU 覆盖率光栅 → RGBA 贴图**（tessellate 四边形仅回退） | 曲线（C/Q）；GPU 三角网（仍非主路径） |
+| `primitives/path` | `PathCommand` + `rui_path_d`（HTML/SVG `d`：M/L/H/V/C/S/Q/T/A/Z，曲线展平为折线）+ **CPU 覆盖率光栅 → RGBA 贴图**（tessellate 四边形仅回退）；`stroke-linecap` / `stroke-linejoin` | GPU 三角网（仍非主路径） |
+| 用户 `<svg>` 场景图 | **WP-3.11 ☑** typed 形状（CPU path）+ `SvgNode::Elem` 透传（resvg）；默认色 / `currentColor` = `foreground`；默认 `pointer-events: bounding-box`（[CSS SVG-only](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)） | 类 Web DOM（script / foreignObject / CSS 选子 / 任意外链 image） |
+| Lucide Animated | **配方 JSON + SVG 帧烘焙**（[`pqoqubbw/icons`](https://github.com/pqoqubbw/icons)）：`<AnimatedIcon>` / `animated_icon()`；默认色 `text-foreground`（经 `text_color` attr，防 cascade 盖成白）；默认 `bounding-box`；支持 `g` 嵌套 / `custom` 函数 variants / 单值 keyframe 插值 | React/Motion 运行时 |
 | Chart | **grammar**：`define_chart` + cartesian / **polar 族** / `custom_mark` + `ChartTheme`；**compact scales**（linear / band / point / **log** / **time**）；tooltip · crosshair；预设薄封装；**同一 path 核** | JS D3 运行时（禁）；组合图可画在 Svg 叶上 |
 | emoji SVG | `emoji-svg` feature：`resvg`/`usvg` **光栅成贴图** | **不是**公开 `<svg>` 场景图 |
-| 用户 `<svg>` 场景图 | **WP-3.11 ☑** `primitives/svg`：叶 + viewBox + circle/path/rect/line/polyline/g；同一 path 核 | 完整 SVG 1.1 / SMIL |
 | 用户 `<canvas>` / paint 回调 | **WP-3.12 ☑** `primitives/canvas`：正式 `Canvas2D`（曲线/图像/状态/离屏/命中）；CPU fallback + `RUI_GPU_2D=1` GPU 主路径 | 完整 WHATWG Canvas2D |
 | 3D mesh / camera | **WP-3.13 ☑** `<scene3d>` 实验 feature；`Scene3dCamera`/`Light`/`Material` builder；透视立方 | glTF 全家桶 |
 | 子树特效 wrap | **B16 底座 ☑** `effect_wrap()` + `EffectPassGpu`（capture → shader → `rui_fx:`） | 创意组件目录件 |
@@ -62,7 +63,7 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 |------|------|
 | **叶节点** | Svg/Canvas/3D 默认 `display` 块或按 props；子 SVG 形状**不**各占 taffy 节点（场景图在叶内） |
 | **Layout ≠ Paint** | 改 path 数据 / paint → 优先 `StyleChanged`；改 `width`/`height`/`viewBox` → `LayoutChanged` |
-| **Hit-test** | 默认用叶 `layout_bounds`；Svg 可选按填充路径命中（P2）；Canvas 默认可点整叶 |
+| **Hit-test** | 默认用叶 `layout_bounds`；`pointer-events` 分通用 / SVG-only，path 场景上 fill/stroke 几何命中（见 §3）；Canvas 默认可点整叶 |
 | **双书写** | 标签与 Builder 必须同语义（ADR-9）；稳定面进 prelude 前须双入口 |
 | **响应式** | 属性走 `bind_*`；结构（增删 `<path>`）走结构岛 / 子 scene reconcile；禁止根裸 `get()` 整树重建画布 |
 
@@ -70,19 +71,37 @@ RUI 已是 **wgpu 自绘 + 保留 Element 树**。缺的不是「再嵌一个浏
 
 ## 3. Svg（WP-3.11）
 
-**目标心智**：接近 HTML `<svg viewBox>`，但是 **RUI Element 叶内的矢量场景**，不是 DOM。
+**目标心智**：接近 HTML `<svg viewBox>`，但是 **RUI Element 叶内的声明式矢量场景图 + resvg 光栅**，不是浏览器 SVG 运行时 / DOM。
 
 | 项 | 口径 |
 |----|------|
 | 根 | `<svg viewBox="0 0 100 100" width="…" height="…">` / `svg().view_box(…).w(…).h(…)` |
-| 子 | `path` / `circle` / `rect` / `line` / `polyline` / `g`（组 + transform）；文本可后置（glyphon 或轮廓） |
-| 绘制 | 描边 / 填充 / opacity / transform；颜色走 token 或 `parse_color` |
-| 实现倾向 | 与 WP-3.2 同源 `PathCommand`；产品 Chart 已 CPU 覆盖率光栅贴图；`<svg>` 可先 GPU 批或继续光栅叶；emoji-svg 的 `resvg` **不算**本包 |
+| 子 | 见下方**支持矩阵**；Builder：`svg_el("…")` / 命名包装；`ui!` 标签表对齐 MDN（无 `script` / `foreignObject`） |
+| 绘制 | 描边 / 填充 / opacity / transform；`stroke-width` / `stroke-linecap` / `stroke-linejoin` / `fill-rule`；`fill="url(#id)"` 渐变：resvg 全量 + CPU path 回退采样；长尾属性 `.attr` 原样 emit；根默认 `color`=主题 `foreground`（Tailwind `text-foreground` / `currentColor`） |
+| 命中 | 对齐 [CSS `pointer-events`](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)：**通用** `auto` / `none`；**布局扩展** `box-none`；**SVG 专用** `bounding-box`（叶默认）/ `visiblePainted` / `visibleFill` / `visibleStroke` / `visible` / `painted` / `fill` / `stroke` / `all` — 有 path 场景时按 fill/stroke **路径级**命中；`auto` 在 SVG 叶上 ≡ `visiblePainted` |
+| 宏 | `ui!`：kebab（`stroke-width`）与 snake/camel 同义；未知 SVG 属性 → `.attr`；`<text>` 等字符串子 → `.text_content` |
+| 实现倾向 | **`svg` feature**：Lucide + 公开 `<svg>` **统一 resvg/usvg 光栅**；SMIL bake（`animate` / `set` / `animateTransform`）+ 持续 `request_redraw`；`animateMotion` 等 Elem 透传；无 feature / Chart 动态数据走 `PathCommand` 核（含 `url(#)` 渐变） |
 | 与 Chart | WP-3.2 grammar（`define_chart` + marks）与预设 **应消费同一 path 核**，禁止第二套折线格式 |
-| 不做 | 完整 SVG 1.1 / SMIL / 外链 `<image>` 全家桶；浏览器 CSS 选中 SVG 子元素 |
+
+### 支持矩阵（对照 [MDN SVG 元素](https://developer.mozilla.org/en-US/docs/Web/SVG/Reference/Element)）
+
+| 分类 | typed + CPU path | Elem + resvg 透传 | 不做 |
+|------|------------------|-------------------|------|
+| 基础形状 | `circle` / `ellipse` / `path` / `rect` / `line` / `polyline` / `polygon` / `g` | — | — |
+| 结构 / 引用 | `defs` / `use` / `symbol` / `clipPath` | `a` / `switch` / `view` / `title` / `desc` / `metadata` | `script` / `foreignObject` |
+| 渐变 | `linearGradient` / `radialGradient` / `stop` | （同左亦可走 Elem） | — |
+| 文本 | — | `text` / `tspan` / `textPath` | — |
+| 图像 / 图案 / 标记 / 遮罩 | — | `image`（仅贴图键 / data URI / 本地约定）/ `pattern` / `marker` / `mask` | 任意外链 `href="https://…"` 自动拉取 |
+| 滤镜 | — | `filter` / `fe*` | 自研 CPU filter 光栅 |
+| SMIL | bake：`animate` / `set` / `animateTransform` | 透传：`animateMotion` / `mpath`（本轮不 bake） | 完整时间线语义 / 脚本改树 |
+| 呈现属性 | 高频 typed helpers | 长尾 `.attr`（`vector-effect` / `paint-order` / `marker-*` 等） | 浏览器 CSS 选中 SVG 子元素 / 样式表驱动 SVG |
+
+**禁区（类 Web DOM）**：`<script>`、事件、SVG DOM API、脚本改树；CSS 选 SVG 子；宿主 HTML（`foreignObject`）；任意外链 image 自动拉取。
 
 **验收（MVP）**：Gallery「绘制」：圆 + path 描边/填充；`ui!` 与 Builder 各一例；离屏或 layout 测证明叶尺寸正确。  
-**落地（2026-08-18）**：`primitives/svg`；子形状 flatten 进叶；`rui_path_fit_leaf` 让 viewBox 跟叶；与 Chart 共用 `PathCommand` / `register_path_scene`。
+**落地（2026-08-18）**：`primitives/svg`；子形状 flatten 进叶；`rui_path_fit_leaf` 让 viewBox 跟叶；与 Chart 共用 `PathCommand` / `register_path_scene`。  
+**加深（2026-08-27）**：`d` 曲线展平；ellipse/polygon；HTML kebab 宏；Lucide SVG path 表驱动 Icon spin；**defs/use/clipPath/linearGradient + SMIL animateTransform/animate/set**；公开 `<svg>` 统一 resvg；CPU path 回退解析 `fill="url(#…)"`。  
+**加深（Elem 透传）**：`SvgNode::Elem` + `svg_el` / `text_content` / `.attr`；MDN 文本/滤镜/遮罩等经 emit → resvg；宏未知属性转发。
 
 ---
 
@@ -197,14 +216,14 @@ W3 **退出不要求** 3.13 3D 产品化 / B16 / B17 目录；3.11/3.12 MVP **�
 不要把「Chart 还没做完」写成永远不做。分层如下（对照 TanStack Charts 心智，**不搬 JS 运行时**）：
 
 ```text
-禁区     DOM · SVG 1.1 / SMIL 全家桶 · JS D3 运行时 · 换渲染器（Skia/Vello）
+禁区     DOM · script/foreignObject · 任意外链 image · JS D3 运行时 · 换渲染器（Skia/Vello）
 可加深   polar 族 · 时间轴 · Rust 专用 scale（log / time / 将来 pow…）· Chart tooltip / crosshair
 别的包   公开 <svg>（WP-3.11）· Canvas paint（WP-3.12）· 通用运动原语（B17）
 ```
 
 | 层 | 含义 | Chart 怎么接 |
 |----|------|----------------|
-| **禁区** | 浏览器 SVG DOM / HTML-in-canvas；完整 SVG 1.1；`npm i d3-scale` 当核；第二渲染器主线 | 场景仍是 `PathCommand` → path 核 → wgpu |
+| **禁区** | 浏览器 SVG DOM / HTML-in-canvas；`script`/`foreignObject`；任意外链 image；`npm i d3-scale` 当核；第二渲染器主线 | 场景仍是 `PathCommand` → path 核 → wgpu |
 | **可加深（本包 · WP-3.2）** | `radial_bar` / `radial_line` / `radial_area` / `radial_dot` + polar guides；`scale_time` / `scale_log`（同一 `ResolvedScale.map` 边界，对位 TanStack compact→专用，**实现是 Rust**）；`.tooltip(true)` / `.crosshair(true)`（钉在命中点，不跟 GSAP/Framer 运动核） | 继续叠 mark，不新开图表类型组件 |
 | **别的包** | 公开 `<svg>` 叶、Canvas paint、duration/easing/弹簧 | Chart **应消费同一 path 核**；3.11 落地后组合图可画在 Svg 叶上，而不是只出 RGBA 贴图 |
 
@@ -212,7 +231,7 @@ W3 **退出不要求** 3.13 3D 产品化 / B16 / B17 目录；3.11/3.12 MVP **�
 
 - 第二渲染器主线（Skia / Vello / FemtoVG）替代 wgpu  
 - 浏览器 `<canvas>` / SVG DOM / HTML-in-canvas  
-- 完整 SVG 规范或完整 WHATWG Canvas2D  
+- 类 Web DOM 的 SVG（script / foreignObject / CSS 选子）或完整 WHATWG Canvas2D  
 - 默认 feature 捆绑大型 3D 运行时  
 - 用 Canvas 每帧清整棵 UI 树（即时模式退回 egui 禁区）  
 - CSS-in-JS / Framer Motion / GSAP / 每字 DOM `<span>` 作为 B17 运行时  

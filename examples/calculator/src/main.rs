@@ -536,9 +536,9 @@ fn key_flex_row(children: Vec<Element>) -> Element {
         .into_iter()
         .map(|c| {
             ui! {
-                <Rect grow="1" flex_basis="0" min_w="0" h="100%">
+                <div grow="1" flex_basis="0" min_w="0" h="100%">
                     { c }
-                </Rect>
+                </div>
             }
         })
         .collect();
@@ -788,9 +788,9 @@ fn CalculatorApp() -> Element {
                     { mem_key("mem-ms", "MS", true, eng, |e| e.mem_store()) }
                 </HStack>
 
-                <Rect w="100%" grow="1" min_h="18rem">
+                <div w="100%" grow="1" min_h="18rem">
                     { pad }
-                </Rect>
+                </div>
             </VStack>
         }
     });

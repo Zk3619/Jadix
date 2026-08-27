@@ -160,7 +160,7 @@
 | **Accordion** | 基础 / 布局 | P1 | 必填实例键（开合） | 单/多开；可复用 Collapsible 原语 |
 | **Collapsible** | 基础 / 布局 | P1 | 必填实例键或受控 Signal | Accordion 积木；headless 开合宜下沉 utils |
 | **Breadcrumb** | 导航 | P1 | 展示型不要求 | 路径导航；与 Navbar / NavigationMenu 分工 |
-| **Pagination** | 数据 | P1 | 可选；受控页码 Signal | 常跟 Table；先控页 API，虚拟滚动另议 |
+| **Pagination** | 数据 | experimental | 可选；受控页码 Signal（1-based） | **已落地**：复合 `Pagination`/`Content`/`Item`/`Link`/`Previous`/`Next`/`Ellipsis` + Builder [`pagination`]；常跟 Table（`page_index` 0-based 需 +1） |
 | **HoverCard** | 浮层 / 反馈 | P2 | 可选；**锚点用 focus_id** | 悬停卡片；复用 popover placement + 延时 |
 | **Calendar** | 表单 | — | 必填实例键 | **已落地 experimental**（WP-3.3）；见 §1.2 |
 | **Empty** | 数据 / 基础 | P2 | 展示型不要求 | 空状态插画槽 + 标题/描述/CTA |
@@ -304,13 +304,13 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 状态 | 数量（约） | 项 |
 |------|------------|-----|
-| **已导出对位** | 36+ | Button、Badge、AspectRatio、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
-| **planned P1** | 8 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination |
+| **已导出对位** | 37+ | Button、Badge、AspectRatio、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Pagination、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
+| **planned P1** | 7 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb |
 | **planned P2** | 7 | HoverCard、Calendar、Empty、Kbd、ButtonGroup、InputOTP、InputGroup |
 | **等价不单列** | 6 | Drawer→Sheet、Sonner→Toast、DropdownMenu→Dropdown、NativeSelect→Select、Field→Form、Item→组合 |
 | **布局/主题级** | 1 | Direction |
 
-完整规划行见 **§1.9**。落地顺序建议：Skeleton / Spinner / Alert → Accordion+Collapsible → Avatar / Breadcrumb / Pagination → 其余 P2（Badge / AspectRatio 已 experimental）。
+完整规划行见 **§1.9**。落地顺序建议：Skeleton / Spinner / Alert → Accordion+Collapsible → Avatar / Breadcrumb → 其余 P2（Badge / AspectRatio / Pagination 已 experimental）。
 
 ### 4.2 SolidJS
 

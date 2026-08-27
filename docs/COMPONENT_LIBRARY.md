@@ -312,6 +312,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | 视口模态（Dialog / Sheet / CommandOverlay） | `portal_sync(Modal)` + [`mount_viewport_portal_stage`](../crates/rui/src/utils/popup.rs)（+ underlay）；舞台内只 [`swallow_clicks`](../crates/rui/src/utils/popup.rs) | `panel_block_clicks` 再包 `portal_panel`（嵌套 hoist） |
 | Esc | `portal_overlay` LIFO；只关顶层 | 每控件自写全局 Esc |
 
+- **命中默认**：hoist 后的浮层 / 弹窗 / 菜单轮廓为 `pointer-events: auto`，挡住点击穿透；仅特殊壳层显式透传——根 portal 叠层、视口居中舞台空白区（点到 underlay）、0×0 锚、Toast 宿主 / 动画中的 `none` / `box-none`。禁止再依赖「无 handler → 默认 box-none」。  
 - Escape **只关顶层**（库测 `push_two_esc_closes_top_only` / `three_layers_esc_closes_top_only_each_time`）；点击外部关闭与受控 `open` 信号单一写入点。  
 - Tab：有顶层 Stacked 时在该层面板循环（[`keyboard_nav.md`](keyboard_nav.md)）；显式 `sync_focus_trap` 仍属 **C-WP-1.3**。  
 - 打开时焦点陷阱与关闭后焦点归还须可测或可冒烟。
@@ -358,7 +359,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | **基础** | Button、**Badge**、**AspectRatio**、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；Badge/AspectRatio=`experimental`；其余=`experimental`（越出 §5.2.1） |
 | **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1；**WP-3.9 ☑** 错误文案与 Input invalid 环同源）；Calendar/Date/Time/Color/File=`experimental` |
 | **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
-| **数据** | VirtualList、**VirtualMasonry**、Table、TreeView、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺）；VirtualMasonry **WP-3.10 ☑** |
+| **数据** | VirtualList、**VirtualMasonry**、Table、TreeView、Pagination、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺）；VirtualMasonry **WP-3.10 ☑**；Pagination=ShadCN 复合 + Builder |
 | **绘制** | Svg（`primitives/svg`）；Canvas（`primitives/canvas`）；Scene3d（`primitives/scene3d`，feature）；B16 / B17 仍规划 | Svg=`experimental`（WP-3.11 ☑）；Canvas=`experimental`（WP-3.12 ☑）；Scene3d=`experimental`（WP-3.13 ☑，默认 feature 关）；B16/B17 未落地；Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar；Gallery 另演示 `app::Router` / Navigator / 完整次窗（输入 + Dialog + `shared_slot`） | Tabs=`verified`；其余=`experimental` |
 | **布局** | ScrollArea、ScrollViewport、Scrollbar、Resizable | ScrollArea/Scrollbar=`verified`；Viewport/Resizable=`experimental` |
@@ -368,7 +369,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 优先级 | 规划组件 | 建议分区 |
 |--------|----------|----------|
-| P1 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb、Pagination | 基础 / 浮层 / 导航 / 数据 |
+| P1 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb | 基础 / 浮层 / 导航 |
 | P2 | HoverCard、Empty、Kbd、ButtonGroup、InputOTP、InputGroup | 浮层 / 表单 / 基础 |
 | 等价不单列 | Drawer→Sheet、Sonner→Toast、NativeSelect→Select、Field→Form 等 | — |
 

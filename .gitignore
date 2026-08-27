@@ -32,6 +32,9 @@ crates/rui/tmp_stack_crumb.txt
 !docs/
 !docs/**
 
+!scripts/
+!scripts/**
+
 # CI definitions (ignored by the blanket `*` above without this)
 !.github/
 !.github/**

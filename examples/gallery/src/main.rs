@@ -24,6 +24,7 @@ use rui::primitives::{
 };
 use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
+use rui::utils::animated_icon;
 use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -248,8 +249,8 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"ping"</Label>
                         <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
-                            <Rect w="2rem" h="2rem" rounded="9999px" bg="primary" />
-                            <Rect
+                            <div w="2rem" h="2rem" rounded="9999px" bg="primary" />
+                            <div
                                 absolute={true}
                                 inset="0"
                                 rounded="9999px"
@@ -260,15 +261,15 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"pulse"</Label>
-                        <Rect w="3rem" h="2rem" rounded="0.375rem" bg="secondary" class="animate-pulse" />
+                        <div w="3rem" h="2rem" rounded="0.375rem" bg="secondary" class="animate-pulse" />
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"bounce"</Label>
-                        <Rect w="2rem" h="2rem" rounded="0.375rem" bg="accent" class="animate-bounce" />
+                        <div w="2rem" h="2rem" rounded="0.375rem" bg="accent" class="animate-bounce" />
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"alternate pulse"</Label>
-                        <Rect
+                        <div
                             w="3rem"
                             h="2rem"
                             rounded="0.375rem"
@@ -278,7 +279,7 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                     </VStack>
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"play-state"</Label>
-                        <Rect
+                        <div
                             w="2.5rem"
                             h="2.5rem"
                             rounded="0.375rem"
@@ -526,11 +527,11 @@ fn MouseEventShowcase() -> Element {
                 <Label w="100%" text_size="0.875rem" leading="normal">
                     { format!("click={}  dblclick={}  mouseover={}", clicks.get(), dbls.get(), overs.get()) }
                 </Label>
-                <Rect w="100%" p="0.75rem" bg="secondary" rounded="0.5rem">
+                <div w="100%" p="0.75rem" bg="secondary" rounded="0.5rem">
                     <Label w="100%" text_size="0.75rem" leading="normal" color="muted-foreground">
                         { log.get() }
                     </Label>
-                </Rect>
+                </div>
                 <Label w="100%" font_weight="700" text_size="0.875rem">"click LCA"</Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     { format!("目标 click={} — 在灰色空白处按下，拖进蓝色块再松开，计数不应增加", lca.get()) }
@@ -602,9 +603,9 @@ fn CursorShowcase() -> Element {
                     <Button disabled=true>"disabled not-allowed"</Button>
                     <Button cursor="wait">"cursor=wait"</Button>
                     <Button class="cursor-help">"class cursor-help"</Button>
-                    <Rect p="0.5rem" rounded="0.375rem" bg="muted" cursor="url(#missing), url(#gallery-ring) 16 16, pointer">
+                    <div p="0.5rem" rounded="0.375rem" bg="muted" cursor="url(#missing), url(#gallery-ring) 16 16, pointer">
                         <Label text_size="0.75rem">"url(#gallery-ring) 16 16"</Label>
-                    </Rect>
+                    </div>
                 </HStack>
                 { grid }
             </VStack>
@@ -635,7 +636,7 @@ fn InputShowcase() -> rui::core::tree::Element {
                     />
                     <Input placeholder="Invalid" invalid=true clearable="true" flex_grow="1" />
                     <Input id="gal-s2-input-pw" type="password" password_toggle="true" clearable="true" flex_grow="1" />
-                    <Input type="number" clearable=true flex_grow="1" />
+                    <Input type="number" number_steppers=true clearable=true flex_grow="1" />
                 </HStack>
                 <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                     <Input type="email" clearable=true flex_grow="1" />
@@ -967,32 +968,32 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"Box-shadow — outset"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0.25rem 0.25rem 0.75rem 0 black" />
+                        <div w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0.25rem 0.25rem 0.75rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"blur + black"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
+                        <div w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
                             box_shadow="-0.25rem 0.25rem 0.5rem 0 destructive" />
                         <Label text_size="0.6rem" color="muted-foreground">"dx&lt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0 0 0.5rem -0.125rem foreground" />
+                        <div w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="0 0 0.5rem -0.125rem foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"spread&lt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" box_shadow="0 0.125rem 0.25rem 0.25rem foreground" />
+                        <div w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" box_shadow="0 0.125rem 0.25rem 0.25rem foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"spread&gt;0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="0" box_shadow="0.125rem 0.125rem 0.5rem 0 primary" />
+                        <div w="6.5rem" h="3.75rem" bg="secondary" rounded="0" box_shadow="0.125rem 0.125rem 0.5rem 0 primary" />
                         <Label text_size="0.6rem" color="muted-foreground">"直角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="1.25rem" box_shadow="0 0.375rem 1rem 0 black" />
+                        <div w="6.5rem" h="3.75rem" bg="accent" rounded="1.25rem" box_shadow="0 0.375rem 1rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"大圆角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem"
+                        <div w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem"
                             box_shadow_color="foreground"
                             box_shadow_offset_x="0.375"
                             box_shadow_offset_y="0.375"
@@ -1005,28 +1006,28 @@ fn ShadowShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"Box-shadow — inset"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="0.5rem" box_shadow="inset 0 0 0.75rem 0 black" />
+                        <div w="6.5rem" h="3.75rem" bg="secondary" rounded="0.5rem" box_shadow="inset 0 0 0.75rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 均匀"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="accent" rounded="0.5rem" box_shadow="inset 0.125rem 0.125rem 0.5rem 0 black" />
+                        <div w="6.5rem" h="3.75rem" bg="accent" rounded="0.5rem" box_shadow="inset 0.125rem 0.125rem 0.5rem 0 black" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset+offset"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="inset 0 0 0.5rem 0.25rem destructive" />
+                        <div w="6.5rem" h="3.75rem" bg="muted" rounded="0.5rem" box_shadow="inset 0 0 0.5rem 0.25rem destructive" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset+正 spread"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
+                        <div w="6.5rem" h="3.75rem" bg="background" rounded="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625"
                             box_shadow="inset -0.125rem -0.125rem 0.5rem -0.0625 foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 负 offset+负 spread"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="background" rounded="0" box_shadow="inset 0 0.25rem 0.75rem 0 foreground" />
+                        <div w="6.5rem" h="3.75rem" bg="background" rounded="0" box_shadow="inset 0 0.25rem 0.75rem 0 foreground" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 直角"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="6.5rem" h="3.75rem" bg="secondary" rounded="1rem" box_shadow="inset 0 0 1rem 0.125rem black" />
+                        <div w="6.5rem" h="3.75rem" bg="secondary" rounded="1rem" box_shadow="inset 0 0 1rem 0.125rem black" />
                         <Label text_size="0.6rem" color="muted-foreground">"inset 大圆角"</Label>
                     </VStack>
                 </HStack>
@@ -1773,7 +1774,7 @@ fn OutlineShowcase() -> rui::core::tree::Element {
                 <Label font_weight="700" text_size="0.875rem">"utility class"</Label>
                 <HStack gap="0.75rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="7rem" h="4rem" bg="background" rounded="0.5rem" class="outline outline-2 outline-offset-4" />
+                        <div w="7rem" h="4rem" bg="background" rounded="0.5rem" class="outline outline-2 outline-offset-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"outline outline-2 outline-offset-4"</Label>
                     </VStack>
                 </HStack>
@@ -1796,17 +1797,17 @@ fn TransitionShowcase() -> rui::core::tree::Element {
                 <Label text_size="0.7rem" font_weight="600">"Opacity fade (transition-opacity)"</Label>
                 <HStack gap="0.75rem" wrap="wrap">
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                        <div w="5rem" h="3rem" bg="primary" rounded="0.5rem"
                               class="transition-opacity duration-300 hover:opacity-[0.3]" />
                         <Label text_size="0.55rem" color="muted-foreground">"300ms"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                        <div w="5rem" h="3rem" bg="primary" rounded="0.5rem"
                               class="transition-opacity duration-700 hover:opacity-[0.3]" />
                         <Label text_size="0.55rem" color="muted-foreground">"700ms"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                        <div w="5rem" h="3rem" bg="primary" rounded="0.5rem"
                               class="transition-opacity duration-300 delay-200 hover:opacity-[0.3]" />
                         <Label text_size="0.55rem" color="muted-foreground">"300ms +delay"</Label>
                     </VStack>
@@ -1815,12 +1816,12 @@ fn TransitionShowcase() -> rui::core::tree::Element {
                 <Label text_size="0.7rem" font_weight="600">"Transform (transition-transform)"</Label>
                 <HStack gap="0.75rem" wrap="wrap">
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="5rem" h="3rem" bg="primary" rounded="0.5rem"
+                        <div w="5rem" h="3rem" bg="primary" rounded="0.5rem"
                               class="transition-transform duration-300 ease-out hover:scale-125" />
                         <Label text_size="0.55rem" color="muted-foreground">"scale 1.25"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="5rem" h="3rem" bg="accent" rounded="0.5rem"
+                        <div w="5rem" h="3rem" bg="accent" rounded="0.5rem"
                               class="scale-100 transition-transform duration-300 ease-in hover:scale-75" />
                         <Label text_size="0.55rem" color="muted-foreground">"scale 0.75"</Label>
                     </VStack>
@@ -1829,22 +1830,22 @@ fn TransitionShowcase() -> rui::core::tree::Element {
                 <Label text_size="0.7rem" font_weight="600">"Timing function comparison (transition-all)"</Label>
                 <HStack gap="0.75rem" wrap="wrap">
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                        <div w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
                               class="transition-all duration-500 ease-linear hover:opacity-[0.2]" />
                         <Label text_size="0.55rem" color="muted-foreground">"linear"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                        <div w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
                               class="transition-all duration-500 ease-in hover:opacity-[0.2]" />
                         <Label text_size="0.55rem" color="muted-foreground">"ease-in"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                        <div w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
                               class="transition-all duration-500 ease-out hover:opacity-[0.2]" />
                         <Label text_size="0.55rem" color="muted-foreground">"ease-out"</Label>
                     </VStack>
                     <VStack items="center" gap="0.2rem">
-                        <Rect w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
+                        <div w="4rem" h="2.5rem" bg="muted" rounded="0.5rem"
                               class="transition-all duration-500 ease-in-out hover:opacity-[0.2]" />
                         <Label text_size="0.55rem" color="muted-foreground">"ease-in-out"</Label>
                     </VStack>
@@ -1868,19 +1869,19 @@ fn ScaleZoomShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1rem" wrap="wrap" items="center" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-50" />
+                        <div w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-50" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-50 (0.5×)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" />
+                        <div w="4rem" h="4rem" bg="primary" rounded="0.375rem" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-100 (1×)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-150" />
+                        <div w="4rem" h="4rem" bg="primary" rounded="0.375rem" class="scale-150" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-150 (1.5×)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-[0.75]" />
+                        <div w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-[0.75]" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-[0.75]"</Label>
                     </VStack>
                 </HStack>
@@ -1890,19 +1891,19 @@ fn ScaleZoomShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1rem" wrap="wrap" items="center" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150" />
+                        <div w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-x-150"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-y-50" />
+                        <div w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-y-50" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-y-50"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150 scale-y-50" />
+                        <div w="4rem" h="4rem" bg="accent" rounded="0.375rem" class="scale-x-150 scale-y-50" />
                         <Label text_size="0.6rem" color="muted-foreground">"X 1.5 + Y 0.5"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="secondary" rounded="0.375rem" class="scale-x-[0.5] scale-y-[2]" />
+                        <div w="4rem" h="4rem" bg="secondary" rounded="0.375rem" class="scale-x-[0.5] scale-y-[2]" />
                         <Label text_size="0.6rem" color="muted-foreground">"X 0.5 + Y 2"</Label>
                     </VStack>
                 </HStack>
@@ -1912,15 +1913,15 @@ fn ScaleZoomShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1rem" wrap="wrap" items="center" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="transition-transform hover:scale-125" />
+                        <div w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="transition-transform hover:scale-125" />
                         <Label text_size="0.6rem" color="muted-foreground">"hover → 1.25×"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="scale-75 transition-transform hover:scale-100" />
+                        <div w="4rem" h="4rem" bg="muted" rounded="0.375rem" class="scale-75 transition-transform hover:scale-100" />
                         <Label text_size="0.6rem" color="muted-foreground">"0.75 → hover 1×"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-100 transition-transform hover:scale-x-150" />
+                        <div w="4rem" h="4rem" bg="destructive" rounded="0.375rem" class="scale-100 transition-transform hover:scale-x-150" />
                         <Label text_size="0.6rem" color="muted-foreground">"hover X 1.5×"</Label>
                     </VStack>
                 </HStack>
@@ -1933,19 +1934,19 @@ fn ScaleZoomShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1rem" wrap="wrap" items="start" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="2rem" bg="chart-1" rounded="0.25rem" class="zoom-50" />
+                        <div w="4rem" h="2rem" bg="chart-1" rounded="0.25rem" class="zoom-50" />
                         <Label text_size="0.6rem" color="muted-foreground">"zoom-50 (0.5×)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="2rem" bg="chart-2" rounded="0.25rem" class="zoom-normal" />
+                        <div w="4rem" h="2rem" bg="chart-2" rounded="0.25rem" class="zoom-normal" />
                         <Label text_size="0.6rem" color="muted-foreground">"zoom-normal"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="2rem" bg="chart-3" rounded="0.25rem" class="zoom-150" />
+                        <div w="4rem" h="2rem" bg="chart-3" rounded="0.25rem" class="zoom-150" />
                         <Label text_size="0.6rem" color="muted-foreground">"zoom-150 (1.5×)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="2rem" bg="chart-4" rounded="0.25rem" class="zoom-200" />
+                        <div w="4rem" h="2rem" bg="chart-4" rounded="0.25rem" class="zoom-200" />
                         <Label text_size="0.6rem" color="muted-foreground">"zoom-200 (2×)"</Label>
                     </VStack>
                 </HStack>
@@ -1958,11 +1959,11 @@ fn ScaleZoomShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="2rem" wrap="wrap" items="start" justify="start" p="1rem" bg="muted" rounded="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3rem" h="2rem" bg="primary" rounded="0.25rem" class="scale-200" />
+                        <div w="3rem" h="2rem" bg="primary" rounded="0.25rem" class="scale-200" />
                         <Label text_size="0.6rem" color="muted-foreground">"scale-200"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3rem" h="2rem" bg="destructive" rounded="0.25rem" class="zoom-200" />
+                        <div w="3rem" h="2rem" bg="destructive" rounded="0.25rem" class="zoom-200" />
                         <Label text_size="0.6rem" color="muted-foreground">"zoom-200"</Label>
                     </VStack>
                 </HStack>
@@ -2028,15 +2029,15 @@ fn TransformShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1.5rem" wrap="wrap" items="center" justify="start">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="chart-1" rounded="0.375rem" class="skew-x-6" />
+                        <div w="4rem" h="4rem" bg="chart-1" rounded="0.375rem" class="skew-x-6" />
                         <Label text_size="0.6rem" color="muted-foreground">"skew-x-6"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="chart-2" rounded="0.375rem" class="skew-y-12" />
+                        <div w="4rem" h="4rem" bg="chart-2" rounded="0.375rem" class="skew-y-12" />
                         <Label text_size="0.6rem" color="muted-foreground">"skew-y-12"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="4rem" bg="chart-3" rounded="0.375rem" class="skew-x-[20deg]" />
+                        <div w="4rem" h="4rem" bg="chart-3" rounded="0.375rem" class="skew-x-[20deg]" />
                         <Label text_size="0.6rem" color="muted-foreground">"skew-x-[20deg]"</Label>
                     </VStack>
                 </HStack>
@@ -2147,27 +2148,27 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-0" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-0" />
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-0"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-12" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-12" />
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-12"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45" />
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-45"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-90" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-90" />
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-90"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-180" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-180" />
                         <Label text_size="0.6rem" color="muted-foreground">"rotate-180"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="-rotate-45" />
+                        <div w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="-rotate-45" />
                         <Label text_size="0.6rem" color="muted-foreground">"-rotate-45"</Label>
                     </VStack>
                 </HStack>
@@ -2177,15 +2178,15 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[30deg]" />
+                        <div w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[30deg]" />
                         <Label text_size="0.6rem" color="muted-foreground">"[30deg]"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[0.25turn]" />
+                        <div w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[0.25turn]" />
                         <Label text_size="0.6rem" color="muted-foreground">"[0.25turn]"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[1.57rad]" />
+                        <div w="3.5rem" h="3.5rem" bg="accent" rounded="0.375rem" class="rotate-[1.57rad]" />
                         <Label text_size="0.6rem" color="muted-foreground">"[1.57rad]"</Label>
                     </VStack>
                 </HStack>
@@ -2195,15 +2196,15 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="1.5rem" wrap="wrap" items="center" justify="start" p="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-90" />
+                        <div w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-90" />
                         <Label text_size="0.6rem" color="muted-foreground">"hover → 90°"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="rotate-45 transition-transform hover:rotate-0" />
+                        <div w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="rotate-45 transition-transform hover:rotate-0" />
                         <Label text_size="0.6rem" color="muted-foreground">"45° → hover 0°"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-180" />
+                        <div w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-180" />
                         <Label text_size="0.6rem" color="muted-foreground">"hover → 180°"</Label>
                     </VStack>
                 </HStack>
@@ -2216,19 +2217,19 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="chart-1" rounded="0.375rem" class="translate-x-4" />
+                        <div w="3.5rem" h="3.5rem" bg="chart-1" rounded="0.375rem" class="translate-x-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"translate-x-4"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="chart-2" rounded="0.375rem" class="translate-y-4" />
+                        <div w="3.5rem" h="3.5rem" bg="chart-2" rounded="0.375rem" class="translate-y-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"translate-y-4"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="chart-3" rounded="0.375rem" class="-translate-x-4" />
+                        <div w="3.5rem" h="3.5rem" bg="chart-3" rounded="0.375rem" class="-translate-x-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"-translate-x-4"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="chart-4" rounded="0.375rem" class="translate-x-4 translate-y-4" />
+                        <div w="3.5rem" h="3.5rem" bg="chart-4" rounded="0.375rem" class="translate-x-4 translate-y-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"X+Y 偏移"</Label>
                     </VStack>
                 </HStack>
@@ -2238,23 +2239,23 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="3rem" bg="primary" rounded="0.375rem" class="translate-x-1/2" />
+                        <div w="4rem" h="3rem" bg="primary" rounded="0.375rem" class="translate-x-1/2" />
                         <Label text_size="0.6rem" color="muted-foreground">"x-1/2 (50%)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="3rem" bg="destructive" rounded="0.375rem" class="translate-x-full" />
+                        <div w="4rem" h="3rem" bg="destructive" rounded="0.375rem" class="translate-x-full" />
                         <Label text_size="0.6rem" color="muted-foreground">"x-full (100%)"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="3rem" bg="accent" rounded="0.375rem" class="-translate-x-1/2" />
+                        <div w="4rem" h="3rem" bg="accent" rounded="0.375rem" class="-translate-x-1/2" />
                         <Label text_size="0.6rem" color="muted-foreground">"-x-1/2"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="3rem" bg="secondary" rounded="0.375rem" class="translate-x-[30px]" />
+                        <div w="4rem" h="3rem" bg="secondary" rounded="0.375rem" class="translate-x-[30px]" />
                         <Label text_size="0.6rem" color="muted-foreground">"x-[30px]"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="4rem" h="3rem" bg="chart-1" rounded="0.375rem" class="translate-y-[50%]" />
+                        <div w="4rem" h="3rem" bg="chart-1" rounded="0.375rem" class="translate-y-[50%]" />
                         <Label text_size="0.6rem" color="muted-foreground">"y-[50%]"</Label>
                     </VStack>
                 </HStack>
@@ -2264,15 +2265,15 @@ fn RotateTranslateShowcase() -> rui::core::tree::Element {
                 </Label>
                 <HStack gap="2rem" wrap="wrap" items="center" justify="start" p="1rem" bg="muted" rounded="0.5rem">
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45 translate-x-4" />
+                        <div w="3.5rem" h="3.5rem" bg="primary" rounded="0.375rem" class="rotate-45 translate-x-4" />
                         <Label text_size="0.6rem" color="muted-foreground">"旋转+平移"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="rotate-12 translate-x-1/2 scale-110" />
+                        <div w="3.5rem" h="3.5rem" bg="destructive" rounded="0.375rem" class="rotate-12 translate-x-1/2 scale-110" />
                         <Label text_size="0.6rem" color="muted-foreground">"旋转+%平移+缩放"</Label>
                     </VStack>
                     <VStack gap="0.25rem" items="center">
-                        <Rect w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 hover:translate-x-4 hover:scale-110" />
+                        <div w="3.5rem" h="3.5rem" bg="muted" rounded="0.375rem" class="transition-transform hover:rotate-45 hover:translate-x-4 hover:scale-110" />
                         <Label text_size="0.6rem" color="muted-foreground">"hover 组合"</Label>
                     </VStack>
                 </HStack>
@@ -2291,7 +2292,7 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                 </Label>
                 <Label font_weight="700" text_size="0.875rem">"A) Inset: inside / outside / mixed"</Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap">
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-inset-inside" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="inside" scrollbar_visibility="always"
                             overflow_y="auto" overflow_x="auto">
@@ -2302,8 +2303,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-inset-outside" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="outside" scrollbar_visibility="always"
                             overflow_y="auto" overflow_x="auto">
@@ -2314,8 +2315,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-inset-mixed-x-out" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset_x="outside" scrollbar_inset_y="inside" scrollbar_visibility="always"
                             overflow_y="auto" overflow_x="auto">
@@ -2326,8 +2327,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-inset-mixed-y-out" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset_x="inside" scrollbar_inset_y="outside" scrollbar_visibility="always"
                             overflow_y="auto" overflow_x="auto">
@@ -2338,12 +2339,12 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
+                    </div>
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"B) Visibility: auto / always / never"</Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap">
-                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    <div w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-vis-auto" w="100%" h="100%" p="0.5rem"
                             scrollbar_visibility="auto" overflow_y="auto" overflow_x="auto">
                             <VStack gap="0.25rem" min_w="18rem">
@@ -2353,8 +2354,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-vis-always" w="100%" h="100%" p="0.5rem"
                             scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
                             <VStack gap="0.25rem" min_w="18rem">
@@ -2364,8 +2365,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-vis-never" w="100%" h="100%" p="0.5rem"
                             scrollbar_visibility="never" overflow_y="auto" overflow_x="auto">
                             <VStack gap="0.25rem" min_w="18rem">
@@ -2375,12 +2376,12 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
+                    </div>
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"C) Four corners: (left/right) x (top/bottom)"</Label>
                 <HStack gap="0.5rem" items="start" wrap="wrap">
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-corner-lt" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="outside" scrollbar_y_side="left" scrollbar_x_side="top"
                             scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
@@ -2391,8 +2392,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-corner-lb" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="outside" scrollbar_y_side="left" scrollbar_x_side="bottom"
                             scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
@@ -2403,8 +2404,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-corner-rt" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="outside" scrollbar_y_side="right" scrollbar_x_side="top"
                             scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
@@ -2415,8 +2416,8 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
-                    <Rect w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    </div>
+                    <div w="13.5rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-corner-rb" w="100%" h="100%" p="0.5rem"
                             scrollbar_inset="outside" scrollbar_y_side="right" scrollbar_x_side="bottom"
                             scrollbar_visibility="always" overflow_y="auto" overflow_x="auto">
@@ -2427,7 +2428,7 @@ fn ScrollShowcase() -> rui::core::tree::Element {
                                 </For>
                             </VStack>
                         </ScrollArea>
-                    </Rect>
+                    </div>
                 </HStack>
             </VStack>
         </MyCard>
@@ -2454,11 +2455,11 @@ fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
                         "复位"
                     </Button>
                 </HStack>
-                <Rect w="14rem" bg="muted" rounded="0.5rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                <div w="14rem" bg="muted" rounded="0.5rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                     <VStack w="100%" gap="0.35rem">
                         <Label text_size="0.75rem" font_weight="600">"header"</Label>
                         <HStack w="100%" gap="0.25rem" wrap="wrap">
-                            <Rect
+                            <div
                                 h="1.5rem"
                                 rounded="0.25rem"
                                 bg="primary"
@@ -2466,16 +2467,16 @@ fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
                                 w={ if wide.get() { "11rem" } else { "3.5rem" } }
                             >
                                 <Label text_size="0.7rem" text_color="primary-foreground">"chip"</Label>
-                            </Rect>
-                            <Rect w="3.5rem" h="1.5rem" rounded="0.25rem" bg="secondary" p="0.15rem">
+                            </div>
+                            <div w="3.5rem" h="1.5rem" rounded="0.25rem" bg="secondary" p="0.15rem">
                                 <Label text_size="0.7rem">"sib"</Label>
-                            </Rect>
+                            </div>
                         </HStack>
-                        <Rect w="100%" bg="accent" rounded="0.25rem" p="0.35rem">
+                        <div w="100%" bg="accent" rounded="0.25rem" p="0.35rem">
                             <Label text_size="0.75rem" font_weight="600">"footer（应随 mid 下移）"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
-                </Rect>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -2546,11 +2547,11 @@ fn DamageShowcase() -> rui::core::tree::Element {
                     </Button>
                 </HStack>
                 <Show when={show_extra.get()}>
-                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <div bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         <Label text_size="0.875rem" leading="normal">
                             "结构变更样例：挂载/卸载此块应走全帧 Clear（ΔFullClear↑）。"
                         </Label>
-                    </Rect>
+                    </div>
                 </Show>
             </VStack>
         </MyCard>
@@ -2679,7 +2680,7 @@ fn OwnerRegistryShowcase() -> rui::core::tree::Element {
                     </Button>
                 </HStack>
                 <Show when={mount.get()}>
-                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <div bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         <VStack gap="0.5rem" w="100%">
                             <Label text_size="0.875rem" font_weight="600">"结构岛（挂载时注册 anchor）"</Label>
                             <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
@@ -2705,7 +2706,7 @@ fn OwnerRegistryShowcase() -> rui::core::tree::Element {
                                 </VStack>
                             </Reactive>
                         </VStack>
-                    </Rect>
+                    </div>
                 </Show>
             </VStack>
         </MyCard>
@@ -2853,9 +2854,9 @@ fn StoreResourceShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { format!("resource(旁路) = {}  |  note: {}", res_summary.get(), action_note.get()) }
                 </Label>
-                <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                <div bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                     { eb }
-                </Rect>
+                </div>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
                     <Button variant="destructive" on_click={move || {
                         resource.set_error("gallery boom");
@@ -2991,11 +2992,11 @@ fn RootBareGetShowcase() -> rui::core::tree::Element {
                     </Button>
                 </HStack>
                 <Show when={panel_open.get()}>
-                    <Rect bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <div bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         <Label text_size="0.875rem" leading="normal">
                             "结构岛面板（Show when）— 切换不应抬高根 dep。"
                         </Label>
-                    </Rect>
+                    </div>
                 </Show>
             </VStack>
         </MyCard>
@@ -3157,41 +3158,41 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                 </Label>
                 <VStack w="100%" gap="0.4rem">
                     <Label text_size="0.75rem" font_weight="600">"卡片宽 100%"</Label>
-                    <Rect w="100%" h="0.5rem" bg="border" rounded="0.25rem" />
+                    <div w="100%" h="0.5rem" bg="border" rounded="0.25rem" />
                     <Label text_size="0.75rem" font_weight="600">"25vw"</Label>
-                    <Rect w="25vw" h="2rem" bg="primary" rounded="0.375rem" items="center" justify="center">
+                    <div w="25vw" h="2rem" bg="primary" rounded="0.375rem" items="center" justify="center">
                         <Label text_size="0.75rem" text_color="primary-foreground">"25vw"</Label>
-                    </Rect>
+                    </div>
                     <Label text_size="0.75rem" font_weight="600">"25dvw"</Label>
-                    <Rect w="25dvw" h="2rem" bg="accent" rounded="0.375rem" items="center" justify="center">
+                    <div w="25dvw" h="2rem" bg="accent" rounded="0.375rem" items="center" justify="center">
                         <Label text_size="0.75rem" text_color="accent-foreground">"25dvw"</Label>
-                    </Rect>
+                    </div>
                     <HStack gap="0.75rem" wrap="wrap" items="end">
                         <VStack gap="0.25rem">
                             <Label text_size="0.75rem" font_weight="600">"10vh"</Label>
-                            <Rect w="4.5rem" h="10vh" bg="muted" rounded="0.375rem" items="center" justify="center">
+                            <div w="4.5rem" h="10vh" bg="muted" rounded="0.375rem" items="center" justify="center">
                                 <Label text_size="0.75rem">"10vh"</Label>
-                            </Rect>
+                            </div>
                         </VStack>
                         <VStack gap="0.25rem">
                             <Label text_size="0.75rem" font_weight="600">"10dvh"</Label>
-                            <Rect w="4.5rem" h="10dvh" bg="secondary" rounded="0.375rem" items="center" justify="center">
+                            <div w="4.5rem" h="10dvh" bg="secondary" rounded="0.375rem" items="center" justify="center">
                                 <Label text_size="0.75rem" text_color="secondary-foreground">"10dvh"</Label>
-                            </Rect>
+                            </div>
                         </VStack>
                         <VStack gap="0.25rem">
                             <Label text_size="0.75rem" font_weight="600">"padding 1em @ 20px"</Label>
-                            <Rect w="8rem" text_size={20.0} p="1em" bg="secondary" rounded="0.375rem" items="center" justify="center">
+                            <div w="8rem" text_size={20.0} p="1em" bg="secondary" rounded="0.375rem" items="center" justify="center">
                                 <Label text_size="0.75rem" text_color="secondary-foreground">"1em pad"</Label>
-                            </Rect>
+                            </div>
                         </VStack>
                     </HStack>
                     <Label text_size="0.75rem" font_weight="600">"calc(100% - 2rem)（相对卡片 content，不是视口）"</Label>
-                    <Rect w="100%" p="0.5rem" bg="muted" rounded="0.375rem">
-                        <Rect w="calc(100% - 2rem)" h="2.5rem" bg="secondary" rounded="0.25rem" items="center" justify="center">
+                    <div w="100%" p="0.5rem" bg="muted" rounded="0.375rem">
+                        <div w="calc(100% - 2rem)" h="2.5rem" bg="secondary" rounded="0.25rem" items="center" justify="center">
                             <Label text_size="0.75rem" text_color="secondary-foreground">"100% - 2rem"</Label>
-                        </Rect>
-                    </Rect>
+                        </div>
+                    </div>
                 </VStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
@@ -3200,15 +3201,15 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                 <HStack gap="0.75rem" wrap="wrap" items="end">
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"box-border（默认）"</Label>
-                        <Rect class="box-border" w="8rem" px="1rem" py="0.5rem" bg="secondary" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <div class="box-border" w="8rem" px="1rem" py="0.5rem" bg="secondary" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             <Label text_size="0.75rem" text_color="secondary-foreground">"w=8rem + px"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"box-content"</Label>
-                        <Rect class="box-content" w="8rem" px="1rem" py="0.5rem" bg="accent" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <div class="box-content" w="8rem" px="1rem" py="0.5rem" bg="accent" rounded="0.375rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             <Label text_size="0.75rem" text_color="accent-foreground">"padding 在外侧"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
                 </HStack>
 
@@ -3218,7 +3219,7 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                 <HStack gap="0.75rem" wrap="wrap" items="end">
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"T8 R4 B12 L16"</Label>
-                        <Rect
+                        <div
                             w="10rem"
                             h="4.5rem"
                             bg="background"
@@ -3235,11 +3236,11 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                             justify="center"
                         >
                             <Label text_size="0.75rem">"分边色+宽"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"border-width: 4px 12px 8px 20px"</Label>
-                        <Rect
+                        <div
                             w="10rem"
                             h="4.5rem"
                             bg="background"
@@ -3250,11 +3251,11 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                             justify="center"
                         >
                             <Label text_size="0.75rem">"TRBL 简写"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
                     <VStack gap="0.25rem">
                         <Label text_size="0.75rem" font_weight="600">"仅左边框 6px"</Label>
-                        <Rect
+                        <div
                             w="10rem"
                             h="4.5rem"
                             bg="muted"
@@ -3266,7 +3267,7 @@ fn BoxModelShowcase() -> rui::core::tree::Element {
                             justify="center"
                         >
                             <Label text_size="0.75rem">"border-left"</Label>
-                        </Rect>
+                        </div>
                     </VStack>
                 </HStack>
 
@@ -3284,7 +3285,7 @@ fn LogicalShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="5) Logical Properties & Layout">
             <VStack gap="0.75rem">
-                <Rect
+                <div
                     inline_size="24rem"
                     block_size="auto"
                     bg="background"
@@ -3295,12 +3296,12 @@ fn LogicalShowcase() -> rui::core::tree::Element {
                     <Label text_size="0.875rem">
                         "padding-block/inline 双值 + inline-size + block-size"
                     </Label>
-                </Rect>
+                </div>
                 <HStack gap="0.5rem" wrap="wrap" column_gap="0.75rem" row_gap="0.5rem">
-                    <Rect bg="background" rounded="0.4rem" px="0.75rem" py="0.5rem"><Label>"px/py"</Label></Rect>
-                    <Rect bg="background" rounded="0.4rem" pt="0.75rem" pr="1rem" pb="0.25rem" pl="0.5rem"><Label>"pt/pr/pb/pl"</Label></Rect>
-                    <Rect bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></Rect>
-                    <Rect bg="background" rounded="0.4rem" margin_inline="0.5rem" padding_block="0.5rem"><Label>"m-inline / p-block"</Label></Rect>
+                    <div bg="background" rounded="0.4rem" px="0.75rem" py="0.5rem"><Label>"px/py"</Label></div>
+                    <div bg="background" rounded="0.4rem" pt="0.75rem" pr="1rem" pb="0.25rem" pl="0.5rem"><Label>"pt/pr/pb/pl"</Label></div>
+                    <div bg="background" rounded="0.4rem" mx="0.75rem" my="0.25rem"><Label>"mx/my"</Label></div>
+                    <div bg="background" rounded="0.4rem" margin_inline="0.5rem" padding_block="0.5rem"><Label>"m-inline / p-block"</Label></div>
                 </HStack>
             </VStack>
         </MyCard>
@@ -3359,25 +3360,25 @@ fn TextAlignShowcase() -> rui::core::tree::Element {
                 <HStack w="100%" min_w="0" gap="1rem" items="start" wrap="wrap">
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"ASCII soft-wrap（~5rem）"</Label>
-                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <div bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             <Label w="100%" text_size="0.875rem" leading="normal">
                                 "hello world from rui text measure alignment"
                             </Label>
-                        </Rect>
+                        </div>
                     </VStack>
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"CJK soft-wrap（~6rem）"</Label>
-                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" w="6rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <div bg="muted" rounded="0.375rem" p="0.5rem" w="6rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             <Label w="100%" text_size="1rem" leading="normal">
                                 "中文日文测试测宽分行对齐用例足够长"
                             </Label>
-                        </Rect>
+                        </div>
                     </VStack>
                     <VStack gap="0.35rem" min_w="0">
                         <Label font_weight="700" text_size="0.75rem">"Chip + Mention（10rem）"</Label>
-                        <Rect bg="muted" rounded="0.375rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                        <div bg="muted" rounded="0.375rem" p="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             { chip_mention }
-                        </Rect>
+                        </div>
                     </VStack>
                 </HStack>
                 <VStack gap="0.35rem" w="100%" min_w="0">
@@ -3387,9 +3388,9 @@ fn TextAlignShowcase() -> rui::core::tree::Element {
                     <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                         "首屏应从 virtual row 000 起；滚动条常显。行高 21px，仅挂载可见区间，无重叠/空隙跳变。"
                     </Label>
-                    <Rect bg="muted" rounded="0.375rem" p="0.25rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
+                    <div bg="muted" rounded="0.375rem" p="0.25rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                         { virt }
-                    </Rect>
+                    </div>
                 </VStack>
             </VStack>
         </MyCard>
@@ -3404,7 +3405,7 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Use this section to verify multilingual shaping, emoji fallback, combining marks, punctuation width, and bidirectional text."
                 </Label>
-                <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%" min_w="0">
+                <div bg="background" rounded="0.5rem" p="0.75rem" w="100%" min_w="0">
                     <VStack gap="0.5rem" w="100%" min_w="0">
                         <Label w="100%" font_weight="700">"English / Latin"</Label>
                         <Label w="100%" leading="normal">
@@ -3468,7 +3469,7 @@ fn TextCompatibilityShowcase() -> rui::core::tree::Element {
                             "Punctuation width: ,.;:!? 。，；：！？ () [] {} <> 《》【】"
                         </Label>
                     </VStack>
-                </Rect>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -3483,7 +3484,7 @@ fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
                     "实时输入回归：输入法候选上屏、粘贴、退格与替换后，Emoji 应在当帧或下一帧可见。"
                 </Label>
                 <Input id="gal-emoji-regression-input" placeholder="输入或粘贴: 😀 👨‍👩‍👧‍👦 👍🏽 🇨🇳 1️⃣" w="100%" />
-                <Rect bg="background" rounded="0.5rem" p="0.75rem" w="100%">
+                <div bg="background" rounded="0.5rem" p="0.75rem" w="100%">
                     <VStack gap="0.5rem" w="100%">
                         <Label w="100%" font_weight="700">"固定样例（视觉比对）"</Label>
                         <Label w="100%" leading="normal">"Family: 👨‍👩‍👧‍👦  Profession: 🧑‍💻"</Label>
@@ -3492,7 +3493,7 @@ fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
                             "Hello 😀 😁 😭  Keycap: 1️⃣ 2️⃣ 9️⃣  Mixed: Rust 👩‍💻 + 中文 + عربي"
                         </Label>
                     </VStack>
-                </Rect>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -3806,27 +3807,27 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
             <VStack gap="1rem">
                 <VStack gap="0.5rem">
                     <Label font_weight="700">"A) class=..."</Label>
-                    <Rect class="p-4 rounded-lg bg-secondary">
+                    <div class="p-4 rounded-lg bg-secondary">
                         <VStack class="gap-2">
                             <Label class="text-sm text-muted-foreground">"This block uses class=\"p-4 rounded-lg bg-secondary\""</Label>
                             <Label class="text-base font-semibold">"Spacing + radius + color + text size"</Label>
                             <Label class="mt-2 text-xs">"mt-2 applied here"</Label>
                         </VStack>
-                    </Rect>
+                    </div>
                 </VStack>
 
                 <VStack gap="0.5rem">
                     <Label font_weight="700">"B) tw=..."</Label>
-                    <Rect tw="grid grid-cols-2 grid-rows-2 gap-x-3 gap-y-2 w-full min-h-20 p-2 bg-muted rounded-md">
-                        <Rect tw="bg-secondary rounded-md h-8" />
-                        <Rect tw="bg-secondary rounded-md h-8" />
+                    <div tw="grid grid-cols-2 grid-rows-2 gap-x-3 gap-y-2 w-full min-h-20 p-2 bg-muted rounded-md">
+                        <div tw="bg-secondary rounded-md h-8" />
+                        <div tw="bg-secondary rounded-md h-8" />
                         <Label tw="self-end text-xs text-muted-foreground">"grid-rows-2 + gap-x/y + self-end"</Label>
-                        <Rect tw="bg-secondary rounded-md h-8" />
-                    </Rect>
+                        <div tw="bg-secondary rounded-md h-8" />
+                    </div>
                     <HStack tw="gap-3 items-center flex-wrap">
-                        <Rect tw="w-24 h-12 rounded-md bg-secondary" />
-                        <Rect tw="w-[120px] h-[48px] rounded-xl bg-muted" />
-                        <Rect tw="w-20 h-12 rounded-full bg-accent" />
+                        <div tw="w-24 h-12 rounded-md bg-secondary" />
+                        <div tw="w-[120px] h-[48px] rounded-xl bg-muted" />
+                        <div tw="w-20 h-12 rounded-full bg-accent" />
                     </HStack>
                     <Label tw="text-sm text-muted-foreground mt-2">
                         "tw supports numeric scale (e.g. mt-2 => 8px) and arbitrary values [120px]"
@@ -3852,7 +3853,7 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
                             <Button w="100%" size="sm">"Mark all as read"</Button>
                         </CardFooter>
                     </Card>
-                    <Rect uno="p-3 rounded-md bg-secondary">
+                    <div uno="p-3 rounded-md bg-secondary">
                         <VStack uno="gap-2">
                             <Label uno="text-sm">"uno=\"...\" works the same way as class/tw"</Label>
                             <HStack uno="gap-2">
@@ -3860,7 +3861,7 @@ fn UtilityClassShowcase() -> rui::core::tree::Element {
                                 <Label uno="mt-1 text-xs text-muted-foreground">"Label with mt-1"</Label>
                             </HStack>
                         </VStack>
-                    </Rect>
+                    </div>
                 </VStack>
             </VStack>
         </MyCard>
@@ -3908,21 +3909,21 @@ fn GridAndDragShowcase() -> Element {
                     "GStack（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"
                 </Label>
                 <GStack cols="3" rows="2" gap="0.5rem" w="100%" min_h="7rem">
-                    <Rect col_span="2" p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
+                    <div col_span="2" p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
                         <Label>"col_span = 2"</Label>
-                    </Rect>
-                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                    </div>
+                    <div p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
                         <Label>"侧栏"</Label>
-                    </Rect>
-                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                    </div>
+                    <div p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
                         <Label>"(2,2)"</Label>
-                    </Rect>
-                    <Rect p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
+                    </div>
+                    <div p="0.75rem" bg="muted" class="rounded-md" items="center" justify="center">
                         <Label>"(3,2)"</Label>
-                    </Rect>
-                    <Rect p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
+                    </div>
+                    <div p="0.75rem" bg="secondary" class="rounded-md" items="center" justify="center">
                         <Label>"(3,3)"</Label>
-                    </Rect>
+                    </div>
                 </GStack>
                 { sort_list }
             </VStack>
@@ -4026,9 +4027,9 @@ fn NavigatorShowcase() -> Element {
                         "Back"
                     </Button>
                 </HStack>
-                <Rect w="100%" h="10rem" relative=true class="rounded-md" bg="background">
+                <div w="100%" h="10rem" relative=true class="rounded-md" bg="background">
                     { body }
-                </Rect>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -4160,7 +4161,7 @@ fn RouterShowcase() -> Element {
                         "Open secondary"
                     </Button>
                 </HStack>
-                <Rect w="100%" p="0.75rem" class="rounded-md" bg="muted">
+                <div w="100%" p="0.75rem" class="rounded-md" bg="muted">
                     <VStack gap="0.25rem">
                         <Label font_weight="600">{ format!("Route: {}", route.get()) }</Label>
                         { router.view() }
@@ -4168,7 +4169,7 @@ fn RouterShowcase() -> Element {
                             "两页历史：Inbox → Settings → Back 应回到 Inbox。"
                         </Label>
                     </VStack>
-                </Rect>
+                </div>
             </VStack>
         </MyCard>
     }
@@ -4460,11 +4461,11 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                         { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
                                     </Button>
                                 </HStack>
-                                <Rect id="prim-portal-host" relative=true w="100%" min_h="6.5rem" p="0.75rem" bg="muted" rounded="0.5rem" overflow="hidden">
+                                <div id="prim-portal-host" relative=true w="100%" min_h="6.5rem" p="0.75rem" bg="muted" rounded="0.5rem" overflow="hidden">
                                     <Label text_size="0.75rem" color="muted-foreground">
                                         "局部宿主 prim-portal-host（mount 叠层裁剪在此框内）"
                                     </Label>
-                                </Rect>
+                                </div>
                                 <HStack gap="0.5rem" items="center" wrap="wrap">
                                     <Label text_size="0.75rem" color="muted-foreground">"陷阱内 Tab:"</Label>
                                     <Button id="trap-a" variant="default">"A"</Button>
@@ -4473,7 +4474,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                             </VStack>
                         </HStack>
                         <Label id="gal-s11-virt-title" font_weight="700" text_size="0.875rem">"虚拟列表窗口（200 行，仅挂载可见区间）"</Label>
-                        <Rect bg="muted" rounded="0.375rem" p="0.25rem" w="100%">
+                        <div bg="muted" rounded="0.375rem" p="0.25rem" w="100%">
                             { Element::from(
                                 virtual_list(PRIMITIVES_VIRT)
                                     .item_count(200)
@@ -4487,14 +4488,14 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                             .into()
                                     }),
                             ) }
-                        </Rect>
+                        </div>
                     </VStack>
                 </Reactive>
             </MyCard>
             <Portal id="prim-portal-root">
                 <Reactive id="examples/gallery/PrimitivesShowcase:portal">
                     <Show when={overlay_open.get()}>
-                        <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
+                        <div absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="900">
                             <VStack gap="0.75rem" p="1.25rem" bg="secondary" rounded="0.75rem" max_w="22rem" m="1rem">
                                 <Label font_weight="700" text_size="1.125rem">"根 Portal 浮层"</Label>
                                 <Label text_size="0.875rem" color="muted-foreground">
@@ -4504,14 +4505,14 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     "关闭"
                                 </Button>
                             </VStack>
-                        </Rect>
+                        </div>
                     </Show>
                 </Reactive>
             </Portal>
             <Portal id="prim-portal-local" mount="prim-portal-host">
                 <Reactive id="examples/gallery/PrimitivesShowcase:portal_local">
                     <Show when={local_open.get()}>
-                        <Rect absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="40">
+                        <div absolute=true inset="0" w="100%" h="100%" items="center" justify="center" bg="black" z_index="40">
                             <VStack gap="0.5rem" p="0.75rem" bg="secondary" rounded="0.5rem" m="0.5rem">
                                 <Label font_weight="700" text_size="0.875rem">"局部 Portal"</Label>
                                 <Label text_size="0.75rem" color="muted-foreground">
@@ -4521,7 +4522,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     "关闭"
                                 </Button>
                             </VStack>
-                        </Rect>
+                        </div>
                     </Show>
                 </Reactive>
             </Portal>
@@ -5046,9 +5047,9 @@ fn OverlayFeedbackShowcase() -> Element {
     let ctx: Element = ui! {
         <ContextMenu id="gal-ctx">
             <ContextMenuTrigger>
-                <Rect p="0.75rem" bg="muted" class="rounded-md" w="100%">
+                <div p="0.75rem" bg="muted" class="rounded-md" w="100%">
                     <Label text_size="0.875rem">{ "右键此区域打开 ContextMenu" }</Label>
-                </Rect>
+                </div>
             </ContextMenuTrigger>
             <ContextMenuContent>
                 <ContextMenuLabel>"Actions"</ContextMenuLabel>
@@ -5364,6 +5365,98 @@ fn DrawingSvgShowcase() -> Element {
                 </svg>
                 <Label font_weight="600" text_size="0.875rem">{ "Builder" }</Label>
                 { builder_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn LucideAnimatedShowcase() -> Element {
+    let samples = [
+        "heart",
+        "bell",
+        "check",
+        "activity",
+        "download",
+        "copy",
+        "menu",
+        "settings",
+        "search",
+        "sun",
+        "moon",
+        "wifi",
+        "battery",
+        "smile",
+        "frown",
+        "bot",
+        "align-left",
+        "align-right",
+        "grip",
+        "grip-horizontal",
+        "calendar-days",
+        "chart-bar-increasing",
+        "chart-bar-decreasing",
+        "chart-line",
+        "volume",
+        "keyboard",
+    ];
+    let cells: Vec<Element> = samples
+        .into_iter()
+        .map(|name| {
+            // Label defaults min_w=0; in a centered VStack it can shrink below the
+            // glyph width and wrap mid-word ("activit"/"y"). Keep captions on one line.
+            ui! {
+                <VStack
+                    items="center"
+                    gap="0.4rem"
+                    p="0.65rem"
+                    min_w="6.5rem"
+                    bg="secondary"
+                    rounded="0.5rem"
+                    borderStyle="solid"
+                    borderColor="border"
+                    borderWidth="0.0625"
+                >
+                    <AnimatedIcon name={name} size={32.0} />
+                    <Label text_size="0.65rem" color="foreground" class="whitespace-nowrap">{ name }</Label>
+                </VStack>
+            }
+        })
+        .collect();
+    // activity was previously the builder-only cell; keep a builder demo beside the grid.
+    let builder_cell: Element = {
+        let icon: Element = animated_icon("activity")
+            .size_px(32.0)
+            .color(parse_text_color("foreground"))
+            .into();
+        ui! {
+            <VStack
+                items="center"
+                gap="0.4rem"
+                p="0.65rem"
+                min_w="6.5rem"
+                bg="secondary"
+                rounded="0.5rem"
+                borderStyle="solid"
+                borderColor="border"
+                borderWidth="0.0625"
+            >
+                { icon }
+                <Label text_size="0.65rem" color="foreground" class="whitespace-nowrap">{ "activity (builder)" }</Label>
+            </VStack>
+        }
+    };
+
+    ui! {
+        <MyCard title="Lucide Animated · hover 播放">
+            <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "配方来自 pqoqubbw/icons（lucide-animated）。指针移入图标区域即可播放；字色跟主题 foreground。需 feature svg。"
+                </Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap" items="start">
+                    { cells }
+                    { builder_cell }
+                </HStack>
             </VStack>
         </MyCard>
     }
@@ -5690,22 +5783,22 @@ fn DataChartShowcase() -> Element {
                 <CarouselSingle id="gal-carousel-single" controls="outside" autoplay={4000} loop={true} seamless={true}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Slide A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Slide B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Slide C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5721,34 +5814,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselMulti id="gal-carousel-multi-slide" perView={2.2} scrollBy="slide" loop={true} seamless={true} itemSizing="fraction">
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5764,34 +5857,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselMulti id="gal-carousel-multi-fixed" itemSizing="fixed" itemWidth="12rem" snap={false} loop={false}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5807,34 +5900,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselMulti id="gal-carousel-multi-seamless-free" perView={2.2} loop={true} seamless={true} snap={false} itemSizing="fraction">
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5850,34 +5943,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselMulti id="gal-carousel-multi-flush" perView={2.2} scrollBy="page" pageSnap="viewport" endAlign="flush" loop={false}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5893,34 +5986,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselMulti id="gal-carousel-multi-pad" perView={2.2} scrollBy="page" pageSnap="peek" endAlign="pad" loop={false}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5936,34 +6029,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselStack id="gal-carousel-stack-auto" controls="outside" stackSides={1} loop={true} autoplay={4000}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Stack A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Stack B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Stack C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "Stack D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "Stack E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -5979,34 +6072,34 @@ fn DataChartShowcase() -> Element {
                 <CarouselStack id="gal-carousel-stack-drag" controls="outside" stackSides={1} loop={true}>
                     <CarouselContent>
                         <CarouselItem>
-                            <Rect p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="muted" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Drag A" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="secondary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Drag B" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="accent" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600">{ "Drag C" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="primary" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="primary-foreground">{ "Drag D" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                         <CarouselItem>
-                            <Rect p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
+                            <div p="1rem" bg="destructive" class="rounded-md" w="100%" h="8rem"
                                   items="center" justify="center">
                                 <Label font_weight="600" color="destructive-foreground">{ "Drag E" }</Label>
-                            </Rect>
+                            </div>
                         </CarouselItem>
                     </CarouselContent>
                     <CarouselPrevious />
@@ -6127,52 +6220,210 @@ fn VirtualMasonryShowcase() -> Element {
 #[component]
 fn NavbarNavigationMenuShowcase() -> Element {
     let picked = use_signal("gal_navmenu_picked", || "—".to_string());
-    let nav_menu: Element = navigation_menu("gal-navmenu")
-        .link("overview", "Overview", {
-            let picked = picked;
-            move || picked.set("Overview".into())
-        })
-        .trigger(
-            "comp",
-            "Components",
-            vec![
-                NavigationMenuLink::new("dialog", "Dialog", {
-                    let picked = picked;
-                    move || picked.set("Dialog".into())
-                })
-                .description("Modal surface with header / body / footer"),
-                NavigationMenuLink::new("tabs", "Tabs", {
-                    let picked = picked;
-                    move || picked.set("Tabs".into())
-                })
-                .description("Compound Tabs + headless strip"),
-            ],
-        )
-        .link("about", "About", {
-            let picked = picked;
-            move || picked.set("About".into())
-        })
-        .into();
-    let brand: Element = label("").text("RUI").into();
-    let action: Element = button("")
-        .variant("outline")
-        .size("sm")
-        .text("Action")
-        .into();
-    let bar: Element = navbar()
-        .brand(brand)
-        .center_child(nav_menu)
-        .action(action)
-        .into();
+
+    // B. Builder（便捷）—— 与下方 RSX 等价
+    let builder_bar: Element = {
+        let picked = picked;
+        let nav_menu: Element = navigation_menu("gal-navmenu-builder")
+            .link("overview", "Overview", {
+                let picked = picked;
+                move || picked.set("Overview".into())
+            })
+            .trigger(
+                "comp",
+                "Components",
+                vec![
+                    NavigationMenuLinkData::new("dialog", "Dialog", {
+                        let picked = picked;
+                        move || picked.set("Dialog".into())
+                    })
+                    .description("Modal surface with header / body / footer"),
+                    NavigationMenuLinkData::new("tabs", "Tabs", {
+                        let picked = picked;
+                        move || picked.set("Tabs".into())
+                    })
+                    .description("Compound Tabs + headless strip"),
+                ],
+            )
+            .link("about", "About", {
+                let picked = picked;
+                move || picked.set("About".into())
+            })
+            .into();
+        navbar()
+            .brand(label("").text("RUI").font_weight(600.0))
+            .center_child(nav_menu)
+            .center_justify("center")
+            .action(
+                button("")
+                    .variant("outline")
+                    .size("sm")
+                    .text("Action"),
+            )
+            .into()
+    };
 
     ui! {
         <MyCard title="Navbar · NavigationMenu">
-            <VStack w="100%" gap="0.75rem">
+            <VStack w="100%" gap="1rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Navbar 是布局壳（WP-2.8：无用户 id）；center 嵌 NavigationMenu（链接导览，非 Menubar 命令、非页面栈）。"
+                    "双写法：复合 RSX（推荐，宏 → navigation_menu_scope / navigation_menu_content）与 Builder。Navbar 是布局壳（WP-2.8：无用户 id）；导览非 Menubar 命令、非页面栈。"
                 </Label>
-                { bar }
+
+                <Label text_size="0.75rem" font_weight="600">"A. 复合 RSX"</Label>
+                <Navbar>
+                    <NavbarBrand>
+                        <Label font_weight="600">"RUI"</Label>
+                    </NavbarBrand>
+                    <NavbarCenter>
+                        <NavigationMenu id="gal-navmenu">
+                            <NavigationMenuList>
+                                <NavigationMenuItem value="overview">
+                                    <NavigationMenuLink on_click={move || {
+                                        picked.set("Overview".into());
+                                    }}>
+                                        "Overview"
+                                    </NavigationMenuLink>
+                                </NavigationMenuItem>
+                                <NavigationMenuItem value="comp">
+                                    <NavigationMenuTrigger>"Components"</NavigationMenuTrigger>
+                                    <NavigationMenuContent>
+                                        <NavigationMenuLink on_click={move || {
+                                            picked.set("Dialog".into());
+                                        }}>
+                                            "Dialog"
+                                            <Label text_size="0.75rem" color="muted-foreground">
+                                                "Modal surface with header / body / footer"
+                                            </Label>
+                                        </NavigationMenuLink>
+                                        <NavigationMenuLink on_click={move || {
+                                            picked.set("Tabs".into());
+                                        }}>
+                                            "Tabs"
+                                            <Label text_size="0.75rem" color="muted-foreground">
+                                                "Compound Tabs + headless strip"
+                                            </Label>
+                                        </NavigationMenuLink>
+                                    </NavigationMenuContent>
+                                </NavigationMenuItem>
+                                <NavigationMenuItem value="about">
+                                    <NavigationMenuLink on_click={move || {
+                                        picked.set("About".into());
+                                    }}>
+                                        "About"
+                                    </NavigationMenuLink>
+                                </NavigationMenuItem>
+                            </NavigationMenuList>
+                        </NavigationMenu>
+                    </NavbarCenter>
+                    <NavbarActions>
+                        <Button variant="outline" size="sm">"Action"</Button>
+                    </NavbarActions>
+                </Navbar>
+
+                <Label text_size="0.75rem" font_weight="600">"B. Builder"</Label>
+                { builder_bar }
+
                 <Label text_size="0.875rem">{ format!("Selected: {}", picked.get()) }</Label>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn PaginationShowcase() -> Element {
+    let page_a = use_signal("gal_pagination_rsx", || 2usize);
+    let page_b = use_signal("gal_pagination_builder", || 5usize);
+    const COUNT_A: usize = 5;
+    const COUNT_B: usize = 12;
+
+    // Gallery 分区体在 isolate_reads 下构建：`disabled={sig.get()…}` / `is_active={…}`
+    // 会被宏 untrack 冻住。用 reactive! 岛订阅 page，在闭包内用局部页码重建零件。
+    let rsx_bar = rui::reactive!("examples/gallery/PaginationShowcase:rsx", move || {
+        let page = page_a.get();
+        ui! {
+            <Pagination>
+                <PaginationContent>
+                    <PaginationItem>
+                        <PaginationPrevious
+                            disabled={page <= 1}
+                            on_click={move || {
+                                page_a.update(|p| *p = (*p).saturating_sub(1).max(1));
+                            }}
+                        />
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationLink
+                            is_active={page == 1}
+                            on_click={move || page_a.set(1)}
+                        >"1"</PaginationLink>
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationLink
+                            is_active={page == 2}
+                            on_click={move || page_a.set(2)}
+                        >"2"</PaginationLink>
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationLink
+                            is_active={page == 3}
+                            on_click={move || page_a.set(3)}
+                        >"3"</PaginationLink>
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationEllipsis />
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationLink
+                            is_active={page == COUNT_A}
+                            on_click={move || page_a.set(COUNT_A)}
+                        >{ COUNT_A.to_string() }</PaginationLink>
+                    </PaginationItem>
+                    <PaginationItem>
+                        <PaginationNext
+                            disabled={page >= COUNT_A}
+                            on_click={move || {
+                                page_a.update(|p| *p = (*p + 1).min(COUNT_A));
+                            }}
+                        />
+                    </PaginationItem>
+                </PaginationContent>
+            </Pagination>
+        }
+    });
+
+    // Builder 内部 reactive_anchor 订阅 page_signal；分区 effect 下 is_tracking=true，可直接挂载。
+    let builder_bar: Element = pagination("gal-pagination-builder")
+        .page_count(COUNT_B)
+        .page_signal(page_b)
+        .sibling_count(1)
+        .previous_text("上一页")
+        .next_text("下一页")
+        .into();
+
+    let status_a = rui::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
+        let t = format!("A · Page {} / {}", page_a.get(), COUNT_A);
+        ui! { <Label text_size="0.875rem">{ t }</Label> }
+    });
+    let status_b = rui::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
+        let t = format!("B · Page {} / {}", page_b.get(), COUNT_B);
+        ui! { <Label text_size="0.875rem">{ t }</Label> }
+    });
+
+    ui! {
+        <MyCard title="Pagination">
+            <VStack w="100%" gap="1rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：复合 RSX（Pagination / Content / Item / Link / Previous / Next / Ellipsis，对齐 ShadCN）与 Builder（page 为 1-based；Table 的 page_index 为 0-based）。"
+                </Label>
+
+                <Label text_size="0.75rem" font_weight="600">"A. 复合 RSX"</Label>
+                { rsx_bar }
+                { status_a }
+
+                <Label text_size="0.75rem" font_weight="600">"B. Builder"</Label>
+                { builder_bar }
+                { status_b }
             </VStack>
         </MyCard>
     }
@@ -6388,9 +6639,10 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"绘制"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
-                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature。"
+                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · lucide-animated。"
                     </Label>
                     <DrawingSvgShowcase />
+                    <LucideAnimatedShowcase />
                     <DrawingCanvasShowcase />
                     <DrawingScene3dShowcase />
                 </VStack>
@@ -6400,6 +6652,7 @@ fn gallery_section_body(section: &str) -> Element {
             <ScrollArea id="scroll-data" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"数据"</Label>
+                    <PaginationShowcase />
                     <DataChartShowcase />
                     <VirtualMasonryShowcase />
                 </VStack>
@@ -6461,7 +6714,7 @@ fn gallery_section_body(section: &str) -> Element {
             <ScrollArea id="scroll-about" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
                     <Label text_size="1.25rem" font_weight="700">"关于"</Label>
-                    <Rect bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
+                    <div bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
                         <VStack gap="0.5rem">
                             <Label font_weight="700">"Technical Stack"</Label>
                             <Label>"Layout: Taffy (Flexbox / Grid)"</Label>
@@ -6470,7 +6723,7 @@ fn gallery_section_body(section: &str) -> Element {
                             <Label>"Reactivity: Signal fine-grained updates"</Label>
                             <Label>"A11y: AccessKit bridge"</Label>
                         </VStack>
-                    </Rect>
+                    </div>
                     <Label text_size="0.875rem" color="muted-foreground">
                         "侧栏分区对应 ENGINEERING_IMPLEMENTATION_PLAN WP-3.1 Gallery 覆盖矩阵。"
                     </Label>
