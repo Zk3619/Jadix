@@ -28,6 +28,7 @@ pub fn upload_rgba8(
         width,
         height,
         wgpu::TextureFormat::Rgba8UnormSrgb,
+        false,
     )
 }
 
@@ -49,6 +50,28 @@ pub fn upload_rgba8_linear(
         width,
         height,
         wgpu::TextureFormat::Rgba8Unorm,
+        false,
+    )
+}
+
+/// SDF/MSDF text atlas — linear Unorm + bilinear sampler (FS reconstructs the edge).
+pub fn upload_rgba8_msdf(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipeline: &TexturedQuadPipeline,
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+) -> GpuImageTexture {
+    upload_rgba8_with_format(
+        device,
+        queue,
+        pipeline,
+        rgba,
+        width,
+        height,
+        wgpu::TextureFormat::Rgba8Unorm,
+        false,
     )
 }
 
@@ -180,6 +203,7 @@ fn upload_rgba8_with_format(
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    sdf_nearest: bool,
 ) -> GpuImageTexture {
     let expected = (width as usize)
         .saturating_mul(height as usize)
@@ -237,7 +261,11 @@ fn upload_rgba8_with_format(
     }
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let bind_group = pipeline.create_texture_bind_group(device, &view);
+    let bind_group = if sdf_nearest {
+        pipeline.create_texture_bind_group_sdf(device, &view)
+    } else {
+        pipeline.create_texture_bind_group(device, &view)
+    };
     GpuImageTexture {
         _texture: texture,
         bind_group,

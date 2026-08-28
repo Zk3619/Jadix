@@ -71,6 +71,25 @@ pub fn rasterize_svg_str(svg: &str, out_w: u32, out_h: u32) -> Option<Vec<u8>> {
     rasterize_svg_to_rgba(svg.as_bytes(), out_w, out_h)
 }
 
+/// Rasterize at the SVG's intrinsic size (no scaling cap).
+pub fn rasterize_svg_natural(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    #[cfg(feature = "svg")]
+    {
+        let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+        let tree = parse_usvg_tree(bytes)?;
+        let size = tree.size();
+        let out_w = size.width().round().max(1.0) as u32;
+        let out_h = size.height().round().max(1.0) as u32;
+        let rgba = rasterize_svg_to_rgba(bytes, out_w, out_h)?;
+        Some((out_w, out_h, rgba))
+    }
+    #[cfg(not(feature = "svg"))]
+    {
+        let _ = bytes;
+        None
+    }
+}
+
 /// Fit longest edge to `max_edge`, preserving aspect ratio.
 pub fn rasterize_svg_fit(bytes: &[u8], max_edge: u32) -> Option<(u32, u32, Vec<u8>)> {
     #[cfg(feature = "svg")]

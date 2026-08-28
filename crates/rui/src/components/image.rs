@@ -19,7 +19,7 @@
 //! <img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! ```
 //!
-//! JPEG/GIF/WebP 需 `images`（或分项 feature）；SVG 需 `svg`。PNG/ICO/BMP 默认可用。
+//! JPEG/GIF/WebP/… 由内置 `image` 解码；SVG 需 `svg` feature。
 //! 与 [`crate::components::AspectRatio`] 容器二选一或组合：容器负责裁剪铺满，属性直接钉在 Image 上。
 
 use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};

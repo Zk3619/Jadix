@@ -161,7 +161,7 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
 }
 
-/// 解码图像字节并排队上传（PNG/ICO/BMP；JPEG/GIF/WebP/SVG 见 features）。
+/// 解码图像字节并排队（全格式光栅 + 可选 SVG；见 `svg` feature）。
 pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
     crate::app::pending_images::queue_image_from_bytes(id, bytes)
 }
@@ -183,6 +183,15 @@ pub fn decode_image_bytes(bytes: &[u8]) -> Option<crate::media::DecodedImage> {
 /// 从路径或 `data:` URL 解码为 RGBA8。
 pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedImage> {
     crate::media::load_src(src.as_ref(), crate::media::DecodeOptions::image())
+}
+
+/// 图像处理（resize / blur / encode 等），基于 [`image`](https://github.com/image-rs/image)。
+pub mod image_ops {
+    pub use crate::media::{
+        blur, brighten, contrast, crop, encode_jpeg, encode_png, encode_webp, flip_horizontal,
+        flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90,
+        unsharpen, to_rgba_image, FilterType,
+    };
 }
 
 /// 注册自定义光标 RGBA（`cursor: url(#id)` / `url(cursor:id)`）。
