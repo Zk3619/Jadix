@@ -4,7 +4,6 @@
 
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -132,9 +131,6 @@ struct FrameTextNodeMeta {
     text_size: f32,
     /// CSS/`ancestor_scale` → glyphon `TextArea.scale` (1 = identity).
     paint_scale: f32,
-    /// World linear `[a,b,c,d]` for glyphon TextArea.transform.
-    paint_transform_ab_cd: [f32; 4],
-    paint_origin: [f32; 2],
     align: glyphon::cosmic_text::Align,
     measured_text_w: f32,
     underline: bool,
@@ -147,9 +143,6 @@ struct FrameTextNodeMeta {
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
     shadow_col: Option<[u8; 4]>,
-    shadow_dx: f32,
-    shadow_dy: f32,
-    shadow_blur: f32,
     emoji_cache_key: Option<super::text::EmojiCacheKey>,
 }
 
@@ -1056,70 +1049,11 @@ fn twemoji_filename(sequence: &str) -> String {
 }
 
 fn decode_png_rgba(bytes: &[u8]) -> Option<super::text::EmojiRaster> {
-    let cursor = Cursor::new(bytes);
-    let decoder = png::Decoder::new(cursor);
-    let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()?];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let data = &buf[..info.buffer_size()];
-    let (w, h) = (info.width as usize, info.height as usize);
-    let mut rgba = vec![0u8; w * h * 4];
-    match info.color_type {
-        png::ColorType::Rgba => {
-            rgba.copy_from_slice(data);
-        }
-        png::ColorType::Rgb => {
-            for i in 0..(w * h) {
-                let si = i * 3;
-                let di = i * 4;
-                rgba[di] = data[si];
-                rgba[di + 1] = data[si + 1];
-                rgba[di + 2] = data[si + 2];
-                rgba[di + 3] = 255;
-            }
-        }
-        png::ColorType::GrayscaleAlpha => {
-            for i in 0..(w * h) {
-                let si = i * 2;
-                let di = i * 4;
-                rgba[di] = data[si];
-                rgba[di + 1] = data[si];
-                rgba[di + 2] = data[si];
-                rgba[di + 3] = data[si + 1];
-            }
-        }
-        png::ColorType::Grayscale => {
-            for (i, &gray) in data.iter().enumerate().take(w * h) {
-                let di = i * 4;
-                rgba[di] = gray;
-                rgba[di + 1] = gray;
-                rgba[di + 2] = gray;
-                rgba[di + 3] = 255;
-            }
-        }
-        png::ColorType::Indexed => {
-            // Twemoji flags are often palette PNGs; rejecting Indexed made 🇨🇳 vanish.
-            let palette = reader.info().palette.as_ref()?;
-            let trns = reader.info().trns.as_ref().map(|t| t.as_ref());
-            for (i, &idx) in data.iter().enumerate().take(w * h) {
-                let di = i * 4;
-                let pi = idx as usize * 3;
-                if pi + 2 >= palette.len() {
-                    continue;
-                }
-                rgba[di] = palette[pi];
-                rgba[di + 1] = palette[pi + 1];
-                rgba[di + 2] = palette[pi + 2];
-                rgba[di + 3] = trns
-                    .and_then(|t| t.get(idx as usize).copied())
-                    .unwrap_or(255);
-            }
-        }
-    }
+    let d = crate::media::decode_bytes(bytes, crate::media::DecodeOptions::image())?;
     Some(super::text::EmojiRaster::new(
-        info.width as u16,
-        info.height as u16,
-        rgba,
+        d.width as u16,
+        d.height as u16,
+        d.rgba,
     ))
 }
 
@@ -1638,23 +1572,6 @@ fn load_emoji_raster_cached(
         .emoji_cache
         .insert_raster(key.clone(), raster.clone());
     Some(raster)
-}
-
-/// 文本阴影层会把整块 buffer 平移；若仍用正文同款 `TextBounds`，glyphon 会按边界裁字，
-/// 多圈模糊采样时会出现缺块/不对称。对阴影扩大裁剪并与视口求交。
-fn shadow_clip_for_glyphon(
-    node_clip: Option<[f32; 4]>,
-    outset: f32,
-    viewport: [f32; 4],
-) -> Option<[f32; 4]> {
-    let c = node_clip?;
-    let expanded = [
-        c[0] - outset,
-        c[1] - outset,
-        c[2] + 2.0 * outset,
-        c[3] + 2.0 * outset,
-    ];
-    clip_rect_to_bounds(expanded, Some(viewport))
 }
 
 /// 排版文本、构建下划线 `InstanceInput`，并调用 glyphon `prepare`。
@@ -2867,8 +2784,11 @@ pub fn prepare_text_frame(
                     });
                     shadow_skip_indices.insert(i);
                 }
-                // 如果 generate_shadow_bitmap 返回 None（无法栅格化字形），
-                // 不加入 shadow_skip_indices，回退到 glyphon TextArea 渲染。
+                // generate_shadow_bitmap 失败时跳过阴影（不再回退 glyphon 多层 TextArea）。
+                log::debug!(
+                    target: "rui::text_shadow",
+                    "shadow bitmap rasterize failed; skipping shadow layer"
+                );
             }
         }
 
@@ -2884,13 +2804,6 @@ pub fn prepare_text_frame(
             } else {
                 1.0
             },
-            paint_transform_ab_cd: [
-                info.paint_transform[0],
-                info.paint_transform[1],
-                info.paint_transform[2],
-                info.paint_transform[3],
-            ],
-            paint_origin: [info.paint_origin[0] * ui_scale, info.paint_origin[1] * ui_scale],
             align,
             measured_text_w,
             underline: st.underline,
@@ -2902,9 +2815,6 @@ pub fn prepare_text_frame(
             underline_offset: st.underline_offset,
             color: glyph_color,
             shadow_col: st.shadow_color,
-            shadow_dx: sdx,
-            shadow_dy: sdy,
-            shadow_blur: sblur,
             clip_bounds: scaled_clip,
             emoji_cache_key,
         }));
@@ -3015,95 +2925,12 @@ pub fn prepare_text_frame(
         };
         let entry = &text_renderer.shaped_cache[i];
         if let Some(sc) = tb.shadow_col {
-            if shadow_skip_indices.contains(&i) {
-                // 阴影已通过纹理缓存渲染，跳过 glyphon TextArea
-            } else {
-                let radius = tb.shadow_blur;
-                let alpha = sc[3];
-                if alpha > 0 {
-                    let shadow_perf = text_perf_mode();
-                    let center_left = tb.x + tb.shadow_dx;
-                    let center_top = tb.y + tb.dy + tb.shadow_dy;
-                    let (min_radius, min_alpha, base_samples, radial_scale, max_samples) =
-                        match shadow_perf {
-                            TextPerfMode::HighQuality => {
-                                (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize)
-                            }
-                            TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
-                            TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
-                        };
-                    const SHARP_BLUR_EPS: f32 = 0.75;
-                    let shadow_bounds_clip = shadow_clip_for_glyphon(
-                        tb.clip_bounds,
-                        radius + tb.shadow_dx.abs() + tb.shadow_dy.abs() + 3.0,
-                        viewport_clip,
-                    );
-                    let bounds = text_bounds_from_clip(shadow_bounds_clip, config);
-
-                    let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
-                        if layer_alpha == 0 {
-                            return;
-                        }
-                        let shadow_rect = [left, top, tb.box_w, tb.box_h];
-                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds)
-                        else {
-                            return;
-                        };
-                        if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
-                            return;
-                        }
-                        text_areas.push(glyphon::TextArea {
-                            buffer: &entry.buffer,
-                            left,
-                            top,
-                            scale: tb.paint_scale,
-                            bounds,
-                            default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], layer_alpha),
-                            custom_glyphs: tb
-                                .emoji_cache_key
-                                .as_ref()
-                                .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
-                            transform: tb.paint_transform_ab_cd,
-                            transform_origin: tb.paint_origin,
-                        });
-                    };
-
-                    let draw_blur =
-                        radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
-                    if !draw_blur {
-                        push_shadow_layer(center_left, center_top, alpha);
-                    } else {
-                        const GOLDEN_ANGLE: f32 = 2.399_963_1;
-                        let sample_count = (base_samples as f32 + radius * radial_scale)
-                            .round()
-                            .clamp(base_samples as f32, max_samples as f32)
-                            as usize;
-                        let sigma = (radius * 0.58).max(0.75);
-                        let two_sigma2 = 2.0 * sigma * sigma;
-
-                        let mut weight_sum = 1.0_f32; // center sample
-                        for idx in 0..sample_count {
-                            let t = (idx as f32 + 0.5) / (sample_count as f32);
-                            let r = radius * t.sqrt();
-                            let w = (-(r * r) / two_sigma2).exp();
-                            weight_sum += w;
-                        }
-                        let inv = 1.0 / weight_sum.max(0.001);
-                        let center_alpha = ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
-                        push_shadow_layer(center_left, center_top, center_alpha);
-
-                        for idx in 0..sample_count {
-                            let t = (idx as f32 + 0.5) / (sample_count as f32);
-                            let r = radius * t.sqrt();
-                            let theta = idx as f32 * GOLDEN_ANGLE;
-                            let rx = theta.cos() * r;
-                            let ry = theta.sin() * r;
-                            let w = (-(r * r) / two_sigma2).exp();
-                            let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
-                            push_shadow_layer(center_left + rx, center_top + ry, wa);
-                        }
-                    }
-                }
+            if !shadow_skip_indices.contains(&i) {
+                log::debug!(
+                    target: "rui::text_shadow",
+                    "shadow not in texture cache and bitmap rasterize failed earlier; skipping"
+                );
+                let _ = sc;
             }
         }
 
@@ -3148,8 +2975,6 @@ pub fn prepare_text_frame(
                 .emoji_cache_key
                 .as_ref()
                 .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
-            transform: tb.paint_transform_ab_cd,
-            transform_origin: tb.paint_origin,
         });
 
         if emoji_debug_enabled() {
@@ -3398,8 +3223,6 @@ pub fn prepare_text_frame(
                 },
                 default_color: glyphon::Color::rgba(0, 0, 0, 0),
                 custom_glyphs: &[],
-                transform: glyphon::TEXT_TRANSFORM_IDENTITY,
-                transform_origin: [0.0, 0.0],
             });
         }
         let fs = text_renderer.font_system;

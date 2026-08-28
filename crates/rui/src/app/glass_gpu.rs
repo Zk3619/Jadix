@@ -36,7 +36,7 @@ fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
 }
 
 pub(super) fn try_acquire(window: &Arc<Window>) -> Option<CompositorGpu> {
-    pollster::block_on(try_acquire_async(window))
+    crate::utils::block_on::block_on(try_acquire_async(window))
 }
 
 async fn try_acquire_async(window: &Arc<Window>) -> Option<CompositorGpu> {

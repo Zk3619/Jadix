@@ -125,9 +125,10 @@ pub fn element_wants_sticky_xform(el: &Element) -> bool {
     if s.transform.as_ref().is_some_and(|t| !t.is_empty()) {
         return true;
     }
-    if (s.scale[0] - 1.0).abs() > 1e-6 || (s.scale[1] - 1.0).abs() > 1e-6 {
-        return true;
-    }
+    // Uniform CSS `scale` is already baked into the instance rect + glyphon
+    // `paint_scale`. Treating it as sticky forced Bake/Msdf at the animated font
+    // size (Dialog `zoom-in-95`: every label re-rasterizes at 0.95 then snaps back
+    // to Coverage at 1.0 — the "缩小态渲染异常" artifact, plus exit stutter).
     if el.attrs.get("rui_animate").map(|v| v.as_str()) == Some("spin") {
         return true;
     }
@@ -225,6 +226,16 @@ mod tests {
         assert_eq!(
             resolve_glyph_raster(true, &MAT2D_IDENTITY, 3.0),
             GlyphRasterMode::Msdf
+        );
+    }
+
+    #[test]
+    fn uniform_scale_is_not_sticky() {
+        let mut el = Element::new();
+        el.style.scale = [0.95, 0.95];
+        assert!(
+            !element_wants_sticky_xform(&el),
+            "scale-only motion must keep Coverage + paint_scale, not Bake"
         );
     }
 

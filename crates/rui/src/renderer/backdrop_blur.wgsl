@@ -12,8 +12,10 @@ struct BlurUniforms {
     direction: vec2<f32>,
     /// Gaussian σ in source texels (mode 1), unused otherwise.
     sigma: f32,
-    /// 0 = downsample, 1 = gaussian, 2 = upsample.
+    /// 0 = downsample, 1 = gaussian, 2 = upsample / blit.
     mode: f32,
+    /// Mode 2: output alpha multiplier (modal underlay fade).
+    blit_alpha: f32,
 };
 
 @group(0) @binding(0)
@@ -80,6 +82,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (mode < 1.5) {
         return gaussian1d(in.uv, uniforms.texel_size, uniforms.direction, uniforms.sigma);
     }
-    // Upsample: hardware bilinear from low-res source.
-    return textureSample(src_tex, src_sampler, in.uv);
+    // Upsample / fullscreen blit: hardware bilinear from low-res source.
+    let c = textureSample(src_tex, src_sampler, in.uv);
+    return vec4<f32>(c.rgb, uniforms.blit_alpha);
 }

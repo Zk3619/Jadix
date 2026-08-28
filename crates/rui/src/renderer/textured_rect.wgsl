@@ -76,13 +76,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var c: vec4<f32>;
     if (in.flags > 0.5) {
         // Median of RGB: true MSDF when channels diverge; single-channel SDF when R=G=B.
-        // Packing: 0.5 = edge, >0.5 inside (see text_texture / SDF_SPREAD).
+        // Packing: 0.5 = edge, >0.5 inside (see text_texture / SDF_SPREAD_PX).
         let sd = median3(sample.r, sample.g, sample.b);
-        // Screen-space px range (MSDF-style): scale AA width by how fast the field changes.
-        let px_range = 2.0;
-        let dist_screen = fwidth(sd) * px_range;
-        let afwidth = max(dist_screen, 0.02);
-        let coverage = smoothstep(0.5 - afwidth, 0.5 + afwidth, sd);
+        // Screen-space distance in SDF-gradient units; ~1.1px smoothstep band.
+        // Linear sampling + narrow AA: sharp without the old px_range=2 fog or Nearest stairs.
+        let grad = vec2<f32>(dpdx(sd), dpdy(sd));
+        let w = max(length(grad), 1e-5);
+        let edge = (sd - 0.5) / w;
+        let coverage = smoothstep(-0.6, 0.6, edge);
         c = vec4<f32>(in.tint.rgb, coverage * in.tint.a);
     } else {
         c = sample * in.tint;

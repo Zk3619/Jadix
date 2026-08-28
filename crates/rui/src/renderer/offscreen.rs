@@ -37,7 +37,7 @@ pub struct OffscreenGpu {
 impl OffscreenGpu {
     pub fn new() -> Option<Self> {
         let instance = super::wgpu_compat::instance(wgpu::Backends::all());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let adapter = crate::utils::block_on::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: None,
             force_fallback_adapter: std::env::var("RUI_FORCE_SOFTWARE").is_ok(),
@@ -52,7 +52,7 @@ impl OffscreenGpu {
         required_limits.max_inter_stage_shader_variables =
             adapter_limits.max_inter_stage_shader_variables.max(60);
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&super::wgpu_compat::device_desc(
+            crate::utils::block_on::block_on(adapter.request_device(&super::wgpu_compat::device_desc(
                 Some("rui-offscreen"),
                 required_limits,
                 Default::default(),

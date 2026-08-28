@@ -164,6 +164,7 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
                 );
             }
             layer.children.clear();
+            root_bucket.sort_by_key(|c| c.style.z_index);
             layer.children.append(&mut root_bucket);
         }
 
@@ -1234,6 +1235,8 @@ pub struct OverlayPaintBand {
     pub paint_op_start: usize,
     /// Max [`crate::style::Style::backdrop_blur`] on this band's root (logical px).
     pub backdrop_blur: f32,
+    /// Underlay 有效 opacity（祖先 × 自身），用于 backdrop blur 与遮罩同步淡入淡出。
+    pub underlay_opacity: f32,
 }
 
 /// Resolved `[start, end)` ranges for drawing one overlay band.
@@ -1270,6 +1273,7 @@ impl OverlayPaintSplit {
                     chrome_start: self.chrome_start.min(chrome_len),
                     paint_op_start: self.paint_op_start.min(paint_op_len),
                     backdrop_blur: 0.0,
+                    underlay_opacity: 1.0,
                 }]
             } else {
                 Vec::new()
@@ -1324,6 +1328,7 @@ impl OverlayPaintSplit {
             chrome_start: self.chrome_start,
             paint_op_start: self.paint_op_start,
             backdrop_blur: 0.0,
+            underlay_opacity: 1.0,
         };
         let mut starts = Vec::with_capacity(self.page_stack_bands.len() + 1);
         let first = self.page_stack_bands[0];
@@ -3428,9 +3433,9 @@ impl LayoutTree {
                 crate::renderer::GlyphRasterMode::Bake | crate::renderer::GlyphRasterMode::Msdf
             ) && !text.trim().is_empty()
                 && text_w >= 1.0
-                && text_h >= 1.0
-                && element.text_spans.as_ref().map_or(true, |s| s.is_empty());
+                && text_h >= 1.0;
 
+            let mut text_baked = false;
             if use_bake {
                 let align = match text_style.align {
                     crate::style::TextAlign::Left
@@ -3446,31 +3451,52 @@ impl LayoutTree {
                 };
                 let as_sdf = matches!(glyph_raster, crate::renderer::GlyphRasterMode::Msdf);
                 let dpr = if as_sdf {
-                    3.5
+                    (3.5 * text_scale).clamp(3.5, 8.0)
                 } else {
                     crate::renderer::BAKE_OVERSAMPLE
                 };
                 let draw_w = text_w * text_scale;
                 let draw_h = text_h * text_scale;
+                // CSS `scale` is baked into vis rect / draw_w (not `world_linear`). Rasterize
+                // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
+                // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
+                let bake_font_size = text_style.size * text_scale;
                 // Expand to line-height + ink pad; draw the padded quad so glyphs aren't
                 // clipped. Intersect only with ancestor scroll clip — not the text leaf's
                 // overflow:hidden (that would crop the pad we just added).
                 let (bake_w, bake_h, pad) = crate::utils::text_texture::text_xform_bake_box(
                     draw_w.max(1.0),
                     draw_h.max(1.0),
-                    text_style.size,
+                    bake_font_size,
                 );
-                if let Some((tex_key, _)) = crate::utils::text_texture::ensure_text_xform_texture(
-                    text,
-                    text_style.size,
-                    text_style.weight,
-                    text_style.color,
-                    bake_w,
-                    bake_h,
-                    align,
-                    dpr,
-                    as_sdf,
-                ) {
+                let bake_result = if let Some(spans) =
+                    element.text_spans.as_ref().filter(|s| !s.is_empty())
+                {
+                    crate::utils::text_texture::ensure_text_xform_texture_spans(
+                        spans,
+                        bake_font_size,
+                        text_style.weight,
+                        text_style.color,
+                        bake_w,
+                        bake_h,
+                        align,
+                        dpr,
+                        as_sdf,
+                    )
+                } else {
+                    crate::utils::text_texture::ensure_text_xform_texture(
+                        text,
+                        bake_font_size,
+                        text_style.weight,
+                        text_style.color,
+                        bake_w,
+                        bake_h,
+                        align,
+                        dpr,
+                        as_sdf,
+                    )
+                };
+                if let Some((tex_key, _)) = bake_result {
                     let full = [text_x - pad, text_y0 - pad, bake_w, bake_h];
                     if let Some(draw) =
                         TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
@@ -3488,9 +3514,19 @@ impl LayoutTree {
                         }
                         textured_draws.push(draw);
                     }
+                    text_baked = true;
+                } else if sticky_xform
+                    || !crate::style::transform::mat2d_is_axis_aligned(&text_world_linear)
+                {
+                    log::warn!(
+                        target: "rui::text_xform",
+                        "text xform bake failed for {:?}; skipping (no glyphon transform fallback)",
+                        text
+                    );
+                    text_baked = true;
                 }
-                // No glyphon TextLayoutInfo — bake owns the glyphs (avoid double-draw / clobber).
-            } else {
+            }
+            if !text_baked {
             let prepared = if is_icon {
                 None
             } else {
@@ -3575,7 +3611,7 @@ impl LayoutTree {
                 chrome_clip,
                 opacity,
             );
-            } // else !use_bake
+            } // !text_baked
             } // else !icon_spin_paint
         }
 
@@ -3659,7 +3695,8 @@ impl LayoutTree {
                                 text_nodes: &Vec<TextLayoutInfo>,
                                 input_chrome_instances: &Vec<InstanceInput>,
                                 paint_ops_len: usize,
-                                band_root: &Element| {
+                                band_root: &Element,
+                                ancestor_opacity: f32| {
             let band = OverlayPaintBand {
                 instance_start: instances.len(),
                 textured_start: textured_draws.len(),
@@ -3667,6 +3704,7 @@ impl LayoutTree {
                 chrome_start: input_chrome_instances.len(),
                 paint_op_start: paint_ops_len,
                 backdrop_blur: band_root.style.backdrop_blur.max(0.0),
+                underlay_opacity: (ancestor_opacity * band_root.style.opacity).clamp(0.0, 1.0),
             };
             if is_body_portal_layer {
                 overlay_split.bands.push(band);
@@ -3832,6 +3870,7 @@ impl LayoutTree {
                     input_chrome_instances,
                     paint_rec.ops.len(),
                     child,
+                    opacity,
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     if child
@@ -3914,6 +3953,7 @@ impl LayoutTree {
                     input_chrome_instances,
                     paint_rec.ops.len(),
                     &element.children[i],
+                    opacity,
                 );
                 let thumb_ov = if thumb_rect_for_child.is_some() {
                     let c = &element.children[i];

@@ -28,8 +28,9 @@ pub use animation::{
     css_transition_needs_frame, cubic_bezier_y_at_x, set_css_transition_synthetic_clock,
     set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
     snap_element_transitions_to_current, tick_animations, tick_element_animations,
-    tick_element_transitions, use_ui_transition_cubic, AnimationBaseline, AnimationRunState,
-    AnimationSnapshot, AnimationTick, CubicTween, CubicTweenState, TransitionSnapshot,
+    tick_element_transitions, tick_element_transitions_locked, use_ui_transition_cubic,
+    AnimationBaseline, AnimationLock, AnimationRunState, AnimationSnapshot, AnimationTick,
+    CubicTween, CubicTweenState, TransitionSnapshot,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
@@ -48,7 +49,8 @@ pub use element_style::{
     TransitionProperty, UnitSlot,
 };
 pub use keyframes::{
-    lookup_keyframes, register_keyframes, sample_keyframes, KeyframeSample, KeyframeStop,
+    keyframe_coverage, keyframes_exist, lookup_keyframes, register_keyframes, sample_keyframes,
+    sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
 };
 pub use filter::{
     filter_list_to_css, interpolate_filter_lists, parse_filter, FilterFunction, FilterList,

@@ -112,8 +112,8 @@ pub fn ensure_text_xform_texture(
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
     as_sdf.hash(&mut hasher);
-    // Bump when packing / pad semantics change (invalidates stale soft/clipped caches).
-    3u8.hash(&mut hasher);
+    // Bump when bake / SDF semantics change (invalidates stale CPU caches).
+    5u8.hash(&mut hasher);
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -130,7 +130,89 @@ pub fn ensure_text_xform_texture(
 
     let (w, h, mut rgba) =
         rasterize_text_rgba(text, font_size_px, font_weight, color, box_w, box_h, align, dpr)?;
-    // Reject empty bitmaps (font/shape failure) so caller can fall back to glyphon.
+    // Reject empty bitmaps (font/shape failure); caller may fall back to Coverage glyphon.
+    if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
+        return None;
+    }
+    if as_sdf {
+        rgba = alpha_coverage_to_sdf_rgba(&rgba, w, h);
+    }
+    cache_put(key.clone(), w, h, rgba.clone());
+    queue_image_rgba8(&key, w, h, rgba);
+    Some((key, box_w))
+}
+
+/// Rich-inline spans (chip/mention/color) → cached bake texture for CSS transform.
+pub fn ensure_text_xform_texture_spans(
+    spans: &[crate::style::TextSpan],
+    font_size_px: f32,
+    font_weight: u16,
+    default_color: [u8; 4],
+    box_w: f32,
+    box_h: f32,
+    align: glyphon::cosmic_text::Align,
+    dpr: f32,
+    as_sdf: bool,
+) -> Option<(String, f32)> {
+    if spans.is_empty() || box_w < 1.0 || box_h < 1.0 || font_size_px < 0.5 {
+        return None;
+    }
+    let dpr = dpr.clamp(1.0, 4.0);
+    let size_key = (font_size_px * 100.0).round() as i32;
+    let w_key = (box_w * 10.0).round() as i32;
+    let h_key = (box_h * 10.0).round() as i32;
+    let dpr_key = (dpr * 100.0).round() as i32;
+    let align_key = match align {
+        glyphon::cosmic_text::Align::Left => 0u8,
+        glyphon::cosmic_text::Align::Center => 1,
+        glyphon::cosmic_text::Align::Right => 2,
+        glyphon::cosmic_text::Align::Justified => 3,
+        glyphon::cosmic_text::Align::End => 4,
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for span in spans {
+        span.text.hash(&mut hasher);
+        span.color.hash(&mut hasher);
+        span.weight.hash(&mut hasher);
+        span.size.map(|v| v.to_bits()).hash(&mut hasher);
+        (span.kind as u8).hash(&mut hasher);
+        span.background.hash(&mut hasher);
+        span.padding_x.to_bits().hash(&mut hasher);
+        span.italic.hash(&mut hasher);
+        span.monospace.hash(&mut hasher);
+        span.underline.hash(&mut hasher);
+    }
+    size_key.hash(&mut hasher);
+    font_weight.hash(&mut hasher);
+    default_color.hash(&mut hasher);
+    w_key.hash(&mut hasher);
+    h_key.hash(&mut hasher);
+    dpr_key.hash(&mut hasher);
+    align_key.hash(&mut hasher);
+    as_sdf.hash(&mut hasher);
+    4u8.hash(&mut hasher); // rich-span bake schema version
+    5u8.hash(&mut hasher); // bake font scale + SDF shader alignment
+    let prefix = if as_sdf {
+        TEXT_MSDF_TEX_PREFIX
+    } else {
+        TEXT_XFORM_TEX_PREFIX
+    };
+    let key = format!("{prefix}{:016x}", hasher.finish());
+
+    if cache_get(&key).is_some() {
+        return Some((key, box_w));
+    }
+
+    let (w, h, mut rgba) = rasterize_rich_text_rgba(
+        spans,
+        font_size_px,
+        font_weight,
+        default_color,
+        box_w,
+        box_h,
+        align,
+        dpr,
+    )?;
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return None;
     }
@@ -349,6 +431,228 @@ fn rasterize_text_rgba(
             }
         }
 
+        Some((tw, th, rgba))
+    })
+}
+
+/// Fill chip/mention pill backgrounds into `rgba` before glyph blits (metadata = span_index+1).
+fn paint_span_backgrounds(
+    rgba: &mut [u8],
+    tw: u32,
+    th: u32,
+    buffer: &glyphon::Buffer,
+    spans: &[crate::style::TextSpan],
+    dpr: f32,
+) {
+    if !spans.iter().any(|s| s.background.is_some()) {
+        return;
+    }
+    for run in buffer.layout_runs() {
+        let line_top = run.line_top;
+        let line_height = run.line_height;
+        let mut cur_meta: Option<usize> = None;
+        let mut min_x = 0.0_f32;
+        let mut max_x = 0.0_f32;
+        let mut flush = |meta: usize, min_x: f32, max_x: f32| {
+            let Some(span) = spans.get(meta.saturating_sub(1)) else {
+                return;
+            };
+            let Some(bg) = span.background else {
+                return;
+            };
+            if max_x <= min_x {
+                return;
+            }
+            let pad = span.padding_x * dpr;
+            let bx = ((min_x - pad) * dpr).round() as i32;
+            let by = (line_top * dpr).round() as i32;
+            let bw = ((max_x - min_x) + 2.0 * pad) * dpr;
+            let bh = line_height.max(1.0) * dpr;
+            let rw = bw.round().max(1.0) as i32;
+            let rh = bh.round().max(1.0) as i32;
+            fill_rect_rgba(rgba, tw, th, bx, by, rw, rh, bg);
+        };
+        for g in run.glyphs.iter() {
+            let meta = g.metadata;
+            if meta == 0 {
+                if let Some(m) = cur_meta.take() {
+                    flush(m, min_x, max_x);
+                }
+                continue;
+            }
+            if cur_meta != Some(meta) {
+                if let Some(m) = cur_meta.take() {
+                    flush(m, min_x, max_x);
+                }
+                cur_meta = Some(meta);
+                min_x = g.x;
+                max_x = g.x + g.w;
+            } else {
+                min_x = min_x.min(g.x);
+                max_x = max_x.max(g.x + g.w);
+            }
+        }
+        if let Some(m) = cur_meta.take() {
+            flush(m, min_x, max_x);
+        }
+    }
+}
+
+fn fill_rect_rgba(
+    dst: &mut [u8],
+    dw: u32,
+    dh: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    color: [u8; 4],
+) {
+    if color[3] == 0 {
+        return;
+    }
+    for row in 0..h {
+        let py = y + row;
+        if py < 0 || py >= dh as i32 {
+            continue;
+        }
+        for col in 0..w {
+            let px = x + col;
+            if px < 0 || px >= dw as i32 {
+                continue;
+            }
+            let i = ((py as u32 * dw + px as u32) * 4) as usize;
+            let sa = color[3] as u32;
+            let da = dst[i + 3] as u32;
+            let out_a = sa + ((255 - sa) * da) / 255;
+            if out_a == 0 {
+                continue;
+            }
+            let inv = 255 - sa;
+            dst[i] = (((color[0] as u32 * sa) + (dst[i] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[i + 1] =
+                (((color[1] as u32 * sa) + (dst[i + 1] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[i + 2] =
+                (((color[2] as u32 * sa) + (dst[i + 2] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[i + 3] = out_a as u8;
+        }
+    }
+}
+
+fn rasterize_rich_text_rgba(
+    spans: &[crate::style::TextSpan],
+    font_size_px: f32,
+    font_weight: u16,
+    default_color: [u8; 4],
+    box_w: f32,
+    box_h: f32,
+    align: glyphon::cosmic_text::Align,
+    dpr: f32,
+) -> Option<(u32, u32, Vec<u8>)> {
+    use crate::style::TextSpanKind;
+    crate::text::measure::with_layout_font_system(|fs| {
+        let size = (font_size_px * dpr).max(1.0);
+        let lh = size * crate::style::tailwind_default_leading_scale(font_size_px);
+        let pw = (box_w * dpr).ceil().max(1.0);
+        let ph = (box_h * dpr).ceil().max(lh).max(1.0);
+        let tw = pw.round().max(1.0) as u32;
+        let th = ph.round().max(1.0) as u32;
+
+        let family = crate::renderer::text_hit::best_font_family(fs);
+        let weight =
+            crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
+        let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
+        buffer.set_size(Some(pw), Some(ph));
+        let base_attrs = glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight))
+            .color(glyphon::Color::rgba(
+                default_color[0],
+                default_color[1],
+                default_color[2],
+                default_color[3],
+            ));
+        let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
+        for (si, span) in spans.iter().enumerate() {
+            let mut a = base_attrs.clone();
+            if let Some(c) = span.color {
+                a = a.color(glyphon::Color::rgba(c[0], c[1], c[2], c[3]));
+            }
+            if let Some(w) = span.weight {
+                a = a.weight(glyphon::fontdb::Weight(w));
+            }
+            if let Some(sz) = span.size {
+                let span_lh = lh * (sz / font_size_px.max(1.0));
+                a = a.metrics(glyphon::Metrics::new((sz * dpr).max(1.0), span_lh.max(1.0)));
+            }
+            if span.italic {
+                a = a.style(glyphon::Style::Italic);
+            }
+            if span.monospace {
+                a = a.family(glyphon::Family::Monospace);
+            }
+            if span.background.is_some()
+                || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
+            {
+                a = a.metadata(si + 1);
+            }
+            owned.push((span.text.clone(), a));
+        }
+        let rich: Vec<(&str, glyphon::Attrs)> =
+            owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
+        buffer.set_rich_text(rich, &base_attrs, glyphon::Shaping::Advanced, None);
+        for line in buffer.lines.iter_mut() {
+            line.set_align(Some(align));
+        }
+        buffer.shape_until_scroll(fs, false);
+
+        let mut rgba = vec![0u8; (tw as usize) * (th as usize) * 4];
+        paint_span_backgrounds(&mut rgba, tw, th, &buffer, spans, dpr);
+
+        let mut swash = glyphon::SwashCache::new();
+        for run in buffer.layout_runs() {
+            let line_y_px = run.line_y.round() as i32;
+            for glyph in run.glyphs.iter() {
+                let physical = glyph.physical((0.0, 0.0), 1.0);
+                let Some(image) = swash.get_image_uncached(fs, physical.cache_key) else {
+                    continue;
+                };
+                let gw = image.placement.width;
+                let gh = image.placement.height;
+                if gw == 0 || gh == 0 {
+                    continue;
+                }
+                let gx = physical.x + image.placement.left;
+                let gy = line_y_px + physical.y - image.placement.top;
+                let glyph_color = glyph
+                    .color_opt
+                    .map(|c| {
+                        let v = c.0;
+                        [
+                            ((v >> 16) & 0xff) as u8,
+                            ((v >> 8) & 0xff) as u8,
+                            (v & 0xff) as u8,
+                            ((v >> 24) & 0xff) as u8,
+                        ]
+                    })
+                    .unwrap_or(default_color);
+                match image.content {
+                    glyphon::SwashContent::Mask => {
+                        blit_mask_straight(
+                            &mut rgba, tw, th, &image.data, gw, gh, gx, gy, glyph_color,
+                        );
+                    }
+                    glyphon::SwashContent::SubpixelMask => {
+                        blit_subpixel_as_mask(
+                            &mut rgba, tw, th, &image.data, gw, gh, gx, gy, glyph_color,
+                        );
+                    }
+                    glyphon::SwashContent::Color => {
+                        blit_rgba_straight(&mut rgba, tw, th, &image.data, gw, gh, gx, gy);
+                    }
+                }
+            }
+        }
         Some((tw, th, rgba))
     })
 }

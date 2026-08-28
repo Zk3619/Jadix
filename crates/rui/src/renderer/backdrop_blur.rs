@@ -17,6 +17,7 @@ const UNIFORM_STRIDE: u64 = 256;
 const MAX_PASSES: u64 = 8;
 
 /// `mode`: 0 = downsample, 1 = Gaussian 1D, 2 = upsample.
+/// WGSL uniform layout rounds struct size to vec2 alignment (32 bytes).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct BlurUniforms {
@@ -24,7 +25,11 @@ struct BlurUniforms {
     direction: [f32; 2],
     sigma: f32,
     mode: f32,
+    blit_alpha: f32,
+    _pad: [f32; 1],
 }
+
+const _: () = assert!(std::mem::size_of::<BlurUniforms>() == 32);
 
 struct Rt {
     /// Kept alive so `view` / bind group remain valid.
@@ -403,6 +408,7 @@ impl BackdropBlurPipeline {
                 [0.0, 0.0],
                 0.0,
                 0.0,
+                1.0,
             );
         } else {
             Self::dispatch_pass(
@@ -421,6 +427,7 @@ impl BackdropBlurPipeline {
                 [0.0, 0.0],
                 0.0,
                 2.0,
+                1.0,
             );
         }
 
@@ -441,6 +448,7 @@ impl BackdropBlurPipeline {
             [1.0, 0.0],
             sigma_work,
             1.0,
+            1.0,
         );
         Self::dispatch_pass(
             &mut slot,
@@ -457,6 +465,7 @@ impl BackdropBlurPipeline {
             work_texel,
             [0.0, 1.0],
             sigma_work,
+            1.0,
             1.0,
         );
 
@@ -478,6 +487,7 @@ impl BackdropBlurPipeline {
                 [1.0, 0.0],
                 s2,
                 1.0,
+                1.0,
             );
             Self::dispatch_pass(
                 &mut slot,
@@ -494,6 +504,7 @@ impl BackdropBlurPipeline {
                 work_texel,
                 [0.0, 1.0],
                 s2,
+                1.0,
                 1.0,
             );
         }
@@ -514,6 +525,7 @@ impl BackdropBlurPipeline {
             [0.0, 0.0],
             0.0,
             2.0,
+            1.0,
         );
     }
 
@@ -526,6 +538,7 @@ impl BackdropBlurPipeline {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         dst: &wgpu::TextureView,
+        alpha: f32,
     ) {
         let Some(full) = self.full.as_ref() else {
             return;
@@ -547,6 +560,7 @@ impl BackdropBlurPipeline {
             [0.0, 0.0],
             0.0,
             2.0,
+            alpha.clamp(0.0, 1.0),
         );
     }
 
@@ -566,6 +580,7 @@ impl BackdropBlurPipeline {
         direction: [f32; 2],
         sigma: f32,
         mode: f32,
+        blit_alpha: f32,
     ) {
         let slot = *pass_slot as u64;
         debug_assert!(slot < MAX_PASSES, "backdrop blur exceeded MAX_PASSES");
@@ -577,6 +592,8 @@ impl BackdropBlurPipeline {
             direction,
             sigma,
             mode,
+            blit_alpha,
+            _pad: [0.0],
         };
         queue.write_buffer(uniforms_buffer, offset, bytemuck::bytes_of(&u));
 

@@ -442,8 +442,6 @@ impl EffectPassGpu {
                             info.style.color[3],
                         ),
                         custom_glyphs: &[],
-                        transform: glyphon::TEXT_TRANSFORM_IDENTITY,
-                        transform_origin: [0.0, 0.0],
                     });
                 }
                 tr.prepare_resolution(device, queue, w, h, areas.into_iter());

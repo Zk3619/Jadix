@@ -1656,6 +1656,22 @@ impl AppState {
 
         let portal_moves = hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
+        // Modal overlay/panel live on the hoisted portal tree. Flush seeds enter/exit
+        // keyframes; CSS then ticks **once** on those nodes. Pre-hoist class-variant
+        // tick skips them via `modal_shell_defer_css_tick` so we do not double-step
+        // (or step a stale un-hoisted copy).
+        let modal_needs_frame =
+            crate::components::internal::modal_motion::flush_modal_shell_motion_subtree(
+                &mut self.root_element,
+            );
+        let modal_css_ticking =
+            crate::components::internal::modal_motion::tick_hoisted_modal_css(
+                &mut self.root_element,
+            );
+        if modal_needs_frame || modal_css_ticking {
+            self.window.request_redraw();
+        }
+
         // Viewport/content signals can be stale right after a resize+StructureChanged (not every
         // StructureChanged). In that narrow case, skip preupdate to avoid corrupt geometry from
         // previous-frame metrics. For normal StructureChanged frames, keep preupdate enabled so
@@ -2555,11 +2571,17 @@ impl AppState {
             .iter()
             .map(|b| b.backdrop_blur)
             .fold(0.0_f32, f32::max);
+        let modal_underlay_opacity = overlay_split
+            .bands
+            .iter()
+            .map(|b| b.underlay_opacity)
+            .fold(0.0_f32, f32::max);
         let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
             && Self::cpu_hybrid_text_only());
         // Fullscreen modal underlay blur: capture page → blur → composite under overlays.
         let use_backdrop_blur = allow_primitives
             && max_backdrop_blur_logical > 0.5
+            && modal_underlay_opacity > 0.001
             && overlay_inst_start > 0
             && !use_partial_damage;
         if use_backdrop_blur {
@@ -2673,11 +2695,14 @@ impl AppState {
                         );
                     }
                 }
+                // Ramp the radius with the overlay's own fade. Blitting a fully-blurred
+                // capture at low alpha reads as the page snapping out of focus; growing the
+                // radius is what `backdrop-filter` under a fading element actually looks like.
                 self.backdrop_blur.blur(
                     &self.device,
                     &self.queue,
                     &mut encoder,
-                    max_backdrop_blur_logical * ui_scale,
+                    max_backdrop_blur_logical * modal_underlay_opacity * ui_scale,
                 );
                 // Same UV space as capture / TexturedQuadPipeline (rect top → uv.y = 0).
                 let blur_dst = if draw_to_retain {
@@ -2686,7 +2711,8 @@ impl AppState {
                     Some(&view)
                 };
                 if let Some(dst) = blur_dst {
-                    self.backdrop_blur.blit_to(&self.queue, &mut encoder, dst);
+                    self.backdrop_blur
+                        .blit_to(&self.queue, &mut encoder, dst, modal_underlay_opacity);
                 }
             }
         }

@@ -251,6 +251,14 @@ struct PropertyTween {
     delay_ms: f32,
     timing: TimingFunction,
     active: bool,
+    /// What this engine last wrote into `Style` (the CSS *used value*).
+    ///
+    /// A browser keeps the cascaded *specified* value and the animated *used* value in
+    /// separate places. Here there is a single `Style`, so without this receipt the next
+    /// frame would read back our own mid-tween value, mistake it for a new target, and
+    /// retarget the tween onto itself — every transition would die after one frame
+    /// unless its owner rewrote the target on every single frame.
+    written: Option<[f32; 8]>,
 }
 
 /// Filter list tween (cannot fit in `[f32; 4]`).
@@ -263,6 +271,8 @@ struct FilterTween {
     delay_ms: f32,
     timing: TimingFunction,
     active: bool,
+    /// Last value written into `Style`; see [`PropertyTween::written`].
+    written: Option<Option<FilterList>>,
 }
 
 /// Per-element transition snapshot stored alongside the element.
@@ -280,8 +290,34 @@ impl TransitionSnapshot {
     }
 }
 
+/// Properties a running `@keyframes` currently drives.
+///
+/// CSS resolves `animation` **after** `transition` and never lets an animation-driven
+/// change start a transition. Both engines write the same `Style` here, so the animation
+/// publishes what it owns and [`tick_element_transitions_locked`] steps aside.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AnimationLock {
+    pub opacity: bool,
+    /// Covers `translate` / `scale` / `rotate` (this engine's transform bundle).
+    pub transform: bool,
+}
+
+impl AnimationLock {
+    pub fn any(self) -> bool {
+        self.opacity || self.transform
+    }
+}
+
+fn animation_owns_prop(prop: TransitionProperty, lock: AnimationLock) -> bool {
+    match prop {
+        TransitionProperty::Opacity => lock.opacity,
+        TransitionProperty::Transform | TransitionProperty::Translate => lock.transform,
+        _ => false,
+    }
+}
+
 /// Baseline visual props captured when an animation starts (fill-mode / restore).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimationBaseline {
     pub opacity: f32,
     pub rotate_deg: f32,
@@ -314,12 +350,29 @@ pub struct AnimationRunState {
 #[derive(Clone, Debug, Default)]
 pub struct AnimationSnapshot {
     pub runs: Vec<AnimationRunState>,
+    /// Cascaded value the keyframes are layered over, re-applied before every sample.
+    base: Option<AnimationBaseline>,
+    /// What the sampler wrote last frame, used to tell our own output apart from a
+    /// fresh assignment by the component (same trick as [`PropertyTween::written`]).
+    written: Option<AnimationBaseline>,
+    lock: AnimationLock,
 }
 
 impl AnimationSnapshot {
+    /// True while some entry still has time left to play.
+    ///
+    /// A finished finite animation is deliberately *not* active: `fill-mode: forwards`
+    /// holds its end value without a frame pump, and treating it as active kept every
+    /// element that ever animated redrawing forever.
     pub fn has_active(&self, style: &super::Style) -> bool {
-        style.animations.iter().any(|e| e.needs_frame())
-            || self.runs.iter().any(|r| !r.finished)
+        style.animations.iter().enumerate().any(|(i, e)| {
+            e.needs_frame() && !self.runs.get(i).is_some_and(|r| r.finished)
+        })
+    }
+
+    /// Properties the last tick painted; transitions must not fight over these.
+    pub fn lock(&self) -> AnimationLock {
+        self.lock
     }
 }
 
@@ -337,17 +390,33 @@ fn animation_entry_fp(entry: &super::element_style::AnimationEntry) -> u64 {
     h.finish()
 }
 
-fn apply_keyframe_sample(style: &mut super::Style, sample: &super::keyframes::KeyframeSample) {
-    if let Some(o) = sample.opacity {
+/// Write a sample back, but only for the properties the rule actually declares.
+///
+/// The sampler fills undeclared properties from the base so single-ended keyframes can
+/// interpolate out of the cascade. Writing those back would let one entry of an
+/// `animation` list clobber another: shadcn's `fade-in-0, zoom-in-95` lost its fade
+/// because `zoom-in-95` reported the *base* opacity and ran last.
+fn apply_keyframe_sample(
+    style: &mut super::Style,
+    stops: &[super::keyframes::KeyframeStop],
+    sample: &super::keyframes::KeyframeSample,
+) {
+    if let Some(o) = sample.opacity.filter(|_| stops.iter().any(|s| s.opacity.is_some())) {
         style.opacity = o;
     }
-    if let Some(r) = sample.rotate_deg {
+    if let Some(r) = sample
+        .rotate_deg
+        .filter(|_| stops.iter().any(|s| s.rotate_deg.is_some()))
+    {
         style.rotate_deg = r;
     }
-    if let Some(s) = sample.scale {
+    if let Some(s) = sample.scale.filter(|_| stops.iter().any(|s| s.scale.is_some())) {
         style.scale = s;
     }
-    if let Some(t) = sample.translate {
+    if let Some(t) = sample
+        .translate
+        .filter(|_| stops.iter().any(|s| s.translate.is_some()))
+    {
         style.translate = t;
     }
 }
@@ -358,6 +427,51 @@ fn restore_baseline(style: &mut super::Style, base: &AnimationBaseline) {
     style.scale = base.scale;
     style.translate = base.translate;
 }
+
+fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
+    (style.opacity - base.opacity).abs() <= 1e-5
+        && (style.rotate_deg - base.rotate_deg).abs() <= 1e-4
+        && (style.scale[0] - base.scale[0]).abs() <= 1e-5
+        && (style.scale[1] - base.scale[1]).abs() <= 1e-5
+        && (style.translate[0] - base.translate[0]).abs() <= 1e-4
+        && (style.translate[1] - base.translate[1]).abs() <= 1e-4
+}
+
+/// Paint one keyframe sample and record which properties it claimed.
+fn apply_animation_sample(
+    style: &mut super::Style,
+    stops: &[super::keyframes::KeyframeStop],
+    local_t: f32,
+    timing: TimingFunction,
+    base: &super::keyframes::KeyframeBase,
+    lock: &mut AnimationLock,
+) {
+    let sample = super::keyframes::sample_keyframes_eased(stops, local_t, timing, Some(base));
+    apply_keyframe_sample(style, stops, &sample);
+    let cov = super::keyframes::keyframe_coverage(stops);
+    lock.opacity |= cov.opacity;
+    lock.transform |= cov.transform;
+}
+
+#[cfg(debug_assertions)]
+fn warn_unknown_keyframes(name: &str) {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+    thread_local! {
+        static SEEN: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    }
+    SEEN.with(|s| {
+        if s.borrow_mut().insert(name.to_string()) {
+            eprintln!(
+                "[rui] animation `{name}` has no @keyframes; the element will stay at its \
+                 cascaded value. Register it with `register_keyframes(\"{name}\", ..)`."
+            );
+        }
+    });
+}
+
+#[cfg(not(debug_assertions))]
+fn warn_unknown_keyframes(_name: &str) {}
 
 /// Map local cycle progress through `animation-direction`.
 fn direction_local_t(
@@ -385,22 +499,44 @@ pub fn tick_element_animations(
     snap: &mut AnimationSnapshot,
     dt_secs: f32,
 ) -> bool {
-    use super::element_style::{
-        AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-    };
-    use super::keyframes::{lookup_keyframes, sample_keyframes};
+    use super::element_style::{AnimationIterationCount, AnimationPlayState};
+    use super::keyframes::{lookup_keyframes, KeyframeBase};
 
     if style.animations.is_empty() {
-        snap.runs.clear();
+        // Animation removed: hand the cascaded value back, unless the component has
+        // meanwhile specified something of its own (CSS drops to the base style here).
+        if let (Some(base), Some(written)) = (snap.base, snap.written) {
+            if baseline_matches(style, &written) {
+                restore_baseline(style, &base);
+            }
+        }
+        *snap = AnimationSnapshot::default();
         return false;
     }
+
+    // Resolve the base value the animation is layered over. Keyframes are *not*
+    // cumulative: every frame must sample from the cascaded style, otherwise our own
+    // output from last frame becomes the new base and the animation drifts/freezes.
+    let base = match (snap.base, snap.written) {
+        (Some(b), Some(w)) if baseline_matches(style, &w) => b,
+        _ => AnimationBaseline::from_style(style),
+    };
+    snap.base = Some(base);
+    restore_baseline(style, &base);
+
+    let kf_base = KeyframeBase {
+        opacity: base.opacity,
+        rotate_deg: base.rotate_deg,
+        scale: base.scale,
+        translate: base.translate,
+    };
 
     // Sync run slots with style list length / fingerprints.
     while snap.runs.len() < style.animations.len() {
         let i = snap.runs.len();
         snap.runs.push(AnimationRunState {
             elapsed_ms: 0.0,
-            baseline: AnimationBaseline::from_style(style),
+            baseline: base,
             finished: false,
             entry_fp: animation_entry_fp(&style.animations[i]),
         });
@@ -409,6 +545,7 @@ pub fn tick_element_animations(
 
     let dt_ms = (dt_secs.max(0.0) * 1000.0).min(80.0);
     let mut any_active = false;
+    let mut lock = AnimationLock::default();
     let animations = style.animations.clone();
 
     for (i, entry) in animations.iter().enumerate() {
@@ -416,45 +553,60 @@ pub fn tick_element_animations(
             continue;
         }
         let fp = animation_entry_fp(entry);
-        let run = &mut snap.runs[i];
-        if run.entry_fp != fp {
-            *run = AnimationRunState {
-                elapsed_ms: 0.0,
-                baseline: AnimationBaseline::from_style(style),
-                finished: false,
-                entry_fp: fp,
-            };
+        {
+            let run = &mut snap.runs[i];
+            run.baseline = base;
+            if run.entry_fp != fp {
+                *run = AnimationRunState {
+                    elapsed_ms: 0.0,
+                    baseline: base,
+                    finished: false,
+                    entry_fp: fp,
+                };
+            }
         }
 
         let Some(stops) = lookup_keyframes(&entry.name) else {
+            warn_unknown_keyframes(&entry.name);
             continue;
         };
 
-        if entry.play_state == AnimationPlayState::Paused {
-            // Still paint current fill/frame without advancing.
-            let sample_t = animation_sample_t(entry, run.elapsed_ms);
-            if let Some(local) = sample_t {
-                let eased = entry.timing.eval(local);
-                apply_keyframe_sample(style, &sample_keyframes(&stops, eased));
-            } else if entry.fill_mode.apply_backwards() && run.elapsed_ms < entry.delay_ms {
+        let (elapsed_ms, finished_before, paused) = {
+            let run = &snap.runs[i];
+            (
+                run.elapsed_ms,
+                run.finished,
+                entry.play_state == AnimationPlayState::Paused,
+            )
+        };
+
+        if paused {
+            // Still paint the current fill/frame without advancing.
+            if let Some(local) = animation_sample_t(entry, elapsed_ms) {
+                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
+            } else if entry.fill_mode.apply_backwards() && elapsed_ms < entry.delay_ms {
                 let local = direction_local_t(entry.direction, 0, 0.0);
-                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
+                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
             }
-            if entry.needs_frame() || !run.finished {
+            if entry.needs_frame() || !finished_before {
                 any_active = true;
             }
             continue;
         }
 
-        if !run.finished {
-            run.elapsed_ms += dt_ms;
-        }
+        let elapsed_ms = if finished_before {
+            elapsed_ms
+        } else {
+            let next = elapsed_ms + dt_ms;
+            snap.runs[i].elapsed_ms = next;
+            next
+        };
 
-        let after_delay = run.elapsed_ms - entry.delay_ms;
+        let after_delay = elapsed_ms - entry.delay_ms;
         if after_delay < 0.0 {
             if entry.fill_mode.apply_backwards() {
                 let local = direction_local_t(entry.direction, 0, 0.0);
-                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
+                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
             }
             any_active = true;
             continue;
@@ -466,14 +618,10 @@ pub fn tick_element_animations(
             AnimationIterationCount::Finite(n) => Some(n.max(0.0)),
         };
 
-        let finished = if let Some(n) = total_iters {
-            after_delay >= dur * n
-        } else {
-            false
-        };
+        let finished = matches!(total_iters, Some(n) if after_delay >= dur * n);
 
         if finished {
-            run.finished = true;
+            snap.runs[i].finished = true;
             if entry.fill_mode.apply_forwards() {
                 let last_iter = match total_iters {
                     Some(n) if n > 0.0 => (n.ceil() as u32).saturating_sub(1),
@@ -481,23 +629,23 @@ pub fn tick_element_animations(
                 };
                 // End of last iteration: local t = 1.0 before direction.
                 let local = direction_local_t(entry.direction, last_iter, 1.0);
-                apply_keyframe_sample(style, &sample_keyframes(&stops, entry.timing.eval(local)));
-            } else if matches!(entry.fill_mode, AnimationFillMode::None) {
-                restore_baseline(style, &run.baseline);
+                apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
             }
+            // `fill-mode: none` needs no work: the base was already restored above.
             continue;
         }
 
-        run.finished = false;
+        snap.runs[i].finished = false;
         any_active = true;
 
         let cycle_index = (after_delay / dur).floor() as u32;
         let cycle_t = (after_delay % dur) / dur;
         let local = direction_local_t(entry.direction, cycle_index, cycle_t);
-        let eased = entry.timing.eval(local);
-        apply_keyframe_sample(style, &sample_keyframes(&stops, eased));
+        apply_animation_sample(style, &stops, local, entry.timing, &kf_base, &mut lock);
     }
 
+    snap.lock = lock;
+    snap.written = Some(AnimationBaseline::from_style(style));
     any_active
 }
 
@@ -530,6 +678,40 @@ pub fn css_animation_needs_frame(style: &super::Style, snap: &AnimationSnapshot)
     style.animations.iter().any(|e| e.needs_frame()) || snap.has_active(style)
 }
 
+/// Recover the *specified* (cascade) value for `prop` from the single `Style` field.
+///
+/// If `style` still holds exactly what we wrote last frame, nobody re-specified the
+/// property, so the standing target stands. Otherwise the owner assigned a new value
+/// and that value is the new target.
+fn specified_prop_value(tween: &PropertyTween, current: [f32; 8], comps: u8) -> [f32; 8] {
+    match tween.written {
+        Some(w) if (0..comps as usize).all(|i| (w[i] - current[i]).abs() <= 1e-5) => tween.to,
+        _ => current,
+    }
+}
+
+fn specified_filter_value(tween: &FilterTween, current: &Option<FilterList>) -> Option<FilterList> {
+    match tween.written.as_ref() {
+        Some(w) if w == current => tween.to.clone(),
+        _ => current.clone(),
+    }
+}
+
+/// CSS keywords like `auto` have no numeric value to interpolate.
+///
+/// Web needs `interpolate-size: allow-keywords` / `calc-size()` to animate to `auto`;
+/// without this guard `max-height: auto` reads back as `0`, and the tween then pins the
+/// box to zero height — turning a decorative `transition: all` into an invisible element.
+fn prop_is_interpolable(style: &super::Style, prop: TransitionProperty) -> bool {
+    match prop {
+        TransitionProperty::MaxHeight => matches!(
+            crate::layout::dim_kind(style.max_size.height),
+            crate::layout::DimKind::Length(_)
+        ),
+        _ => true,
+    }
+}
+
 fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8) {
     match prop {
         TransitionProperty::Opacity => ([style.opacity, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1),
@@ -556,6 +738,10 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8
             let c = style.shadow_color;
             ([c[0], c[1], c[2], c[3], 0.0, 0.0, 0.0, 0.0], 4)
         }
+        TransitionProperty::MaxHeight => {
+            let h = crate::layout::dim_length_px(style.max_size.height).unwrap_or(0.0);
+            ([h, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
+        }
         // Independent transform props: translate → rotate → scale（与 resolve 顺序一致）。
         TransitionProperty::Transform | TransitionProperty::Translate => (
             [
@@ -576,7 +762,7 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8
         ),
         // Handled via [`FilterTween`] + [`interpolate_filter_lists`].
         TransitionProperty::Filter => ([0.0; 8], 0),
-        TransitionProperty::All => ([0.0; 8], 0),
+        TransitionProperty::All | TransitionProperty::Unsupported => ([0.0; 8], 0),
     }
 }
 
@@ -590,6 +776,9 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]
         TransitionProperty::OutlineWidth => style.outline_width = val[0],
         TransitionProperty::OutlineOffset => style.outline_offset = val[0],
         TransitionProperty::BoxShadow => style.shadow_color = [val[0], val[1], val[2], val[3]],
+        TransitionProperty::MaxHeight => {
+            style.max_size.height = taffy::style::Dimension::length(val[0].max(0.0));
+        }
         TransitionProperty::Transform => {
             style.translate = [val[0], val[1]];
             style.scale = [val[2], val[3]];
@@ -599,7 +788,7 @@ fn write_prop(style: &mut super::Style, prop: TransitionProperty, val: &[f32; 8]
             style.translate = [val[0], val[1]];
         }
         TransitionProperty::Filter => {}
-        TransitionProperty::All => {}
+        TransitionProperty::All | TransitionProperty::Unsupported => {}
     }
 }
 
@@ -627,6 +816,7 @@ const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::Color,
     // Transform 已含 translate；勿再单独扩 Translate，避免同帧双写。
     TransitionProperty::Transform,
+    TransitionProperty::MaxHeight,
     TransitionProperty::Filter,
 ];
 
@@ -651,10 +841,10 @@ pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSna
     }
     for &prop in config_map.keys() {
         if prop == TransitionProperty::Filter {
-            let target = style.filter.clone();
+            let current = style.filter.clone();
             match &snapshot.filter_tween {
                 Some(t) => {
-                    if t.to != target {
+                    if t.to != specified_filter_value(t, &current) {
                         return true;
                     }
                 }
@@ -662,12 +852,13 @@ pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSna
             }
             continue;
         }
-        let (target, comps) = extract_prop(style, prop);
-        if comps == 0 {
+        let (current, comps) = extract_prop(style, prop);
+        if comps == 0 || !prop_is_interpolable(style, prop) {
             continue;
         }
         match snapshot.tweens.get(&prop) {
             Some(t) => {
+                let target = specified_prop_value(t, current, comps);
                 if (0..comps as usize).any(|i| (t.to[i] - target[i]).abs() > 1e-5) {
                     return true;
                 }
@@ -746,17 +937,19 @@ pub fn snap_element_transitions_to_current(
             let cur = style.filter.clone();
             snapshot.filter_tween = Some(FilterTween {
                 from: cur.clone(),
-                to: cur,
+                to: cur.clone(),
                 start_ms: now_ms,
                 duration_ms: style.transition[cfg_idx].duration_ms,
                 delay_ms: style.transition[cfg_idx].delay_ms,
                 timing: style.transition[cfg_idx].timing,
                 active: false,
+                written: Some(cur),
             });
             continue;
         }
         let (val, comps) = extract_prop(style, prop);
-        if comps == 0 {
+        if comps == 0 || !prop_is_interpolable(style, prop) {
+            snapshot.tweens.remove(&prop);
             continue;
         }
         let cfg = &style.transition[cfg_idx];
@@ -771,6 +964,7 @@ pub fn snap_element_transitions_to_current(
                 delay_ms: cfg.delay_ms,
                 timing: cfg.timing,
                 active: false,
+                written: Some(val),
             },
         );
     }
@@ -787,6 +981,21 @@ pub fn snap_element_transitions_to_current(
 pub fn tick_element_transitions(
     style: &mut super::Style,
     snapshot: &mut TransitionSnapshot,
+    dt_secs: f32,
+) -> bool {
+    tick_element_transitions_locked(style, snapshot, AnimationLock::default(), dt_secs)
+}
+
+/// [`tick_element_transitions`], with the properties a running `@keyframes` owns.
+///
+/// CSS gives animations priority over transitions, and a change *caused by* an animation
+/// never starts a transition. Sharing one `Style` here means both engines write the same
+/// fields, so the locked properties are dropped from the transition snapshot: when the
+/// animation ends the tween re-seeds from wherever it left the value, with no snap-back.
+pub fn tick_element_transitions_locked(
+    style: &mut super::Style,
+    snapshot: &mut TransitionSnapshot,
+    lock: AnimationLock,
     _dt_secs: f32,
 ) -> bool {
     if style.transition.is_empty() {
@@ -819,22 +1028,24 @@ pub fn tick_element_transitions(
     // Filter uses list interpolation (or discrete when kinds don't align).
     if let Some(&cfg_idx) = config_map.get(&TransitionProperty::Filter) {
         let cfg = &transition_entries[cfg_idx];
-        let target = style.filter.clone();
+        let current = style.filter.clone();
         let tween = snapshot.filter_tween.get_or_insert_with(|| FilterTween {
-            from: target.clone(),
-            to: target.clone(),
+            from: current.clone(),
+            to: current.clone(),
             start_ms: now_ms,
             duration_ms: cfg.duration_ms,
             delay_ms: cfg.delay_ms,
             timing: cfg.timing,
             active: false,
+            written: None,
         });
 
+        let target = specified_filter_value(tween, &current);
         let target_changed = tween.to != target;
         if target_changed {
             if tween.active {
-                let (current, _) = filter_tween_sample(tween, now_ms);
-                tween.from = current;
+                let (mid, _) = filter_tween_sample(tween, now_ms);
+                tween.from = mid;
             }
             tween.to = target;
             tween.duration_ms = cfg.duration_ms;
@@ -846,14 +1057,15 @@ pub fn tick_element_transitions(
 
         if tween.active {
             let (interpolated, linear_t) = filter_tween_sample(tween, now_ms);
-            style.filter = interpolated;
             if linear_t >= 1.0 - 1e-6 {
                 tween.active = false;
                 tween.from = tween.to.clone();
                 style.filter = tween.to.clone();
             } else {
+                style.filter = interpolated;
                 any_active = true;
             }
+            tween.written = Some(style.filter.clone());
         }
     } else {
         snapshot.filter_tween = None;
@@ -864,8 +1076,34 @@ pub fn tick_element_transitions(
             continue;
         }
         let cfg = &transition_entries[cfg_idx];
-        let (target, comps) = extract_prop(style, prop);
+        let (current, comps) = extract_prop(style, prop);
         if comps == 0 {
+            continue;
+        }
+        // A running animation owns this property. Park the tween on whatever the
+        // keyframes painted so the animation-driven change starts no transition, and so
+        // the handover on animation end has no value to snap back to.
+        if animation_owns_prop(prop, lock) {
+            snapshot.tweens.insert(
+                prop,
+                PropertyTween {
+                    from: current,
+                    to: current,
+                    components: comps,
+                    start_ms: now_ms,
+                    duration_ms: cfg.duration_ms,
+                    delay_ms: cfg.delay_ms,
+                    timing: cfg.timing,
+                    active: false,
+                    written: Some(current),
+                },
+            );
+            continue;
+        }
+        if !prop_is_interpolable(style, prop) {
+            // Discrete: the owner's assignment stands as-is, and any in-flight tween is
+            // abandoned rather than resolving a keyword to a bogus number.
+            snapshot.tweens.remove(&prop);
             continue;
         }
 
@@ -873,23 +1111,25 @@ pub fn tick_element_transitions(
             .tweens
             .entry(prop)
             .or_insert_with(|| PropertyTween {
-                from: target,
-                to: target,
+                from: current,
+                to: current,
                 components: comps,
                 start_ms: now_ms,
                 duration_ms: cfg.duration_ms,
                 delay_ms: cfg.delay_ms,
                 timing: cfg.timing,
                 active: false,
+                written: None,
             });
 
+        let target = specified_prop_value(tween, current, comps);
         // Target changed → retarget from the **current computed value** (CSS transition).
         let target_changed = (0..comps as usize).any(|i| (tween.to[i] - target[i]).abs() > 1e-5);
         if target_changed {
             tween.components = comps;
             if tween.active {
-                let (current, _) = tween_sample(tween, now_ms);
-                tween.from = current;
+                let (mid, _) = tween_sample(tween, now_ms);
+                tween.from = mid;
             }
             // Inactive: `from` already equals last settled `to`.
             tween.to = target;
@@ -905,15 +1145,16 @@ pub fn tick_element_transitions(
         }
 
         let (interpolated, linear_t) = tween_sample(tween, now_ms);
-        write_prop(style, prop, &interpolated);
-
-        if linear_t >= 1.0 - 1e-6 {
+        let written = if linear_t >= 1.0 - 1e-6 {
             tween.active = false;
             tween.from = tween.to;
-            write_prop(style, prop, &tween.to);
+            tween.to
         } else {
             any_active = true;
-        }
+            interpolated
+        };
+        write_prop(style, prop, &written);
+        tween.written = Some(written);
     }
 
     snapshot.tweens.retain(|p, _| config_map.contains_key(p));
@@ -1277,6 +1518,202 @@ mod tests {
             "forwards fade-out should stay near 0, got {}",
             style.opacity
         );
+    }
+
+    /// The component assigns a target **once**; every later frame just re-renders the
+    /// value the engine wrote. Reading that back as a new target used to retarget the
+    /// tween to itself each frame, freezing it a few percent from the start.
+    #[test]
+    fn transition_runs_to_completion_without_being_respecified() {
+        use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style {
+            opacity: 0.0,
+            ..Default::default()
+        };
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        let mut snap = TransitionSnapshot::default();
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+
+        style.opacity = 1.0; // the one and only assignment
+        assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
+
+        set_css_transition_timeline_ms(100.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        let mid = style.opacity;
+        assert!((mid - 0.5).abs() < 0.05, "expected ~0.5 at 100ms, got {mid}");
+
+        set_css_transition_timeline_ms(200.0);
+        let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        assert!(
+            (style.opacity - 1.0).abs() < 0.01,
+            "tween must reach the specified target, got {}",
+            style.opacity
+        );
+        assert!(!snap.has_active_tweens());
+        set_css_transition_virtual_timeline(false);
+    }
+
+    /// `transition: all` sweeps in `max-height`, which is `auto` on most boxes. Resolving
+    /// `auto` to `0` collapsed accordion panels the moment anything animated.
+    #[test]
+    fn transition_all_leaves_auto_max_height_alone() {
+        use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::All,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        assert!(matches!(
+            crate::layout::dim_kind(style.max_size.height),
+            crate::layout::DimKind::Auto
+        ));
+        let mut snap = TransitionSnapshot::default();
+        for ms in [0.0, 50.0, 200.0] {
+            set_css_transition_timeline_ms(ms);
+            let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
+        }
+        assert!(
+            matches!(
+                crate::layout::dim_kind(style.max_size.height),
+                crate::layout::DimKind::Auto
+            ),
+            "auto max-height must survive `transition: all`, got {:?}",
+            style.max_size.height
+        );
+        assert!(!snap.tweens.contains_key(&TransitionProperty::MaxHeight));
+        set_css_transition_virtual_timeline(false);
+    }
+
+    /// An animation owns the properties its keyframes touch; the transition on the same
+    /// property must not chase the animation's output (CSS: animation wins, and an
+    /// animation-driven change never starts a transition).
+    #[test]
+    fn animation_lock_parks_transition_on_owned_property() {
+        use crate::style::{
+            AnimationEntry, AnimationFillMode, AnimationIterationCount, TimingFunction,
+            TransitionEntry, TransitionProperty,
+        };
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style {
+            opacity: 1.0,
+            ..Default::default()
+        };
+        style.transition.push(TransitionEntry {
+            property: TransitionProperty::Opacity,
+            duration_ms: 200.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::Linear,
+        });
+        style.animations.push(AnimationEntry {
+            name: "fade-out".into(),
+            duration_ms: 200.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Finite(1.0),
+            fill_mode: AnimationFillMode::Forwards,
+            ..Default::default()
+        });
+        let mut anim = AnimationSnapshot::default();
+        let mut trans = TransitionSnapshot::default();
+        for _ in 0..3 {
+            let _ = tick_element_animations(&mut style, &mut anim, 0.05);
+            let _ = tick_element_transitions_locked(&mut style, &mut trans, anim.lock(), 0.0);
+        }
+        assert!(anim.lock().opacity, "fade-out must claim opacity");
+        let after = style.opacity;
+        assert!(
+            after > 0.05 && after < 0.95,
+            "animation should drive opacity mid-way, got {after}"
+        );
+        assert!(
+            !trans
+                .tweens
+                .get(&TransitionProperty::Opacity)
+                .is_some_and(|t| t.active),
+            "transition must stay parked while the animation owns opacity"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    /// Keyframes are layered over the cascaded value and re-sampled from it every frame;
+    /// dropping the animation hands that value back.
+    #[test]
+    fn animation_resamples_from_base_and_restores_on_removal() {
+        use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
+        let mut style = crate::style::Style {
+            opacity: 1.0,
+            ..Default::default()
+        };
+        style.animations.push(AnimationEntry {
+            name: "fade-out".into(),
+            duration_ms: 400.0,
+            timing: TimingFunction::Linear,
+            iteration_count: AnimationIterationCount::Infinite,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        for _ in 0..2 {
+            let _ = tick_element_animations(&mut style, &mut snap, 0.08);
+        }
+        let mid = style.opacity;
+        assert!(
+            (mid - 0.6).abs() < 0.05,
+            "160ms of a 400ms linear fade-out should read ~0.6, got {mid}"
+        );
+
+        style.animations.clear();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+        assert!(
+            (style.opacity - 1.0).abs() < 1e-4,
+            "removing the animation must restore the cascaded opacity, got {}",
+            style.opacity
+        );
+    }
+
+    /// shadcn composes `fade-in-0 zoom-in-95` on one element. Each entry must only write the
+    /// properties its own keyframes declare, or the later one snaps the earlier one back to
+    /// the base value.
+    #[test]
+    fn stacked_animations_do_not_clobber_each_other() {
+        use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
+        let mut style = crate::style::Style {
+            opacity: 1.0,
+            ..Default::default()
+        };
+        for name in ["fade-in-0", "zoom-in-95"] {
+            style.animations.push(AnimationEntry {
+                name: name.into(),
+                duration_ms: 200.0,
+                timing: TimingFunction::Linear,
+                iteration_count: AnimationIterationCount::Finite(1.0),
+                ..Default::default()
+            });
+        }
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.08);
+        assert!(
+            style.opacity > 0.05 && style.opacity < 0.95,
+            "fade must survive the zoom entry, got {}",
+            style.opacity
+        );
+        assert!(
+            style.scale[0] > 0.95 && style.scale[0] < 1.0,
+            "zoom must survive the fade entry, got {}",
+            style.scale[0]
+        );
+        let lock = snap.lock();
+        assert!(lock.opacity && lock.transform);
     }
 
     #[test]

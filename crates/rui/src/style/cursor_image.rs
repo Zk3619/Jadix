@@ -1,6 +1,6 @@
 ﻿//! 自定义光标：用 [`crate::media`] 解码后 `from_rgba` → 缓存 `CustomCursor`。
 //!
-//! 128×128 上限、多 `url()` 回退、画布注册表见本模块。
+//! 多 `url()` 回退、画布注册表见本模块。
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -11,9 +11,6 @@ use winit::window::{CustomCursor, Window};
 use crate::media::{decode_bytes, decode_data_url, load_src, DecodeOptions, DecodedImage};
 
 use super::cursor::{CursorUrl, CursorValue};
-
-/// 与 Chromium / Firefox 自定义光标常见上限对齐。
-pub const MAX_CURSOR_SIZE: u32 = crate::media::MAX_CURSOR_EDGE;
 
 type DecodedCursor = DecodedImage;
 
@@ -27,13 +24,11 @@ static REGISTRY: Mutex<Option<HashMap<String, RegistryEntry>>> = Mutex::new(None
 
 /// 注册一张 RGBA8 光标图（画布栅格化结果）。`url(#id)` 或 `url(cursor:id)` 引用。
 ///
-/// `rgba.len()` 必须为 `width * height * 4`。超限尺寸会被忽略。
+/// `rgba.len()` 必须为 `width * height * 4`。
 pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     let id = id.into();
     if width == 0
         || height == 0
-        || width > MAX_CURSOR_SIZE
-        || height > MAX_CURSOR_SIZE
         || rgba.len() != width as usize * height as usize * 4
     {
         log::warn!("register_cursor_rgba8({id}): invalid size or buffer, ignored");
@@ -59,6 +54,7 @@ fn lookup_registered(id: &str) -> Option<DecodedCursor> {
         height: e.height,
         rgba: e.rgba.clone(),
         intrinsic_hotspot: None,
+        animation: None,
     })
 }
 
@@ -244,6 +240,7 @@ mod tests {
             height: 8,
             rgba: vec![0; 8 * 8 * 4],
             intrinsic_hotspot: None,
+            animation: None,
         };
         let img = CursorUrl {
             src: "x".into(),

@@ -83,6 +83,7 @@ pub struct TexturedQuadPipeline {
     pub num_indices: u32,
     pub globals_buffer: wgpu::Buffer,
     pub sampler: wgpu::Sampler,
+    pub sdf_sampler: wgpu::Sampler,
     premultiply: f32,
 }
 
@@ -141,6 +142,13 @@ impl TexturedQuadPipeline {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let sdf_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Rui SDF text sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
@@ -227,6 +235,7 @@ impl TexturedQuadPipeline {
             num_indices: indices.len() as u32,
             globals_buffer,
             sampler,
+            sdf_sampler,
             premultiply,
         }
     }
@@ -240,6 +249,24 @@ impl TexturedQuadPipeline {
         &self,
         device: &wgpu::Device,
         view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.create_texture_bind_group_with_sampler(device, view, &self.sampler)
+    }
+
+    /// SDF/MSDF text atlases — Nearest avoids pre-blurring the distance field before FS reconstruct.
+    pub fn create_texture_bind_group_sdf(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.create_texture_bind_group_with_sampler(device, view, &self.sdf_sampler)
+    }
+
+    fn create_texture_bind_group_with_sampler(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Image bind group"),
@@ -255,7 +282,7 @@ impl TexturedQuadPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
         })

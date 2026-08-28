@@ -497,6 +497,14 @@ pub enum TransitionProperty {
     OutlineOffset,
     BoxShadow,
     Color,
+    MaxHeight,
+    /// A property this engine cannot interpolate (`height`, `padding`, …).
+    ///
+    /// CSS treats an unknown / non-animatable `transition-property` as "no transition"
+    /// for that entry. Folding it into [`Self::All`] instead would silently attach
+    /// tweens to every supported property — including `max-height`, which then drives
+    /// an `auto` box to zero.
+    Unsupported,
 }
 
 impl TransitionProperty {
@@ -514,7 +522,14 @@ impl TransitionProperty {
             "outline-offset" => Self::OutlineOffset,
             "box-shadow" | "shadow" => Self::BoxShadow,
             "color" => Self::Color,
-            _ => Self::All,
+            "max-height" | "max_height" => Self::MaxHeight,
+            "none" => Self::Unsupported,
+            other => {
+                #[cfg(debug_assertions)]
+                log::debug!("[transition] unsupported transition-property `{other}` — ignored");
+                let _ = other;
+                Self::Unsupported
+            }
         }
     }
 

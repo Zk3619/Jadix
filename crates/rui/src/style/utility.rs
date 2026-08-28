@@ -27,7 +27,7 @@ pub fn set_frame_dt(dt: f32) {
     FRAME_DT.with(|c| c.set(dt.max(0.0)));
 }
 
-fn frame_dt() -> f32 {
+pub(crate) fn frame_dt() -> f32 {
     FRAME_DT.with(|c| c.get())
 }
 
@@ -350,6 +350,10 @@ pub fn tick_active_css_transitions_subtree(
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs =
         super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+    let defer_modal_enter =
+        crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+            el.template_id.as_deref(),
+        );
 
     if has_spin || has_css_anim || has_active_css || css_needs {
         let before = el.style.clone();
@@ -363,10 +367,13 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             false
         };
-        let css_trans = if has_active_css || css_needs || !el.style.transition.is_empty() {
-            super::animation::tick_element_transitions(
+        let css_trans = if !defer_modal_enter
+            && (has_active_css || css_needs || !el.style.transition.is_empty())
+        {
+            super::animation::tick_element_transitions_locked(
                 &mut el.style,
                 &mut el.transition_snapshot,
+                el.animation_snapshot.lock(),
                 frame_dt(),
             )
         } else {
@@ -611,11 +618,20 @@ fn sync_class_variants_subtree_inner(
                 &mut el.animation_snapshot,
                 frame_dt(),
             );
-            let css_trans = super::animation::tick_element_transitions(
-                &mut el.style,
-                &mut el.transition_snapshot,
-                frame_dt(),
-            );
+            let defer_modal_enter =
+                crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+                    el.template_id.as_deref(),
+                );
+            let css_trans = if !defer_modal_enter {
+                super::animation::tick_element_transitions_locked(
+                    &mut el.style,
+                    &mut el.transition_snapshot,
+                    el.animation_snapshot.lock(),
+                    frame_dt(),
+                )
+            } else {
+                false
+            };
             if let Some(cs) = el.class_set.as_mut() {
                 cs.last_ctx_fp = Some(ctx_fp);
             }

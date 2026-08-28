@@ -14,7 +14,7 @@ use std::fmt::Display;
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::tree::Element;
 use crate::layout::layout_tree::ATTR_PORTAL_KEY;
-use crate::style::css_transition_needs_frame;
+use crate::style::{css_animation_needs_frame, css_transition_needs_frame};
 use crate::utils::popup::portal_panel;
 
 /// 通用 keyed 项前缀（新组件推荐 `ko:{scope}`）。
@@ -31,6 +31,40 @@ pub fn item_template_id(scope: &str, key: impl Display) -> String {
 /// 是否应按 keyed overlay 保留 CSS transition mid（translate/opacity/scale/shadow）。
 pub fn is_keyed_motion_item(tid: Option<&str>) -> bool {
     tid.is_some_and(|t| t.starts_with(KEYED_OVERLAY_PREFIX) || t.starts_with("toast-card-"))
+}
+
+/// Dialog / Sheet / Drawer 模态壳节点（[`apply_modal_shell_motion`] 每帧写入目标）。
+pub(crate) fn is_modal_shell_motion_item(tid: Option<&str>) -> bool {
+    tid.is_some_and(|t| {
+        t.ends_with("__modal_overlay")
+            || t.ends_with("__modal_panel")
+            || t.ends_with("__modal_zoom")
+    })
+}
+
+fn modal_shell_should_preserve_motion(prev: &Element) -> bool {
+    prev.transition_snapshot.has_active_tweens()
+        || css_transition_needs_frame(&prev.style, &prev.transition_snapshot)
+        || css_animation_needs_frame(&prev.style, &prev.animation_snapshot)
+}
+
+fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
+    let is_zoom = fresh
+        .template_id
+        .as_deref()
+        .is_some_and(|t| t.ends_with("__modal_zoom"));
+    let enter_mid_rebuild = prev.style.opacity + 0.02 < fresh.style.opacity
+        || (is_zoom && (prev.style.scale[0] + 0.02 < fresh.style.scale[0]));
+    if !modal_shell_should_preserve_motion(prev) && !enter_mid_rebuild {
+        return;
+    }
+    copy_keyed_motion_state(fresh, prev);
+    if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
+        fresh.style.transition = prev.style.transition.clone();
+    }
+    if fresh.style.animations.is_empty() && !prev.style.animations.is_empty() {
+        fresh.style.animations = prev.style.animations.clone();
+    }
 }
 
 /// 视口级 portal 舞台：铺满层 + 稳定 portal key + z（Toast / 轻量 Notify 宿主）。
@@ -65,6 +99,13 @@ pub fn mount_reactive_anchor(view_id: &str, paint: impl Fn() -> Element + 'stati
 
 /// 同 `template_id` 的 reconcile：保留 transition mid + 阴影（非 hoist 路径）。
 pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -> bool {
+    if is_modal_shell_motion_item(fresh.template_id.as_deref()) {
+        let preserve = modal_shell_should_preserve_motion(prev);
+        if preserve {
+            preserve_modal_shell_motion(fresh, prev);
+        }
+        return preserve;
+    }
     let preserve = !fresh.style.transition.is_empty()
         && (is_keyed_motion_item(fresh.template_id.as_deref())
             || prev.transition_snapshot.has_active_tweens()
@@ -126,6 +167,10 @@ fn adopt_overlay_node(fresh: &mut Element, prev: &mut Element) {
 }
 
 fn preserve_keyed_motion_on_hoist(fresh: &mut Element, prev: &Element) {
+    if is_modal_shell_motion_item(fresh.template_id.as_deref()) {
+        preserve_modal_shell_motion(fresh, prev);
+        return;
+    }
     let keyed = is_keyed_motion_item(fresh.template_id.as_deref());
     if !keyed
         && fresh.style.transition.is_empty()
@@ -157,11 +202,21 @@ fn preserve_keyed_motion_on_hoist(fresh: &mut Element, prev: &Element) {
 
 fn copy_keyed_motion_state(fresh: &mut Element, prev: &Element) {
     fresh.transition_snapshot = prev.transition_snapshot.clone();
+    fresh.animation_snapshot = prev.animation_snapshot.clone();
     fresh.style.translate = prev.style.translate;
     fresh.style.opacity = prev.style.opacity;
     fresh.style.scale = prev.style.scale;
     fresh.style.rotate_deg = prev.style.rotate_deg;
     fresh.style.shadow_color = prev.style.shadow_color;
+    if prev
+        .style
+        .transition
+        .iter()
+        .any(|e| e.property == crate::style::TransitionProperty::MaxHeight)
+        || prev.transition_snapshot.has_active_tweens()
+    {
+        fresh.style.max_size.height = prev.style.max_size.height;
+    }
 }
 
 fn take_templated_descendants(node: &mut Element, out: &mut HashMap<String, Element>) {
@@ -263,5 +318,77 @@ mod tests {
         assert!(preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
         assert!((fresh.style.scale[0] - 0.9).abs() < f32::EPSILON);
         assert!((fresh.style.shadow_color[3] - 0.4).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn modal_shell_motion_skips_keyed_preserve_on_reconcile_when_idle() {
+        let mut prev = Element::new().template_id("dlg__modal_panel");
+        prev.style.opacity = 1.0;
+        prev.style.translate = [0.0, 0.0];
+
+        let mut fresh = Element::new().template_id("dlg__modal_panel");
+        fresh.style.opacity = 1.0;
+        fresh.style.translate = [0.0, 520.0];
+
+        assert!(!preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
+        assert!((fresh.style.translate[1] - 520.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn modal_shell_motion_preserves_enter_mid_on_hoist() {
+        use crate::style::{
+            set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+            snap_element_transitions_to_current, tick_element_transitions, TimingFunction,
+        };
+
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+
+        let mut prev = Element::new().template_id("dlg__modal_panel");
+        prev.style.scale = [0.96, 0.96];
+        prev.style.opacity = 1.0;
+        prev.style.transition.push(TransitionEntry {
+            property: TransitionProperty::Transform,
+            duration_ms: 250.0,
+            delay_ms: 0.0,
+            timing: TimingFunction::EaseOut,
+        });
+        snap_element_transitions_to_current(&prev.style, &mut prev.transition_snapshot);
+        prev.style.scale = [1.0, 1.0];
+        let _ = tick_element_transitions(
+            &mut prev.style,
+            &mut prev.transition_snapshot,
+            0.0,
+        );
+        set_css_transition_timeline_ms(120.0);
+        let _ = tick_element_transitions(
+            &mut prev.style,
+            &mut prev.transition_snapshot,
+            0.0,
+        );
+        assert!(
+            prev.style.scale[0] > 0.97 && prev.style.scale[0] < 0.995,
+            "sanity: prev should be mid-enter scale, got {}",
+            prev.style.scale[0]
+        );
+
+        let mut fresh = Element::new().template_id("dlg__modal_panel");
+        fresh.style.scale = [1.0, 1.0];
+        fresh.style.opacity = 1.0;
+        fresh.style.transition = prev.style.transition.clone();
+
+        adopt_keyed_overlay(&mut fresh, &mut prev);
+        assert!(
+            (fresh.style.scale[0] - prev.style.scale[0]).abs() < f32::EPSILON,
+            "enter scale mid must survive hoist adopt, fresh={} prev={}",
+            fresh.style.scale[0],
+            prev.style.scale[0]
+        );
+        assert!(
+            (fresh.style.opacity - 1.0).abs() < f32::EPSILON,
+            "panel must stay opaque during enter"
+        );
+
+        set_css_transition_virtual_timeline(false);
     }
 }

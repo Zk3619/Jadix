@@ -749,7 +749,6 @@ fn parse_oklch_args(inner: &str) -> Option<[f32; 4]> {
 }
 
 fn parse_oklab_args(inner: &str) -> Option<[f32; 4]> {
-    use palette::{IntoColor, Oklab, Srgb};
     let parts = split_css_color_args(inner);
     if parts.len() < 3 {
         return None;
@@ -762,10 +761,8 @@ fn parse_oklab_args(inner: &str) -> Option<[f32; 4]> {
     } else {
         1.0
     };
-    let ok = Oklab::new(l, a_ch, b_ch);
-    let srgb: Srgb<f32> = ok.into_color();
-    let (r, g, b) = srgb.into_components();
-    Some([r, g, b, alpha])
+    let rgb = super::color_space::oklab_to_display_srgb(l, a_ch, b_ch);
+    Some([rgb[0], rgb[1], rgb[2], alpha])
 }
 
 /// CSS Level 4 `<named-color>` keywords → display sRGB.
