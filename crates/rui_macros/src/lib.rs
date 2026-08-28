@@ -6,6 +6,10 @@ use syn::parse::{Parse, ParseStream};
 use syn::visit::Visit;
 use syn::{Expr, Ident, Token, braced};
 
+mod lucide_glyph_hex {
+    include!(concat!(env!("OUT_DIR"), "/lucide_glyph_hex.rs"));
+}
+
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// 同 Input：省略 `id` 的 `<Checkbox>` 仍生成唯一实例键（focus / Label `for`）；非受控布尔态走 Owner 作用域（WP-3.7）。
@@ -863,6 +867,7 @@ fn expand_node(
                 name_str == "RadioGroup" && !el.attributes.iter().any(|(k, _)| k == "options");
             let tabs_is_compound =
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
+            let accordion_is_compound = name_str == "Accordion";
             let carousel_is_compound = matches!(
                 name_str.as_str(),
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
@@ -874,11 +879,14 @@ fn expand_node(
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
                 || name_str == "Progress"
+                || name_str == "Accordion"
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
                 || name_str == "Sheet"
                 || name_str == "SheetContent"
+                || name_str == "Drawer"
+                || name_str == "DrawerContent"
                 || name_str == "CommandDialog"
                 || name_str == "CommandOverlay"
                 || command_is_compound
@@ -910,6 +918,8 @@ fn expand_node(
                 || radio_group_is_compound
                 || tabs_is_compound
                 || name_str == "TabsContent"
+                || name_str == "AccordionContent"
+                || name_str == "AccordionItem"
                 || carousel_is_compound
                 || name_str == "ForKeyed"
                 || name_str == "For"
@@ -982,6 +992,91 @@ fn expand_node(
                             #id_ts,
                             #value_ts,
                             #default_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if accordion_is_compound {
+                    // ShadCN compound Accordion：先 provide context 再构建 Item/Trigger/Content。
+                    let id_expr = get_attr("id");
+                    let value_expr = get_attr("value")
+                        .or_else(|| get_attr("valueSignal"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
+                    let multiple_expr = get_attr("multiple");
+                    let disabled_expr = get_attr("disabled");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Accordion#{}", file!(), line!(), #idx) }
+                    };
+                    let value_ts = if let Some(value) = value_expr {
+                        quote! { Some(#value) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        quote! { Some(#d) }
+                    } else {
+                        quote! { None }
+                    };
+                    let multiple_ts = if let Some(m) = multiple_expr {
+                        if let Some(b) = expr_as_bool_compat(m) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#m) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::accordion_scope(
+                            #id_ts,
+                            #value_ts,
+                            #default_ts.unwrap_or_default(),
+                            #multiple_ts,
+                            #disabled_ts,
                             #class_ts,
                             || #child_el,
                         )
@@ -1186,6 +1281,48 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::sheet_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "Drawer" {
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Drawer#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::drawer_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -2122,6 +2259,87 @@ fn expand_node(
                     };
                 }
 
+                if name_str == "AccordionContent" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::accordion_content(move || #child_el)
+                    };
+                }
+
+                if name_str == "AccordionItem" {
+                    let Some(value_expr) = get_attr("value") else {
+                        return quote! { compile_error!("<AccordionItem> requires `value={...}`"); };
+                    };
+                    let disabled_expr = get_attr("disabled");
+                    let class_expr = get_attr("class");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let value_ts = quote! { (#value_expr).to_string() };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::accordion_item_scope(
+                            #value_ts,
+                            #disabled_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "DialogContent" {
                     let show_close = get_attr("show_close")
                         .or_else(|| get_attr("showClose"))
@@ -2260,6 +2478,116 @@ fn expand_node(
                                 overlay_blur: #overlay_blur,
                                 width: #width,
                                 height: #height,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "DrawerContent" {
+                    let show_close = get_attr("show_close")
+                        .or_else(|| get_attr("showClose"))
+                        .or_else(|| get_attr("showCloseButton"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let show_swipe_handle = get_attr("show_swipe_handle")
+                        .or_else(|| get_attr("showSwipeHandle"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let snap_to_sequential_point = get_attr("snap_to_sequential_point")
+                        .or_else(|| get_attr("snapToSequentialPoint"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let scale_background = get_attr("scale_background")
+                        .or_else(|| get_attr("scaleBackground"))
+                        .or_else(|| get_attr("shouldScaleBackground"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
+                    let modal = get_attr("modal")
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let direction = get_attr("direction")
+                        .or_else(|| get_attr("swipe_direction"))
+                        .or_else(|| get_attr("swipeDirection"))
+                        .or_else(|| get_attr("side"))
+                        .map(|e| quote! { rui::components::DrawerDirection::from(#e) })
+                        .unwrap_or_else(|| {
+                            quote! { rui::components::DrawerDirection::Down }
+                        });
+                    let overlay_color = get_attr("overlay_color")
+                        .or_else(|| get_attr("overlayColor"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let overlay_opacity = get_attr("overlay_opacity")
+                        .or_else(|| get_attr("overlayOpacity"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_overlay = get_attr("close_on_overlay_click")
+                        .or_else(|| get_attr("closeOnOverlayClick"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let overlay_blur = get_attr("overlay_blur")
+                        .or_else(|| get_attr("overlayBlur"))
+                        .or_else(|| get_attr("backdrop_blur"))
+                        .or_else(|| get_attr("backdropBlur"))
+                        .map(|e| quote! { Some((#e) as f32) })
+                        .unwrap_or_else(|| quote! { None });
+                    let width = get_attr("w")
+                        .or_else(|| get_attr("width"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let height = get_attr("h")
+                        .or_else(|| get_attr("height"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let snap_points = get_attr("snap_points")
+                        .or_else(|| get_attr("snapPoints"))
+                        .map(|e| {
+                            quote! { rui::components::drawer::coerce_snap_points(#e) }
+                        })
+                        .unwrap_or_else(|| quote! { vec![rui::components::DrawerSnapPoint::Fraction(1.0)] });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::drawer_content(
+                            rui::components::DrawerContentOpts {
+                                direction: #direction,
+                                show_close: #show_close,
+                                show_swipe_handle: #show_swipe_handle,
+                                modal: #modal,
+                                overlay_color: #overlay_color,
+                                overlay_opacity: #overlay_opacity,
+                                close_on_overlay_click: #close_on_overlay,
+                                overlay_blur: #overlay_blur,
+                                width: #width,
+                                height: #height,
+                                snap_points: #snap_points,
+                                snap_to_sequential_point: #snap_to_sequential_point,
+                                scale_background: #scale_background,
                             },
                             move || #child_el,
                         )
@@ -4636,14 +4964,8 @@ fn expand_node(
                             && let syn::Lit::Str(lit_str) = &expr_lit.lit
                         {
                             let name_str = lit_str.value();
-                            let json_str = include_str!("../../rui/assets/lucide.json");
-                            static ICONS: std::sync::OnceLock<
-                                std::collections::HashMap<String, String>,
-                            > = std::sync::OnceLock::new();
-                            let map = ICONS
-                                .get_or_init(|| serde_json::from_str(json_str).unwrap_or_default());
-                            if let Some(code) = map.get(&name_str) {
-                                icon_code = code.clone();
+                            if let Some(code) = lucide_glyph_hex::LUCIDE_GLYPH_HEX.get(name_str.as_str()) {
+                                icon_code = (*code).to_string();
                                 static_icon_name = Some(name_str);
                             } else {
                                 panic!(

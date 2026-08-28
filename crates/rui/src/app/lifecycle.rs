@@ -567,7 +567,7 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             // built exactly once, inside the tracked root effect below; otherwise startup creates
             // a throwaway tree whose Drop/on_unmount side effects can invalidate resources still
             // referenced by the tracked tree.
-            let state = pollster::block_on(super::state::AppState::new_bootstrap(
+            let state = crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
                 window.clone(),
                 self.window_options.clone(),
             ));

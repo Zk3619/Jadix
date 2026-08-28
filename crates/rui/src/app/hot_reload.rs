@@ -1,16 +1,16 @@
-#[cfg(any(debug_assertions, test))]
+#[cfg(all(any(debug_assertions, test), feature = "hot-reload"))]
 use serde::Deserialize;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::collections::HashMap;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::io::{BufRead, BufReader};
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::net::TcpListener;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::sync::mpsc::{self, Receiver};
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::sync::Arc;
 #[cfg(debug_assertions)]
 use winit::event_loop::EventLoopProxy;
@@ -21,13 +21,13 @@ use super::RuiUserEvent;
 #[cfg(debug_assertions)]
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 pub(super) struct HotReloadState {
     rx: Receiver<HotReloadCommand>,
     pending_count: Arc<AtomicUsize>,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 impl HotReloadState {
     /// `wake`：TCP 线程收到补丁后唤醒主线程事件循环（`ControlFlow::Wait` 下否则可能一直阻塞到用户输入）。
     pub(super) fn new(wake: EventLoopProxy<RuiUserEvent>) -> Self {
@@ -107,6 +107,24 @@ impl HotReloadState {
     }
 }
 
+#[cfg(all(debug_assertions, not(feature = "hot-reload")))]
+pub(super) struct HotReloadState;
+
+#[cfg(all(debug_assertions, not(feature = "hot-reload")))]
+impl HotReloadState {
+    pub(super) fn new(_wake: EventLoopProxy<RuiUserEvent>) -> Self {
+        Self
+    }
+
+    pub(super) fn drain_pending(&self) -> HotReloadBatch {
+        HotReloadBatch::default()
+    }
+
+    pub(super) fn has_pending(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Default)]
 pub(super) struct HotReloadBatch {
@@ -127,49 +145,53 @@ pub(super) enum HotReloadCommand {
 }
 
 #[cfg(any(debug_assertions, test))]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
 pub(super) struct TemplatePatchMsg {
     pub(super) file: String,
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) templates: Vec<TemplateFragment>,
 }
 
 #[cfg(any(debug_assertions, test))]
 #[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
 pub(super) struct TemplateFragment {
     pub(super) id: String,
     pub(super) hash: String,
     pub(super) len: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) index: usize,
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) text_literals: Vec<String>,
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) text_replacements: Vec<TextReplacement>,
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) style_attrs: Vec<StyleAttr>,
 }
 
 #[cfg(any(debug_assertions, test))]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
 pub(super) struct StyleAttr {
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) element_index: usize,
     pub(super) name: String,
     pub(super) value: String,
 }
 
 #[cfg(any(debug_assertions, test))]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
 pub(super) struct TextReplacement {
-    #[serde(default)]
+    #[cfg_attr(feature = "hot-reload", serde(default))]
     pub(super) index: usize,
     pub(super) from: String,
     pub(super) to: String,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum IncomingMessage {
@@ -209,7 +231,7 @@ fn ingest_template_patch(
     }
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 fn parse_command(raw: &str) -> Option<HotReloadCommand> {
     if raw.eq_ignore_ascii_case("reload") {
         return Some(HotReloadCommand::Reload);
