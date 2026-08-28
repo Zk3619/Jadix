@@ -2486,6 +2486,81 @@ fn ScrollShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
+fn AccordionShowcase() -> rui::core::tree::Element {
+    let multi_open = use_signal("gal-acc-multi", || vec!["m-1".to_string()]);
+
+    let builder_el: Element = accordion("gal-acc-builder")
+        .default_value(vec!["b-1".into()])
+        .item("b-1", "Builder: Is it accessible?", || {
+            label("")
+                .text("Yes. Builder 与 RSX 共用 accordion_scope / accordion_content。")
+                .font_weight(400.0)
+                .into()
+        })
+        .item("b-2", "Builder: Can I use multiple?", || {
+            label("")
+                .text("Set multiple(true) and value_signal for controlled multi-open.")
+                .font_weight(400.0)
+                .into()
+        })
+        .into();
+
+    ui! {
+        <MyCard title="Accordion（ShadCN base）">
+            <VStack gap="1rem" w="100%" max_w="36rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：复合 RSX（宏 → accordion_scope / accordion_content）与 Builder。单开默认；multiple 允许多项同时展开。面板 max-height CSS transition（200ms ease-out/in，对位 ShadCN accordion-down/up）。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"A · RSX 单开（defaultValue）"</Label>
+                <Accordion id="gal-acc-single" defaultValue={vec!["item-1".into()]}>
+                    <AccordionItem value="item-1">
+                        <AccordionTrigger>"Is it accessible?"</AccordionTrigger>
+                        <AccordionContent>
+                            <Label font_weight="400" leading="normal">
+                                "Yes. It adheres to the WAI-ARIA design pattern."
+                            </Label>
+                        </AccordionContent>
+                    </AccordionItem>
+                    <AccordionItem value="item-2">
+                        <AccordionTrigger>"Is it styled?"</AccordionTrigger>
+                        <AccordionContent>
+                            <Label font_weight="400" leading="normal">
+                                "Yes. cn-accordion-* 样式：border-b 项、py-4 触发器、muted 正文。"
+                            </Label>
+                        </AccordionContent>
+                    </AccordionItem>
+                    <AccordionItem value="item-3">
+                        <AccordionTrigger>"Is it animated?"</AccordionTrigger>
+                        <AccordionContent>
+                            <Label font_weight="400" leading="normal">
+                                "Chevron 翻转 + 内容 max-height 进出场（overflow-hidden，200ms CSS transition）。"
+                            </Label>
+                        </AccordionContent>
+                    </AccordionItem>
+                </Accordion>
+                <Label font_weight="700" text_size="0.875rem">"B · RSX multiple + valueSignal"</Label>
+                <Accordion id="gal-acc-multi" multiple={true} valueSignal={multi_open}>
+                    <AccordionItem value="m-1">
+                        <AccordionTrigger>"Section one"</AccordionTrigger>
+                        <AccordionContent>
+                            <Label font_weight="400" leading="normal">"Multiple mode keeps several panels open."</Label>
+                        </AccordionContent>
+                    </AccordionItem>
+                    <AccordionItem value="m-2">
+                        <AccordionTrigger>"Section two"</AccordionTrigger>
+                        <AccordionContent>
+                            <Label font_weight="400" leading="normal">"Toggle independently; chevron reflects each item."</Label>
+                        </AccordionContent>
+                    </AccordionItem>
+                </Accordion>
+                <Label font_weight="700" text_size="0.875rem">"C · Builder 双写"</Label>
+                { builder_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 fn ResizableShowcase() -> rui::core::tree::Element {
     let builder_el: Element = resizable("gal-rz-builder")
         .orientation("horizontal")
@@ -4935,6 +5010,8 @@ fn OverlayFeedbackShowcase() -> Element {
     let sheet_open = use_signal("gal_sheet_open", || false);
     let sheet_name = use_signal("gal_sheet_name", || "Pedro Duarte".to_string());
     let sheet_user = use_signal("gal_sheet_user", || "@peduarte".to_string());
+    let drawer_open = use_signal("gal_drawer_open", || false);
+    let drawer_link = use_signal("gal_drawer_link", || "https://ui.shadcn.com".to_string());
     let progress_val = use_signal("gal_progress", || 0.45f32);
     let open_cmd = cmd_open;
     let open_cmd_dlg = cmd_dlg_open;
@@ -5212,6 +5289,51 @@ fn OverlayFeedbackShowcase() -> Element {
                     </SheetFooter>
                 </SheetContent>
             </Sheet>
+        }
+    };
+    let drawer_el: Element = {
+        let open = drawer_open;
+        let link = drawer_link;
+        ui! {
+            <Drawer id="gal-drawer" open={open}>
+                <DrawerTrigger>
+                    <Button variant="outline" size="sm">Drawer</Button>
+                </DrawerTrigger>
+                <DrawerContent
+                    direction="down"
+                    show_swipe_handle={true}
+                    snap_points={[0.5_f32, 1.0]}
+                    snap_to_sequential_point={true}
+                    scale_background={true}
+                >
+                    <DrawerHeader>
+                        <DrawerTitle>Share link</DrawerTitle>
+                        <DrawerDescription>
+                            "Anyone with the link can view this document."
+                        </DrawerDescription>
+                    </DrawerHeader>
+                    <DrawerBody>
+                        <VStack gap="0.5rem" w="100%">
+                            <Label text_size="0.875rem" font_weight="600">"Link"</Label>
+                            <Input id="gal-drawer-link" value={link} class="w-full" />
+                        </VStack>
+                    </DrawerBody>
+                    <DrawerFooter>
+                        <Button
+                            size="sm"
+                            on_click={move || {
+                                toast_push("Link copied", 1500);
+                                open.set(false);
+                            }}
+                        >
+                            "Copy link"
+                        </Button>
+                        <DrawerClose>
+                            <Button variant="outline" size="sm">Close</Button>
+                        </DrawerClose>
+                    </DrawerFooter>
+                </DrawerContent>
+            </Drawer>
         }
     };
     let sheet_sides_el: Element = {
@@ -5552,10 +5674,10 @@ fn OverlayFeedbackShowcase() -> Element {
     let progress_el: Element = progress().value_signal(progress_val).into();
 
     ui! {
-        <MyCard title="Command · Dialog · Sheet · Toast · Tooltip · Dropdown · Progress">
+        <MyCard title="Command · Dialog · Sheet · Drawer · Toast · Tooltip · Dropdown · Progress">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、Sheet（复合 Trigger/Content/Side）、Toast、Tooltip、DropdownMenu、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
+                    "浮层与反馈：Command 顶部居中浮层 / CommandDialog 模态、Dialog、Sheet（复合 Trigger/Content/Side）、Drawer（底滑 + 拖柄）、Toast、Tooltip、DropdownMenu、进度条。desktop_smoke #7/#8：Dialog+Select 嵌套 Esc；次窗按钮。"
                 </Label>
                 <HStack gap="0.5rem" wrap="wrap" items="center">
                     <Button variant="secondary" size="sm" on_click={move || open_cmd.set(true)}>
@@ -5566,6 +5688,7 @@ fn OverlayFeedbackShowcase() -> Element {
                     </Button>
                     { dialog_el }
                     { sheet_el }
+                    { drawer_el }
                     <Button variant="default" size="sm" on_click={move || {
                         gallery_feedback_toast(
                             "Toast from Gallery",
@@ -7140,6 +7263,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <IdentityApiShowcase />
                     <BoxModelShowcase />
                     <ScrollShowcase />
+                    <AccordionShowcase />
                     <ResizableShowcase />
                     <LogicalShowcase />
                     <UtilityClassShowcase />
