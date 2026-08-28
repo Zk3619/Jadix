@@ -193,9 +193,7 @@ pub fn truncate_with_ellipsis(
 }
 
 pub fn best_font_family(font_system: &glyphon::FontSystem) -> glyphon::Family<'static> {
-    let db = font_system.db();
-    let preferred = "Noto Sans CJK, Microsoft YaHei UI, Microsoft YaHei, Malgun Gothic, PingFang SC, Leelawadee UI, Segoe UI, sans-serif";
-    crate::utils::font::resolve_family(db, preferred)
+    crate::utils::font::resolve_family(font_system.db(), crate::utils::font::default_ui_sans_family_list())
 }
 
 /// 在水平方向命中：返回 UTF-8 字节下标（落在某字符簇边界，与光标语义一致）。
@@ -515,6 +513,18 @@ mod tests {
         crate::renderer::font_loader::apply_default_families(fs.db_mut());
         crate::text::install_shared_font_system(&mut fs);
         fs
+    }
+
+    #[test]
+    fn best_font_family_keeps_platform_ui_after_cjk_lazy_load() {
+        let mut fs = test_font_system();
+        let before = best_font_family(&fs);
+        crate::renderer::font_loader::ensure_coverage_for_text(&mut fs, "浮层与反馈中文");
+        let after = best_font_family(&fs);
+        assert_eq!(
+            before, after,
+            "lazy CJK must not switch the global UI family (before={before:?}, after={after:?})"
+        );
     }
 
     #[test]

@@ -40,6 +40,15 @@ const RUNTIME_CJK_SANS: &str = "NotoSansCJK.ttc";
 const RUNTIME_CJK_SERIF: &str = "NotoSerifCJK.ttc";
 #[cfg(not(feature = "bundled-lucide"))]
 const RUNTIME_LUCIDE: &str = "lucide.ttf";
+const RUNTIME_INTER: &[&str] = &[
+    "Inter-Variable.ttf",
+    "InterVariable.ttf",
+    "Inter-Regular.ttf",
+    "Inter-Medium.ttf",
+    "Inter-SemiBold.ttf",
+    "Inter-Bold.ttf",
+    "Inter.ttf",
+];
 const RUNTIME_SYMBOLS: &[&str] = &[
     "NotoSansSymbols-wght.ttf",
     "NotoSansSymbols2-Regular.ttf",
@@ -382,37 +391,9 @@ fn first_present<'a>(db: &Database, names: &[&'a str]) -> Option<&'a str> {
 
 /// Pick default sans/serif family names after fonts are loaded.
 pub fn apply_default_families(db: &mut Database) {
-    // Prefer the platform UI sans first. Putting CJK UI fonts (YaHei) first made
-    // Latin/geometry (■ ● ★) pick CJK-designed glyphs that look tiny next to
-    // Latin text; CJK codepoints still resolve via lazy YaHei fallback.
-    let sans = first_present(
-        db,
-        &[
-            // Windows / cross-platform UI defaults
-            "Segoe UI",
-            "San Francisco",
-            "Helvetica Neue",
-            "Arial",
-            // CJK UI faces (fallback when Latin UI sans is absent)
-            "Microsoft YaHei UI",
-            "Microsoft YaHei",
-            "Noto Sans CJK SC",
-            "Noto Sans CJK JP",
-            "Noto Sans CJK KR",
-            "Noto Sans CJK TC",
-            "Malgun Gothic",
-            "PingFang SC",
-            "Hiragino Sans GB",
-            "Apple SD Gothic Neo",
-            "Source Han Sans SC",
-            "WenQuanYi Micro Hei",
-            "Leelawadee UI",
-        ],
-    );
-    if let Some(name) = sans {
-        db.set_sans_serif_family(name);
-        log::debug!("default sans-serif family: {name}");
-    }
+    let sans = crate::utils::font::resolved_default_sans_family(db);
+    db.set_sans_serif_family(sans);
+    log::debug!("default sans-serif family: {sans}");
 
     let serif = first_present(
         db,
@@ -816,6 +797,7 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
 
     apply_default_families(db);
     if loaded_any {
+        crate::utils::font::clear_resolve_family_cache();
         crate::text::measure::invalidate_prepare_cache();
     }
     log::info!(
@@ -882,8 +864,19 @@ fn load_eager_system_ui_fonts(db: &mut Database, state: &mut LazyFontState) {
     }
 }
 
+/// Optional project UI faces from `RUI_FONT_DIR` / `assets/` (Inter, etc.).
+fn load_eager_project_ui_fonts(db: &mut Database, state: &mut LazyFontState) {
+    for name in RUNTIME_INTER {
+        if try_load_font_file(db, name, state) {
+            log::debug!("loaded project UI font: {name}");
+        }
+    }
+}
+
 /// Optional project / bundled assets that are safe to open at startup (icons only by default).
 fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
+    load_eager_project_ui_fonts(db, state);
+
     #[cfg(feature = "bundled-lucide")]
     {
         load_static_bytes(db, include_bytes!("../../assets/lucide.ttf"));
@@ -896,6 +889,7 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
             );
         }
     }
+    crate::utils::font::clear_resolve_family_cache();
 
     // Escape hatches that force eager Noto loads (single-file / CI demos).
     #[cfg(feature = "bundled-cjk")]
