@@ -9,9 +9,15 @@ readme = "../../README.md"
 keywords = ["gui", "ui", "wgpu", "reactive", "desktop"]
 categories = ["gui"]
 
+build = "build.rs"
+
 [features]
-# Lean by default: no resvg. Apps opt into emoji-svg / bundled-* as needed.
+# Lean by default: no resvg / serde. Opt into boundaries below.
 default = []
+# Dev-time TCP hot reload (`rui_hot_reload_cli`). Requires debug build.
+hot-reload = ["dep:serde", "dep:serde_json"]
+# pqoqubbw animated Lucide recipes — compiled into the binary at build time (no runtime JSON).
+lucide-animated = []
 # Optional runtime logger: console (stderr) + optional file via RUI_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
@@ -40,12 +46,33 @@ fonts-emoji = []
 svg = ["dep:resvg"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
 emoji-svg = ["svg"]
-# Extra rasters for Image, CSS cursor, and queue_image_* (PNG/ICO/BMP always on).
-jpeg = ["dep:jpeg-decoder"]
-gif = ["dep:gif"]
-webp = ["dep:image-webp"]
-images = ["jpeg", "gif", "webp"]
-cursor-images = ["images"]
+# Extra raster codecs (off by default; see `image` dep for the core set).
+image-bmp = ["image/bmp"]
+image-tiff = ["image/tiff"]
+image-avif = ["image/avif"]
+image-exr = ["image/exr"]
+image-hdr = ["image/hdr"]
+image-pnm = ["image/pnm"]
+image-qoi = ["image/qoi"]
+image-tga = ["image/tga"]
+image-ff = ["image/ff"]
+image-full = [
+    "image-bmp",
+    "image-tiff",
+    "image-avif",
+    "image-exr",
+    "image-hdr",
+    "image-pnm",
+    "image-qoi",
+    "image-tga",
+    "image-ff",
+]
+# Deprecated aliases (raster decode is always on via the `image` crate).
+jpeg = ["image/jpeg"]
+gif = ["image/gif"]
+webp = ["image/webp"]
+images = []
+cursor-images = []
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
 scene3d = []
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
@@ -56,19 +83,18 @@ devtools = []
 winit = { workspace = true }
 wgpu = { workspace = true }
 taffy = { workspace = true }
-palette = { workspace = true }
 bytemuck = { workspace = true }
 glyphon = { workspace = true }
-pollster = { workspace = true }
 env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 tracing = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 rui_macros = { path = "../rui_macros" }
 rui_style_tokens = { path = "../rui_style_tokens" }
+phf = { version = "0.11", default-features = false }
 clipboard-rs = { workspace = true }
 rfd = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -84,20 +110,26 @@ windows-sys = { version = "0.59", features = [
 accesskit = { workspace = true }
 accesskit_winit = { workspace = true }
 swash = { workspace = true }
-fontdb = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
-png = "0.18.1"
-jpeg-decoder = { version = "0.3", optional = true, default-features = false }
-gif = { version = "0.13", optional = true, default-features = false }
-image-webp = { version = "0.2", optional = true }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "ico",
+] }
 resvg = { version = "0.45.1", optional = true }
 # default-features off: skip Linux libxdo. gtk still required on Linux if this feature is on.
 tray-icon = { version = "0.21", optional = true, default-features = false }
 
+[build-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+phf_codegen = "0.11"
+
 [dev-dependencies]
-jpeg-encoder = "0.6"
 
 [[bench]]
 name = "layout_baseline"

@@ -8,8 +8,8 @@
 |--------|------|
 | `FontSystem` / `TextAtlas` 归属 | 由 `RuiTextRenderer` 持有，随 `AppState::new` 创建并复用，非每帧 `new` |
 | 文本脏检查 | 布局路径在 `layout_tree` / `prepare_text` 侧按内容、样式与几何变化更新缓冲；高帧率场景继续优先 `peek`/`set_silent` |
-| **变换文字三模式** | [`GlyphRasterMode`](../crates/rui/src/renderer/text_xform.rs)：`Coverage`（轴对齐 UI，glyphon + Nearest）· `Bake`（sticky 超采样 RGBA + Linear/mip 贴图）· `Msdf`（覆盖率→单通道 SDF 贴图 + FS `median`/`pxRange`/`smoothstep`，自由缩放） |
-| 批处理 | Coverage 走 glyphon；Bake/Msdf 走 `TexturedDraw`（与壳同 `world_linear`）；禁止 Bake 与主 `text_renderer` 共用 prepare |
+| **变换文字三模式** | [`GlyphRasterMode`](../crates/rui/src/renderer/text_xform.rs)：`Coverage`（轴对齐 UI，上游 glyphon + Nearest）· `Bake`（sticky 超采样 RGBA + `TexturedDraw` mat2）· `Msdf`（覆盖率→单通道 SDF 贴图 + FS `median`/`pxRange`/`smoothstep`，自由缩放） |
+| 批处理 | Coverage 走上游 glyphon（无 `TextArea.transform`）；Bake/Msdf 走 `TexturedDraw`（与壳同 `world_linear`）；rich spans 走 `ensure_text_xform_texture_spans` |
 | DPI / scale | `AppState::ui_scale` 与 `scale_instances`、surface 尺寸联动；换屏或 `ScaleFactorChanged` 会标记布局脏 |
 | **3D 文字** | `bake_text_texture_key_for_3d` + `scene3d().label(..)`：mat4 投影 billboard 角点 → 屏幕 AABB → textured mat2 VS；见 Gallery Scene3d |
 | Vello | [`reference/vello-main`](../reference/vello-main) 仅对照矢量/Canvas；**不**替换 glyphon。窄矢量字形见 `utils/text_vector_spike.rs`（后置 ADR） |

@@ -19,7 +19,6 @@ dx12 = ["wgpu/dx12"]
 winit = { workspace = true }
 # GL and Vulkan are on in the workspace wgpu features; DX12 still needs `dx12`.
 wgpu = { workspace = true }
-pollster = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

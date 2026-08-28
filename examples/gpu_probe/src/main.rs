@@ -13,6 +13,29 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake};
+
+    struct NoopWaker;
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+        fn wake_by_ref(self: &Arc<Self>) {}
+    }
+
+    let waker = Arc::new(NoopWaker).into();
+    let mut cx = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
 #[cfg(windows)]
 fn mem_mb() -> (f64, f64) {
     use windows_sys::Win32::System::ProcessStatus::{
@@ -134,7 +157,7 @@ impl ApplicationHandler for Probe {
             return;
         }
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
@@ -154,7 +177,7 @@ impl ApplicationHandler for Probe {
         limits.max_texture_dimension_1d = adapter_limits.max_texture_dimension_1d;
         limits.max_texture_dimension_2d = adapter_limits.max_texture_dimension_2d;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_features: wgpu::Features::empty(),
             required_limits: limits,
             label: None,
