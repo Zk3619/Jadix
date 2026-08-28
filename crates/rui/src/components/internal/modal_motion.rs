@@ -1,9 +1,10 @@
 //! Dialog / Sheet / Drawer 共享模态动效：presence（退场保留挂载）+ 表面动画。
 //!
 //! **Dialog** 对齐 shadcn [`dialog.tsx`](https://ui.shadcn.com/docs/components/dialog)：
-//! overlay `fade-in-0` / `fade-out-0`，面板 `fade-in-0 zoom-in-95` /
-//! `fade-out-0 zoom-out-95`（退场对称），走 CSS `@keyframes`（[`style::keyframes`]），
-//! 不经 transition flush/tick 链路。
+//! overlay `fade-in-0` / `fade-out-0`，面板 `fade-in-0 zoom-in-90` /
+//! `fade-out-0 zoom-out-90`（退场对称），走 CSS `@keyframes`（[`style::keyframes`]），
+//! 不经 transition flush/tick 链路。遮罩 `backdrop-blur` 保持恒定目标半径，
+//! 入场/退场的模糊渐显由渲染器按 overlay opacity 乘算（见 `AppState` backdrop pass）。
 //!
 //! Sheet / Drawer 仍用 CSS transition + [`flush_modal_shell_motion_subtree`]。
 
@@ -28,10 +29,12 @@ use crate::utils::presence::{ExitGate, PresencePhase};
 
 pub(crate) const MODAL_ENTER_MS: f32 = 250.0;
 pub(crate) const MODAL_EXIT_MS: f32 = 200.0;
-/// shadcn Dialog `duration-200`
-const DIALOG_CSS_ANIM_MS: f32 = MODAL_EXIT_MS;
-const EXIT_DURATION: Duration = Duration::from_millis(MODAL_EXIT_MS as u64 + 40);
-const DIALOG_ENTER_SCALE: f32 = 0.95;
+/// shadcn Dialog enter — slightly longer than exit for a clearer reveal.
+const DIALOG_ENTER_ANIM_MS: f32 = 300.0;
+const DIALOG_EXIT_ANIM_MS: f32 = MODAL_EXIT_MS;
+const EXIT_DURATION: Duration = Duration::from_millis(DIALOG_EXIT_ANIM_MS as u64 + 40);
+/// shadcn `zoom-in-90` — a bit more travel than `zoom-in-95`.
+const DIALOG_ENTER_SCALE: f32 = 0.90;
 
 fn dialog_zoom_tid(modal_id: &str) -> String {
     format!("{modal_id}__modal_zoom")
@@ -436,10 +439,15 @@ fn settle_modal_enter_if_ready(
     !settled
 }
 
-fn dialog_css_anim(name: &str, timing: TimingFunction, fill: AnimationFillMode) -> AnimationEntry {
+fn dialog_css_anim(
+    name: &str,
+    timing: TimingFunction,
+    fill: AnimationFillMode,
+    duration_ms: f32,
+) -> AnimationEntry {
     AnimationEntry {
         name: name.to_string(),
-        duration_ms: DIALOG_CSS_ANIM_MS,
+        duration_ms,
         timing,
         delay_ms: 0.0,
         iteration_count: AnimationIterationCount::Finite(1.0),
@@ -454,7 +462,7 @@ fn dialog_has_exit_anim(el: &Element) -> bool {
     el.style
         .animations
         .iter()
-        .any(|a| a.name == "fade-out-0" || a.name == "zoom-out-95")
+        .any(|a| a.name == "fade-out-0" || a.name == "zoom-out-90" || a.name == "zoom-out-95")
 }
 
 fn reset_dialog_css_anim_snapshots(overlay: &mut Element, zoom: &mut Element) {
@@ -466,8 +474,8 @@ fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
     clear_motion(overlay);
     clear_motion(zoom);
     overlay.style.opacity = 0.0;
-    // shadcn content is `fade-in-0 zoom-in-95`: the panel must be **invisible** while it is
-    // still scaled down. Zooming an opaque panel shows a 95% render of finished text/borders
+    // shadcn content is `fade-in-0 zoom-in-90`: the panel must be **invisible** while it is
+    // still scaled down. Zooming an opaque panel shows a 90% render of finished text/borders
     // that then snaps to 100% — the "缩小态 → 正常态" jump.
     zoom.style.opacity = 0.0;
     zoom.style.scale = [DIALOG_ENTER_SCALE, DIALOG_ENTER_SCALE];
@@ -475,13 +483,20 @@ fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
         "fade-in-0",
         TimingFunction::EaseOut,
         AnimationFillMode::Both,
+        DIALOG_ENTER_ANIM_MS,
     )];
     zoom.style.animations = vec![
-        dialog_css_anim("fade-in-0", TimingFunction::EaseOut, AnimationFillMode::Both),
         dialog_css_anim(
-            "zoom-in-95",
+            "fade-in-0",
             TimingFunction::EaseOut,
             AnimationFillMode::Both,
+            DIALOG_ENTER_ANIM_MS,
+        ),
+        dialog_css_anim(
+            "zoom-in-90",
+            TimingFunction::EaseOut,
+            AnimationFillMode::Both,
+            DIALOG_ENTER_ANIM_MS,
         ),
     ];
     reset_dialog_css_anim_snapshots(overlay, zoom);
@@ -497,15 +512,20 @@ fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
         "fade-out-0",
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
+        DIALOG_EXIT_ANIM_MS,
     )];
-    // Symmetric with enter (`fade-out-0 zoom-out-95`). The panel fades as it shrinks, so the
-    // old "ghost window" artifact that made exit zoom unusable cannot appear.
     zoom.style.animations = vec![
-        dialog_css_anim("fade-out-0", TimingFunction::EaseIn, AnimationFillMode::Both),
         dialog_css_anim(
-            "zoom-out-95",
+            "fade-out-0",
             TimingFunction::EaseIn,
             AnimationFillMode::Both,
+            DIALOG_EXIT_ANIM_MS,
+        ),
+        dialog_css_anim(
+            "zoom-out-90",
+            TimingFunction::EaseIn,
+            AnimationFillMode::Both,
+            DIALOG_EXIT_ANIM_MS,
         ),
     ];
     reset_dialog_css_anim_snapshots(overlay, zoom);
@@ -1043,7 +1063,7 @@ pub(crate) fn apply_modal_shell_motion(
         {
             overlay.style.opacity = 0.0;
             // Panel fades with the overlay, so hide the zoom layer here too — otherwise a
-            // frame that paints before flush shows the panel opaque at 95%.
+            // frame that paints before flush shows the panel opaque at 90%.
             if let Some(zoom) = find_template_id_mut(panel, &dialog_zoom_tid(modal_id)) {
                 zoom.style.opacity = 0.0;
                 zoom.style.scale = [DIALOG_ENTER_SCALE, DIALOG_ENTER_SCALE];
@@ -1161,15 +1181,15 @@ mod tests {
                 overlay.style.animations.iter().any(|a| a.name == "fade-in-0")
             );
             assert!(
-                zoom.style.animations.iter().any(|a| a.name == "zoom-in-95")
+                zoom.style.animations.iter().any(|a| a.name == "zoom-in-90")
             );
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-in-0"),
-                "panel must fade together with the overlay (shadcn `fade-in-0 zoom-in-95`)"
+                "panel must fade together with the overlay (shadcn `fade-in-0 zoom-in-90`)"
             );
             assert!(
                 (zoom.style.scale[0] - DIALOG_ENTER_SCALE).abs() < 0.02,
-                "zoom layer starts at zoom-in-95, got {}",
+                "zoom layer starts at zoom-in-90, got {}",
                 zoom.style.scale[0]
             );
             assert!(
@@ -1473,8 +1493,8 @@ mod tests {
                 "panel must fade out with the overlay"
             );
             assert!(
-                zoom.style.animations.iter().any(|a| a.name == "zoom-out-95"),
-                "exit must mirror enter (shadcn `fade-out-0 zoom-out-95`)"
+                zoom.style.animations.iter().any(|a| a.name == "zoom-out-90"),
+                "exit must mirror enter (shadcn `fade-out-0 zoom-out-90`)"
             );
             // Exit starts from the settled pose; the keyframes take it down from here.
             assert!((zoom.style.scale[0] - 1.0).abs() < 0.01);

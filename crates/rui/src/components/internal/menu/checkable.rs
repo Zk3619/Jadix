@@ -128,7 +128,7 @@ fn build_radio_dot(on: bool) -> Element {
         .h(DOT_PX)
         .min_w(DOT_PX)
         .min_h(DOT_PX)
-        .rounded("9999px")
+        .rounded_full()
         .bg(indicator_dot_color(on))
         .flex_shrink(0.0)
         .into();
@@ -145,7 +145,7 @@ pub(crate) fn menu_radio_control(selected: Signal<String>, value: &str) -> Eleme
         .h(BOX_PX)
         .min_w(BOX_PX)
         .min_h(BOX_PX)
-        .rounded("9999px")
+        .rounded_full()
         .items_center()
         .justify_center()
         .flex_shrink(0.0)

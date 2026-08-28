@@ -189,6 +189,21 @@ fn apply_chrome(el: &mut Element, variant: &str) {
     paint_descendant_text(el, text_color, variant == "link");
 }
 
+/// 将 Badge 变体 chroming 应用到任意子树（[`AvatarBadge`] 圆点复用）。
+pub fn apply_badge_variant_paint(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
+    let key = BadgeVariant::from(variant.as_ref()).as_paint_key();
+    let prev = el
+        .attrs
+        .get(ATTR_VARIANT)
+        .map(|s| s.as_str())
+        .unwrap_or("default");
+    if prev == key {
+        return LayoutStatus::Clean;
+    }
+    apply_chrome(el, key);
+    LayoutStatus::StyleChanged
+}
+
 fn paint_descendant_text(el: &mut Element, color: [u8; 4], underline: bool) {
     if el.text.is_some() {
         el.text_style.color = color;
@@ -213,14 +228,15 @@ pub fn badge() -> BadgeBuilder {
         id: String::new(),
         variant: BadgeVariant::Default,
         // ShadCN base: inline-flex w-fit shrink-0 items-center justify-center gap-1
-        // rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap
+        // rounded-full border px-2 py-0.75 text-xs font-medium whitespace-nowrap
         container: hstack()
             .items_center()
             .justify_center()
             .gap("0.25rem")
             .px("0.5rem")
-            .py("0.125rem")
-            .rounded("9999px")
+            .py("0.1875rem")
+            .min_h("1.25rem")
+            .rounded_full()
             .flex_shrink(0.0)
             .w("auto")
             .h("auto")
@@ -234,7 +250,7 @@ pub fn badge() -> BadgeBuilder {
             underline_offset_px: None,
             text_align: crate::style::TextAlign::Center,
             line_height_px: None,
-            leading_scale: Some(1.0),
+            leading_scale: None,
             font_family: None,
         },
     }
@@ -380,17 +396,7 @@ impl From<BadgeBuilder> for Element {
 
 /// Solid-style in-place bind for `<Badge variant={sig.get()}>`.
 pub fn apply_bound_badge_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
-    let key = BadgeVariant::from(variant.as_ref()).as_paint_key();
-    let prev = el
-        .attrs
-        .get(ATTR_VARIANT)
-        .map(|s| s.as_str())
-        .unwrap_or("default");
-    if prev == key {
-        return LayoutStatus::Clean;
-    }
-    apply_chrome(el, key);
-    LayoutStatus::StyleChanged
+    apply_badge_variant_paint(el, variant)
 }
 
 #[cfg(test)]
@@ -449,6 +455,24 @@ mod tests {
     fn badge_empty_id_does_not_write_empty_template() {
         let el: Element = badge().text("x").into();
         assert!(el.template_id.is_none() || el.template_id.as_deref() != Some(""));
+    }
+
+    #[test]
+    fn badge_default_height_has_vertical_breathing_room() {
+        let mut el: Element = badge().text("Hi").into();
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut el, 400.0, 80.0, [-1.0, -1.0]);
+        let h = el.layout_bounds[3];
+        let text_h = el.children[0].layout_bounds[3];
+        // text-xs default leading (~16px) + py (0.1875rem × 2) ≈ 22px; must exceed tight 1.0 leading.
+        assert!(
+            h >= 20.0,
+            "badge layout height should be at least 20px, got {h:.2} (text leaf {text_h:.2})"
+        );
+        assert!(
+            text_h >= 14.0,
+            "badge text leaf should use Tailwind text-xs leading, got {text_h:.2}"
+        );
     }
 
     #[test]

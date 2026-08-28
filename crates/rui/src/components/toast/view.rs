@@ -1,6 +1,8 @@
 //! Toast 卡片壳与 stack/list 渲染。
 
 use super::*;
+use crate::components::button::button;
+use crate::utils::text_node::{build_icon_text_node, build_named_icon_text_node};
 use super::motion::{
     apply_enter_motion, stack_pose_for_rank, tone_shadow_stacked, ToastStackMotion,
 };
@@ -94,7 +96,7 @@ fn build_toast_card(
         if let Some(name) = icon_name {
             if let Some(g) = lucide_glyph(name) {
                 // 独立左侧图标列，纵向居中（与文案区分离）。
-                let icon = build_icon_text_node(g)
+                let icon = build_named_icon_text_node(name, g)
                     .text_size(18.0)
                     .text_color(fg)
                     .w(18.0)
@@ -108,25 +110,19 @@ fn build_toast_card(
     row = row.child(Element::from(body));
 
     let close_glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-    let close_icon = build_icon_text_node(close_glyph)
+    let close_icon = build_named_icon_text_node("x", close_glyph)
         .text_size(14.0)
         .text_color({
             let mut c = fg;
             c[3] = (c[3] as f32 * 0.55) as u8;
             c
-        })
-        .w(16.0)
-        .h(16.0)
-        .pointer_events_none();
-    let mut close_btn: Element = interactive(
-        r#box()
-            .p("0.25rem")
-            .rounded("0.375rem")
-            .child(close_icon)
-            .into(),
-    )
-    .on_click(move || toast_dismiss(id))
-    .into();
+        });
+    let mut close_btn: Element = button(format!("toast-close-{id}"))
+        .variant("ghost")
+        .size("icon-sm")
+        .on_click(move || toast_dismiss(id))
+        .child(close_icon)
+        .into();
     close_btn = close_btn.on_pointer_down(move |e: &PointerEvent| {
         // 避免关闭钮按下启动整卡拖拽。
         e.stop_propagation();
@@ -247,12 +243,14 @@ pub fn ToastDescription(children: Option<Element>) -> Element {
 pub fn ToastClose(children: Option<Element>) -> Element {
     let _ = children;
     let g = lucide_glyph("x").unwrap_or_else(|| "×".into());
-    let icon = build_icon_text_node(g)
+    let icon = build_named_icon_text_node("x", g)
         .text_size(14.0)
-        .text_color(parse_text_color("muted-foreground"))
-        .w(16.0)
-        .h(16.0);
-    interactive(r#box().p("0.25rem").rounded("0.375rem").child(icon).into()).into()
+        .text_color(parse_text_color("muted-foreground"));
+    button("toast-close-part")
+        .variant("ghost")
+        .size("icon-sm")
+        .child(icon)
+        .into()
 }
 
 // ---------------------------------------------------------------------------

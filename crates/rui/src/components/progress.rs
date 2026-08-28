@@ -303,7 +303,7 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
         let mut track: Element = hstack()
             .w("100%")
             .h("0.5rem")
-            .rounded("9999px")
+            .rounded_full()
             .overflow("hidden")
             .items_center()
             .into();
@@ -312,7 +312,7 @@ pub fn progress_track(opts: ProgressTrackOpts) -> Element {
         let mut fill: Element = r#box()
             .h("100%")
             .w(format!("{pct}%"))
-            .rounded("9999px")
+            .rounded_full()
             .flex_shrink(0.0)
             .into();
         fill = fill.bg(tokens::primary());

@@ -317,7 +317,7 @@ mod tests {
                 fmt,
                 out,
                 open,
-                "9999px",
+                "0.25rem",
             )
         });
         assert_eq!(

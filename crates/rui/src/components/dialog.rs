@@ -69,7 +69,7 @@ use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
-use crate::utils::text_node::build_icon_text_node;
+use crate::utils::text_node::build_named_icon_text_node;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ fn dialog_shell_frame(
 ) -> Element {
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
-    let mut zoom_body: Element = if hug_content {
+    let zoom_body: Element = if hug_content {
         vstack()
             .w("100%")
             .flex_shrink(0.0)
@@ -248,10 +248,6 @@ fn dialog_shell_frame(
     } else {
         vstack().w("100%").min_h("0").child(inner).into()
     };
-    if let Some(mut close) = chrome_close {
-        close = close.absolute().top("1rem").right("1rem").z_index(1);
-        zoom_body = zoom_body.relative().child(close);
-    }
     // shadcn animates `DialogContent` itself — the card carrying bg / border / shadow.
     // Putting the animated layer *inside* the surface instead only scales the content, so the
     // card stays full size while its contents shrink: the "缩小态渲染异常" artifact, and on
@@ -263,8 +259,16 @@ fn dialog_shell_frame(
     };
     card = apply_dialog_shell_surface(card, hug_content);
     card.template_id = Some(format!("{modal_id}__modal_zoom"));
+    // Close sits on the padded surface (`absolute top-4 right-4`), not in the header flow.
+    if let Some(mut close) = chrome_close {
+        close = close.absolute().top("1rem").right("1rem").z_index(2);
+        card = card.relative().child(close);
+    }
+    // Swallow on the visible card only — `panel_block_clicks` would nest a second
+    // `rui_portal` under stage. The outer panel must shrink-wrap so the viewport
+    // stage stays `box-none` outside the dialog (underlay close + centered layout).
+    card = swallow_clicks(card);
 
-    // Swallow clicks only — `panel_block_clicks` would nest a second `rui_portal` under stage.
     let mut panel: Element = if hug_content {
         vstack()
             .w("32rem")
@@ -273,9 +277,15 @@ fn dialog_shell_frame(
             .child(card)
             .into()
     } else {
-        vstack().w("100%").min_h("0").child(card).into()
+        vstack()
+            .w("32rem")
+            .max_w("85dvw")
+            .max_h("85dvh")
+            .flex_shrink(0.0)
+            .min_h("0")
+            .child(card)
+            .into()
     };
-    panel = swallow_clicks(panel);
 
     if apply_modal_shell_motion(
         modal_id,
@@ -407,7 +417,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         let chrome_close = if show_close {
             let o = open;
             let glyph = lucide_glyph("x").unwrap_or_else(|| "×".into());
-            let icon = build_icon_text_node(glyph).text_size(16.0);
+            let icon = build_named_icon_text_node("x", glyph).text_size(16.0);
             Some(
                 button(format!("{id}:chrome_close"))
                     .variant("ghost")
@@ -471,8 +481,12 @@ pub fn DialogHeader(children: Option<Element>) -> Element {
     Element::from(
         vstack()
             .w("100%")
+            .min_w("0")
             .gap("0.375rem")
             .flex_shrink(0.0)
+            .overflow_x("hidden")
+            // Reserve chrome close (`absolute top-4 right-4` on DialogContent).
+            .pr("2.5rem")
             .children(kids),
     )
 }
@@ -485,8 +499,15 @@ pub fn DialogHeader(children: Option<Element>) -> Element {
 pub fn DialogTitle(children: Option<Element>) -> Element {
     let fg = parse_text_color("foreground");
     match children {
-        Some(c) => c.text_size(18.0).font_weight(600.0).text_color(fg),
-        None => Element::from(text("").size(18.0).weight(600.0).color(fg)),
+        Some(c) => c
+            .w("100%")
+            .min_w("0")
+            .text_size(18.0)
+            .font_weight(600.0)
+            .text_color(fg),
+        None => Element::from(text("").size(18.0).weight(600.0).color(fg))
+            .w("100%")
+            .min_w("0"),
     }
 }
 
@@ -495,10 +516,27 @@ pub fn DialogTitle(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn DialogDescription(children: Option<Element>) -> Element {
     let muted = parse_text_color("muted-foreground");
-    match children {
-        Some(c) => c.text_size(14.0).font_weight(400.0).text_color(muted),
-        None => Element::from(text("").size(14.0).weight(400.0).color(muted)),
-    }
+    let inner = match children {
+        Some(c) => c
+            .w("100%")
+            .min_w("0")
+            .text_size(14.0)
+            .font_weight(400.0)
+            .text_leading_normal()
+            .text_color(muted),
+        None => Element::from(text("").size(14.0).weight(400.0).color(muted))
+            .w("100%")
+            .min_w("0"),
+    };
+    // Block wrapper: portal 首帧 flex 宽度未定时，文本叶按 intrinsic 单行测量会导致
+    // 打开后换行 layout shift。固定为 header 可用宽度（100% − close 预留）。
+    Element::from(
+        crate::primitives::r#box::r#box()
+            .w("100%")
+            .min_w("0")
+            .overflow_x("hidden")
+            .child(inner),
+    )
 }
 
 /// Header 与 Footer 之间的**唯一滚动区**。
@@ -537,4 +575,108 @@ pub fn DialogFooter(children: Option<Element>) -> Element {
             .flex_shrink(0.0)
             .children(kids),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::portal_overlay::clear_overlay_stack;
+    use crate::components::internal::modal_motion::{
+        sync_modal_presence, use_modal_presence,
+    };
+    use crate::components::internal::modal_shell::{
+        default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+    };
+    use crate::core::reactivity::Signal;
+    use crate::core::tree::PointerEvents;
+    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
+    use crate::utils::presence::PresencePhase;
+
+    #[test]
+    fn dialog_panel_is_viewport_centered_and_empty_stage_hits_underlay() {
+        use crate::app::pointer_events::hit_path;
+        use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+
+        clear_overlay_stack();
+        let open = Signal::new(true);
+        let handle = use_modal_presence("dlg-center");
+        sync_modal_presence(&handle, true);
+        let Some(zs) = modal_sync("dlg-center", open) else {
+            panic!("modal_sync");
+        };
+
+        let overlay_opts = ShellOverlayOpts {
+            color: default_modal_overlay_color(None, Some(0.5)),
+            close_on_click: true,
+            backdrop_blur: 0.0,
+        };
+        let inner = vstack()
+            .w("100%")
+            .child(Element::new().text("Body"))
+            .into();
+        let shell = dialog_shell_frame(
+            "dlg-center",
+            open,
+            &zs,
+            inner,
+            &overlay_opts,
+            None,
+            false,
+            &handle,
+            PresencePhase::Present,
+        );
+
+        let mut root = Element::new().w(800.0).h(600.0).child(shell);
+        assert!(hoist_portal_subtrees(&mut root) >= 2);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+
+        let layer = root
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+            .expect("portal layer");
+        let panel = layer
+            .children
+            .iter()
+            .find(|c| {
+                c.attrs
+                    .get(ATTR_PORTAL_KEY)
+                    .map(|s| s.as_str())
+                    .is_some_and(|k| k.starts_with("panel:"))
+            })
+            .and_then(|stage| {
+                stage
+                    .children
+                    .iter()
+                    .find(|c| c.template_id.as_deref() == Some("dlg-center__modal_panel"))
+            })
+            .expect("dialog panel on stage");
+        let [px, _, pw, _] = panel.layout_bounds;
+        let panel_center = px + pw * 0.5;
+        assert!(
+            (panel_center - 400.0).abs() < 2.0,
+            "panel must be horizontally centered in 800px viewport, center={panel_center}"
+        );
+        assert!(
+            pw < 600.0,
+            "panel must shrink-wrap dialog chrome, not span viewport; w={pw}"
+        );
+
+        let corner = hit_path(&root, 790.0, 10.0);
+        assert!(
+            corner.iter().any(|e| {
+                e.portal_key
+                    .as_deref()
+                    .is_some_and(|k| k.starts_with("underlay:"))
+            }),
+            "clicks outside shrink-wrapped panel must reach underlay"
+        );
+        assert_eq!(
+            panel.pointer_events_mode(),
+            PointerEvents::Auto,
+            "panel/card swallow must stay auto"
+        );
+        clear_overlay_stack();
+    }
 }

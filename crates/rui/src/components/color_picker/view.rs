@@ -569,7 +569,7 @@ pub(super) fn sv_area(
     tex.attrs
         .insert(ATTR_CP_SLOT.to_string(), SLOT_SV_TEX.to_string());
 
-    let mut knob: Element = r#box().w("0.75rem").h("0.75rem").rounded("9999px").into();
+    let mut knob: Element = r#box().w("0.75rem").h("0.75rem").rounded_full().into();
     knob = knob
         .absolute()
         .bg(c.to_f32())
@@ -1107,12 +1107,18 @@ pub(super) fn swatch_grid(
         .gap("0.375rem")
         .into();
     let circle = variant.circle_swatches();
-    let radius = if circle { "9999px" } else { round };
     for (i, sw) in variant.swatches().iter().enumerate() {
         let parsed = parse_color_str(sw).unwrap_or(Rgba::opaque(59, 130, 246));
         // Prefer explicit w×h for swatches: `w:100%` + `aspect-ratio` inside a
         // `h:auto` / `min-h:0` grid cell often collapses (auto track min contribution).
-        let mut chip: Element = r#box().w(chip_size).h(chip_size).rounded(radius).into();
+        let mut chip: Element = {
+            let b = r#box().w(chip_size).h(chip_size);
+            if circle {
+                b.rounded_full().into()
+            } else {
+                b.rounded(round).into()
+            }
+        };
         chip = chip
             .bg(parsed.to_f32())
             .border(tokens::border(), 1.0);
@@ -1202,7 +1208,7 @@ pub(super) fn build_panel(
         ColorPickerVariant::Circle => vstack()
             .gap("0.5rem")
             .w("100%")
-            .child(swatches("9999px"))
+            .child(swatches("0.25rem"))
             .into(),
         ColorPickerVariant::Slider => vstack()
             .gap("0.5rem")
@@ -1225,7 +1231,7 @@ pub(super) fn build_panel(
         ColorPickerVariant::Github => vstack()
             .gap("0.5rem")
             .w("100%")
-            .child(swatches("9999px"))
+            .child(swatches("0.25rem"))
             .child(Element::from(separator()))
             .child(sliders())
             .child(controls())

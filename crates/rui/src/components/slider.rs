@@ -419,7 +419,7 @@ impl From<SliderBuilder> for Element {
             let mut fill: Element = r#box()
                 .h("100%")
                 .w(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
-                .rounded("9999px")
+                .rounded_full()
                 .bg(fill_bg())
                 .into();
             fill.attrs
@@ -438,7 +438,7 @@ impl From<SliderBuilder> for Element {
             .h(THUMB_PX)
             .min_w(THUMB_PX)
             .min_h(THUMB_PX)
-            .rounded("9999px")
+            .rounded_full()
             .bg(thumb0)
             .border(thumb_border(), BORDER_W)
             .shadow(rest_c, rest_blur)
@@ -475,7 +475,7 @@ impl From<SliderBuilder> for Element {
             .right(0.0)
             .top(TRACK_TOP)
             .h(TRACK_H)
-            .rounded("9999px")
+            .rounded_full()
             .overflow("hidden")
             .bg(if textured.is_some() {
                 // Ramp textures punch transparent corners; keep an opaque bed.

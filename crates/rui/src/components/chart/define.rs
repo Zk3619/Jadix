@@ -654,7 +654,7 @@ fn pin_overlay_layer(
             let mut dot: Element = r#box()
                 .w(6.0)
                 .h(6.0)
-                .rounded("9999px")
+                .rounded_full()
                 .absolute(true)
                 .left(format!("calc({x_pct:.2}% - 3px)"))
                 .top(format!("calc({y_pct:.2}% - 3px)"))

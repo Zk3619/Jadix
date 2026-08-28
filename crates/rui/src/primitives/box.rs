@@ -434,6 +434,11 @@ impl BoxBuilder {
         self
     }
 
+    pub fn rounded_full(mut self) -> Self {
+        self.el = self.el.rounded_full();
+        self
+    }
+
     pub fn gap(mut self, g: impl IntoCssDim) -> Self {
         self.el = self.el.gap(g);
         self

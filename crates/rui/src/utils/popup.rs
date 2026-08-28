@@ -915,13 +915,15 @@ pub fn path_hits_floating_trigger(
 ) -> bool {
     let mut triggers = std::collections::HashSet::new();
     collect_floating_triggers(root, &mut triggers);
-    if triggers.is_empty() {
-        return false;
-    }
     path.iter().any(|e| {
-        e.focus_id
-            .as_ref()
-            .is_some_and(|id| triggers.contains(id.as_str()))
+        e.focus_id.as_ref().is_some_and(|id| {
+            triggers.contains(id.as_str())
+                // Nested Select inside Dialog: the menu portal is not hoisted on the
+                // opening click, so hoisted panels have not registered their trigger yet.
+                // Without this, the same release runs `try_dismiss_outside_press` and
+                // immediately closes the menu that `SelectTrigger` just opened.
+                || id.ends_with(":trigger")
+        })
     })
 }
 
@@ -1775,5 +1777,20 @@ mod tests {
             "page control under the panel must not receive the hit"
         );
         clear_overlay_stack();
+    }
+
+    #[test]
+    fn path_hits_floating_trigger_before_menu_portal_hoists() {
+        use crate::app::pointer_events::HitPathEntry;
+
+        let root = Element::new();
+        let path = [HitPathEntry {
+            focus_id: Some("gal-dialog-nested-select:trigger".into()),
+            ..Default::default()
+        }];
+        assert!(
+            path_hits_floating_trigger(&root, &path),
+            "opening click on SelectTrigger must count as in-bounds before menu portal mounts"
+        );
     }
 }

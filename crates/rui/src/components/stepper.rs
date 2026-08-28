@@ -54,7 +54,7 @@ impl From<StepperBuilder> for Element {
         for (i, label) in steps.iter().enumerate() {
             let done = i < active;
             let here = i == active;
-            let mut badge: Element = r#box().w("1.5rem").h("1.5rem").rounded("9999px").into();
+            let mut badge: Element = r#box().w("1.5rem").h("1.5rem").rounded_full().into();
             badge = badge.bg(if done || here {
                 tokens::primary()
             } else {

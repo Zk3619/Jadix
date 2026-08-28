@@ -105,6 +105,19 @@ fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
     }
 }
 
+/// `link` + 显式 rest 字色（如 Breadcrumb muted）：hover 切 `foreground`。
+fn link_caption_color(
+    explicit_rest: Option<[u8; 4]>,
+    variant_text: [u8; 4],
+    is_hovered: bool,
+) -> [u8; 4] {
+    match (explicit_rest, is_hovered) {
+        (Some(_rest), true) => parse_text_color("foreground"),
+        (Some(rest), false) => rest,
+        (None, _) => variant_text,
+    }
+}
+
 fn color4_near(a: [f32; 4], b: [f32; 4]) -> bool {
     (0..4).all(|i| (a[i] - b[i]).abs() <= 1e-4)
 }
@@ -343,6 +356,8 @@ impl ButtonVariant {
 pub enum ButtonSize {
     #[default]
     Default,
+    /// 行内文字链（Breadcrumb / 内联导航）：零 padding · `h-auto`。
+    Inline,
     Xs,
     Sm,
     Lg,
@@ -369,6 +384,7 @@ impl std::str::FromStr for ButtonSize {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
+            "inline" => Self::Inline,
             "xs" => Self::Xs,
             "sm" => Self::Sm,
             "lg" => Self::Lg,
@@ -384,6 +400,7 @@ impl std::str::FromStr for ButtonSize {
 impl ButtonSize {
     fn height(&self) -> &'static str {
         match self {
+            Self::Inline => "auto",
             Self::Xs | Self::IconXs => "1.5rem",
             Self::Sm | Self::IconSm => "2rem",
             Self::Default | Self::Icon => "2.25rem",
@@ -393,6 +410,7 @@ impl ButtonSize {
 
     fn padding_h(&self) -> &'static str {
         match self {
+            Self::Inline => "0",
             Self::Xs => "0.5rem",
             Self::Sm => "0.75rem",
             Self::Default => "1rem",
@@ -403,6 +421,7 @@ impl ButtonSize {
 
     fn padding_v(&self) -> &'static str {
         match self {
+            Self::Inline => "0",
             Self::Xs => "0.125rem",
             Self::Sm => "0.25rem",
             Self::Default => "0.5rem",
@@ -413,7 +432,7 @@ impl ButtonSize {
 
     fn gap(&self) -> &'static str {
         match self {
-            Self::Xs | Self::IconXs => "0.25rem",
+            Self::Inline | Self::Xs | Self::IconXs => "0.25rem",
             Self::Sm | Self::IconSm => "0.375rem",
             _ => "0.5rem",
         }
@@ -433,9 +452,14 @@ impl ButtonSize {
     /// 对齐 shadcn/ui `buttonVariants`：基底 `text-sm`，仅 `xs` / `icon-xs` 叠加 `text-xs`。
     fn text_size(&self) -> &'static str {
         match self {
+            Self::Inline => "0.875rem",
             Self::Xs | Self::IconXs => "0.75rem",
             _ => "0.875rem",
         }
+    }
+
+    fn is_inline(self) -> bool {
+        matches!(self, Self::Inline)
     }
 }
 
@@ -499,7 +523,14 @@ pub fn Button(
     builder.size = size;
     builder.container = builder.container.gap(size.gap());
     builder.text_style.size_px = IntoF32::into_f32(size.text_size());
-    if size.is_icon() {
+    if size.is_inline() {
+        builder.container = builder
+            .container
+            .w("auto")
+            .h("auto")
+            .min_h(0.0)
+            .flex_shrink(0.0);
+    } else if size.is_icon() {
         builder.container = builder
             .container
             .h(size.height())
@@ -618,6 +649,11 @@ impl ButtonBuilder {
 
     pub fn text_size(mut self, size: impl IntoF32) -> Self {
         self.text_style.size_px = size.into_f32();
+        self
+    }
+
+    pub fn font_weight(mut self, weight: u16) -> Self {
+        self.text_style.weight = weight;
         self
     }
 
@@ -780,7 +816,13 @@ impl From<ButtonBuilder> for Element {
 
         // Apply size-based padding if not specified
         let mut container = builder.container;
-        if !builder.size.is_icon() {
+        if builder.size.is_inline() {
+            container = container
+                .w("auto")
+                .h("auto")
+                .min_h(0.0)
+                .flex_shrink(0.0);
+        } else if !builder.size.is_icon() {
             container = container
                 .px(builder.size.padding_h())
                 .py(builder.size.padding_v());
@@ -788,7 +830,11 @@ impl From<ButtonBuilder> for Element {
 
         let (mut bg, variant_text_color, border) =
             button_chrome_for_variant(builder.variant.as_paint_key(), t);
-        let text_color = builder.explicit_text_color.unwrap_or(variant_text_color);
+        let text_color = if builder.variant == ButtonVariant::Link {
+            link_caption_color(builder.explicit_text_color, variant_text_color, is_hovered)
+        } else {
+            builder.explicit_text_color.unwrap_or(variant_text_color)
+        };
         if builder.disabled {
             bg[3] *= 0.5;
         }
@@ -855,8 +901,12 @@ impl From<ButtonBuilder> for Element {
                 if builder.disabled {
                     color[3] = (color[3] as f32 * 0.5) as u8;
                 }
-                let underline = builder.variant == ButtonVariant::Link && is_hovered;
                 let is_lucide_glyph = child.text_style.font_family.as_deref() == Some("lucide");
+                let underline = if is_lucide_glyph {
+                    false
+                } else {
+                    builder.variant == ButtonVariant::Link && is_hovered
+                };
                 let size_px = if is_lucide_glyph {
                     child.text_style.size
                 } else {
@@ -903,6 +953,9 @@ impl From<ButtonBuilder> for Element {
                             text_node = text_node.whitespace_nowrap();
                         }
                     }
+                    if builder.variant == ButtonVariant::Link {
+                        text_node = text_node.pointer_events("none");
+                    }
                 }
                 if preserve_binding {
                     if let Some(tid) = child.template_id.take() {
@@ -916,6 +969,11 @@ impl From<ButtonBuilder> for Element {
                 // so clicks land on the Button interactive root).
                 if let Some(pe) = child.attrs.get(crate::core::tree::ATTR_POINTER_EVENTS) {
                     text_node = text_node.pointer_events(pe.as_str());
+                }
+                if is_lucide_glyph {
+                    if let Some(name) = child.get_attr(crate::utils::ATTR_ICON_NAME) {
+                        text_node.set_attr(crate::utils::ATTR_ICON_NAME, name);
+                    }
                 }
                 el = el.child(text_node);
             } else {
@@ -971,7 +1029,11 @@ fn paint_button_root_from_hover(
     ensure_button_css_transition(el);
     let t = hover_t_from_bool(is_hovered, desc.disabled);
     let (mut bg, variant_text_color, border) = button_chrome_for_variant(&desc.variant, t);
-    let text_color = desc.text_color.unwrap_or(variant_text_color);
+    let text_color = if desc.variant == "link" {
+        link_caption_color(desc.text_color, variant_text_color, is_hovered)
+    } else {
+        desc.text_color.unwrap_or(variant_text_color)
+    };
     if desc.disabled {
         bg[3] *= 0.5;
     }
@@ -1402,6 +1464,35 @@ mod chrome_tests {
         assert_eq!(
             "error".parse::<super::ButtonVariant>().unwrap(),
             super::ButtonVariant::Destructive
+        );
+    }
+
+    #[test]
+    fn inline_size_has_no_padding() {
+        use super::button;
+        use crate::core::tree::Element;
+        use crate::layout::lp_length_px;
+        let el: Element = button("t-inline")
+            .variant("link")
+            .size("inline")
+            .text("Home")
+            .into();
+        assert_eq!(lp_length_px(el.style.padding.left), Some(0.0));
+        assert_eq!(lp_length_px(el.style.padding.right), Some(0.0));
+    }
+
+    #[test]
+    fn link_explicit_muted_hovers_to_foreground() {
+        use super::link_caption_color;
+        let muted = parse_text_color("muted-foreground");
+        let fg = parse_text_color("foreground");
+        assert_eq!(
+            link_caption_color(Some(muted), parse_text_color("primary"), false),
+            muted
+        );
+        assert_eq!(
+            link_caption_color(Some(muted), parse_text_color("primary"), true),
+            fg
         );
     }
 

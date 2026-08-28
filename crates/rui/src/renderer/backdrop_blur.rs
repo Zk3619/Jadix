@@ -409,6 +409,7 @@ impl BackdropBlurPipeline {
                 0.0,
                 0.0,
                 1.0,
+                wgpu::Color::TRANSPARENT,
             );
         } else {
             Self::dispatch_pass(
@@ -428,6 +429,7 @@ impl BackdropBlurPipeline {
                 0.0,
                 2.0,
                 1.0,
+                wgpu::Color::TRANSPARENT,
             );
         }
 
@@ -449,6 +451,7 @@ impl BackdropBlurPipeline {
             sigma_work,
             1.0,
             1.0,
+            wgpu::Color::TRANSPARENT,
         );
         Self::dispatch_pass(
             &mut slot,
@@ -467,6 +470,7 @@ impl BackdropBlurPipeline {
             sigma_work,
             1.0,
             1.0,
+            wgpu::Color::TRANSPARENT,
         );
 
         if sigma_work > 4.0 {
@@ -488,6 +492,7 @@ impl BackdropBlurPipeline {
                 s2,
                 1.0,
                 1.0,
+                wgpu::Color::TRANSPARENT,
             );
             Self::dispatch_pass(
                 &mut slot,
@@ -506,6 +511,7 @@ impl BackdropBlurPipeline {
                 s2,
                 1.0,
                 1.0,
+                wgpu::Color::TRANSPARENT,
             );
         }
 
@@ -526,6 +532,7 @@ impl BackdropBlurPipeline {
             0.0,
             2.0,
             1.0,
+            wgpu::Color::TRANSPARENT,
         );
     }
 
@@ -539,6 +546,7 @@ impl BackdropBlurPipeline {
         encoder: &mut wgpu::CommandEncoder,
         dst: &wgpu::TextureView,
         alpha: f32,
+        clear: wgpu::Color,
     ) {
         let Some(full) = self.full.as_ref() else {
             return;
@@ -561,6 +569,7 @@ impl BackdropBlurPipeline {
             0.0,
             2.0,
             alpha.clamp(0.0, 1.0),
+            clear,
         );
     }
 
@@ -581,6 +590,7 @@ impl BackdropBlurPipeline {
         sigma: f32,
         mode: f32,
         blit_alpha: f32,
+        clear: wgpu::Color,
     ) {
         let slot = *pass_slot as u64;
         debug_assert!(slot < MAX_PASSES, "backdrop blur exceeded MAX_PASSES");
@@ -604,7 +614,7 @@ impl BackdropBlurPipeline {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(clear),
                     store: wgpu::StoreOp::Store,
                 },
             })],

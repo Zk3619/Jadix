@@ -80,7 +80,9 @@ use crate::utils::lucide_glyph;
 use crate::utils::keyed_overlay::{item_template_id, TOAST_CARD_SCOPE};
 use crate::utils::layout_group::linear_slot_offset;
 
-use crate::utils::text_node::build_icon_text_node;
+use crate::utils::text_node::{build_icon_text_node, build_named_icon_text_node};
+use crate::components::button::button;
+
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};

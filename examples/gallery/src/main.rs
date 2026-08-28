@@ -176,9 +176,170 @@ fn BadgeShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn AvatarShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1d) Avatar（ShadCN）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：shape=circle|rounded-square；Fallback 支持文本/Icon/遮罩图片；avatar().shape().fallback*()"
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" items="center" wrap="wrap">
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Basic"</Label>
+                        <Avatar>
+                            <AvatarImage
+                                src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%233b82f6'/></svg>"
+                                alt="@demo"
+                            />
+                            <AvatarFallback>"CN"</AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Fallback Icon"</Label>
+                        <Avatar>
+                            <AvatarFallback>
+                                <Icon name="user" />
+                            </AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Fallback Image"</Label>
+                        { Element::from(avatar().fallback_image("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f97316'/></svg>")) }
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Rounded sq."</Label>
+                        <Avatar shape="rounded-square">
+                            <AvatarFallback>"RS"</AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Badge"</Label>
+                        <Avatar>
+                            <AvatarImage
+                                src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%2310b981'/></svg>"
+                            />
+                            <AvatarFallback>"PP"</AvatarFallback>
+                            <AvatarBadge variant="success" />
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Badge + Icon"</Label>
+                        <Avatar size="lg">
+                            <AvatarFallback>"JD"</AvatarFallback>
+                            <AvatarBadge variant="destructive">
+                                <Icon name="badge-check" size="0.5rem" />
+                            </AvatarBadge>
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Load fail"</Label>
+                        <Avatar>
+                            <AvatarImage src="/nonexistent/rui-gallery-avatar.png" />
+                            <AvatarFallback>"404"</AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Sizes"</Label>
+                        <HStack gap="0.5rem" items="center">
+                            <Avatar size="sm"><AvatarFallback>"SM"</AvatarFallback></Avatar>
+                            <Avatar><AvatarFallback>"MD"</AvatarFallback></Avatar>
+                            <Avatar size="lg"><AvatarFallback>"LG"</AvatarFallback></Avatar>
+                        </HStack>
+                    </VStack>
+                </HStack>
+                <VStack gap="0.25rem">
+                    <Label font_weight="700" text_size="0.75rem">"AvatarGroup + Count"</Label>
+                    <AvatarGroup>
+                        <Avatar>
+                            <AvatarImage src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23ef4444'/></svg>" />
+                            <AvatarFallback>"A"</AvatarFallback>
+                        </Avatar>
+                        <Avatar>
+                            <AvatarImage src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%2322c55e'/></svg>" />
+                            <AvatarFallback>"B"</AvatarFallback>
+                        </Avatar>
+                        <Avatar><AvatarFallback>"C"</AvatarFallback></Avatar>
+                        <AvatarGroupCount>"+3"</AvatarGroupCount>
+                    </AvatarGroup>
+                </VStack>
+                <HStack gap="0.5rem" items="center" wrap="wrap">
+                    <VStack gap="0.25rem" items="center">
+                        <Label font_weight="700" text_size="0.75rem">"Fallback"</Label>
+                        <Avatar>
+                            <AvatarFallback>"ER"</AvatarFallback>
+                        </Avatar>
+                    </VStack>
+                    { Element::from(avatar().fallback("BLD")) }
+                    { Element::from(avatar().fallback_icon("user")) }
+                    { Element::from(
+                        avatar()
+                            .shape("rounded-square")
+                            .fallback_image("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23f97316'/></svg>")
+                    ) }
+                    { Element::from(
+                        avatar()
+                            .size("lg")
+                            .image("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64'><rect width='64' height='64' fill='%23a855f7'/></svg>")
+                            .fallback("BLD")
+                    ) }
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+fn BreadcrumbShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1e) Breadcrumb（ShadCN）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：RSX 复合标签与 breadcrumb().link().page()；Separator / Ellipsis 默认 Lucide 图标"
+                </Label>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"RSX"</Label>
+                    <Breadcrumb>
+                        <BreadcrumbList>
+                            <BreadcrumbItem>
+                                <BreadcrumbLink on_click={|| {}}>"Home"</BreadcrumbLink>
+                            </BreadcrumbItem>
+                            <BreadcrumbSeparator />
+                            <BreadcrumbItem>
+                                <BreadcrumbLink on_click={|| {}}>"Components"</BreadcrumbLink>
+                            </BreadcrumbItem>
+                            <BreadcrumbSeparator />
+                            <BreadcrumbItem>
+                                <BreadcrumbPage>"Breadcrumb"</BreadcrumbPage>
+                            </BreadcrumbItem>
+                        </BreadcrumbList>
+                    </Breadcrumb>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Builder"</Label>
+                    { Element::from(
+                        breadcrumb()
+                            .link("Home", || {})
+                            .link("Components", || {})
+                            .page("Breadcrumb")
+                    ) }
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Ellipsis"</Label>
+                    { Element::from(
+                        breadcrumb()
+                            .link("Home", || {})
+                            .ellipsis()
+                            .link("Settings", || {})
+                            .page("Profile")
+                    ) }
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 fn AspectRatioShowcase() -> rui::core::tree::Element {
     ui! {
-        <MyCard title="1d) AspectRatio（CSS aspect-ratio）">
+        <MyCard title="1f) AspectRatio（CSS aspect-ratio）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "双写法：<AspectRatio ratio> 与 aspect_ratio().ratio()；Image/Box 亦可写 aspect_ratio=\"16/9\"（MDN：定宽 + 另一轴 auto）"
@@ -236,7 +397,7 @@ fn AnimationShowcase() -> rui::core::tree::Element {
     let play_btn = play;
     let play_box = play;
     ui! {
-        <MyCard title="1e) CSS animation（MDN）">
+        <MyCard title="1g) CSS animation（MDN）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "utility：animate-spin / ping / pulse / bounce；属性：animation / animation_play_state / fill-mode；Icon+spin 走字形贴图+transform（非 glyphon）；fade 用 infinite alternate"
@@ -249,13 +410,12 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                     <VStack gap="0.25rem" items="center">
                         <Label font_weight="700" text_size="0.75rem">"ping"</Label>
                         <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
-                            <div w="2rem" h="2rem" rounded="9999px" bg="primary" />
+                            <div w="2rem" h="2rem" class="rounded-full" bg="primary" />
                             <div
                                 absolute={true}
                                 inset="0"
-                                rounded="9999px"
+                                class="rounded-full animate-ping"
                                 bg="primary"
-                                class="animate-ping"
                             />
                         </Box>
                     </VStack>
@@ -1377,7 +1537,7 @@ fn GradientShowcase() -> rui::core::tree::Element {
             r#box()
                 .w(w)
                 .h(h)
-                .rounded("9999px")
+                .rounded_full()
                 .overflow("hidden")
                 .background_image(css),
         );
@@ -1407,20 +1567,17 @@ fn GradientShowcase() -> rui::core::tree::Element {
     ]
     .into_iter()
     .map(|(label, css, w, h)| {
-        let rounded = if label.contains("conic") || label.contains("radial") {
-            "9999px"
+        let mut b = r#box()
+            .w(w)
+            .h(h)
+            .overflow("hidden")
+            .background_image(css);
+        if label.contains("conic") || label.contains("radial") {
+            b = b.rounded_full();
         } else {
-            "0.5rem"
-        };
-        let el = Element::from(
-            r#box()
-                .w(w)
-                .h(h)
-                .rounded(rounded)
-                .overflow("hidden")
-                .background_image(css),
-        );
-        gradient_demo_tile(label, el)
+            b = b.rounded("0.5rem");
+        }
+        gradient_demo_tile(label, Element::from(b))
     })
     .collect();
 
@@ -4752,7 +4909,7 @@ fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><circle cx='16' cy='16' r='14' fill='steelblue'/></svg>"
                                     w="5.5rem"
                                     h="5.5rem"
-                                    rounded="9999px"
+                                    class="rounded-full"
                                 />
                             </VStack>
                             <VStack gap="0.35rem" flex_grow="1" min_w="12rem">
@@ -7316,11 +7473,13 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"基础"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
-                        "Button 变体 / 尺寸 / hover 缓动 · Badge · AspectRatio · CSS animation · 排版装饰"
+                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Avatar · Breadcrumb · AspectRatio · CSS animation · 排版装饰"
                     </Label>
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
+                    { AvatarShowcase() }
+                    { BreadcrumbShowcase() }
                     { AspectRatioShowcase() }
                     <AnimationShowcase />
                     <TypographyShowcase />

@@ -83,6 +83,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return gaussian1d(in.uv, uniforms.texel_size, uniforms.direction, uniforms.sigma);
     }
     // Upsample / fullscreen blit: hardware bilinear from low-res source.
+    // Page dimming belongs on the modal underlay rect (bg alpha × overlay opacity),
+    // not on the blurred capture — fading the blit made glyphs vanish instead of blur.
     let c = textureSample(src_tex, src_sampler, in.uv);
-    return vec4<f32>(c.rgb, uniforms.blit_alpha);
+    return vec4<f32>(c.rgb, 1.0);
 }

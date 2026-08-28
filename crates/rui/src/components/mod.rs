@@ -24,7 +24,9 @@
 //! - DropdownMenu：`<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub（宏 `dropdown_menu_scope`）；Builder [`dropdown_menu`]。
 //! - Menubar：`<Menubar>` / Menu / Trigger / Content / Item…（宏 `menubar_scope` / `menubar_menu`；内容复用 DropdownMenu）；Builder [`menubar`]。
 //! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
+//! - Avatar：`<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>`（宏 → [`avatar_scope`]）；Builder [`avatar`]。
 //! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
+//! - Breadcrumb：`<Breadcrumb>` / `BreadcrumbList` / `BreadcrumbItem` / `BreadcrumbLink` / `BreadcrumbPage` / `BreadcrumbSeparator` / `BreadcrumbEllipsis`；Builder [`breadcrumb`]。
 //! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
@@ -37,7 +39,9 @@ pub(crate) mod internal;
 
 pub mod accordion;
 pub mod aspect_ratio;
+pub mod avatar;
 pub mod badge;
+pub mod breadcrumb;
 pub mod base;
 pub mod button;
 pub mod calendar;
@@ -95,8 +99,21 @@ pub use accordion::{
 pub use aspect_ratio::{
     aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
 };
+pub use avatar::{
+    apply_bound_avatar_badge_variant, apply_bound_avatar_shape, apply_bound_avatar_size, avatar,
+    avatar_fallback, avatar_scope, use_avatar, Avatar, AvatarBadge, AvatarBadgeProps,
+    AvatarBuilder, AvatarCtx, AvatarFallback, AvatarFallbackBuilder, AvatarFallbackProps,
+    AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps, AvatarImage,
+    AvatarImageProps, AvatarProps, AvatarShape, AvatarSize,
+};
 pub use badge::{
     apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps, BadgeVariant,
+};
+pub use breadcrumb::{
+    breadcrumb, Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis, BreadcrumbEllipsisProps,
+    BreadcrumbItem, BreadcrumbItemProps, BreadcrumbLink, BreadcrumbLinkProps, BreadcrumbList,
+    BreadcrumbListProps, BreadcrumbPage, BreadcrumbPageProps, BreadcrumbProps,
+    BreadcrumbSeparator, BreadcrumbSeparatorProps,
 };
 pub use base::BaseComponentBuilder;
 pub use button::{

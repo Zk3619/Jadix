@@ -2617,7 +2617,142 @@ impl AppState {
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
                     );
-                    if overlay_paint_start > 0 {
+                    for sd in &shadow_tex_draws {
+                        let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
+                            continue;
+                        };
+                        let inst = TexturedInstanceInput {
+                            rect_pos: [sd.rect[0], sd.rect[1]],
+                            rect_size: [sd.rect[2], sd.rect[3]],
+                            tint: [1.0, 1.0, 1.0, 1.0],
+                            uv_offset: [0.0, 0.0],
+                            uv_scale: [1.0, 1.0],
+                            transform: crate::style::transform::MAT2D_IDENTITY,
+                            flags: 0.0,
+                            _pad: [0.0; 3],
+                        };
+                        let shadow_inst_buf =
+                            self.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Shadow instance (scene)"),
+                                    contents: bytemuck::cast_slice(&[inst]),
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                });
+                        page_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
+                        page_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+                        page_pass
+                            .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
+                        page_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
+                        page_pass.set_index_buffer(
+                            self.textured_pipeline.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        page_pass.draw_indexed(
+                            0..self.textured_pipeline.num_indices,
+                            0,
+                            0..1,
+                        );
+                    }
+                    if has_page_stack_bands {
+                        for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+                            if band.paint_ops.0 < band.paint_ops.1 {
+                                draw_paint_ops(
+                                    &mut page_pass,
+                                    &render_result.paint_ops,
+                                    band.paint_ops.0,
+                                    band.paint_ops.1,
+                                    &self.pipeline,
+                                    &self.instance_buffer,
+                                    &self.textured_pipeline,
+                                    &self.textured_instance_buffer,
+                                    &self.image_textures,
+                                    &scaled_tex,
+                                );
+                            } else if band.instance.0 < band.instance.1 {
+                                page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                                page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                                page_pass.set_index_buffer(
+                                    self.pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                page_pass.draw_indexed(
+                                    0..self.pipeline.num_indices,
+                                    0,
+                                    band.instance.0 as u32..band.instance.1 as u32,
+                                );
+                                if band.textured.0 < band.textured.1 {
+                                    draw_packed_textured_runs(
+                                        &mut page_pass,
+                                        &self.textured_pipeline,
+                                        &self.textured_instance_buffer,
+                                        &self.image_textures,
+                                        &scaled_tex,
+                                        band.textured.0,
+                                        band.textured.1,
+                                    );
+                                }
+                            }
+                            if band.chrome.0 < band.chrome.1 {
+                                page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                                page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                let chrome_slice =
+                                    &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                                let chrome_buffer = self.device.create_buffer_init(
+                                    &wgpu::util::BufferInitDescriptor {
+                                        label: Some("Page Stack Chrome Buffer (scene)"),
+                                        contents: bytemuck::cast_slice(chrome_slice),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    },
+                                );
+                                page_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                                page_pass.set_index_buffer(
+                                    self.pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                page_pass.draw_indexed(
+                                    0..self.pipeline.num_indices,
+                                    0,
+                                    0..chrome_slice.len() as u32,
+                                );
+                            }
+                            if let Some(ul) = page_stack_band_underlines.get(band_i) {
+                                if !ul.is_empty() {
+                                    page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                                    page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                    page_pass
+                                        .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                    let underline_buffer = self.device.create_buffer_init(
+                                        &wgpu::util::BufferInitDescriptor {
+                                            label: Some("Page Stack Underline Buffer (scene)"),
+                                            contents: bytemuck::cast_slice(ul),
+                                            usage: wgpu::BufferUsages::VERTEX,
+                                        },
+                                    );
+                                    page_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                                    page_pass.set_index_buffer(
+                                        self.pipeline.index_buffer.slice(..),
+                                        wgpu::IndexFormat::Uint16,
+                                    );
+                                    page_pass.draw_indexed(
+                                        0..self.pipeline.num_indices,
+                                        0,
+                                        0..ul.len() as u32,
+                                    );
+                                }
+                            }
+                            if band.text.0 < band.text.1 {
+                                if band_i == 0 {
+                                    self.text_renderer.render(&mut page_pass);
+                                } else {
+                                    self.page_stack_band_text_renderers[band_i - 1]
+                                        .render(&mut page_pass);
+                                }
+                            }
+                        }
+                    } else if overlay_paint_start > 0 {
                         draw_paint_ops(
                             &mut page_pass,
                             &render_result.paint_ops,
@@ -2648,29 +2783,31 @@ impl AppState {
                             );
                         }
                     }
-                    if !underline_instances.is_empty() {
-                        page_pass.set_pipeline(&self.pipeline.render_pipeline);
-                        page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                        page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                        let underline_buffer =
-                            self.device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Underline Instance Buffer (scene)"),
-                                    contents: bytemuck::cast_slice(&underline_instances),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                });
-                        page_pass.set_vertex_buffer(1, underline_buffer.slice(..));
-                        page_pass.set_index_buffer(
-                            self.pipeline.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        page_pass.draw_indexed(
-                            0..self.pipeline.num_indices,
-                            0,
-                            0..underline_instances.len() as u32,
-                        );
+                    if !has_page_stack_bands {
+                        if !underline_instances.is_empty() {
+                            page_pass.set_pipeline(&self.pipeline.render_pipeline);
+                            page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                            let underline_buffer =
+                                self.device
+                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("Underline Instance Buffer (scene)"),
+                                        contents: bytemuck::cast_slice(&underline_instances),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    });
+                            page_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                            page_pass.set_index_buffer(
+                                self.pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            page_pass.draw_indexed(
+                                0..self.pipeline.num_indices,
+                                0,
+                                0..underline_instances.len() as u32,
+                            );
+                        }
+                        self.text_renderer.render(&mut page_pass);
                     }
-                    self.text_renderer.render(&mut page_pass);
                     if overlay_chrome_start > 0 {
                         page_pass.set_pipeline(&self.pipeline.render_pipeline);
                         page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
@@ -2695,9 +2832,8 @@ impl AppState {
                         );
                     }
                 }
-                // Ramp the radius with the overlay's own fade. Blitting a fully-blurred
-                // capture at low alpha reads as the page snapping out of focus; growing the
-                // radius is what `backdrop-filter` under a fading element actually looks like.
+                // Ramp blur σ with overlay opacity (CSS `backdrop-filter` under a fading
+                // element). Keep the blit itself opaque — dimming is the underlay rect.
                 self.backdrop_blur.blur(
                     &self.device,
                     &self.queue,
@@ -2712,7 +2848,7 @@ impl AppState {
                 };
                 if let Some(dst) = blur_dst {
                     self.backdrop_blur
-                        .blit_to(&self.queue, &mut encoder, dst, modal_underlay_opacity);
+                        .blit_to(&self.queue, &mut encoder, dst, 1.0, clear_color);
                 }
             }
         }
