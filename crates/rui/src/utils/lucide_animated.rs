@@ -1,12 +1,13 @@
 //! Lucide-animated recipes ([pqoqubbw/icons](https://github.com/pqoqubbw/icons)) → SVG frame bake.
 //!
 //! Recipes are extracted offline (`scripts/extract_lucide_animated.mjs`) into
-//! `assets/lucide_animated.json`, then **compiled** by `build.rs` into native Rust data.
-//! Playback is hover / imperative; frames go through resvg (or CPU path) like public `<svg>` /
-//! Lucide static icons — no React/Motion runtime.
+//! `assets/lucide_animated.json`. Playback is hover / imperative; frames go through resvg
+//! (or CPU path) like public `<svg>` / Lucide static icons — no React/Motion runtime.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+
+use serde::Deserialize;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,77 +19,109 @@ pub const ATTR_ANIMATED_ICON_STATE: &str = "rui_animated_icon_state";
 pub const ATTR_ANIMATED_ICON_CONTROLLED: &str = "rui_animated_icon_controlled";
 pub const ATTR_ANIMATED_ICON_SIZE: &str = "rui_animated_icon_size";
 
-/// JSON keyframe value compiled at build time (replaces runtime `serde_json::Value`).
-#[derive(Debug, Clone)]
-pub enum KeyframeValue {
-    Null,
-    Bool(bool),
-    Number(f32),
-    String(String),
-    Array(Vec<KeyframeValue>),
-}
-
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct AnimatedIconRecipe {
     pub id: String,
+    #[serde(default)]
     pub lucide: String,
+    #[serde(default = "default_vb", alias = "viewBox")]
     pub view_box: String,
+    #[serde(default = "default_sw", alias = "strokeWidth")]
     pub stroke_width: f32,
+    #[serde(default = "default_cap", alias = "strokeLinecap")]
     pub stroke_linecap: String,
+    #[serde(default = "default_join", alias = "strokeLinejoin")]
     pub stroke_linejoin: String,
+    #[serde(default)]
     pub root: RecipeNodeGroup,
+    #[serde(default)]
     pub nodes: Vec<RecipeNode>,
+    #[serde(default)]
     pub animated: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+fn default_vb() -> String {
+    "0 0 24 24".into()
+}
+fn default_sw() -> f32 {
+    2.0
+}
+fn default_cap() -> String {
+    "round".into()
+}
+fn default_join() -> String {
+    "round".into()
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RecipeNodeGroup {
+    #[serde(default)]
     pub tracks: Vec<RecipeTrack>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RecipeNode {
+    #[serde(default)]
     pub id: String,
+    #[serde(default = "default_path_tag")]
     pub tag: String,
+    #[serde(default)]
     pub attrs: HashMap<String, String>,
+    #[serde(default)]
     pub tracks: Vec<RecipeTrack>,
     /// Nested geometry under a Motion `<g>` (e.g. download arrow group).
+    #[serde(default)]
     pub children: Vec<RecipeNode>,
 }
 
-#[derive(Debug, Clone, Default)]
+fn default_path_tag() -> String {
+    "path".into()
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RecipeTrack {
     pub prop: String,
-    pub keyframes: HashMap<String, KeyframeValue>,
+    #[serde(default)]
+    pub keyframes: HashMap<String, serde_json::Value>,
+    #[serde(default)]
     pub transition: Option<RecipeTransition>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RecipeTransition {
+    #[serde(default)]
     pub duration: Option<f32>,
+    #[serde(default)]
     pub delay: Option<f32>,
+    #[serde(default)]
     pub ease: Option<String>,
     /// `-1` = infinite
+    #[serde(default)]
     pub repeat: Option<f32>,
+    #[serde(default, rename = "type")]
     pub ty: Option<String>,
+    #[serde(default)]
     pub stiffness: Option<f32>,
+    #[serde(default)]
     pub damping: Option<f32>,
     /// Motion `times` — absolute keyframe offsets in [0,1], same length as value array.
+    #[serde(default)]
     pub times: Option<Vec<f32>>,
+    #[serde(default, rename = "perProp")]
     pub per_prop: Option<HashMap<String, PerPropTransition>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct PerPropTransition {
+    #[serde(default)]
     pub duration: Option<f32>,
 }
 
-mod recipe_data {
-    include!(concat!(env!("OUT_DIR"), "/lucide_animated_recipes.rs"));
-}
-
 fn recipes() -> &'static HashMap<String, AnimatedIconRecipe> {
-    recipe_data::recipes()
+    static MAP: OnceLock<HashMap<String, AnimatedIconRecipe>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        serde_json::from_str(include_str!("../../assets/lucide_animated.json")).unwrap_or_default()
+    })
 }
 
 pub fn animated_icon_recipe(name: &str) -> Option<&'static AnimatedIconRecipe> {
@@ -138,24 +171,24 @@ fn instance_key(el: &Element) -> u64 {
     h.finish()
 }
 
-fn value_as_f32(v: &KeyframeValue) -> Option<f32> {
+fn value_as_f32(v: &serde_json::Value) -> Option<f32> {
     match v {
-        KeyframeValue::Number(n) => Some(*n),
-        KeyframeValue::String(s) => {
+        serde_json::Value::Number(n) => n.as_f64().map(|x| x as f32),
+        serde_json::Value::String(s) => {
             let s = s.trim();
             if let Some(d) = s.strip_suffix("deg") {
                 return d.trim().parse().ok();
             }
             s.parse().ok()
         }
-        KeyframeValue::Array(arr) if arr.len() == 1 => value_as_f32(&arr[0]),
+        serde_json::Value::Array(arr) if arr.len() == 1 => value_as_f32(&arr[0]),
         _ => None,
     }
 }
 
-fn keyframe_series(v: &KeyframeValue) -> Vec<f32> {
+fn keyframe_series(v: &serde_json::Value) -> Vec<f32> {
     match v {
-        KeyframeValue::Array(arr) => arr.iter().filter_map(value_as_f32).collect(),
+        serde_json::Value::Array(arr) => arr.iter().filter_map(value_as_f32).collect(),
         other => value_as_f32(other).into_iter().collect(),
     }
 }
@@ -324,16 +357,13 @@ struct SampledProps {
     d: Option<String>,
 }
 
-fn keyframe_string_series(v: &KeyframeValue) -> Vec<String> {
+fn keyframe_string_series(v: &serde_json::Value) -> Vec<String> {
     match v {
-        KeyframeValue::Array(arr) => arr
+        serde_json::Value::Array(arr) => arr
             .iter()
-            .filter_map(|x| match x {
-                KeyframeValue::String(s) => Some(s.clone()),
-                _ => None,
-            })
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
             .collect(),
-        KeyframeValue::String(s) => vec![s.clone()],
+        serde_json::Value::String(s) => vec![s.clone()],
         _ => Vec::new(),
     }
 }
@@ -1181,7 +1211,7 @@ mod tests {
 
     #[test]
     fn recipes_loaded() {
-        assert!(!recipes().is_empty(), "no animated recipes embedded");
+        assert!(recipes().len() >= 400, "len={}", recipes().len());
         assert!(animated_icon_recipe("heart").is_some());
         assert!(animated_icon_recipe("check").is_some());
         assert!(animated_icon_recipe("menu").is_some());
@@ -1457,7 +1487,7 @@ mod tests {
         let t0 = &grip.nodes[0].tracks[0];
         assert!(matches!(
             t0.keyframes.get("animate"),
-            Some(KeyframeValue::Array(a)) if a.len() >= 3
+            Some(serde_json::Value::Array(a)) if a.len() >= 3
         ));
         let blink = emit_animated_icon_svg(grip, "animate", 0.3, "#000");
         assert!(blink.matches("<circle").count() >= 9, "{blink}");

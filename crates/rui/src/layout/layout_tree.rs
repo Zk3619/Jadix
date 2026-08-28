@@ -3419,6 +3419,48 @@ impl LayoutTree {
                     }
                 }
             } else {
+            // Named Lucide icons: raster SVG/path to texture (bypasses PUA + fontdb drift).
+            let mut lucide_static_textured = false;
+            if is_icon {
+                if let (Some(icon_name), Some(glyph)) = (
+                    element
+                        .attrs
+                        .get(crate::utils::ATTR_ICON_NAME)
+                        .map(|s| s.as_str())
+                        .filter(|n| !n.is_empty()),
+                    element.text.as_deref(),
+                ) {
+                    if crate::utils::lucide_svg_inner(icon_name).is_some() {
+                        let side = lay_w
+                            .max(lay_h)
+                            .max(text_style.size)
+                            .max(1.0);
+                        if let Some((tex_key, _)) =
+                            crate::utils::icon_texture::ensure_lucide_icon_texture(
+                                Some(icon_name),
+                                glyph,
+                                side,
+                                text_style.color,
+                                2.0,
+                            )
+                        {
+                            let cx = vis_x + vis_w * 0.5;
+                            let cy = vis_y + vis_h * 0.5;
+                            textured_draws.push(crate::renderer::TexturedDraw {
+                                rect: [cx - side * 0.5, cy - side * 0.5, side, side],
+                                uv_offset: [0.0, 0.0],
+                                uv_scale: [1.0, 1.0],
+                                texture_key: tex_key,
+                                opacity,
+                                tint_rgb: [1.0, 1.0, 1.0],
+                                transform: text_world_linear,
+                            });
+                            lucide_static_textured = true;
+                        }
+                    }
+                }
+            }
+            if !lucide_static_textured {
             // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
             // Coverage (glyphon) for idle axis-aligned UI text only.
             let sticky_xform = ancestor_sticky_xform
@@ -3612,6 +3654,7 @@ impl LayoutTree {
                 opacity,
             );
             } // !text_baked
+            } // !lucide_static_textured
             } // else !icon_spin_paint
         }
 

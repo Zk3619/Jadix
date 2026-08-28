@@ -9,14 +9,12 @@ readme = "../../README.md"
 keywords = ["gui", "ui", "wgpu", "reactive", "desktop"]
 categories = ["gui"]
 
-build = "build.rs"
-
 [features]
 # Lean by default: no resvg / serde. Opt into boundaries below.
 default = []
 # Dev-time TCP hot reload (`rui_hot_reload_cli`). Requires debug build.
-hot-reload = ["dep:serde", "dep:serde_json"]
-# pqoqubbw animated Lucide recipes — compiled into the binary at build time (no runtime JSON).
+hot-reload = []
+# pqoqubbw animated Lucide recipes — runtime JSON from assets/lucide_animated.json.
 lucide-animated = []
 # Optional runtime logger: console (stderr) + optional file via RUI_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
@@ -88,11 +86,10 @@ glyphon = { workspace = true }
 env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 tracing = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 rui_macros = { path = "../rui_macros" }
 rui_style_tokens = { path = "../rui_style_tokens" }
-phf = { version = "0.11", default-features = false }
 clipboard-rs = { workspace = true }
 rfd = { workspace = true }
 windows-sys = { version = "0.59", features = [
@@ -123,11 +120,6 @@ image = { version = "0.25", default-features = false, features = [
 resvg = { version = "0.45.1", optional = true }
 # default-features off: skip Linux libxdo. gtk still required on Linux if this feature is on.
 tray-icon = { version = "0.21", optional = true, default-features = false }
-
-[build-dependencies]
-serde = { workspace = true }
-serde_json = { workspace = true }
-phf_codegen = "0.11"
 
 [dev-dependencies]
 

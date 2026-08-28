@@ -6,10 +6,6 @@ use syn::parse::{Parse, ParseStream};
 use syn::visit::Visit;
 use syn::{Expr, Ident, Token, braced};
 
-mod lucide_glyph_hex {
-    include!(concat!(env!("OUT_DIR"), "/lucide_glyph_hex.rs"));
-}
-
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
 /// 同 Input：省略 `id` 的 `<Checkbox>` 仍生成唯一实例键（focus / Label `for`）；非受控布尔态走 Owner 作用域（WP-3.7）。
@@ -879,6 +875,7 @@ fn expand_node(
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
                 || name_str == "Progress"
+                || name_str == "Avatar"
                 || name_str == "Accordion"
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
@@ -992,6 +989,66 @@ fn expand_node(
                             #id_ts,
                             #value_ts,
                             #default_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "Avatar" {
+                    let id_expr = get_attr("id");
+                    let size_expr = get_attr("size");
+                    let shape_expr = get_attr("shape");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Avatar#{}", file!(), line!(), #idx) }
+                    };
+                    let size_ts = if let Some(s) = size_expr {
+                        quote! { rui::components::AvatarSize::from(#s) }
+                    } else {
+                        quote! { rui::components::AvatarSize::Default }
+                    };
+                    let shape_ts = if let Some(s) = shape_expr {
+                        quote! { rui::components::AvatarShape::from(#s) }
+                    } else {
+                        quote! { rui::components::AvatarShape::Circle }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::avatar_scope(
+                            #id_ts,
+                            #size_ts,
+                            #shape_ts,
                             #class_ts,
                             || #child_el,
                         )
@@ -3977,14 +4034,14 @@ fn expand_node(
                         continue;
                     }
 
-                    // Button / Badge / Input chrome attrs → bind_attr (Solid-style, no rebuild).
-                    if matches!(name_str.as_str(), "Button" | "Badge" | "Input")
-                        && matches!(attr_name, "variant" | "disabled" | "invalid")
+                    // Button / Badge / Avatar / Input chrome attrs → bind_attr (Solid-style, no rebuild).
+                    if matches!(name_str.as_str(), "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Input")
+                        && matches!(attr_name, "variant" | "disabled" | "invalid" | "size" | "shape")
                         && expr_reads_get(value)
                     {
                         let idx = *node_counter;
                         *node_counter += 1;
-                        if name_str == "Badge" && attr_name == "variant" {
+                        if name_str == "Avatar" && attr_name == "size" {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {
                                 Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
@@ -3992,9 +4049,49 @@ fn expand_node(
                             chrome_binds.push(quote! {
                                 __rui_el = rui::app::reactive::bind_attr(
                                     __rui_el,
-                                    format!("{}:{}:bind_badge_variant#{}", file!(), line!(), #idx),
+                                    format!("{}:{}:bind_avatar_size#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| rui::components::apply_bound_badge_variant(el, v),
+                                    |el, v| rui::components::apply_bound_avatar_size(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Avatar" && attr_name == "shape" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_avatar_shape#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_avatar_shape(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if matches!(name_str.as_str(), "Badge" | "AvatarBadge") && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            let bind_key = if name_str == "AvatarBadge" {
+                                "avatarbadge"
+                            } else {
+                                "badge"
+                            };
+                            let apply_fn = if name_str == "AvatarBadge" {
+                                quote! { rui::components::apply_bound_avatar_badge_variant }
+                            } else {
+                                quote! { rui::components::apply_bound_badge_variant }
+                            };
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_{}_variant#{}", file!(), line!(), #bind_key, #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| #apply_fn(el, v),
                                 );
                             });
                             continue;
@@ -4964,8 +5061,14 @@ fn expand_node(
                             && let syn::Lit::Str(lit_str) = &expr_lit.lit
                         {
                             let name_str = lit_str.value();
-                            if let Some(code) = lucide_glyph_hex::LUCIDE_GLYPH_HEX.get(name_str.as_str()) {
-                                icon_code = (*code).to_string();
+                            let json_str = include_str!("../../rui/assets/lucide.json");
+                            static ICONS: std::sync::OnceLock<
+                                std::collections::HashMap<String, String>,
+                            > = std::sync::OnceLock::new();
+                            let map = ICONS
+                                .get_or_init(|| serde_json::from_str(json_str).unwrap_or_default());
+                            if let Some(code) = map.get(&name_str) {
+                                icon_code = code.clone();
                                 static_icon_name = Some(name_str);
                             } else {
                                 panic!(

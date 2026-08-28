@@ -14,11 +14,6 @@ pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
-#[cfg(feature = "lucide-animated")]
-#[path = "lucide_animated.rs"]
-pub mod lucide_animated;
-#[cfg(not(feature = "lucide-animated"))]
-#[path = "lucide_animated_stub.rs"]
 pub mod lucide_animated;
 pub mod icon_texture;
 pub mod text_texture;
@@ -47,8 +42,8 @@ pub use focus_trap::{
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
 pub use instance_id::resolve_instance_id;
-pub use lucide::{apply_bound_icon_name, lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
 pub use block_on::block_on;
+pub use lucide::{apply_bound_icon_name, lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,

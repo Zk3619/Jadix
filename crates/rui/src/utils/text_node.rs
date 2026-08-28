@@ -79,9 +79,13 @@ pub fn build_text_node(text: impl Into<String>, mut cfg: TextNodeConfig) -> Elem
 ///
 /// 默认字色为主题 `foreground`（对齐 Tailwind v4 `text-foreground`），避免
 /// [`TextStyle::default`] 的白色在浅色底上看不见。
+/// 显式 `font_weight(400)` + `underline(false)`（带 attr 标记）以免祖先
+/// `font-medium` / `hover:underline` 经 cascade 污染 PUA 字形。
 pub fn build_icon_text_node(glyph: impl Into<String>) -> Element {
     Element::new()
         .font_family("lucide")
+        .font_weight(400.0)
+        .underline(false)
         .text(glyph.into())
         .text_color(parse_text_color("foreground"))
         // SVG-only MDN keyword：命中自身布局盒（容器）。
