@@ -184,7 +184,9 @@ pub fn portal_sync(
                                 l.kind == OverlayKind::Menu
                                     && id.starts_with(&format!("{}__sub", l.id))
                             });
-                        if !nested_sub && !had_peer_menu {
+                        let menu_over_modal = kind == OverlayKind::Menu
+                            && stack.iter().any(|l| l.kind == OverlayKind::Modal);
+                        if !nested_sub && !had_peer_menu && !menu_over_modal {
                             crate::utils::popup::disarm_underlay_close();
                         }
                         stack.push(OverlayLayer { id, open, kind });
@@ -236,6 +238,21 @@ pub fn top_stacked_panel_z() -> Option<i32> {
         other.try_set(false);
     }
     z
+}
+
+/// 当前窗口 Stacked 栈里是否有已打开的 Modal（Dialog / Sheet / Drawer）。
+pub fn stacked_modal_open() -> bool {
+    let (open, to_close) = with_stack_mut(|stack| {
+        let to_close = prune_closed(stack);
+        let open = stack
+            .iter()
+            .any(|l| l.kind == OverlayKind::Modal && l.open.peek());
+        (open, to_close)
+    });
+    for other in to_close {
+        other.try_set(false);
+    }
+    open
 }
 
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
@@ -402,6 +419,24 @@ pub fn clear_overlay_stack() {
 #[cfg(test)]
 pub fn overlay_stack_depth_for_test() -> usize {
     with_stack_mut(|s| s.len())
+}
+
+/// Modal 在 stacked 栈中的 `(index, len)`；仅统计 [`OverlayKind::Modal`]。
+pub(crate) fn modal_stack_metrics(id: &str) -> (usize, usize) {
+    with_stack_mut(|stack| {
+        let indices: Vec<usize> = stack
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.kind == OverlayKind::Modal)
+            .map(|(i, _)| i)
+            .collect();
+        let len = indices.len();
+        let pos = stack
+            .iter()
+            .position(|l| l.id == id && l.kind == OverlayKind::Modal);
+        let idx = pos.and_then(|p| indices.iter().position(|&i| i == p));
+        (idx.unwrap_or(0), len.max(1))
+    })
 }
 
 pub(crate) fn drop_overlay_stack(scope: WindowScope) {

@@ -13,7 +13,8 @@
 //!     └── SheetClose         // 任意子节点点击关闭
 //! ```
 //!
-//! 模态壳（Portal / Overlay / 面板表面）在本模块内实现。`ui!` 中 `<Sheet>` /
+//! 模态壳 overlay / Portal z 见 [`crate::components::internal::modal_shell`]；
+//! 贴边面板表面在本模块内实现。`ui!` 中 `<Sheet>` /
 //! `<SheetContent>` 由宏展开。
 //!
 //! ## 用法（双写法 · ADR-9）
@@ -53,9 +54,15 @@
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode, OverlayZ};
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
+use crate::components::internal::modal_motion::{
+    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
+    ModalPresenceHandle, ModalSurfaceMotion,
+};
+use crate::components::internal::modal_shell::{
+    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
@@ -63,13 +70,13 @@ use crate::core::reactivity::{
 };
 use crate::core::tree::Element;
 use crate::primitives::interactive::interactive;
-use crate::primitives::overlay::overlay;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::{parse_color, parse_text_color};
+use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
+use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
@@ -319,63 +326,8 @@ fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Modal shell
+// Modal shell（贴边面板表面；overlay / z 见 internal::modal_shell）
 // ---------------------------------------------------------------------------
-
-struct ModalShellZs {
-    underlay: i32,
-    panel: i32,
-}
-
-#[derive(Clone, Debug)]
-struct ShellOverlayOpts {
-    color: [f32; 4],
-    close_on_click: bool,
-    backdrop_blur: f32,
-}
-
-impl ShellOverlayOpts {
-    fn from_parts(
-        color: Option<&str>,
-        opacity: Option<f32>,
-        close_on_click: bool,
-        backdrop_blur: f32,
-    ) -> Self {
-        Self {
-            color: default_overlay_color(color, opacity),
-            close_on_click,
-            backdrop_blur: backdrop_blur.max(0.0),
-        }
-    }
-}
-
-fn default_overlay_color(color: Option<&str>, opacity: Option<f32>) -> [f32; 4] {
-    let mut c = match color {
-        Some(s) if !s.is_empty() => parse_color(s),
-        // shadcn: bg-black/50
-        _ => [0.0, 0.0, 0.0, 1.0],
-    };
-    c[3] = opacity.unwrap_or(0.5).clamp(0.0, 1.0);
-    c
-}
-
-fn modal_sync(id: &str, open: Signal<bool>) -> Option<ModalShellZs> {
-    let oz: OverlayZ = portal_sync(id, open, OverlayKind::Modal, OverlayMode::Stacked)?;
-    Some(ModalShellZs {
-        underlay: oz.underlay,
-        panel: oz.panel,
-    })
-}
-
-fn sheet_overlay(open: Signal<bool>, underlay_z: i32, opts: &ShellOverlayOpts) -> Element {
-    let mut b = overlay(underlay_z)
-        .color(opts.color)
-        .backdrop_blur(opts.backdrop_blur);
-    if opts.close_on_click {
-        b = b.close_on_click(open);
-    }
-    b.into()
-}
 
 /// 对齐 new-york-v4 `SheetContent` 表面：gap-4、bg、shadow、贴边单侧边框。
 fn apply_sheet_shell_surface(
@@ -445,6 +397,7 @@ fn apply_sheet_shell_surface(
 
 /// Portal + Overlay + Content 壳；`inner` 为面板内整棵子树。
 fn sheet_shell_frame(
+    modal_id: &str,
     open: Signal<bool>,
     zs: &ModalShellZs,
     inner: Element,
@@ -453,8 +406,10 @@ fn sheet_shell_frame(
     width: Option<&str>,
     height: Option<&str>,
     chrome_close: Option<Element>,
+    presence: &ModalPresenceHandle,
+    phase: PresencePhase,
 ) -> Element {
-    let overlay_el = sheet_overlay(open, zs.underlay, overlay_opts);
+    let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     // Swallow clicks only — nesting `panel_block_clicks` under stage nests `rui_portal`.
     let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
@@ -464,6 +419,26 @@ fn sheet_shell_frame(
         // shadcn: absolute top-4 right-4
         close = close.absolute().top("1rem").right("1rem").z_index(1);
         panel = panel.child(close);
+    }
+
+    let (vw, vh) = crate::components::drawer::drawer_viewport_size();
+    let slide_axis = match side {
+        SheetSide::Top | SheetSide::Bottom => vh,
+        SheetSide::Left | SheetSide::Right => vw,
+    };
+
+    if apply_modal_shell_motion(
+        modal_id,
+        &mut overlay_el,
+        &mut panel,
+        ModalSurfaceMotion::from_sheet_side(side),
+        phase,
+        presence,
+        [0.0, 0.0],
+        false,
+        slide_axis,
+    ) {
+        crate::app::runtime::request_redraw();
     }
 
     let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
@@ -535,13 +510,13 @@ pub struct SheetContentOpts {
     pub side: SheetSide,
     /// 右上角仅图标 ghost 关闭钮；默认 `true`（对齐 shadcn `showCloseButton`）。
     pub show_close: bool,
-    /// 遮罩色（语义 token / hex）；`None` → 黑 + 默认 alpha。
+    /// 遮罩色（语义 token / hex）；`None` → theme `background` RGB + 模态默认 alpha。
     pub overlay_color: Option<String>,
-    /// 遮罩不透明度 0…1；`None` → `0.5`。
+    /// 遮罩不透明度 0…1；`None` → 模态默认（[`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`]，`0.6`）。
     pub overlay_opacity: Option<f32>,
     /// 点击遮罩是否关闭；默认 `true`。
     pub close_on_overlay_click: bool,
-    /// 遮罩 backdrop 模糊半径（逻辑 px）；`0` / `None` → 关闭。
+    /// 遮罩 backdrop 模糊半径（逻辑 px）；`None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`]（`4`）。
     pub overlay_blur: Option<f32>,
     /// 左右侧宽；`None` → `75%`（`max-w: 24rem`）。
     pub width: Option<String>,
@@ -571,28 +546,31 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     let open = ctx.open;
     let id = ctx.id.clone();
     let view_id = format!("{id}__sheet_view");
-    let overlay = ShellOverlayOpts::from_parts(
+    let overlay = ShellOverlayOpts::from_content_parts(
         opts.overlay_color.as_deref(),
         opts.overlay_opacity,
         opts.close_on_overlay_click,
-        opts.overlay_blur.unwrap_or(0.0),
+        opts.overlay_blur,
     );
     let show_close = opts.show_close;
     let side = opts.side;
     let width = opts.width;
     let height = opts.height;
+    let presence = use_modal_presence(&id);
+    let mounted = mounted_signal(&presence);
 
     reactive_view(view_id, move || {
-        let is_open = open.get();
+        let want = open.get();
+        let phase = sync_modal_presence(&presence, want);
         let owner = format!("sheet:{id}");
-        let Some(zs) = modal_sync(&id, open) else {
-            sync_focus_trap(&owner, false, "");
-            return Element::new();
-        };
-        if !is_open {
+        if !mounted.get() {
             sync_focus_trap(&owner, false, "");
             return Element::new();
         }
+        let Some(zs) = modal_sync(&id, mounted) else {
+            sync_focus_trap(&owner, false, "");
+            return Element::new();
+        };
 
         let mut inner = body();
         // Vertical stack: Header / Body / Footer；中间区 flex-grow 把 Footer 顶到底。
@@ -619,13 +597,14 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
         if show_close {
             ring.push(format!("{id}:chrome_close"));
         }
-        if ring.is_empty() {
+        if phase != PresencePhase::Present || ring.is_empty() {
             sync_focus_trap(&owner, false, "");
         } else {
             sync_focus_trap(&owner, true, ring.join(","));
         }
 
         sheet_shell_frame(
+            &id,
             open,
             &zs,
             inner,
@@ -634,6 +613,8 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
             width.as_deref(),
             height.as_deref(),
             chrome_close,
+            &presence,
+            phase,
         )
     })
 }

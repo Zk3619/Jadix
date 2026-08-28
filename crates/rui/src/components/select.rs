@@ -254,7 +254,7 @@ pub fn SelectTrigger(
     let mut trigger: Element = btn
         .on_click(move || {
             let next = !open.peek();
-            if next {
+            if next && !crate::app::portal_overlay::stacked_modal_open() {
                 disarm_underlay_close();
             }
             open.set(next);

@@ -133,6 +133,7 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
         crate::app::reactive::drain_deferred_view_remounts();
+        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
     }
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
@@ -1123,6 +1124,9 @@ impl super::App {
             cursor_pick.clone(),
         );
 
+        let drawer_dragging =
+            crate::components::drawer::tick_drawer_drag(&mut state.root_element, x, y);
+
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
         self.sync_mouse_enter_leave(x, y, &mouse_path, MouseButton::Left);
@@ -1155,6 +1159,9 @@ impl super::App {
             || color_dragging
             || carousel_dragging
             || resizable_dragging
+            || drawer_dragging
+            || crate::components::internal::modal_motion::tick_modal_presence()
+            || crate::components::accordion::tick_accordion_panel_presence()
             || crate::primitives::canvas::take_canvas_wants_redraw()
         {
             window.request_redraw();
@@ -1283,6 +1290,7 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
         crate::app::reactive::drain_deferred_view_remounts();
+        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
 
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
@@ -1889,6 +1897,7 @@ impl super::App {
             crate::components::color_picker::clear_color_drag_if_any();
             crate::components::carousel::clear_carousel_drag_if_any();
             crate::components::resizable::clear_resizable_drag_if_any();
+            crate::components::drawer::clear_drawer_drag_if_any();
             self.finish_content_scroll_drag();
             if let Some(st_drag) = self.drag_reorder.take() {
                 let hk = crate::utils::drag_reorder::drag_hover_signal_key(&st_drag.list_id);
@@ -2160,6 +2169,8 @@ impl super::App {
 
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
         let _scope = super::window_scope::enter_primary();
+        crate::app::reactive::drain_deferred_view_remounts();
+        crate::components::internal::modal_motion::drain_pending_modal_unmounts();
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -2267,6 +2278,7 @@ impl super::App {
         crate::utils::lucide_animated::sync_animated_icon_hover(&mut state.root_element);
         let anim_icons =
             crate::utils::lucide_animated::tick_animated_icons_subtree(&mut state.root_element, anim_dt);
+        let gif_tick = crate::app::pending_images::tick_gif_textures(anim_dt);
         drop(state_borrow);
 
         if input_drag_keep {
@@ -2276,7 +2288,7 @@ impl super::App {
         crate::style::utility::set_frame_dt(dt.max(0.0));
         let anim_tick = crate::style::tick_animations(anim_dt);
         let nav_animating = crate::app::navigator::tick_active(anim_dt);
-        if anim_tick.any || nav_animating || anim_icons {
+        if anim_tick.any || nav_animating || anim_icons || gif_tick {
             window.request_redraw();
         }
         let mut smooth_scroll_animating = false;
@@ -3213,6 +3225,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
+                    || crate::app::pending_images::any_gif_playing()
                     || super::scroll_support::has_pending_scroll_item_align()
                     // `any_ui_animation_active()` is a post-tick safety net for late-set tweens.
                     // Gate it with `force_redraw_count` to avoid long-running stale animation
@@ -3238,6 +3251,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     (*cb.borrow_mut())(is_hover);
                 }
                 crate::app::reactive::drain_deferred_view_remounts();
+                crate::components::internal::modal_motion::drain_pending_modal_unmounts();
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }

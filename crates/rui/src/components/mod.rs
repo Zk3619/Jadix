@@ -35,6 +35,7 @@
 /// 组件库私有实现（不进产品面）。
 pub(crate) mod internal;
 
+pub mod accordion;
 pub mod aspect_ratio;
 pub mod badge;
 pub mod base;
@@ -50,6 +51,7 @@ pub mod command;
 pub mod context_menu;
 pub mod date_picker;
 pub mod dialog;
+pub mod drawer;
 pub mod dropdown_menu;
 pub mod form;
 pub mod image;
@@ -84,6 +86,12 @@ pub mod tree_view;
 pub mod virtual_list;
 pub mod virtual_masonry;
 
+pub use accordion::{
+    accordion, accordion_content, accordion_item_scope, accordion_scope, use_accordion,
+    use_accordion_item, Accordion,
+    AccordionBuilder, AccordionContent, AccordionContentProps, AccordionCtx, AccordionItem,
+    AccordionItemCtx, AccordionItemProps, AccordionProps, AccordionTrigger, AccordionTriggerProps,
+};
 pub use aspect_ratio::{
     aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
 };
@@ -166,6 +174,15 @@ pub use dialog::{
     DialogBodyProps, DialogBuilder, DialogContentOpts, DialogCtx, DialogDescription,
     DialogDescriptionProps, DialogFooter, DialogFooterProps, DialogHeader, DialogHeaderProps,
     DialogTitle, DialogTitleProps, DialogTrigger, DialogTriggerProps,
+};
+pub use drawer::{
+    coerce_snap_point_list, coerce_snap_points, drawer, drawer_active_snap_point, drawer_close,
+    drawer_content, drawer_open, drawer_scope, drawer_set_active_snap_point, drawer_snap_to_next,
+    drawer_snap_to_prev, parse_snap_point_token, parse_snap_points, use_drawer, DrawerBody,
+    DrawerBodyProps, DrawerBuilder, DrawerClose, DrawerCloseProps, DrawerContentOpts, DrawerCtx,
+    DrawerDescription, DrawerDescriptionProps, DrawerDirection, DrawerFooter, DrawerFooterProps,
+    DrawerHeader, DrawerHeaderProps, DrawerSnapPoint, DrawerSwipeHandle, DrawerSwipeHandleProps,
+    DrawerTitle, DrawerTitleProps, DrawerTrigger, DrawerTriggerProps,
 };
 pub use dropdown_menu::{
     dropdown, dropdown_menu, dropdown_menu_content, dropdown_menu_radio_group, dropdown_menu_scope,
