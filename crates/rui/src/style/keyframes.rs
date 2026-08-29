@@ -25,6 +25,8 @@ pub struct KeyframeStop {
     pub rotate_deg: Option<f32>,
     pub scale: Option<[f32; 2]>,
     pub translate: Option<[f32; 2]>,
+    /// Layout clip height (maps to `Style::max_size.height` length px).
+    pub max_height: Option<f32>,
     /// CSS `animation-timing-function` declared *inside* a keyframe: eases the segment
     /// that starts at this stop. `None` → inherit the animation's timing function.
     pub timing: Option<TimingFunction>,
@@ -38,6 +40,7 @@ impl KeyframeStop {
             rotate_deg: None,
             scale: None,
             translate: None,
+            max_height: None,
             timing: None,
         }
     }
@@ -72,6 +75,11 @@ impl KeyframeStop {
         self.translate = Some(xy);
         self
     }
+
+    pub fn max_height(mut self, px: f32) -> Self {
+        self.max_height = Some(px.max(0.0));
+        self
+    }
 }
 
 /// Interpolated sample at a local progress `t` ∈ [0, 1].
@@ -81,6 +89,7 @@ pub struct KeyframeSample {
     pub rotate_deg: Option<f32>,
     pub scale: Option<[f32; 2]>,
     pub translate: Option<[f32; 2]>,
+    pub max_height: Option<f32>,
 }
 
 /// Element values the animation is layered on top of (CSS base value).
@@ -93,6 +102,7 @@ pub struct KeyframeBase {
     pub rotate_deg: f32,
     pub scale: [f32; 2],
     pub translate: [f32; 2],
+    pub max_height: f32,
 }
 
 /// Which properties a rule touches anywhere in its stops.
@@ -103,6 +113,7 @@ pub struct KeyframeBase {
 pub struct KeyframeCoverage {
     pub opacity: bool,
     pub transform: bool,
+    pub max_height: bool,
 }
 
 /// Properties declared anywhere in `stops`.
@@ -112,6 +123,7 @@ pub fn keyframe_coverage(stops: &[KeyframeStop]) -> KeyframeCoverage {
         transform: stops
             .iter()
             .any(|s| s.rotate_deg.is_some() || s.scale.is_some() || s.translate.is_some()),
+        max_height: stops.iter().any(|s| s.max_height.is_some()),
     }
 }
 
@@ -219,6 +231,21 @@ fn ensure_builtins() {
                 KeyframeStop::at(1.0).opacity(0.0),
             ],
         );
+        // shadcn accordion — height 0 ↔ cascaded content height (see KeyframeBase::max_height).
+        register_keyframes(
+            "accordion-down",
+            vec![KeyframeStop::at(0.0).max_height(0.0)],
+        );
+        register_keyframes("accordion-up", vec![KeyframeStop::at(1.0).max_height(0.0)]);
+        // shadcn collapsible — same shape as accordion, separate names (community / tw-animate-css).
+        register_keyframes(
+            "collapsible-down",
+            vec![KeyframeStop::at(0.0).max_height(0.0)],
+        );
+        register_keyframes(
+            "collapsible-up",
+            vec![KeyframeStop::at(1.0).max_height(0.0)],
+        );
         // `slide-in-from-*-2` / `slide-out-to-*-2` — Tailwind `-2` is 0.5rem.
         for (name, dxy) in [
             ("top", [0.0, -SLIDE_2_PX]),
@@ -295,6 +322,7 @@ struct Endpoint {
     rotate_deg: Option<f32>,
     scale: Option<[f32; 2]>,
     translate: Option<[f32; 2]>,
+    max_height: Option<f32>,
 }
 
 impl Endpoint {
@@ -304,6 +332,7 @@ impl Endpoint {
             rotate_deg: stop.rotate_deg.or(base.map(|b| b.rotate_deg)),
             scale: stop.scale.or(base.map(|b| b.scale)),
             translate: stop.translate.or(base.map(|b| b.translate)),
+            max_height: stop.max_height.or(base.map(|b| b.max_height)),
         }
     }
 
@@ -314,6 +343,7 @@ impl Endpoint {
             rotate_deg: base.map(|b| b.rotate_deg),
             scale: base.map(|b| b.scale),
             translate: base.map(|b| b.translate),
+            max_height: base.map(|b| b.max_height),
         }
     }
 }
@@ -387,6 +417,7 @@ pub fn sample_keyframes_eased(
         rotate_deg: lerp_opt_f(a.rotate_deg, b.rotate_deg, u),
         scale: lerp_opt_xy(a.scale, b.scale, u),
         translate: lerp_opt_xy(a.translate, b.translate, u),
+        max_height: lerp_opt_f(a.max_height, b.max_height, u),
     }
 }
 
@@ -414,6 +445,7 @@ mod tests {
             rotate_deg: 0.0,
             scale: [1.0, 1.0],
             translate: [0.0, 0.0],
+            max_height: 48.0,
         }
     }
 
@@ -444,7 +476,9 @@ mod tests {
     #[test]
     fn per_keyframe_timing_overrides_animation_timing() {
         let stops = vec![
-            KeyframeStop::at(0.0).opacity(0.0).timing(TimingFunction::Linear),
+            KeyframeStop::at(0.0)
+                .opacity(0.0)
+                .timing(TimingFunction::Linear),
             KeyframeStop::at(1.0).opacity(1.0),
         ];
         let mid = sample_keyframes_eased(&stops, 0.5, TimingFunction::EaseIn, None);
@@ -494,10 +528,36 @@ mod tests {
     }
 
     #[test]
+    fn accordion_height_keyframes_interpolate_toward_base() {
+        let down = lookup_keyframes("accordion-down").expect("accordion-down");
+        let b = base();
+        let mid = sample_keyframes_eased(&down, 0.5, TimingFunction::Linear, Some(&b));
+        assert!((mid.max_height.unwrap() - 24.0).abs() < 1e-3);
+        let up = lookup_keyframes("accordion-up").expect("accordion-up");
+        let mid_up = sample_keyframes_eased(&up, 0.5, TimingFunction::Linear, Some(&b));
+        assert!((mid_up.max_height.unwrap() - 24.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn collapsible_height_keyframes_match_accordion_shape() {
+        let down = lookup_keyframes("collapsible-down").expect("collapsible-down");
+        let b = base();
+        let mid = sample_keyframes_eased(&down, 0.5, TimingFunction::Linear, Some(&b));
+        assert!((mid.max_height.unwrap() - 24.0).abs() < 1e-3);
+        let up = lookup_keyframes("collapsible-up").expect("collapsible-up");
+        let mid_up = sample_keyframes_eased(&up, 0.5, TimingFunction::Linear, Some(&b));
+        assert!((mid_up.max_height.unwrap() - 24.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn shadcn_slide_names_are_registered() {
         for name in [
             "fade-in-0",
             "fade-out-0",
+            "accordion-down",
+            "accordion-up",
+            "collapsible-down",
+            "collapsible-up",
             "slide-in-from-top-2",
             "slide-out-to-right-2",
             "zoom-in-90",

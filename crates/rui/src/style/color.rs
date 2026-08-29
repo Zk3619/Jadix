@@ -391,8 +391,16 @@ fn parse_hsl_args(inner: &str) -> Option<[f32; 4]> {
     // `s`/`l` from percent → 0..=1; bare numbers in modern syntax are also 0..=1
     // but legacy `hsl(120, 100%, 50%)` uses percent. If someone writes `100` without
     // `%` for S/L, treat >1 as percent-like 0–100.
-    let s = if s > 1.0 { (s / 100.0).clamp(0.0, 1.0) } else { s };
-    let l = if l > 1.0 { (l / 100.0).clamp(0.0, 1.0) } else { l };
+    let s = if s > 1.0 {
+        (s / 100.0).clamp(0.0, 1.0)
+    } else {
+        s
+    };
+    let l = if l > 1.0 {
+        (l / 100.0).clamp(0.0, 1.0)
+    } else {
+        l
+    };
     let a = if parts.len() >= 4 {
         parse_alpha_component(&parts[3])?
     } else {
@@ -563,7 +571,12 @@ fn parse_relative_rgb_hsl(inner: &str, as_rgb: bool) -> Option<[f32; 4]> {
         } else {
             origin_c[3]
         };
-        Some([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), a.clamp(0.0, 1.0)])
+        Some([
+            r.clamp(0.0, 1.0),
+            g.clamp(0.0, 1.0),
+            b.clamp(0.0, 1.0),
+            a.clamp(0.0, 1.0),
+        ])
     } else {
         let (oh, os, ol) = rgb_to_hsl(origin_c[0], origin_c[1], origin_c[2]);
         let h = eval_rel_hsl_channel(&channel_tokens[0], oh, os, ol, origin_c[3], true)?;
@@ -586,19 +599,13 @@ enum RelSpace {
 fn split_origin_color(s: &str) -> Option<(&str, &str)> {
     let s = s.trim_start();
     if s.starts_with('#') {
-        let end = s
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(s.len());
+        let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());
         return Some((s[..end].trim(), s[end..].trim_start()));
     }
     // Functional color: name(...)
     if let Some(open) = s.find('(') {
         let name = s[..open].trim();
-        if !name.is_empty()
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_alphabetic() || b == b'-')
-        {
+        if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-') {
             let after = &s[open + 1..];
             let mut depth = 1i32;
             for (i, ch) in after.char_indices() {
@@ -682,14 +689,7 @@ fn eval_rel_channel(tok: &str, origin: [f32; 4], _space: RelSpace) -> Option<f32
     }
 }
 
-fn eval_rel_hsl_channel(
-    tok: &str,
-    h: f32,
-    s: f32,
-    l: f32,
-    a: f32,
-    is_hue: bool,
-) -> Option<f32> {
+fn eval_rel_hsl_channel(tok: &str, h: f32, s: f32, l: f32, a: f32, is_hue: bool) -> Option<f32> {
     let t = tok.trim().to_ascii_lowercase();
     match t.as_str() {
         "h" => Some(h),
@@ -912,6 +912,51 @@ pub(crate) fn css_named_color(s: &str) -> Option<[f32; 4]> {
     Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
 }
 
+/// Tailwind `token/10` · `token/80` · `token/[0.12]` opacity suffix → 0..1 alpha.
+fn parse_color_opacity_suffix(tail: &str) -> Option<f32> {
+    let t = tail.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Some(inner) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let inner = inner.trim();
+        if let Some(pct) = inner.strip_suffix('%') {
+            return pct
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|v| (v / 100.0).clamp(0.0, 1.0));
+        }
+        return inner.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0));
+    }
+    if let Some(pct) = t.strip_suffix('%') {
+        return pct
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|v| (v / 100.0).clamp(0.0, 1.0));
+    }
+    t.parse::<f32>().ok().map(|v| {
+        if v > 1.0 {
+            (v / 100.0).clamp(0.0, 1.0)
+        } else {
+            v.clamp(0.0, 1.0)
+        }
+    })
+}
+
+/// `color-mix` 等价：语义色 `token/N` 叠在 `background` 上的不透明结果（与 Button 一致）。
+fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
+    let bg = get_theme().colors.background;
+    let a = alpha.clamp(0.0, 1.0);
+    [
+        fg[0] * a + bg[0] * (1.0 - a),
+        fg[1] * a + bg[1] * (1.0 - a),
+        fg[2] * a + bg[2] * (1.0 - a),
+        1.0,
+    ]
+}
+
 /// Parse a color name / hex / Tailwind shade / CSS color function for backgrounds.
 ///
 /// Unknown tokens return `None` (callers may fall back). Prefer this over silent gray.
@@ -927,6 +972,13 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
     }
     if let Some(c) = parse_tailwind_family_shade_token(s) {
         return Some(rgba_u8_to_f32(c));
+    }
+    if let Some((name, opacity_tok)) = s.split_once('/') {
+        if let Some(base) = try_parse_color(name) {
+            if let Some(alpha) = parse_color_opacity_suffix(opacity_tok) {
+                return Some(color_mix_over_background(base, alpha));
+            }
+        }
     }
     Some(match s {
         "background" => colors.background,
@@ -993,6 +1045,25 @@ pub fn parse_text_color(s: &str) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_semantic_token_opacity_suffix() {
+        let d10 = try_parse_color("destructive/10").unwrap();
+        let destructive = try_parse_color("destructive").unwrap();
+        let bg = try_parse_color("background").unwrap();
+        let want = [
+            destructive[0] * 0.1 + bg[0] * 0.9,
+            destructive[1] * 0.1 + bg[1] * 0.9,
+            destructive[2] * 0.1 + bg[2] * 0.9,
+            1.0,
+        ];
+        assert!(
+            (0..4).all(|i| (d10[i] - want[i]).abs() < 1e-4),
+            "destructive/10 should mix over background"
+        );
+        let p80 = try_parse_color("primary/80").unwrap();
+        assert!(p80[0] < destructive[0] || p80[0] > 0.1);
+    }
 
     #[test]
     fn parses_hex_and_rgba_hsl_oklch() {

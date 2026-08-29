@@ -181,7 +181,10 @@ pub fn any_ui_animation_active() -> bool {
 // `SystemTime` / wall clock (NTP jumps must not seek animations).
 // Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
 
-use super::element_style::{TimingFunction, TransitionEntry, TransitionProperty};
+use super::element_style::{
+    AnimationDirection, AnimationEntry, AnimationFillMode, AnimationIterationCount,
+    AnimationPlayState, TimingFunction, TransitionEntry, TransitionProperty,
+};
 use super::filter::{interpolate_filter_lists, FilterList};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -300,11 +303,12 @@ pub struct AnimationLock {
     pub opacity: bool,
     /// Covers `translate` / `scale` / `rotate` (this engine's transform bundle).
     pub transform: bool,
+    pub max_height: bool,
 }
 
 impl AnimationLock {
     pub fn any(self) -> bool {
-        self.opacity || self.transform
+        self.opacity || self.transform || self.max_height
     }
 }
 
@@ -312,6 +316,7 @@ fn animation_owns_prop(prop: TransitionProperty, lock: AnimationLock) -> bool {
     match prop {
         TransitionProperty::Opacity => lock.opacity,
         TransitionProperty::Transform | TransitionProperty::Translate => lock.transform,
+        TransitionProperty::MaxHeight => lock.max_height,
         _ => false,
     }
 }
@@ -323,6 +328,10 @@ pub struct AnimationBaseline {
     pub rotate_deg: f32,
     pub scale: [f32; 2],
     pub translate: [f32; 2],
+    /// Cascaded `max-height` (`auto` must stay `auto` — treating it as 0px collapses boxes).
+    pub max_height: taffy::style::Dimension,
+    /// Cascaded `min-height` before any `@keyframes` max-height pin.
+    pub min_height: taffy::style::Dimension,
 }
 
 impl AnimationBaseline {
@@ -332,6 +341,8 @@ impl AnimationBaseline {
             rotate_deg: style.rotate_deg,
             scale: style.scale,
             translate: style.translate,
+            max_height: style.max_size.height,
+            min_height: style.min_size.height,
         }
     }
 }
@@ -365,9 +376,11 @@ impl AnimationSnapshot {
     /// holds its end value without a frame pump, and treating it as active kept every
     /// element that ever animated redrawing forever.
     pub fn has_active(&self, style: &super::Style) -> bool {
-        style.animations.iter().enumerate().any(|(i, e)| {
-            e.needs_frame() && !self.runs.get(i).is_some_and(|r| r.finished)
-        })
+        style
+            .animations
+            .iter()
+            .enumerate()
+            .any(|(i, e)| e.needs_frame() && !self.runs.get(i).is_some_and(|r| r.finished))
     }
 
     /// Properties the last tick painted; transitions must not fight over these.
@@ -376,7 +389,27 @@ impl AnimationSnapshot {
     }
 }
 
-fn animation_entry_fp(entry: &super::element_style::AnimationEntry) -> u64 {
+/// Build one CSS `animation` list item that references a registered [`super::keyframes`] name.
+pub fn keyframes_anim_entry(
+    name: impl Into<String>,
+    duration_ms: f32,
+    timing: TimingFunction,
+    fill_mode: AnimationFillMode,
+) -> AnimationEntry {
+    AnimationEntry {
+        name: name.into(),
+        duration_ms,
+        timing,
+        delay_ms: 0.0,
+        iteration_count: AnimationIterationCount::Finite(1.0),
+        direction: AnimationDirection::Normal,
+        fill_mode,
+        play_state: AnimationPlayState::Running,
+        ..Default::default()
+    }
+}
+
+fn animation_entry_fp(entry: &AnimationEntry) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -401,7 +434,10 @@ fn apply_keyframe_sample(
     stops: &[super::keyframes::KeyframeStop],
     sample: &super::keyframes::KeyframeSample,
 ) {
-    if let Some(o) = sample.opacity.filter(|_| stops.iter().any(|s| s.opacity.is_some())) {
+    if let Some(o) = sample
+        .opacity
+        .filter(|_| stops.iter().any(|s| s.opacity.is_some()))
+    {
         style.opacity = o;
     }
     if let Some(r) = sample
@@ -410,7 +446,10 @@ fn apply_keyframe_sample(
     {
         style.rotate_deg = r;
     }
-    if let Some(s) = sample.scale.filter(|_| stops.iter().any(|s| s.scale.is_some())) {
+    if let Some(s) = sample
+        .scale
+        .filter(|_| stops.iter().any(|s| s.scale.is_some()))
+    {
         style.scale = s;
     }
     if let Some(t) = sample
@@ -419,6 +458,12 @@ fn apply_keyframe_sample(
     {
         style.translate = t;
     }
+    if let Some(h) = sample
+        .max_height
+        .filter(|_| stops.iter().any(|s| s.max_height.is_some()))
+    {
+        style.max_size.height = taffy::style::Dimension::length(h.max(0.0));
+    }
 }
 
 fn restore_baseline(style: &mut super::Style, base: &AnimationBaseline) {
@@ -426,6 +471,16 @@ fn restore_baseline(style: &mut super::Style, base: &AnimationBaseline) {
     style.rotate_deg = base.rotate_deg;
     style.scale = base.scale;
     style.translate = base.translate;
+    style.max_size.height = base.max_height;
+    style.min_size.height = base.min_height;
+}
+
+/// Taffy `min-height: auto` resolves to min-content; padding on the same box then blocks
+/// `max-height` keyframes from collapsing to 0. Pin only while a rule owns `max-height`.
+fn pin_min_height_for_max_height_keyframes(style: &mut super::Style, lock: AnimationLock) {
+    if lock.max_height {
+        style.min_size.height = taffy::style::Dimension::length(0.0);
+    }
 }
 
 fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
@@ -435,6 +490,17 @@ fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
         && (style.scale[1] - base.scale[1]).abs() <= 1e-5
         && (style.translate[0] - base.translate[0]).abs() <= 1e-4
         && (style.translate[1] - base.translate[1]).abs() <= 1e-4
+        && max_height_dim_matches(style.max_size.height, base.max_height)
+}
+
+fn max_height_dim_matches(style: taffy::style::Dimension, base: taffy::style::Dimension) -> bool {
+    use crate::layout::{dim_kind, DimKind};
+    match (dim_kind(style), dim_kind(base)) {
+        (DimKind::Auto, DimKind::Auto) => true,
+        (DimKind::Length(a), DimKind::Length(b)) => (a - b).abs() <= 1e-3,
+        (DimKind::Percent(a), DimKind::Percent(b)) => (a - b).abs() <= 1e-5,
+        _ => false,
+    }
 }
 
 /// Paint one keyframe sample and record which properties it claimed.
@@ -451,6 +517,7 @@ fn apply_animation_sample(
     let cov = super::keyframes::keyframe_coverage(stops);
     lock.opacity |= cov.opacity;
     lock.transform |= cov.transform;
+    lock.max_height |= cov.max_height;
 }
 
 #[cfg(debug_assertions)]
@@ -529,6 +596,8 @@ pub fn tick_element_animations(
         rotate_deg: base.rotate_deg,
         scale: base.scale,
         translate: base.translate,
+        // Accordion interpolates toward the cascaded px; `auto` has no length → 0.
+        max_height: crate::layout::dim_length_px(base.max_height).unwrap_or(0.0),
     };
 
     // Sync run slots with style list length / fingerprints.
@@ -645,8 +714,20 @@ pub fn tick_element_animations(
     }
 
     snap.lock = lock;
+    pin_min_height_for_max_height_keyframes(style, lock);
     snap.written = Some(AnimationBaseline::from_style(style));
     any_active
+}
+
+/// True while a finite `@keyframes` run is still playing.
+///
+/// Prefer over [`css_animation_needs_frame`] for presence exit gates: the latter stays
+/// true whenever `style.animations` is non-empty, even after all runs have `finished`.
+pub fn animation_run_active(style: &super::Style, snap: &AnimationSnapshot) -> bool {
+    if style.animations.is_empty() {
+        return false;
+    }
+    snap.has_active(style)
 }
 
 fn animation_sample_t(
@@ -1547,7 +1628,10 @@ mod tests {
         set_css_transition_timeline_ms(100.0);
         let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
         let mid = style.opacity;
-        assert!((mid - 0.5).abs() < 0.05, "expected ~0.5 at 100ms, got {mid}");
+        assert!(
+            (mid - 0.5).abs() < 0.05,
+            "expected ~0.5 at 100ms, got {mid}"
+        );
 
         set_css_transition_timeline_ms(200.0);
         let _ = tick_element_transitions(&mut style, &mut snap, 0.0);
@@ -1714,6 +1798,89 @@ mod tests {
         );
         let lock = snap.lock();
         assert!(lock.opacity && lock.transform);
+    }
+
+    #[test]
+    fn max_height_keyframes_pin_min_height_zero_and_restore_on_clear() {
+        use crate::layout::dim_kind;
+        use crate::layout::DimKind;
+        use crate::style::{AnimationFillMode, TimingFunction};
+        let mut style = crate::style::Style::default();
+        style.max_size.height = taffy::style::Dimension::length(48.0);
+        style.animations.push(keyframes_anim_entry(
+            "accordion-up",
+            200.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        ));
+        let mut snap = AnimationSnapshot::default();
+        assert!(matches!(dim_kind(style.min_size.height), DimKind::Auto));
+        let _ = tick_element_animations(&mut style, &mut snap, 0.0);
+        assert!(matches!(
+            dim_kind(style.min_size.height),
+            DimKind::Length(h) if h.abs() < f32::EPSILON
+        ));
+        for _ in 0..20 {
+            let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+        }
+        assert!(
+            !animation_run_active(&style, &snap),
+            "finished finite run must not block presence exit"
+        );
+        style.animations.clear();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.0);
+        assert!(
+            matches!(dim_kind(style.min_size.height), DimKind::Auto),
+            "min-height must restore to cascaded auto after animation removal"
+        );
+    }
+
+    #[test]
+    fn animation_run_active_false_while_css_animation_needs_frame_still_true() {
+        use crate::style::{AnimationFillMode, TimingFunction};
+        let mut style = crate::style::Style::default();
+        style.max_size.height = taffy::style::Dimension::length(48.0);
+        style.animations.push(keyframes_anim_entry(
+            "accordion-up",
+            200.0,
+            TimingFunction::Linear,
+            AnimationFillMode::Both,
+        ));
+        let mut snap = AnimationSnapshot::default();
+        for _ in 0..20 {
+            let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+        }
+        assert!(
+            css_animation_needs_frame(&style, &snap),
+            "list still non-empty → css_animation_needs_frame stays true"
+        );
+        assert!(
+            !animation_run_active(&style, &snap),
+            "presence gates must use animation_run_active, not css_animation_needs_frame"
+        );
+    }
+
+    #[test]
+    fn opacity_animation_preserves_auto_max_height() {
+        use crate::layout::{dim_kind, DimKind};
+        use crate::style::{AnimationFillMode, TimingFunction};
+        let mut style = crate::style::Style::default();
+        style.size.height = taffy::style::Dimension::length(32.0);
+        style.animations.push(keyframes_anim_entry(
+            "pulse",
+            2000.0,
+            TimingFunction::Linear,
+            AnimationFillMode::None,
+        ));
+        style.animations[0].iteration_count = crate::style::AnimationIterationCount::Infinite;
+        assert!(matches!(dim_kind(style.max_size.height), DimKind::Auto));
+        let mut snap = AnimationSnapshot::default();
+        let _ = tick_element_animations(&mut style, &mut snap, 0.016);
+        assert!(
+            matches!(dim_kind(style.max_size.height), DimKind::Auto),
+            "pulse/spin/bounce must not rewrite max-height:auto to 0px, got {:?}",
+            dim_kind(style.max_size.height)
+        );
     }
 
     #[test]

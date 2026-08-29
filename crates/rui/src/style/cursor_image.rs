@@ -1,4 +1,4 @@
-﻿//! 自定义光标：用 [`crate::media`] 解码后 `from_rgba` → 缓存 `CustomCursor`。
+//! 自定义光标：用 [`crate::media`] 解码后 `from_rgba` → 缓存 `CustomCursor`。
 //!
 //! 多 `url()` 回退、画布注册表见本模块。
 
@@ -27,10 +27,7 @@ static REGISTRY: Mutex<Option<HashMap<String, RegistryEntry>>> = Mutex::new(None
 /// `rgba.len()` 必须为 `width * height * 4`。
 pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     let id = id.into();
-    if width == 0
-        || height == 0
-        || rgba.len() != width as usize * height as usize * 4
-    {
+    if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 {
         log::warn!("register_cursor_rgba8({id}): invalid size or buffer, ignored");
         return;
     }

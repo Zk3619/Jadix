@@ -350,10 +350,9 @@ pub fn tick_active_css_transitions_subtree(
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs =
         super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    let defer_modal_enter =
-        crate::components::internal::modal_motion::modal_shell_defer_css_tick(
-            el.template_id.as_deref(),
-        );
+    let defer_modal_enter = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+        el.template_id.as_deref(),
+    );
 
     if has_spin || has_css_anim || has_active_css || css_needs {
         let before = el.style.clone();

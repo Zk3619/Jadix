@@ -437,9 +437,7 @@ impl TextStyle {
     /// overflows, `text-overflow` keeps the inline-start edge in view (offset = 0).
     pub fn align_inline_offset(&self, line_content_w: f32, box_w: f32) -> f32 {
         let nowrap = self.white_space == WhiteSpace::Nowrap || self.overflow.nowrap();
-        if self.overflow.start_align_when_line_overflows()
-            && nowrap
-            && line_content_w > box_w + 0.5
+        if self.overflow.start_align_when_line_overflows() && nowrap && line_content_w > box_w + 0.5
         {
             return 0.0;
         }

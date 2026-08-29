@@ -1,7 +1,11 @@
 //! 样式子系统：
 //! - [`Style`]：盒模型 + 与 Taffy 对齐的字段 + 矩形绘制（背景/边框/阴影）；
 //! - [`TextStyle`] / [`TextDecorationStyle`]：文本排版与装饰线（见 [`text_style`] 模块）；
-//! - 语义色解析。
+//! - 语义色解析；
+//! - CSS [`keyframes`] 曲线 + [`animation`] 运行时（transition / `@keyframes` tick）。
+//!
+//! Element 侧 **transition 配方**（`MotionStyle` / `prepare_motion_sync`）在
+//! [`crate::utils::motion`]；分层决策见仓库 `docs/animation_and_motion.md`。
 //!
 //! 布局遍历见 [`crate::layout::layout_tree`]。
 
@@ -24,13 +28,13 @@ pub mod transform;
 pub(crate) mod utility;
 
 pub use animation::{
-    advance_css_transition_timeline_ms, any_ui_animation_active, css_animation_needs_frame,
-    css_transition_needs_frame, cubic_bezier_y_at_x, set_css_transition_synthetic_clock,
-    set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
-    snap_element_transitions_to_current, tick_animations, tick_element_animations,
-    tick_element_transitions, tick_element_transitions_locked, use_ui_transition_cubic,
-    AnimationBaseline, AnimationLock, AnimationRunState, AnimationSnapshot, AnimationTick,
-    CubicTween, CubicTweenState, TransitionSnapshot,
+    advance_css_transition_timeline_ms, animation_run_active, any_ui_animation_active,
+    css_animation_needs_frame, css_transition_needs_frame, cubic_bezier_y_at_x,
+    keyframes_anim_entry, set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
+    set_css_transition_virtual_timeline, snap_element_transitions_to_current, tick_animations,
+    tick_element_animations, tick_element_transitions, tick_element_transitions_locked,
+    use_ui_transition_cubic, AnimationBaseline, AnimationLock, AnimationRunState,
+    AnimationSnapshot, AnimationTick, CubicTween, CubicTweenState, TransitionSnapshot,
 };
 pub use color::{parse_color, parse_text_color, try_parse_color, try_parse_text_color};
 pub use color_space::{
@@ -48,10 +52,6 @@ pub use element_style::{
     BorderImageRepeat, BoxShadow, CornerShape, LineStyle, Style, TimingFunction, TransitionEntry,
     TransitionProperty, UnitSlot,
 };
-pub use keyframes::{
-    keyframe_coverage, keyframes_exist, lookup_keyframes, register_keyframes, sample_keyframes,
-    sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
-};
 pub use filter::{
     filter_list_to_css, interpolate_filter_lists, parse_filter, FilterFunction, FilterList,
 };
@@ -64,9 +64,12 @@ pub use focus_ring::{
 pub use gradient::{
     ensure_gradient_texture, flush_gradient_textures, gradient_texture_radii,
     gradient_texture_size, parse_gradient, rasterize_gradient, sample_gradient,
-    sample_gradient_in_box, set_gradient_raster_dpi, ColorHint, ColorStop, ConicGradient,
-    Gradient, GradientPosition, LinearGradient, RadialExtent, RadialGradient, RadialShape,
-    RadialSize,
+    sample_gradient_in_box, set_gradient_raster_dpi, ColorHint, ColorStop, ConicGradient, Gradient,
+    GradientPosition, LinearGradient, RadialExtent, RadialGradient, RadialShape, RadialSize,
+};
+pub use keyframes::{
+    keyframe_coverage, keyframes_exist, lookup_keyframes, register_keyframes, sample_keyframes,
+    sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
 };
 pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,

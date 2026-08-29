@@ -178,7 +178,10 @@ pub enum RadialSize {
 pub enum RadialExtent {
     Keyword(RadialSize),
     /// Horizontal / vertical radius as fraction of box width / height (`0`..=`1+`).
-    Ellipse { rx: f32, ry: f32 },
+    Ellipse {
+        rx: f32,
+        ry: f32,
+    },
     /// Circle radius as fraction of the smaller box side.
     Circle(f32),
 }
@@ -324,8 +327,7 @@ fn expand_and_resolve_stops(
     for s in stops {
         raw.push((
             s.color,
-            s.position
-                .map(|v| to_frac(v, s.position_px, ref_len_px)),
+            s.position.map(|v| to_frac(v, s.position_px, ref_len_px)),
         ));
         if let Some(end) = s.position_end {
             raw.push((s.color, Some(to_frac(end, s.position_end_px, ref_len_px))));
@@ -593,10 +595,14 @@ fn gradient_needs_ssaa(grad: &Gradient) -> bool {
 fn has_hard_edge_stops(stops: &[ColorStop]) -> bool {
     // Dual-position bands and adjacent equal positions create hard edges that alias badly.
     stops.iter().any(|s| s.position_end.is_some())
-        || stops.windows(2).any(|w| match (w[0].position, w[1].position) {
-            (Some(a), Some(b)) => (a - b).abs() < 1e-5 && !w[0].position_px && !w[1].position_px,
-            _ => false,
-        })
+        || stops
+            .windows(2)
+            .any(|w| match (w[0].position, w[1].position) {
+                (Some(a), Some(b)) => {
+                    (a - b).abs() < 1e-5 && !w[0].position_px && !w[1].position_px
+                }
+                _ => false,
+            })
 }
 
 /// Rasterize with optional CSS border-radius (TL, TR, BR, BL in px) baked into alpha.
@@ -614,7 +620,11 @@ pub fn rasterize_gradient_with_radii(
     let wf = w as f32;
     let hf = h as f32;
     let has_radii = radii.iter().any(|r| *r > 0.5);
-    let ssaa = if gradient_needs_ssaa(grad) { 2u32 } else { 1u32 };
+    let ssaa = if gradient_needs_ssaa(grad) {
+        2u32
+    } else {
+        1u32
+    };
     let inv = 1.0 / (ssaa * ssaa) as f32;
     for y in 0..h {
         for x in 0..w {
@@ -779,7 +789,8 @@ pub fn ensure_gradient_texture(
 /// Upload any needed gradient textures that are missing from the GPU pool.
 /// Returns `true` if any texture was queued/uploaded (caller should request redraw).
 pub fn flush_gradient_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let needed: Vec<String> = GRADIENT_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+    let needed: Vec<String> = GRADIENT_NEEDED
+        .with(|n| std::mem::take(&mut *n.borrow_mut()))
         .into_iter()
         .collect();
     let mut any = false;
@@ -1303,8 +1314,8 @@ mod tests {
 
     #[test]
     fn parse_multicolor_and_hard_line() {
-        let g = parse_gradient("linear-gradient(to bottom left, cyan 50%, palegoldenrod 50%)")
-            .unwrap();
+        let g =
+            parse_gradient("linear-gradient(to bottom left, cyan 50%, palegoldenrod 50%)").unwrap();
         match g {
             Gradient::Linear(l) => {
                 assert_eq!(l.stops.len(), 2);
@@ -1328,14 +1339,22 @@ mod tests {
 
     #[test]
     fn parse_repeating_linear() {
-        let g = parse_gradient("repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)")
-            .unwrap();
+        let g =
+            parse_gradient("repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)")
+                .unwrap();
         match g {
             Gradient::Linear(l) => {
                 assert!(l.repeating);
                 assert!(l.stops.iter().any(|s| s.position_px));
                 assert!(
-                    (l.stops.iter().find(|s| s.position_px).unwrap().position.unwrap() - 5.0).abs()
+                    (l.stops
+                        .iter()
+                        .find(|s| s.position_px)
+                        .unwrap()
+                        .position
+                        .unwrap()
+                        - 5.0)
+                        .abs()
                         < 1e-3
                 );
             }
@@ -1345,8 +1364,9 @@ mod tests {
 
     #[test]
     fn repeating_raster_is_antialiased_not_empty() {
-        let g = parse_gradient("repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)")
-            .unwrap();
+        let g =
+            parse_gradient("repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)")
+                .unwrap();
         let rgba = rasterize_gradient(&g, 48, 48);
         assert_eq!(rgba.len(), 48 * 48 * 4);
         // SSAA should produce some intermediate (non-primary) samples along edges.
@@ -1355,7 +1375,10 @@ mod tests {
             let b = p[2] as i32;
             r > 20 && b > 20 && r < 240 && b < 240
         });
-        assert!(mixed, "expected anti-aliased blend pixels between red/blue stripes");
+        assert!(
+            mixed,
+            "expected anti-aliased blend pixels between red/blue stripes"
+        );
     }
 
     #[test]
@@ -1373,11 +1396,7 @@ mod tests {
 
     #[test]
     fn via_inserts_mid_stop() {
-        let mut l = LinearGradient::two_stop(
-            [1.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0, 1.0],
-            0.0,
-        );
+        let mut l = LinearGradient::two_stop([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0);
         l.set_via([0.0, 1.0, 0.0, 1.0]);
         assert_eq!(l.stops.len(), 3);
     }

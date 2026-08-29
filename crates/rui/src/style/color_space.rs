@@ -14,7 +14,11 @@ const LINEAR_SRGB_TO_XYZ: [[f32; 3]; 3] = [
 const XYZ_TO_LINEAR_SRGB: [[f32; 3]; 3] = [
     [3.2409699419045226, -1.537383177570094, -0.4986107602930034],
     [-0.9692436362808796, 1.8759675015077202, 0.04155505740717559],
-    [0.05563007969699366, -0.20397695888897652, 1.0569715142428786],
+    [
+        0.05563007969699366,
+        -0.20397695888897652,
+        1.0569715142428786,
+    ],
 ];
 
 /// XYZ D65 → LMS（OKLab 白点与 CSS 一致，见 color.js `oklab.js`）。
@@ -262,9 +266,18 @@ mod tests {
         for (r, g, b) in [(1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)] {
             let (l, a, bb) = display_srgb_to_oklab(r, g, b);
             let back = oklab_to_display_srgb(l, a, bb);
-            assert!((back[0] - r).abs() < 1e-3, "r roundtrip for ({r},{g},{b}): {back:?}");
-            assert!((back[1] - g).abs() < 1e-3, "g roundtrip for ({r},{g},{b}): {back:?}");
-            assert!((back[2] - b).abs() < 1e-3, "b roundtrip for ({r},{g},{b}): {back:?}");
+            assert!(
+                (back[0] - r).abs() < 1e-3,
+                "r roundtrip for ({r},{g},{b}): {back:?}"
+            );
+            assert!(
+                (back[1] - g).abs() < 1e-3,
+                "g roundtrip for ({r},{g},{b}): {back:?}"
+            );
+            assert!(
+                (back[2] - b).abs() < 1e-3,
+                "b roundtrip for ({r},{g},{b}): {back:?}"
+            );
         }
     }
 
