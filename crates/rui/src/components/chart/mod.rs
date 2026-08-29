@@ -6,8 +6,8 @@
 //!   [`scale_log`] / [`scale_time`]。
 //! - **Marks**：笛卡尔 [`bar_y`] [`line_y`] [`area_y`] [`dot`] [`rule_*`]；polar
 //!   [`pie`] [`radial_bar`] [`radial_line`] [`radial_area`] [`radial_dot`]；[`custom_mark`]。
-//! - **Theme / interaction**：[`ChartTheme`] / [`MarkStyle`]；`.tooltip(true)` / `.crosshair(true)`。
-//! - **Composition**：[`define_chart`] 按声明顺序叠层；预设是薄封装。
+//! - **Theme / interaction**：[`ChartTheme`] / [`ChartConfig`] / [`TooltipIndicator`] / [`MarkStyle`]；`.tooltip(true)` / `.crosshair(true)`。
+//! - **Composition**：[`define_chart`] 按声明顺序叠层；预设是薄封装（含 `donut_chart` / `radial_chart`）。
 //! - **Scene**：mark → [`crate::primitives::path::PathCommand`] → 同一 path 核。
 //!
 //! 分层（详见 `docs/drawing.md` §8）：
@@ -30,7 +30,7 @@ mod preset;
 mod scale;
 mod theme;
 
-pub use datum::{ChartDatum, ChartSelect, ChartSelected};
+pub use datum::{ChartDatum, ChartSelect, ChartSelected, ChartTooltipItem};
 pub use define::{define_chart, ChartBuilder, ChartDefinition};
 pub use mark::{
     area_y, bar_x, bar_y, custom_mark, dot, line_y, pie, rule_x, rule_x_num, rule_y, ChartMark,
@@ -38,15 +38,18 @@ pub use mark::{
 };
 pub use polar::{radial_area, radial_bar, radial_dot, radial_line};
 pub use preset::{
-    area_chart, bar_chart, line_chart, pie_chart, AreaChart, AreaChartProps, BarChart,
-    BarChartBuilder, BarChartProps, Chart, ChartProps, LineChart, LineChartBuilder, LineChartProps,
-    PieChart, PieChartBuilder, PieChartProps,
+    area_chart, bar_chart, donut_chart, line_chart, pie_chart, radial_chart, AreaChart,
+    AreaChartProps, BarChart, BarChartBuilder, BarChartProps, Chart, ChartProps, DonutChart,
+    DonutChartProps, LineChart, LineChartBuilder, LineChartProps, PieChart, PieChartBuilder,
+    PieChartProps, RadialChart, RadialChartBuilder, RadialChartProps,
 };
 pub use scale::{
     format_time_label, pie_layout, pie_layout_span, scale_band, scale_linear, scale_log,
     scale_point, scale_time, unix_ms_to_utc, AxisSpec, ScaleKind,
 };
-pub use theme::{ChartPaint, ChartTheme, MarkStyle};
+pub use theme::{
+    ChartConfig, ChartPaint, ChartSeriesConfig, ChartTheme, MarkStyle, TooltipIndicator,
+};
 
 #[cfg(test)]
 mod tests {
@@ -79,6 +82,40 @@ mod tests {
     fn pie_chart_without_id_writes_no_template_id() {
         let el: Element = pie_chart().values([1.0, 2.0, 3.0]).into();
         assert!(el.template_id.is_none());
+    }
+
+    #[test]
+    fn donut_chart_without_id_writes_no_template_id() {
+        let el: Element = donut_chart().values([1.0, 2.0, 3.0]).into();
+        assert!(el.template_id.is_none());
+    }
+
+    #[test]
+    fn radial_chart_without_id_writes_no_template_id() {
+        let el: Element = radial_chart()
+            .values([1.0, 2.0, 3.0])
+            .labels(["A", "B", "C"])
+            .into();
+        assert!(el.template_id.is_none());
+    }
+
+    #[test]
+    fn chart_theme_tokens_match_shadcn_chrome() {
+        use crate::style::parse_color;
+        let t = ChartTheme::tokens();
+        assert_eq!(t.background, parse_color("transparent"));
+        assert_eq!(t.muted, parse_color("muted-foreground"));
+        assert_eq!(t.grid, parse_color("border/50"));
+    }
+
+    #[test]
+    fn unknown_tooltip_indicator_string_falls_back_to_dot() {
+        assert_eq!(TooltipIndicator::from("weird"), TooltipIndicator::Dot);
+        let el: Element = bar_chart()
+            .values([1.0, 2.0])
+            .tooltip_indicator("nope")
+            .into();
+        assert!(el.attrs.get("rui_chart").is_some() || !el.children.is_empty());
     }
 
     #[test]
@@ -371,10 +408,14 @@ mod tests {
         assert!(el.template_id.is_none());
         assert_eq!(el.get_attr("rui_chart").map(|s| s.as_str()), Some("chart"));
         assert!(find_attr(&el, ATTR_PATH_D).is_some());
-        assert!(
+        fn has_path_tex(el: &Element) -> bool {
             el.image_texture
                 .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:")),
+                .is_some_and(|k| k.starts_with("rui_path:"))
+                || el.children.iter().any(has_path_tex)
+        }
+        assert!(
+            has_path_tex(&el),
             "composed chart must raster via shared path kernel"
         );
     }
@@ -691,6 +732,119 @@ mod tests {
     }
 
     #[test]
+    fn bar_axis_labels_center_on_band() {
+        use crate::layout::{lpa_kind, DimKind};
+        let labels = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+        let plot_w = 320.0;
+        let pad = [8.0, 8.0, 8.0, 0.0];
+        let n = labels.len();
+        let (bw, x_of) = scale_band(n, (pad[0], plot_w - pad[2]), 0.2);
+        let ticks: Vec<(f32, String)> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, lab)| (x_of(i) + bw * 0.5, (*lab).to_string()))
+            .collect();
+        let row = super::define::tick_label_row(&ticks, plot_w);
+        assert_eq!(row.children.len(), n);
+        for (i, lab) in labels.iter().enumerate() {
+            let cell = &row.children[i];
+            let got = match lpa_kind(cell.style.inset.left) {
+                DimKind::Percent(p) => p * 100.0,
+                other => panic!("{lab} inset.left not %, got {other:?}"),
+            };
+            let expect = ticks[i].0 / plot_w * 100.0;
+            assert!(
+                (got - expect).abs() < 0.05,
+                "{lab} label left {got}% vs bar center {expect}%"
+            );
+            assert!(
+                (cell.style.translate_pct[0] + 0.5).abs() < 1e-4,
+                "{lab} must translate_pct -50% to sit on the tick"
+            );
+        }
+    }
+
+    #[test]
+    fn bar_sits_on_plot_baseline() {
+        use super::scale::resolve_scales_pad;
+        use crate::primitives::path::points_from_commands;
+        let mark = ChartMark::from(bar_y([("A", 0.8f32), ("B", 0.4)]));
+        let scales = resolve_scales_pad(
+            200.0,
+            80.0,
+            &AxisSpec::band(),
+            &AxisSpec::linear(),
+            vec!["A".into(), "B".into()],
+            &[],
+            &[],
+            &[0.8, 0.4],
+            true,
+            [8.0, 8.0, 8.0, 0.0],
+        );
+        let theme = ChartTheme::tokens();
+        let layers = mark.render(&MarkRenderContext::new(&scales, &theme, None, 80.0));
+        let mut max_y = 0.0f32;
+        for l in &layers {
+            for p in points_from_commands(&l.commands) {
+                max_y = max_y.max(p.1);
+            }
+        }
+        assert!(
+            (max_y - 80.0).abs() < 1.5,
+            "bar bottom {max_y} should sit on plot_h=80 (axis)"
+        );
+    }
+
+    #[test]
+    fn bar_base_radius_rounds_bottom_when_no_axis() {
+        use super::scale::resolve_scales_pad;
+        use crate::primitives::path::points_from_commands;
+        let mark = ChartMark::from(bar_y([("A", 1.0f32)]).corner_radius(8.0));
+        let scales = resolve_scales_pad(
+            120.0,
+            80.0,
+            &AxisSpec::band(),
+            &AxisSpec::linear(),
+            vec!["A".into()],
+            &[],
+            &[],
+            &[1.0],
+            true,
+            [0.0, 8.0, 0.0, 0.0],
+        );
+        let theme = ChartTheme::tokens();
+        let mut ctx = MarkRenderContext::new(&scales, &theme, None, 80.0);
+        ctx.round_bar_base = true;
+        let layers = mark.render(&ctx);
+        let pts: Vec<_> = layers
+            .iter()
+            .flat_map(|l| points_from_commands(&l.commands))
+            .collect();
+        assert!(
+            pts.len() > 8,
+            "rounded all-four corners must emit arc vertices, got {}",
+            pts.len()
+        );
+        let min_y = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
+        let max_y = pts.iter().map(|p| p.1).fold(0.0f32, f32::max);
+        // 底角圆角：柱底可略超出 plot_h（+1px 盖住光栅半开裁剪），顶点多于 4。
+        assert!(max_y <= 81.5, "bottom still within plot, max_y={max_y}");
+        assert!(min_y >= 7.0, "top pad leaves headroom, min_y={min_y}");
+    }
+
+    #[test]
+    fn bar_chart_tooltip_tracks_mousemove() {
+        let el: Element = bar_chart().values([0.2, 0.9]).labels(["Mon", "Tue"]).into();
+        fn find_move(el: &Element) -> bool {
+            el.on_mousemove.is_some() || el.children.iter().any(find_move)
+        }
+        assert!(
+            find_move(&el),
+            "tooltip charts must listen to mousemove for hover"
+        );
+    }
+
+    #[test]
     fn line_stroke_color_does_not_dim_when_non_first_point_selected() {
         use super::scale::resolve_scales;
         let mark = ChartMark::from(line_y([0.2f32, 0.9, 0.4]));
@@ -839,7 +993,7 @@ mod tests {
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut content, 200.0, 400.0, [-1.0, -1.0]);
 
-        let mut viewport = Element::new().overflow("hidden");
+        let mut viewport = Element::new().overflow("scroll");
         viewport.layout_bounds = [0.0, 0.0, 200.0, 100.0];
         viewport.scroll_offset = [0.0, 90.0];
         viewport.children.push(content);
@@ -998,57 +1152,77 @@ mod tests {
             .size(200.0, 80.0)
             .selected(Some(1))
             .into();
-        fn find_label_parent<'a>(el: &'a Element, needle: &str) -> Option<&'a Element> {
-            for c in &el.children {
-                if c.text.as_deref().is_some_and(|t| t.contains(needle)) {
-                    return Some(el);
-                }
-                if let Some(hit) = find_label_parent(c, needle) {
-                    return Some(hit);
-                }
+        fn find_bubble<'a>(el: &'a Element, needle: &str) -> Option<&'a Element> {
+            fn contains_text(el: &Element, needle: &str) -> bool {
+                el.text.as_deref().is_some_and(|t| t.contains(needle))
+                    || el.children.iter().any(|c| contains_text(c, needle))
             }
-            None
+            if el.style.bg_color[3] > 0.5
+                && el.style.radii.iter().any(|r| *r > 1.0)
+                && contains_text(el, needle)
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_bubble(c, needle))
         }
-        let parent = find_label_parent(&el, "0.8").expect("tooltip text parent");
+        let bubble = find_bubble(&el, "0.8").expect("tooltip bubble with value text");
         assert!(
-            parent.style.bg_color[3] > 0.5,
-            "bubble must own the chrome (reuse tooltip.rs), not a detached path rect"
+            bubble.style.radii.iter().all(|r| *r > 4.0),
+            "tooltip must keep CSS corner radii (no square path backing)"
         );
-        let left_tracks_plot = parent.style.unit_specs.iter().any(|(slot, dim)| {
-            *slot == UnitSlot::InsetL
+        let tracks_plot = bubble.style.unit_specs.iter().any(|(slot, dim)| {
+            matches!(*slot, UnitSlot::InsetL | UnitSlot::InsetR)
                 && matches!(
                     dim,
                     CssDim::Percent(_) | CssDim::CalcAdd(_, _) | CssDim::CalcSub(_, _)
                 )
         });
         assert!(
-            left_tracks_plot,
-            "tooltip left must be % / calc(% ± px) so stretch cannot split box and text"
+            tracks_plot,
+            "tooltip left/right must be % / calc(% ± px) so stretch cannot split box and text"
         );
+        let below_pin = bubble.style.unit_specs.iter().any(|(slot, dim)| {
+            *slot == UnitSlot::InsetT
+                && matches!(
+                    dim,
+                    CssDim::Percent(_) | CssDim::CalcAdd(_, _) | CssDim::CalcSub(_, _)
+                )
+        });
         assert!(
-            parent.get_attr(ATTR_PATH_D).is_some(),
-            "bubble backing texture sits above the chart scene"
+            below_pin,
+            "default tooltip must sit below the pin (`top: y% + gap`)"
         );
     }
 
     #[test]
     fn tooltip_pin_flips_near_plot_edges() {
+        use super::datum::ChartTooltipItem;
         use super::define::tooltip_pin_place;
+        let item = |label: &str, v: f32| ChartTooltipItem {
+            label: label.into(),
+            value: v,
+            series_key: None,
+            header: None,
+        };
         assert!(
-            !tooltip_pin_place(40.0, 40.0, 200.0, 80.0, "Tue 0.40").flip_x,
+            !tooltip_pin_place(40.0, 40.0, 200.0, 80.0, &item("Tue", 0.40)).flip_x,
             "room on the right → keep tooltip to the right of the pin"
         );
         assert!(
-            tooltip_pin_place(190.0, 40.0, 200.0, 80.0, "Fri 0.90").flip_x,
+            tooltip_pin_place(190.0, 40.0, 200.0, 80.0, &item("Fri", 0.90)).flip_x,
             "near right edge → flip to the left so overflow:hidden cannot clip"
         );
         assert!(
-            tooltip_pin_place(100.0, 6.0, 200.0, 80.0, "A 1.00").flip_y,
-            "near top → place below the pin"
+            !tooltip_pin_place(100.0, 6.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
+            "near top → keep tooltip below the pointer"
         );
         assert!(
-            !tooltip_pin_place(100.0, 50.0, 200.0, 80.0, "A 1.00").flip_y,
-            "enough room above → keep tooltip above the pin"
+            !tooltip_pin_place(100.0, 20.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
+            "enough room below → keep tooltip below the pointer"
+        );
+        assert!(
+            tooltip_pin_place(100.0, 70.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
+            "near bottom → flip above so the bubble stays in plot"
         );
     }
 
@@ -1061,26 +1235,28 @@ mod tests {
             .labels(["Mon", "Tue", "Wed", "Thu", "Fri"])
             .selected(Some(4))
             .into();
-        fn find_label_parent<'a>(el: &'a Element, needle: &str) -> Option<&'a Element> {
-            for c in &el.children {
-                if c.text.as_deref().is_some_and(|t| t.contains(needle)) {
-                    return Some(el);
-                }
-                if let Some(hit) = find_label_parent(c, needle) {
-                    return Some(hit);
-                }
+        fn find_bubble<'a>(el: &'a Element, needle: &str) -> Option<&'a Element> {
+            fn contains_text(el: &Element, needle: &str) -> bool {
+                el.text.as_deref().is_some_and(|t| t.contains(needle))
+                    || el.children.iter().any(|c| contains_text(c, needle))
             }
-            None
+            if el.style.bg_color[3] > 0.5
+                && el.style.radii.iter().any(|r| *r > 1.0)
+                && contains_text(el, needle)
+            {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_bubble(c, needle))
         }
-        let parent = find_label_parent(&el, "Fri").expect("Fri tooltip");
-        let from_right = parent.style.unit_specs.iter().any(|(slot, dim)| {
+        let bubble = find_bubble(&el, "Fri").expect("Fri tooltip bubble");
+        let from_right = bubble.style.unit_specs.iter().any(|(slot, dim)| {
             *slot == UnitSlot::InsetR
                 && matches!(
                     dim,
                     CssDim::Percent(_) | CssDim::CalcAdd(_, _) | CssDim::CalcSub(_, _)
                 )
         });
-        let from_left = parent
+        let from_left = bubble
             .style
             .unit_specs
             .iter()

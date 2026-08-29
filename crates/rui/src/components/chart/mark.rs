@@ -4,10 +4,13 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
 
 use crate::primitives::path::{
-    filled_circle, pie_ring, pie_sector, polygon, polyline, PathCommand, PathStyle, Point2,
+    filled_circle, pie_ring, pie_sector, polygon, polyline, rounded_rect, PathCommand, PathStyle,
+    Point2,
 };
 
-use super::datum::{collect_rows, datum_hover_text, ChartDatum};
+use super::datum::{
+    collect_rows, datum_hover_item, datum_hover_text, ChartDatum, ChartTooltipItem,
+};
 use super::scale::{pie_layout_span, ResolvedScales};
 use super::theme::{ChartPaint, ChartTheme, MarkStyle};
 
@@ -70,6 +73,8 @@ pub struct MarkRenderContext<'a> {
     pub polar_start: f32,
     pub polar_end: f32,
     pub polar_inner: f32,
+    /// 无底轴时 bar 基线端默认同值端圆角。
+    pub round_bar_base: bool,
 }
 
 impl<'a> MarkRenderContext<'a> {
@@ -87,6 +92,7 @@ impl<'a> MarkRenderContext<'a> {
             polar_start: -FRAC_PI_2,
             polar_end: -FRAC_PI_2 + TAU,
             polar_inner: 0.15,
+            round_bar_base: false,
         }
     }
 }
@@ -102,6 +108,26 @@ pub(crate) trait MarkRender {
     }
     fn hover_text(&self, _index: usize) -> Option<String> {
         None
+    }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        self.hover_text(index).map(|t| {
+            if let Some((label, value)) = t.rsplit_once("  ") {
+                let v = value.trim().parse::<f32>().unwrap_or(0.0);
+                ChartTooltipItem {
+                    label: label.to_string(),
+                    value: v,
+                    series_key: None,
+                    header: None,
+                }
+            } else {
+                ChartTooltipItem {
+                    label: t,
+                    value: 0.0,
+                    series_key: None,
+                    header: None,
+                }
+            }
+        })
     }
     fn datum_point(&self, _ctx: &MarkRenderContext<'_>, _index: usize) -> Option<Point2> {
         None
@@ -141,6 +167,9 @@ impl ChartMark {
     pub fn hover_text(&self, index: usize) -> Option<String> {
         self.inner.hover_text(index)
     }
+    pub fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        self.inner.hover_item(index)
+    }
     pub fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         self.inner.datum_point(ctx, index)
     }
@@ -174,6 +203,14 @@ macro_rules! style_setters {
         }
         pub fn stroke_dash(mut self, dash: impl IntoIterator<Item = f32>) -> Self {
             self.style = self.style.stroke_dash(dash);
+            self
+        }
+        pub fn corner_radius(mut self, px: f32) -> Self {
+            self.style.corner_radius = Some(px.max(0.0));
+            self
+        }
+        pub fn corner_radius_base(mut self, px: f32) -> Self {
+            self.style.corner_radius_base = Some(px.max(0.0));
             self
         }
     };
@@ -411,6 +448,11 @@ impl MarkRender for BarYMark {
                     continue;
                 };
                 let fill = paint_fill(&self.style, ctx.theme, si, di, ctx.selected, 1.0);
+                let r_value = self.style.corner_radius.unwrap_or(4.0);
+                let r_base = self
+                    .style
+                    .corner_radius_base
+                    .unwrap_or(if ctx.round_bar_base { r_value } else { 0.0 });
                 if self.horizontal {
                     let band_y = ctx.scales.bandwidth_y().max(1.0);
                     let slot_y =
@@ -419,10 +461,15 @@ impl MarkRender for BarYMark {
                     let x0 = ctx.scales.x_value0();
                     let x1 = ctx.scales.x_value(val.max(0.0));
                     let (l, r) = if x1 >= x0 { (x0, x1) } else { (x1, x0) };
-                    let pts = [(l, y0), (r, y0), (r, y0 + slot_y), (l, y0 + slot_y)];
-                    layers.push(SceneLayer::polygon(
+                    let radii = if x1 >= x0 {
+                        [r_base, r_value, r_value, r_base]
+                    } else {
+                        [r_value, r_base, r_base, r_value]
+                    };
+                    let cmds = rounded_rect(l, y0, (r - l).max(1.0), slot_y, radii);
+                    layers.push(SceneLayer::path(
                         format!("barX-{xi}-{si}"),
-                        &pts,
+                        cmds,
                         PathStyle::fill(fill),
                     ));
                 } else {
@@ -430,10 +477,17 @@ impl MarkRender for BarYMark {
                     let y1 = ctx.scales.y(val.max(0.0));
                     let y0 = ctx.scales.y0();
                     let (top, bot) = if y1 <= y0 { (y1, y0) } else { (y0, y1) };
-                    let pts = [(x0, top), (x0 + slot, top), (x0 + slot, bot), (x0, bot)];
-                    layers.push(SceneLayer::polygon(
+                    // +1px：光栅半开区间会裁掉 y==plot_h 的最后一行，柱底会离轴线一条缝。
+                    let cmds = rounded_rect(
+                        x0,
+                        top,
+                        slot,
+                        (bot - top + 1.0).max(0.5),
+                        [r_value, r_value, r_base, r_base],
+                    );
+                    layers.push(SceneLayer::path(
                         format!("barY-{xi}-{si}"),
-                        &pts,
+                        cmds,
                         PathStyle::fill(fill),
                     ));
                 }
@@ -493,6 +547,9 @@ impl MarkRender for BarYMark {
     }
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
+    }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
     }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let r = self.rows.get(index)?;
@@ -736,6 +793,9 @@ impl MarkRender for LineYMark {
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
     }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
+    }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let series = unique_series(&self.rows);
         for ser in &series {
@@ -904,6 +964,9 @@ impl MarkRender for PieMark {
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
     }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
+    }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let s = ctx.polar_size.max(48.0);
         let values: Vec<f32> = self.rows.iter().map(|d| d.value).collect();
@@ -1021,6 +1084,9 @@ impl MarkRender for DotMark {
     }
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
+    }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
     }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let series = unique_series(&self.rows);

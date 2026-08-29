@@ -5,7 +5,9 @@ use std::f32::consts::TAU;
 
 use crate::primitives::path::{pie_ring, polyline, PathStyle, Point2};
 
-use super::datum::{collect_rows, datum_hover_text, ChartDatum};
+use super::datum::{
+    collect_rows, datum_hover_item, datum_hover_text, ChartDatum, ChartTooltipItem,
+};
 use super::mark::{
     dashed_segment, filled_dot_layers, paint_fill, paint_stroke, unique_labels, unique_series,
     ChartMark, MarkChannels, MarkRender, MarkRenderContext, SceneLayer,
@@ -260,6 +262,9 @@ impl MarkRender for RadialBarMark {
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
     }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
+    }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let n = self.rows.len().max(1);
         let r = self.rows.get(index)?;
@@ -423,6 +428,9 @@ impl MarkRender for RadialLineMark {
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
     }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
+    }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let inner_f = inner_frac(self.inner_radius, ctx);
         let series = unique_series(&self.rows);
@@ -540,6 +548,9 @@ impl MarkRender for RadialDotMark {
     }
     fn hover_text(&self, index: usize) -> Option<String> {
         datum_hover_text(&self.rows, index)
+    }
+    fn hover_item(&self, index: usize) -> Option<ChartTooltipItem> {
+        datum_hover_item(&self.rows, index)
     }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         let inner_f = inner_frac(self.inner_radius, ctx);

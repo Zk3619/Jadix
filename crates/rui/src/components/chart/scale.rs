@@ -470,7 +470,32 @@ pub(crate) fn resolve_scales(
     y_nums: &[f32],
     y_include_zero: bool,
 ) -> ResolvedScales {
-    let pad = [8.0, 8.0, 8.0, 8.0];
+    resolve_scales_pad(
+        plot_w,
+        plot_h,
+        x,
+        y,
+        x_cats,
+        x_nums,
+        x_times,
+        y_nums,
+        y_include_zero,
+        [8.0, 8.0, 8.0, 8.0],
+    )
+}
+
+pub(crate) fn resolve_scales_pad(
+    plot_w: f32,
+    plot_h: f32,
+    x: &AxisSpec,
+    y: &AxisSpec,
+    x_cats: Vec<String>,
+    x_nums: &[f32],
+    x_times: &[i64],
+    y_nums: &[f32],
+    y_include_zero: bool,
+    pad: [f32; 4],
+) -> ResolvedScales {
     let x_time_domain = x.domain_time.or_else(|| {
         if x_times.is_empty() {
             None

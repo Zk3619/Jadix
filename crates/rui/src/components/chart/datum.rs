@@ -117,16 +117,56 @@ pub(crate) fn rows_from_values_labels(values: &[f32], labels: &[String]) -> Vec<
         .collect()
 }
 
-pub(crate) fn datum_hover_text(rows: &[ChartDatum], index: usize) -> Option<String> {
+/// 结构化 tooltip 行（对位 shadcn `ChartTooltipContent` 一项）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartTooltipItem {
+    pub label: String,
+    pub value: f32,
+    /// 系列 / config key（可选）。
+    pub series_key: Option<String>,
+    /// 顶栏类目 / 日期（有系列时显示，对位 shadcn tooltip label）。
+    pub header: Option<String>,
+}
+
+impl ChartTooltipItem {
+    pub fn display_value(&self) -> String {
+        if self.value.fract().abs() < 1e-4 {
+            format!("{:.0}", self.value)
+        } else {
+            format!("{:.2}", self.value)
+        }
+    }
+
+    /// 兼容旧单行文案。
+    pub fn flat_text(&self) -> String {
+        format!("{}  {}", self.label, self.display_value())
+    }
+}
+
+pub(crate) fn datum_hover_item(rows: &[ChartDatum], index: usize) -> Option<ChartTooltipItem> {
     let r = rows.get(index)?;
-    let name = if !r.label.is_empty() {
+    let category = if !r.label.is_empty() {
         r.label.clone()
     } else if let Some(t) = r.time {
         super::scale::format_time_label(t, 86_400_000)
     } else {
         format!("{}", index + 1)
     };
-    Some(format!("{}  {:.2}", name, r.value))
+    // 有系列：顶栏 = 类目，行标签 = 系列名；无系列：行标签 = 类目。
+    let (label, header) = match r.series.as_ref() {
+        Some(s) => (s.clone(), Some(category)),
+        None => (category, None),
+    };
+    Some(ChartTooltipItem {
+        label,
+        value: r.value,
+        series_key: r.series.clone(),
+        header,
+    })
+}
+
+pub(crate) fn datum_hover_text(rows: &[ChartDatum], index: usize) -> Option<String> {
+    datum_hover_item(rows, index).map(|i| i.flat_text())
 }
 
 pub(crate) fn collect_rows<I, T>(data: I) -> Vec<ChartDatum>
