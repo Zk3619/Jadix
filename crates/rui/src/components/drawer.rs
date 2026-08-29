@@ -57,7 +57,7 @@ use std::sync::OnceLock;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
-use crate::app::{release_pointer_capture, set_pointer_capture, runtime::request_redraw};
+use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
     apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
@@ -107,10 +107,6 @@ impl DrawerDirection {
             Self::Left => "left",
             Self::Right => "right",
         }
-    }
-
-    fn is_vertical(self) -> bool {
-        matches!(self, Self::Down | Self::Up)
     }
 
     fn axis_viewport(self, vw: f32, vh: f32) -> f32 {
@@ -613,13 +609,7 @@ fn drawer_shell_frame(
     cache_snap_fracs(modal_id, &snap_fracs);
 
     let handle = |dir: DrawerDirection| {
-        drawer_swipe_handle_element(
-            modal_id,
-            open,
-            dir,
-            snap_points,
-            snap_to_sequential,
-        )
+        drawer_swipe_handle_element(modal_id, open, dir, snap_points, snap_to_sequential)
     };
 
     let mut panel: Element = match direction {
@@ -767,9 +757,13 @@ pub fn DrawerClose(children: Option<Element>) -> Element {
         }
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
-            interactive(label(format!("{}:drawer_close", ctx.id).as_str()).text(t).into())
-                .on_click(move || open.set(false))
-                .into()
+            interactive(
+                label(format!("{}:drawer_close", ctx.id).as_str())
+                    .text(t)
+                    .into(),
+            )
+            .on_click(move || open.set(false))
+            .into()
         }
         Some(c) => chain_click(c, move || open.set(false)),
     }
@@ -1084,10 +1078,7 @@ fn normalize_snap_points(points: &[DrawerSnapPoint]) -> Vec<DrawerSnapPoint> {
 }
 
 fn resolve_snap_fractions(points: &[DrawerSnapPoint], axis_px: f32) -> Vec<f32> {
-    let mut out: Vec<f32> = points
-        .iter()
-        .map(|p| p.to_open_fraction(axis_px))
-        .collect();
+    let mut out: Vec<f32> = points.iter().map(|p| p.to_open_fraction(axis_px)).collect();
     out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     out.dedup_by(|a, b| (*a - *b).abs() < 0.01);
     if out.is_empty() {
@@ -1142,8 +1133,7 @@ fn drawer_drag_translate(direction: DrawerDirection, open_frac: f32, axis_px: f3
 }
 
 fn is_drawer_dragging(id: &str) -> bool {
-    DRAWER_DRAG
-        .with(|d| d.borrow().as_ref().is_some_and(|drag| drag.id == id))
+    DRAWER_DRAG.with(|d| d.borrow().as_ref().is_some_and(|drag| drag.id == id))
 }
 
 fn axis_delta(direction: DrawerDirection, drag: &DrawerDrag, x: f32, y: f32) -> f32 {
@@ -1207,7 +1197,10 @@ fn nearest_snap(snap_fracs: &[f32], frac: f32) -> f32 {
 fn sequential_snap_target(snap_fracs: &[f32], current: f32, delta_sign: f32) -> f32 {
     let idx = nearest_snap_index(snap_fracs, current);
     if delta_sign < -0.5 {
-        snap_fracs.get(idx.saturating_sub(1)).copied().unwrap_or(0.0)
+        snap_fracs
+            .get(idx.saturating_sub(1))
+            .copied()
+            .unwrap_or(0.0)
     } else if delta_sign > 0.5 {
         snap_fracs
             .get((idx + 1).min(snap_fracs.len().saturating_sub(1)))
@@ -1395,7 +1388,10 @@ mod tests {
     #[test]
     fn snap_points_normalize_and_nearest() {
         let pts = resolve_snap_fractions(
-            &[DrawerSnapPoint::Fraction(0.35), DrawerSnapPoint::Fraction(1.0)],
+            &[
+                DrawerSnapPoint::Fraction(0.35),
+                DrawerSnapPoint::Fraction(1.0),
+            ],
             800.0,
         );
         assert!((nearest_snap(&pts, 0.4) - 0.35).abs() < 0.01);

@@ -27,7 +27,9 @@
 //! - Avatar：`<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>`（宏 → [`avatar_scope`]）；Builder [`avatar`]。
 //! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
 //! - Breadcrumb：`<Breadcrumb>` / `BreadcrumbList` / `BreadcrumbItem` / `BreadcrumbLink` / `BreadcrumbPage` / `BreadcrumbSeparator` / `BreadcrumbEllipsis`；Builder [`breadcrumb`]。
+//! - ButtonGroup：`<ButtonGroup>` / `ButtonGroupText` / `ButtonGroupSeparator`；Builder [`button_group`]。
 //! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
+//! - Collapsible：复合 `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent`（宏 `collapsible_scope` / `collapsible_content`）；Builder [`collapsible`]。
 //! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令；
@@ -41,14 +43,17 @@ pub mod accordion;
 pub mod aspect_ratio;
 pub mod avatar;
 pub mod badge;
-pub mod breadcrumb;
 pub mod base;
+pub mod breadcrumb;
+pub mod bubble;
 pub mod button;
+pub mod button_group;
 pub mod calendar;
 pub mod card;
 pub mod carousel;
 pub mod chart;
 pub mod checkbox;
+pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
 pub mod command;
@@ -92,9 +97,9 @@ pub mod virtual_masonry;
 
 pub use accordion::{
     accordion, accordion_content, accordion_item_scope, accordion_scope, use_accordion,
-    use_accordion_item, Accordion,
-    AccordionBuilder, AccordionContent, AccordionContentProps, AccordionCtx, AccordionItem,
-    AccordionItemCtx, AccordionItemProps, AccordionProps, AccordionTrigger, AccordionTriggerProps,
+    use_accordion_item, Accordion, AccordionBuilder, AccordionContent, AccordionContentProps,
+    AccordionCtx, AccordionItem, AccordionItemCtx, AccordionItemProps, AccordionProps,
+    AccordionTrigger, AccordionTriggerProps,
 };
 pub use aspect_ratio::{
     aspect_ratio, AspectRatio, AspectRatioBuilder, AspectRatioProps, AspectRatioValue,
@@ -106,19 +111,29 @@ pub use avatar::{
     AvatarGroup, AvatarGroupCount, AvatarGroupCountProps, AvatarGroupProps, AvatarImage,
     AvatarImageProps, AvatarProps, AvatarShape, AvatarSize,
 };
-pub use badge::{
-    apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps, BadgeVariant,
-};
+pub use badge::{apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps, BadgeVariant};
+pub use base::BaseComponentBuilder;
 pub use breadcrumb::{
     breadcrumb, Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis, BreadcrumbEllipsisProps,
     BreadcrumbItem, BreadcrumbItemProps, BreadcrumbLink, BreadcrumbLinkProps, BreadcrumbList,
-    BreadcrumbListProps, BreadcrumbPage, BreadcrumbPageProps, BreadcrumbProps,
-    BreadcrumbSeparator, BreadcrumbSeparatorProps,
+    BreadcrumbListProps, BreadcrumbPage, BreadcrumbPageProps, BreadcrumbProps, BreadcrumbSeparator,
+    BreadcrumbSeparatorProps,
 };
-pub use base::BaseComponentBuilder;
+pub use bubble::{
+    apply_bound_bubble_align, apply_bound_bubble_variant, apply_bubble_variant_paint, bubble,
+    bubble_content, bubble_group, bubble_reactions, bubble_scope, use_bubble, Bubble, BubbleAlign,
+    BubbleBuilder, BubbleContent, BubbleContentBuilder, BubbleContentProps, BubbleCtx, BubbleGroup,
+    BubbleGroupBuilder, BubbleGroupProps, BubbleProps, BubbleReactions, BubbleReactionsAlign,
+    BubbleReactionsBuilder, BubbleReactionsLayout, BubbleReactionsProps, BubbleReactionsSide,
+    BubbleVariant,
+};
 pub use button::{
     apply_bound_button_disabled, apply_bound_button_variant, button, Button, ButtonBuilder,
     ButtonProps,
+};
+pub use button_group::{
+    button_group, ButtonGroup, ButtonGroupBuilder, ButtonGroupOrientation, ButtonGroupProps,
+    ButtonGroupSeparator, ButtonGroupSeparatorProps, ButtonGroupText, ButtonGroupTextProps,
 };
 pub use calendar::{
     calendar, days_in_month, format_long_date, format_month_year, format_ymd, parse_ymd, today_ymd,
@@ -129,10 +144,6 @@ pub use card::{
     CardDescriptionProps, CardFooter, CardFooterProps, CardHeader, CardHeaderProps, CardProps,
     CardTitle, CardTitleProps,
 };
-pub use carousel::{
-    carousel_scope, use_carousel, CarouselControls, CarouselCtx, CarouselEndAlign, CarouselItemSizing,
-    CarouselKind, CarouselOrientation, CarouselPageSnap, CarouselScrollBy, CarouselVariant,
-};
 pub use carousel::builder::{
     carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder,
 };
@@ -140,17 +151,29 @@ pub use carousel::content::{
     CarouselContent, CarouselContentProps, CarouselDots, CarouselDotsProps, CarouselItem,
     CarouselItemProps, CarouselNext, CarouselNextProps, CarouselPrevious, CarouselPreviousProps,
 };
+pub use carousel::{
+    carousel_scope, use_carousel, CarouselControls, CarouselCtx, CarouselEndAlign,
+    CarouselItemSizing, CarouselKind, CarouselOrientation, CarouselPageSnap, CarouselScrollBy,
+    CarouselVariant,
+};
 pub use chart::{
-    area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, dot, format_time_label,
-    line_chart, line_y, pie, pie_chart, pie_layout, pie_layout_span, radial_area, radial_bar,
-    radial_dot, radial_line, rule_x, rule_x_num, rule_y, scale_band, scale_linear, scale_log,
-    scale_point, scale_time, unix_ms_to_utc, AreaChart, AreaChartProps, BarChart, BarChartBuilder,
-    BarChartProps, Chart, ChartBuilder, ChartDatum, ChartDefinition, ChartMark, ChartPaint,
-    ChartProps, ChartSelect, ChartSelected, ChartTheme, CustomMarkBuilder, LineChart,
-    LineChartBuilder, LineChartProps, MarkChannels, MarkRenderContext, MarkStyle, PieChart,
-    PieChartBuilder, PieChartProps, SceneLayer,
+    area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, donut_chart, dot,
+    format_time_label, line_chart, line_y, pie, pie_chart, pie_layout, pie_layout_span,
+    radial_area, radial_bar, radial_chart, radial_dot, radial_line, rule_x, rule_x_num, rule_y,
+    scale_band, scale_linear, scale_log, scale_point, scale_time, unix_ms_to_utc, AreaChart,
+    AreaChartProps, BarChart, BarChartBuilder, BarChartProps, Chart, ChartBuilder, ChartConfig,
+    ChartDatum, ChartDefinition, ChartMark, ChartPaint, ChartProps, ChartSelect, ChartSelected,
+    ChartSeriesConfig, ChartTheme, ChartTooltipItem, CustomMarkBuilder, DonutChart,
+    DonutChartProps, LineChart, LineChartBuilder, LineChartProps, MarkChannels, MarkRenderContext,
+    MarkStyle, PieChart, PieChartBuilder, PieChartProps, RadialChart, RadialChartBuilder,
+    RadialChartProps, SceneLayer, TooltipIndicator,
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
+pub use collapsible::{
+    collapsible, collapsible_content, collapsible_scope, use_collapsible, Collapsible,
+    CollapsibleBuilder, CollapsibleContent, CollapsibleContentProps, CollapsibleCtx,
+    CollapsibleProps, CollapsibleTrigger, CollapsibleTriggerProps,
+};
 pub use color_picker::{
     color_picker, format_color, parse_color_str, ColorFormat, ColorPicker, ColorPickerBuilder,
     ColorPickerProps, ColorPickerVariant, Rgba,
@@ -178,9 +201,9 @@ pub use context_menu::{
     ContextMenuContentOpts, ContextMenuCtx, ContextMenuGroup, ContextMenuGroupProps,
     ContextMenuItem, ContextMenuItemProps, ContextMenuLabel, ContextMenuLabelProps,
     ContextMenuRadioGroupCtx, ContextMenuRadioItem, ContextMenuRadioItemProps,
-    ContextMenuSeparator, ContextMenuSeparatorProps, ContextMenuShortcut,
-    ContextMenuShortcutProps, ContextMenuSubCtx, ContextMenuSubTrigger,
-    ContextMenuSubTriggerProps, ContextMenuTrigger, ContextMenuTriggerProps,
+    ContextMenuSeparator, ContextMenuSeparatorProps, ContextMenuShortcut, ContextMenuShortcutProps,
+    ContextMenuSubCtx, ContextMenuSubTrigger, ContextMenuSubTriggerProps, ContextMenuTrigger,
+    ContextMenuTriggerProps,
 };
 pub use date_picker::{
     date_picker, time_picker, DatePicker, DatePickerBuilder, DatePickerKind, DatePickerProps,
@@ -240,8 +263,8 @@ pub use menubar::{
     MenubarTriggerProps,
 };
 pub use navbar::{
-    navbar, Navbar, NavbarActions, NavbarActionsProps, NavbarBrand, NavbarBrandProps, NavbarBuilder,
-    NavbarCenter, NavbarCenterProps, NavbarProps,
+    navbar, Navbar, NavbarActions, NavbarActionsProps, NavbarBrand, NavbarBrandProps,
+    NavbarBuilder, NavbarCenter, NavbarCenterProps, NavbarProps,
 };
 pub use navigation_menu::{
     navigation_menu, navigation_menu_content, navigation_menu_item, navigation_menu_scope,
@@ -266,10 +289,9 @@ pub use popover::{
     PopoverPanelBuilder, PopoverTitle, PopoverTitleProps, PopoverTrigger, PopoverTriggerProps,
 };
 pub use progress::{
-    progress, progress_scope, progress_track, use_progress, Progress, ProgressBuilder,
-    ProgressCtx, ProgressIndicator, ProgressIndicatorProps, ProgressLabel, ProgressLabelProps,
-    ProgressProps, ProgressTrack, ProgressTrackOpts, ProgressTrackProps, ProgressValue,
-    ProgressValueProps,
+    progress, progress_scope, progress_track, use_progress, Progress, ProgressBuilder, ProgressCtx,
+    ProgressIndicator, ProgressIndicatorProps, ProgressLabel, ProgressLabelProps, ProgressProps,
+    ProgressTrack, ProgressTrackOpts, ProgressTrackProps, ProgressValue, ProgressValueProps,
 };
 pub use radio_group::{
     radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx,
@@ -309,9 +331,9 @@ pub use stepper::{stepper, StepperBuilder};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
 pub use table::{
     data_table, table, table_comfortable, table_compact, DataTable, DataTableProps, Table,
-    TableAlign, TableBody, TableBodyProps, TableBuilder, TableCaption, TableCaptionProps, TableCell,
-    TableCellProps, TableColumn, TableDensity, TableFooter, TableFooterProps, TableHead,
-    TableHeader, TableHeaderProps, TableHeadProps, TablePaginationState, TableProps, TableRow,
+    TableAlign, TableBody, TableBodyProps, TableBuilder, TableCaption, TableCaptionProps,
+    TableCell, TableCellProps, TableColumn, TableDensity, TableFooter, TableFooterProps, TableHead,
+    TableHeadProps, TableHeader, TableHeaderProps, TablePaginationState, TableProps, TableRow,
     TableRowProps, TableSortDir, TableSortState,
 };
 pub use tabs::{
@@ -321,15 +343,15 @@ pub use tabs::{
     TABSTRIP_FOCUS_PREFIX,
 };
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
-pub use toast::{
-    toast, toast_dismiss, toast_pending, toast_push, toast_queue, toast_set_layout, toast_set_limit,
-    toast_set_overflow, toast_set_position, ToastBuilder, ToastItem, ToastLayout, ToastOverflow,
-    ToastPosition, ToastTone,
-};
 pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
 pub use toast::view::{
     Toast, ToastClose, ToastCloseProps, ToastDescription, ToastDescriptionProps, ToastProps,
     ToastTitle, ToastTitleProps,
+};
+pub use toast::{
+    toast, toast_dismiss, toast_pending, toast_push, toast_queue, toast_set_layout,
+    toast_set_limit, toast_set_overflow, toast_set_position, ToastBuilder, ToastItem, ToastLayout,
+    ToastOverflow, ToastPosition, ToastTone,
 };
 pub use toggle::{toggle, Toggle, ToggleBuilder, ToggleProps};
 pub use toggle_group::{toggle_group, ToggleGroup, ToggleGroupBuilder, ToggleGroupProps};

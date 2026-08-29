@@ -8,7 +8,7 @@ use secondary_window::SecondaryUiBuilder;
 /// Wakes the event loop for hot reload (debug) and background tasks, and delivers
 /// [`accesskit_winit`] messages.
 pub(super) enum RuiUserEvent {
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     HotReloadWake,
     /// A worker thread queued a closure via [`ui_bridge::run_on_ui_thread`].
     UiWake,
@@ -29,7 +29,7 @@ pub(super) enum RuiUserEvent {
 impl std::fmt::Debug for RuiUserEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, feature = "hot-reload"))]
             Self::HotReloadWake => f.write_str("HotReloadWake"),
             Self::UiWake => f.write_str("UiWake"),
             Self::OpenWindow { options, .. } => f

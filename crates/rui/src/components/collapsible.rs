@@ -1,0 +1,986 @@
+//! # Collapsible
+//!
+//! 对照 ShadCN **base** [`collapsible.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/collapsible.tsx)：
+//!
+//! ```text
+//! Collapsible                      // Root：open / defaultOpen；单面板开合
+//! ├── CollapsibleTrigger           // 点击切换；纯文本带 chevron，或包裹自定义子节点
+//! └── CollapsibleContent           // Panel：overflow-hidden + `@keyframes collapsible-down/up`
+//! ```
+//!
+//! 进出场对位 ShadCN 社区惯例 `collapsible-down` / `collapsible-up`（height 0 ↔ content-height，200ms），
+//! 与 Accordion 的 `accordion-down/up` **同形不同名**（官方 base 默认无动画；有动画时用独立 keyframes）。
+//!
+//! `ui!` 中 `<Collapsible>` / `<CollapsibleContent>` 由宏展开（[`collapsible_scope`] /
+//! [`collapsible_content`]）。Builder [`collapsible`] 与 RSX 共用实现。
+//!
+//! ## 用法（双写）
+//! ```ignore
+//! // A · RSX（camelCase 宏别名：defaultOpen / openSignal）
+//! ui! {
+//!     <Collapsible id="faq" defaultOpen={true}>
+//!         <CollapsibleTrigger>"Can I use this in my project?"</CollapsibleTrigger>
+//!         <CollapsibleContent>
+//!             <Label>"Yes. Free for personal and commercial use."</Label>
+//!         </CollapsibleContent>
+//!     </Collapsible>
+//! }
+//!
+//! // B · Builder（只 snake_case）
+//! collapsible("faq")
+//!     .default_open(true)
+//!     .trigger(|| Element::new().text("Can I use this in my project?"))
+//!     .content(|| {
+//!         label("").text("Yes. Free for personal and commercial use.").into()
+//!     })
+//! ```
+//!
+//! **身份（WP-2.8）**：`id` 可选；空串 → [`resolve_instance_id`]。
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+use rui_macros::component;
+use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
+
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::core::reactivity::{
+    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
+};
+use crate::core::tree::{parse_text_color, Element, LayoutStatus};
+use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::interactive::interactive;
+use crate::primitives::r#box::{hstack, vstack};
+use crate::style::{
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
+};
+use crate::tokens;
+use crate::utils::lucide::lucide_glyph;
+use crate::utils::motion::{clear_motion, ensure_motion_transitions};
+use crate::utils::presence::{ExitGate, PresencePhase};
+use crate::utils::resolve_instance_id;
+use crate::utils::take_fragment;
+use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::toggle_state::{resolve_bool_signal, write_bool_toggle};
+
+const ATTR_SLOT: &str = "data-slot";
+const SLOT_ROOT: &str = "collapsible";
+const SLOT_TRIGGER: &str = "collapsible-trigger";
+const SLOT_TRIGGER_ICON: &str = "collapsible-trigger-icon";
+const SLOT_CONTENT: &str = "collapsible-content";
+const SLOT_CONTENT_INNER: &str = "collapsible-content-inner";
+
+const COLLAPSE_MS: f32 = 200.0;
+const CHEVRON_PX: f32 = 16.0;
+const CHEVRON_OPEN_DEG: f32 = 180.0;
+const TRIGGER_WEIGHT: u16 = 500;
+const CONTENT_WEIGHT: u16 = 400;
+
+const COLLAPSIBLE_DOWN: &str = "collapsible-down";
+const COLLAPSIBLE_UP: &str = "collapsible-up";
+
+// ── Context ──────────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct CollapsibleCtx {
+    pub id: String,
+    pub open: Signal<bool>,
+    pub disabled: bool,
+}
+
+fn collapsible_context() -> Context<CollapsibleCtx> {
+    static CTX: OnceLock<Context<CollapsibleCtx>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<CollapsibleCtx>)
+}
+
+pub fn use_collapsible() -> Option<CollapsibleCtx> {
+    use_context(collapsible_context())
+}
+
+fn require_collapsible(part: &str) -> CollapsibleCtx {
+    use_collapsible().unwrap_or_else(|| {
+        panic!("{part} must be used within <Collapsible> / collapsible_scope");
+    })
+}
+
+// ── Panel presence（对位 Accordion 面板进出场）────────────────────────────────
+
+thread_local! {
+    static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<CollapsePanelPresenceCell>>>> =
+        const { RefCell::new(Vec::new()) };
+    static PENDING_COLLAPSE_UNMOUNTS: RefCell<Vec<Signal<bool>>> = const { RefCell::new(Vec::new()) };
+}
+
+const PANEL_EXIT: Duration = Duration::from_millis(COLLAPSE_MS as u64);
+
+#[derive(Clone)]
+struct CollapsePanelPresenceHandle {
+    cell: Rc<RefCell<CollapsePanelPresenceCell>>,
+}
+
+struct CollapsePanelPresenceCell {
+    mounted: Signal<bool>,
+    gate: ExitGate,
+    needs_enter: bool,
+    enter_active: bool,
+    exit_armed: bool,
+    initialized: bool,
+    measured_height: f32,
+    exit_from_height: Option<f32>,
+    needs_exit_anim: bool,
+}
+
+fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresenceHandle {
+    let cell_key = format!("__rui_collapsible_panel:{key}");
+    let mounted_key = format!("__rui_collapsible_mounted:{key}");
+    let cell = use_signal(cell_key.as_str(), || {
+        let mounted = use_signal(mounted_key.as_str(), || false);
+        let rc = Rc::new(RefCell::new(CollapsePanelPresenceCell {
+            mounted,
+            gate: ExitGate::new(false, PANEL_EXIT),
+            needs_enter: false,
+            enter_active: false,
+            exit_armed: false,
+            initialized: false,
+            measured_height: 0.0,
+            exit_from_height: None,
+            needs_exit_anim: false,
+        }));
+        PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
+        rc
+    });
+    CollapsePanelPresenceHandle { cell: cell.peek() }
+}
+
+fn collapse_panel_mounted_signal(handle: &CollapsePanelPresenceHandle) -> Signal<bool> {
+    handle.cell.borrow().mounted
+}
+
+fn sync_collapse_panel_presence(handle: &CollapsePanelPresenceHandle, want: bool) -> PresencePhase {
+    let mounted_sig = collapse_panel_mounted_signal(handle);
+    let (phase, mounted, set_mounted) = {
+        let mut c = handle.cell.borrow_mut();
+        let was = c.gate.phase();
+        let changed = c.gate.set_present(want, Instant::now());
+        let phase = c.gate.phase();
+        let mounted = c.gate.is_mounted();
+        if want
+            && matches!(phase, PresencePhase::Present)
+            && (changed || was == PresencePhase::Absent)
+        {
+            if !c.initialized {
+                c.needs_enter = false;
+                c.enter_active = false;
+            } else if changed && was != PresencePhase::Present {
+                c.needs_enter = true;
+                c.enter_active = false;
+            }
+            c.exit_armed = false;
+            c.exit_from_height = None;
+            c.needs_exit_anim = false;
+        }
+        c.initialized = true;
+        if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
+            c.exit_armed = true;
+            c.needs_enter = false;
+            c.enter_active = false;
+            c.needs_exit_anim = true;
+            if c.exit_from_height.is_none() {
+                c.exit_from_height = Some(c.measured_height.max(1.0));
+            }
+        }
+        let set_mounted = c.mounted.peek() != mounted;
+        (phase, mounted, set_mounted)
+    };
+    if set_mounted {
+        mounted_sig.set(mounted);
+    }
+    phase
+}
+
+/// 事件循环推进退场；CSS 退场完成在 drain 卸树。
+pub(crate) fn tick_collapsible_panel_presence() -> bool {
+    drain_pending_collapse_unmounts();
+    let now = Instant::now();
+    let mut needs_frame = false;
+    let mut unmount: Vec<Signal<bool>> = Vec::new();
+    PANEL_PRESENCE_REGISTRY.with(|reg| {
+        for cell in reg.borrow().iter() {
+            let maybe_unmount = {
+                let mut c = cell.borrow_mut();
+                if c.gate.phase() == PresencePhase::Exiting {
+                    if c.exit_armed {
+                        needs_frame = true;
+                        None
+                    } else if c.gate.tick(now) {
+                        c.needs_enter = false;
+                        c.enter_active = false;
+                        c.exit_armed = false;
+                        c.exit_from_height = None;
+                        c.needs_exit_anim = false;
+                        Some(c.mounted)
+                    } else {
+                        needs_frame = true;
+                        None
+                    }
+                } else if c.enter_active && c.gate.phase() == PresencePhase::Present {
+                    needs_frame = true;
+                    None
+                } else {
+                    None
+                }
+            };
+            if let Some(sig) = maybe_unmount {
+                unmount.push(sig);
+            }
+        }
+    });
+    for sig in unmount {
+        sig.set(false);
+    }
+    needs_frame
+}
+
+fn drain_pending_collapse_unmounts() {
+    let pending = PENDING_COLLAPSE_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for sig in pending {
+        sig.set(false);
+    }
+}
+
+fn chevron_transition_entries() -> [TransitionEntry; 1] {
+    [TransitionEntry {
+        property: TransitionProperty::Transform,
+        duration_ms: COLLAPSE_MS,
+        delay_ms: 0.0,
+        timing: TimingFunction::EaseOut,
+    }]
+}
+
+fn panel_content_height(presence: &CollapsePanelPresenceHandle, el: &Element) -> f32 {
+    let c = presence.cell.borrow();
+    c.exit_from_height
+        .filter(|h| *h > 1.0)
+        .or_else(|| (c.measured_height > 1.0).then_some(c.measured_height))
+        .unwrap_or_else(|| el.layout_bounds[3].max(0.0))
+}
+
+fn collapse_has_exit_anim(el: &Element) -> bool {
+    el.style.animations.iter().any(|a| a.name == COLLAPSIBLE_UP)
+}
+
+fn reset_collapse_anim_snapshot(el: &mut Element) {
+    el.animation_snapshot = Default::default();
+}
+
+fn seed_collapse_enter_anim(el: &mut Element, content_height: f32) {
+    clear_motion(el);
+    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.animations = vec![keyframes_anim_entry(
+        COLLAPSIBLE_DOWN,
+        COLLAPSE_MS,
+        TimingFunction::EaseOut,
+        AnimationFillMode::Both,
+    )];
+    reset_collapse_anim_snapshot(el);
+}
+
+fn seed_collapse_exit_anim(el: &mut Element, content_height: f32) {
+    clear_motion(el);
+    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.animations = vec![keyframes_anim_entry(
+        COLLAPSIBLE_UP,
+        COLLAPSE_MS,
+        TimingFunction::EaseIn,
+        AnimationFillMode::Both,
+    )];
+    reset_collapse_anim_snapshot(el);
+}
+
+fn finish_collapse_panel_exit(presence: &CollapsePanelPresenceHandle) {
+    let mounted_sig = collapse_panel_mounted_signal(presence);
+    {
+        let mut c = presence.cell.borrow_mut();
+        c.gate.force_absent();
+        c.exit_armed = false;
+        c.needs_exit_anim = false;
+        c.enter_active = false;
+        c.exit_from_height = None;
+    }
+    PENDING_COLLAPSE_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
+    crate::app::runtime::request_redraw();
+}
+
+fn collapse_panel_phase(presence: &CollapsePanelPresenceHandle) -> PresencePhase {
+    presence.cell.borrow().gate.phase()
+}
+
+fn max_height_is_auto(el: &Element) -> bool {
+    matches!(
+        crate::layout::dim_kind(el.style.max_size.height),
+        crate::layout::DimKind::Auto
+    )
+}
+
+fn stamp_content_text_weight(el: &mut Element) {
+    if el.text.is_some() {
+        el.text_style.weight = CONTENT_WEIGHT;
+        el.attrs.insert("font_weight".to_string(), "1".to_string());
+    }
+    for child in &mut el.children {
+        stamp_content_text_weight(child);
+    }
+}
+
+fn register_open_redraw_effect(instance_id: &str, open_sig: Signal<bool>) {
+    let key = format!("{instance_id}__collapsible_open_redraw");
+    use_signal(key.as_str(), move || {
+        create_effect(move || {
+            let _ = open_sig.get();
+            crate::app::runtime::request_redraw();
+        });
+    });
+}
+
+fn sync_collapse_panel_open(open_sig: Signal<bool>, presence: &CollapsePanelPresenceHandle) {
+    sync_collapse_panel_presence(presence, open_sig.peek());
+}
+
+fn chevron_icon() -> Element {
+    let glyph = lucide_glyph("chevron-down").unwrap_or_else(|| "▾".into());
+    build_icon_text_node(glyph)
+        .text_size(CHEVRON_PX)
+        .text_color(parse_text_color("muted-foreground"))
+}
+
+fn sync_collapse_chevron(el: &mut Element, open: bool) -> LayoutStatus {
+    ensure_motion_transitions(&mut el.style, &chevron_transition_entries());
+    let want_rotate = if open { CHEVRON_OPEN_DEG } else { 0.0 };
+    let mut changed = false;
+    if (el.style.rotate_deg - want_rotate).abs() > 0.01 {
+        el.style.rotate_deg = want_rotate;
+        changed = true;
+    }
+    let animating = css_transition_needs_frame(&el.style, &el.transition_snapshot)
+        || el.transition_snapshot.has_active_tweens();
+    if changed || animating {
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
+fn is_text_leaf(el: &Element) -> bool {
+    el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
+}
+
+fn caption_text(el: &Element) -> Option<String> {
+    if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return Some(t.to_string());
+    }
+    el.children.iter().find_map(caption_text)
+}
+
+fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
+    let prev = el.on_click.clone();
+    let mut handler = handler;
+    el = el.on_click(move || {
+        if let Some(ref rc) = prev {
+            rc.borrow_mut()();
+        }
+        handler();
+    });
+    el
+}
+
+fn apply_collapse_panel_motion(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    presence: &CollapsePanelPresenceHandle,
+) -> LayoutStatus {
+    let phase = collapse_panel_phase(presence);
+    if !phase.is_mounted() {
+        let mut layout = false;
+        if el.style.display != Display::None {
+            el.style.display = Display::None;
+            layout = true;
+        }
+        if layout && el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        return LayoutStatus::Clean;
+    }
+
+    let exiting = phase == PresencePhase::Exiting;
+    let open_visual = phase == PresencePhase::Present && !exiting;
+    let mut layout = false;
+
+    if el.style.display != Display::Flex {
+        el.style.display = Display::Flex;
+        layout = true;
+    }
+    if el.style.overflow.y != Overflow::Hidden {
+        el.style.overflow.y = Overflow::Hidden;
+        layout = true;
+    }
+    if (el.style.opacity - 1.0).abs() > 0.001 {
+        el.style.opacity = 1.0;
+    }
+    if el.style.scale != [1.0, 1.0] {
+        el.style.scale = [1.0, 1.0];
+    }
+
+    let w = crate::layout::dim_kind(el.style.size.width);
+    if !matches!(w, crate::layout::DimKind::Percent(_)) {
+        el.style.size.width = Dimension::percent(1.0);
+        layout = true;
+    }
+    if !matches!(
+        crate::layout::dim_kind(el.style.size.height),
+        crate::layout::DimKind::Auto
+    ) {
+        el.style.size.height = Dimension::auto();
+        layout = true;
+    }
+
+    let (needs_enter, needs_exit_anim) = {
+        let mut c = presence.cell.borrow_mut();
+        let needs_enter = c.needs_enter;
+        let needs_exit_anim = c.needs_exit_anim;
+        if needs_enter && open_visual {
+            c.needs_enter = false;
+            c.enter_active = true;
+        }
+        if needs_exit_anim && exiting {
+            c.needs_exit_anim = false;
+        }
+        (needs_enter, needs_exit_anim)
+    };
+
+    if exiting {
+        let mut c = presence.cell.borrow_mut();
+        if c.exit_from_height.is_none() {
+            c.exit_from_height = Some(c.measured_height.max(el.layout_bounds[3]).max(1.0));
+        }
+    }
+
+    let exit_armed = presence.cell.borrow().exit_armed;
+    if exiting && (needs_exit_anim || (!collapse_has_exit_anim(el) && exit_armed)) {
+        let h = panel_content_height(presence, el);
+        seed_collapse_exit_anim(el, h);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if exiting {
+        if animation_run_active(&el.style, &el.animation_snapshot) {
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        el.style.max_size.height = Dimension::length(0.0);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        finish_collapse_panel_exit(presence);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if open_visual && needs_enter {
+        let measured = {
+            let mut c = presence.cell.borrow_mut();
+            if c.measured_height < 1.0 {
+                if !max_height_is_auto(el) {
+                    el.style.max_size.height = Dimension::auto();
+                    layout = true;
+                } else {
+                    let h = el.layout_bounds[3];
+                    if h > 1.0 {
+                        c.measured_height = h;
+                    }
+                }
+            }
+            c.measured_height
+        };
+        if measured < 1.0 {
+            if layout && el.layout_node.is_some() {
+                layout_tree.update_taffy_node_style(el);
+                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                return LayoutStatus::LayoutChanged;
+            }
+            return if layout {
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            };
+        }
+        seed_collapse_enter_anim(el, measured);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if open_visual {
+        if animation_run_active(&el.style, &el.animation_snapshot) {
+            if el.layout_node.is_some() {
+                layout_tree.update_taffy_node_style(el);
+            }
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        if el.style.max_size.height != Dimension::auto() {
+            el.style.max_size.height = Dimension::auto();
+            layout = true;
+        }
+        presence.cell.borrow_mut().enter_active = false;
+        let h = el.layout_bounds[3];
+        if h > 1.0 {
+            presence.cell.borrow_mut().measured_height = h;
+        }
+    }
+
+    if layout && el.layout_node.is_some() {
+        layout_tree.update_taffy_node_style(el);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    LayoutStatus::Clean
+}
+
+// ── Scope ─────────────────────────────────────────────────────────────────────
+
+/// 提供 Collapsible 上下文并构建根壳（`ui!` `<Collapsible>` / Builder 共用）。
+pub fn collapsible_scope(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    default_open: bool,
+    disabled: bool,
+    class: Option<String>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    let id = resolve_instance_id(id, "collapsible");
+    let open = resolve_bool_signal(open, &id, "open", default_open);
+    register_open_redraw_effect(&id, open);
+    let mut root = with_child_owner(|| {
+        provide_context(
+            collapsible_context(),
+            CollapsibleCtx {
+                id: id.clone(),
+                open,
+                disabled,
+            },
+        );
+        let kids = take_fragment(body());
+        let mut root: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
+        if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+            root = with_class_list(root, &c);
+        }
+        root
+    });
+    root.attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
+    root.template_id = Some(id.clone());
+    root
+}
+
+/// 宏 `<CollapsibleContent>`：按 Root `open` 显隐 + 进出场过渡。
+pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
+    let ctx = require_collapsible("CollapsibleContent");
+    let open_sig = ctx.open;
+    let menu_id = ctx.id.clone();
+    let anchor = format!("{menu_id}:content");
+    let effect_anchor = anchor.clone();
+    let presence = use_collapse_panel_presence(&format!("{menu_id}:presence"));
+    let sync_presence = presence.clone();
+    let mounted = collapse_panel_mounted_signal(&presence);
+    sync_collapse_panel_open(open_sig, &presence);
+
+    reactive_anchor(effect_anchor, move || {
+        let want = open_sig.get();
+        sync_collapse_panel_presence(&sync_presence, want);
+        if !mounted.get() {
+            let mut hidden = Element::new();
+            hidden.style.display = Display::None;
+            hidden
+                .attrs
+                .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+            return hidden;
+        }
+        let mut body = body();
+        if body.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
+            let kids = std::mem::take(&mut body.children);
+            body = vstack().w("100%").min_w(0.0).children(kids).into();
+        }
+        stamp_content_text_weight(&mut body);
+        // 与 Trigger 同左缘：ShadCN Content 仅 `pb-4 pt-0`（无水平 padding）；
+        // padding 打在布局壳上，勿打在文本叶节点。
+        let mut inner: Element = vstack()
+            .w("100%")
+            .min_w(0.0)
+            .pb(tokens::SPACE_4)
+            .child(body)
+            .into();
+        inner
+            .attrs
+            .insert(ATTR_SLOT.to_string(), SLOT_CONTENT_INNER.to_string());
+        let mut wrap: Element = vstack()
+            .w("100%")
+            .min_w(0.0)
+            .min_h(0.0)
+            .overflow_y("hidden")
+            .child(inner)
+            .into();
+        wrap.attrs
+            .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+        wrap = wrap
+            .text_size(14.0)
+            .text_color(parse_text_color("muted-foreground"));
+        wrap = wrap.accesskit_role("region");
+        wrap.template_id = Some(format!("{menu_id}:panel"));
+        let sync_presence = sync_presence.clone();
+        wrap = wrap.reactive_sync(move |el, layout_tree| {
+            apply_collapse_panel_motion(el, layout_tree, &sync_presence)
+        });
+        wrap
+    });
+
+    let mut panel = reactive_placeholder_sized(anchor, 0.0, 0.0);
+    panel
+        .attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+    panel
+}
+
+// ── RSX parts ─────────────────────────────────────────────────────────────────
+
+/// ShadCN `CollapsibleTrigger`：点击切换；纯文本行带 chevron，自定义子节点则 chain click。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CollapsibleTrigger(
+    disabled: bool,
+    class: Option<String>,
+    children: Option<Element>,
+) -> Element {
+    let ctx = require_collapsible("CollapsibleTrigger");
+    let item_disabled = disabled || ctx.disabled;
+    let open_sig = ctx.open;
+    let focus_id = format!("{}:trigger", ctx.id);
+    let focus_for_toggle = focus_id.clone();
+
+    let toggle = move || {
+        if item_disabled {
+            return;
+        }
+        use_signal("__rui_button_focus_id", String::new).set(focus_for_toggle.clone());
+        write_bool_toggle(open_sig, false);
+    };
+
+    // 自定义子节点（如 Button）：只挂点击，不改外观。
+    let label_text = match children {
+        Some(c) if !is_text_leaf(&c) => {
+            let mut trigger = c;
+            if trigger.focus_id.is_none() {
+                trigger = trigger.focus_id(focus_id.as_str());
+            }
+            let mut trigger = chain_click(trigger, toggle);
+            if item_disabled {
+                trigger = trigger.opacity(0.5).cursor_not_allowed();
+            }
+            if let Some(cls) = class.filter(|s| !s.trim().is_empty()) {
+                trigger = with_class_list(trigger, &cls);
+            }
+            trigger
+                .attrs
+                .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER.to_string());
+            return trigger;
+        }
+        Some(ref c) => caption_text(c).unwrap_or_else(|| "Toggle".into()),
+        None => "Toggle".into(),
+    };
+
+    let mut chevron = chevron_icon();
+    chevron
+        .attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER_ICON.to_string());
+    chevron = chevron.flex_shrink(0.0);
+    let sync_open = open_sig;
+    chevron =
+        chevron.reactive_sync(move |el, _layout_tree| sync_collapse_chevron(el, sync_open.peek()));
+
+    let mut caption = build_text_node(
+        &label_text,
+        TextNodeConfig {
+            size_px: 14.0,
+            weight: TRIGGER_WEIGHT,
+            color: parse_text_color("foreground"),
+            leading_scale: Some(1.25),
+            ..Default::default()
+        },
+    );
+    caption = caption
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .min_w(0.0)
+        .text_left();
+
+    let mut trigger_row: Element = hstack()
+        .w("100%")
+        .min_w(0.0)
+        .items("center")
+        .justify("between")
+        .gap(tokens::SPACE_4)
+        .py(tokens::SPACE_3)
+        .font_weight(TRIGGER_WEIGHT as f32)
+        .child(caption)
+        .child(chevron)
+        .into();
+    trigger_row
+        .attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER.to_string());
+    trigger_row.style.flex_direction = FlexDirection::Row;
+    trigger_row.style.align_items = Some(AlignItems::CENTER);
+    trigger_row.style.justify_content = Some(JustifyContent::SPACE_BETWEEN);
+
+    let mut trigger: Element = interactive(trigger_row)
+        .focus_id(focus_id.clone())
+        .focusable(!item_disabled)
+        .focus_ring(!item_disabled)
+        .on_click(toggle)
+        .into();
+    trigger = trigger.accesskit_role("button");
+    trigger.template_id = Some(focus_id);
+    if item_disabled {
+        trigger = trigger.opacity(0.5).cursor_not_allowed();
+    } else {
+        trigger = trigger.cursor_kind(crate::core::tree::CursorKind::Pointer);
+    }
+    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+        trigger = with_class_list(trigger, &c);
+    }
+
+    hstack().w("100%").min_w(0.0).child(trigger).into()
+}
+
+/// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`collapsible_content`]）。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn CollapsibleContent(class: Option<String>, children: Option<Element>) -> Element {
+    let ctx = require_collapsible("CollapsibleContent");
+    let open_sig = ctx.open;
+    let presence = use_collapse_panel_presence(&format!("{}:presence", ctx.id));
+    sync_collapse_panel_open(open_sig, &presence);
+
+    let mut body = children.unwrap_or_else(Element::new);
+    if body.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
+        let kids = std::mem::take(&mut body.children);
+        body = vstack().w("100%").min_w(0.0).children(kids).into();
+    }
+    stamp_content_text_weight(&mut body);
+    let mut inner: Element = vstack()
+        .w("100%")
+        .min_w(0.0)
+        .pb(tokens::SPACE_4)
+        .child(body)
+        .into();
+    inner
+        .attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_CONTENT_INNER.to_string());
+    inner = inner
+        .text_size(14.0)
+        .text_color(parse_text_color("muted-foreground"));
+    if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
+        inner = with_class_list(inner, &c);
+    }
+
+    let mut panel: Element = vstack().w("100%").min_w(0.0).min_h(0.0).child(inner).into();
+    panel
+        .attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
+    panel = panel.overflow_y("hidden");
+    panel.template_id = Some(format!("{}:panel", ctx.id));
+
+    let sync_presence = presence.clone();
+    panel = panel.reactive_sync(move |el, layout_tree| {
+        sync_collapse_panel_presence(&sync_presence, open_sig.peek());
+        apply_collapse_panel_motion(el, layout_tree, &sync_presence)
+    });
+    panel = panel.accesskit_role("region");
+    panel
+}
+
+/// RSX 备用入口（无宏特殊展开时）；复合面请走宏 → [`collapsible_scope`]。
+#[component(crate_path = "crate")]
+#[allow(non_snake_case)]
+pub fn Collapsible(
+    id: String,
+    open: Option<Signal<bool>>,
+    default_open: bool,
+    disabled: bool,
+    class: Option<String>,
+    children: Option<Element>,
+) -> Element {
+    collapsible_scope(id, open, default_open, disabled, class, move || {
+        children.unwrap_or_else(Element::new)
+    })
+}
+
+// ── Builder ───────────────────────────────────────────────────────────────────
+
+pub struct CollapsibleBuilder {
+    id: String,
+    open: Option<Signal<bool>>,
+    default_open: bool,
+    disabled: bool,
+    class: Option<String>,
+    trigger: Option<Box<dyn FnOnce() -> Element>>,
+    content: Option<Box<dyn Fn() -> Element>>,
+}
+
+/// 复合 Collapsible 入口（对位 `<Collapsible>`）。
+pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
+    CollapsibleBuilder {
+        id: id.into(),
+        open: None,
+        default_open: false,
+        disabled: false,
+        class: None,
+        trigger: None,
+        content: None,
+    }
+}
+
+impl CollapsibleBuilder {
+    pub fn open_signal(mut self, s: Signal<bool>) -> Self {
+        self.open = Some(s);
+        self
+    }
+
+    /// 与 [`Self::open_signal`] 相同。
+    pub fn open(self, s: Signal<bool>) -> Self {
+        self.open_signal(s)
+    }
+
+    pub fn default_open(mut self, v: bool) -> Self {
+        self.default_open = v;
+        self
+    }
+
+    pub fn disabled(mut self, v: bool) -> Self {
+        self.disabled = v;
+        self
+    }
+
+    pub fn class(mut self, c: impl Into<String>) -> Self {
+        self.class = Some(c.into());
+        self
+    }
+
+    pub fn trigger(mut self, build: impl FnOnce() -> Element + 'static) -> Self {
+        self.trigger = Some(Box::new(build));
+        self
+    }
+
+    pub fn content(mut self, build: impl Fn() -> Element + 'static) -> Self {
+        self.content = Some(Box::new(build));
+        self
+    }
+
+    /// 在上下文内构建任意子树（Trigger / Content 等）。
+    pub fn child(self, body: impl FnOnce() -> Element) -> Element {
+        collapsible_scope(
+            self.id,
+            self.open,
+            self.default_open,
+            self.disabled,
+            self.class,
+            body,
+        )
+    }
+}
+
+impl From<CollapsibleBuilder> for Element {
+    fn from(builder: CollapsibleBuilder) -> Self {
+        let CollapsibleBuilder {
+            id,
+            open,
+            default_open,
+            disabled,
+            class,
+            trigger,
+            content,
+        } = builder;
+        collapsible_scope(id, open, default_open, disabled, class, move || {
+            let mut kids = Vec::new();
+            if let Some(t) = trigger {
+                kids.push(CollapsibleTrigger(CollapsibleTriggerProps {
+                    disabled: Some(false),
+                    class: None,
+                    children: Some(t()),
+                    base: None,
+                }));
+            }
+            if let Some(c) = content {
+                kids.push(collapsible_content(c));
+            }
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(kids)
+        })
+    }
+}
+
+impl crate::core::tree::IntoElementList for CollapsibleBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::create_root;
+
+    #[test]
+    fn scope_sets_slot_and_template() {
+        let (_o, el): (_, Element) = create_root(|| {
+            collapsible("col-test")
+                .default_open(true)
+                .trigger(|| Element::new().text("Toggle"))
+                .content(|| Element::new().text("Body"))
+                .into()
+        });
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(|s| s.as_str()), Some(SLOT_ROOT));
+        assert_eq!(el.template_id.as_deref(), Some("col-test"));
+    }
+
+    #[test]
+    fn dual_surface_compiles_shape() {
+        let _b: Element = collapsible("x").default_open(false).into();
+        let el = Collapsible(CollapsibleProps {
+            id: "y".into(),
+            open: None,
+            default_open: Some(true),
+            disabled: Some(false),
+            class: None,
+            children: None,
+            base: None,
+            ..Default::default()
+        });
+        let _: Element = el;
+    }
+}

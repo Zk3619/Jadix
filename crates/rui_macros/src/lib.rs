@@ -864,19 +864,22 @@ fn expand_node(
             let tabs_is_compound =
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             let accordion_is_compound = name_str == "Accordion";
+            let collapsible_is_compound = name_str == "Collapsible";
             let carousel_is_compound = matches!(
                 name_str.as_str(),
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
-            // 复合壳若只需 `*Props`（无 scope）：Pagination / Navbar / Badge / Card 等走下方
-            // 通用 PascalCase 展开，勿加入本特殊列表。
+            // 复合壳若只需 `*Props`（无 scope）：Pagination / Navbar / Badge / Card /
+            // ButtonGroup / Breadcrumb 等走下方通用 PascalCase 展开，勿加入本特殊列表。
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
                 || name_str == "Progress"
+                || name_str == "Bubble"
                 || name_str == "Avatar"
                 || name_str == "Accordion"
+                || name_str == "Collapsible"
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
@@ -917,6 +920,7 @@ fn expand_node(
                 || name_str == "TabsContent"
                 || name_str == "AccordionContent"
                 || name_str == "AccordionItem"
+                || name_str == "CollapsibleContent"
                 || carousel_is_compound
                 || name_str == "ForKeyed"
                 || name_str == "For"
@@ -989,6 +993,58 @@ fn expand_node(
                             #id_ts,
                             #value_ts,
                             #default_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "Bubble" {
+                    let variant_expr = get_attr("variant");
+                    let align_expr = get_attr("align");
+                    let class_expr = get_attr("class");
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let variant_ts = if let Some(v) = variant_expr {
+                        quote! { rui::components::BubbleVariant::from(#v) }
+                    } else {
+                        quote! { rui::components::BubbleVariant::Default }
+                    };
+                    let align_ts = if let Some(a) = align_expr {
+                        quote! { rui::components::BubbleAlign::from(#a) }
+                    } else {
+                        quote! { rui::components::BubbleAlign::Start }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::bubble_scope(
+                            #variant_ts,
+                            #align_ts,
                             #class_ts,
                             || #child_el,
                         )
@@ -1133,6 +1189,85 @@ fn expand_node(
                             #value_ts,
                             #default_ts.unwrap_or_default(),
                             #multiple_ts,
+                            #disabled_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if collapsible_is_compound {
+                    // ShadCN compound Collapsible：先 provide context 再构建 Trigger/Content。
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open")
+                        .or_else(|| get_attr("open_signal"))
+                        .or_else(|| get_attr("openSignal"));
+                    let default_expr =
+                        get_attr("default_open").or_else(|| get_attr("defaultOpen"));
+                    let disabled_expr = get_attr("disabled");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:Collapsible#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_ts = if let Some(d) = default_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::collapsible_scope(
+                            #id_ts,
+                            #open_ts,
+                            #default_ts,
                             #disabled_ts,
                             #class_ts,
                             || #child_el,
@@ -2341,6 +2476,34 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::accordion_content(move || #child_el)
+                    };
+                }
+
+                if name_str == "CollapsibleContent" {
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::collapsible_content(move || #child_el)
                     };
                 }
 
@@ -4034,13 +4197,43 @@ fn expand_node(
                         continue;
                     }
 
-                    // Button / Badge / Avatar / Input chrome attrs → bind_attr (Solid-style, no rebuild).
-                    if matches!(name_str.as_str(), "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Input")
-                        && matches!(attr_name, "variant" | "disabled" | "invalid" | "size" | "shape")
+                    // Button / Badge / Avatar / Bubble / Input chrome attrs → bind_attr (Solid-style, no rebuild).
+                    if matches!(name_str.as_str(), "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Input")
+                        && matches!(attr_name, "variant" | "disabled" | "invalid" | "size" | "shape" | "align")
                         && expr_reads_get(value)
                     {
                         let idx = *node_counter;
                         *node_counter += 1;
+                        if name_str == "Bubble" && attr_name == "variant" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_bubble_variant#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_bubble_variant(el, v),
+                                );
+                            });
+                            continue;
+                        }
+                        if name_str == "Bubble" && attr_name == "align" {
+                            prop_names.push(attr.clone());
+                            prop_values.push(quote! {
+                                Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
+                            });
+                            chrome_binds.push(quote! {
+                                __rui_el = rui::app::reactive::bind_attr(
+                                    __rui_el,
+                                    format!("{}:{}:bind_bubble_align#{}", file!(), line!(), #idx),
+                                    move || (#value).to_string(),
+                                    |el, v| rui::components::apply_bound_bubble_align(el, v),
+                                );
+                            });
+                            continue;
+                        }
                         if name_str == "Avatar" && attr_name == "size" {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {

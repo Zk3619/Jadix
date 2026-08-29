@@ -154,16 +154,8 @@ fn badge_chrome(variant: &str) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
             parse_text_color("foreground"),
             Some(parse_color("border")),
         ),
-        "ghost" => (
-            [0.0, 0.0, 0.0, 0.0],
-            parse_text_color("foreground"),
-            None,
-        ),
-        "link" => (
-            [0.0, 0.0, 0.0, 0.0],
-            parse_text_color("primary"),
-            None,
-        ),
+        "ghost" => ([0.0, 0.0, 0.0, 0.0], parse_text_color("foreground"), None),
+        "link" => ([0.0, 0.0, 0.0, 0.0], parse_text_color("primary"), None),
         _ => (
             parse_color("primary"),
             parse_text_color("primary-foreground"),
@@ -349,11 +341,7 @@ impl From<BadgeBuilder> for Element {
                     TextNodeConfig {
                         color: text_color,
                         underline: variant == "link",
-                        underline_offset_px: if variant == "link" {
-                            Some(2.0)
-                        } else {
-                            None
-                        },
+                        underline_offset_px: if variant == "link" { Some(2.0) } else { None },
                         font_family: child.text_style.font_family.clone(),
                         size_px,
                         weight: if is_lucide {
@@ -482,10 +470,7 @@ mod tests {
             .items_center()
             .child(badge().text("Blocked"))
             .into();
-        let mut short: Element = hstack()
-            .items_center()
-            .child(badge().text("Ready"))
-            .into();
+        let mut short: Element = hstack().items_center().child(badge().text("Ready")).into();
         let mut tree = LayoutTree::new();
         let _ = tree.build_and_layout(&mut long, 400.0, 80.0, [-1.0, -1.0]);
         let _ = tree.build_and_layout(&mut short, 400.0, 80.0, [-1.0, -1.0]);
@@ -503,12 +488,10 @@ mod tests {
         use crate::utils::text_node::build_icon_text_node;
 
         // Simulate ui! multi-child pack: Icon + caption wrapped in a VStack.
-        let packed = Element::from(
-            vstack().children(vec![
-                build_icon_text_node("✓").text_size(12.0),
-                Element::new().text("Verified"),
-            ]),
-        );
+        let packed = Element::from(vstack().children(vec![
+            build_icon_text_node("✓").text_size(12.0),
+            Element::new().text("Verified"),
+        ]));
         let el: Element = Badge(BadgeProps {
             variant: Some(BadgeVariant::Secondary),
             children: Some(packed),

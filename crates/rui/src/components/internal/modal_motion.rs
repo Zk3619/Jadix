@@ -16,14 +16,12 @@ use crate::app::portal_overlay::modal_stack_metrics;
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::{
-    css_transition_needs_frame, AnimationDirection,
-    AnimationEntry, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-    TimingFunction, TransitionEntry, TransitionProperty, tick_element_transitions_locked,
+    css_transition_needs_frame, keyframes_anim_entry, tick_element_transitions_locked,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::utils::motion::{
-    clear_motion, motion_is_animating, motion_sync_status,
-    prepare_motion_sync, snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle,
-    MotionTransform,
+    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync,
+    snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
 
@@ -90,10 +88,6 @@ impl ModalSurfaceMotion {
     fn animates_panel_transform_on_exit(self) -> bool {
         !matches!(self, Self::DialogFade)
     }
-
-    fn animates_panel_opacity(self) -> bool {
-        false
-    }
 }
 
 #[derive(Clone)]
@@ -154,9 +148,7 @@ pub(crate) fn use_modal_presence(inst_id: &str) -> ModalPresenceHandle {
         PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
         rc
     });
-    ModalPresenceHandle {
-        cell: cell.peek(),
-    }
+    ModalPresenceHandle { cell: cell.peek() }
 }
 
 pub(crate) fn mounted_signal(handle: &ModalPresenceHandle) -> Signal<bool> {
@@ -232,7 +224,9 @@ pub(crate) fn tick_modal_presence() -> bool {
                     needs_frame = true;
                     None
                 } else if c.gate.phase() == PresencePhase::Present
-                    && c.shell.as_ref().is_some_and(|s| s.motion == ModalSurfaceMotion::DialogFade)
+                    && c.shell
+                        .as_ref()
+                        .is_some_and(|s| s.motion == ModalSurfaceMotion::DialogFade)
                     && c.needs_enter
                 {
                     needs_frame = true;
@@ -254,7 +248,11 @@ pub(crate) fn tick_modal_presence() -> bool {
 }
 
 fn motion_timing(exiting: bool) -> (f32, TimingFunction) {
-    let dur = if exiting { MODAL_EXIT_MS } else { MODAL_ENTER_MS };
+    let dur = if exiting {
+        MODAL_EXIT_MS
+    } else {
+        MODAL_ENTER_MS
+    };
     let timing = if exiting {
         TimingFunction::EaseIn
     } else {
@@ -439,25 +437,6 @@ fn settle_modal_enter_if_ready(
     !settled
 }
 
-fn dialog_css_anim(
-    name: &str,
-    timing: TimingFunction,
-    fill: AnimationFillMode,
-    duration_ms: f32,
-) -> AnimationEntry {
-    AnimationEntry {
-        name: name.to_string(),
-        duration_ms,
-        timing,
-        delay_ms: 0.0,
-        iteration_count: AnimationIterationCount::Finite(1.0),
-        direction: AnimationDirection::Normal,
-        fill_mode: fill,
-        play_state: AnimationPlayState::Running,
-        ..Default::default()
-    }
-}
-
 fn dialog_has_exit_anim(el: &Element) -> bool {
     el.style
         .animations
@@ -479,24 +458,24 @@ fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
     // that then snaps to 100% — the "缩小态 → 正常态" jump.
     zoom.style.opacity = 0.0;
     zoom.style.scale = [DIALOG_ENTER_SCALE, DIALOG_ENTER_SCALE];
-    overlay.style.animations = vec![dialog_css_anim(
+    overlay.style.animations = vec![keyframes_anim_entry(
         "fade-in-0",
+        DIALOG_ENTER_ANIM_MS,
         TimingFunction::EaseOut,
         AnimationFillMode::Both,
-        DIALOG_ENTER_ANIM_MS,
     )];
     zoom.style.animations = vec![
-        dialog_css_anim(
+        keyframes_anim_entry(
             "fade-in-0",
+            DIALOG_ENTER_ANIM_MS,
             TimingFunction::EaseOut,
             AnimationFillMode::Both,
-            DIALOG_ENTER_ANIM_MS,
         ),
-        dialog_css_anim(
+        keyframes_anim_entry(
             "zoom-in-90",
+            DIALOG_ENTER_ANIM_MS,
             TimingFunction::EaseOut,
             AnimationFillMode::Both,
-            DIALOG_ENTER_ANIM_MS,
         ),
     ];
     reset_dialog_css_anim_snapshots(overlay, zoom);
@@ -508,40 +487,32 @@ fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
     overlay.style.opacity = 1.0;
     zoom.style.opacity = 1.0;
     zoom.style.scale = [1.0, 1.0];
-    overlay.style.animations = vec![dialog_css_anim(
+    overlay.style.animations = vec![keyframes_anim_entry(
         "fade-out-0",
+        DIALOG_EXIT_ANIM_MS,
         TimingFunction::EaseIn,
         AnimationFillMode::Both,
-        DIALOG_EXIT_ANIM_MS,
     )];
     zoom.style.animations = vec![
-        dialog_css_anim(
+        keyframes_anim_entry(
             "fade-out-0",
+            DIALOG_EXIT_ANIM_MS,
             TimingFunction::EaseIn,
             AnimationFillMode::Both,
-            DIALOG_EXIT_ANIM_MS,
         ),
-        dialog_css_anim(
+        keyframes_anim_entry(
             "zoom-out-90",
+            DIALOG_EXIT_ANIM_MS,
             TimingFunction::EaseIn,
             AnimationFillMode::Both,
-            DIALOG_EXIT_ANIM_MS,
         ),
     ];
     reset_dialog_css_anim_snapshots(overlay, zoom);
 }
 
 fn dialog_css_animating(overlay: &Element, zoom: &Element) -> bool {
-    fn el_animating(el: &Element) -> bool {
-        if el.style.animations.is_empty() {
-            return false;
-        }
-        if el.animation_snapshot.runs.is_empty() {
-            return true;
-        }
-        el.animation_snapshot.runs.iter().any(|r| !r.finished)
-    }
-    el_animating(overlay) || el_animating(zoom)
+    crate::style::animation_run_active(&overlay.style, &overlay.animation_snapshot)
+        || crate::style::animation_run_active(&zoom.style, &zoom.animation_snapshot)
 }
 
 fn finish_dialog_exit_presence(presence: &ModalPresenceHandle, modal_id: &str) {
@@ -556,8 +527,7 @@ fn finish_dialog_exit_presence(presence: &ModalPresenceHandle, modal_id: &str) {
     }
     // Cannot `mounted.set` / hoist here: called from flush while AppState is borrowed.
     PENDING_MODAL_UNMOUNTS.with(|q| {
-        q.borrow_mut()
-            .push((mounted_sig, modal_id.to_string()));
+        q.borrow_mut().push((mounted_sig, modal_id.to_string()));
     });
     crate::utils::popup::arm_underlay_close();
     crate::app::runtime::request_redraw();
@@ -572,7 +542,12 @@ pub(crate) fn drain_pending_modal_unmounts() {
     use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
     for (mounted_sig, modal_id) in pending {
         mounted_sig.set(false);
-        let _ = portal_sync(&modal_id, mounted_sig, OverlayKind::Modal, OverlayMode::Stacked);
+        let _ = portal_sync(
+            &modal_id,
+            mounted_sig,
+            OverlayKind::Modal,
+            OverlayMode::Stacked,
+        );
     }
     crate::app::runtime::try_hoist_portals_now();
 }
@@ -687,8 +662,8 @@ fn apply_modal_shell_motion_inner(
         exiting,
     );
     // 入场 bootstrap 仅首帧 / hoist 后丢 mid 时跑一次；enter_active 期间勿每帧 prepare_motion_sync。
-    let animate_shell = !dragging
-        && (exiting || (open_visual && (needs_enter || hoist_enter_seed)));
+    let animate_shell =
+        !dragging && (exiting || (open_visual && (needs_enter || hoist_enter_seed)));
     let enter_in_progress =
         !dragging && open_visual && enter_was_active && !exiting && !animate_shell;
 
@@ -814,7 +789,11 @@ fn apply_modal_shell_motion_inner(
         seed_modal_shell_transition_mid(panel);
     }
 
-    if open_visual && enter_was_active && animate_shell && enter_animation_running(overlay, panel, motion) {
+    if open_visual
+        && enter_was_active
+        && animate_shell
+        && enter_animation_running(overlay, panel, motion)
+    {
         needs_frame = true;
     } else if open_visual && enter_was_active && !enter_animation_running(overlay, panel, motion) {
         c.enter_active = false;
@@ -823,7 +802,11 @@ fn apply_modal_shell_motion_inner(
     needs_frame
 }
 
-fn flush_shell_state(root: &mut Element, shell: &ModalShellState, presence: &ModalPresenceHandle) -> bool {
+fn flush_shell_state(
+    root: &mut Element,
+    shell: &ModalShellState,
+    presence: &ModalPresenceHandle,
+) -> bool {
     let overlay_tid = format!("{}__modal_overlay", shell.modal_id);
     let overlay_ptr = find_template_id_mut(root, &overlay_tid).map(|el| el as *mut Element);
     let motion_ptr = if shell.motion == ModalSurfaceMotion::DialogFade {
@@ -1131,14 +1114,22 @@ mod tests {
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let overlay = find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap();
             assert!(
-                overlay.style.animations.iter().any(|a| a.name == "fade-in-0"),
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
                 "overlay must run fade-in keyframes"
             );
             assert!(!handle.cell.borrow().enter_active);
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let overlay = find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap();
             assert!(
-                overlay.style.animations.iter().any(|a| a.name == "fade-in-0"),
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
                 "second flush must not drop enter keyframes mid-flight"
             );
         });
@@ -1169,20 +1160,19 @@ mod tests {
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let o_ptr =
                 find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap() as *mut Element;
-            let p_ptr =
-                find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
+            let p_ptr = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
             let (overlay, zoom) = unsafe { (&*o_ptr, &*p_ptr) };
             assert!(
                 overlay.style.opacity < 0.05,
                 "flush must start overlay faded, got {}",
                 overlay.style.opacity
             );
-            assert!(
-                overlay.style.animations.iter().any(|a| a.name == "fade-in-0")
-            );
-            assert!(
-                zoom.style.animations.iter().any(|a| a.name == "zoom-in-90")
-            );
+            assert!(overlay
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-in-0"));
+            assert!(zoom.style.animations.iter().any(|a| a.name == "zoom-in-90"));
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-in-0"),
                 "panel must fade together with the overlay (shadcn `fade-in-0 zoom-in-90`)"
@@ -1292,7 +1282,9 @@ mod tests {
 
     #[test]
     fn flush_finds_shell_after_portal_hoist() {
-        use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode, portal_sync};
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+        };
         use crate::layout::layout_tree::hoist_portal_subtrees;
         use crate::primitives::overlay::overlay;
 
@@ -1301,7 +1293,9 @@ mod tests {
             let open = use_signal("dlg-open", || true);
             let handle = use_modal_presence("gal-dialog");
             sync_modal_presence(&handle, true);
-            let Some(zs) = portal_sync("gal-dialog", open, OverlayKind::Modal, OverlayMode::Stacked) else {
+            let Some(zs) =
+                portal_sync("gal-dialog", open, OverlayKind::Modal, OverlayMode::Stacked)
+            else {
                 panic!("portal_sync");
             };
 
@@ -1337,7 +1331,8 @@ mod tests {
             assert!(flush_modal_shell_motion_subtree(&mut root));
 
             let panel_ptr = find_template_id_mut(&mut root, "gal-dialog__modal_panel")
-                .expect("hoisted panel must keep template_id") as *mut Element;
+                .expect("hoisted panel must keep template_id")
+                as *mut Element;
             let zoom_ptr = find_template_id_mut(&mut root, "gal-dialog__modal_zoom")
                 .expect("hoisted zoom layer must exist") as *mut Element;
             let (panel, zoom) = unsafe { (&*panel_ptr, &*zoom_ptr) };
@@ -1362,7 +1357,9 @@ mod tests {
 
     #[test]
     fn dialog_exit_finish_defers_mounted_until_drain() {
-        use crate::app::portal_overlay::{clear_overlay_stack, portal_sync, OverlayKind, OverlayMode};
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+        };
 
         create_root(|| {
             clear_overlay_stack();
@@ -1380,7 +1377,10 @@ mod tests {
             );
             drain_pending_modal_unmounts();
             assert!(!mounted.peek());
-            assert_eq!(crate::app::portal_overlay::overlay_stack_depth_for_test(), 0);
+            assert_eq!(
+                crate::app::portal_overlay::overlay_stack_depth_for_test(),
+                0
+            );
         });
     }
 
@@ -1480,8 +1480,7 @@ mod tests {
             assert!(flush_modal_shell_motion_subtree(&mut root));
             let o_ptr =
                 find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap() as *mut Element;
-            let z_ptr =
-                find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
+            let z_ptr = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
             let (overlay, zoom) = unsafe { (&*o_ptr, &*z_ptr) };
             assert!(overlay
                 .style
@@ -1493,7 +1492,10 @@ mod tests {
                 "panel must fade out with the overlay"
             );
             assert!(
-                zoom.style.animations.iter().any(|a| a.name == "zoom-out-90"),
+                zoom.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "zoom-out-90"),
                 "exit must mirror enter (shadcn `fade-out-0 zoom-out-90`)"
             );
             // Exit starts from the settled pose; the keyframes take it down from here.

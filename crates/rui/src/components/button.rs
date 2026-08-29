@@ -40,8 +40,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Tailwind v4 `shadow-xs`（保留常量供文档/对照；当前 Button 变体不再默认挂 shadow）。
 #[allow(dead_code)]
 const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
-/// Tailwind `underline-offset-4` 观感折中：正值向上抬向字形；略小于 3 以免贴字。
+/// Link 变体 hover 下划线默认间距（逻辑 px；正值在本引擎中向上靠近字形）。
 const LINK_UNDERLINE_OFFSET_PX: f32 = 2.0;
+
+fn link_underline_offset_px(builder: &ButtonBuilder) -> f32 {
+    builder
+        .text_style
+        .underline_offset_px
+        .unwrap_or(LINK_UNDERLINE_OFFSET_PX)
+}
+
+fn link_caption_underline_offset(child: &Element) -> f32 {
+    if child.attrs.contains_key("text_underline_offset") {
+        child.text_style.underline_offset
+    } else {
+        LINK_UNDERLINE_OFFSET_PX
+    }
+}
 
 trait ColorExt {
     fn with_alpha(self, alpha: f32) -> [f32; 4];
@@ -620,6 +635,9 @@ impl ButtonBuilder {
 
     pub fn variant(mut self, v: &str) -> Self {
         self.variant = v.parse().unwrap_or(ButtonVariant::Default);
+        if self.variant == ButtonVariant::Link && self.text_style.underline_offset_px.is_none() {
+            self.text_style.underline_offset_px = Some(LINK_UNDERLINE_OFFSET_PX);
+        }
         self
     }
 
@@ -660,6 +678,12 @@ impl ButtonBuilder {
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.color = color;
         self.explicit_text_color = Some(color);
+        self
+    }
+
+    /// Link hover 下划线 offset（逻辑 px；正值在本引擎中向上靠近字形）。
+    pub fn text_underline_offset(mut self, px: impl IntoF32) -> Self {
+        self.text_style.underline_offset_px = Some(px.into_f32());
         self
     }
 
@@ -800,6 +824,12 @@ impl ButtonBuilder {
 
 impl From<ButtonBuilder> for Element {
     fn from(builder: ButtonBuilder) -> Element {
+        let caption_underline_offset = if builder.variant == ButtonVariant::Link {
+            Some(link_underline_offset_px(&builder))
+        } else {
+            builder.text_style.underline_offset_px
+        };
+
         let id_hover = format!("{}_hover", builder.id);
         let hovered = use_signal(&id_hover, || false);
         let focused = use_signal("__rui_button_focus_id", String::new);
@@ -817,11 +847,7 @@ impl From<ButtonBuilder> for Element {
         // Apply size-based padding if not specified
         let mut container = builder.container;
         if builder.size.is_inline() {
-            container = container
-                .w("auto")
-                .h("auto")
-                .min_h(0.0)
-                .flex_shrink(0.0);
+            container = container.w("auto").h("auto").min_h(0.0).flex_shrink(0.0);
         } else if !builder.size.is_icon() {
             container = container
                 .px(builder.size.padding_h())
@@ -917,11 +943,7 @@ impl From<ButtonBuilder> for Element {
                     TextNodeConfig {
                         color,
                         underline,
-                        underline_offset_px: if builder.variant == ButtonVariant::Link {
-                            Some(LINK_UNDERLINE_OFFSET_PX)
-                        } else {
-                            builder.text_style.underline_offset_px
-                        },
+                        underline_offset_px: caption_underline_offset,
                         font_family: child.text_style.font_family.clone(),
                         size_px,
                         weight: if is_lucide_glyph {
@@ -1067,7 +1089,7 @@ fn paint_button_root_from_hover(
             c[3] = ((c[3] as f32) * 0.5).round() as u8;
         }
         let want_uo = if desc.variant == "link" {
-            LINK_UNDERLINE_OFFSET_PX
+            link_caption_underline_offset(child)
         } else {
             child.text_style.underline_offset
         };
@@ -1082,6 +1104,13 @@ fn paint_button_root_from_hover(
         }
     }
     if root_ok && text_children_ok {
+        // 组内连体：即便色值已到位，也要重套圆角 / 绘制叠边标记（hover 的 set_uniform 会清掉连体）。
+        let before_radii = el.style.radii;
+        crate::components::button_group::apply_button_group_join_chrome(el);
+        if el.style.radii != before_radii {
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+            push_button_paint_damage(el);
+        }
         return;
     }
 
@@ -1094,12 +1123,15 @@ fn paint_button_root_from_hover(
     match border {
         Some(b_color) => {
             el.style.border_color = b_color;
-            el.style.border_width = 1.0;
+            el.style.set_uniform_border_width(1.0);
         }
         None => {
             el.style.border_width = 0.0;
+            el.style.border_width_sides = None;
         }
     }
+    // ButtonGroup 连体：写回 border 后重套圆角 / 绘制叠边标记。
+    crate::components::button_group::apply_button_group_join_chrome(el);
     let mut layout_hit = el.style.border_width != old_bw;
     let mut style_hit =
         !layout_hit && (el.style.bg_color != old_bg || el.style.border_color != old_bc);
@@ -1130,13 +1162,15 @@ fn paint_button_root_from_hover(
             .attrs
             .insert("text_color".to_string(), "1".to_string());
         if desc.variant == "link" {
-            child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
+            if !child.attrs.contains_key("text_underline_offset") {
+                child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
+                child
+                    .attrs
+                    .insert("text_underline_offset".to_string(), "1".to_string());
+            }
             // currentColor：勿写 Some(rgb)/attr，让 cascade 与 prepare_text 跟字色走。
             child.text_style.decoration_color = None;
             child.attrs.remove("text_decoration_color");
-            child
-                .attrs
-                .insert("text_underline_offset".to_string(), "1".to_string());
         }
         if prev_u != underline {
             layout_hit = true;
@@ -1353,7 +1387,8 @@ impl crate::core::tree::IntoElementList for ButtonBuilder {
 
 #[cfg(test)]
 mod chrome_tests {
-    use super::{button_chrome_for_variant, color_mix_over_background};
+    use super::{button, button_chrome_for_variant, color_mix_over_background};
+    use crate::core::tree::Element;
     use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
 
     fn hex(c: [f32; 4]) -> String {
@@ -1479,6 +1514,21 @@ mod chrome_tests {
             .into();
         assert_eq!(lp_length_px(el.style.padding.left), Some(0.0));
         assert_eq!(lp_length_px(el.style.padding.right), Some(0.0));
+    }
+
+    #[test]
+    fn link_default_underline_offset_is_2px() {
+        let el: Element = button("link-offset").variant("link").text("Go").into();
+        let caption = el
+            .children
+            .iter()
+            .find(|c| c.text.is_some())
+            .expect("caption");
+        assert!(
+            caption.attrs.contains_key("text_underline_offset"),
+            "link caption should pin underline offset"
+        );
+        assert_eq!(caption.text_style.underline_offset, 2.0);
     }
 
     #[test]

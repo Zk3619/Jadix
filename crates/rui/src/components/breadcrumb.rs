@@ -46,6 +46,7 @@
 //! - **展示型**：空 `id` 不写 `template_id`（WP-2.8）。
 //! - `ui!` 多子节点会包 fragment；List / Item 会 [`take_packed`] 拆开横排。
 //! - [`BreadcrumbLink`] / [`BreadcrumbPage`] 共用 `text-sm` · `font-normal`（14px / 400）；Link muted → foreground hover。
+//! - 勿对 Link 使用 `leading-none`：`text-sm` 默认行高才容得下统一 2px 下划线 offset。
 //! - [`BreadcrumbSeparator`] / [`BreadcrumbEllipsis`] 默认 Lucide chevron / more-horizontal。
 
 use crate::components::base::BaseComponentBuilder;
@@ -75,7 +76,6 @@ fn breadcrumb_caption_config(color: [u8; 4]) -> TextNodeConfig {
         size_px: BREADCRUMB_TEXT_SIZE_PX,
         weight: BREADCRUMB_TEXT_WEIGHT,
         color,
-        leading_scale: Some(1.0),
         ..Default::default()
     }
 }
@@ -135,7 +135,6 @@ fn build_breadcrumb_link(
         .variant("link")
         .size("inline")
         .font_weight(BREADCRUMB_TEXT_WEIGHT)
-        .leading_none()
         .text_color(muted)
         .on_click(move || on_click.call(()));
     if !label.is_empty() {
@@ -150,16 +149,14 @@ fn build_breadcrumb_link(
 }
 
 fn page_text_node(label: &str) -> Element {
-    build_text_node(
-        label,
-        breadcrumb_caption_config(theme_fg("foreground")),
-    )
+    build_text_node(label, breadcrumb_caption_config(theme_fg("foreground")))
 }
 
 /// 去掉列表末尾多余的分隔符（RSX 误写 / 展平 fragment 时防御）。
 fn strip_trailing_separators(mut kids: Vec<Element>) -> Vec<Element> {
     while matches!(
-        kids.last().and_then(|el| el.attrs.get(ATTR_SLOT).map(String::as_str)),
+        kids.last()
+            .and_then(|el| el.attrs.get(ATTR_SLOT).map(String::as_str)),
         Some(SLOT_SEPARATOR)
     ) {
         kids.pop();
@@ -180,11 +177,7 @@ pub fn Breadcrumb(
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut row = hstack()
-        .w("auto")
-        .min_w(0.0)
-        .items_center()
-        .gap("0");
+    let mut row = hstack().w("auto").min_w(0.0).items_center().gap("0");
     for k in kids {
         row = row.child(k);
     }
@@ -287,7 +280,8 @@ pub fn BreadcrumbPage(class: Option<String>, children: Option<Element>) -> Eleme
             el = el.child(page_text_node(&label));
         } else {
             for k in kids {
-                if k.text.as_ref().is_some_and(|t| !t.is_empty()) && label == extract_text_leaf(&k) {
+                if k.text.as_ref().is_some_and(|t| !t.is_empty()) && label == extract_text_leaf(&k)
+                {
                     el = el.child(page_text_node(&label));
                 } else {
                     el = el.child(k);
@@ -398,11 +392,7 @@ impl BreadcrumbBuilder {
         self
     }
 
-    pub fn link(
-        mut self,
-        label: impl Into<String>,
-        on_click: impl Fn() + 'static,
-    ) -> Self {
+    pub fn link(mut self, label: impl Into<String>, on_click: impl Fn() + 'static) -> Self {
         self.parts.push(BreadcrumbBuilderPart::Link {
             label: label.into(),
             on_click: Handler::new(move |_| on_click()),
@@ -513,10 +503,7 @@ mod tests {
             base_builder: None,
             ..Default::default()
         });
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(
             el.attrs.get("aria-label").map(String::as_str),
             Some("breadcrumb")
@@ -532,10 +519,7 @@ mod tests {
             base: None,
             ..Default::default()
         });
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_PAGE)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_PAGE));
         assert_eq!(
             el.attrs.get("aria-current").map(String::as_str),
             Some("page")
@@ -545,18 +529,27 @@ mod tests {
     #[test]
     fn breadcrumb_link_inline_button() {
         let el = build_breadcrumb_link("", "Home", Handler::default(), None);
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_LINK)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_LINK));
         assert!(el.button_hover_paint.is_some());
         assert_eq!(
             el.button_hover_paint.as_ref().map(|p| p.variant.as_str()),
             Some("link")
         );
         use crate::core::tree::PointerEvents;
-        let caption = el.children.iter().find(|c| c.text.is_some()).expect("caption");
+        let caption = el
+            .children
+            .iter()
+            .find(|c| c.text.is_some())
+            .expect("caption");
         assert_eq!(caption.pointer_events_mode(), PointerEvents::None);
+        assert!(
+            caption.attrs.contains_key("text_underline_offset"),
+            "link button caption should carry default underline offset"
+        );
+        assert_eq!(
+            caption.text_style.underline_offset, 2.0,
+            "link button default underline offset"
+        );
     }
 
     #[test]
@@ -598,7 +591,15 @@ mod tests {
             .expect("page caption");
         assert_eq!(link_text.text_style.size, page_text.text_style.size);
         assert_eq!(link_text.text_style.weight, page_text.text_style.weight);
-        assert_eq!(link_text.text_style.line_height_scale, page_text.text_style.line_height_scale);
+        assert_eq!(
+            link_text.text_style.line_height_scale,
+            page_text.text_style.line_height_scale
+        );
+        assert_ne!(
+            link_text.text_style.line_height_scale,
+            Some(1.0),
+            "breadcrumb must not use leading-none — tight line box makes 2px underline hug text"
+        );
     }
 
     #[test]
@@ -664,10 +665,7 @@ mod tests {
             .link("Docs", || {})
             .page("Breadcrumb")
             .into();
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         let list = el
             .children
             .iter()

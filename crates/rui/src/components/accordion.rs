@@ -6,11 +6,11 @@
 //! Accordion                      // Root：single | multiple；value 为已展开项 id 列表
 //! └── AccordionItem              // value + border-b
 //!     ├── AccordionTrigger       // Header + chevron（展开旋转）
-//!     └── AccordionContent       // Panel：overflow-hidden + max-height CSS transition（ShadCN）
+//!     └── AccordionContent       // Panel：overflow-hidden + `@keyframes accordion-down/up`
 //! ```
 //!
 //! 进出场对位 ShadCN `accordion-down` / `accordion-up`（height 0 ↔ content-height，200ms ease-out）：
-//! 实现为 `max-height` **CSS transition**（[`TransitionProperty::MaxHeight`]），不用 MotionStyle 手写插值。
+//! 与 [`dialog`](super::dialog) 相同，走 **CSS `@keyframes`** + `AnimationSnapshot` 推进，不用 MotionStyle 手写插值。
 //! Chevron 为 `transform`（rotate）CSS transition。
 //!
 //! 样式对位 `cn-accordion` / `cn-accordion-item` / `cn-accordion-trigger` /
@@ -71,12 +71,12 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, tick_element_transitions, with_class_list, TimingFunction,
-    TransitionEntry, TransitionProperty,
+    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
 };
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::motion::{ensure_motion_transitions, snap_motion_baseline, MotionBootstrap};
+use crate::utils::motion::{clear_motion, ensure_motion_transitions};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
@@ -177,9 +177,13 @@ fn toggle_open_item(open: &mut Vec<String>, value: &str, multiple: bool) {
     }
 }
 
+const ACCORDION_DOWN: &str = "accordion-down";
+const ACCORDION_UP: &str = "accordion-up";
+
 thread_local! {
     static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<AccordionPanelPresenceCell>>>> =
         const { RefCell::new(Vec::new()) };
+    static PENDING_ACCORDION_UNMOUNTS: RefCell<Vec<Signal<bool>>> = const { RefCell::new(Vec::new()) };
 }
 
 const PANEL_EXIT: Duration = Duration::from_millis(ACCORDION_MS as u64);
@@ -200,8 +204,8 @@ struct AccordionPanelPresenceCell {
     /// 上次完全展开时的面板高度（退场 height 动画用）。
     measured_height: f32,
     exit_from_height: Option<f32>,
-    /// 退场 `max-height` 是否已 seed（勿每帧 SnapAfterEnsure 重置 tween）。
-    exit_height_seeded: bool,
+    /// 退场 CSS `accordion-up` 是否仍待 seed（对位 Dialog `needs_exit_anim`）。
+    needs_exit_anim: bool,
 }
 
 fn use_accordion_panel_presence(key: &str) -> AccordionPanelPresenceHandle {
@@ -218,14 +222,12 @@ fn use_accordion_panel_presence(key: &str) -> AccordionPanelPresenceHandle {
             initialized: false,
             measured_height: 0.0,
             exit_from_height: None,
-            exit_height_seeded: false,
+            needs_exit_anim: false,
         }));
         PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
         rc
     });
-    AccordionPanelPresenceHandle {
-        cell: cell.peek(),
-    }
+    AccordionPanelPresenceHandle { cell: cell.peek() }
 }
 
 fn accordion_panel_mounted_signal(handle: &AccordionPanelPresenceHandle) -> Signal<bool> {
@@ -256,13 +258,14 @@ fn sync_accordion_panel_presence(
             }
             c.exit_armed = false;
             c.exit_from_height = None;
-            c.exit_height_seeded = false;
+            c.needs_exit_anim = false;
         }
         c.initialized = true;
         if matches!(phase, PresencePhase::Exiting) && !c.exit_armed {
             c.exit_armed = true;
             c.needs_enter = false;
             c.enter_active = false;
+            c.needs_exit_anim = true;
             if c.exit_from_height.is_none() {
                 c.exit_from_height = Some(c.measured_height.max(1.0));
             }
@@ -276,8 +279,9 @@ fn sync_accordion_panel_presence(
     phase
 }
 
-/// 事件循环推进退场计时；返回是否仍需 redraw。
+/// 事件循环推进退场；CSS 退场完成在 [`drain_pending_accordion_unmounts`] 卸树。
 pub(crate) fn tick_accordion_panel_presence() -> bool {
+    drain_pending_accordion_unmounts();
     let now = Instant::now();
     let mut needs_frame = false;
     let mut unmount: Vec<Signal<bool>> = Vec::new();
@@ -286,12 +290,16 @@ pub(crate) fn tick_accordion_panel_presence() -> bool {
             let maybe_unmount = {
                 let mut c = cell.borrow_mut();
                 if c.gate.phase() == PresencePhase::Exiting {
-                    if c.gate.tick(now) {
+                    if c.exit_armed {
+                        // 墙钟 ExitGate 不得打断 accordion-up（对位 Dialog CSS 退场）。
+                        needs_frame = true;
+                        None
+                    } else if c.gate.tick(now) {
                         c.needs_enter = false;
                         c.enter_active = false;
                         c.exit_armed = false;
                         c.exit_from_height = None;
-                        c.exit_height_seeded = false;
+                        c.needs_exit_anim = false;
                         Some(c.mounted)
                     } else {
                         needs_frame = true;
@@ -315,17 +323,11 @@ pub(crate) fn tick_accordion_panel_presence() -> bool {
     needs_frame
 }
 
-fn panel_height_transition_entries(exiting: bool) -> [TransitionEntry; 1] {
-    [TransitionEntry {
-        property: TransitionProperty::MaxHeight,
-        duration_ms: ACCORDION_MS,
-        delay_ms: 0.0,
-        timing: if exiting {
-            TimingFunction::EaseIn
-        } else {
-            TimingFunction::EaseOut
-        },
-    }]
+fn drain_pending_accordion_unmounts() {
+    let pending = PENDING_ACCORDION_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for sig in pending {
+        sig.set(false);
+    }
 }
 
 fn chevron_transition_entries() -> [TransitionEntry; 1] {
@@ -337,11 +339,6 @@ fn chevron_transition_entries() -> [TransitionEntry; 1] {
     }]
 }
 
-fn panel_height_animating(el: &Element) -> bool {
-    css_transition_needs_frame(&el.style, &el.transition_snapshot)
-        || el.transition_snapshot.has_active_tweens()
-}
-
 fn panel_content_height(presence: &AccordionPanelPresenceHandle, el: &Element) -> f32 {
     let c = presence.cell.borrow();
     c.exit_from_height
@@ -350,65 +347,50 @@ fn panel_content_height(presence: &AccordionPanelPresenceHandle, el: &Element) -
         .unwrap_or_else(|| el.layout_bounds[3].max(0.0))
 }
 
-fn seed_panel_height_transition(el: &mut Element) {
-    if el.style.transition.is_empty() {
-        return;
-    }
-    let _ = tick_element_transitions(&mut el.style, &mut el.transition_snapshot, 0.0);
+fn accordion_has_exit_anim(el: &Element) -> bool {
+    el.style.animations.iter().any(|a| a.name == ACCORDION_UP)
 }
 
-fn set_panel_max_height(
-    el: &mut Element,
-    height_px: f32,
-    exiting: bool,
-    bootstrap: Option<MotionBootstrap>,
-) -> bool {
-    match bootstrap {
-        Some(MotionBootstrap::SnapAfterEnsure) => {
-            ensure_motion_transitions(&mut el.style, &panel_height_transition_entries(exiting));
-            snap_motion_baseline(el);
-        }
-        Some(MotionBootstrap::EnsureAfterSnap) => {
-            snap_motion_baseline(el);
-            ensure_motion_transitions(&mut el.style, &panel_height_transition_entries(exiting));
-        }
-        Some(MotionBootstrap::EnsureOnly) | None => {
-            ensure_motion_transitions(&mut el.style, &panel_height_transition_entries(exiting));
-        }
-    }
-    let dim = Dimension::length(height_px.max(0.0));
-    if el.style.max_size.height != dim {
-        el.style.max_size.height = dim;
-        true
-    } else {
-        false
-    }
+fn reset_accordion_anim_snapshot(el: &mut Element) {
+    el.animation_snapshot = Default::default();
 }
 
-fn finish_accordion_panel_exit_if_height_idle(
-    presence: &AccordionPanelPresenceHandle,
-    el: &Element,
-) {
-    if accordion_panel_phase(presence) != PresencePhase::Exiting {
-        return;
-    }
-    if panel_height_animating(el) {
-        return;
-    }
+fn seed_accordion_enter_anim(el: &mut Element, content_height: f32) {
+    clear_motion(el);
+    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.animations = vec![keyframes_anim_entry(
+        ACCORDION_DOWN,
+        ACCORDION_MS,
+        TimingFunction::EaseOut,
+        AnimationFillMode::Both,
+    )];
+    reset_accordion_anim_snapshot(el);
+}
+
+fn seed_accordion_exit_anim(el: &mut Element, content_height: f32) {
+    clear_motion(el);
+    el.style.max_size.height = Dimension::length(content_height.max(0.0));
+    el.style.animations = vec![keyframes_anim_entry(
+        ACCORDION_UP,
+        ACCORDION_MS,
+        TimingFunction::EaseIn,
+        AnimationFillMode::Both,
+    )];
+    reset_accordion_anim_snapshot(el);
+}
+
+fn finish_accordion_panel_exit(presence: &AccordionPanelPresenceHandle) {
     let mounted_sig = accordion_panel_mounted_signal(presence);
-    let set_mounted = {
+    {
         let mut c = presence.cell.borrow_mut();
-        if c.gate.phase() != PresencePhase::Exiting {
-            return;
-        }
         c.gate.force_absent();
+        c.exit_armed = false;
+        c.needs_exit_anim = false;
+        c.enter_active = false;
         c.exit_from_height = None;
-        c.exit_height_seeded = false;
-        c.mounted.peek() != false
-    };
-    if set_mounted {
-        mounted_sig.set(false);
     }
+    PENDING_ACCORDION_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
+    crate::app::runtime::request_redraw();
 }
 
 fn accordion_panel_phase(presence: &AccordionPanelPresenceHandle) -> PresencePhase {
@@ -468,23 +450,12 @@ fn chevron_icon() -> Element {
         .text_color(parse_text_color("muted-foreground"))
 }
 
+#[cfg(test)]
 fn find_slot_child<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
     if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
         return Some(el);
     }
     el.children.iter().find_map(|c| find_slot_child(c, slot))
-}
-
-fn find_slot_child_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
-        return Some(el);
-    }
-    for child in &mut el.children {
-        if let Some(hit) = find_slot_child_mut(child, slot) {
-            return Some(hit);
-        }
-    }
-    None
 }
 
 // ── Scope ─────────────────────────────────────────────────────────────────────
@@ -513,18 +484,14 @@ pub fn accordion_scope(
             },
         );
         let kids = take_fragment(body());
-        let mut root: Element = vstack()
-            .w("100%")
-            .min_w(0.0)
-            .gap(0.0)
-            .children(kids)
-            .into();
+        let mut root: Element = vstack().w("100%").min_w(0.0).gap(0.0).children(kids).into();
         if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
             root = with_class_list(root, &c);
         }
         root
     });
-    root.attrs.insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
+    root.attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_ROOT.to_string());
     root.template_id = Some(id.clone());
     attach_focus_roving(&mut root, FocusRovingAxis::Vertical);
     root
@@ -564,20 +531,27 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
                 .insert(ATTR_ITEM_VALUE.to_string(), value_anchor.clone());
             return hidden;
         }
-        let mut inner = body();
-        if inner.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-            let kids = std::mem::take(&mut inner.children);
-            inner = vstack().w("100%").min_w(0.0).children(kids).into();
+        let mut body = body();
+        if body.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
+            let kids = std::mem::take(&mut body.children);
+            body = vstack().w("100%").min_w(0.0).children(kids).into();
         }
+        stamp_accordion_content_text_weight(&mut body);
+        // padding 必须在布局壳上（勿打在文本叶）：ShadCN `pb-4 pt-0`，无水平 padding，
+        // 与 Trigger 的 `py-4`（无 px）左缘对齐；且须在高度动画外壳之内。
+        let mut inner: Element = vstack()
+            .w("100%")
+            .min_w(0.0)
+            .pb(tokens::SPACE_4)
+            .child(body)
+            .into();
         inner
             .attrs
             .insert(ATTR_SLOT.to_string(), SLOT_CONTENT_INNER.to_string());
-        stamp_accordion_content_text_weight(&mut inner);
         let mut wrap: Element = vstack()
             .w("100%")
             .min_w(0.0)
-            .px(tokens::SPACE_4)
-            .pb(tokens::SPACE_4)
+            .min_h(0.0)
             .overflow_y("hidden")
             .child(inner)
             .into();
@@ -592,7 +566,7 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
         wrap.template_id = Some(format!("{menu_id}:panel:{value_anchor}"));
         let sync_presence = sync_presence.clone();
         wrap = wrap.reactive_sync(move |el, layout_tree| {
-            sync_accordion_panel_phase(el, layout_tree, &sync_presence)
+            apply_accordion_panel_motion(el, layout_tree, &sync_presence)
         });
         wrap
     });
@@ -605,7 +579,7 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
     panel
 }
 
-fn sync_accordion_panel_phase(
+fn apply_accordion_panel_motion(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     presence: &AccordionPanelPresenceHandle,
@@ -625,10 +599,9 @@ fn sync_accordion_panel_phase(
         return LayoutStatus::Clean;
     }
 
-    let visually_open = phase == PresencePhase::Present;
     let exiting = phase == PresencePhase::Exiting;
+    let open_visual = phase == PresencePhase::Present && !exiting;
     let mut layout = false;
-    let mut style_changed = false;
 
     if el.style.display != Display::Flex {
         el.style.display = Display::Flex;
@@ -640,47 +613,9 @@ fn sync_accordion_panel_phase(
     }
     if (el.style.opacity - 1.0).abs() > 0.001 {
         el.style.opacity = 1.0;
-        style_changed = true;
     }
     if el.style.scale != [1.0, 1.0] {
         el.style.scale = [1.0, 1.0];
-        style_changed = true;
-    }
-
-    if exiting {
-        let mut c = presence.cell.borrow_mut();
-        if c.exit_from_height.is_none() {
-            c.exit_from_height = Some(c.measured_height.max(el.layout_bounds[3]).max(1.0));
-        }
-    }
-
-    let exit_seed_height = if exiting {
-        let mut c = presence.cell.borrow_mut();
-        if !c.exit_height_seeded {
-            c.exit_height_seeded = true;
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    let (needs_enter, enter_was_active) = {
-        let mut c = presence.cell.borrow_mut();
-        let needs_enter = c.needs_enter;
-        if needs_enter && visually_open {
-            c.needs_enter = false;
-            c.enter_active = true;
-        }
-        (needs_enter, c.enter_active)
-    };
-
-    if visually_open && !exiting && !enter_was_active && max_height_is_auto(el) {
-        let h = el.layout_bounds[3];
-        if h > 1.0 {
-            presence.cell.borrow_mut().measured_height = h;
-        }
     }
 
     let w = crate::layout::dim_kind(el.style.size.width);
@@ -696,15 +631,56 @@ fn sync_accordion_panel_phase(
         layout = true;
     }
 
-    if exiting {
-        if exit_seed_height {
-            let open_h = panel_content_height(presence, el);
-            el.style.max_size.height = Dimension::length(open_h.max(0.0));
-            style_changed |= set_panel_max_height(el, 0.0, true, Some(MotionBootstrap::SnapAfterEnsure));
-            seed_panel_height_transition(el);
+    let (needs_enter, needs_exit_anim) = {
+        let mut c = presence.cell.borrow_mut();
+        let needs_enter = c.needs_enter;
+        let needs_exit_anim = c.needs_exit_anim;
+        if needs_enter && open_visual {
+            c.needs_enter = false;
+            c.enter_active = true;
         }
-        finish_accordion_panel_exit_if_height_idle(presence, el);
-    } else if visually_open && (needs_enter || enter_was_active) {
+        if needs_exit_anim && exiting {
+            c.needs_exit_anim = false;
+        }
+        (needs_enter, needs_exit_anim)
+    };
+
+    if exiting {
+        let mut c = presence.cell.borrow_mut();
+        if c.exit_from_height.is_none() {
+            c.exit_from_height = Some(c.measured_height.max(el.layout_bounds[3]).max(1.0));
+        }
+    }
+
+    // 只在首次退场或 wrap 被重建（仍 armed 且丢失 accordion-up）时 seed。
+    // 动画结束后清 list 不得再 seed，否则会每帧 LayoutChanged。
+    let exit_armed = presence.cell.borrow().exit_armed;
+    if exiting && (needs_exit_anim || (!accordion_has_exit_anim(el) && exit_armed)) {
+        let h = panel_content_height(presence, el);
+        seed_accordion_exit_anim(el, h);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if exiting {
+        if animation_run_active(&el.style, &el.animation_snapshot) {
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        el.style.max_size.height = Dimension::length(0.0);
+        if el.layout_node.is_some() {
+            layout_tree.update_taffy_node_style(el);
+        }
+        finish_accordion_panel_exit(presence);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    if open_visual && needs_enter {
         let measured = {
             let mut c = presence.cell.borrow_mut();
             if c.measured_height < 1.0 {
@@ -732,48 +708,41 @@ fn sync_accordion_panel_phase(
                 LayoutStatus::Clean
             };
         }
-        if needs_enter {
-            el.style.max_size.height = Dimension::length(0.0);
-            snap_motion_baseline(el);
-            ensure_motion_transitions(&mut el.style, &panel_height_transition_entries(false));
-        }
-        style_changed |= set_panel_max_height(el, measured, false, None);
-        seed_panel_height_transition(el);
-        if enter_was_active && !needs_enter && !panel_height_animating(el) {
-            presence.cell.borrow_mut().enter_active = false;
-            if el.style.max_size.height != Dimension::auto() {
-                el.style.max_size.height = Dimension::auto();
-                layout = true;
-            }
-        }
-    } else if visually_open {
-        if el.style.max_size.height != Dimension::auto() {
-            el.style.max_size.height = Dimension::auto();
-            layout = true;
-        }
-        el.style.transition.retain(|e| e.property != TransitionProperty::MaxHeight);
-    }
-
-    let animating = panel_height_animating(el);
-
-    if style_changed || animating {
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
-        if (style_changed || animating) && el.layout_node.is_some() {
+        seed_accordion_enter_anim(el, measured);
+        if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
-            layout = true;
         }
-    }
-
-    if layout && el.layout_node.is_some() {
         crate::app::damage::push_frame_paint_damage(el.layout_bounds);
         return LayoutStatus::LayoutChanged;
     }
 
-    if style_changed || animating {
-        LayoutStatus::StyleChanged
-    } else {
-        LayoutStatus::Clean
+    if open_visual {
+        if animation_run_active(&el.style, &el.animation_snapshot) {
+            if el.layout_node.is_some() {
+                layout_tree.update_taffy_node_style(el);
+            }
+            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            return LayoutStatus::LayoutChanged;
+        }
+        el.style.animations.clear();
+        if el.style.max_size.height != Dimension::auto() {
+            el.style.max_size.height = Dimension::auto();
+            layout = true;
+        }
+        presence.cell.borrow_mut().enter_active = false;
+        let h = el.layout_bounds[3];
+        if h > 1.0 {
+            presence.cell.borrow_mut().measured_height = h;
+        }
     }
+
+    if layout && el.layout_node.is_some() {
+        layout_tree.update_taffy_node_style(el);
+        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        return LayoutStatus::LayoutChanged;
+    }
+
+    LayoutStatus::Clean
 }
 
 fn sync_accordion_chevron(el: &mut Element, open: bool) -> LayoutStatus {
@@ -829,7 +798,8 @@ fn build_accordion_item_shell(
         .border_bottom(parse_color("border"), 1.0)
         .children(kids)
         .into();
-    item.attrs.insert(ATTR_SLOT.to_string(), SLOT_ITEM.to_string());
+    item.attrs
+        .insert(ATTR_SLOT.to_string(), SLOT_ITEM.to_string());
     item.attrs
         .insert(ATTR_ITEM_VALUE.to_string(), value.clone());
     item.template_id = Some(format!("accordion-item:{value}"));
@@ -848,7 +818,9 @@ pub fn AccordionItem(
     class: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    accordion_item_scope(value, disabled, class, move || children.unwrap_or_else(Element::new))
+    accordion_item_scope(value, disabled, class, move || {
+        children.unwrap_or_else(Element::new)
+    })
 }
 
 /// ShadCN `AccordionTrigger`：Header + 触发器 + chevron。
@@ -894,7 +866,11 @@ pub fn AccordionTrigger(
             ..Default::default()
         },
     );
-    caption = caption.flex_grow(1.0).flex_shrink(1.0).min_w(0.0).text_left();
+    caption = caption
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .min_w(0.0)
+        .text_left();
 
     let mut trigger_row: Element = hstack()
         .w("100%")
@@ -902,7 +878,6 @@ pub fn AccordionTrigger(
         .items("start")
         .justify("between")
         .gap(tokens::SPACE_4)
-        .px(tokens::SPACE_4)
         .py(tokens::SPACE_4)
         .font_weight(TRIGGER_WEIGHT as f32)
         .child(caption)
@@ -943,11 +918,7 @@ pub fn AccordionTrigger(
         trigger = crate::style::with_class_list(trigger, &c);
     }
 
-    hstack()
-        .w("100%")
-        .min_w(0.0)
-        .child(trigger)
-        .into()
+    hstack().w("100%").min_w(0.0).child(trigger).into()
 }
 
 /// 非宏路径：子节点已构建时用 reactive_sync 显隐（RSX 走 [`accordion_content`]）。
@@ -963,25 +934,29 @@ pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Ele
     let value_for_presence = value.clone();
     sync_accordion_panel_open(open_sync, &value_for_presence, &presence);
 
-    let mut inner = children.unwrap_or_else(Element::new);
-    if inner.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        let kids = std::mem::take(&mut inner.children);
-        inner = vstack().w("100%").min_w(0.0).children(kids).into();
+    let mut body = children.unwrap_or_else(Element::new);
+    if body.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
+        let kids = std::mem::take(&mut body.children);
+        body = vstack().w("100%").min_w(0.0).children(kids).into();
     }
+    stamp_accordion_content_text_weight(&mut body);
+    let mut inner: Element = vstack()
+        .w("100%")
+        .min_w(0.0)
+        .pb(tokens::SPACE_4)
+        .child(body)
+        .into();
     inner
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT_INNER.to_string());
-    stamp_accordion_content_text_weight(&mut inner);
     inner = inner
-        .px(tokens::SPACE_4)
-        .pb(tokens::SPACE_4)
         .text_size(14.0)
         .text_color(parse_text_color("muted-foreground"));
     if let Some(c) = class.filter(|s| !s.trim().is_empty()) {
         inner = crate::style::with_class_list(inner, &c);
     }
 
-    let mut panel: Element = vstack().w("100%").min_w(0.0).child(inner).into();
+    let mut panel: Element = vstack().w("100%").min_w(0.0).min_h(0.0).child(inner).into();
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
@@ -995,7 +970,7 @@ pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Ele
     panel = panel.reactive_sync(move |el, layout_tree| {
         let want = is_item_open(&open_sync.peek(), &value_for_presence);
         sync_accordion_panel_presence(&sync_presence, want);
-        sync_accordion_panel_phase(el, layout_tree, &sync_presence)
+        apply_accordion_panel_motion(el, layout_tree, &sync_presence)
     });
     panel = panel.accesskit_role("region");
     panel
@@ -1124,43 +1099,51 @@ impl From<AccordionBuilder> for Element {
             class,
             items,
         } = builder;
-        accordion_scope(id, value, default_value, multiple, disabled, class, move || {
-            let mut out = Vec::with_capacity(items.len());
-            for spec in items {
-                let value = spec.value.clone();
-                let title = spec.title.clone();
-                let body = spec.body;
-                let item_disabled = spec.disabled;
-                out.push(accordion_item_scope(
-                    value,
-                    item_disabled,
-                    None,
-                    move || {
-                        let mut frag = Element::new();
-                        frag.set_attr("rui_fragment", "1");
-                        frag.children(vec![
-                            AccordionTrigger(AccordionTriggerProps {
-                                disabled: None,
-                                class: None,
-                                base: None,
-                                children: Some(Element::new().text(title)),
-                            }),
-                            accordion_content(move || body()),
-                        ])
-                    },
-                ));
-            }
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children(out)
-        })
+        accordion_scope(
+            id,
+            value,
+            default_value,
+            multiple,
+            disabled,
+            class,
+            move || {
+                let mut out = Vec::with_capacity(items.len());
+                for spec in items {
+                    let value = spec.value.clone();
+                    let title = spec.title.clone();
+                    let body = spec.body;
+                    let item_disabled = spec.disabled;
+                    out.push(accordion_item_scope(
+                        value,
+                        item_disabled,
+                        None,
+                        move || {
+                            let mut frag = Element::new();
+                            frag.set_attr("rui_fragment", "1");
+                            frag.children(vec![
+                                AccordionTrigger(AccordionTriggerProps {
+                                    disabled: None,
+                                    class: None,
+                                    base: None,
+                                    children: Some(Element::new().text(title)),
+                                }),
+                                accordion_content(move || body()),
+                            ])
+                        },
+                    ));
+                }
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(out)
+            },
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::reactivity::{create_root, use_signal};
+    use crate::core::reactivity::{create_effect, create_root, use_signal};
 
     #[test]
     fn toggle_single_mode() {
@@ -1184,17 +1167,71 @@ mod tests {
     }
 
     #[test]
+    fn accordion_exit_run_inactive_after_keyframes_finish() {
+        use crate::style::tick_element_animations;
+        let mut el = Element::new();
+        seed_accordion_exit_anim(&mut el, 48.0);
+        assert!(
+            animation_run_active(&el.style, &el.animation_snapshot),
+            "fresh accordion-up must count as animating"
+        );
+        for _ in 0..20 {
+            let _ = tick_element_animations(&mut el.style, &mut el.animation_snapshot, 0.016);
+        }
+        assert!(
+            !animation_run_active(&el.style, &el.animation_snapshot),
+            "finished accordion-up must not keep LayoutChanged pumping"
+        );
+    }
+
+    #[test]
+    fn collapsed_panel_height_is_zero_when_padding_is_on_inner() {
+        use crate::core::tree::LayoutTree;
+        let (_h, _) = create_root(|| {
+            create_effect(|| {
+                let inner: Element = vstack()
+                    .w("100%")
+                    .pb(tokens::SPACE_4)
+                    .child(
+                        Element::new()
+                            .text("Yes. Builder 与 RSX 共用 accordion_scope / accordion_content。"),
+                    )
+                    .into();
+                let wrap: Element = vstack()
+                    .w(320.0)
+                    .min_w(0.0)
+                    .min_h(0.0)
+                    .overflow_y("hidden")
+                    .max_h(0.0)
+                    .child(inner)
+                    .into();
+                let mut root = Element::new().w(400.0).h(400.0).child(wrap);
+                let mut layout = LayoutTree::new();
+                let _ = layout.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+                let h = root.children[0].layout_bounds[3];
+                assert!(
+                    h <= 1.0,
+                    "clip shell with min-h:0 and padding on inner must collapse to ~0, got {h}"
+                );
+            });
+        });
+    }
+
+    #[test]
     fn scope_sets_template_and_slot() {
         let (_h, el) = create_root(|| {
-            accordion_scope("acc-test", None, vec!["one".into()], false, false, None, || {
-                Element::new()
-            })
+            accordion_scope(
+                "acc-test",
+                None,
+                vec!["one".into()],
+                false,
+                false,
+                None,
+                || Element::new(),
+            )
         });
         assert_eq!(el.template_id.as_deref(), Some("acc-test"));
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(|s| s.as_str()), Some(SLOT_ROOT));
     }
 
     #[test]

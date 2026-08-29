@@ -495,9 +495,13 @@ pub fn SheetClose(children: Option<Element>) -> Element {
         }
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
-            interactive(label(format!("{}:sheet_close", ctx.id).as_str()).text(t).into())
-                .on_click(move || open.set(false))
-                .into()
+            interactive(
+                label(format!("{}:sheet_close", ctx.id).as_str())
+                    .text(t)
+                    .into(),
+            )
+            .on_click(move || open.set(false))
+            .into()
         }
         Some(c) => chain_click(c, move || open.set(false)),
     }

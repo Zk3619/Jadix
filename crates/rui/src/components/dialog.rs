@@ -47,7 +47,7 @@ use std::sync::OnceLock;
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, sync_modal_presence, use_modal_presence, mounted_signal,
+    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
     ModalPresenceHandle, ModalSurfaceMotion,
 };
 use crate::components::internal::modal_shell::{
@@ -240,11 +240,7 @@ fn dialog_shell_frame(
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     let zoom_body: Element = if hug_content {
-        vstack()
-            .w("100%")
-            .flex_shrink(0.0)
-            .child(inner)
-            .into()
+        vstack().w("100%").flex_shrink(0.0).child(inner).into()
     } else {
         vstack().w("100%").min_h("0").child(inner).into()
     };
@@ -437,10 +433,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
         if phase != PresencePhase::Present || ring.is_empty() {
             sync_focus_trap(&owner, false, "");
             let focus = use_signal("__rui_button_focus_id", String::new);
-            if focus
-                .peek()
-                .starts_with(&format!("{id}:"))
-            {
+            if focus.peek().starts_with(&format!("{id}:")) {
                 focus.set(String::new());
             }
         } else {
@@ -581,9 +574,7 @@ pub fn DialogFooter(children: Option<Element>) -> Element {
 mod tests {
     use super::*;
     use crate::app::portal_overlay::clear_overlay_stack;
-    use crate::components::internal::modal_motion::{
-        sync_modal_presence, use_modal_presence,
-    };
+    use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
     use crate::components::internal::modal_shell::{
         default_modal_overlay_color, modal_sync, ShellOverlayOpts,
     };
@@ -610,10 +601,7 @@ mod tests {
             close_on_click: true,
             backdrop_blur: 0.0,
         };
-        let inner = vstack()
-            .w("100%")
-            .child(Element::new().text("Body"))
-            .into();
+        let inner = vstack().w("100%").child(Element::new().text("Body")).into();
         let shell = dialog_shell_frame(
             "dlg-center",
             open,
