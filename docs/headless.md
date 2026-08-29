@@ -23,7 +23,7 @@
 | Activate 注册表 | [`utils/activate_registry`](../crates/rui/src/utils/activate_registry.rs) | **WP-SI.1**；菜单 / Command Enter 激活 |
 | 打开列表键 | [`utils/list_nav`](../crates/rui/src/utils/list_nav.rs) | **WP-SI.4**；Combobox ↑↓/Home/End；Command 过滤框仅 ↑↓/Enter/Esc |
 | Presence / ExitGate | [`utils/presence`](../crates/rui/src/utils/presence.rs) | **WP-PRIM.1**；退场播完再卸 |
-| MotionStyle | [`utils/motion`](../crates/rui/src/utils/motion.rs) | **WP-PRIM.2**；只写目标、保 mid + transition |
+| MotionStyle | [`utils/motion`](../crates/rui/src/utils/motion.rs) | **WP-PRIM.2**；只写目标、保 mid + transition；与 `@keyframes` 分工见 [`animation_and_motion.md`](animation_and_motion.md) |
 | KeyedOverlay | [`utils/keyed_overlay`](../crates/rui/src/utils/keyed_overlay.rs) | **WP-PRIM.3**；portal + 同 key 调和（shadow/transform mid） |
 | LayoutGroup / slot_list | [`utils/layout_group`](../crates/rui/src/utils/layout_group.rs) | **WP-PRIM.4**；rank → offset/scale 目标 |
 | Toast 产品策略 | `components/toast/{timer,queue,swipe}` | 单组件拆分（**非**框架原语；已从 internal 折回） |

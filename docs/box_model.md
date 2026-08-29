@@ -89,6 +89,21 @@ RUI 用 **Taffy** 做 Flex/Grid 盒模型：默认 **`box-sizing: border-box`**�
 - **overflow 裁剪边 = 父 border-box**：父级 padding **不**内缩 clip 矩形（子项可画进 padding 带，但不能画出父 `layout_bounds`）。滚动裁剪与边框粘边见 `scroll_clip_border`。  
 - 库测：`box_model_contract`（outline hit / border hit / overflow+padding clip）。
 
+### 2.5.1 可折叠 clip 壳（Collapsible / Accordion）
+
+Taffy 默认 `min-height: auto` 解析为 **min-content**（内容 + **padding**，不含 margin）。对 **`max-height` 动画** 的外壳：
+
+| 层 | 职责 |
+|----|------|
+| **外层 clip 壳** | `overflow: hidden` + `min-h(0)`；**不要**放 padding / margin |
+| **内层内容壳** | `px` / `pb` / `gap` 等 spacing |
+
+引擎在 `@keyframes` 驱动 `max-height` 期间会把 `min-height` 临时钉为 `0`（[`animation_run_active` / `tick_element_animations`](../crates/rui/src/style/animation.rs)），动画结束恢复 cascaded 值；**padding 仍应放在 inner**，否则 min-content 下限仍由 padding 抬高。
+
+**Margin** 在 border-box **外**，不参与自身 min-content，但 flex 列里 `height≈0` 的项若带 `margin-bottom` 仍会留下**外部空白**（RUI 不做 margin collapse）。间距优先：`gap` / `border-b` / inner padding。
+
+参考：ShadCN `accordion-content` · [`animation_and_motion.md`](animation_and_motion.md) §2.1.1。
+
 ### 2.6 单位（布局期解析）
 
 | 单位 | 语义 |

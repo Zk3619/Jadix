@@ -176,6 +176,166 @@ fn BadgeShowcase() -> rui::core::tree::Element {
     }
 }
 
+#[component]
+fn BubbleShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1c-b) Bubble 聊天气泡（ShadCN）">
+            <VStack w="100%" min_w="0" gap="1.25rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：<Bubble variant align> + <BubbleContent> / <BubbleReactions>。默认独立行（左气泡右下 / 右气泡左下）；side / align 可覆盖；layout=\"overlay\" 咬住气泡边并内缩。超过 3 个显示圆形 +N，悬停/点击展开浮层。"
+                </Label>
+                <VStack
+                    w="100%"
+                    min_w="0"
+                    gap="0"
+                    p="1rem"
+                    overflow="visible"
+                    bg="background"
+                    border_color="border"
+                    border_width="1"
+                    rounded="0.75rem"
+                >
+                    <BubbleGroup>
+                        <Bubble variant="secondary" align="start">
+                            <BubbleContent>"Can you tell me what's the issue?"</BubbleContent>
+                        </Bubble>
+                        <Bubble variant="default" align="end">
+                            <BubbleContent>"You tell me!"</BubbleContent>
+                        </Bubble>
+                        <Bubble variant="muted" align="start">
+                            <BubbleContent>"It worked yesterday."</BubbleContent>
+                            <BubbleReactions side="bottom">
+                                "👍"
+                                "😮"
+                            </BubbleReactions>
+                        </Bubble>
+                    </BubbleGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label w="100%" text_size="0.75rem" font_weight="600">"Variants"</Label>
+                    <BubbleGroup>
+                        <Bubble variant="tinted" align="start">
+                            <BubbleContent>"Tinted variant"</BubbleContent>
+                        </Bubble>
+                        <Bubble variant="outline" align="start">
+                            <BubbleContent>"Outline"</BubbleContent>
+                        </Bubble>
+                        <Bubble variant="destructive" align="start">
+                            <BubbleContent>"Failed to run the command."</BubbleContent>
+                            <BubbleReactions side="bottom">
+                                "👍"
+                                "😮"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="ghost" align="start">
+                            <BubbleContent>"Ghost bubbles work for assistant text without a frame."</BubbleContent>
+                        </Bubble>
+                    </BubbleGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label w="100%" text_size="0.75rem" font_weight="600">"Reactions（+N 悬停 / 点击浮层展开）"</Label>
+                    <BubbleGroup>
+                        <Bubble variant="secondary" align="end">
+                            <BubbleContent>"Reactions"</BubbleContent>
+                            <BubbleReactions side="bottom">
+                                "👍"
+                                "😮"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="secondary" align="end">
+                            <BubbleContent>"Party"</BubbleContent>
+                            <BubbleReactions side="bottom">
+                                "🎉"
+                                "👏"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="secondary" align="end">
+                            <BubbleContent>"row · 8 reactions → +5"</BubbleContent>
+                            <BubbleReactions side="bottom">
+                                "👍"
+                                "🔥"
+                                "👀"
+                                "🎉"
+                                "👏"
+                                "❤️"
+                                "🚀"
+                                "✨"
+                            </BubbleReactions>
+                        </Bubble>
+                        { Element::from(
+                            bubble()
+                                .variant("secondary")
+                                .align("end")
+                                .child(bubble_content().text("Builder bubble"))
+                                .child(
+                                    bubble_reactions()
+                                        .side("bottom")
+                                        .emoji("👍")
+                                        .emoji("🔥"),
+                                ),
+                        ) }
+                    </BubbleGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label w="100%" text_size="0.75rem" font_weight="600">"Placement（覆盖位置 / 独立行 vs 叠加）"</Label>
+                    <BubbleGroup>
+                        <Bubble variant="muted" align="start">
+                            <BubbleContent>"row · 居中独立行"</BubbleContent>
+                            <BubbleReactions side="bottom" align="center">
+                                "👍"
+                                "🔥"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="secondary" align="start">
+                            <BubbleContent>"overlay · 左气泡默认右下"</BubbleContent>
+                            <BubbleReactions layout="overlay">
+                                "😮"
+                                "🎉"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="secondary" align="end">
+                            <BubbleContent>"overlay · 右气泡默认左下"</BubbleContent>
+                            <BubbleReactions layout="overlay">
+                                "👍"
+                                "🔥"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="outline" align="start">
+                            <BubbleContent>"overlay · 顶左（覆盖）"</BubbleContent>
+                            <BubbleReactions side="top" align="start" layout="overlay">
+                                "👀"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="secondary" align="start">
+                            <BubbleContent>"overlay · 7 reactions → +4"</BubbleContent>
+                            <BubbleReactions layout="overlay">
+                                "👍"
+                                "🔥"
+                                "👀"
+                                "🎉"
+                                "👏"
+                                "❤️"
+                                "🚀"
+                            </BubbleReactions>
+                        </Bubble>
+                        <Bubble variant="outline" align="end">
+                            <BubbleContent>"overlay 顶 · 6 reactions → +3"</BubbleContent>
+                            <BubbleReactions side="top" layout="overlay">
+                                "👍"
+                                "😮"
+                                "🎉"
+                                "🔥"
+                                "👀"
+                                "👏"
+                            </BubbleReactions>
+                        </Bubble>
+                    </BubbleGroup>
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 fn AvatarShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1d) Avatar（ShadCN）">
@@ -337,6 +497,53 @@ fn BreadcrumbShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn ButtonGroupShowcase() -> rui::core::tree::Element {
+    ui! {
+        <MyCard title="1e-b) ButtonGroup（ShadCN）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：RSX 复合标签与 button_group().button()；相邻圆角合并 · 绘制期叠边 · Separator / Text"
+                </Label>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"RSX · horizontal"</Label>
+                    <ButtonGroup>
+                        <Button variant="outline">"Copy"</Button>
+                        <Button variant="outline">"Paste"</Button>
+                        <Button variant="outline">"Cut"</Button>
+                    </ButtonGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"RSX · Text + Separator"</Label>
+                    <ButtonGroup>
+                        <ButtonGroupText>"Archive"</ButtonGroupText>
+                        <Button variant="outline">"Open"</Button>
+                        <ButtonGroupSeparator />
+                        <Button variant="outline">"Delete"</Button>
+                    </ButtonGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"RSX · vertical"</Label>
+                    <ButtonGroup orientation="vertical">
+                        <Button variant="outline">"Top"</Button>
+                        <Button variant="outline">"Middle"</Button>
+                        <Button variant="outline">"Bottom"</Button>
+                    </ButtonGroup>
+                </VStack>
+                <VStack w="100%" min_w="0" gap="0.5rem">
+                    <Label font_weight="700" text_size="0.75rem">"Builder"</Label>
+                    { Element::from(
+                        button_group()
+                            .button("Copy", || {})
+                            .button("Paste", || {})
+                            .separator()
+                            .button("Cut", || {})
+                    ) }
+                </VStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
 fn AspectRatioShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1f) AspectRatio（CSS aspect-ratio）">
@@ -402,16 +609,16 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "utility：animate-spin / ping / pulse / bounce；属性：animation / animation_play_state / fill-mode；Icon+spin 走字形贴图+transform（非 glyphon）；fade 用 infinite alternate"
                 </Label>
-                <HStack w="100%" min_w="0" gap="1rem" items="end" wrap="wrap">
-                    <VStack gap="0.25rem" items="center">
+                <HStack w="100%" min_w="0" gap="1.25rem" items="start" wrap="wrap" py="0.75rem" overflow="visible">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"spin"</Label>
                         <Icon name="loader-circle" size="2rem" color="foreground" class="animate-spin" />
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"ping"</Label>
                         <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
-                            <div w="2rem" h="2rem" class="rounded-full" bg="primary" />
-                            <div
+                            <Box w="2rem" h="2rem" class="rounded-full" bg="primary" />
+                            <Box
                                 absolute={true}
                                 inset="0"
                                 class="rounded-full animate-ping"
@@ -419,46 +626,47 @@ fn AnimationShowcase() -> rui::core::tree::Element {
                             />
                         </Box>
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"pulse"</Label>
-                        <div w="3rem" h="2rem" rounded="0.375rem" bg="secondary" class="animate-pulse" />
+                        <Box w="3rem" h="2rem" bg="secondary" class="rounded-md animate-pulse" />
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"bounce"</Label>
-                        <div w="2rem" h="2rem" rounded="0.375rem" bg="accent" class="animate-bounce" />
+                        <Box w="2rem" h="2rem" bg="accent" class="rounded-md animate-bounce" />
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"alternate pulse"</Label>
-                        <div
+                        <Box
                             w="3rem"
                             h="2rem"
-                            rounded="0.375rem"
                             bg="destructive"
+                            class="rounded-md"
                             animation="1s ease-in-out infinite alternate pulse"
                         />
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"play-state"</Label>
-                        <div
+                        <Box
                             w="2.5rem"
                             h="2.5rem"
-                            rounded="0.375rem"
                             bg="primary"
+                            class="rounded-md"
                             animation="1s linear infinite spin"
                             animation_play_state={ if play_box.get() { "running" } else { "paused" } }
                         />
-                        <Button variant="outline" on_click={move || play_btn.set(!play_btn.get())}>
+                        <Button size="sm" variant="outline" on_click={move || play_btn.set(!play_btn.get())}>
                             { if play.get() { "Pause" } else { "Play" } }
                         </Button>
                     </VStack>
-                    <VStack gap="0.25rem" items="center">
+                    <VStack gap="0.35rem" items="center" shrink={0.0}>
                         <Label font_weight="700" text_size="0.75rem">"fade alternate"</Label>
-                        { Element::new()
-                            .w("3rem")
-                            .h("2rem")
-                            .rounded(6.0)
-                            .bg(rui::core::tree::parse_color("muted"))
-                            .animation("1.2s ease-in-out infinite alternate fade-in") }
+                        <Box
+                            w="3rem"
+                            h="2rem"
+                            bg="muted"
+                            class="rounded-md"
+                            animation="1.2s ease-in-out infinite alternate fade-in"
+                        />
                     </VStack>
                 </HStack>
             </VStack>
@@ -2666,7 +2874,7 @@ fn AccordionShowcase() -> rui::core::tree::Element {
         <MyCard title="Accordion（ShadCN base）">
             <VStack gap="1rem" w="100%" max_w="36rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：复合 RSX（宏 → accordion_scope / accordion_content）与 Builder。单开默认；multiple 允许多项同时展开。面板 max-height CSS transition（200ms ease-out/in，对位 ShadCN accordion-down/up）。"
+                    "双写法：复合 RSX（宏 → accordion_scope / accordion_content）与 Builder。单开默认；multiple 允许多项同时展开。面板 `@keyframes accordion-down/up`（200ms，对位 Dialog CSS 动画）。"
                 </Label>
                 <Label font_weight="700" text_size="0.875rem">"A · RSX 单开（defaultValue）"</Label>
                 <Accordion id="gal-acc-single" defaultValue={vec!["item-1".into()]}>
@@ -2690,7 +2898,7 @@ fn AccordionShowcase() -> rui::core::tree::Element {
                         <AccordionTrigger>"Is it animated?"</AccordionTrigger>
                         <AccordionContent>
                             <Label font_weight="400" leading="normal">
-                                "Chevron 翻转 + 内容 max-height 进出场（overflow-hidden，200ms CSS transition）。"
+                                "Chevron 翻转 + 内容 accordion-down/up 进出场（overflow-hidden，200ms CSS keyframes）。"
                             </Label>
                         </AccordionContent>
                     </AccordionItem>
@@ -2711,6 +2919,77 @@ fn AccordionShowcase() -> rui::core::tree::Element {
                     </AccordionItem>
                 </Accordion>
                 <Label font_weight="700" text_size="0.875rem">"C · Builder 双写"</Label>
+                { builder_el }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn CollapsibleShowcase() -> rui::core::tree::Element {
+    let controlled = use_signal("gal-col-ctrl", || false);
+
+    let builder_el: Element = collapsible("gal-col-builder")
+        .default_open(true)
+        .trigger(|| Element::new().text("Builder: Can I use this in my project?"))
+        .content(|| {
+            label("")
+                .text("Yes. Builder 与 RSX 共用 collapsible_scope / collapsible_content。")
+                .font_weight(400.0)
+                .into()
+        })
+        .into();
+
+    ui! {
+        <MyCard title="Collapsible（ShadCN base）">
+            <VStack gap="1rem" w="100%" max_w="36rem">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：复合 RSX（宏 → collapsible_scope / collapsible_content）与 Builder。单面板开合；受控用 openSignal。面板 `@keyframes collapsible-down/up`（200ms，与 accordion 同形不同名）。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"A · RSX defaultOpen"</Label>
+                <Collapsible id="gal-col-default" defaultOpen={true}>
+                    <CollapsibleTrigger>"Can I use this in my project?"</CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <Label font_weight="400" leading="normal">
+                            "Yes. Free to use for personal and commercial projects. No attribution required."
+                        </Label>
+                    </CollapsibleContent>
+                </Collapsible>
+                <Label font_weight="700" text_size="0.875rem">"B · RSX openSignal（受控）"</Label>
+                <HStack gap="0.5rem" items="center">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        on_click={move || controlled.set(!controlled.peek())}
+                    >
+                        { if controlled.get() { "Collapse" } else { "Expand" } }
+                    </Button>
+                    <Label text_size="0.75rem" color="muted-foreground">
+                        { format!("open = {}", controlled.get()) }
+                    </Label>
+                </HStack>
+                <Collapsible id="gal-col-ctrl" openSignal={controlled}>
+                    <CollapsibleTrigger>"@peduarte starred 3 repositories"</CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <VStack gap="0.25rem" w="100%">
+                            <Label font_weight="400" leading="normal">"@radix-ui/primitives"</Label>
+                            <Label font_weight="400" leading="normal">"@radix-ui/colors"</Label>
+                            <Label font_weight="400" leading="normal">"@stitches/react"</Label>
+                        </VStack>
+                    </CollapsibleContent>
+                </Collapsible>
+                <Label font_weight="700" text_size="0.875rem">"C · Trigger 包裹 Button"</Label>
+                <Collapsible id="gal-col-btn">
+                    <CollapsibleTrigger>
+                        <Button variant="ghost" size="sm">"Product details"</Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <Label font_weight="400" leading="normal">
+                            "自定义 Trigger 子节点只挂点击；外观由 Button 决定。"
+                        </Label>
+                    </CollapsibleContent>
+                </Collapsible>
+                <Label font_weight="700" text_size="0.875rem">"D · Builder 双写"</Label>
                 { builder_el }
             </VStack>
         </MyCard>
@@ -6391,23 +6670,23 @@ fn DataChartShowcase() -> Element {
     ];
     let composed: Element = define_chart()
         .id("gal-compose")
-        .theme(ChartTheme::tokens().palette([parse_color("#2563eb"), parse_color("#16a34a")]))
+        .theme(ChartTheme::tokens())
         .mark(
             area_y(compose_rows.clone())
-                .fill("#2563eb")
+                .fill("chart-1")
                 .fill_opacity(0.28)
-                .stroke("#2563eb")
+                .stroke("chart-1")
                 .stroke_width(2.0),
         )
         .mark(
             line_y(compose_rows.clone())
-                .stroke("#2563eb")
+                .stroke("chart-1")
                 .stroke_width(2.5),
         )
-        .mark(dot(compose_rows.clone()).r(4.0).fill("#2563eb"))
+        .mark(dot(compose_rows.clone()).r(4.0).fill("chart-1"))
         .mark(
             rule_y([60.0])
-                .stroke("#dc2626")
+                .stroke("destructive")
                 .stroke_width(1.5)
                 .stroke_dash([4.0, 2.0]),
         )
@@ -6415,6 +6694,7 @@ fn DataChartShowcase() -> Element {
         .y_nice()
         .guides(true)
         .tooltip(true)
+        .tooltip_indicator("line")
         .crosshair(true)
         .on_select(move |i| chart_sel.set(Some(i)))
         .h(160.0)
@@ -6431,10 +6711,10 @@ fn DataChartShowcase() -> Element {
         .id("gal-time")
         .mark(
             line_y(time_rows.clone())
-                .stroke("#0f766e")
+                .stroke("chart-2")
                 .stroke_width(2.5),
         )
-        .mark(dot(time_rows).r(4.0).fill("#0f766e"))
+        .mark(dot(time_rows).r(4.0).fill("chart-2"))
         .x_time()
         .y_nice()
         .tooltip(true)
@@ -6450,7 +6730,7 @@ fn DataChartShowcase() -> Element {
     ];
     let log_chart: Element = define_chart()
         .id("gal-log")
-        .mark(line_y(log_rows).stroke("#7c3aed").stroke_width(2.5))
+        .mark(line_y(log_rows).stroke("chart-3").stroke_width(2.5))
         .y_log()
         .y_nice()
         .guides(true)
@@ -6467,20 +6747,35 @@ fn DataChartShowcase() -> Element {
         ChartDatum::new("W", 9.0),
         ChartDatum::new("NW", 2.0),
     ];
-    let radial_chart: Element = define_chart()
+    let radial_composed: Element = define_chart()
         .id("gal-radial")
         .mark(radial_bar(radial_rows.clone()).inner_radius(0.2))
         .mark(
             radial_line(radial_rows.clone())
-                .stroke("#2563eb")
+                .stroke("chart-1")
                 .stroke_width(2.0),
         )
-        .mark(radial_dot(radial_rows).r(3.5).fill("#2563eb"))
+        .mark(radial_dot(radial_rows.clone()).r(3.5).fill("chart-1"))
         .guides(true)
         .legend(true)
         .tooltip(true)
         .on_select(move |i| chart_sel.set(Some(i)))
         .size(180.0)
+        .into();
+    let donut_el: Element = donut_chart()
+        .id("gal-donut")
+        .data(pie_rows.clone())
+        .size(160.0)
+        .theme(ChartTheme::vibrant())
+        .tooltip_indicator("dashed")
+        .on_select(move |i| chart_sel.set(Some(i)))
+        .into();
+    let radial_preset: Element = radial_chart()
+        .id("gal-radial-preset")
+        .data(radial_rows)
+        .size(160.0)
+        .theme(ChartTheme::tokens())
+        .on_select(move |i| chart_sel.set(Some(i)))
         .into();
     let carousel_el = ui! {
         <VStack w="100%" max_w="36rem" mx="auto" gap="1.25rem">
@@ -6822,7 +7117,7 @@ fn DataChartShowcase() -> Element {
         <MyCard title="Table · TreeView · Chart · Carousel">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "数据面：Table / 树 / Chart（预设 + define_chart grammar：cartesian/polar、log/time scale、tooltip/crosshair）/ 轮播。点柱、折线或扇区可选中；tooltip 钉在按下点。"
+                    "数据面：Table / 树 / Chart（预设 bar/line/area/pie/donut/radial + define_chart；shadcn chrome · tooltip indicator · ChartTheme 色板）/ 轮播。点柱、折线或扇区可选中；tooltip 钉在按下点。"
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "Table" }</Label>
                 { table_el }
@@ -6858,21 +7153,18 @@ fn DataChartShowcase() -> Element {
                     data={pie_rows.clone()}
                     on_select={move |i| chart_sel.set(Some(i))}
                 />
-                <Label font_weight="600" text_size="0.875rem">{ "Donut" }</Label>
-                <PieChart
-                    id="gal-donut"
-                    data={pie_rows.clone()}
-                    inner_radius={0.55}
-                    on_select={move |i| chart_sel.set(Some(i))}
-                />
-                <Label font_weight="600" text_size="0.875rem">{ "define_chart · Area+Line+Dot+Rule · tooltip/crosshair" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "DonutChart · vibrant · indicator=dashed" }</Label>
+                { donut_el }
+                <Label font_weight="600" text_size="0.875rem">{ "RadialChart 预设" }</Label>
+                { radial_preset }
+                <Label font_weight="600" text_size="0.875rem">{ "define_chart · Area+Line+Dot+Rule · tooltip indicator=line" }</Label>
                 { composed }
                 <Label font_weight="600" text_size="0.875rem">{ "define_chart · 时间轴" }</Label>
                 { time_chart }
                 <Label font_weight="600" text_size="0.875rem">{ "define_chart · y log" }</Label>
                 { log_chart }
                 <Label font_weight="600" text_size="0.875rem">{ "define_chart · radial_bar + line + dot" }</Label>
-                { radial_chart }
+                { radial_composed }
                 <Label text_size="0.75rem" color="muted-foreground">
                     { match chart_sel.get() {
                         Some(i) => format!("Chart 选中 index = {i}"),
@@ -7421,6 +7713,7 @@ fn gallery_section_body(section: &str) -> Element {
                     <BoxModelShowcase />
                     <ScrollShowcase />
                     <AccordionShowcase />
+                    <CollapsibleShowcase />
                     <ResizableShowcase />
                     <LogicalShowcase />
                     <UtilityClassShowcase />
@@ -7473,13 +7766,15 @@ fn gallery_section_body(section: &str) -> Element {
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"基础"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
-                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Avatar · Breadcrumb · AspectRatio · CSS animation · 排版装饰"
+                        "Button 变体 / 尺寸 / hover 缓动 · Badge · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰"
                     </Label>
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
+                    <BubbleShowcase />
                     { AvatarShowcase() }
                     { BreadcrumbShowcase() }
+                    { ButtonGroupShowcase() }
                     { AspectRatioShowcase() }
                     <AnimationShowcase />
                     <TypographyShowcase />

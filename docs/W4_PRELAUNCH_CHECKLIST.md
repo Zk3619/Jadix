@@ -70,6 +70,16 @@
 
 
 
+### A2½. 主题令牌与颜色治理（WP-STY.0 / WP-STY.1，挡 WP-4.7）
+
+> 完整计划：[`plans/global-stylesheet-loader.md`](plans/global-stylesheet-loader.md) Phase 0。全局样式表**选择器加载器**发版后做（WP-STY.2+）。
+
+- [ ] **WP-STY.0**：`ThemeColorPatch` + `load_theme_patch`（`.toml` / `.json` / `globals.css` `:root` 变量子集）+ `install_theme_patch`；`set_theme_mode` 保留用户 patch。
+- [ ] **WP-STY.1**：库内产品色令牌化（shadow elevation、overlay scrim、`TRANSPARENT` 常量）；CI `check-token-colors` 挡裸 RGBA/hex。
+- [ ] `color.md` 增「应用级主题覆盖」；Gallery 演示 `theme.toml` 覆盖 `destructive`。
+
+
+
 ### A3. 质量门与 CI（WP-4.5）
 
 

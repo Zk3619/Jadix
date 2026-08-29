@@ -19,6 +19,8 @@
 - 缺的主要是 steps / jump-* 以及 scroll/view `animation-timeline` 驱动（`animation` / `@keyframes` MVP 已落地：name/duration/timing/delay/iteration/direction/fill-mode/play-state；composition/range 仅存档）
 - solid-dnd/sortablejs 拖拽、拖拽排序及切换父级、拖拽时的浮层、碰撞检测等
 - orientation="vertical"  自动检测屏幕方向 auto、始终水平、始终垂直
+- 浮层的入场退场动画
+- 无任何动画、阴影、模糊等特殊效果的性能模式
 - 是否应将 lucide icon / lucide-animated 图标拆成独立 crate 发布
 
 ## Bugs

@@ -10,12 +10,13 @@
 
 ```
 用户应用
-  assets/          ← 图片、自定义字体、可选 lucide.ttf（用户自备）
+  assets/          ← 图片、自定义字体、可选 lucide.ttf / twemoji（用户自备）
   src/
   Cargo.toml       ← 显式依赖需要的「能力 crate」
 
-jadix              ← 核心：reactivity / layout / renderer / primitives / app
+jadix              ← 核心：reactivity / layout / renderer / IconProvider+EmojiProvider 契约
 jadix_icons        ← 图标库（现 lucide 全家桶）
+jadix_emoji_*      ← 可选 emoji 覆盖（Twemoji 等；默认不装）
 jadix_components   ← 组件库（现 components/，未来独立）
 jadix_macros
 jadix_style_tokens
@@ -23,7 +24,7 @@ jadix_hot_reload   （可选，开发期 watcher）
 jadix_devtools     （可选，运行时 Inspector 面板）
 ```
 
-**原则**：`jadix` 核心里 **零 `include_bytes!` 产品资源**；图标、演示字体、Inspector 面板 UI 均为可选依赖，不是框架默认内置。
+**原则**：`jadix` 核心里 **零 `include_bytes!` 产品资源**；图标、emoji 位图包、演示字体、Inspector 面板均为可选依赖。Emoji **默认系统彩色字体**，不内置 Twemoji。
 
 ---
 
@@ -31,21 +32,23 @@ jadix_devtools     （可选，运行时 Inspector 面板）
 
 | 层级 | 谁管 | 内容 | 加载方式 |
 |------|------|------|----------|
-| **用户资源** | 应用 `assets/` | PNG/WebP、自定义 SVG、字体文件 | 运行时路径（`RUI_ASSETS_DIR` / exe 旁 `assets/`） |
+| **用户资源** | 应用 `assets/` | PNG/WebP、自定义 SVG、字体文件、**可选** Twemoji 目录 | 运行时路径（`RUI_ASSETS_DIR` / exe 旁 `assets/`） |
 | **图标库** | `jadix_icons` | `lucide.json`、`lucide_paths.json`、`lucide_animated.json`、可选子集 TTF | 该 crate 的 `build.rs` codegen → phf / 子集字体 |
-| **框架能力** | `jadix` | `IconProvider` trait、字形渲染、SVG 栅格、图片注册表 | **不持有** lucide 数据，只接 provider |
+| **Emoji 覆盖（可选）** | 应用 `assets/` 或 `jadix_emoji_*` | Twemoji PNG/SVG、Noto Color Emoji TTF、私有 emoji 包 | **默认不装**；经 `EmojiProvider` 注入 |
+| **框架能力** | `jadix` | `IconProvider` / **`EmojiProvider`**、字形渲染、SVG 栅格、图片注册表 | **不持有** lucide / Twemoji 数据；默认走 **系统彩色字体** |
 
-图片等已由 `image_registry` / 文件路径走向用户 `assets/`；核心里不应再 embed 演示用二进制。
+图片等已由 `image_registry` / 文件路径走向用户 `assets/`；核心里不应再 embed 演示用二进制。**Emoji 与 Lucide 同原则：核心零内置产品资源。**
 
 ### 2.1 与现有 `bundled-*` feature 的关系
 
 | 现状（`rui`） | 目标 |
 |---------------|------|
 | `bundled-lucide` / `bundled-cjk` / `bundled-emoji` / `bundled-symbols` 在 crate 内 `include_bytes!` | **从核心删除** |
-| `fonts-cjk` 等运行时磁盘加载 | 保留为 **默认路径**（`assets/fonts/`、`RUI_FONT_DIR`） |
-| 需要「单文件分发」 | 可选 **`jadix_icons` 的 `bundled-lucide`**、**`jadix_fonts_noto`** 等独立 crate，而非堆在核心 |
+| `fonts-cjk` / `fonts-emoji` 等运行时磁盘加载 | 保留为 **可选路径**（`assets/fonts/`、`RUI_FONT_DIR`） |
+| Twemoji 目录（`assets/twemoji/`）+ `RUI_EMOJI_CUSTOM_GLYPH` 默认开 | **默认关**；系统字体 CBDT/COLR；用户显式开 provider / 自备目录 |
+| 需要「单文件分发」 | 可选 **`jadix_icons` 的 `bundled-lucide`**、**`jadix_fonts_noto`**、**`jadix_emoji_twemoji`** 等独立 crate，而非堆在核心 |
 
-Lucide 字体与 CJK/Emoji **不要混在同一 feature**。
+Lucide、CJK、Emoji **不要混在同一 feature**。
 
 ---
 
@@ -325,18 +328,98 @@ fn app() -> Element {
 
 ---
 
-## 11. 禁区
+## 11. Emoji：与图标同构（系统默认 + 可选覆盖）
 
-- 不在 `jadix` 默认 feature 中重新 embed 产品级字体 / 图标 JSON
+### 11.1 结论（与 §1 / §2 对齐）
+
+**应当**与未来 `jadix_icons` 一样：
+
+| 决策 | 说明 |
+|------|------|
+| **核心不内置 emoji 资源** | 不 `include_bytes!` Twemoji；不默认假设仓库 `assets/twemoji/` 存在 |
+| **默认 = 系统彩色字体** | Segoe UI Emoji / Apple Color Emoji / Noto Color Emoji 等，经 glyphon `SwashContent::Color`（CBDT/COLR） |
+| **覆盖 = 可选 provider** | 用户自备 PNG/SVG 目录、或另挂彩色 emoji 字体、或 `jadix_emoji_twemoji` 一类可选 crate |
+
+今日债务（过渡）：`RUI_EMOJI_CUSTOM_GLYPH` **默认 true**，Bake/Coverage 优先走 Twemoji 槽位；这与「核心零产品资源」冲突，也放大 `png` 依赖与体积（见 [`size_and_memory.md`](size_and_memory.md)）。目标应 **默认 false**（系统字体），显式开启才走位图覆盖。
+
+### 11.2 为何不能「像 Lucide 一样默认捆绑」
+
+| | Lucide | Emoji |
+|--|--------|--------|
+| 数量级 | ~千级 path / 可选子集 TTF | 数千 PNG/SVG + 版本漂移 |
+| 平台已有 | 无统一系统图标 | **各 OS 已有彩色 emoji 字体** |
+| 一致性需求 | ShadCN 组件依赖固定 glyph | 多数 App 接受「跟系统长一样」 |
+| 体积 | 可子集 | Twemoji 全量对默认二进制过重 |
+
+因此：**图标外置到 `jadix_icons`；emoji 默认不外置包，只保留可插拔覆盖。**
+
+### 11.3 `EmojiProvider` 契约（草案）
+
+与 `IconProvider` 平行，核心只定义 trait：
+
+```rust
+// jadix::emoji
+pub trait EmojiProvider: Send + Sync {
+    /// 若返回 Some(rgba)，paint/Bake 走位图覆盖；None → 系统字体彩色 glyph。
+    fn raster(&self, sequence: &str, pixel_size: u16) -> Option<EmojiRaster>;
+    /// 可选：额外 emoji 字体路径（Noto Color Emoji 等），在 FontSystem 懒加载。
+    fn font_paths(&self) -> &[&Path] { &[] }
+}
+
+pub fn set_emoji_provider(p: Option<Arc<dyn EmojiProvider>>);
+/// true 仅当已注册会返回 raster 的 provider（或 env 显式强制位图模式）。
+pub fn emoji_bitmap_override_active() -> bool;
+```
+
+| 配置 | 行为 |
+|------|------|
+| 仅 `jadix` | provider = `None` → **系统字体**；`custom_glyph` 槽位关闭 |
+| `RUI_TWEMOJI_DIR` / 应用 `assets/twemoji/` | 用户实现或内置 `TwemojiDirProvider::from_env()` 后 `set_emoji_provider` |
+| `jadix_emoji_twemoji`（可选 crate） | `install()` 注册目录/LFS 资源；feature `png` / `svg` |
+| `fonts-emoji` + `assets/fonts/NotoColorEmoji.ttf` | 仍走字体栈，不经 Twemoji；适合「换字体不换位图」 |
+
+Bake / Coverage / sticky transform：**同一 provider**。禁止「Coverage 用 Twemoji、Bake 用字体线框」分叉（见近期 sticky Bake 接 Twemoji 的修复动机）。
+
+### 11.4 与现有 env / feature 的迁移
+
+| 现状 | 目标 |
+|------|------|
+| `RUI_EMOJI_CUSTOM_GLYPH` 默认 **开** | 默认 **关**；或删除，改由 `emoji_bitmap_override_active()` |
+| `RUI_TWEMOJI_DIR` / 仓库 `assets/twemoji` | 保留为 **用户覆盖路径**，非框架默认依赖 |
+| `emoji-svg` feature | 仍可选；挂在 `jadix_emoji_*` 或应用 feature，不进默认 |
+| `bundled-emoji` | 从核心删除；若需单文件分发 → 独立 crate |
+| Gallery | `examples/gallery/assets/twemoji` 或 `RUI_TWEMOJI_DIR`；文档写明「演示彩色一致性时再开」 |
+
+### 11.5 分阶段落地（建议）
+
+1. **契约**：加 `EmojiProvider`；`custom_glyph_layout_enabled` 改为「provider 已注册」或 env 显式 on。  
+2. **默认翻转**：默认系统字体；Gallery / Bubble 演示在 README 写可选 Twemoji。  
+3. **Bake 对齐**：位图模式才走槽位 + Twemoji 复合；系统字体模式 Bake 用 `SwashContent::Color`（禁止 Mask 当线框）。  
+4. **可选 crate**：`jadix_emoji_twemoji`（或并入 `jadix_icons` 的 `emoji-twemoji` feature）——与 Lucide 拆分同一波次更干净。
+
+### 11.6 禁区（emoji）
+
+- 不在 `jadix` 默认路径 **硬编码** 仓库根 `assets/twemoji` 为「无则失败」。  
+- 不以 MSDF / 单色 Mask 冒充彩色 emoji。  
+- 不把 Twemoji 全量塞进默认 `bundled-fonts`。
+
+---
+
+## 12. 禁区
+
+- 不在 `jadix` 默认 feature 中重新 embed 产品级字体 / 图标 JSON / **Twemoji**
 - `jadix_devtools` 不进 Beta SemVer 稳定面（与现 `devtools` feature 策略一致）
 - 不为实现「零核心钩子」而把 layout 高亮逻辑塞进应用层
 - 资源拆分 **不** 废除 Builder 双书写面（ADR-9）
 
 ---
 
-## 12. 开放问题
+## 13. 开放问题
 
 - [ ] `jadix_icons` 与 `jadix_macros` 的 build 依赖方向（macros 校验是否改为 `build = jadix_icons` 的 `links` 输出）
 - [ ] TTF 子集化（`font-subset`）放在 `jadix_icons` 还是独立工具 crate
 - [ ] `jadix_devtools` 与 layout `#[cfg]` 钩子：保留 feature vs 运行时 callback 注册表
 - [ ] `jadix_macros` / `jadix_style_tokens` 可选化的 SemVer 与默认 feature 矩阵
+- [ ] **`EmojiProvider` 独立 crate vs `jadix_icons` feature `emoji-twemoji`**
+- [ ] 默认翻转 `RUI_EMOJI_CUSTOM_GLYPH` 的 SemVer / Gallery 回归窗口
+- [ ] 系统字体缺彩色面时的降级策略（豆腐 vs 可选提示下载 Noto）

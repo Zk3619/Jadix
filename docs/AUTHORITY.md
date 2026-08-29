@@ -52,7 +52,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav
 │   reactivity_and_hot_reload · headless · custom_components · devtools
 │   color · font* · damage · layout_subtree · text_align · box_model
-│   drawing（自绘面规范，亦作手册入口）
+│   animation_and_motion · css_animation_max_alignment · drawing（自绘面规范，亦作手册入口）
 │   glyphon_audit · PUBLISH · size_and_memory · multi_window · tray
    scroll_cpu（[`size_and_memory.md`](size_and_memory.md) §7 · AUTHORITY §5.6 审计）
 │
@@ -72,6 +72,8 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 | `<svg>` / `<canvas>` / 2D·3D 怎么画 | [`drawing.md`](drawing.md) | HTML-in-canvas、换 Skia 主线、完整 SVG/Canvas2D 规范 |
 | `id` 是不是 focus / template / 信号键 | `element_identity.md` | 三轴混用；空串当身份 |
 | 自定义 / 复合控件心智负担是产品还是框架？ | `COMPONENT_LIBRARY.md` **§2.3**；手册 [`custom_components.md`](custom_components.md) | 在每个选器里发明第二套 Owner / `untrack` / 浮层配方 |
+| `@keyframes` / transition / `motion` 各写在哪？是否迁 `motion` 到 `style/`？ | [`animation_and_motion.md`](animation_and_motion.md) | 在组件里重复实现 tick；把 presence 塞进 `keyframes` |
+| CSS 动画最大对齐范围、ANIM 波次、Specified/Used 模型 | [`css_animation_max_alignment.md`](css_animation_max_alignment.md) | 创作时按组件补丁 `KeyframeStop`；跳过 ANIM DoD |
 | 这周做什么、是否升 Beta | **本文** | 在三份旧计划里改勾选充进度 |
 | 某组件 verified / broken | `component_inventory.md`（回写规范 §5.2.1） | 只改 Gallery 文案 |
 
@@ -764,10 +766,22 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **WP-4.5** | CI：golden≥5 + 既有门禁 | — | ☐ |
 | **WP-4.6** | 体积/内存发布核对 | — | ☐ |
 | **WP-4.7** | 对外叙事升 Beta | — | ☐ 依赖 §6 全勾 |
+| **WP-STY.0** | 主题令牌文件加载 + patch merge（`.toml`/`.json`/`.css` 变量） | — | ☐ **挡 4.7**；见 [`plans/global-stylesheet-loader.md`](plans/global-stylesheet-loader.md) |
+| **WP-STY.1** | 库内颜色令牌化 + CI 门禁 | — | ☐ **挡 4.7** |
 
 开工执行清单见 [`W4_PRELAUNCH_CHECKLIST.md`](W4_PRELAUNCH_CHECKLIST.md)。**Step 0**：命名已锁定 **`jadix`（琢玉）**，见 [`NAMING_DECISION.md`](NAMING_DECISION.md)；**重命名尚未执行**，仍阻塞 publish。热重载为 **`jadix_hot_reload`**（无 `_cli`）。
 W4 发布模式固定为**伞形 crate**：`jadix` + `jadix_macros` + `jadix_style_tokens` + `jadix_hot_reload` 四 crate 同步发布（热重载策略 A）。
 底层架构口径：当前 `layout` / `renderer` 等仍在主 crate 内；Beta 后按门槛评估拆分为 `jadix_layout` / `jadix_renderer` / `jadix_core` 等独立 crate（仍由伞形入口重导出）。
+
+### 5.7.1 发版后 — 全局样式表（WP-STY.2–4，不挡 0.1）
+
+| ID | 主题 | 状态 |
+|----|------|------|
+| **WP-STY.2** | Stylesheet IR + `load_stylesheet`（TOML/JSON/CSS 规则） | ☐ |
+| **WP-STY.3** | 有限选择器匹配 → `apply_class_list` | ☐ |
+| **WP-STY.4** | 热重载 + DevTools + CSS 声明降级 | ☐ |
+
+计划全文：[`plans/global-stylesheet-loader.md`](plans/global-stylesheet-loader.md)。**不实现完整 CSSOM**；`.rui` 不首推，优先 `.toml`/`.json`/`.css` 以保留 IDE 高亮。
 
 ### 5.8 反应性加深（战略：超过 Floem、逼近 Solid；不挡 Win-first 0.1）
 

@@ -140,6 +140,8 @@
 | 公开 API | 位置 | SemVer | 验收归属 | 笔记 |
 |----------|------|--------|----------|------|
 | Theme / `set_theme_mode` | `style/theme.rs` | 0.1 承诺 | WP-2.9、[`color.md`](color.md)、换肤冒烟 | light/dark 与 chrome 同源 |
+| Theme 文件覆盖（计划） | `style/theme_load.rs`（WP-STY.0） | 0.1 承诺 | [`plans/global-stylesheet-loader.md`](plans/global-stylesheet-loader.md) Phase 0 | `.toml`/`.json`/`.css` `:root` 变量；`ThemeColorPatch` |
+| 全局样式表（计划） | `style/stylesheet/`（WP-STY.2+） | 发版后 | 同上 Phase 1–3 | 有限选择器 → utility；**非** CSSOM |
 | utility `class` 主集 | `rui_style_tokens` + `class`/`tw` | 0.1 承诺 | WP-2.9 ☑、[`box_model.md`](box_model.md) | 含 `box-border` / `box-content`；未知类名编译期提示 |
 
 ### 1.9 ShadCN 对位 · 尚未实现（`planned`）
