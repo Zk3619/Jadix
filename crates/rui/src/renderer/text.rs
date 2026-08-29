@@ -392,10 +392,8 @@ impl RuiTextRenderer {
         height: u32,
         text_areas: impl Iterator<Item = TextArea<'a>>,
     ) {
-        self.viewport.update(
-            queue,
-            glyphon::Resolution { width, height },
-        );
+        self.viewport
+            .update(queue, glyphon::Resolution { width, height });
         let font_system = self.font_system;
         if let Err(err) = self.text_renderer.prepare_with_custom(
             device,

@@ -8,6 +8,7 @@ const BOLD: &str = "\x1b[1m";
 const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
+#[cfg(feature = "hot-reload")]
 const RED: &str = "\x1b[31m";
 
 fn color_enabled() -> bool {
@@ -162,6 +163,7 @@ pub(super) fn display_path(p: &str) -> String {
     p.replace('\\', "/")
 }
 
+#[cfg(feature = "hot-reload")]
 pub(super) fn ready(detail: &str) {
     emit(CYAN, "ready", detail);
 }
@@ -175,6 +177,7 @@ pub(super) fn skip(detail: &str) {
     emit(YELLOW, "hmr skip", detail);
 }
 
+#[cfg(feature = "hot-reload")]
 pub(super) fn error(detail: &str) {
     emit(RED, "hmr error", detail);
 }

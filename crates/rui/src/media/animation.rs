@@ -23,6 +23,10 @@ impl DecodedAnimation {
 
     pub fn frame_delay_ms(&self, index: usize) -> u32 {
         let cs = self.frames.get(index).map(|f| f.delay_cs).unwrap_or(0);
-        if cs == 0 { 100 } else { cs as u32 * 10 }
+        if cs == 0 {
+            100
+        } else {
+            cs as u32 * 10
+        }
     }
 }

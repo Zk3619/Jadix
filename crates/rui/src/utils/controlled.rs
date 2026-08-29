@@ -68,9 +68,7 @@ mod tests {
 
     #[test]
     fn string_uncontrolled_is_owner_scoped() {
-        let (_o, a) = create_root(|| {
-            resolve_string_signal(None, "inst", "tabs", "x").peek()
-        });
+        let (_o, a) = create_root(|| resolve_string_signal(None, "inst", "tabs", "x").peek());
         assert_eq!(a, "x");
         let (_o2, b) = create_root(|| {
             let key = bool_slot_key("inst", "tabs");

@@ -46,8 +46,8 @@ pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };
 pub use svg::{
-    animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse,
-    fe_blend, fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
+    animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse, fe_blend,
+    fe_color_matrix, fe_drop_shadow, fe_flood, fe_gaussian_blur, fe_merge, fe_merge_node,
     fe_offset, filter, g, image, line, linear_gradient, marker, mask, mpath, path as svg_path,
     pattern, polygon as svg_polygon, polyline as svg_polyline, radial_gradient, rect, set_el, stop,
     svg, svg_el, svg_text, svg_use, symbol, text_path, title, tspan, AnimateBuilder, CircleBuilder,

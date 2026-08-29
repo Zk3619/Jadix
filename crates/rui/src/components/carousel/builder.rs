@@ -1,8 +1,7 @@
 //! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
 
-use super::*;
 use super::content::*;
-
+use super::*;
 
 // ── Builder ──────────────────────────────────────────────────────────────────
 
@@ -266,4 +265,3 @@ impl From<CarouselBuilder> for Element {
         )
     }
 }
-

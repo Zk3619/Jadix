@@ -37,12 +37,14 @@ pub struct OffscreenGpu {
 impl OffscreenGpu {
     pub fn new() -> Option<Self> {
         let instance = super::wgpu_compat::instance(wgpu::Backends::all());
-        let adapter = crate::utils::block_on::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: None,
-            force_fallback_adapter: std::env::var("RUI_FORCE_SOFTWARE").is_ok(),
-            ..Default::default()
-        }))
+        let adapter = crate::utils::block_on::block_on(instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: std::env::var("RUI_FORCE_SOFTWARE").is_ok(),
+                ..Default::default()
+            },
+        ))
         .ok()?;
         let adapter_limits = adapter.limits();
         let mut required_limits = wgpu::Limits::downlevel_defaults();
@@ -51,13 +53,14 @@ impl OffscreenGpu {
         // Rounded-rect VS needs >31 inter-stage components (WebGL2 default is too low).
         required_limits.max_inter_stage_shader_variables =
             adapter_limits.max_inter_stage_shader_variables.max(60);
-        let (device, queue) =
-            crate::utils::block_on::block_on(adapter.request_device(&super::wgpu_compat::device_desc(
+        let (device, queue) = crate::utils::block_on::block_on(adapter.request_device(
+            &super::wgpu_compat::device_desc(
                 Some("rui-offscreen"),
                 required_limits,
                 Default::default(),
-            )))
-            .ok()?;
+            ),
+        ))
+        .ok()?;
         Some(Self { device, queue })
     }
 

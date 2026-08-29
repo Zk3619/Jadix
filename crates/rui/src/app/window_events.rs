@@ -127,13 +127,17 @@ impl super::App {
             [0.0, 0.0],
             &mut hover_to_run,
         );
-        state.window.request_redraw();
+        let window = state.window.clone();
+        window.request_redraw();
         drop(borrow);
         for (cb, is_hover) in hover_to_run {
             (*cb.borrow_mut())(is_hover);
         }
         crate::app::reactive::drain_deferred_view_remounts();
         crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+        if crate::components::bubble::flush_reaction_hover_dismiss() {
+            window.request_redraw();
+        }
     }
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
@@ -631,8 +635,7 @@ impl super::App {
         let caret_prefix = &display[..caret_byte];
         let compose_prefix = &display[..compose_byte];
         // Hard line containing the caret — needed for CSS text-align inline offset.
-        let (_, caret_local) =
-            crate::utils::text_field::caret_line_and_local(&display, caret_byte);
+        let (_, caret_local) = crate::utils::text_field::caret_line_and_local(&display, caret_byte);
         let line_start = caret_byte.saturating_sub(caret_local);
         let line_end = display[line_start..]
             .find('\n')
@@ -1162,6 +1165,7 @@ impl super::App {
             || drawer_dragging
             || crate::components::internal::modal_motion::tick_modal_presence()
             || crate::components::accordion::tick_accordion_panel_presence()
+            || crate::components::collapsible::tick_collapsible_panel_presence()
             || crate::primitives::canvas::take_canvas_wants_redraw()
         {
             window.request_redraw();
@@ -1291,6 +1295,9 @@ impl super::App {
         }
         crate::app::reactive::drain_deferred_view_remounts();
         crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+        if crate::components::bubble::flush_reaction_hover_dismiss() {
+            window.request_redraw();
+        }
 
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
@@ -2276,8 +2283,10 @@ impl super::App {
 
         let window = state.window.clone();
         crate::utils::lucide_animated::sync_animated_icon_hover(&mut state.root_element);
-        let anim_icons =
-            crate::utils::lucide_animated::tick_animated_icons_subtree(&mut state.root_element, anim_dt);
+        let anim_icons = crate::utils::lucide_animated::tick_animated_icons_subtree(
+            &mut state.root_element,
+            anim_dt,
+        );
         let gif_tick = crate::app::pending_images::tick_gif_textures(anim_dt);
         drop(state_borrow);
 
@@ -2847,9 +2856,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     .any(|n| n.style.input_caret.is_some());
                 let svg_smil_active =
                     crate::primitives::svg::subtree_has_svg_smil(&state.root_element);
-                let anim_icon_active = crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
-                    &state.root_element,
-                );
+                let anim_icon_active =
+                    crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
+                        &state.root_element,
+                    );
 
                 drop(re_borrow); // CRITICAL: Free the borrow before updating signals!
 
@@ -3252,6 +3262,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
                 crate::app::reactive::drain_deferred_view_remounts();
                 crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+                if crate::components::bubble::flush_reaction_hover_dismiss() {
+                    window.request_redraw();
+                }
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }

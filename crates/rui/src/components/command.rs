@@ -882,11 +882,9 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
                 }
             }
             Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
-                if let Some(next) = crate::utils::list_nav::list_nav_move_arrows(
-                    &ev.logical_key,
-                    n,
-                    active.peek(),
-                ) {
+                if let Some(next) =
+                    crate::utils::list_nav::list_nav_move_arrows(&ev.logical_key, n, active.peek())
+                {
                     set_command_active(active, next);
                 }
                 return true;

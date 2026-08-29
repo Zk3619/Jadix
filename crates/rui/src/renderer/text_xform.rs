@@ -2,7 +2,9 @@
 //!
 //! - [`GlyphRasterMode::Coverage`]: axis-aligned UI — glyphon swash + Nearest (sharp small sizes).
 //! - [`GlyphRasterMode::Bake`]: sticky supersampled RGBA + Linear(+mip) textured quad (follow anim).
+//!   Emoji leaves composite **Twemoji** into the Bake RT (never font outline / MSDF).
 //! - [`GlyphRasterMode::Msdf`]: distance-field bake for free scale / 3D (after Bake band).
+//!   **Not used** when the leaf contains emoji (color would collapse to a wireframe).
 //!
 //! Shader path for Msdf: `median(RGB)` + screen-space `pxRange` in `textured_rect.wgsl`
 //! (single-channel SDF packed as R=G=B today; true multi-channel MSDF later).
@@ -43,8 +45,7 @@ pub fn bake_text_texture_key_for_3d(
     box_w: f32,
     box_h: f32,
 ) -> Option<String> {
-    let (bw, bh, _) =
-        crate::utils::text_texture::text_xform_bake_box(box_w, box_h, font_size_px);
+    let (bw, bh, _) = crate::utils::text_texture::text_xform_bake_box(box_w, box_h, font_size_px);
     crate::utils::text_texture::ensure_text_xform_texture(
         text,
         font_size_px,
@@ -187,8 +188,8 @@ pub fn text_xform_mode() -> TextXformMode {
 mod tests {
     use super::*;
     use crate::layout::dimension::CssAngle;
-    use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
     use crate::style::transform::{TransformFunction, MAT2D_IDENTITY};
+    use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 
     #[test]
     fn coverage_when_idle_identity() {

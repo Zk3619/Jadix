@@ -927,10 +927,8 @@ fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextS
         if !node.attrs.contains_key("text_align") {
             node.text_style.align = parent.align;
         } else if node.text_style.align == crate::style::TextAlign::MatchParent {
-            node.text_style.align = crate::style::TextAlign::resolve_match_parent(
-                parent.align,
-                parent.direction,
-            );
+            node.text_style.align =
+                crate::style::TextAlign::resolve_match_parent(parent.align, parent.direction);
         }
         if !node.attrs.contains_key("text_color") {
             node.text_style.color = parent.color;
@@ -2687,6 +2685,8 @@ impl LayoutTree {
         } else {
             scroll_acc
         };
+        let paint_nudge = crate::components::button_group::button_group_paint_nudge(element);
+        // 布局原点（文字 / 子节点 / overflow clip）。连体叠边只扩 chrome，不平移整框。
         let mut render_x = abs_x - scroll_for_render[0]
             + element.style.translate[0]
             + lay_w * element.style.translate_pct[0];
@@ -2739,6 +2739,12 @@ impl LayoutTree {
         // Include ancestor scale (CarouselStack: scale lives on the shell; children stay at 1).
         let paint_sx = (ancestor_scale[0] * scale_x).clamp(0.01, 8.0);
         let paint_sy = (ancestor_scale[1] * scale_y).clamp(0.01, 8.0);
+        // ButtonGroup：向共享边加宽 1px，远侧边仍落在布局盒上（避免中间项整框平移后
+        // 与 Separator / 下一项并成 2px 线）。
+        let chrome_x = render_x + paint_nudge[0];
+        let chrome_y = render_y + paint_nudge[1];
+        let chrome_w = (lay_w - paint_nudge[0]).max(0.0);
+        let chrome_h = (lay_h - paint_nudge[1]).max(0.0);
         // Bake CSS independent `scale` into the instance rect so placement matches
         // `visual_paint_aabb` (hover / leave). The SDF shader also applies the affine
         // **linear** part about the rect center — passing `style.scale` again made paint
@@ -2755,7 +2761,7 @@ impl LayoutTree {
                     render_y + (lay_h - sh) * 0.5,
                 )
             } else {
-                (lay_w, lay_h, render_x, render_y)
+                (chrome_w, chrome_h, chrome_x, chrome_y)
             };
         let render_rect = [vis_x, vis_y, vis_w, vis_h];
         #[cfg(feature = "devtools")]
@@ -2872,7 +2878,11 @@ impl LayoutTree {
         // Baking `visible_rect` into pos/size made scrolled borders stick to the viewport edge.
         let border_widths = element.style.resolved_border_widths();
         let border_w = border_widths.into_iter().fold(0.0_f32, f32::max);
-        let use_border_strips = border_w > 0.0 && !element.style.border_is_uniform();
+        let use_border_strips = border_w > 0.0
+            && !element.style.border_is_uniform()
+            // 有圆角时 strip 路径把 radii 钉成 0，ButtonGroup 端段会丢圆角；改走 SDF
+            //（零宽侧仍会画一笔，叠在前一段共享边上，观感与 ShadCN border-l-0 一致）。
+            && !element.style.radii.iter().any(|r| *r > 0.5);
         let sdf_border_w = if use_border_strips { 0.0 } else { border_w };
         let sdf_border_color = if use_border_strips {
             [0.0, 0.0, 0.0, 0.0]
@@ -2911,9 +2921,7 @@ impl LayoutTree {
                 let (tw, th) = gradient_texture_size(render_rect[2], render_rect[3]);
                 let tex_radii = gradient_texture_radii(resolved_radii);
                 let key = ensure_gradient_texture(grad, tw, th, tex_radii);
-                if let Some(draw) =
-                    TexturedDraw::clipped(render_rect, parent_clip, key, opacity)
-                {
+                if let Some(draw) = TexturedDraw::clipped(render_rect, parent_clip, key, opacity) {
                     textured_draws.push(draw);
                 }
                 if has_shadow || (has_border && !use_border_strips) {
@@ -3025,7 +3033,8 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws
+                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
@@ -3038,7 +3047,8 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws
+                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if crate::renderer::gpu2d_enabled() {
@@ -3094,7 +3104,8 @@ impl LayoutTree {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                     {
-                        textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                        textured_draws
+                            .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                         path_tex_drawn = true;
                     }
                 } else if let Some((tex_key, dw, dh)) =
@@ -3107,21 +3118,19 @@ impl LayoutTree {
                     if let Some(draw) =
                         TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                     {
-                        textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                        textured_draws
+                            .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                         path_tex_drawn = true;
                     }
                 }
             } else if let Some((tex_key, dw, dh)) =
-                crate::primitives::svg::svg_raster_from_element_attrs(
-                    &element.attrs,
-                    vis_w,
-                    vis_h,
-                )
+                crate::primitives::svg::svg_raster_from_element_attrs(&element.attrs, vis_w, vis_h)
             {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws
+                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if let Some((tex_key, dw, dh)) =
@@ -3134,7 +3143,8 @@ impl LayoutTree {
                 if let Some(draw) =
                     TexturedDraw::clipped([vis_x, vis_y, dw, dh], clip, tex_key, opacity)
                 {
-                    textured_draws.push(draw.with_transform(crate::style::mat2d_linear(&transform)));
+                    textured_draws
+                        .push(draw.with_transform(crate::style::mat2d_linear(&transform)));
                     path_tex_drawn = true;
                 }
             } else if let Some(quads) = crate::primitives::path::path_quads_from_element_attrs(
@@ -3310,10 +3320,10 @@ impl LayoutTree {
                 let a = ((f32::from(text_style.color[3]) * opacity).round() as u16).min(255) as u8;
                 text_style.color[3] = a;
             }
-            // CSS `scale` must paint like a transform: same visual box as SDF rects, **no
-            // soft-wrap reflow**, and **no per-frame font-size reshape** (that lagged behind
-            // continuous rect scale during CarouselStack drag). Shape at layout size; place
-            // at the scaled top-left; glyphon `TextArea.scale` applies the CSS scale.
+            // CSS `scale` paints like a transform: shape at layout box width (soft-wrap
+            // follows element `white-space`, not visual scale), place at scaled top-left,
+            // and apply glyphon `TextArea.scale` — no per-frame font-size reshape (that
+            // lagged behind continuous rect scale during CarouselStack drag).
             let text_scale =
                 if (paint_sx - 1.0).abs() > f32::EPSILON || (paint_sy - 1.0).abs() > f32::EPSILON {
                     paint_sx.min(paint_sy)
@@ -3321,9 +3331,6 @@ impl LayoutTree {
                     1.0
                 };
             let scaled_paint = (text_scale - 1.0).abs() > f32::EPSILON;
-            if scaled_paint {
-                text_style.white_space = crate::style::WhiteSpace::Nowrap;
-            }
             let (text_x0, text_y0, text_w, text_h) = if scaled_paint {
                 // vis_* = layout box scaled about center; width/height stay layout for shaping.
                 (vis_x, vis_y, lay_w, lay_h)
@@ -3332,9 +3339,7 @@ impl LayoutTree {
             };
             let text_x = text_x0 - text_style.scroll_x.max(0.0) * text_scale;
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
-            let is_animated_icon = element
-                .attrs
-                .contains_key(crate::utils::ATTR_ANIMATED_ICON);
+            let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
             // Glyphon cannot rotate. Lucide + spin/rotate → cached glyph texture + element
             // transform. lucide-animated always uses the same TexturedDraw path (frame bake).
             let icon_needs_xform = is_animated_icon
@@ -3400,13 +3405,15 @@ impl LayoutTree {
                         .get(crate::utils::ATTR_ICON_NAME)
                         .map(|s| s.as_str());
                     // 2× supersample for crisp spin; draw into layout `side` square.
-                    if let Some((tex_key, _)) = crate::utils::icon_texture::ensure_lucide_icon_texture(
-                        icon_name,
-                        glyph,
-                        side,
-                        text_style.color,
-                        2.0,
-                    ) {
+                    if let Some((tex_key, _)) =
+                        crate::utils::icon_texture::ensure_lucide_icon_texture(
+                            icon_name,
+                            glyph,
+                            side,
+                            text_style.color,
+                            2.0,
+                        )
+                    {
                         textured_draws.push(crate::renderer::TexturedDraw {
                             rect: full,
                             uv_offset: [0.0, 0.0],
@@ -3419,242 +3426,252 @@ impl LayoutTree {
                     }
                 }
             } else {
-            // Named Lucide icons: raster SVG/path to texture (bypasses PUA + fontdb drift).
-            let mut lucide_static_textured = false;
-            if is_icon {
-                if let (Some(icon_name), Some(glyph)) = (
-                    element
-                        .attrs
-                        .get(crate::utils::ATTR_ICON_NAME)
-                        .map(|s| s.as_str())
-                        .filter(|n| !n.is_empty()),
-                    element.text.as_deref(),
-                ) {
-                    if crate::utils::lucide_svg_inner(icon_name).is_some() {
-                        let side = lay_w
-                            .max(lay_h)
-                            .max(text_style.size)
-                            .max(1.0);
-                        if let Some((tex_key, _)) =
-                            crate::utils::icon_texture::ensure_lucide_icon_texture(
-                                Some(icon_name),
-                                glyph,
-                                side,
-                                text_style.color,
-                                2.0,
-                            )
-                        {
-                            let cx = vis_x + vis_w * 0.5;
-                            let cy = vis_y + vis_h * 0.5;
-                            textured_draws.push(crate::renderer::TexturedDraw {
-                                rect: [cx - side * 0.5, cy - side * 0.5, side, side],
-                                uv_offset: [0.0, 0.0],
-                                uv_scale: [1.0, 1.0],
-                                texture_key: tex_key,
-                                opacity,
-                                tint_rgb: [1.0, 1.0, 1.0],
-                                transform: text_world_linear,
-                            });
-                            lucide_static_textured = true;
+                // Named Lucide icons: raster SVG/path to texture (bypasses PUA + fontdb drift).
+                let mut lucide_static_textured = false;
+                if is_icon {
+                    if let (Some(icon_name), Some(glyph)) = (
+                        element
+                            .attrs
+                            .get(crate::utils::ATTR_ICON_NAME)
+                            .map(|s| s.as_str())
+                            .filter(|n| !n.is_empty()),
+                        element.text.as_deref(),
+                    ) {
+                        if crate::utils::lucide_svg_inner(icon_name).is_some() {
+                            let side = lay_w.max(lay_h).max(text_style.size).max(1.0);
+                            if let Some((tex_key, _)) =
+                                crate::utils::icon_texture::ensure_lucide_icon_texture(
+                                    Some(icon_name),
+                                    glyph,
+                                    side,
+                                    text_style.color,
+                                    2.0,
+                                )
+                            {
+                                let cx = vis_x + vis_w * 0.5;
+                                let cy = vis_y + vis_h * 0.5;
+                                textured_draws.push(crate::renderer::TexturedDraw {
+                                    rect: [cx - side * 0.5, cy - side * 0.5, side, side],
+                                    uv_offset: [0.0, 0.0],
+                                    uv_scale: [1.0, 1.0],
+                                    texture_key: tex_key,
+                                    opacity,
+                                    tint_rgb: [1.0, 1.0, 1.0],
+                                    transform: text_world_linear,
+                                });
+                                lucide_static_textured = true;
+                            }
                         }
                     }
                 }
-            }
-            if !lucide_static_textured {
-            // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
-            // Coverage (glyphon) for idle axis-aligned UI text only.
-            let sticky_xform = ancestor_sticky_xform
-                || crate::renderer::element_wants_sticky_xform(element);
-            let glyph_raster = crate::renderer::resolve_glyph_raster(
-                sticky_xform,
-                &text_world_linear,
-                text_scale,
-            );
-            let use_bake = matches!(
-                glyph_raster,
-                crate::renderer::GlyphRasterMode::Bake | crate::renderer::GlyphRasterMode::Msdf
-            ) && !text.trim().is_empty()
-                && text_w >= 1.0
-                && text_h >= 1.0;
-
-            let mut text_baked = false;
-            if use_bake {
-                let align = match text_style.align {
-                    crate::style::TextAlign::Left
-                    | crate::style::TextAlign::Start
-                    | crate::style::TextAlign::MatchParent => glyphon::cosmic_text::Align::Left,
-                    crate::style::TextAlign::Center => glyphon::cosmic_text::Align::Center,
-                    crate::style::TextAlign::Right | crate::style::TextAlign::End => {
-                        glyphon::cosmic_text::Align::Right
-                    }
-                    crate::style::TextAlign::Justify | crate::style::TextAlign::JustifyAll => {
-                        glyphon::cosmic_text::Align::Justified
-                    }
-                };
-                let as_sdf = matches!(glyph_raster, crate::renderer::GlyphRasterMode::Msdf);
-                let dpr = if as_sdf {
-                    (3.5 * text_scale).clamp(3.5, 8.0)
-                } else {
-                    crate::renderer::BAKE_OVERSAMPLE
-                };
-                let draw_w = text_w * text_scale;
-                let draw_h = text_h * text_scale;
-                // CSS `scale` is baked into vis rect / draw_w (not `world_linear`). Rasterize
-                // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
-                // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
-                let bake_font_size = text_style.size * text_scale;
-                // Expand to line-height + ink pad; draw the padded quad so glyphs aren't
-                // clipped. Intersect only with ancestor scroll clip — not the text leaf's
-                // overflow:hidden (that would crop the pad we just added).
-                let (bake_w, bake_h, pad) = crate::utils::text_texture::text_xform_bake_box(
-                    draw_w.max(1.0),
-                    draw_h.max(1.0),
-                    bake_font_size,
-                );
-                let bake_result = if let Some(spans) =
-                    element.text_spans.as_ref().filter(|s| !s.is_empty())
-                {
-                    crate::utils::text_texture::ensure_text_xform_texture_spans(
-                        spans,
-                        bake_font_size,
-                        text_style.weight,
-                        text_style.color,
-                        bake_w,
-                        bake_h,
-                        align,
-                        dpr,
-                        as_sdf,
-                    )
-                } else {
-                    crate::utils::text_texture::ensure_text_xform_texture(
-                        text,
-                        bake_font_size,
-                        text_style.weight,
-                        text_style.color,
-                        bake_w,
-                        bake_h,
-                        align,
-                        dpr,
-                        as_sdf,
-                    )
-                };
-                if let Some((tex_key, _)) = bake_result {
-                    let full = [text_x - pad, text_y0 - pad, bake_w, bake_h];
-                    if let Some(draw) =
-                        TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
-                    {
-                        let mut draw = draw.with_transform(crate::style::mat2d_linear(
-                            &text_world_linear,
-                        ));
-                        if as_sdf {
-                            let c = text_style.color;
-                            draw = draw.with_tint_rgb([
-                                c[0] as f32 / 255.0,
-                                c[1] as f32 / 255.0,
-                                c[2] as f32 / 255.0,
-                            ]);
-                        }
-                        textured_draws.push(draw);
-                    }
-                    text_baked = true;
-                } else if sticky_xform
-                    || !crate::style::transform::mat2d_is_axis_aligned(&text_world_linear)
-                {
-                    log::warn!(
-                        target: "rui::text_xform",
-                        "text xform bake failed for {:?}; skipping (no glyphon transform fallback)",
-                        text
+                if !lucide_static_textured {
+                    // Sticky Bake / Msdf: supersampled texture + matrix (same world_linear as shell).
+                    // Coverage (glyphon) for idle axis-aligned UI text only.
+                    let sticky_xform = ancestor_sticky_xform
+                        || crate::renderer::element_wants_sticky_xform(element);
+                    let glyph_raster = crate::renderer::resolve_glyph_raster(
+                        sticky_xform,
+                        &text_world_linear,
+                        text_scale,
                     );
-                    text_baked = true;
-                }
-            }
-            if !text_baked {
-            let prepared = if is_icon {
-                None
-            } else {
-                let line_height = if let Some(lh) = text_style.line_height_px {
-                    lh
-                } else if let Some(scale) = text_style.line_height_scale {
-                    text_style.size * scale
-                } else {
-                    text_style.size * crate::style::tailwind_default_leading_scale(text_style.size)
-                };
-                if let Some(spans) = element.text_spans.as_ref().filter(|s| !s.is_empty()) {
-                    Some(crate::text::prepare_rich(
-                        spans,
-                        text_style.size,
-                        text_style.weight,
-                        line_height,
-                    ))
-                } else {
-                    let blob: std::borrow::Cow<'_, str> = match element.text_shape_suffix.as_deref()
-                    {
-                        Some(suf) if !suf.is_empty() => {
-                            std::borrow::Cow::Owned(format!("{}{}", text, suf))
+                    let use_bake = matches!(
+                        glyph_raster,
+                        crate::renderer::GlyphRasterMode::Bake
+                            | crate::renderer::GlyphRasterMode::Msdf
+                    ) && !text.trim().is_empty()
+                        && text_w >= 1.0
+                        && text_h >= 1.0;
+
+                    let mut text_baked = false;
+                    if use_bake {
+                        let align = match text_style.align {
+                            crate::style::TextAlign::Left
+                            | crate::style::TextAlign::Start
+                            | crate::style::TextAlign::MatchParent => {
+                                glyphon::cosmic_text::Align::Left
+                            }
+                            crate::style::TextAlign::Center => glyphon::cosmic_text::Align::Center,
+                            crate::style::TextAlign::Right | crate::style::TextAlign::End => {
+                                glyphon::cosmic_text::Align::Right
+                            }
+                            crate::style::TextAlign::Justify
+                            | crate::style::TextAlign::JustifyAll => {
+                                glyphon::cosmic_text::Align::Justified
+                            }
+                        };
+                        let as_sdf = matches!(glyph_raster, crate::renderer::GlyphRasterMode::Msdf)
+                            && !crate::renderer::emoji_detect::text_contains_emoji(text);
+                        let dpr = if as_sdf {
+                            (3.5 * text_scale).clamp(3.5, 8.0)
+                        } else if crate::renderer::emoji_detect::text_contains_emoji(text)
+                            && text_scale > 1.25
+                        {
+                            // Sticky hover:scale on emoji — raise Bake oversample instead of MSDF.
+                            (crate::renderer::BAKE_OVERSAMPLE * text_scale).clamp(3.0, 6.0)
+                        } else {
+                            crate::renderer::BAKE_OVERSAMPLE
+                        };
+                        let draw_w = text_w * text_scale;
+                        let draw_h = text_h * text_scale;
+                        // CSS `scale` is baked into vis rect / draw_w (not `world_linear`). Rasterize
+                        // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
+                        // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
+                        let bake_font_size = text_style.size * text_scale;
+                        // Expand to line-height + ink pad; draw the padded quad so glyphs aren't
+                        // clipped. Intersect only with ancestor scroll clip — not the text leaf's
+                        // overflow:hidden (that would crop the pad we just added).
+                        let (bake_w, bake_h, pad) = crate::utils::text_texture::text_xform_bake_box(
+                            draw_w.max(1.0),
+                            draw_h.max(1.0),
+                            bake_font_size,
+                        );
+                        let bake_result = if let Some(spans) =
+                            element.text_spans.as_ref().filter(|s| !s.is_empty())
+                        {
+                            crate::utils::text_texture::ensure_text_xform_texture_spans(
+                                spans,
+                                bake_font_size,
+                                text_style.weight,
+                                text_style.color,
+                                bake_w,
+                                bake_h,
+                                align,
+                                dpr,
+                                as_sdf,
+                            )
+                        } else {
+                            crate::utils::text_texture::ensure_text_xform_texture(
+                                text,
+                                bake_font_size,
+                                text_style.weight,
+                                text_style.color,
+                                bake_w,
+                                bake_h,
+                                align,
+                                dpr,
+                                as_sdf,
+                            )
+                        };
+                        if let Some((tex_key, _)) = bake_result {
+                            let full = [text_x - pad, text_y0 - pad, bake_w, bake_h];
+                            if let Some(draw) =
+                                TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
+                            {
+                                let mut draw = draw
+                                    .with_transform(crate::style::mat2d_linear(&text_world_linear));
+                                if as_sdf {
+                                    let c = text_style.color;
+                                    draw = draw.with_tint_rgb([
+                                        c[0] as f32 / 255.0,
+                                        c[1] as f32 / 255.0,
+                                        c[2] as f32 / 255.0,
+                                    ]);
+                                }
+                                // Emoji Bake is RGBA Twemoji — never apply text-color tint.
+                                textured_draws.push(draw);
+                            }
+                            text_baked = true;
+                        } else if sticky_xform
+                            || !crate::style::transform::mat2d_is_axis_aligned(&text_world_linear)
+                        {
+                            log::warn!(
+                                target: "rui::text_xform",
+                                "text xform bake failed for {:?}; skipping (no glyphon transform fallback)",
+                                text
+                            );
+                            text_baked = true;
                         }
-                        _ => std::borrow::Cow::Borrowed(text.as_str()),
-                    };
-                    Some(crate::text::prepare(
-                        blob.as_ref(),
-                        text_style.size,
-                        text_style.weight,
-                        line_height,
-                    ))
-                }
-            };
-            text_nodes.push(TextLayoutInfo {
-                text: text.clone(),
-                shape_suffix: element.text_shape_suffix.clone(),
-                spans: element.text_spans.clone(),
-                template_id: element.template_id.clone(),
-                x: text_x,
-                y: text_y0,
-                width: text_w,
-                height: text_h,
-                // Clip/hidden/ellipsis nowrap must scissor to the field. Growing the leaf to
-                // intrinsic (button nowrap) used to make `clip == leaf`, so glyphs and
-                // selection painted past the input border.
-                clip_bounds: if text_style.overflow.allows_caret_scroll() {
-                    hidden_input_text_clip(parent_clip, render_rect)
-                } else if element_text_clips_to_box(element) {
-                    Some(intersect_rect(parent_clip, render_rect))
-                } else {
-                    // Ancestor overflow only for wrapping text: leaf scissor hides spilled
-                    // bidi/emoji glyphs when measure under-counts soft-wrap lines.
-                    clip
-                },
-                style: text_style.clone(),
-                prepared,
-                glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
-                paint_scale: text_scale,
-                paint_transform: text_world_linear,
-                paint_origin: [
-                    text_x + text_w * text_scale * 0.5,
-                    text_y0 + text_h * text_scale * 0.5,
-                ],
-                glyph_raster,
-            });
-            let chrome_clip = if text_style.overflow.allows_caret_scroll() {
-                hidden_input_text_clip(parent_clip, render_rect)
-            } else if element_text_clips_to_box(element) {
-                Some(intersect_rect(parent_clip, render_rect))
-            } else {
-                clip
-            };
-            push_input_chrome_instances(
-                instances,
-                input_chrome_instances,
-                text,
-                &text_style,
-                text_x,
-                text_y0,
-                text_w,
-                text_h,
-                chrome_clip,
-                opacity,
-            );
-            } // !text_baked
-            } // !lucide_static_textured
+                    }
+                    if !text_baked {
+                        let prepared = if is_icon {
+                            None
+                        } else {
+                            let line_height = if let Some(lh) = text_style.line_height_px {
+                                lh
+                            } else if let Some(scale) = text_style.line_height_scale {
+                                text_style.size * scale
+                            } else {
+                                text_style.size
+                                    * crate::style::tailwind_default_leading_scale(text_style.size)
+                            };
+                            if let Some(spans) =
+                                element.text_spans.as_ref().filter(|s| !s.is_empty())
+                            {
+                                Some(crate::text::prepare_rich(
+                                    spans,
+                                    text_style.size,
+                                    text_style.weight,
+                                    line_height,
+                                ))
+                            } else {
+                                let blob: std::borrow::Cow<'_, str> =
+                                    match element.text_shape_suffix.as_deref() {
+                                        Some(suf) if !suf.is_empty() => {
+                                            std::borrow::Cow::Owned(format!("{}{}", text, suf))
+                                        }
+                                        _ => std::borrow::Cow::Borrowed(text.as_str()),
+                                    };
+                                Some(crate::text::prepare(
+                                    blob.as_ref(),
+                                    text_style.size,
+                                    text_style.weight,
+                                    line_height,
+                                ))
+                            }
+                        };
+                        text_nodes.push(TextLayoutInfo {
+                            text: text.clone(),
+                            shape_suffix: element.text_shape_suffix.clone(),
+                            spans: element.text_spans.clone(),
+                            template_id: element.template_id.clone(),
+                            x: text_x,
+                            y: text_y0,
+                            width: text_w,
+                            height: text_h,
+                            // Clip/hidden/ellipsis nowrap must scissor to the field. Growing the leaf to
+                            // intrinsic (button nowrap) used to make `clip == leaf`, so glyphs and
+                            // selection painted past the input border.
+                            clip_bounds: if text_style.overflow.allows_caret_scroll() {
+                                hidden_input_text_clip(parent_clip, render_rect)
+                            } else if element_text_clips_to_box(element) {
+                                Some(intersect_rect(parent_clip, render_rect))
+                            } else {
+                                // Ancestor overflow only for wrapping text: leaf scissor hides spilled
+                                // bidi/emoji glyphs when measure under-counts soft-wrap lines.
+                                clip
+                            },
+                            style: text_style.clone(),
+                            prepared,
+                            glyph_fx: element.attrs.get(crate::renderer::ATTR_GLYPH_FX).cloned(),
+                            paint_scale: text_scale,
+                            paint_transform: text_world_linear,
+                            paint_origin: [
+                                text_x + text_w * text_scale * 0.5,
+                                text_y0 + text_h * text_scale * 0.5,
+                            ],
+                            glyph_raster,
+                        });
+                        let chrome_clip = if text_style.overflow.allows_caret_scroll() {
+                            hidden_input_text_clip(parent_clip, render_rect)
+                        } else if element_text_clips_to_box(element) {
+                            Some(intersect_rect(parent_clip, render_rect))
+                        } else {
+                            clip
+                        };
+                        push_input_chrome_instances(
+                            instances,
+                            input_chrome_instances,
+                            text,
+                            &text_style,
+                            text_x,
+                            text_y0,
+                            text_w,
+                            text_h,
+                            chrome_clip,
+                            opacity,
+                        );
+                    } // !text_baked
+                } // !lucide_static_textured
             } // else !icon_spin_paint
         }
 
@@ -4658,8 +4675,13 @@ fn push_input_chrome_instances(
             let prefix_w =
                 prefix_width_logical(line_body, from, style.size, style.weight, line_height);
             let end_w = prefix_width_logical(line_body, to, style.size, style.weight, line_height);
-            let line_w =
-                prefix_width_logical(line_body, line_body.len(), style.size, style.weight, line_height);
+            let line_w = prefix_width_logical(
+                line_body,
+                line_body.len(),
+                style.size,
+                style.weight,
+                line_height,
+            );
             let align_dx = style.align_inline_offset(line_w, box_w);
             let pan = style.overflow.allows_caret_scroll();
             let sel_w = if pan {
@@ -4694,8 +4716,13 @@ fn push_input_chrome_instances(
     let (line_i, local) = line_and_local(ix);
     let (_line_start, line_body) = line_body_at(line_i);
     let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
-    let line_w =
-        prefix_width_logical(line_body, line_body.len(), style.size, style.weight, line_height);
+    let line_w = prefix_width_logical(
+        line_body,
+        line_body.len(),
+        style.size,
+        style.weight,
+        line_height,
+    );
     let align_dx = style.align_inline_offset(line_w, box_w);
     let caret_w = 2.0_f32;
     let mut caret_x = x + align_dx + prefix_w;
@@ -5418,14 +5445,16 @@ mod portal_hoist_tests {
         );
         let path = hit_path(&root, 200.0, 200.0);
         assert!(
-            path.iter().any(|e| e.portal_key.as_deref() == Some("panel:plain")),
+            path.iter()
+                .any(|e| e.portal_key.as_deref() == Some("panel:plain")),
             "hit must land on the hoisted panel; path={:?}",
             path.iter()
                 .map(|e| (e.focus_id.clone(), e.portal_key.clone()))
                 .collect::<Vec<_>>()
         );
         assert!(
-            path.iter().all(|e| e.focus_id.as_deref() != Some("under-btn")),
+            path.iter()
+                .all(|e| e.focus_id.as_deref() != Some("under-btn")),
             "page control under the panel must not receive the hit"
         );
     }
@@ -5436,8 +5465,7 @@ mod portal_hoist_tests {
         use crate::core::reactivity::Signal;
         use crate::core::tree::PointerEvents;
         use crate::utils::popup::{
-            mount_modal_layer, mount_viewport_portal_stage, swallow_clicks,
-            underlay_close_on_click,
+            mount_modal_layer, mount_viewport_portal_stage, swallow_clicks, underlay_close_on_click,
         };
 
         // Special-purpose pass-through: empty stage chrome → underlay, not page.
@@ -5455,13 +5483,10 @@ mod portal_hoist_tests {
             .justify_center()
             .child(panel);
         let underlay = underlay_close_on_click(Signal::new(true), 1000);
-        let mut root = Element::new()
-            .w(400.0)
-            .h(400.0)
-            .child(mount_modal_layer(
-                underlay,
-                mount_viewport_portal_stage(stage, 1001),
-            ));
+        let mut root = Element::new().w(400.0).h(400.0).child(mount_modal_layer(
+            underlay,
+            mount_viewport_portal_stage(stage, 1001),
+        ));
         assert!(hoist_portal_subtrees(&mut root) >= 1);
         let mut tree = LayoutTree::new();
         let _ = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
@@ -5980,6 +6005,36 @@ mod portal_hoist_tests {
             label.style.size > 10.0,
             "layout font size must stay unscaled for stable reshape; got {}",
             label.style.size
+        );
+    }
+
+    /// Dialog `zoom-in-95` keeps `scale` < 1 during entrance; soft-wrapping description
+    /// must still use layout width (not forced nowrap) so lines match the stable frame.
+    #[test]
+    fn css_scale_preserves_soft_wrap_during_paint() {
+        let long = "desktop_smoke #7: Body 内含 Select; 先开下拉再 Esc, 应只关顶层浮层。";
+        let child = Element::new().w(200.0).h(60.0).text(long);
+        let mut shell = Element::new().w(200.0).h(60.0).child(child);
+        shell.style.scale = [0.95, 0.95];
+        let mut root = Element::new().w(400.0).h(400.0).child(shell);
+
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+
+        let label = result
+            .text_nodes
+            .iter()
+            .find(|t| t.text.contains("desktop_smoke"))
+            .expect("scaled description text");
+        assert!(
+            label.style.white_space == crate::style::WhiteSpace::Normal,
+            "CSS scale must not force nowrap during paint; got {:?}",
+            label.style.white_space
+        );
+        assert!(
+            (label.paint_scale - 0.95).abs() < 0.02,
+            "paint_scale must carry CSS scale; got {}",
+            label.paint_scale
         );
     }
 

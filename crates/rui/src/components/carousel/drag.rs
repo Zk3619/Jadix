@@ -1,8 +1,7 @@
 //! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
 
-use super::*;
 use super::geometry::*;
-
+use super::*;
 
 // ── Drag ─────────────────────────────────────────────────────────────────────
 
@@ -128,7 +127,13 @@ pub(super) fn drag_clamp_offset(drag: &CarouselDrag, off: f32) -> f32 {
 }
 
 /// 由视觉 offset 得到 nearest 逻辑 index（拖拽松手吸附用）。
-pub(super) fn drag_nearest_index(drag: &CarouselDrag, visual: f32, step: f32, cc: usize, hi: usize) -> usize {
+pub(super) fn drag_nearest_index(
+    drag: &CarouselDrag,
+    visual: f32,
+    step: f32,
+    cc: usize,
+    hi: usize,
+) -> usize {
     let n = drag.count.peek().max(1);
     if step <= 1.0 {
         return drag.index.peek().min(hi);
@@ -145,7 +150,13 @@ pub(super) fn drag_nearest_index(drag: &CarouselDrag, visual: f32, step: f32, cc
 }
 
 /// 吸附目标：以视觉位置为准（过半格跟 nearest）；仅「几乎未动且仍在起点半格内」才钉回按下时的 index。
-pub(super) fn resolve_snap_index(drag: &CarouselDrag, visual: f32, step: f32, cc: usize, hi: usize) -> usize {
+pub(super) fn resolve_snap_index(
+    drag: &CarouselDrag,
+    visual: f32,
+    step: f32,
+    cc: usize,
+    hi: usize,
+) -> usize {
     let start = drag.index.peek().min(hi);
     let nearest = drag_nearest_index(drag, visual, step, cc, hi);
     let start_off = -((start + cc) as f32) * step;

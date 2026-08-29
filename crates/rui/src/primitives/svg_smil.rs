@@ -201,14 +201,30 @@ fn apply_group_attr(xf: &mut String, opacity: &mut f32, node: &SvgNode, t: f32) 
 
 fn set_shape_transform(mut node: SvgNode, transform: String) -> SvgNode {
     match &mut node {
-        SvgNode::Circle { transform: slot, .. }
-        | SvgNode::Ellipse { transform: slot, .. }
-        | SvgNode::Path { transform: slot, .. }
-        | SvgNode::Rect { transform: slot, .. }
-        | SvgNode::Line { transform: slot, .. }
-        | SvgNode::Polyline { transform: slot, .. }
-        | SvgNode::Use { transform: slot, .. }
-        | SvgNode::Group { transform: slot, .. } => {
+        SvgNode::Circle {
+            transform: slot, ..
+        }
+        | SvgNode::Ellipse {
+            transform: slot, ..
+        }
+        | SvgNode::Path {
+            transform: slot, ..
+        }
+        | SvgNode::Rect {
+            transform: slot, ..
+        }
+        | SvgNode::Line {
+            transform: slot, ..
+        }
+        | SvgNode::Polyline {
+            transform: slot, ..
+        }
+        | SvgNode::Use {
+            transform: slot, ..
+        }
+        | SvgNode::Group {
+            transform: slot, ..
+        } => {
             *slot = transform;
         }
         _ => {}
@@ -448,9 +464,7 @@ fn apply_attr_to_shape(mut node: SvgNode, attr: &str, value: &str) -> SvgNode {
             _ => {}
         },
         SvgNode::Group {
-            opacity,
-            transform,
-            ..
+            opacity, transform, ..
         } => match key.as_str() {
             "opacity" => {
                 if let Ok(v) = value.parse::<f32>() {
@@ -531,18 +545,18 @@ fn apply_smil_node(node: &SvgNode, t: f32) -> SvgNode {
                         xf = apply_animate_transform(&xf, &children[i], t);
                         i += 1;
                     }
-                    SvgNode::Animate {
-                        attribute_name, ..
-                    }
-                    | SvgNode::Set {
-                        attribute_name, ..
-                    } if is_group_level_attr(attribute_name) => {
+                    SvgNode::Animate { attribute_name, .. }
+                    | SvgNode::Set { attribute_name, .. }
+                        if is_group_level_attr(attribute_name) =>
+                    {
                         apply_group_attr(&mut xf, &mut op, &children[i], t);
                         i += 1;
                     }
                     smil if matches!(
                         smil,
-                        SvgNode::Animate { .. } | SvgNode::Set { .. } | SvgNode::AnimateTransform { .. }
+                        SvgNode::Animate { .. }
+                            | SvgNode::Set { .. }
+                            | SvgNode::AnimateTransform { .. }
                     ) =>
                     {
                         // Shape-targeted SMIL with no preceding shape in this group — drop.

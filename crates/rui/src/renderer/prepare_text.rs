@@ -1185,7 +1185,13 @@ pub(crate) fn load_twemoji_raster(
     pixel_size: u16,
 ) -> Option<super::text::EmojiRaster> {
     let base = twemoji_dir();
-    let path = base.join(twemoji_filename(sequence));
+    let mut path = base.join(twemoji_filename(sequence));
+    if !Path::new(&path).exists() {
+        let stripped: String = sequence.chars().filter(|&c| c as u32 != 0xFE0F).collect();
+        if stripped != sequence {
+            path = base.join(twemoji_filename(&stripped));
+        }
+    }
     if !Path::new(&path).exists() {
         return None;
     }
@@ -2575,7 +2581,9 @@ pub fn prepare_text_frame(
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
                 // Same-line backstop if a slot advance collapses; reset on soft-wrap.
-                let mut emoji_left_cursor = 0.0_f32;
+                // NEG_INFINITY so the first glyph may sit slightly left of 0 when ink
+                // overflows the slot equally on both sides (not packed to the left).
+                let mut emoji_left_cursor = f32::NEG_INFINITY;
                 let mut emoji_line_top: Option<f32> = None;
                 for seg in segments {
                     let TextSegment::Emoji { text, start } = seg else {
@@ -2596,7 +2604,7 @@ pub fn prepare_text_frame(
                         Some((l, t)) => (l, t + emoji_baseline_layout_tweak(scaled_size)),
                         None => {
                             let prefix = layout_text.get(..start).unwrap_or("");
-                            let left = measure_prefix_width(
+                            let prefix_w = measure_prefix_width(
                                 unsafe { &mut *text_renderer.font_system },
                                 prefix,
                                 scaled_size,
@@ -2611,6 +2619,9 @@ pub fn prepare_text_frame(
                                     start
                                 );
                             }
+                            // Same bearing as the slot path — prefix-only left pasted ink
+                            // to the start of the cell with blank on the right.
+                            let left = prefix_w + (advance - ink_draw) * 0.5;
                             let top = emoji_baseline_offset_fallback(scaled_size);
                             (left, top)
                         }

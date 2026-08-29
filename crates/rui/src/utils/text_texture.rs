@@ -20,9 +20,11 @@ static CACHE: Mutex<Option<HashMap<String, Entry>>> = Mutex::new(None);
 const MAX_CACHE: usize = 128;
 
 /// Key prefix — coverage bake; `upload_rgba8_linear_with_mips` (linear Unorm).
-pub const TEXT_XFORM_TEX_PREFIX: &str = "rui_text_xform_v2:";
+/// v3: Twemoji color composite for emoji leaves (never font outline / MSDF).
+pub const TEXT_XFORM_TEX_PREFIX: &str = "rui_text_xform_v3:";
 
 /// Key prefix — single-channel SDF packed as R=G=B; same linear mip upload path.
+/// Emoji-bearing strings must **not** use this path (color would collapse to wireframe).
 pub const TEXT_MSDF_TEX_PREFIX: &str = "rui_text_msdf_v1:";
 
 /// SDF spread in supersampled pixels (normalize: 128 = edge).
@@ -111,9 +113,13 @@ pub fn ensure_text_xform_texture(
     h_key.hash(&mut hasher);
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
+    let wants_emoji_color = bake_wants_twemoji(text);
+    // Color emoji must stay RGBA Bake — MSDF collapses Twemoji to a tinted wireframe.
+    let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
-    // Bump when bake / SDF semantics change (invalidates stale CPU caches).
-    5u8.hash(&mut hasher);
+    wants_emoji_color.hash(&mut hasher);
+    // Bump when bake / SDF / emoji-Twemoji semantics change (invalidates stale CPU caches).
+    6u8.hash(&mut hasher);
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -128,8 +134,16 @@ pub fn ensure_text_xform_texture(
         return Some((key, box_w));
     }
 
-    let (w, h, mut rgba) =
-        rasterize_text_rgba(text, font_size_px, font_weight, color, box_w, box_h, align, dpr)?;
+    let (w, h, mut rgba) = rasterize_text_rgba(
+        text,
+        font_size_px,
+        font_weight,
+        color,
+        box_w,
+        box_h,
+        align,
+        dpr,
+    )?;
     // Reject empty bitmaps (font/shape failure); caller may fall back to Coverage glyphon.
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return None;
@@ -189,9 +203,11 @@ pub fn ensure_text_xform_texture_spans(
     h_key.hash(&mut hasher);
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
+    let wants_emoji_color = spans.iter().any(|s| bake_wants_twemoji(&s.text));
+    let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
-    4u8.hash(&mut hasher); // rich-span bake schema version
-    5u8.hash(&mut hasher); // bake font scale + SDF shader alignment
+    wants_emoji_color.hash(&mut hasher);
+    6u8.hash(&mut hasher); // rich-span + Twemoji bake schema
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -332,6 +348,11 @@ pub fn flush_text_xform_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool 
     any
 }
 
+fn bake_wants_twemoji(text: &str) -> bool {
+    crate::renderer::emoji_layout::custom_glyph_layout_enabled()
+        && crate::renderer::emoji_detect::text_contains_emoji(text)
+}
+
 fn rasterize_text_rgba(
     text: &str,
     font_size_px: f32,
@@ -352,15 +373,32 @@ fn rasterize_text_rgba(
         let th = ph.round().max(1.0) as u32;
 
         let family = crate::renderer::text_hit::best_font_family(fs);
-        let weight =
-            crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
+        let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
         let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(pw), Some(ph));
         let attrs = glyphon::Attrs::new()
             .family(family)
             .weight(glyphon::fontdb::Weight(weight))
             .color(glyphon::Color::rgba(color[0], color[1], color[2], color[3]));
-        buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
+
+        // Sticky Bake used to shape raw emoji codepoints → font Mask/CBDT outlines
+        // (lucide-like wireframes). Match Coverage: invisible slots + Twemoji RGBA blit.
+        let wants_twemoji = bake_wants_twemoji(text);
+        let layout;
+        if wants_twemoji {
+            layout = crate::renderer::emoji_layout::plan_emoji_layout_text(text);
+            crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
+                &mut buffer,
+                &layout,
+                &attrs,
+                glyphon::Shaping::Advanced,
+                size,
+                lh,
+            );
+        } else {
+            layout = text.to_string();
+            buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
+        }
         for line in buffer.lines.iter_mut() {
             line.set_align(Some(align));
         }
@@ -396,6 +434,11 @@ fn rasterize_text_rgba(
                         ]
                     })
                     .unwrap_or(color);
+                // Slot attrs use alpha=0; skip any residual ink so Twemoji isn't underlaid
+                // by a CJK/font outline.
+                if glyph_color[3] == 0 {
+                    continue;
+                }
                 match image.content {
                     glyphon::SwashContent::Mask => {
                         blit_mask_straight(
@@ -411,7 +454,6 @@ fn rasterize_text_rgba(
                         );
                     }
                     glyphon::SwashContent::SubpixelMask => {
-                        // RGB coverage → max channel as alpha; never treat as RGBA8.
                         blit_subpixel_as_mask(
                             &mut rgba,
                             tw,
@@ -425,14 +467,81 @@ fn rasterize_text_rgba(
                         );
                     }
                     glyphon::SwashContent::Color => {
+                        // Prefer Twemoji below; ignore font CBDT when custom glyphs are on.
+                        if wants_twemoji {
+                            continue;
+                        }
                         blit_rgba_straight(&mut rgba, tw, th, &image.data, gw, gh, gx, gy);
                     }
                 }
             }
         }
 
+        if wants_twemoji {
+            composite_twemoji_into_bake(&mut rgba, tw, th, &buffer, text, &layout, size);
+        }
+
         Some((tw, th, rgba))
     })
+}
+
+/// Blit Twemoji PNGs into a Bake RT at the same centers Coverage uses for custom glyphs.
+fn composite_twemoji_into_bake(
+    rgba: &mut [u8],
+    tw: u32,
+    th: u32,
+    buffer: &glyphon::Buffer,
+    original: &str,
+    layout: &str,
+    font_size_px: f32,
+) {
+    use crate::renderer::emoji_layout;
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let (ink, _advance, _) = emoji_layout::emoji_metrics(font_size_px);
+    let pixel_size = emoji_layout::emoji_ink_pixel_size(font_size_px);
+    let ink_draw = (pixel_size as f32).min(ink);
+
+    let emojis: Vec<&str> = original
+        .graphemes(true)
+        .filter(|g| crate::renderer::emoji_detect::grapheme_is_emoji(g))
+        .collect();
+    if emojis.is_empty() {
+        return;
+    }
+
+    let mut emoji_i = 0usize;
+    let mut pos = 0usize;
+    for c in layout.chars() {
+        let start = pos;
+        pos += c.len_utf8();
+        if c != emoji_layout::EMOJI_LAYOUT_SLOT {
+            continue;
+        }
+        let Some(seq) = emojis.get(emoji_i).copied() else {
+            break;
+        };
+        emoji_i += 1;
+        let Some((left, top)) =
+            emoji_layout::custom_emoji_left_centered_top(buffer, layout, start, ink_draw, ink_draw)
+        else {
+            continue;
+        };
+        let Some(raster) = crate::renderer::prepare_text::load_twemoji_raster(seq, pixel_size)
+        else {
+            continue;
+        };
+        blit_rgba_straight(
+            rgba,
+            tw,
+            th,
+            &raster.rgba,
+            raster.width as u32,
+            raster.height as u32,
+            left.round() as i32,
+            top.round() as i32,
+        );
+    }
 }
 
 /// Fill chip/mention pill backgrounds into `rgba` before glyph blits (metadata = span_index+1).
@@ -559,8 +668,7 @@ fn rasterize_rich_text_rgba(
         let th = ph.round().max(1.0) as u32;
 
         let family = crate::renderer::text_hit::best_font_family(fs);
-        let weight =
-            crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
+        let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
         let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
         buffer.set_size(Some(pw), Some(ph));
         let base_attrs = glyphon::Attrs::new()
@@ -639,12 +747,28 @@ fn rasterize_rich_text_rgba(
                 match image.content {
                     glyphon::SwashContent::Mask => {
                         blit_mask_straight(
-                            &mut rgba, tw, th, &image.data, gw, gh, gx, gy, glyph_color,
+                            &mut rgba,
+                            tw,
+                            th,
+                            &image.data,
+                            gw,
+                            gh,
+                            gx,
+                            gy,
+                            glyph_color,
                         );
                     }
                     glyphon::SwashContent::SubpixelMask => {
                         blit_subpixel_as_mask(
-                            &mut rgba, tw, th, &image.data, gw, gh, gx, gy, glyph_color,
+                            &mut rgba,
+                            tw,
+                            th,
+                            &image.data,
+                            gw,
+                            gh,
+                            gx,
+                            gy,
+                            glyph_color,
                         );
                     }
                     glyphon::SwashContent::Color => {
@@ -695,13 +819,11 @@ fn blit_mask_straight(
                 continue;
             }
             let inv = 255 - sa as u32;
-            dst[i] = (((color[0] as u32 * sa as u32) + (dst[i] as u32 * inv * da) / 255) / out_a)
-                as u8;
-            dst[i + 1] = (((color[1] as u32 * sa as u32)
-                + (dst[i + 1] as u32 * inv * da) / 255)
+            dst[i] =
+                (((color[0] as u32 * sa as u32) + (dst[i] as u32 * inv * da) / 255) / out_a) as u8;
+            dst[i + 1] = (((color[1] as u32 * sa as u32) + (dst[i + 1] as u32 * inv * da) / 255)
                 / out_a) as u8;
-            dst[i + 2] = (((color[2] as u32 * sa as u32)
-                + (dst[i + 2] as u32 * inv * da) / 255)
+            dst[i + 2] = (((color[2] as u32 * sa as u32) + (dst[i + 2] as u32 * inv * da) / 255)
                 / out_a) as u8;
             dst[i + 3] = out_a as u8;
         }
@@ -777,11 +899,9 @@ fn blit_rgba_straight(
             let inv = 255 - sa as u32;
             dst[i] =
                 (((src[si] as u32 * sa as u32) + (dst[i] as u32 * inv * da) / 255) / out_a) as u8;
-            dst[i + 1] = (((src[si + 1] as u32 * sa as u32)
-                + (dst[i + 1] as u32 * inv * da) / 255)
+            dst[i + 1] = (((src[si + 1] as u32 * sa as u32) + (dst[i + 1] as u32 * inv * da) / 255)
                 / out_a) as u8;
-            dst[i + 2] = (((src[si + 2] as u32 * sa as u32)
-                + (dst[i + 2] as u32 * inv * da) / 255)
+            dst[i + 2] = (((src[si + 2] as u32 * sa as u32) + (dst[i + 2] as u32 * inv * da) / 255)
                 / out_a) as u8;
             dst[i + 3] = out_a as u8;
         }
@@ -813,8 +933,56 @@ mod tests {
         assert!(sdf[c] > 128, "inside expected >128, got {}", sdf[c]);
         assert_eq!(sdf[c + 3], 255);
         // Prefix constants stable for upload routing.
-        assert_eq!(TEXT_XFORM_TEX_PREFIX, "rui_text_xform_v2:");
+        assert_eq!(TEXT_XFORM_TEX_PREFIX, "rui_text_xform_v3:");
         assert_eq!(TEXT_MSDF_TEX_PREFIX, "rui_text_msdf_v1:");
+    }
+
+    #[test]
+    fn bake_emoji_composites_twemoji_color_not_wireframe() {
+        // Repro: sticky Bake without Twemoji used font Mask → lucide-like outline.
+        let font = 28.0_f32;
+        let (bw, bh, _) = text_xform_bake_box(48.0, 48.0, font);
+        let Some((key, _)) = ensure_text_xform_texture(
+            "👍",
+            font,
+            400,
+            [0, 0, 0, 255], // black text color — wireframe path would be near-monochrome black
+            bw,
+            bh,
+            glyphon::cosmic_text::Align::Center,
+            3.0,
+            true, // would be MSDF; must be forced to RGBA Bake for emoji
+        ) else {
+            // Twemoji assets missing in some CI sandboxes — skip soft.
+            return;
+        };
+        assert!(
+            key.starts_with(TEXT_XFORM_TEX_PREFIX),
+            "emoji must not use MSDF prefix, got {key}"
+        );
+        let Some((w, h, rgba)) = cache_get(&key) else {
+            panic!("bake cache miss after ensure");
+        };
+        assert!(w > 0 && h > 0);
+        // Twemoji has chromatic pixels; a tinted outline bake is nearly R≈G≈B.
+        let mut chromatic = 0u32;
+        let mut opaque = 0u32;
+        for px in rgba.chunks_exact(4) {
+            if px[3] < 32 {
+                continue;
+            }
+            opaque += 1;
+            let max = px[0].max(px[1]).max(px[2]);
+            let min = px[0].min(px[1]).min(px[2]);
+            if (max as i32 - min as i32) > 24 {
+                chromatic += 1;
+            }
+        }
+        assert!(opaque > 20, "expected opaque emoji ink, opaque={opaque}");
+        assert!(
+            chromatic > 5,
+            "expected Twemoji color variance (not wireframe), chromatic={chromatic}/opaque={opaque}"
+        );
     }
 
     #[test]

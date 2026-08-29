@@ -190,7 +190,7 @@ pub mod image_ops {
     pub use crate::media::{
         blur, brighten, contrast, crop, encode_jpeg, encode_png, encode_webp, flip_horizontal,
         flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90,
-        unsharpen, to_rgba_image, FilterType,
+        to_rgba_image, unsharpen, FilterType,
     };
 }
 

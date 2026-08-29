@@ -318,8 +318,7 @@ pub fn radio_group_scope(
 ) -> Element {
     let id = crate::utils::resolve_instance_id(id, "radio");
     let default_value = default_value.into();
-    let value =
-        resolve_string_signal(value, &id, "radio", default_value);
+    let value = resolve_string_signal(value, &id, "radio", default_value);
     with_child_owner(move || {
         provide_context(
             radio_group_context(),

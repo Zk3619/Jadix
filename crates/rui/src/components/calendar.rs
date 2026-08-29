@@ -464,9 +464,7 @@ fn build_calendar_view(
             .border_width(1.0)
             .border_color(tokens::border());
     }
-    root = root.child(
-        reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
-    );
+    root = root.child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none());
     if !disabled {
         let y_k = y_sig;
         let m_k = m_sig;

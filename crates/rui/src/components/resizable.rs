@@ -134,12 +134,7 @@ thread_local! {
 }
 
 fn begin_resizable_drag(id: impl Into<String>, drag: ResizableDrag, x: f32, y: f32) {
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::Resizable,
-        id,
-        x,
-        y,
-    );
+    crate::utils::pointer_drag::begin(crate::utils::pointer_drag::DragKind::Resizable, id, x, y);
     RESIZABLE_DRAG.with(|d| *d.borrow_mut() = Some(drag));
 }
 
@@ -268,19 +263,19 @@ fn parse_parts(body: Element) -> Vec<Part> {
                 let min_size = parse_f32_attr(&el, ATTR_MIN_SIZE, 10.0);
                 let max_size = parse_f32_attr(&el, ATTR_MAX_SIZE, 100.0);
                 // Prefer inner children as content; otherwise the element itself (text etc.).
-                let content = if el.children.len() == 1 && el.text.as_ref().is_none_or(|t| t.is_empty())
-                {
-                    el.children.pop().unwrap()
-                } else if !el.children.is_empty() {
-                    let kids = std::mem::take(&mut el.children);
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(kids)
-                } else {
-                    let mut bare = Element::new();
-                    bare.text = el.text.take();
-                    bare
-                };
+                let content =
+                    if el.children.len() == 1 && el.text.as_ref().is_none_or(|t| t.is_empty()) {
+                        el.children.pop().unwrap()
+                    } else if !el.children.is_empty() {
+                        let kids = std::mem::take(&mut el.children);
+                        let mut frag = Element::new();
+                        frag.set_attr("rui_fragment", "1");
+                        frag.children(kids)
+                    } else {
+                        let mut bare = Element::new();
+                        bare.text = el.text.take();
+                        bare
+                    };
                 out.push(Part::Panel(PanelPart {
                     default_size,
                     min_size: min_size.clamp(0.0, 100.0),
@@ -333,11 +328,7 @@ fn normalize_defaults(panels: &mut [PanelPart]) {
     }
 }
 
-fn apply_panel_grows(
-    root: &mut Element,
-    layout_tree: &mut LayoutTree,
-    sizes: &[f32],
-) -> bool {
+fn apply_panel_grows(root: &mut Element, layout_tree: &mut LayoutTree, sizes: &[f32]) -> bool {
     fn walk(el: &mut Element, layout_tree: &mut LayoutTree, sizes: &[f32], changed: &mut bool) {
         if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_PANEL) {
             let i = el
@@ -719,7 +710,11 @@ fn build_group_from_parts(
 
     let mut kids: Vec<Element> = Vec::new();
     for (i, panel) in panels.into_iter().enumerate() {
-        let grow = init_sizes.get(i).copied().unwrap_or(panel.default_size).max(0.0001);
+        let grow = init_sizes
+            .get(i)
+            .copied()
+            .unwrap_or(panel.default_size)
+            .max(0.0001);
         let mut pane: Element = r#box()
             .flex_grow(grow)
             .flex_shrink(1.0)
@@ -781,12 +776,7 @@ fn build_group_from_parts(
     };
 
     let mut root: Element = if let Some(h) = height {
-        r#box()
-            .w("100%")
-            .h(h)
-            .overflow("hidden")
-            .child(row)
-            .into()
+        r#box().w("100%").h(h).overflow("hidden").child(row).into()
     } else {
         r#box()
             .w("100%")
@@ -834,9 +824,8 @@ pub fn resizable_panel_group_scope(
 ) -> Element {
     let id = resolve_instance_id(id, "resizable");
     let orientation = ResizableOrientation::parse(orientation.as_ref());
-    let sizes = sizes.unwrap_or_else(|| {
-        use_signal(format!("{id}__rz_sizes").as_str(), Vec::<f32>::new)
-    });
+    let sizes =
+        sizes.unwrap_or_else(|| use_signal(format!("{id}__rz_sizes").as_str(), Vec::<f32>::new));
 
     with_child_owner(|| {
         let body_el = body();
@@ -850,15 +839,7 @@ pub fn resizable_panel_group_scope(
                 sizes,
             },
         );
-        build_group_from_parts(
-            id,
-            orientation,
-            class,
-            height,
-            sizes,
-            parts,
-            group_bounds,
-        )
+        build_group_from_parts(id, orientation, class, height, sizes, parts, group_bounds)
     })
 }
 
@@ -1199,41 +1180,34 @@ mod tests {
 
     #[test]
     fn resizable_panel_group_scope_builds() {
-        let el = resizable_panel_group_scope(
-            "rz2",
-            "horizontal",
-            None,
-            Some(120.0),
-            None,
-            || {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(vec![
-                    ResizablePanel(ResizablePanelProps {
-                        default_size: Some(40.0),
-                        min_size: Some(20.0),
-                        max_size: None,
-                        class: None,
-                        children: Some(crate::primitives::text::text("A").into()),
-                        base: None,
-                    }),
-                    ResizableHandle(ResizableHandleProps {
-                        with_handle: Some(true),
-                        class: None,
-                        children: None,
-                        base: None,
-                    }),
-                    ResizablePanel(ResizablePanelProps {
-                        default_size: Some(60.0),
-                        min_size: None,
-                        max_size: None,
-                        class: None,
-                        children: Some(crate::primitives::text::text("B").into()),
-                        base: None,
-                    }),
-                ])
-            },
-        );
+        let el = resizable_panel_group_scope("rz2", "horizontal", None, Some(120.0), None, || {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                ResizablePanel(ResizablePanelProps {
+                    default_size: Some(40.0),
+                    min_size: Some(20.0),
+                    max_size: None,
+                    class: None,
+                    children: Some(crate::primitives::text::text("A").into()),
+                    base: None,
+                }),
+                ResizableHandle(ResizableHandleProps {
+                    with_handle: Some(true),
+                    class: None,
+                    children: None,
+                    base: None,
+                }),
+                ResizablePanel(ResizablePanelProps {
+                    default_size: Some(60.0),
+                    min_size: None,
+                    max_size: None,
+                    class: None,
+                    children: Some(crate::primitives::text::text("B").into()),
+                    base: None,
+                }),
+            ])
+        });
         assert_eq!(
             el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some(SLOT_GROUP)
@@ -1274,13 +1248,7 @@ mod tests {
                             min_size: Some(10.0),
                             max_size: None,
                             class: None,
-                            children: Some(
-                                r#box()
-                                    .w("100%")
-                                    .h("100%")
-                                    .bg(tokens::muted())
-                                    .into(),
-                            ),
+                            children: Some(r#box().w("100%").h("100%").bg(tokens::muted()).into()),
                             base: None,
                         }),
                         ResizableHandle(ResizableHandleProps {
@@ -1295,11 +1263,7 @@ mod tests {
                             max_size: None,
                             class: None,
                             children: Some(
-                                r#box()
-                                    .w("100%")
-                                    .h("100%")
-                                    .bg(tokens::background())
-                                    .into(),
+                                r#box().w("100%").h("100%").bg(tokens::background()).into(),
                             ),
                             base: None,
                         }),
@@ -1385,11 +1349,7 @@ mod tests {
             "left panel ~30% of 400, got {:?}",
             left
         );
-        assert!(
-            right[2] > 200.0,
-            "right panel ~70% of 400, got {:?}",
-            right
-        );
+        assert!(right[2] > 200.0, "right panel ~70% of 400, got {:?}", right);
 
         // Simulate drag: move pointer +40px on a 400px group → ~10%
         begin_resizable_drag(
@@ -1422,53 +1382,34 @@ mod tests {
         use crate::core::tree::LayoutTree;
 
         let (_owner, mut root) = create_root(|| {
-            resizable_panel_group_scope(
-                "rz_v_align",
-                "vertical",
-                None,
-                Some(224.0),
-                None,
-                || {
-                    let mut frag = Element::new();
-                    frag.set_attr("rui_fragment", "1");
-                    frag.children(vec![
-                        ResizablePanel(ResizablePanelProps {
-                            default_size: Some(30.0),
-                            min_size: Some(10.0),
-                            max_size: None,
-                            class: None,
-                            children: Some(
-                                r#box()
-                                    .w("100%")
-                                    .h("100%")
-                                    .bg(tokens::muted())
-                                    .into(),
-                            ),
-                            base: None,
-                        }),
-                        ResizableHandle(ResizableHandleProps {
-                            with_handle: Some(true),
-                            class: None,
-                            children: None,
-                            base: None,
-                        }),
-                        ResizablePanel(ResizablePanelProps {
-                            default_size: Some(70.0),
-                            min_size: Some(10.0),
-                            max_size: None,
-                            class: None,
-                            children: Some(
-                                r#box()
-                                    .w("100%")
-                                    .h("100%")
-                                    .bg(tokens::background())
-                                    .into(),
-                            ),
-                            base: None,
-                        }),
-                    ])
-                },
-            )
+            resizable_panel_group_scope("rz_v_align", "vertical", None, Some(224.0), None, || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![
+                    ResizablePanel(ResizablePanelProps {
+                        default_size: Some(30.0),
+                        min_size: Some(10.0),
+                        max_size: None,
+                        class: None,
+                        children: Some(r#box().w("100%").h("100%").bg(tokens::muted()).into()),
+                        base: None,
+                    }),
+                    ResizableHandle(ResizableHandleProps {
+                        with_handle: Some(true),
+                        class: None,
+                        children: None,
+                        base: None,
+                    }),
+                    ResizablePanel(ResizablePanelProps {
+                        default_size: Some(70.0),
+                        min_size: Some(10.0),
+                        max_size: None,
+                        class: None,
+                        children: Some(r#box().w("100%").h("100%").bg(tokens::background()).into()),
+                        base: None,
+                    }),
+                ])
+            })
         });
 
         let mut layout = LayoutTree::new();
@@ -1487,11 +1428,7 @@ mod tests {
         }
         fn find_panel<'a>(el: &'a Element, idx: usize) -> Option<&'a Element> {
             if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_PANEL)
-                && el
-                    .attrs
-                    .get(ATTR_PANEL_INDEX)
-                    .map(|s| s.as_str())
-                    == Some(&idx.to_string())
+                && el.attrs.get(ATTR_PANEL_INDEX).map(|s| s.as_str()) == Some(&idx.to_string())
             {
                 return Some(el);
             }

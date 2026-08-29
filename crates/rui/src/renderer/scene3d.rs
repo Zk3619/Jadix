@@ -288,14 +288,20 @@ impl Scene3dGpu {
                 let hw = 0.55f32;
                 let hh = 0.14f32;
                 let y = 0.95f32;
-                let corners = [[-hw, y, 0.0], [hw, y, 0.0], [hw, y + hh * 2.0, 0.0], [-hw, y + hh * 2.0, 0.0]];
+                let corners = [
+                    [-hw, y, 0.0],
+                    [hw, y, 0.0],
+                    [hw, y + hh * 2.0, 0.0],
+                    [-hw, y + hh * 2.0, 0.0],
+                ];
                 let mut min_x = f32::MAX;
                 let mut min_y = f32::MAX;
                 let mut max_x = f32::MIN;
                 let mut max_y = f32::MIN;
                 let mut ok = true;
                 for c in corners {
-                    let Some(ndc) = crate::renderer::project_point_mat4(&mvp, c[0], c[1], c[2]) else {
+                    let Some(ndc) = crate::renderer::project_point_mat4(&mvp, c[0], c[1], c[2])
+                    else {
                         ok = false;
                         break;
                     };
@@ -308,13 +314,12 @@ impl Scene3dGpu {
                 if ok {
                     let rw = (max_x - min_x).max(4.0);
                     let rh = (max_y - min_y).max(4.0);
-                    let flags = if tex_key
-                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
-                    {
-                        1.0
-                    } else {
-                        0.0
-                    };
+                    let flags =
+                        if tex_key.starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX) {
+                            1.0
+                        } else {
+                            0.0
+                        };
                     let inst = TexturedInstanceInput {
                         rect_pos: [min_x, min_y],
                         rect_size: [rw, rh],

@@ -1317,7 +1317,12 @@ pub(crate) fn sync_context_menu_item_paint_subtree(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    const CTX_SLOTS: &[&str] = &[SLOT_ITEM, SLOT_SUB_TRIGGER, SLOT_CHECKBOX_ITEM, SLOT_RADIO_ITEM];
+    const CTX_SLOTS: &[&str] = &[
+        SLOT_ITEM,
+        SLOT_SUB_TRIGGER,
+        SLOT_CHECKBOX_ITEM,
+        SLOT_RADIO_ITEM,
+    ];
     let cfg = item_chrome::ItemPaintConfig {
         attr_slot: ATTR_SLOT,
         shortcut_slot: SLOT_SHORTCUT,

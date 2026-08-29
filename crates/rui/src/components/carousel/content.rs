@@ -1,9 +1,8 @@
 //! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
 
-use super::*;
-use super::geometry::*;
 use super::drag::*;
-
+use super::geometry::*;
+use super::*;
 
 fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // 与 Single/Multi 一致：舞台宽度 = 视口 100%；高度由内容撑开（不用写死 rem）。

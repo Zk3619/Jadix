@@ -336,10 +336,7 @@ pub fn popover_surface(mut body: Element, width: Option<&str>) -> Element {
 
 /// ShadCN `PopoverContent`：Portal + floating；仅在 open 时构建。
 /// `ui!` 中由宏编成此函数。
-pub fn popover_content(
-    opts: PopoverContentOpts,
-    body: impl Fn() -> Element + 'static,
-) -> Element {
+pub fn popover_content(opts: PopoverContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_popover("PopoverContent");
     let open = ctx.open;
     let id = ctx.id.clone();

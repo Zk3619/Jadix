@@ -55,6 +55,7 @@ pub fn upload_rgba8_linear(
 }
 
 /// SDF/MSDF text atlas — linear Unorm + bilinear sampler (FS reconstructs the edge).
+#[allow(dead_code)]
 pub fn upload_rgba8_msdf(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

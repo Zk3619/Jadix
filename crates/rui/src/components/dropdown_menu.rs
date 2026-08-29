@@ -921,7 +921,9 @@ pub fn dropdown_menu_radio_group(
     };
     let default_value = default_value.unwrap_or_default();
     let value = value.unwrap_or_else(|| {
-        use_signal(format!("{rid}__value").as_str(), move || default_value.clone())
+        use_signal(format!("{rid}__value").as_str(), move || {
+            default_value.clone()
+        })
     });
     let kids = with_child_owner(|| {
         provide_context(
@@ -1082,7 +1084,9 @@ pub fn dropdown_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> 
         _ => format!("{}__sub{seq}", parent.id),
     };
     let open = use_signal(format!("{sid}__open").as_str(), || false);
-    let trigger_fid = use_signal(format!("{sid}__tfid").as_str(), || format!("{sid}__trigger"));
+    let trigger_fid = use_signal(format!("{sid}__tfid").as_str(), || {
+        format!("{sid}__trigger")
+    });
     let kids = with_child_owner(|| {
         provide_context(
             dropdown_menu_sub_context(),

@@ -271,7 +271,11 @@ fn sample_track(track: &RecipeTrack, state: &str, elapsed: f32, bridging: bool) 
     // Bridging is only for explicit state changes — idle `normal` must snap to
     // its own keyframe (not reverse-lerp from `animate`).
     if series.len() == 1 && bridging {
-        let other = if state == "animate" { "normal" } else { "animate" };
+        let other = if state == "animate" {
+            "normal"
+        } else {
+            "animate"
+        };
         if let Some(from_v) = track
             .keyframes
             .get(other)
@@ -284,7 +288,11 @@ fn sample_track(track: &RecipeTrack, state: &str, elapsed: f32, bridging: bool) 
             }
         }
     }
-    let delay = track.transition.as_ref().and_then(|t| t.delay).unwrap_or(0.0);
+    let delay = track
+        .transition
+        .as_ref()
+        .and_then(|t| t.delay)
+        .unwrap_or(0.0);
     let dur = track_duration(track, &track.prop);
     let repeat = track
         .transition
@@ -292,16 +300,9 @@ fn sample_track(track: &RecipeTrack, state: &str, elapsed: f32, bridging: bool) 
         .and_then(|t| t.repeat)
         .unwrap_or(0.0);
     let local = (elapsed - delay).max(0.0);
-    let ease = track
-        .transition
-        .as_ref()
-        .and_then(|t| t.ease.as_deref());
+    let ease = track.transition.as_ref().and_then(|t| t.ease.as_deref());
 
-    let mut t = if dur <= 1e-6 {
-        1.0
-    } else {
-        local / dur
-    };
+    let mut t = if dur <= 1e-6 { 1.0 } else { local / dur };
     if repeat < 0.0 {
         t = t.fract();
     } else if repeat > 0.0 {
@@ -317,10 +318,7 @@ fn sample_track(track: &RecipeTrack, state: &str, elapsed: f32, bridging: bool) 
     } else {
         t = t.clamp(0.0, 1.0);
     }
-    let times = track
-        .transition
-        .as_ref()
-        .and_then(|tr| tr.times.as_deref());
+    let times = track.transition.as_ref().and_then(|tr| tr.times.as_deref());
     // Motion: when `times` is set, keyframe offsets are absolute on the duration
     // timeline (typically linear). Ease applies within segments only — do not
     // ease the global t before looking up `times`, or stagger blinks skew.
@@ -381,10 +379,18 @@ fn sample_tracks(
                 let series = keyframe_string_series(kf);
                 if !series.is_empty() {
                     // Snap: before midpoint keep first, after keep last (full morph needs SVG path interp).
-                    let delay = track.transition.as_ref().and_then(|t| t.delay).unwrap_or(0.0);
+                    let delay = track
+                        .transition
+                        .as_ref()
+                        .and_then(|t| t.delay)
+                        .unwrap_or(0.0);
                     let dur = track_duration(track, "d");
                     let local = (elapsed - delay).max(0.0);
-                    let t = if dur <= 1e-6 { 1.0 } else { (local / dur).clamp(0.0, 1.0) };
+                    let t = if dur <= 1e-6 {
+                        1.0
+                    } else {
+                        (local / dur).clamp(0.0, 1.0)
+                    };
                     let idx = if t < 0.5 { 0 } else { series.len() - 1 };
                     out.d = Some(series[idx].clone());
                 }
@@ -506,9 +512,7 @@ fn motion_dash_attrs_ex(pl: f32, po: f32, path_spacing: Option<f32>, total_len: 
     // lets the *next* dash period leak onto the path (flicker / ghost residue,
     // e.g. activity drawing L→R while a stump flashes on the right).
     // Floor spacing at 1 so gap ≥ path length → at most one visible dash segment.
-    let spacing = path_spacing
-        .unwrap_or((1.0 - pl).max(0.0))
-        .max(1.0);
+    let spacing = path_spacing.unwrap_or((1.0 - pl).max(0.0)).max(1.0);
     let dash = pl * l;
     let gap = spacing * l;
     let offset = -po * l;
@@ -551,14 +555,7 @@ fn emit_animated_icon_svg_ex(
     let mut inner = String::new();
     for node in &recipe.nodes {
         emit_recipe_node(
-            &mut inner,
-            node,
-            recipe,
-            state,
-            elapsed,
-            color_css,
-            root_op,
-            bridging,
+            &mut inner, node, recipe, state, elapsed, color_css, root_op, bridging,
         );
     }
 
@@ -632,10 +629,7 @@ fn emit_recipe_node(
         Some(s) if !s.is_empty() => s.to_string(),
         _ => color_css.to_string(),
     };
-    let sw = sp
-        .stroke_width
-        .unwrap_or(recipe.stroke_width)
-        .max(0.0);
+    let sw = sp.stroke_width.unwrap_or(recipe.stroke_width).max(0.0);
     let stroke_w = if stroke_paint == "none" { 0.0 } else { sw };
 
     let stroke_common = format!(
@@ -652,11 +646,10 @@ fn emit_recipe_node(
             out.push_str("</g>");
         }
         "path" => {
-            let d = sp
-                .d
-                .as_deref()
-                .or_else(|| node.attrs.get("d").map(|s| s.as_str()))
-                .unwrap_or("");
+            let d =
+                sp.d.as_deref()
+                    .or_else(|| node.attrs.get("d").map(|s| s.as_str()))
+                    .unwrap_or("");
             if d.is_empty() {
                 return;
             }
@@ -681,11 +674,10 @@ fn emit_recipe_node(
                 .map(|v| format!("{v}"))
                 .or_else(|| node.attrs.get("cy").cloned())
                 .unwrap_or_else(|| "0".into());
-            let r = sp
-                .r
-                .map(|v| format!("{v}"))
-                .or_else(|| node.attrs.get("r").cloned())
-                .unwrap_or_else(|| "0".into());
+            let r =
+                sp.r.map(|v| format!("{v}"))
+                    .or_else(|| node.attrs.get("r").cloned())
+                    .unwrap_or_else(|| "0".into());
             let dash = if wants_dash {
                 let rv = r.parse::<f32>().unwrap_or(1.0).abs().max(1e-3);
                 motion_dash_attrs(pl, po, std::f32::consts::TAU * rv)
@@ -793,9 +785,7 @@ fn emit_recipe_node(
             };
             // Prefer explicit stroke="none" from recipe for filled bars (battery).
             let rect_stroke = if stroke_attr == Some("none") {
-                format!(
-                    "fill=\"{fill_paint}\" stroke=\"none\" stroke-width=\"0\""
-                )
+                format!("fill=\"{fill_paint}\" stroke=\"none\" stroke-width=\"0\"")
             } else {
                 stroke_common.clone()
             };
@@ -942,19 +932,10 @@ pub fn ensure_animated_icon_texture(
     let (elapsed, bridging) = play_store()
         .lock()
         .ok()
-        .and_then(|m| {
-            m.get(&key_id)
-                .map(|p| (p.elapsed, p.bridging))
-        })
+        .and_then(|m| m.get(&key_id).map(|p| (p.elapsed, p.bridging)))
         .unwrap_or((0.0, false));
 
-    let doc = emit_animated_icon_svg_ex(
-        recipe,
-        state,
-        elapsed,
-        &color_css(color),
-        bridging,
-    );
+    let doc = emit_animated_icon_svg_ex(recipe, state, elapsed, &color_css(color), bridging);
     let size = size_px.clamp(8.0, 256.0);
     let dpr = dpr.clamp(1.0, 3.0);
     let side = (size * dpr).ceil().clamp(16.0, 512.0) as u32;
@@ -1120,11 +1101,7 @@ impl From<AnimatedIconBuilder> for Element {
         let tid = format!("anim-icon:{name}:{seq}");
         el.template_id = Some(tid.clone());
         // Default: SVG `bounding-box` — hit own layout container (MDN SVG-only).
-        el = el.pointer_events(
-            pointer_events
-                .as_deref()
-                .unwrap_or("bounding-box"),
-        );
+        el = el.pointer_events(pointer_events.as_deref().unwrap_or("bounding-box"));
 
         if controlled {
             return el;
@@ -1193,11 +1170,7 @@ impl IntoElementList for AnimatedIconBuilder {
 
 /// `ui!` / component entry: `<AnimatedIcon name="heart" size={28.0} />`
 #[allow(non_snake_case)]
-pub fn AnimatedIcon(
-    name: impl AsRef<str>,
-    size: Option<f32>,
-    controlled: Option<bool>,
-) -> Element {
+pub fn AnimatedIcon(name: impl AsRef<str>, size: Option<f32>, controlled: Option<bool>) -> Element {
     let mut b = animated_icon(name.as_ref()).size_px(size.unwrap_or(24.0));
     if controlled.unwrap_or(false) {
         b = b.controlled(true);
@@ -1294,14 +1267,20 @@ mod tests {
             .iter()
             .find(|t| t.prop == "rotate")
             .expect("rotate");
-        assert_eq!(rot.keyframes.get("animate").and_then(value_as_f32), Some(45.0));
+        assert_eq!(
+            rot.keyframes.get("animate").and_then(value_as_f32),
+            Some(45.0)
+        );
         let mid = &r.nodes[1];
         let op = mid
             .tracks
             .iter()
             .find(|t| t.prop == "opacity")
             .expect("opacity");
-        assert_eq!(op.keyframes.get("animate").and_then(value_as_f32), Some(0.0));
+        assert_eq!(
+            op.keyframes.get("animate").and_then(value_as_f32),
+            Some(0.0)
+        );
     }
 
     #[test]
@@ -1309,11 +1288,17 @@ mod tests {
         let r = animated_icon_recipe("check").unwrap();
         let d = r.nodes[0].attrs.get("d").unwrap();
         let total = svg_path_d_length(d);
-        assert!(total > 5.0, "check path should be longer than a few ux, got {total}");
+        assert!(
+            total > 5.0,
+            "check path should be longer than a few ux, got {total}"
+        );
         let doc = emit_animated_icon_svg(r, "animate", 0.0, "#111");
         // t=0 → pathLength 0 → dash starts at 0 (hidden), scaled by real length.
         assert!(doc.contains("stroke-dasharray=\"0 "), "{doc}");
-        assert!(!doc.contains("pathLength=\""), "resvg ignores pathLength; omit it: {doc}");
+        assert!(
+            !doc.contains("pathLength=\""),
+            "resvg ignores pathLength; omit it: {doc}"
+        );
     }
 
     #[test]
@@ -1459,10 +1444,19 @@ mod tests {
             .expect("fill rect");
         assert!(fill.tracks.iter().any(|t| t.prop == "width"));
         let idle = emit_animated_icon_svg(r, "normal", 0.0, "#222");
-        assert!(idle.contains("width=\"0\"") || idle.contains("opacity=\"0\""), "{idle}");
+        assert!(
+            idle.contains("width=\"0\"") || idle.contains("opacity=\"0\""),
+            "{idle}"
+        );
         let end = emit_animated_icon_svg_ex(r, "animate", 0.4, "#222", true);
-        assert!(end.contains("width=\"12\"") || end.contains("width=\"12"), "{end}");
-        assert!(end.contains("fill=\"#222\"") || end.contains("fill=\"rgb"), "{end}");
+        assert!(
+            end.contains("width=\"12\"") || end.contains("width=\"12"),
+            "{end}"
+        );
+        assert!(
+            end.contains("fill=\"#222\"") || end.contains("fill=\"rgb"),
+            "{end}"
+        );
     }
 
     #[test]
@@ -1474,7 +1468,10 @@ mod tests {
             "face scale on root"
         );
         assert!(
-            smile.nodes.iter().any(|n| n.tracks.iter().any(|t| t.prop == "d")),
+            smile
+                .nodes
+                .iter()
+                .any(|n| n.tracks.iter().any(|t| t.prop == "d")),
             "mouth d morph track"
         );
 
@@ -1494,10 +1491,7 @@ mod tests {
 
         let volume = animated_icon_recipe("volume").unwrap();
         assert!(volume.animated);
-        assert!(
-            volume.nodes.iter().any(|n| n.tag == "line"),
-            "mute X lines"
-        );
+        assert!(volume.nodes.iter().any(|n| n.tag == "line"), "mute X lines");
         let v_idle = emit_animated_icon_svg(volume, "normal", 0.0, "#000");
         assert!(v_idle.contains("<line"), "{v_idle}");
         let v_anim = emit_animated_icon_svg(volume, "animate", 0.3, "#000");
@@ -1535,8 +1529,7 @@ mod tests {
         let mut el: Element = animated_icon("bell").size_px(32.0).controlled(true).into();
         set_animated_icon_state(&mut el, "animate");
         let fg = crate::style::parse_text_color("foreground");
-        let (tex, _) =
-            ensure_animated_icon_texture(&el, 32.0, fg, 2.0).expect("tex");
+        let (tex, _) = ensure_animated_icon_texture(&el, 32.0, fg, 2.0).expect("tex");
         assert!(tex.starts_with("rui_lucide_anim:"));
     }
 }

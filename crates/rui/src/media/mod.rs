@@ -16,6 +16,6 @@ pub use decode::{
 };
 pub use image::{
     blur, brighten, contrast, crop, encode_jpeg, encode_png, encode_webp, flip_horizontal,
-    flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90, unsharpen,
-    to_rgba_image, FilterType,
+    flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90,
+    to_rgba_image, unsharpen, FilterType,
 };

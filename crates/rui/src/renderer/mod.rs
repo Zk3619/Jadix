@@ -38,19 +38,12 @@ pub use css_filter::{
 };
 pub use effect::{
     enrich_render_graph, queue_capture, queue_effect, queue_from_attrs as queue_effect_from_attrs,
-    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob,
-    EffectJob, EffectKind, EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN,
-    ATTR_EFFECT_STRENGTH,
+    queue_subtree_wrap, take_capture_jobs, take_effect_jobs, CaptureJob, EffectJob, EffectKind,
+    EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN, ATTR_EFFECT_STRENGTH,
 };
 pub use effect_pass::EffectPassGpu;
 pub use geometry2d::{gpu2d_enabled, path_to_instances, quads_to_instances};
 pub use glyph_fx::{GlyphFx, GlyphFxKind, ATTR_GLYPH_FX};
-pub use text_xform::{
-    bake_text_texture_key_for_3d, element_wants_sticky_xform, mat2d_uniform_scale, mat4_from_mat2d,
-    mat4_identity, mat4_mul, ndc_to_pixel, project_point_mat4, resolve_glyph_raster,
-    text_xform_mode, text_xform_offscreen, BAKE_OVERSAMPLE, BAKE_SCALE_MAX, BAKE_SCALE_MIN,
-    GlyphRasterMode, TextXformMode,
-};
 pub use graph::{
     env_dump_enabled as render_graph_dump_enabled, store_last_dump as store_render_graph_dump,
     PassKind, RenderGraph, RenderPassNode,
@@ -64,6 +57,12 @@ pub use text::RuiTextRenderer;
 pub use text_hit::{
     best_font_family, hit_test_input_is_line_side_blank, hit_test_input_text_index,
     is_single_line_text_box, measure_prefix_width, truncate_with_ellipsis,
+};
+pub use text_xform::{
+    bake_text_texture_key_for_3d, element_wants_sticky_xform, mat2d_uniform_scale, mat4_from_mat2d,
+    mat4_identity, mat4_mul, ndc_to_pixel, project_point_mat4, resolve_glyph_raster,
+    text_xform_mode, text_xform_offscreen, GlyphRasterMode, TextXformMode, BAKE_OVERSAMPLE,
+    BAKE_SCALE_MAX, BAKE_SCALE_MIN,
 };
 pub use textured_pipeline::{TexturedInstanceInput, TexturedQuadPipeline};
 

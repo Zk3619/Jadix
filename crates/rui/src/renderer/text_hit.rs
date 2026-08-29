@@ -193,7 +193,10 @@ pub fn truncate_with_ellipsis(
 }
 
 pub fn best_font_family(font_system: &glyphon::FontSystem) -> glyphon::Family<'static> {
-    crate::utils::font::resolve_family(font_system.db(), crate::utils::font::default_ui_sans_family_list())
+    crate::utils::font::resolve_family(
+        font_system.db(),
+        crate::utils::font::default_ui_sans_family_list(),
+    )
 }
 
 /// 在水平方向命中：返回 UTF-8 字节下标（落在某字符簇边界，与光标语义一致）。

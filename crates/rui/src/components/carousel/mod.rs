@@ -60,30 +60,29 @@ use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty, UnitSlot};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::motion::{clear_motion, ensure_motion_transitions, motion_sync_status, snap_motion_baseline};
+use crate::utils::motion::{
+    clear_motion, ensure_motion_transitions, motion_sync_status, snap_motion_baseline,
+};
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::build_icon_text_node;
 
 mod autoplay;
+pub mod builder;
+pub mod content;
+mod drag;
+mod geometry;
 mod loop_anim;
 mod snap;
 mod track;
-mod geometry;
-mod drag;
-pub mod content;
-pub mod builder;
 
-use geometry::*;
+pub use builder::{carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder};
+#[allow(unused_imports)] // used by external crates / window layer
+pub(crate) use drag::is_carousel_dragging;
 use drag::*;
-pub use builder::{
-    carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder,
-};
 pub(crate) use drag::{
     carousel_next_wake_at, clear_carousel_drag_if_any, tick_carousel_autoplay, tick_carousel_drag,
 };
-#[allow(unused_imports)] // used by external crates / window layer
-pub(crate) use drag::is_carousel_dragging;
-
+use geometry::*;
 
 use autoplay::{decide_autoplay, AutoplayAction};
 use loop_anim::{loop_reached, LoopAnim};

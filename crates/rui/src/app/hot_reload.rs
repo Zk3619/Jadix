@@ -18,7 +18,7 @@ use winit::event_loop::EventLoopProxy;
 #[cfg(debug_assertions)]
 use super::RuiUserEvent;
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
 
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
@@ -136,7 +136,7 @@ pub(super) struct HotReloadBatch {
     pub(super) asset_paths: Vec<String>,
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 #[derive(Debug, Clone)]
 pub(super) enum HotReloadCommand {
     Reload,
@@ -144,7 +144,7 @@ pub(super) enum HotReloadCommand {
     AssetReload(Vec<String>),
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "hot-reload", derive(Deserialize))]
 pub(super) struct TemplatePatchMsg {
@@ -209,7 +209,7 @@ enum IncomingMessage {
 
 /// WP-R.6：`templates: []` 表示文件解析成功但没有 `ui!` 块，必须整树 `rebuild_ui`，
 /// 禁止对反应槽做模糊/空补丁注入。
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 fn ingest_template_patch(
     batch: &mut HotReloadBatch,
     patch: TemplatePatchMsg,

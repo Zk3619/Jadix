@@ -24,7 +24,12 @@ pub struct SlotListConfig {
 
 impl SlotListConfig {
     /// Toast stack 默认口径（peek / expand gap / 5% 缩尺）。
-    pub fn toast_stack(item_size: f32, collapsed_step: f32, expanded_gap: f32, from_start: bool) -> Self {
+    pub fn toast_stack(
+        item_size: f32,
+        collapsed_step: f32,
+        expanded_gap: f32,
+        from_start: bool,
+    ) -> Self {
         Self {
             item_size,
             collapsed_step,

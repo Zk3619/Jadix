@@ -132,10 +132,7 @@ impl PointerEvents {
     pub fn requires_visibility(self) -> bool {
         matches!(
             self,
-            Self::VisiblePainted
-                | Self::VisibleFill
-                | Self::VisibleStroke
-                | Self::Visible
+            Self::VisiblePainted | Self::VisibleFill | Self::VisibleStroke | Self::Visible
         )
     }
 

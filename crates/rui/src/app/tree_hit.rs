@@ -73,13 +73,7 @@ fn claims_own_bounds(el: &Element) -> bool {
 
 /// 自身指针命中：AABB +（若适用）SVG path fill/stroke 几何（MDN `pointer-events`）。
 #[inline]
-pub(crate) fn element_self_pointer_hit(
-    el: &Element,
-    x: f32,
-    y: f32,
-    vx: f32,
-    vy: f32,
-) -> bool {
+pub(crate) fn element_self_pointer_hit(el: &Element, x: f32, y: f32, vx: f32, vy: f32) -> bool {
     if !claims_own_bounds(el) {
         return false;
     }
@@ -1445,7 +1439,11 @@ mod hover_occlusion_tests {
         leaf.text = Some("hello".into());
         leaf.focus_id = Some(format!("{TEXTAREA_FOCUS_PREFIX}under-ta"));
 
-        let mut field = Element::new().w(200.0).h(80.0).on_click(|| {}).cursor_text();
+        let mut field = Element::new()
+            .w(200.0)
+            .h(80.0)
+            .on_click(|| {})
+            .cursor_text();
         field.layout_bounds = [40.0, 40.0, 200.0, 80.0];
         field.focus_id = Some(format!("{TEXTAREA_FOCUS_PREFIX}under-ta"));
         field = field.child(leaf);

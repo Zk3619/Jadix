@@ -1,8 +1,8 @@
 //! ColorPicker 纹理与面板 UI（产品层）。
 
-use super::*;
 use super::drag::*;
 use super::model::*;
+use super::*;
 
 pub(super) fn sv_texture_key(id: &str, hue: f32) -> String {
     format!("rui_cp_sv:{id}:{:.0}", hue.rem_euclid(360.0))
@@ -117,7 +117,8 @@ pub(super) fn tex_cached_tagged(
 
 /// Re-queue ColorPicker ramps missing from the GPU pool after eviction.
 pub(crate) fn flush_color_picker_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let needed: Vec<String> = TEX_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+    let needed: Vec<String> = TEX_NEEDED
+        .with(|n| std::mem::take(&mut *n.borrow_mut()))
         .into_iter()
         .collect();
     let mut any = false;
@@ -475,7 +476,12 @@ pub(super) fn sync_sv_visuals(
     status
 }
 
-pub(super) fn apply_sv_from_rgb(parsed: Rgba, hue: Signal<f32>, sat: Signal<f32>, val: Signal<f32>) {
+pub(super) fn apply_sv_from_rgb(
+    parsed: Rgba,
+    hue: Signal<f32>,
+    sat: Signal<f32>,
+    val: Signal<f32>,
+) {
     let (h, s, v) = rgb_to_hsv(parsed.r, parsed.g, parsed.b);
     if s > 0.001 && v > 0.001 {
         hue.set(h);
@@ -1119,9 +1125,7 @@ pub(super) fn swatch_grid(
                 b.rounded(round).into()
             }
         };
-        chip = chip
-            .bg(parsed.to_f32())
-            .border(tokens::border(), 1.0);
+        chip = chip.bg(parsed.to_f32()).border(tokens::border(), 1.0);
         let rgba_s = rgba;
         let hue_s = hue;
         let sat_s = sat;
@@ -1401,4 +1405,3 @@ pub(super) fn build_color_picker_view(
     }
     with_trigger_preview_sync(view, id, rgba, fmt_sig)
 }
-

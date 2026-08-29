@@ -215,7 +215,7 @@ impl accesskit::ActivationHandler for AccessKitBootstrap {
 impl ApplicationHandler<super::RuiUserEvent> for super::App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: super::RuiUserEvent) {
         match event {
-            #[cfg(debug_assertions)]
+            #[cfg(all(debug_assertions, feature = "hot-reload"))]
             super::RuiUserEvent::HotReloadWake => {
                 if let Some(state) = (*self.state.borrow_mut()).as_mut() {
                     state.window.request_redraw();

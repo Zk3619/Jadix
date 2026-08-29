@@ -443,8 +443,7 @@ pub fn tabs_scope(
     let id = crate::utils::resolve_instance_id(id, "tabs");
     let default_value = default_value.into();
     let orientation = TabsOrientation::parse(&orientation.into());
-    let value =
-        resolve_string_signal(value, &id, "tabs", default_value);
+    let value = resolve_string_signal(value, &id, "tabs", default_value);
     provide_context(
         tabs_context(),
         TabsCtx {
@@ -500,15 +499,10 @@ pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'stat
     let effect_anchor = anchor.clone();
     reactive_anchor(effect_anchor, move || {
         if selected.get() == want {
-            let mut wrap: Element = vstack()
-                .w("100%")
-                .min_w(0.0)
-                .child(body())
-                .into();
+            let mut wrap: Element = vstack().w("100%").min_w(0.0).child(body()).into();
             wrap.attrs
                 .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
-            wrap.attrs
-                .insert(ATTR_TABS_VALUE.to_string(), want.clone());
+            wrap.attrs.insert(ATTR_TABS_VALUE.to_string(), want.clone());
             wrap = wrap.accesskit_role("tabpanel");
             wrap
         } else {
@@ -610,11 +604,7 @@ pub fn TabsList(
             // 同行仍连体（column gap 0）；折行后略留行距，避免两行芯片贴死。
             row.column_gap(0.0).row_gap("0.25rem")
         };
-        row.w("100%")
-            .min_w(0.0)
-            .max_w("100%")
-            .children(kids)
-            .into()
+        row.w("100%").min_w(0.0).max_w("100%").children(kids).into()
     };
 
     if line {
@@ -904,9 +894,8 @@ pub(crate) fn sync_tabs_trigger_subtree(
         // (shared `radio_selected_sync` without `rui_radio_value`). That turns the text leaf
         // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
         let before = el.children.len();
-        el.children.retain(|c| {
-            c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator")
-        });
+        el.children
+            .retain(|c| c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator"));
         if el.children.len() != before {
             *impact = impact.merge(LayoutStatus::StructureChanged);
         }
@@ -1076,10 +1065,7 @@ mod tests {
             trigger.style.box_sizing,
             taffy::style::BoxSizing::ContentBox
         );
-        assert_eq!(
-            trigger.text_style.align,
-            crate::style::TextAlign::Center
-        );
+        assert_eq!(trigger.text_style.align, crate::style::TextAlign::Center);
         let tn = result
             .text_nodes
             .iter()
@@ -1184,14 +1170,7 @@ mod tests {
     fn tabs_chips_prefer_intrinsic_content_width_in_narrow_parent() {
         let value = use_signal("tabs_intrinsic_w_value", || "sketch".to_string());
         let labels = [
-            "Sketch",
-            "Chrome",
-            "GitHub",
-            "Twitter",
-            "Material",
-            "Block",
-            "Circle",
-            "Slider",
+            "Sketch", "Chrome", "GitHub", "Twitter", "Material", "Block", "Circle", "Slider",
             "Compact",
         ];
         let scope = tabs_scope(
@@ -1231,13 +1210,10 @@ mod tests {
             },
         );
         // Gallery MyCard 形状：窄列 + min_w(0) + padding。
-        let mut root = Element::new().w(360.0).h(240.0).child(
-            Element::new()
-                .w("100%")
-                .min_w(0.0)
-                .p(16.0)
-                .child(scope),
-        );
+        let mut root = Element::new()
+            .w(360.0)
+            .h(240.0)
+            .child(Element::new().w("100%").min_w(0.0).p(16.0).child(scope));
         let mut tree = LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 360.0, 240.0, [-1.0, -1.0]);
 
@@ -1473,20 +1449,13 @@ mod tests {
         let (handle, ()) = create_root(|| {
             let root_e = Rc::clone(&root);
             create_effect(move || {
-                let el = tabs_scope(
-                    "tc-nest",
-                    None,
-                    "date",
-                    "horizontal",
-                    false,
-                    || {
-                        tabs_content("date", || {
-                            reactive_component_live("tc-nest-picker__view", (), |_| {
-                                Element::new().text("Pick a date")
-                            })
+                let el = tabs_scope("tc-nest", None, "date", "horizontal", false, || {
+                    tabs_content("date", || {
+                        reactive_component_live("tc-nest-picker__view", (), |_| {
+                            Element::new().text("Pick a date")
                         })
-                    },
-                );
+                    })
+                });
                 *root_e.borrow_mut() = el;
             });
         });
@@ -1528,21 +1497,14 @@ mod tests {
     #[test]
     fn tabs_sync_strips_stray_radio_indicator_from_trigger() {
         let value = use_signal("tabs_strip_indicator", || "a".to_string());
-        let mut el = tabs_scope(
-            "strip-ind",
-            Some(value),
-            "a",
-            "horizontal",
-            false,
-            || {
-                TabsTrigger(TabsTriggerProps {
-                    value: Some("a".into()),
-                    disabled: None,
-                    children: Some(Element::new().text("Alpha")),
-                    base: None,
-                })
-            },
-        );
+        let mut el = tabs_scope("strip-ind", Some(value), "a", "horizontal", false, || {
+            TabsTrigger(TabsTriggerProps {
+                value: Some("a".into()),
+                disabled: None,
+                children: Some(Element::new().text("Alpha")),
+                base: None,
+            })
+        });
         fn find_trigger_mut(el: &mut Element) -> Option<&mut Element> {
             if is_tabs_trigger(el) {
                 return Some(el);

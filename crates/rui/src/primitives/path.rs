@@ -277,6 +277,79 @@ pub fn filled_rect(x: f32, y: f32, w: f32, h: f32) -> Vec<PathCommand> {
     polygon(&[(x, y), (x + w, y), (x + w, y + h), (x, y + h)])
 }
 
+/// 轴对齐圆角矩形。`radii` = `[tl, tr, br, bl]`，各角自动钳到宽高一半。
+pub fn rounded_rect(x: f32, y: f32, w: f32, h: f32, radii: [f32; 4]) -> Vec<PathCommand> {
+    let w = w.max(1.0);
+    let h = h.max(0.5);
+    let max_r = (w * 0.5).min(h * 0.5);
+    let tl = radii[0].clamp(0.0, max_r);
+    let tr = radii[1].clamp(0.0, max_r);
+    let br = radii[2].clamp(0.0, max_r);
+    let bl = radii[3].clamp(0.0, max_r);
+    if tl + tr + br + bl < 0.5 {
+        return filled_rect(x, y, w, h);
+    }
+    const SEGS: usize = 6;
+    let mut pts = Vec::with_capacity(SEGS * 4 + 4);
+    let mut arc = |cx: f32, cy: f32, r: f32, a0: f32, span: f32| {
+        if r < 0.5 {
+            pts.push((cx, cy));
+            return;
+        }
+        for i in 0..=SEGS {
+            let t = i as f32 / SEGS as f32;
+            let a = a0 + span * t;
+            pts.push((cx + r * a.cos(), cy + r * a.sin()));
+        }
+    };
+    // clockwise from top-left
+    arc(
+        x + tl,
+        y + tl,
+        tl,
+        std::f32::consts::PI,
+        std::f32::consts::FRAC_PI_2,
+    );
+    arc(
+        x + w - tr,
+        y + tr,
+        tr,
+        -std::f32::consts::FRAC_PI_2,
+        std::f32::consts::FRAC_PI_2,
+    );
+    arc(x + w - br, y + h - br, br, 0.0, std::f32::consts::FRAC_PI_2);
+    arc(
+        x + bl,
+        y + h - bl,
+        bl,
+        std::f32::consts::FRAC_PI_2,
+        std::f32::consts::FRAC_PI_2,
+    );
+    polygon(&pts)
+}
+
+/// 柱状图顶圆角矩形（底边贴基线、顶边左右圆角）。`r` 自动钳到宽高一半。
+/// `y` 为顶边（较小 y），`h` 向下延伸。
+pub fn rounded_rect_top(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<PathCommand> {
+    rounded_rect(x, y, w, h, [r, r, 0.0, 0.0])
+}
+
+/// 水平柱：右端（或左端，若 `!round_right`）圆角。
+pub fn rounded_rect_end(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: f32,
+    round_right: bool,
+) -> Vec<PathCommand> {
+    if round_right {
+        rounded_rect(x, y, w, h, [0.0, r, r, 0.0])
+    } else {
+        rounded_rect(x, y, w, h, [r, 0.0, 0.0, r])
+    }
+}
+
 /// 环形扇区（TanStack donut）：外弧 + 反向内弧。`inner >= outer` 时退回实心扇区。
 pub fn pie_ring(
     cx: f32,
@@ -358,7 +431,10 @@ impl<'a> PathDParser<'a> {
 
     fn peek_cmd(&mut self) -> Option<char> {
         self.skip_sep();
-        self.chars.peek().copied().filter(|c| c.is_ascii_alphabetic())
+        self.chars
+            .peek()
+            .copied()
+            .filter(|c| c.is_ascii_alphabetic())
     }
 
     fn next_number(&mut self) -> Option<f32> {
@@ -724,10 +800,10 @@ fn flatten_arc(
         ry_sq = ry * ry;
     }
     let sign = if large_arc == sweep { -1.0 } else { 1.0 };
-    let mut sq =
-        ((rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq) / (rx_sq * y1p_sq + ry_sq * x1p_sq))
-            .max(0.0)
-            .sqrt();
+    let mut sq = ((rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq)
+        / (rx_sq * y1p_sq + ry_sq * x1p_sq))
+        .max(0.0)
+        .sqrt();
     sq *= sign;
     let cxp = sq * (rx * y1p) / ry;
     let cyp = sq * -(ry * x1p) / rx;
@@ -1493,10 +1569,7 @@ fn layer_hits_point(
         // `fill` / `visibleFill`：几何填充命中，即使 fill=none 也测“内部”
         if !policy.require_fill_painted && !fill_painted {
             for (pts, closed) in subpaths(cmds) {
-                if closed
-                    && pts.len() >= 3
-                    && fill_contains(p, &pts, style.fill_rule)
-                {
+                if closed && pts.len() >= 3 && fill_contains(p, &pts, style.fill_rule) {
                     return true;
                 }
             }
@@ -2039,7 +2112,8 @@ pub fn ensure_raster_texture(
 
 /// Re-queue path rasters that are missing from the GPU pool (after LRU eviction).
 pub fn flush_path_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let needed: Vec<String> = RASTER_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+    let needed: Vec<String> = RASTER_NEEDED
+        .with(|n| std::mem::take(&mut *n.borrow_mut()))
         .into_iter()
         .collect();
     let mut any = false;
@@ -2268,11 +2342,7 @@ mod tests {
         assert!((last.0 - 0.0).abs() < 0.2 && (last.1 - 10.0).abs() < 0.2);
 
         let arc = decode_path_d("M10,0 A10,10 0 0 1 0,10");
-        assert!(
-            arc.len() >= 3,
-            "arc should flatten, got {}",
-            arc.len()
-        );
+        assert!(arc.len() >= 3, "arc should flatten, got {}", arc.len());
         let end = points_from_commands(&arc).last().copied().unwrap();
         assert!((end.0 - 0.0).abs() < 0.5 && (end.1 - 10.0).abs() < 0.5);
     }

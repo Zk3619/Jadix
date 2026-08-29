@@ -15,9 +15,9 @@ use std::hash::{Hash, Hasher};
 use crate::core::tree::{Element, IntoCssDim, IntoElementList};
 use crate::primitives::path::{
     decode_path_d, encode_path_d, ensure_raster_texture, filled_circle, filled_rect,
-    polygon as path_polygon, polyline as path_polyline, register_path_scene, FillRule,
-    PathCommand, PathStyle, Point2, StrokeLinecap, StrokeLinejoin, ATTR_PATH_D,
-    ATTR_PATH_FIT_LEAF, ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
+    polygon as path_polygon, polyline as path_polyline, register_path_scene, FillRule, PathCommand,
+    PathStyle, Point2, StrokeLinecap, StrokeLinejoin, ATTR_PATH_D, ATTR_PATH_FIT_LEAF,
+    ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
 };
 use crate::style::parse_color;
 
@@ -390,10 +390,7 @@ fn collect_paint_defs(nodes: &[SvgNode], out: &mut HashMap<String, crate::style:
                 ..
             } => {
                 if !id.is_empty() {
-                    out.insert(
-                        id.clone(),
-                        linear_gradient_to_css(x1, y1, x2, y2, stops),
-                    );
+                    out.insert(id.clone(), linear_gradient_to_css(x1, y1, x2, y2, stops));
                 }
             }
             SvgNode::RadialGradient {
@@ -848,9 +845,7 @@ fn elem_attrs_from_element(el: &Element) -> Vec<(String, String)> {
         .attrs
         .iter()
         .filter(|(k, _)| {
-            k.as_str() != ATTR_SVG_KIND
-                && k.as_str() != ATTR_SVG_TEXT
-                && !k.starts_with("rui_")
+            k.as_str() != ATTR_SVG_KIND && k.as_str() != ATTR_SVG_TEXT && !k.starts_with("rui_")
         })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
@@ -1079,11 +1074,7 @@ fn node_from_element(el: &Element) -> Option<SvgNode> {
             gradient_units: opt_attr(el, "gradientUnits")
                 .or_else(|| opt_attr(el, "gradient_units"))
                 .unwrap_or_else(|| "objectBoundingBox".into()),
-            stops: el
-                .children
-                .iter()
-                .filter_map(stop_from_element)
-                .collect(),
+            stops: el.children.iter().filter_map(stop_from_element).collect(),
         }),
         "radialgradient" | "radialGradient" => Some(SvgNode::RadialGradient {
             id: opt_attr(el, "id").unwrap_or_default(),
@@ -1095,11 +1086,7 @@ fn node_from_element(el: &Element) -> Option<SvgNode> {
             gradient_units: opt_attr(el, "gradientUnits")
                 .or_else(|| opt_attr(el, "gradient_units"))
                 .unwrap_or_else(|| "objectBoundingBox".into()),
-            stops: el
-                .children
-                .iter()
-                .filter_map(stop_from_element)
-                .collect(),
+            stops: el.children.iter().filter_map(stop_from_element).collect(),
         }),
         "symbol" => Some(SvgNode::Symbol {
             id: opt_attr(el, "id").unwrap_or_default(),
@@ -1937,7 +1924,14 @@ pub(crate) fn register_svg_scene(nodes: Vec<SvgNode>, vb: [f32; 4], has_smil: bo
         if g.len() >= 64 {
             g.clear();
         }
-        g.insert(id, StoredSvgScene { nodes, vb, has_smil });
+        g.insert(
+            id,
+            StoredSvgScene {
+                nodes,
+                vb,
+                has_smil,
+            },
+        );
     });
     id
 }
@@ -1945,7 +1939,14 @@ pub(crate) fn register_svg_scene(nodes: Vec<SvgNode>, vb: [f32; 4], has_smil: bo
 fn hash_svg_node(h: &mut DefaultHasher, node: &SvgNode) {
     use SvgNode::*;
     match node {
-        Circle { cx, cy, r, fill, stroke, .. } => {
+        Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            ..
+        } => {
             "circle".hash(h);
             cx.to_bits().hash(h);
             cy.to_bits().hash(h);
@@ -1953,7 +1954,9 @@ fn hash_svg_node(h: &mut DefaultHasher, node: &SvgNode) {
             fill.hash(h);
             stroke.hash(h);
         }
-        Path { d, fill, stroke, .. } => {
+        Path {
+            d, fill, stroke, ..
+        } => {
             "path".hash(h);
             d.hash(h);
             fill.hash(h);
@@ -2009,7 +2012,9 @@ pub fn svg_raster_from_element_attrs(
     let target = crate::primitives::path::path_target_leaf_size(attrs, [leaf_w, leaf_h]);
     let w = target[0].round().max(2.0) as u32;
     let h = target[1].round().max(2.0) as u32;
-    let smil_t = scene.has_smil.then(crate::primitives::svg_smil::smil_time_secs);
+    let smil_t = scene
+        .has_smil
+        .then(crate::primitives::svg_smil::smil_time_secs);
     #[cfg(feature = "svg")]
     {
         let doc = emit_svg_document_at(&scene.nodes, scene.vb, smil_t);
@@ -2173,7 +2178,11 @@ impl From<SvgBuilder> for Element {
             el.text_style.color = crate::style::parse_text_color("foreground");
         }
         // SVG 叶默认 `bounding-box`（MDN SVG-only：命中容器）；调用方可覆盖。
-        if el.attrs.get(crate::core::tree::ATTR_POINTER_EVENTS).is_none() {
+        if el
+            .attrs
+            .get(crate::core::tree::ATTR_POINTER_EVENTS)
+            .is_none()
+        {
             el = el.pointer_events("bounding-box");
         }
         attach_svg_scene(el, &nodes, &layers, vb, builder.view_box.as_deref())
@@ -2889,24 +2898,25 @@ mod tests {
         };
         let (lr, _, lb, la) = px(4, 32);
         let (rr, _, _, ra) = px(60, 32);
-        assert!(la > 180 && lb > lr + 40, "left should be blue, got {lr},{lb},{la}");
+        assert!(
+            la > 180 && lb > lr + 40,
+            "left should be blue, got {lr},{lb},{la}"
+        );
         assert!(ra > 180 && rr > lb, "right should be red, got {rr},{ra}");
     }
 
     #[test]
     fn elem_text_tspan_emits_font_size() {
-        let nodes = vec![
-            node_from_element(
-                &svg_text()
-                    .attr("x", "10")
-                    .attr("y", "20")
-                    .font_size(14.0)
-                    .text_content("Hello ")
-                    .child(tspan().font_size(18.0).text_content("World"))
-                    .into(),
-            )
-            .unwrap(),
-        ];
+        let nodes = vec![node_from_element(
+            &svg_text()
+                .attr("x", "10")
+                .attr("y", "20")
+                .font_size(14.0)
+                .text_content("Hello ")
+                .child(tspan().font_size(18.0).text_content("World"))
+                .into(),
+        )
+        .unwrap()];
         let doc = emit_svg_document(&nodes, [0.0, 0.0, 100.0, 40.0]);
         assert!(doc.contains("<text"), "{doc}");
         assert!(doc.contains("font-size"), "{doc}");
@@ -3008,13 +3018,12 @@ mod tests {
             .into();
         el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
         assert_eq!(el.pointer_events_mode(), PointerEvents::Fill);
-        assert!(crate::primitives::path::element_has_path_geometry(&el.attrs));
+        assert!(crate::primitives::path::element_has_path_geometry(
+            &el.attrs
+        ));
 
         let center = hit_path(&el, 50.0, 50.0);
-        assert!(
-            !center.is_empty(),
-            "fill mode must hit circle interior"
-        );
+        assert!(!center.is_empty(), "fill mode must hit circle interior");
         let corner = hit_path(&el, 95.0, 95.0);
         assert!(
             corner.is_empty(),
@@ -3046,10 +3055,7 @@ mod tests {
         let rim = hit_path(&el, 50.0, 20.0); // top of circle
         assert!(!rim.is_empty(), "stroke mode must hit perimeter");
         let center = hit_path(&el, 50.0, 50.0);
-        assert!(
-            center.is_empty(),
-            "stroke mode must miss hollow interior"
-        );
+        assert!(center.is_empty(), "stroke mode must miss hollow interior");
     }
 
     #[test]
@@ -3066,10 +3072,7 @@ mod tests {
         el.layout_bounds = [0.0, 0.0, 100.0, 100.0];
 
         let corner = hit_path(&el, 2.0, 2.0);
-        assert!(
-            !corner.is_empty(),
-            "bounding-box must hit entire leaf"
-        );
+        assert!(!corner.is_empty(), "bounding-box must hit entire leaf");
     }
 
     #[test]

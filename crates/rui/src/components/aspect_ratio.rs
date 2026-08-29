@@ -149,10 +149,7 @@ fn build_aspect_ratio(id: Option<String>, ratio: f32, children: Vec<Element>) ->
         1.0
     };
     let mut el: Element = r#box().w("100%").into();
-    el = el
-        .relative()
-        .overflow("hidden")
-        .aspect_ratio(ratio);
+    el = el.relative().overflow("hidden").aspect_ratio(ratio);
     if let Some(id) = id.filter(|s| !s.is_empty()) {
         el.template_id = Some(id);
     }
@@ -169,7 +166,13 @@ fn build_aspect_ratio(id: Option<String>, ratio: f32, children: Vec<Element>) ->
 pub fn AspectRatio(
     id: String,
     ratio: AspectRatioValue,
-    base_builder: Option<Box<dyn FnOnce(crate::components::base::BaseComponentBuilder) -> crate::components::base::BaseComponentBuilder>>,
+    base_builder: Option<
+        Box<
+            dyn FnOnce(
+                crate::components::base::BaseComponentBuilder,
+            ) -> crate::components::base::BaseComponentBuilder,
+        >,
+    >,
     children: Option<Element>,
 ) -> Element {
     let r = ratio.0.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);

@@ -804,10 +804,9 @@ impl SecondaryWindowState {
         *old = new_fragment;
         let mut status = LayoutStatus::StructureChanged;
         if needs_portal_hoist {
-            let portal_moves =
-                crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
-                    &mut self.root_element,
-                );
+            let portal_moves = crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
+                &mut self.root_element,
+            );
             if portal_moves > 0 {
                 status = status.merge(LayoutStatus::StructureChanged);
             }

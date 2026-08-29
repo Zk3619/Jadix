@@ -11,7 +11,12 @@ pub trait TreeNodeLike {
 }
 
 /// 深度优先：仅展开 `expanded` 中的节点。
-pub fn flatten_expanded<T, R, F>(nodes: &[T], expanded: &HashSet<String>, depth: usize, map: F) -> Vec<R>
+pub fn flatten_expanded<T, R, F>(
+    nodes: &[T],
+    expanded: &HashSet<String>,
+    depth: usize,
+    map: F,
+) -> Vec<R>
 where
     T: TreeNodeLike,
     F: Fn(&T, usize, bool) -> R + Copy,
@@ -74,8 +79,7 @@ mod tests {
             }],
         };
         let mut exp = HashSet::new();
-        let closed: Vec<_> =
-            flatten_expanded(&[root], &exp, 0, |n, d, _| (n.id().to_string(), d));
+        let closed: Vec<_> = flatten_expanded(&[root], &exp, 0, |n, d, _| (n.id().to_string(), d));
         assert_eq!(closed, vec![("a".into(), 0)]);
         toggle_expanded(&mut exp, "a");
         let root = N {

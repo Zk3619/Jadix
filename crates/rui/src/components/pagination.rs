@@ -280,7 +280,11 @@ pub fn estimate_jumper_chrome_px(button_text: &str, page_count: usize) -> f32 {
 ///
 /// `extra_chrome_px`：跳转区等额外占用（见 [`estimate_jumper_chrome_px`]）。
 /// 返回 `(max_page_slots, compact_nav)`；`width_px ≤ 1` 时返回 `(0, false)` 表示尚未测量。
-pub fn fit_pagination_for_width(width_px: f32, previous_text: &str, next_text: &str) -> (usize, bool) {
+pub fn fit_pagination_for_width(
+    width_px: f32,
+    previous_text: &str,
+    next_text: &str,
+) -> (usize, bool) {
     fit_pagination_for_width_ex(width_px, previous_text, next_text, 0.0)
 }
 
@@ -365,7 +369,11 @@ pub fn parse_jumper_page(raw: &str, page_count: usize) -> Option<usize> {
 }
 
 /// `max_items ≤ 4` 时的极窄窗（避免 `fit_range_caps` 压到 left=right=0）。
-fn compact_pagination_range(page: usize, page_count: usize, max_items: usize) -> Vec<PaginationPage> {
+fn compact_pagination_range(
+    page: usize,
+    page_count: usize,
+    max_items: usize,
+) -> Vec<PaginationPage> {
     let page = page.clamp(1, page_count);
     match max_items.max(1) {
         1 => vec![PaginationPage::Number(page)],
@@ -373,11 +381,20 @@ fn compact_pagination_range(page: usize, page_count: usize, max_items: usize) ->
             if page_count == 1 {
                 vec![PaginationPage::Number(1)]
             } else if page == 1 {
-                vec![PaginationPage::Number(1), PaginationPage::Number(page_count)]
+                vec![
+                    PaginationPage::Number(1),
+                    PaginationPage::Number(page_count),
+                ]
             } else if page == page_count {
-                vec![PaginationPage::Number(1), PaginationPage::Number(page_count)]
+                vec![
+                    PaginationPage::Number(1),
+                    PaginationPage::Number(page_count),
+                ]
             } else {
-                vec![PaginationPage::Number(page), PaginationPage::Number(page_count)]
+                vec![
+                    PaginationPage::Number(page),
+                    PaginationPage::Number(page_count),
+                ]
             }
         }
         3 => {
@@ -454,8 +471,12 @@ pub fn pagination_range(
         }
     }
 
-    let (left_n, sibling, right_n) =
-        fit_range_caps(opts.left_count, opts.sibling_count, opts.right_count, opts.max_items);
+    let (left_n, sibling, right_n) = fit_range_caps(
+        opts.left_count,
+        opts.sibling_count,
+        opts.right_count,
+        opts.max_items,
+    );
 
     let mid_span = sibling.saturating_mul(2).saturating_add(1);
     let number_budget = left_n.saturating_add(mid_span).saturating_add(right_n);
@@ -696,7 +717,11 @@ pub fn PaginationPrevious(
     };
     let show_text = !hide_text;
     let size = if show_text { "default" } else { "icon" };
-    let btn_id = if id.trim().is_empty() { "" } else { id.as_str() };
+    let btn_id = if id.trim().is_empty() {
+        ""
+    } else {
+        id.as_str()
+    };
     let mut btn = button(btn_id)
         .variant("ghost")
         .size(size)
@@ -751,7 +776,11 @@ pub fn PaginationNext(
     };
     let show_text = !hide_text;
     let size = if show_text { "default" } else { "icon" };
-    let btn_id = if id.trim().is_empty() { "" } else { id.as_str() };
+    let btn_id = if id.trim().is_empty() {
+        ""
+    } else {
+        id.as_str()
+    };
     let mut btn = button(btn_id)
         .variant("ghost")
         .size(size)
@@ -829,9 +858,8 @@ pub fn PaginationJumper(
     } else {
         id.clone()
     };
-    let page_sig = page.unwrap_or_else(|| {
-        use_signal(format!("{instance}__page").as_str(), || 1usize)
-    });
+    let page_sig =
+        page.unwrap_or_else(|| use_signal(format!("{instance}__page").as_str(), || 1usize));
     let button_text = if button_text.trim().is_empty() {
         "Go".to_string()
     } else {
@@ -1309,13 +1337,12 @@ impl From<PaginationBuilder> for Element {
                     fit_max_s.set_silent(slots);
                     fit_compact_s.set_silent(compact);
 
-                    let effective_max =
-                        match (explicit_max, Some(slots)) {
-                            (Some(a), Some(b)) => Some(a.min(b)),
-                            (Some(a), None) => Some(a),
-                            (None, Some(b)) => Some(b),
-                            (None, None) => None,
-                        };
+                    let effective_max = match (explicit_max, Some(slots)) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => None,
+                    };
                     let range = PaginationRangeOpts {
                         left_count,
                         sibling_count,
@@ -1475,7 +1502,10 @@ mod tests {
     #[test]
     fn fit_width_compresses_and_may_hide_nav_text() {
         let (wide_slots, wide_compact) = fit_pagination_for_width(800.0, "上一页", "下一页");
-        assert!(wide_slots >= 10, "wide should fit many slots, got {wide_slots}");
+        assert!(
+            wide_slots >= 10,
+            "wide should fit many slots, got {wide_slots}"
+        );
         assert!(!wide_compact);
 
         let (narrow_slots, narrow_compact) = fit_pagination_for_width(280.0, "上一页", "下一页");
@@ -1484,7 +1514,10 @@ mod tests {
         // 中文 Prev/Next 较宽，窄屏应收起文案。
         assert!(narrow_compact);
 
-        assert_eq!(fit_pagination_for_width(0.0, "Previous", "Next"), (0, false));
+        assert_eq!(
+            fit_pagination_for_width(0.0, "Previous", "Next"),
+            (0, false)
+        );
     }
 
     #[test]
@@ -1558,10 +1591,7 @@ mod tests {
             })),
             base: None,
         });
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert!(el.template_id.is_none());
     }
 
@@ -1577,11 +1607,11 @@ mod tests {
             children: Some(Element::new().text("3")),
             base: None,
         });
-        assert_eq!(el.attrs.get("data-active").map(String::as_str), Some("true"));
         assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_LINK)
+            el.attrs.get("data-active").map(String::as_str),
+            Some("true")
         );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_LINK));
     }
 
     #[test]

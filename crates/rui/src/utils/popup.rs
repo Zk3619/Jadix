@@ -157,7 +157,7 @@ pub fn mark_floating_with_gap(
     gap_px: f32,
 ) {
     mark_floating(el, id, trigger_focus_id, placement);
-    let g = gap_px.clamp(-32.0, 64.0);
+    let g = gap_px.clamp(-64.0, 64.0);
     el.set_attr(ATTR_FLOATING_GAP, format!("{g}"));
 }
 
@@ -356,6 +356,8 @@ pub fn compute_anchored_placement(
 }
 
 /// `strategy=fixed`：钉在触发器首选侧，不翻转、不按剩余视口夹高度（滚动时跟触发器走，可溢出窗口）。
+///
+/// 负 `gap` 让面板叠在触发器上（例如 reaction 展开就地盖住折叠条）；多余高度仍只朝首选侧生长。
 fn compute_fixed_anchor(
     trigger: [f32; 4],
     viewport: [f32; 2],
@@ -367,7 +369,8 @@ fn compute_fixed_anchor(
     let [tx, ty, tw, th] = trigger;
     let [vw, _] = viewport;
     let margin = FLOATING_VIEWPORT_MARGIN;
-    let gap = gap.max(0.0);
+    let cover = gap < 0.0;
+    let gap = if cover { -th } else { gap.max(0.0) };
     let w = if menu_w > 0.0 { menu_w } else { tw };
     let prefer_bottom = matches!(
         preferred,
@@ -394,11 +397,13 @@ fn compute_fixed_anchor(
         tx
     };
     let x_max = (vw - margin - w).max(margin);
-    if x + w > vw - margin {
-        x = x_max;
-    }
-    if x < margin {
-        x = margin;
+    if !cover {
+        if x + w > vw - margin {
+            x = x_max;
+        }
+        if x < margin {
+            x = margin;
+        }
     }
     (x, y)
 }
@@ -636,16 +641,8 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
             scroll_acc
         };
     if let Some(fid) = &el.focus_id {
-        let b = el.layout_bounds;
-        out.push((
-            fid.clone(),
-            [
-                b[0] - scroll_acc[0] + el.sticky_visual_offset[0],
-                b[1] - scroll_acc[1] + el.sticky_visual_offset[1],
-                b[2],
-                b[3],
-            ],
-        ));
+        let b = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+        out.push((fid.clone(), b));
     }
     let mut next_acc = scroll_acc;
     let is_scroll_viewport = el
@@ -762,7 +759,7 @@ fn apply_floating_menus(
             } else {
                 FLOATING_TRIGGER_GAP
             })
-            .clamp(-32.0, 64.0);
+            .clamp(-64.0, 64.0);
         let strategy_fixed = el
             .attrs
             .get(ATTR_FLOATING_STRATEGY)
@@ -1769,11 +1766,16 @@ mod tests {
             }),
             "hit must stay on floating panel; path={:?}",
             path.iter()
-                .map(|e| (e.focus_id.clone(), e.floating_id.clone(), e.portal_key.clone()))
+                .map(|e| (
+                    e.focus_id.clone(),
+                    e.floating_id.clone(),
+                    e.portal_key.clone()
+                ))
                 .collect::<Vec<_>>()
         );
         assert!(
-            path.iter().all(|e| e.focus_id.as_deref() != Some("under-btn")),
+            path.iter()
+                .all(|e| e.focus_id.as_deref() != Some("under-btn")),
             "page control under the panel must not receive the hit"
         );
         clear_overlay_stack();
@@ -1791,6 +1793,61 @@ mod tests {
         assert!(
             path_hits_floating_trigger(&root, &path),
             "opening click on SelectTrigger must count as in-bounds before menu portal mounts"
+        );
+    }
+
+    #[test]
+    fn fixed_anchor_negative_gap_covers_trigger_without_flipping() {
+        let trigger = [10.0, 100.0, 80.0, 32.0];
+        let viewport = [800.0, 600.0];
+        let (_x, y) = compute_fixed_anchor(
+            trigger,
+            viewport,
+            80.0,
+            64.0,
+            PopupPlacement::BottomStart,
+            -32.0,
+        );
+        assert!(
+            (y - 100.0).abs() < 0.1,
+            "bottom + negative gap: panel top sits on the trigger top (got {y})"
+        );
+        let (_x, y) = compute_fixed_anchor(
+            trigger,
+            viewport,
+            80.0,
+            64.0,
+            PopupPlacement::TopStart,
+            -32.0,
+        );
+        assert!(
+            (y - 68.0).abs() < 0.1,
+            "top + negative gap: panel bottom sits on the trigger bottom (got {y})"
+        );
+        let (_x, y) = compute_fixed_anchor(
+            trigger,
+            viewport,
+            80.0,
+            64.0,
+            PopupPlacement::BottomStart,
+            -8.0,
+        );
+        assert!(
+            (y - 100.0).abs() < 0.1,
+            "any negative gap covers using -trigger_height, not the raw gap (got {y})"
+        );
+        let edge = [790.0, 100.0, 80.0, 32.0];
+        let (x, _y) = compute_fixed_anchor(
+            edge,
+            viewport,
+            80.0,
+            32.0,
+            PopupPlacement::BottomStart,
+            -32.0,
+        );
+        assert!(
+            (x - 790.0).abs() < 0.1,
+            "cover placement must not clamp away from the trigger (got {x})"
         );
     }
 }

@@ -246,6 +246,27 @@ fn draw_packed_textured_runs<'pass>(
     }
 }
 
+/// Hash underline rects that this frame will actually draw.
+///
+/// Page-stack / overlay prepare returns empty `underline_instances`; the rects live in the
+/// band vecs. Omitting those from `last_gpu_frame_fp` made Link `hover:underline` leave
+/// match the previous fingerprint (same button rects, same text color/weight) so present
+/// was skipped and the decoration stayed until an unrelated instance change.
+fn hash_present_underline_layers(
+    hasher: &mut impl Hasher,
+    underline_instances: &[InstanceInput],
+    page_stack_band_underlines: &[Vec<InstanceInput>],
+    overlay_band_underlines: &[Vec<InstanceInput>],
+) {
+    hasher.write(bytemuck::cast_slice(underline_instances));
+    for ul in page_stack_band_underlines {
+        hasher.write(bytemuck::cast_slice(ul));
+    }
+    for ul in overlay_band_underlines {
+        hasher.write(bytemuck::cast_slice(ul));
+    }
+}
+
 fn draw_paint_ops<'pass>(
     pass: &mut wgpu::RenderPass<'pass>,
     ops: &[crate::layout::layout_tree::PaintOp],
@@ -919,9 +940,7 @@ impl AppState {
                 new_el.on_unmount = old_el.on_unmount.clone();
             }
             // Keyed overlay：同 template_id 保留 transition mid（见 utils/keyed_overlay）。
-            let _ = crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(
-                new_el, old_el,
-            );
+            let _ = crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(new_el, old_el);
             let is_reactive_placeholder = new_el.template_hash.as_deref()
                 == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH);
             if is_reactive_placeholder {
@@ -1460,6 +1479,7 @@ impl AppState {
         let mut sync_impact = crate::core::tree::LayoutStatus::Clean;
         let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
         let (viewport_w, viewport_h) = self.logical_size();
+        crate::components::drawer::set_drawer_viewport_size(viewport_w, viewport_h);
         crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -1524,6 +1544,10 @@ impl AppState {
             crate::components::tabs::sync_tabs_trigger_subtree(
                 &mut self.root_element,
                 &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::bubble::sync_bubble_reactions_subtree(
+                &mut self.root_element,
                 &mut sync_impact,
             );
             // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
@@ -1664,10 +1688,9 @@ impl AppState {
             crate::components::internal::modal_motion::flush_modal_shell_motion_subtree(
                 &mut self.root_element,
             );
-        let modal_css_ticking =
-            crate::components::internal::modal_motion::tick_hoisted_modal_css(
-                &mut self.root_element,
-            );
+        let modal_css_ticking = crate::components::internal::modal_motion::tick_hoisted_modal_css(
+            &mut self.root_element,
+        );
         if modal_needs_frame || modal_css_ticking {
             self.window.request_redraw();
         }
@@ -2012,18 +2035,15 @@ impl AppState {
 
         // Rehydrate CPU-cached textures after TexturePool eviction / first paint.
         // Uploads happen immediately in take_pending below (same frame).
-        let _ = crate::style::flush_gradient_textures(|key| {
-            self.image_textures.get(key).is_some()
-        });
+        let _ = crate::style::flush_gradient_textures(|key| self.image_textures.get(key).is_some());
         let _ = crate::primitives::path::flush_path_textures(|key| {
             self.image_textures.get(key).is_some()
         });
         let _ = crate::media::svg_raster::flush_svg_textures(|key| {
             self.image_textures.get(key).is_some()
         });
-        let _ = super::pending_images::flush_src_textures(|key| {
-            self.image_textures.get(key).is_some()
-        });
+        let _ =
+            super::pending_images::flush_src_textures(|key| self.image_textures.get(key).is_some());
         let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
             self.image_textures.get(key).is_some()
         });
@@ -2438,7 +2458,12 @@ impl AppState {
                     v.to_bits().hash(&mut hasher);
                 }
             }
-            hasher.write(bytemuck::cast_slice(&underline_instances));
+            hash_present_underline_layers(
+                &mut hasher,
+                &underline_instances,
+                &page_stack_band_underlines,
+                &overlay_band_underlines,
+            );
             hasher.write(bytemuck::cast_slice(&caret_instances));
             // Canvas / scene3d reuse a stable texture_key while pixels change every frame.
             // Without this, last_gpu_frame_fp matches and present is skipped (frozen cube / laggy ink).
@@ -2457,6 +2482,11 @@ impl AppState {
                 n.style.color.hash(&mut hasher);
                 n.style.size.to_bits().hash(&mut hasher);
                 n.style.weight.hash(&mut hasher);
+                n.style.underline.hash(&mut hasher);
+                n.style.overline.hash(&mut hasher);
+                n.style.line_through.hash(&mut hasher);
+                n.style.decoration_color.hash(&mut hasher);
+                n.style.underline_offset.to_bits().hash(&mut hasher);
                 // Caret index / selection must affect present even when underline instance
                 // bytes happen to collide (e.g. empty selection vs no caret).
                 match &n.style.input_caret {
@@ -2647,11 +2677,7 @@ impl AppState {
                             self.textured_pipeline.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint16,
                         );
-                        page_pass.draw_indexed(
-                            0..self.textured_pipeline.num_indices,
-                            0,
-                            0..1,
-                        );
+                        page_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
                     }
                     if has_page_stack_bands {
                         for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
@@ -2671,7 +2697,8 @@ impl AppState {
                             } else if band.instance.0 < band.instance.1 {
                                 page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                 page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                                page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                page_pass
+                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                                 page_pass.set_index_buffer(
                                     self.pipeline.index_buffer.slice(..),
@@ -2697,7 +2724,8 @@ impl AppState {
                             if band.chrome.0 < band.chrome.1 {
                                 page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                 page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                                page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                page_pass
+                                    .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                                 let chrome_slice =
                                     &scaled_input_chrome[band.chrome.0..band.chrome.1];
                                 let chrome_buffer = self.device.create_buffer_init(
@@ -2722,8 +2750,10 @@ impl AppState {
                                 if !ul.is_empty() {
                                     page_pass.set_pipeline(&self.pipeline.render_pipeline);
                                     page_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                                    page_pass
-                                        .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                    page_pass.set_vertex_buffer(
+                                        0,
+                                        self.pipeline.vertex_buffer.slice(..),
+                                    );
                                     let underline_buffer = self.device.create_buffer_init(
                                         &wgpu::util::BufferInitDescriptor {
                                             label: Some("Page Stack Underline Buffer (scene)"),
@@ -4852,5 +4882,33 @@ mod surface_resize_tests {
         let inner = PhysicalSize::new(640, 480);
         let target = AppState::resolve_surface_size(inner, None);
         assert_eq!((target.width, target.height), (640, 480));
+    }
+}
+
+#[cfg(test)]
+mod present_fingerprint_tests {
+    use super::hash_present_underline_layers;
+    use crate::renderer::InstanceInput;
+    use bytemuck::Zeroable;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn fp(page: &[InstanceInput], page_stack: &[Vec<InstanceInput>], underline: bool) -> u64 {
+        let mut h = DefaultHasher::new();
+        hash_present_underline_layers(&mut h, page, page_stack, &[]);
+        underline.hash(&mut h);
+        h.finish()
+    }
+
+    #[test]
+    fn page_stack_underline_leave_changes_present_hash() {
+        // Gallery / z-index pages use page_stack bands: `underline_instances` is empty.
+        let line = InstanceInput::zeroed();
+        let hovered = fp(&[], &[vec![line]], true);
+        let rest = fp(&[], &[Vec::new()], false);
+        assert_ne!(
+            hovered, rest,
+            "Link hover:underline leave must bust last_gpu_frame_fp on the page-stack path"
+        );
     }
 }

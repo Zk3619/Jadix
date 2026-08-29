@@ -7,6 +7,7 @@ pub mod element_pack;
 pub mod file_dialog;
 pub mod focus_trap;
 pub mod font;
+pub mod icon_texture;
 pub mod input_hit;
 pub mod instance_id;
 pub mod keyboard;
@@ -15,9 +16,6 @@ pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
 pub mod lucide_animated;
-pub mod icon_texture;
-pub mod text_texture;
-pub mod text_vector_spike;
 pub mod motion;
 pub mod pointer_drag;
 pub mod popup;
@@ -26,11 +24,14 @@ pub mod roving;
 pub mod table_sort;
 pub mod text_field;
 pub mod text_node;
+pub mod text_texture;
+pub mod text_vector_spike;
 pub mod toggle_state;
 pub mod tree_model;
 pub mod virtual_list;
 pub mod virtual_masonry;
 
+pub use block_on::block_on;
 pub use controlled::{resolve_f32_signal, resolve_open_signal, resolve_string_signal};
 pub use element_pack::{take_fragment, take_packed};
 pub use file_dialog::{
@@ -42,13 +43,25 @@ pub use focus_trap::{
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
 pub use instance_id::resolve_instance_id;
-pub use block_on::block_on;
+pub use keyed_overlay::{
+    adopt_keyed_overlay, is_keyed_motion_item, item_template_id, mount_reactive_anchor,
+    preserve_keyed_motion_on_reconcile, viewport_portal_stage, KEYED_OVERLAY_PREFIX,
+    TOAST_CARD_SCOPE,
+};
+pub use layout_group::{
+    linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
+};
 pub use lucide::{apply_bound_icon_name, lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,
     sync_animated_icon_hover, tick_animated_icons_subtree, AnimatedIcon, AnimatedIconBuilder,
     ATTR_ANIMATED_ICON, ATTR_ANIMATED_ICON_STATE,
+};
+pub use motion::{
+    clear_motion, ensure_motion_transitions, motion_is_animating, motion_sync_status,
+    prepare_motion_sync, snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle,
+    MotionTransform,
 };
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
@@ -61,19 +74,6 @@ pub use popup::{
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W,
     ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,
-};
-pub use keyed_overlay::{
-    adopt_keyed_overlay, is_keyed_motion_item, item_template_id, mount_reactive_anchor,
-    preserve_keyed_motion_on_reconcile, viewport_portal_stage, KEYED_OVERLAY_PREFIX,
-    TOAST_CARD_SCOPE,
-};
-pub use layout_group::{
-    linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
-};
-pub use motion::{
-    clear_motion, ensure_motion_transitions, motion_is_animating, motion_sync_status,
-    prepare_motion_sync, snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle,
-    MotionTransform,
 };
 pub use presence::{exit_elapsed, exit_elapsed_at, ExitGate, PresencePhase};
 pub use roving::{roving_edge, roving_move};

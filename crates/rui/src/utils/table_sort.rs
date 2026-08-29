@@ -46,9 +46,7 @@ pub fn filtered_row_order(
         return (0..row_count).collect();
     }
     (0..row_count)
-        .filter(|&r| {
-            (0..col_count).any(|ci| cell(r, ci).to_ascii_lowercase().contains(&q))
-        })
+        .filter(|&r| (0..col_count).any(|ci| cell(r, ci).to_ascii_lowercase().contains(&q)))
         .collect()
 }
 

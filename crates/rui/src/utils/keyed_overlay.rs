@@ -68,11 +68,7 @@ fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
 }
 
 /// 视口级 portal 舞台：铺满层 + 稳定 portal key + z（Toast / 轻量 Notify 宿主）。
-pub fn viewport_portal_stage(
-    portal_key: impl Into<String>,
-    panel: Element,
-    z: i32,
-) -> Element {
+pub fn viewport_portal_stage(portal_key: impl Into<String>, panel: Element, z: i32) -> Element {
     let key = portal_key.into();
     let mut stage: Element = Element::new()
         .absolute()
@@ -92,9 +88,7 @@ pub fn mount_reactive_anchor(view_id: &str, paint: impl Fn() -> Element + 'stati
         .w(0.0)
         .h(0.0)
         .pointer_events_box_none()
-        .child(
-            reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none(),
-        )
+        .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
 /// 同 `template_id` 的 reconcile：保留 transition mid + 阴影（非 hoist 路径）。
@@ -355,17 +349,9 @@ mod tests {
         });
         snap_element_transitions_to_current(&prev.style, &mut prev.transition_snapshot);
         prev.style.scale = [1.0, 1.0];
-        let _ = tick_element_transitions(
-            &mut prev.style,
-            &mut prev.transition_snapshot,
-            0.0,
-        );
+        let _ = tick_element_transitions(&mut prev.style, &mut prev.transition_snapshot, 0.0);
         set_css_transition_timeline_ms(120.0);
-        let _ = tick_element_transitions(
-            &mut prev.style,
-            &mut prev.transition_snapshot,
-            0.0,
-        );
+        let _ = tick_element_transitions(&mut prev.style, &mut prev.transition_snapshot, 0.0);
         assert!(
             prev.style.scale[0] > 0.97 && prev.style.scale[0] < 0.995,
             "sanity: prev should be mid-enter scale, got {}",

@@ -77,12 +77,7 @@ thread_local! {
 }
 
 fn begin_slider_drag(id: impl Into<String>, drag: SliderDrag) {
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::Slider,
-        id,
-        0.0,
-        0.0,
-    );
+    crate::utils::pointer_drag::begin(crate::utils::pointer_drag::DragKind::Slider, id, 0.0, 0.0);
     SLIDER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
 }
 

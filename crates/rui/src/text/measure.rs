@@ -1035,11 +1035,7 @@ pub fn measure_leaf(
     } else {
         intrinsic_w
     };
-    let layout_w = if nowrap {
-        intrinsic_w
-    } else {
-        width.max(1.0)
-    };
+    let layout_w = if nowrap { intrinsic_w } else { width.max(1.0) };
     let metrics = layout(&prepared, layout_w);
     let height = bidi_soft_wrap_height(
         text,
@@ -1529,7 +1525,10 @@ mod tests {
             // not last-letter wrap (gallery "su"/"n" / "activit"/"y").
             let n_meas = glyphon_soft_wrap_line_count(text, size, weight, lh, mw);
             let n_floor_raw = glyphon_soft_wrap_line_count(text, size, weight, lh, raw.floor());
-            assert_eq!(n_meas, 1, "{text}: glyphon wraps at measured {mw} (raw={raw})");
+            assert_eq!(
+                n_meas, 1,
+                "{text}: glyphon wraps at measured {mw} (raw={raw})"
+            );
             // After snap, callers size to ceil(raw); floor(raw) may still wrap — that's OK
             // as long as measure reports the ceiled width.
             assert!(

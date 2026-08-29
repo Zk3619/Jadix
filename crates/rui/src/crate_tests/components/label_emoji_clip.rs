@@ -129,14 +129,9 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
     buffer.shape_until_scroll(&mut fs, false);
 
     let ink = crate::renderer::prepare_text::emoji_paint_pixel_size(size) as f32;
-    let (left, top) = emoji_layout::custom_emoji_left_centered_top(
-        &buffer,
-        &layout,
-        emoji_start,
-        ink,
-        ink,
-    )
-    .expect("emoji slot");
+    let (left, top) =
+        emoji_layout::custom_emoji_left_centered_top(&buffer, &layout, emoji_start, ink, ink)
+            .expect("emoji slot");
     let bottom = top + ink;
     let overshoot = clipped_bottom_overshoot(info.y, top, ink, clip_y, clip_h);
 

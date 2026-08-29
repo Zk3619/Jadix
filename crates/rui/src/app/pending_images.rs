@@ -80,9 +80,7 @@ fn publish_src_load_state(key: &str, state: SrcLoadState) {
 }
 
 fn cached_src_load_state(key: &str) -> Option<SrcLoadState> {
-    src_load_map()
-        .as_ref()
-        .and_then(|m| m.get(key).copied())
+    src_load_map().as_ref().and_then(|m| m.get(key).copied())
 }
 
 fn mark_src_needed(key: impl Into<String>) {
@@ -263,6 +261,7 @@ fn apply_shape_alpha_mask(rgba: &mut [u8], width: u32, height: u32, mask: Avatar
 }
 
 /// 对 RGBA 贴图施加圆形 alpha 遮罩（Avatar `object-cover` 正方形裁切 + 圆角）。
+#[cfg(test)]
 fn apply_circular_alpha_mask(rgba: &mut [u8], width: u32, height: u32) {
     apply_shape_alpha_mask(rgba, width, height, AvatarImageMask::Circle);
 }
@@ -436,9 +435,7 @@ pub fn any_gif_playing() -> bool {
 pub(crate) fn flush_src_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
     let needed: Vec<String> = {
         let mut g = SRC_NEEDED.lock().unwrap();
-        g.get_or_insert_with(HashSet::new)
-            .drain()
-            .collect()
+        g.get_or_insert_with(HashSet::new).drain().collect()
     };
     let mut any = false;
     let decoded = DECODED_SRC.lock().unwrap();
@@ -513,7 +510,10 @@ mod tests {
         let state = ensure_src_loaded(key, "/nonexistent/rui-avatar-fail-test.png");
         assert_eq!(state, SrcLoadState::Failed);
         assert_eq!(src_load_state_for_key(key), SrcLoadState::Failed);
-        assert!(!queue_image_from_src(key, "/nonexistent/rui-avatar-fail-test.png"));
+        assert!(!queue_image_from_src(
+            key,
+            "/nonexistent/rui-avatar-fail-test.png"
+        ));
     }
 
     #[test]

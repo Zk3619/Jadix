@@ -70,18 +70,18 @@ use crate::app::pending_images::{
     ensure_avatar_src_loaded, texture_key_for_avatar_src, track_src_load_signal, AvatarImageMask,
     SrcLoadState,
 };
-use crate::app::reactive::bind_attr;
 use crate::app::reactive::apply_bound_size;
+use crate::app::reactive::bind_attr;
 use crate::components::badge::{apply_badge_variant_paint, BadgeVariant};
 use crate::components::base::BaseComponentBuilder;
-use crate::utils::lucide::lucide_glyph;
-use crate::utils::text_node::build_named_icon_text_node;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_color, Element, IntoF32, LayoutStatus};
 use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{parse_text_color, with_class_list};
+use crate::utils::lucide::lucide_glyph;
+use crate::utils::text_node::build_named_icon_text_node;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 
@@ -363,7 +363,8 @@ fn apply_badge_metrics(el: &mut Element, size: AvatarSize) {
         }
     } else {
         // sm：隐藏 badge 内 svg（对位 `[&>svg]:hidden`）
-        el.children.retain(|c| c.text_style.font_family.as_deref() != Some("lucide"));
+        el.children
+            .retain(|c| c.text_style.font_family.as_deref() != Some("lucide"));
     }
 }
 
@@ -386,11 +387,7 @@ fn restyle_avatar_subtree(el: &mut Element, ctx: AvatarCtx) {
 }
 
 fn fill_avatar_layer(el: Element) -> Element {
-    el.absolute()
-        .top(0.0)
-        .left(0.0)
-        .right(0.0)
-        .bottom(0.0)
+    el.absolute().top(0.0).left(0.0).right(0.0).bottom(0.0)
 }
 
 fn order_avatar_children(children: Vec<Element>) -> Vec<Element> {
@@ -460,7 +457,11 @@ pub fn avatar_scope(
         provide_context(avatar_context(), AvatarCtx { size, shape });
         let kids = take_packed(body());
         build_avatar_root(
-            if id.is_empty() { None } else { Some(id.clone()) },
+            if id.is_empty() {
+                None
+            } else {
+                Some(id.clone())
+            },
             size,
             shape,
             kids,
@@ -606,7 +607,11 @@ fn build_avatar_badge(
         .bottom(0.0)
         .rounded_full()
         .into();
-    el = el.display_flex().items_center().justify_center().z_index(10);
+    el = el
+        .display_flex()
+        .items_center()
+        .justify_center()
+        .z_index(10);
     el.set_attr(ATTR_SLOT, SLOT_BADGE);
     for mut c in children {
         apply_badge_metrics(&mut c, ctx.size);
@@ -721,8 +726,7 @@ impl AvatarFallbackBuilder {
     pub fn icon(mut self, name: impl AsRef<str>) -> Self {
         let name = name.as_ref();
         let glyph = lucide_glyph(name).unwrap_or_else(|| "\u{ea0e}".to_string());
-        self.children
-            .push(build_named_icon_text_node(name, glyph));
+        self.children.push(build_named_icon_text_node(name, glyph));
         self
     }
 
@@ -852,16 +856,14 @@ impl AvatarBuilder {
         self.body = Some(Box::new(move || {
             let mut frag = Element::new();
             frag.set_attr("rui_fragment", "1");
-            frag.children(vec![
-                AvatarImage(AvatarImageProps {
-                    id: String::new(),
-                    src: Some(src.clone()),
-                    alt: Some(String::new()),
-                    base: None,
-                    children: None,
-                    ..Default::default()
-                }),
-            ])
+            frag.children(vec![AvatarImage(AvatarImageProps {
+                id: String::new(),
+                src: Some(src.clone()),
+                alt: Some(String::new()),
+                base: None,
+                children: None,
+                ..Default::default()
+            })])
         }));
         self
     }
@@ -897,21 +899,15 @@ pub fn Avatar(
 ) -> Element {
     let class = None;
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el = avatar_scope(
-        id,
-        size,
-        shape,
-        class,
-        move || {
-            let mut frag = Element::new();
-            if kids.is_empty() {
-                frag
-            } else {
-                frag.set_attr("rui_fragment", "1");
-                frag.children(kids)
-            }
-        },
-    );
+    let mut el = avatar_scope(id, size, shape, class, move || {
+        let mut frag = Element::new();
+        if kids.is_empty() {
+            frag
+        } else {
+            frag.set_attr("rui_fragment", "1");
+            frag.children(kids)
+        }
+    });
     if let Some(b) = base_builder {
         let base = BaseComponentBuilder::new(el);
         el = b(base).el;
@@ -995,7 +991,10 @@ pub fn AvatarGroupCount(
 }
 
 /// Solid-style in-place bind for `<AvatarBadge variant={sig.get()}>`.
-pub fn apply_bound_avatar_badge_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
+pub fn apply_bound_avatar_badge_variant(
+    el: &mut Element,
+    variant: impl AsRef<str>,
+) -> LayoutStatus {
     let status = apply_badge_variant_paint(el, variant);
     apply_avatar_badge_ring(el);
     status
@@ -1057,18 +1056,12 @@ mod tests {
 
     #[test]
     fn builder_sets_slot_and_size() {
-        let el: Element = avatar()
-            .size("lg")
-            .fallback("CN")
-            .into();
+        let el: Element = avatar().size("lg").fallback("CN").into();
         assert_eq!(
             el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some(SLOT_AVATAR)
         );
-        assert_eq!(
-            el.attrs.get(ATTR_SIZE).map(|s| s.as_str()),
-            Some("lg")
-        );
+        assert_eq!(el.attrs.get(ATTR_SIZE).map(|s| s.as_str()), Some("lg"));
     }
 
     #[test]
@@ -1157,10 +1150,7 @@ mod tests {
 
     #[test]
     fn avatar_rounded_square_shape() {
-        let el: Element = avatar()
-            .shape("rounded-square")
-            .fallback("RS")
-            .into();
+        let el: Element = avatar().shape("rounded-square").fallback("RS").into();
         assert_eq!(
             el.attrs.get(ATTR_SHAPE).map(|s| s.as_str()),
             Some("rounded-square")

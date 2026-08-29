@@ -7,8 +7,8 @@ use crate::renderer::emoji_layout::{
 use crate::renderer::font_loader;
 use crate::renderer::prepare_text::emoji_paint_pixel_size;
 use crate::text::{
-    build_visual_lines, caret_visual_line_index, measure_prefix_advance, soft_visual_line_byte_ranges,
-    LineBreakSource,
+    build_visual_lines, caret_visual_line_index, measure_prefix_advance,
+    soft_visual_line_byte_ranges, LineBreakSource,
 };
 
 /// Gallery-shaped sample (wrap=char demo).
@@ -132,16 +132,96 @@ fn emoji_ink_fits_inside_advance_slot() {
         "ink must fit inside advance (ink={ink} adv={})",
         g.w
     );
+    let slot_mid = g.x + g.w * 0.5;
+    let ink_mid = left + ink * 0.5;
     assert!(
-        left + 0.25 >= g.x,
-        "emoji left={left} must not start left of slot advance origin g.x={gx} (ink={ink} g.w={gw})",
-        gx = g.x,
-        gw = g.w
+        (slot_mid - ink_mid).abs() < 0.6,
+        "ink must be centered in the glyph box (slot_mid={slot_mid} ink_mid={ink_mid} \
+         left={left} ink={ink} g.x={} g.w={})",
+        g.x,
+        g.w
     );
+}
+
+#[test]
+fn emoji_ink_centered_under_leading_none() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    font_loader::ensure_coverage_for_text(&mut fs, &EMOJI_LAYOUT_SLOT.to_string());
+
+    let layout = plan_emoji_layout_text("👍");
+    let slot_start = layout.find(EMOJI_LAYOUT_SLOT).expect("slot");
+    let size = 14.0_f32;
+    let lh = size; // leading-none (reaction chips)
+    let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
+    let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+    buffer.set_size(Some(400.0), Some(lh + 2.0));
+    set_buffer_with_emoji_slots(
+        &mut buffer,
+        &layout,
+        &attrs,
+        glyphon::Shaping::Advanced,
+        size,
+        lh,
+    );
+    buffer.shape_until_scroll(&mut fs, false);
+
+    let (line_i, local) =
+        crate::renderer::emoji_layout::global_byte_to_line_local(&layout, slot_start).unwrap();
+    let (_run, g) =
+        crate::renderer::emoji_layout::find_glyph_for_line_byte(&buffer, line_i, local).unwrap();
+    let ink = emoji_paint_pixel_size(size) as f32;
+    let (left, _top) =
+        custom_emoji_left_centered_top(&buffer, &layout, slot_start, ink, ink).unwrap();
+
+    let designed = ink * (EMOJI_ADVANCE_EM / EMOJI_INK_EM);
+    let cell_w = g.w.max(designed);
+    let slot_mid = g.x + cell_w * 0.5;
+    let ink_mid = left + ink * 0.5;
     assert!(
-        left + ink.min(g.w) <= g.x + g.w + 0.25,
-        "emoji right must stay within slot advance (left={left} ink={ink} g.x={gx} g.w={gw})",
-        gx = g.x,
-        gw = g.w
+        (slot_mid - ink_mid).abs() < 0.6,
+        "leading-none must still center ink (slot_mid={slot_mid} ink_mid={ink_mid} \
+         left={left} ink={ink} g.x={} g.w={})",
+        g.x,
+        g.w
+    );
+}
+
+#[test]
+fn emoji_ink_not_packed_to_slot_origin() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    font_loader::ensure_coverage_for_text(&mut fs, &EMOJI_LAYOUT_SLOT.to_string());
+
+    let layout = plan_emoji_layout_text("👀");
+    let slot_start = layout.find(EMOJI_LAYOUT_SLOT).expect("slot");
+    let size = 14.0_f32;
+    let lh = size;
+    let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
+    let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
+    buffer.set_size(Some(64.0), Some(lh + 2.0));
+    set_buffer_with_emoji_slots(
+        &mut buffer,
+        &layout,
+        &attrs,
+        glyphon::Shaping::Advanced,
+        size,
+        lh,
+    );
+    buffer.shape_until_scroll(&mut fs, false);
+
+    let (line_i, local) =
+        crate::renderer::emoji_layout::global_byte_to_line_local(&layout, slot_start).unwrap();
+    let (_run, g) =
+        crate::renderer::emoji_layout::find_glyph_for_line_byte(&buffer, line_i, local).unwrap();
+    let ink = emoji_paint_pixel_size(size) as f32;
+    let (left, _top) =
+        custom_emoji_left_centered_top(&buffer, &layout, slot_start, ink, ink).unwrap();
+    assert!(
+        left > g.x + 0.25,
+        "ink must be inset from the glyph-box origin (not packed left with blank on the right); \
+         left={left} g.x={} ink={ink} g.w={}",
+        g.x,
+        g.w
     );
 }

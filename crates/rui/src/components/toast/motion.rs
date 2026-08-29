@@ -10,7 +10,6 @@ use crate::utils::motion::{
 };
 use std::cell::{Cell, RefCell};
 
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToastCssPhase {
     /// 新通知自边缘滑入。
@@ -110,7 +109,6 @@ pub(super) fn exit_target(from: [f32; 2], from_bottom: bool) -> [f32; 2] {
     }
 }
 
-
 /// 四边均匀阴影（offset 0,0）；语义变体仅换色相，强度与 default 一致。
 pub(super) fn tone_shadow(tone: ToastTone) -> ([f32; 4], f32, f32) {
     const BLUR: f32 = 10.0;
@@ -150,7 +148,6 @@ pub(super) fn tone_shadow_stacked(tone: ToastTone, behind: bool) -> ([f32; 4], f
     (c, blur, spread)
 }
 
-
 /// 堆叠位移动画参数；`None` = list 布局仅入场/退场。
 #[derive(Clone)]
 pub(super) struct ToastStackMotion {
@@ -165,7 +162,11 @@ pub(super) struct ToastStackMotion {
 }
 
 /// 堆叠 rank → 原始 lift / scale / 是否压暗阴影（LayoutGroup / slot_list）。
-pub(super) fn stack_pose_for_rank(rank: usize, from_bottom: bool, expanded: bool) -> (f32, f32, bool) {
+pub(super) fn stack_pose_for_rank(
+    rank: usize,
+    from_bottom: bool,
+    expanded: bool,
+) -> (f32, f32, bool) {
     let pose = slot_list_pose(
         rank,
         expanded,
@@ -380,13 +381,7 @@ pub(super) fn apply_enter_motion(
             last_shadow_a.set(None);
             None
         };
-        prepare_motion_sync(
-            el,
-            &entries,
-            bootstrap,
-            &mut motion.borrow_mut(),
-            dragging,
-        );
+        prepare_motion_sync(el, &entries, bootstrap, &mut motion.borrow_mut(), dragging);
 
         let target = MotionTransform::uniform_scale([x, y], opacity, scale);
         let target_changed =

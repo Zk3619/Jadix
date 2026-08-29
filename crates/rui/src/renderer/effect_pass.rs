@@ -348,12 +348,7 @@ impl EffectPassGpu {
                 TexturedInstanceInput {
                     rect_pos: [(d.rect[0] - ox) * ui_scale, (d.rect[1] - oy) * ui_scale],
                     rect_size: [d.rect[2] * ui_scale, d.rect[3] * ui_scale],
-                    tint: [
-                        d.tint_rgb[0],
-                        d.tint_rgb[1],
-                        d.tint_rgb[2],
-                        d.opacity,
-                    ],
+                    tint: [d.tint_rgb[0], d.tint_rgb[1], d.tint_rgb[2], d.opacity],
                     uv_offset: d.uv_offset,
                     uv_scale: d.uv_scale,
                     transform: {
@@ -400,9 +395,7 @@ impl EffectPassGpu {
                     let attrs = glyphon::Attrs::new()
                         .family(family)
                         .weight(glyphon::fontdb::Weight(weight))
-                        .color(glyphon::Color::rgba(
-                            color[0], color[1], color[2], color[3],
-                        ));
+                        .color(glyphon::Color::rgba(color[0], color[1], color[2], color[3]));
                     buffer.set_text(&info.text, &attrs, glyphon::Shaping::Advanced, None);
                     let align = info.style.align.to_glyphon(info.style.direction);
                     for line in buffer.lines.iter_mut() {

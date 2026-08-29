@@ -135,9 +135,8 @@ pub fn progress_scope(
 ) -> Element {
     let id = resolve_instance_id(id, "progress");
     let default_value = default_value.clamp(0.0, 1.0);
-    let value = value.unwrap_or_else(|| {
-        use_signal(format!("{id}__progress").as_str(), move || default_value)
-    });
+    let value = value
+        .unwrap_or_else(|| use_signal(format!("{id}__progress").as_str(), move || default_value));
     let mut root = with_child_owner(|| {
         provide_context(
             progress_context(),

@@ -157,7 +157,8 @@ pub fn ensure_svg_document_texture(svg: &str, width: u32, height: u32) -> Option
 
 /// Re-queue SVG rasters evicted from the GPU pool.
 pub fn flush_svg_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let needed: Vec<String> = RASTER_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()))
+    let needed: Vec<String> = RASTER_NEEDED
+        .with(|n| std::mem::take(&mut *n.borrow_mut()))
         .into_iter()
         .collect();
     let mut any = false;
@@ -221,6 +222,13 @@ pub fn lucide_icon_cache_put(key: String, w: u32, h: u32, rgba: Vec<u8>) {
         if map.len() >= 256 {
             map.clear();
         }
-        map.insert(key, SvgCpuEntry { width: w, height: h, rgba });
+        map.insert(
+            key,
+            SvgCpuEntry {
+                width: w,
+                height: h,
+                rgba,
+            },
+        );
     }
 }

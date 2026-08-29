@@ -301,9 +301,7 @@ where
     let already_registered = REGISTERED_ANCHORS.with(|registry| {
         let mut map = registry.borrow_mut();
         if let Some(registration) = map.get(&registry_key) {
-            let alive = registration
-                .effect_id
-                .is_some_and(effect_is_alive);
+            let alive = registration.effect_id.is_some_and(effect_is_alive);
             if alive {
                 return true;
             }
@@ -994,7 +992,9 @@ pub fn apply_bound_animation_play_state(el: &mut Element, value: String) -> Layo
         return LayoutStatus::Clean;
     }
     while el.style.animations.len() < states.len().max(1) {
-        el.style.animations.push(crate::style::AnimationEntry::default());
+        el.style
+            .animations
+            .push(crate::style::AnimationEntry::default());
     }
     let mut changed = false;
     for (i, s) in states.into_iter().enumerate() {

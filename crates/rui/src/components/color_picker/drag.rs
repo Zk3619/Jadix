@@ -1,7 +1,7 @@
 //! ColorPicker 拖拽会话（产品层）。
 
-use super::*;
 use super::model::*;
+use super::*;
 
 #[derive(Clone, Copy)]
 pub(super) enum ColorDragKind {
@@ -27,10 +27,7 @@ thread_local! {
 }
 
 pub(super) fn begin_color_drag(drag: ColorDrag) {
-    let sid = drag
-        .sv_id
-        .clone()
-        .unwrap_or_else(|| "color_picker".into());
+    let sid = drag.sv_id.clone().unwrap_or_else(|| "color_picker".into());
     crate::utils::pointer_drag::begin(
         crate::utils::pointer_drag::DragKind::ColorPicker,
         sid,
@@ -88,4 +85,3 @@ pub(super) fn apply_color_pointer(drag: &ColorDrag, x: f32, y: f32) {
         a: if drag.show_alpha { a } else { 1.0 },
     });
 }
-

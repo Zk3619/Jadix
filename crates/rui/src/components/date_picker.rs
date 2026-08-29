@@ -766,15 +766,17 @@ fn build_date_picker_floating_panel(
                 .justify_center()
                 .gap("0.375rem")
                 .child(calendar_month_select(format!("{id}:dp_m"), m_sel))
-                .child(calendar_year_select(format!("{id}:dp_y"), y_sel, year.peek()))
+                .child(calendar_year_select(
+                    format!("{id}:dp_y"),
+                    y_sel,
+                    year.peek(),
+                ))
                 .into();
             panel = panel.child(
                 vstack()
                     .gap("1rem")
                     .p("0.75rem")
-                    .child(
-                        reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
-                    )
+                    .child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none())
                     .child(header),
             );
         }

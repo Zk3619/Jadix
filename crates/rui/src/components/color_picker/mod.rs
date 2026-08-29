@@ -68,15 +68,15 @@ fn close_picker(open: Signal<bool>, trigger_fid: impl Into<String>) {
     focus_id_only(trigger_fid.into());
 }
 
-mod model;
 mod drag;
+mod model;
 pub mod view;
 
+pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag};
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,
 };
-pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag};
 pub(crate) use view::flush_color_picker_textures;
 use view::{build_color_picker_view, follow_hue_into_rgba, ColorPickerRenderProps};
 
@@ -206,14 +206,14 @@ impl From<ColorPickerBuilder> for Element {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::drag::{apply_color_pointer, ColorDrag, ColorDragKind};
+    use super::model::SWATCHES_GITHUB;
     use super::view::{
         format_value_row, place_sv_knob, sv_area, sv_knob_frac, sv_texture_mid_column_luma,
         swatch_grid, sync_trigger_preview, tex_sv_cpu_count, ATTR_CP_SLOT, SLOT_SV_KNOB,
         SLOT_SV_TEX, SV_KNOB_HALF_PX,
     };
-    use super::model::SWATCHES_GITHUB;
+    use super::*;
 
     #[test]
     fn closed_color_picker_defers_sv_texture_until_panel() {
@@ -236,7 +236,10 @@ mod tests {
             top_luma > bot_luma + 200,
             "SV row0 (widget top) must be brighter than last row; top={top_luma} bot={bot_luma}"
         );
-        assert!(bot_luma < 24, "bottom row should be near black, got {bot_luma}");
+        assert!(
+            bot_luma < 24,
+            "bottom row should be near black, got {bot_luma}"
+        );
     }
 
     #[test]

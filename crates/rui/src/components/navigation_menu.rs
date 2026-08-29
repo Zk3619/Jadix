@@ -312,10 +312,7 @@ fn nav_top_chip(bg: [f32; 4], label: Element, trailing: Option<Element>) -> Elem
     row.into()
 }
 
-fn chain_key_down(
-    mut el: Element,
-    handler: impl FnMut(KeyEvent) -> bool + 'static,
-) -> Element {
+fn chain_key_down(mut el: Element, handler: impl FnMut(KeyEvent) -> bool + 'static) -> Element {
     let prev = el.on_key_down.clone();
     let mut handler = handler;
     el = el.on_key_down(move |ev| {
@@ -346,7 +343,10 @@ pub fn navigation_menu_scope(
 ) -> Element {
     let id = resolve_instance_id(id, "navigation_menu");
     reset_item_seq(&id);
-    let expanded = use_signal(format!("{id}__navmenu_expanded").as_str(), || None::<String>);
+    let expanded = use_signal(
+        format!("{id}__navmenu_expanded").as_str(),
+        || None::<String>,
+    );
     let mut root = with_child_owner(|| {
         provide_context(
             navigation_menu_context(),
@@ -436,7 +436,11 @@ pub fn navigation_menu_content(
         let _guard = enter_content_body();
         let rows = body();
         let kids = take_packed(rows);
-        let mut list = vstack().gap("0.125rem").p("0.75rem").min_w("14rem").w("auto");
+        let mut list = vstack()
+            .gap("0.125rem")
+            .p("0.75rem")
+            .min_w("14rem")
+            .w("auto");
         let link_ids: Vec<String> = kids
             .iter()
             .enumerate()
@@ -679,8 +683,7 @@ pub fn NavigationMenuTrigger(
                 }
                 return true;
             }
-            if matches!(ev.logical_key, Key::Named(NamedKey::Escape)) && exp_keys.peek().is_some()
-            {
+            if matches!(ev.logical_key, Key::Named(NamedKey::Escape)) && exp_keys.peek().is_some() {
                 exp_keys.set(None);
                 return true;
             }
@@ -1031,14 +1034,8 @@ mod tests {
                 base: None,
             })
         });
-        assert_eq!(
-            el.template_id.as_deref(),
-            Some("nm-scope__navigation_menu")
-        );
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.template_id.as_deref(), Some("nm-scope__navigation_menu"));
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
     }
 
     #[test]
@@ -1048,8 +1045,7 @@ mod tests {
             .trigger(
                 "comp",
                 "Components",
-                vec![NavigationMenuLinkData::new("a", "Alert", || {})
-                    .description("Modal")],
+                vec![NavigationMenuLinkData::new("a", "Alert", || {}).description("Modal")],
             )
             .into();
         assert!(
@@ -1058,10 +1054,7 @@ mod tests {
                 .is_some_and(|id| id.contains("navigation_menu")),
             "builder must route through scope"
         );
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
     }
 
     #[test]
@@ -1070,10 +1063,7 @@ mod tests {
             .link("a", "A", || {})
             .link("b", "B", || {})
             .into();
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         // Root children: List (+ optional Viewport). Items must live under List, not root.
         let list = el
             .children

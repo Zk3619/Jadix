@@ -158,7 +158,9 @@ fn menus_of(bar_id: &str) -> Vec<MenuReg> {
 }
 
 fn any_menu_open(bar_id: &str) -> bool {
-    menus_of(bar_id).iter().any(|r| r.open.is_alive() && r.open.peek())
+    menus_of(bar_id)
+        .iter()
+        .any(|r| r.open.is_alive() && r.open.peek())
 }
 
 fn open_neighbor_menu(bar_id: &str, from_ix: usize, delta: i32) {
@@ -324,8 +326,7 @@ pub fn menubar_menu(
         }
         None => format!("{}__menu{seq}", bar.id),
     };
-    let open =
-        open.unwrap_or_else(|| use_signal(format!("{menu_id}__dd_open").as_str(), || false));
+    let open = open.unwrap_or_else(|| use_signal(format!("{menu_id}__dd_open").as_str(), || false));
     register_menu(
         &bar.id,
         MenuReg {
@@ -361,10 +362,7 @@ impl Default for MenubarContentOpts {
 }
 
 /// solid-ui / shadcn `MenubarContent`：复用 DropdownMenuContent（gap≈8）。
-pub fn menubar_content(
-    opts: MenubarContentOpts,
-    body: impl Fn() -> Element + 'static,
-) -> Element {
+pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let _ = require_dropdown_in_menubar("MenubarContent");
     let el = dropdown_menu_content(
         DropdownMenuContentOpts {
@@ -387,10 +385,7 @@ pub fn menubar_sub(id: Option<String>, body: impl FnOnce() -> Element) -> Elemen
 }
 
 /// 子菜单内容。
-pub fn menubar_sub_content(
-    class: Option<String>,
-    body: impl Fn() -> Element + 'static,
-) -> Element {
+pub fn menubar_sub_content(class: Option<String>, body: impl Fn() -> Element + 'static) -> Element {
     let _ = require_dropdown_in_menubar("MenubarSubContent");
     // Keep dropdown-menu-sub-content slot / placeholder identity for floating sync.
     dropdown_menu_sub_content(class, body)
@@ -475,10 +470,7 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
             .text(label_text.clone())
             .into();
         // solid-ui: rounded-sm px-3 py-1.5; open → accent (disable button hover paint so sync won't overwrite).
-        trigger = trigger
-            .px("0.75rem")
-            .py("0.375rem")
-            .rounded("0.125rem");
+        trigger = trigger.px("0.75rem").py("0.375rem").rounded("0.125rem");
         if is_open {
             trigger.button_hover_paint = None;
             trigger = trigger
@@ -515,22 +507,14 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
                 return false;
             }
             let menus = menus_of(&bar_keys);
-            let menu_ix = menus
-                .iter()
-                .position(|m| m.id == menu_id_ix)
-                .unwrap_or(0);
+            let menu_ix = menus.iter().position(|m| m.id == menu_id_ix).unwrap_or(0);
             let trigger_ids: Vec<String> = menus
                 .iter()
                 .map(|m| format!("{}__dd_trigger", m.id))
                 .collect();
             let n_sec = menus.len();
             if !open_keys.peek() {
-                return focus_roving_key(
-                    &ev,
-                    &trigger_ids,
-                    menu_ix,
-                    FocusRovingAxis::Horizontal,
-                );
+                return focus_roving_key(&ev, &trigger_ids, menu_ix, FocusRovingAxis::Horizontal);
             }
             match &ev.logical_key {
                 Key::Named(NamedKey::ArrowRight) if n_sec > 0 => {
@@ -574,10 +558,7 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
                 .unwrap_or_else(|| trigger_id.clone()),
         );
         trigger.set_attr(ATTR_SLOT, SLOT_TRIGGER);
-        trigger.set_attr(
-            "data-state",
-            if is_open { "open" } else { "closed" },
-        );
+        trigger.set_attr("data-state", if is_open { "open" } else { "closed" });
         trigger.accesskit_role("menuitem")
     })
 }
@@ -1022,7 +1003,8 @@ mod tests {
         let sub_trigger_fid = {
             let tree = root.borrow();
             fn find_sub_trigger_fid(el: &Element) -> Option<String> {
-                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                if el.attrs.get("data-slot").map(String::as_str)
+                    == Some("dropdown-menu-sub-trigger")
                 {
                     return el.focus_id.clone();
                 }
@@ -1078,9 +1060,15 @@ mod tests {
             });
             let layer_len = layer.map(|l| l.children.len()).unwrap_or(0);
             let sub_on_layer = layer.is_some_and(|l| {
-                l.children.iter().any(|c| find_slot(c, "dropdown-menu-sub-content"))
+                l.children
+                    .iter()
+                    .any(|c| find_slot(c, "dropdown-menu-sub-content"))
             });
-            (find_slot(&tree, "dropdown-menu-sub-content"), sub_on_layer, layer_len)
+            (
+                find_slot(&tree, "dropdown-menu-sub-content"),
+                sub_on_layer,
+                layer_len,
+            )
         };
         assert!(
             has_sub_panel,
@@ -1244,7 +1232,8 @@ mod tests {
         let sub_trigger_fid = {
             let tree = root.borrow();
             fn find_sub_trigger_fid(el: &Element) -> Option<String> {
-                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                if el.attrs.get("data-slot").map(String::as_str)
+                    == Some("dropdown-menu-sub-trigger")
                     || el.attrs.get("data-slot").map(String::as_str) == Some("menubar-sub-trigger")
                 {
                     return el.focus_id.clone();
@@ -1373,7 +1362,8 @@ mod tests {
             fn find_sub_hover(
                 el: &Element,
             ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
-                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                if el.attrs.get("data-slot").map(String::as_str)
+                    == Some("dropdown-menu-sub-trigger")
                 {
                     return el.on_hover.clone();
                 }
@@ -1436,7 +1426,8 @@ mod tests {
                 c.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
             });
             fn find_sub_panel(el: &Element) -> Option<&Element> {
-                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-content")
+                if el.attrs.get("data-slot").map(String::as_str)
+                    == Some("dropdown-menu-sub-content")
                 {
                     return Some(el);
                 }
@@ -1480,9 +1471,7 @@ mod tests {
         use std::rc::Rc;
 
         use crate::app::portal_overlay::clear_overlay_stack;
-        use crate::app::reactive::{
-            drain_deferred_view_remounts, reset_registered_anchors,
-        };
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
         use crate::core::reactivity::{create_effect, create_root, use_signal};
 
@@ -1551,7 +1540,8 @@ mod tests {
             fn find_sub_hover(
                 el: &Element,
             ) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>> {
-                if el.attrs.get("data-slot").map(String::as_str) == Some("dropdown-menu-sub-trigger")
+                if el.attrs.get("data-slot").map(String::as_str)
+                    == Some("dropdown-menu-sub-trigger")
                 {
                     return el.on_hover.clone();
                 }
@@ -1569,8 +1559,7 @@ mod tests {
         // Simulate reconcile miss during open (e.g. AppState borrowed): drop the test root.
         clear_test_reconcile_root();
         hover_cb.borrow_mut()(true);
-        let sub_open_after_miss =
-            use_signal("mb_miss_bar__file__sub0__open", || false).peek();
+        let sub_open_after_miss = use_signal("mb_miss_bar__file__sub0__open", || false).peek();
         assert!(
             sub_open_after_miss,
             "hover must still set sub_open even when reconcile misses"

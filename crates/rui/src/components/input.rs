@@ -1100,13 +1100,7 @@ mod tests {
             }
             el.children.iter().any(|c| find_tid(c, tid))
         }
-        assert!(!find_tid(
-            &el,
-            &input_number_inc_template_id(id)
-        ));
-        assert!(!find_tid(
-            &el,
-            &input_number_dec_template_id(id)
-        ));
+        assert!(!find_tid(&el, &input_number_inc_template_id(id)));
+        assert!(!find_tid(&el, &input_number_dec_template_id(id)));
     }
 }

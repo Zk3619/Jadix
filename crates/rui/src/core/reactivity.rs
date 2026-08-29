@@ -591,10 +591,7 @@ fn flush_deferred_effects(rt: &Runtime) {
         }
         rounds += 1;
         if rounds == 1 || rounds % 50 == 0 {
-            log::debug!(
-                "flush_deferred: round={rounds} batch={}",
-                ids.len()
-            );
+            log::debug!("flush_deferred: round={rounds} batch={}", ids.len());
         }
         if rounds > 100_000 {
             panic!("flush_deferred_effects exceeded 100k rounds — likely effect create loop");

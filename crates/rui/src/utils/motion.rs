@@ -3,7 +3,8 @@
 //! 自定义浮层/通知应消费本模块，而不是在 `reactive_sync` 里重复：
 //! snap 基线、ensure transition、目标去重 StyleChanged、按卡要帧。
 //!
-//! 底层引擎：[`crate::style::tick_element_transitions`] / [`css_transition_needs_frame`]。
+//! 底层引擎：[`crate::style::tick_element_transitions`] / [`css_transition_needs_frame`].
+//! 与 [`crate::style::keyframes`] / CSS `@keyframes` 路径的分工见仓库 `docs/animation_and_motion.md`。
 
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::{
@@ -138,10 +139,7 @@ pub fn snap_motion_baseline(el: &mut Element) {
 
 /// 本节点 CSS transition 是否仍需帧。
 #[inline]
-pub fn motion_is_animating(
-    style: &crate::style::Style,
-    snapshot: &TransitionSnapshot,
-) -> bool {
+pub fn motion_is_animating(style: &crate::style::Style, snapshot: &TransitionSnapshot) -> bool {
     snapshot.has_active_tweens() || css_transition_needs_frame(style, snapshot)
 }
 

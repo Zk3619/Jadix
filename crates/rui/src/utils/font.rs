@@ -138,11 +138,7 @@ pub fn default_ui_sans_family_list() -> &'static str {
                 }
             }
         }
-        parts.extend(
-            BUILT_IN_UI_SANS_CANDIDATES
-                .iter()
-                .map(|s| (*s).to_string()),
-        );
+        parts.extend(BUILT_IN_UI_SANS_CANDIDATES.iter().map(|s| (*s).to_string()));
         parts.push("sans-serif".to_string());
         parts.join(", ")
     })

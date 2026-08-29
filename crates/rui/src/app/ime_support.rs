@@ -967,7 +967,8 @@ pub(crate) fn estimate_caret_x_in_field(
     } else {
         glyphon::Family::SansSerif
     };
-    let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
+    let weight =
+        crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
     let measure_one = |fs: &mut glyphon::FontSystem, text: &str| -> f32 {
         if text.is_empty() {
             return 0.0;
@@ -985,8 +986,7 @@ pub(crate) fn estimate_caret_x_in_field(
     let line_w = measure_one(fs, line_full);
     let prefix_w = measure_one(fs, display_prefix);
     let align_dx = text_style.align_inline_offset(line_w, content_w);
-    pad_left_logical
-        + (align_dx + prefix_w - text_style.scroll_x.max(0.0)).clamp(0.0, content_w)
+    pad_left_logical + (align_dx + prefix_w - text_style.scroll_x.max(0.0)).clamp(0.0, content_w)
 }
 
 #[cfg(test)]

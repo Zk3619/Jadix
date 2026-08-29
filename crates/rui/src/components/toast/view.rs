@@ -1,12 +1,11 @@
 //! Toast 卡片壳与 stack/list 渲染。
 
-use super::*;
-use crate::components::button::button;
-use crate::utils::text_node::{build_icon_text_node, build_named_icon_text_node};
 use super::motion::{
     apply_enter_motion, stack_pose_for_rank, tone_shadow_stacked, ToastStackMotion,
 };
-
+use super::*;
+use crate::components::button::button;
+use crate::utils::text_node::build_named_icon_text_node;
 
 // ---------------------------------------------------------------------------
 // Visual: card + parts
@@ -359,8 +358,7 @@ fn render_stack(
         if from_bottom {
             let top = h - CARD_H;
             for child in &mut el.children {
-                if crate::utils::keyed_overlay::is_keyed_motion_item(child.template_id.as_deref())
-                {
+                if crate::utils::keyed_overlay::is_keyed_motion_item(child.template_id.as_deref()) {
                     child.style.set_css_dim(UnitSlot::InsetT, CssDim::Px(top));
                 }
             }
@@ -549,7 +547,12 @@ fn render_list(items: &[&ToastItem], from_bottom: bool, swipe: ToastSwipeDirs) -
     Element::from(pile)
 }
 
-pub(super) fn render_queue(layout: ToastLayout, position: &str, q: &[ToastItem], expanded: bool) -> Element {
+pub(super) fn render_queue(
+    layout: ToastLayout,
+    position: &str,
+    q: &[ToastItem],
+    expanded: bool,
+) -> Element {
     let limit = visible_limit();
     let active_ids: std::collections::HashSet<u64> = q
         .iter()

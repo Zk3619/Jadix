@@ -1,8 +1,7 @@
 //! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
 
-use super::*;
 use super::drag::is_carousel_dragging_id;
-
+use super::*;
 
 pub(super) fn step_px(ctx: &CarouselCtx) -> f32 {
     if ctx.variant == CarouselVariant::Stack {
@@ -385,4 +384,3 @@ pub(super) fn begin_seamless_prev(ctx: &CarouselCtx, from: usize, delta: usize) 
     animate_offset_to(&ctx.id, target);
     true
 }
-

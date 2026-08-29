@@ -52,20 +52,14 @@
 //!   堆高度 `LayoutChanged` 由框架按 portal 局部 dirty 处理（不全窗 remasure / FullClear）。
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
+pub mod host;
+mod motion;
 mod queue;
 mod swipe;
 mod timer;
-mod motion;
 pub mod view;
-pub mod host;
 
-
-use queue::{
-    max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP,
-};
-use swipe::{clamp_swipe_offset, should_dismiss, ToastSwipeDirs};
 use crate::core::reactivity::{batch, remove_named_signal, use_signal, Signal};
-use crate::utils::presence::exit_elapsed;
 use crate::core::tree::{Element, LayoutStatus, PointerEvents, ATTR_POINTER_EVENTS};
 use crate::layout::dimension::CssDim;
 use crate::layout::layout_tree::LayoutTree;
@@ -76,12 +70,12 @@ use crate::style::{
     parse_color, parse_text_color, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
 };
 use crate::tokens;
-use crate::utils::lucide_glyph;
 use crate::utils::keyed_overlay::{item_template_id, TOAST_CARD_SCOPE};
 use crate::utils::layout_group::linear_slot_offset;
-
-use crate::utils::text_node::{build_icon_text_node, build_named_icon_text_node};
-use crate::components::button::button;
+use crate::utils::lucide_glyph;
+use crate::utils::presence::exit_elapsed;
+use queue::{max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING, TOAST_EXIT_GAP};
+use swipe::{clamp_swipe_offset, should_dismiss, ToastSwipeDirs};
 
 use rui_macros::component;
 use std::cell::{Cell, RefCell};
@@ -1334,8 +1328,8 @@ mod tests {
         toast_motion_pose, tone_shadow, ToastStackMotion,
     };
     use super::view::tone_colors;
-    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
     use super::*;
+    use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 
     fn settle_toast_exits() {
         let mut q = toast_queue().get();

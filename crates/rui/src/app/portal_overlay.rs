@@ -627,9 +627,7 @@ mod tests {
         assert!(portal_sync("file", parent, OverlayKind::Menu, OverlayMode::Stacked).is_some());
         crate::utils::popup::arm_underlay_close();
         sub.set(true);
-        assert!(
-            portal_sync("file__sub0", sub, OverlayKind::Menu, OverlayMode::Stacked).is_some()
-        );
+        assert!(portal_sync("file__sub0", sub, OverlayKind::Menu, OverlayMode::Stacked).is_some());
         assert!(
             crate::utils::popup::underlay_close_is_armed(),
             "opening nested __sub must keep underlay armed"
@@ -650,11 +648,23 @@ mod tests {
         crate::utils::popup::arm_underlay_close();
         sub.set(true);
         assert!(
-            portal_sync(sub_id.as_str(), sub, OverlayKind::Menu, OverlayMode::Stacked).is_some(),
+            portal_sync(
+                sub_id.as_str(),
+                sub,
+                OverlayKind::Menu,
+                OverlayMode::Stacked
+            )
+            .is_some(),
             "namespaced sub must push onto the stack"
         );
-        assert!(parent.peek(), "menubar parent Menu must stay open under namespaced __sub");
-        assert!(sub.peek(), "sub open signal must remain true after portal_sync");
+        assert!(
+            parent.peek(),
+            "menubar parent Menu must stay open under namespaced __sub"
+        );
+        assert!(
+            sub.peek(),
+            "sub open signal must remain true after portal_sync"
+        );
         assert_eq!(depth(), 2, "parent + nested sub must both remain stacked");
     }
 

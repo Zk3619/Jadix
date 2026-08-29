@@ -226,9 +226,10 @@ pub fn custom_emoji_left_top(
     Some((left, top))
 }
 
-/// 将 `ink_w`×`ink_h` 墨水方块水平居中于占位 advance（`g.w`），垂直光学居中于行盒。
+/// 将 `ink_w`×`ink_h` 墨水方块水平居中于占位字形盒，垂直光学居中于行盒。
 ///
-/// - 水平：墨水不得越过 advance（`ink_w` 钳到 `g.w`）。
+/// - 水平：以 `max(g.w, designed advance)` 为字形盒居中。切勿把 `ink` 钳进 `g.w`
+///   再贴左——槽宽一旦略小于墨水，溢出会全部堆在右侧，胶囊看起来左边距更窄。
 /// - 垂直：允许相对 `line_height` 轻微溢出（系统 emoji 亦非坐死基线）。
 pub fn custom_emoji_left_centered_top(
     buffer: &glyphon::Buffer,
@@ -239,9 +240,13 @@ pub fn custom_emoji_left_centered_top(
 ) -> Option<(f32, f32)> {
     let (line_i, local) = global_byte_to_line_local(layout_text, global_byte)?;
     let (run, g) = find_glyph_for_line_byte(buffer, line_i, local)?;
-    let ew = ink_w.min(g.w.max(0.0));
+    let ink_w = ink_w.max(0.0);
     let eh = ink_h.max(0.0);
-    let left = g.x + (g.w - ew) * 0.5;
+    // Rounded paint size can be 1px off `font_size * INK_EM`; recover the 1.22em cell
+    // so a collapsed slot (leading-none, span metrics ignored) still centers.
+    let designed = ink_w * (EMOJI_ADVANCE_EM / EMOJI_INK_EM);
+    let cell_w = g.w.max(designed);
+    let left = g.x + (cell_w - ink_w) * 0.5;
     let top = run.line_top + (run.line_height - eh) * 0.5;
     Some((left, top))
 }
@@ -256,7 +261,9 @@ pub fn advance_emoji_left_cursor(
     line_top: &mut Option<f32>,
 ) -> f32 {
     if line_top.map(|t| (top - t).abs() > 0.5).unwrap_or(false) {
-        *cursor = 0.0;
+        // First glyph on a wrapped line may sit slightly left of 0 when ink > slot
+        // (symmetric overflow). Resetting to 0 packed that overflow onto the right.
+        *cursor = f32::NEG_INFINITY;
     }
     *line_top = Some(top);
     let mut left = left;
@@ -299,7 +306,7 @@ mod tests {
     #[test]
     fn left_cursor_resets_on_soft_wrap_line() {
         let slot = 16.0_f32;
-        let mut cursor = 0.0_f32;
+        let mut cursor = f32::NEG_INFINITY;
         let mut line_top = None;
         let l0 = advance_emoji_left_cursor(100.0, 0.0, slot, &mut cursor, &mut line_top);
         assert!((l0 - 100.0).abs() < f32::EPSILON);
@@ -312,6 +319,18 @@ mod tests {
         assert!(
             (l2 - 4.0).abs() < 0.01,
             "wrapped emoji must keep line-start left, got {l2} (stair-step regression)"
+        );
+    }
+
+    #[test]
+    fn left_cursor_keeps_first_glyph_nudge_left_of_origin() {
+        let slot = 16.0_f32;
+        let mut cursor = f32::NEG_INFINITY;
+        let mut line_top = None;
+        let left = advance_emoji_left_cursor(-1.25, 0.0, slot, &mut cursor, &mut line_top);
+        assert!(
+            (left + 1.25).abs() < 0.01,
+            "first-on-line centering overflow must not be packed to 0, got {left}"
         );
     }
 
