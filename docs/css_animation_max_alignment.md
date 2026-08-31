@@ -114,7 +114,7 @@ pub struct PresentStyle { /* 本帧绘制：Style 子集 + TextStyle 子集 */ }
 
 ## 3. Animatable 属性矩阵（对齐 MDN）
 
-图例：**✅ v1** · **🔜 ANIM 波次** · **�—** 不纳入 v1
+图例：**✅ v1** · **🔜 ANIM 波次** · **—** 不纳入 v1
 
 ### 3.1 A 层 — 合成 / 不触 layout
 

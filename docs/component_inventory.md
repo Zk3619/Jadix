@@ -60,12 +60,15 @@
 | ToggleGroup | `toggle_group` / `ToggleGroup` | **experimental** | 必填实例键 | reactive sync lib；≈ EUI `segmented` |
 | Progress | `progress` / `Progress*` | **experimental** | 可选 / 展示偏多 | ShadCN 复合：Label/Value + Track；`value` ∈ 0..=1；`valueSignal` |
 | Image | `Image` | **experimental** | 可选（测试选择器） | 不在 §5.2.1 |
+| Kbd | `kbd` / `Kbd` / `kbd_group` / `KbdGroup` | **experimental** | **展示型不要求** | ShadCN 快捷键胶囊；Gallery `1c-k)`；通用 PascalCase → `*Props`（无特殊 scope） |
 
 ### 1.2 表单（Gallery `forms`）
 
 | 公开 API | 导出符号（摘要） | 桶 | id 策略 | 证据 / 笔记 |
 |----------|------------------|----|---------|-------------|
 | Input | `input` / `Input` / `InputBuilder` | **verified** | 多实例 **必填实例键**；空 → **仅内部自动** `__rui_input_rt_N` | smoke#2/#3/#4/#9；input_* lib |
+| InputAdornment | `input_adornment` / `InputAdornment*` | **experimental** | 外壳展示型不要求；内嵌 Input/Textarea **必填字段 id** | 对位 ShadCN **InputGroup**（非多 Input 成组）；`plain_chrome` control；Gallery `2b)` |
+| InputOTP | `input_otp` / `InputOTP*` | **experimental** | **必填实例键**；`focus_id=input-otp:{id}` | 对位 ShadCN InputOTP；多格非 Input `type`；Gallery `2c)` |
 | Textarea | `textarea` / `Textarea` | **verified** | 同 Input | CV.1 主交互走查；textarea_* lib |
 | Checkbox | `checkbox` / `Checkbox` | **verified** | 非受控建议唯一 `id`（Owner 作用域）；受控可选；空 → auto | CV.1 + CV.2；WP-3.7 `toggle_state` |
 | Switch | `switch` / `Switch` | **verified** | 同上 | CV.1 + CV.2；WP-3.7 `toggle_state` |
@@ -163,13 +166,13 @@
 | **Collapsible** | 基础 / 布局 | P1 | 必填实例键或受控 Signal | Accordion 积木；headless 开合宜下沉 utils |
 | **Breadcrumb** | 导航 | P1 | 展示型不要求 | 路径导航；与 Navbar / NavigationMenu 分工 |
 | **Pagination** | 数据 | experimental | 可选；受控页码 Signal（1-based） | **已落地**：复合 `Pagination`/`Content`/`Item`/`Link`/`Previous`/`Next`/`Ellipsis` + Builder [`pagination`]；常跟 Table（`page_index` 0-based 需 +1） |
-| **HoverCard** | 浮层 / 反馈 | P2 | 可选；**锚点用 focus_id** | 悬停卡片；复用 popover placement + 延时 |
+| **HoverCard** | 浮层 / 反馈 | experimental | 可选；**锚点用 focus_id** | **已落地**：复合 `HoverCard`/`Trigger`/`Content` + Builder；Solid 式 `openDelay`/`closeDelay`（UI 线程 Instant）；**base** 默认内容宽（radix 才内置 `w-64`，demo 用 `class`） |
 | **Calendar** | 表单 | — | 必填实例键 | **已落地 experimental**（WP-3.3）；见 §1.2 |
 | **Empty** | 数据 / 基础 | P2 | 展示型不要求 | 空状态插画槽 + 标题/描述/CTA |
-| **Kbd** | 基础 / 文本 | P2 | 展示型不要求 | 快捷键胶囊；纯展示 |
+| ~~**Kbd**~~ | — | — | — | **已落地** [`kbd`](../crates/rui/src/components/kbd.rs)；见 §1.1 |
 | **ButtonGroup** | 基础 | P2 | 展示型不要求 | Button 水平/垂直组；圆角合并 |
-| **InputOTP** | 表单 | P2 | 必填实例键 | 验证码格；桌面少见但表单完整度需要 |
-| **InputGroup** | 表单 | P2 | 跟随 Input | addon 左/右；部分能力已在 Input adornment，可归一文档后再决定是否单列 |
+| ~~**InputOTP**~~ | — | — | — | **已落地** [`input_otp`](../crates/rui/src/components/input_otp.rs)；见 §1.2 |
+| ~~**InputGroup**~~ | — | — | — | **已落地为 [`InputAdornment`](../crates/rui/src/components/input_adornment.rs)**（避免误解为多 Input 成组）；见 §1.2 |
 
 #### 等价已有 · 不单列（P3）
 
@@ -306,9 +309,9 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 | 状态 | 数量（约） | 项 |
 |------|------------|-----|
-| **已导出对位** | 37+ | Button、Badge、AspectRatio、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Pagination、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
+| **已导出对位** | 40+ | Button、Badge、**Kbd**、AspectRatio、Label、Input、**InputAdornment**、**InputOTP**、Textarea、Checkbox、Switch、RadioGroup、Slider、Select、Combobox、Card、Separator、Tabs、Dialog、Sheet、Popover、Tooltip、HoverCard、Dropdown、ContextMenu、Menubar、NavigationMenu、Sidebar、ScrollArea、Resizable、Table、Pagination、Toast、Toggle、ToggleGroup、Progress、Carousel、Chart、Command、Form、… |
 | **planned P1** | 7 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb |
-| **planned P2** | 7 | HoverCard、Calendar、Empty、Kbd、ButtonGroup、InputOTP、InputGroup |
+| **planned P2** | 2 | Empty、ButtonGroup、（Calendar / InputAdornment / InputOTP / Kbd 已 experimental） |
 | **等价不单列** | 6 | Drawer→Sheet、Sonner→Toast、DropdownMenu→Dropdown、NativeSelect→Select、Field→Form、Item→组合 |
 | **布局/主题级** | 1 | Direction |
 
@@ -328,7 +331,7 @@ Web 专有或与底座冲突的 registry 项（若未来出现）一律进本小
 
 下列 `pub use` 均已入 **§1.1–1.8**（或标明非产品面）：
 
-`aspect_ratio`, `badge`, `button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(+复合标签/`use_popover`/`popover_panel`), `progress`(+复合标签/`use_progress`), `radio_group`, `resizable`(+复合 `ResizablePanelGroup`/`Panel`/`Handle`/`use_resizable`), `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
+`aspect_ratio`, `badge`, `button`, `calendar`, `card`, `carousel`, `chart`(`define_chart`+cartesian/polar marks / `bar_chart`/`line_chart`/`area_chart`/`pie_chart` + log/time/tooltip), `checkbox`, `color_picker`, `command`, `combobox`, `context_menu`, `table`, `date_picker`(+`time_picker`), `dialog`(+复合标签/`use_dialog`), `dropdown`, `form`(+helpers), `hover_card`(+复合标签/`use_hover_card`), `image`, `input`, `label`(+selection helpers), `menubar`, `navbar`, `navigation_menu`, `popover`(+复合标签/`use_popover`/`popover_panel`), `progress`(+复合标签/`use_progress`), `radio_group`, `resizable`(+复合 `ResizablePanelGroup`/`Panel`/`Handle`/`use_resizable`), `scroll_area`, `scroll_viewport`, `scrollbar`, `select`, `separator`, `sheet`, `sidebar`, `slider`, `stepper`, `switch`, `tabs`, `textarea`, `toast`, `toggle`, `toggle_group`, `tooltip`(+复合标签/`use_tooltip`), `tree_view`, `virtual_list`, `virtual_masonry`。
 
 **已移除（勿再导出）**：`alert_dialog` / `AlertDialogBuilder` — 确认为 Dialog 薄封装，2026-08-12 废弃；确认 UI 用 `Dialog` + Header/Footer。
 

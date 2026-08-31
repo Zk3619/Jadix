@@ -59,6 +59,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 └─ 非执行源
     三份 *_PLAN.md                   冻结展开（历史 WP 细则；勾选作废）
     gap_analysis · STAGE7_ROADMAP · PROJECT · REFERENCE_COMPARISON
+    FREYA_COMPARISON（× reference/freya-main；非执行源）
     archive/ · rui.md · bugs.md · site/README
 ```
 
@@ -546,7 +547,7 @@ WP-3.14 任务要点（已签）：`#[component]` 包 [`component_root`](../crat
 | **3.8.3** | 受控命名 `value_signal` / `checked_signal` / `open_signal`；Button variant + Input 外部 set 测 | ☑ |
 | **3.8.4** | 双书写审计表；Input RSX `value`；site README Button/Input 双片段 | ☑ |
 
-**禁区**：把 experimental Toggle/ColorPicker 强行并进 Button 词汇；Scrollbar `variant` 解析成 `outline`。
+**禁区**：把 experimental Toggle/ColorPicker 强行并进 Button 词汇；Scrollbar `variant` 解析成 `outline`；**废除 Builder/RSX 字符串 `variant` 只留枚举**（`Into` 双收见 [`component_variants.md`](component_variants.md) §0，非 Freya 式纯枚举迁移）。
 
 #### WP-3.8 验收（可判定）
 

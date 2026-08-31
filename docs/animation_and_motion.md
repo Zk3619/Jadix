@@ -251,6 +251,8 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 | Accordion chevron | `transition` | 组件内 `TransitionEntry` | 简单 rotate，无需 `MotionStyle` |
 | Dialog | `@keyframes` | `keyframes`: `fade-in-0`, `zoom-in-90`, … | `internal/modal_motion.rs` |
 | Sheet / Drawer | `transition` + `motion` | `modal_motion`: slide entries | `MotionStyle` + presence |
+| Floating Fade | `@keyframes` | `fade-in-0` / `fade-out-0`（无 zoom） | `internal/floating_motion.rs`：popover / tooltip / hover_card / context / command |
+| Floating Expand | `@keyframes` | `accordion-down/up` | `internal/floating_motion.rs`：dropdown / select / combobox / menubar / navigation_menu |
 | Toast | `transition` + `motion` | `toast/motion.rs`: phase → entries | 堆叠/drag/队列语义 |
 
 ---
@@ -277,4 +279,5 @@ Taffy 下 `min-height: auto` = min-content。若 **padding 打在外层 clip 壳
 | [`crates/rui/src/utils/motion.rs`](../crates/rui/src/utils/motion.rs) | MotionStyle 配方 |
 | [`crates/rui/src/utils/presence.rs`](../crates/rui/src/utils/presence.rs) | ExitGate |
 | [`crates/rui/src/components/internal/modal_motion.rs`](../crates/rui/src/components/internal/modal_motion.rs) | Dialog/Sheet 共享编排 |
+| [`crates/rui/src/components/internal/floating_motion.rs`](../crates/rui/src/components/internal/floating_motion.rs) | 锚定浮层 Fade / Expand 共享编排 |
 | [`crates/rui/src/components/toast/motion.rs`](../crates/rui/src/components/toast/motion.rs) | Toast 产品层 motion |

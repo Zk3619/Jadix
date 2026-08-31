@@ -2,9 +2,51 @@
 
 > **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §3（双书写）· §4.3（外观）· §4.2.5（状态）。  
 > **范围**：仅 [`component_inventory.md`](component_inventory.md) **verified** 控件。experimental（Toggle / ToggleGroup / ColorPicker…）不进本冻结。  
-> **日期**：2026-08-17
+> **日期**：2026-08-17；**2026-08-31** §0 `Into` 双收（字符串产品面 + 可选枚举）
 
 未知 `variant` / `size` **回退 `default`**（可测）。禁止在 verified 控件里发明第二套 Button 同名、不同语义的词汇而不登记本表。
+
+---
+
+## 0. Builder：`Into` 双收（字符串 + 枚举）
+
+产品面 **默认仍是字符串**（对齐 ShadCN / `ui!` 属性 / 热重载模板）。对内用枚举（`ButtonVariant`、`BubbleVariant`…）做真源；Builder **不得**只收枚举、废除 `&str`。
+
+| 面 | 约定 | 禁止 |
+|----|------|------|
+| **RSX** | `variant="outline"` / `variant={sig.get()}`（`String` 或可解析值） | 强迫用户在标签里写 `ButtonVariant::Outline` |
+| **Builder 产品示例** | `.variant("outline")`（文档 / Gallery 默认） | 文档暗示「现代写法 = 只能传枚举」 |
+| **Builder 类型增强** | 参数类型为 `impl Into<XxxVariant>`（或等价：`From<&str>` + `From<XxxVariant>`），使 `"outline"` **与** `ButtonVariant::Outline` **都能传** | 为对齐 Freya 删掉字符串重载；第二套平行 API（`.variant_str` / `.variant_enum`） |
+| **内部** | 枚举 + `FromStr` / `parse`；未知 → `default`（§1） | 组件内再发明一套未登记字符串别名 |
+
+推荐签名形态（新控件 / 改造时优先）：
+
+```rust
+// 对内真源
+pub enum ButtonVariant { /* … */ }
+impl From<&str> for ButtonVariant { /* parse；未知 → Default */ }
+impl From<ButtonVariant> for ButtonVariant {
+    fn from(v: Self) -> Self { v }
+}
+
+impl ButtonBuilder {
+    pub fn variant(mut self, v: impl Into<ButtonVariant>) -> Self {
+        self.variant = v.into();
+        self
+    }
+}
+```
+
+合法调用（同一方法）：
+
+```rust
+button("save").variant("outline");
+button("save").variant(ButtonVariant::Outline);
+```
+
+**与 Freya 的边界**：Freya 主路径是纯枚举链式 API（无 `variant="…"` RSX 面）。RUI **学其 `Into` 双收思路作 Builder 增强**，**不**把「只能写 `Enum::Variant`」当成产品默认。对照见 [`FREYA_COMPARISON.md`](FREYA_COMPARISON.md) §6 / §10。
+
+**现状**：多数 Builder 仍是 `fn variant(self, v: &str)` + 内部 `parse`（等价于「只开了字符串半边」）。`Into` 双收是 **允许且鼓励的增强**，不要求一次全仓改完；新增 / 触碰变体 API 时优先改成 `impl Into<…>`。experimental 控件（如 Bubble）同样适用本条。
 
 ---
 
@@ -58,8 +100,8 @@ experimental 备注（不挡本包）：Toggle `default`/`outline` + `sm`/`defau
 | 语义 | Builder | RSX | verified |
 |------|---------|-----|----------|
 | 文本/选项值 | `value_signal` | `value` / `valueSignal` | Input · Textarea · Select · Combobox · RadioGroup · Slider · Tabs · Progress |
-| 浮层开合 | `open` / `open_signal` | `open` / `openSignal` | Dialog · Popover · Tooltip · DropdownMenu · Sheet |
-| 浮层间距 | `side_offset` | `sideOffset` | Popover ·（Tooltip 用 `side`） |
+| 浮层开合 | `open` / `open_signal` | `open` / `openSignal` | Dialog · Popover · Tooltip · HoverCard · DropdownMenu · Sheet |
+| 浮层间距 | `side_offset` | `sideOffset` | Popover · HoverCard ·（Tooltip 用 `side`） |
 | 布尔开合（控件） | `checked_signal` | `checked` | Checkbox · Switch |
 | 浮层开合 | `open_signal` | `open` | Dialog · Tooltip |
 | 按钮变体绑定 | `apply_bound_button_variant` | `variant={sig.get()}` | Button |
@@ -88,6 +130,7 @@ experimental 备注（不挡本包）：Toggle `default`/`outline` + `sm`/`defau
 | Select / Combobox | 标签 + fn | `value_signal` | 复合 Trigger/Content 与扁平 `options` 两写法 |
 | Dialog | 复合标签 | `open` | Builder：`dialog` / `open_signal`；壳走 WP-3.4 |
 | Tooltip | 标签 + fn | `open_signal` | |
+| HoverCard | 复合标签 + fn | `open` ↔ `open_signal` | 悬停；`side`+`align`+`sideOffset` |
 | Toast / Toaster | 标签 + `toast()` / `toaster()` | 队列全局 | **命令式** `toast("…").show()` 是产品面，不是「仅 RSX」；条目 `variant` ≠ 宿主 `variant` |
 | Tabs | 复合标签 + fn | `value_signal` | |
 | ScrollArea / Scrollbar | 标签 + fn | — | Scrollbar `variant` 见 §2 |
@@ -101,6 +144,7 @@ use rui::prelude::*;
 
 ui! { <Button variant="outline">"保存"</Button> }
 let _: Element = button("save").variant("outline").text("保存").into();
+// Builder 增强后亦可（§0）：.variant(ButtonVariant::Outline)
 
 let v = use_signal("name", || String::new());
 ui! { <Input id="name" value={v} /> }

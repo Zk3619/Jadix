@@ -45,7 +45,7 @@ jadix_devtools     （可选，运行时 Inspector 面板）
 |---------------|------|
 | `bundled-lucide` / `bundled-cjk` / `bundled-emoji` / `bundled-symbols` 在 crate 内 `include_bytes!` | **从核心删除** |
 | `fonts-cjk` / `fonts-emoji` 等运行时磁盘加载 | 保留为 **可选路径**（`assets/fonts/`、`RUI_FONT_DIR`） |
-| Twemoji 目录（`assets/twemoji/`）+ `RUI_EMOJI_CUSTOM_GLYPH` 默认开 | **默认关**；系统字体 CBDT/COLR；用户显式开 provider / 自备目录 |
+| Twemoji 目录（`assets/twemoji/`）+ `RUI_EMOJI_CUSTOM_GLYPH` 默认开 | **默认关**（已落地）；系统字体 CBDT/COLR；`RUI_EMOJI_CUSTOM_GLYPH=1` / `RUI_TWEMOJI_DIR` 显式开位图 |
 | 需要「单文件分发」 | 可选 **`jadix_icons` 的 `bundled-lucide`**、**`jadix_fonts_noto`**、**`jadix_emoji_twemoji`** 等独立 crate，而非堆在核心 |
 
 Lucide、CJK、Emoji **不要混在同一 feature**。
@@ -340,7 +340,7 @@ fn app() -> Element {
 | **默认 = 系统彩色字体** | Segoe UI Emoji / Apple Color Emoji / Noto Color Emoji 等，经 glyphon `SwashContent::Color`（CBDT/COLR） |
 | **覆盖 = 可选 provider** | 用户自备 PNG/SVG 目录、或另挂彩色 emoji 字体、或 `jadix_emoji_twemoji` 一类可选 crate |
 
-今日债务（过渡）：`RUI_EMOJI_CUSTOM_GLYPH` **默认 true**，Bake/Coverage 优先走 Twemoji 槽位；这与「核心零产品资源」冲突，也放大 `png` 依赖与体积（见 [`size_and_memory.md`](size_and_memory.md)）。目标应 **默认 false**（系统字体），显式开启才走位图覆盖。
+今日债务（过渡）：~~`RUI_EMOJI_CUSTOM_GLYPH` **默认 true**~~ → **已翻转（2026-08）**：默认走系统彩色字体；`RUI_EMOJI_CUSTOM_GLYPH=1` 或有效的 `RUI_TWEMOJI_DIR` 才开启位图槽位。仓库样例 `assets/twemoji` **不再**隐式启用覆盖（半包会导致空白芯片）。
 
 ### 11.2 为何不能「像 Lucide 一样默认捆绑」
 
@@ -373,28 +373,28 @@ pub fn emoji_bitmap_override_active() -> bool;
 
 | 配置 | 行为 |
 |------|------|
-| 仅 `jadix` | provider = `None` → **系统字体**；`custom_glyph` 槽位关闭 |
+| 仅 `jadix` | provider = `None` → **系统色字体光栅**（隔离 FS）；**槽位布局始终开**（字形盒内光学居中） |
 | `RUI_TWEMOJI_DIR` / 应用 `assets/twemoji/` | 用户实现或内置 `TwemojiDirProvider::from_env()` 后 `set_emoji_provider` |
 | `jadix_emoji_twemoji`（可选 crate） | `install()` 注册目录/LFS 资源；feature `png` / `svg` |
 | `fonts-emoji` + `assets/fonts/NotoColorEmoji.ttf` | 仍走字体栈，不经 Twemoji；适合「换字体不换位图」 |
 
-Bake / Coverage / sticky transform：**同一 provider**。禁止「Coverage 用 Twemoji、Bake 用字体线框」分叉（见近期 sticky Bake 接 Twemoji 的修复动机）。
+Bake / Coverage / sticky transform：**同一 provider / 同一槽位居中模型**。禁止「Coverage 用 Twemoji、Bake 用字体线框」分叉（见近期 sticky Bake 接 Twemoji 的修复动机）。
 
 ### 11.4 与现有 env / feature 的迁移
 
-| 现状 | 目标 |
+| 现状（历史） | 目标 / 现状（已落地） |
 |------|------|
-| `RUI_EMOJI_CUSTOM_GLYPH` 默认 **开** | 默认 **关**；或删除，改由 `emoji_bitmap_override_active()` |
-| `RUI_TWEMOJI_DIR` / 仓库 `assets/twemoji` | 保留为 **用户覆盖路径**，非框架默认依赖 |
-| `emoji-svg` feature | 仍可选；挂在 `jadix_emoji_*` 或应用 feature，不进默认 |
-| `bundled-emoji` | 从核心删除；若需单文件分发 → 独立 crate |
-| Gallery | `examples/gallery/assets/twemoji` 或 `RUI_TWEMOJI_DIR`；文档写明「演示彩色一致性时再开」 |
+| `RUI_EMOJI_CUSTOM_GLYPH` 默认 **开**（兼布局+Twemoji） | **布局槽位始终开**；`RUI_EMOJI_CUSTOM_GLYPH` / `RUI_TWEMOJI_DIR` 仅切换 **位图资产**（Twemoji） |
+| `RUI_TWEMOJI_DIR` / 仓库 `assets/twemoji` | `RUI_TWEMOJI_DIR` 为显式覆盖；仓库样例目录 **不** 自动启用 |
+| `emoji-svg` feature | 仍可选；挂在覆盖模式或应用 feature，不进默认 |
+| `bundled-emoji` | 可选；装入隔离 FS（槽位光栅回退） |
+| Gallery | 默认系统色光栅 + 槽位居中；Twemoji 演示：`RUI_EMOJI_CUSTOM_GLYPH=1` + 完整 `RUI_TWEMOJI_DIR` |
 
 ### 11.5 分阶段落地（建议）
 
-1. **契约**：加 `EmojiProvider`；`custom_glyph_layout_enabled` 改为「provider 已注册」或 env 显式 on。  
-2. **默认翻转**：默认系统字体；Gallery / Bubble 演示在 README 写可选 Twemoji。  
-3. **Bake 对齐**：位图模式才走槽位 + Twemoji 复合；系统字体模式 Bake 用 `SwashContent::Color`（禁止 Mask 当线框）。  
+1. **契约**：加 `EmojiProvider`；`emoji_bitmap_override_active` = provider 已注册或 env 显式 on。  
+2. **默认**：槽位光学居中始终开；光栅默认系统色（隔离 FS）；Gallery README 写可选 Twemoji。  
+3. **Bake 对齐**：Coverage / Bake 共用槽位 + 同一光栅链（系统色或 Twemoji）。  
 4. **可选 crate**：`jadix_emoji_twemoji`（或并入 `jadix_icons` 的 `emoji-twemoji` feature）——与 Lucide 拆分同一波次更干净。
 
 ### 11.6 禁区（emoji）

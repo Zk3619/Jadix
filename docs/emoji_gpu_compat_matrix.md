@@ -106,20 +106,21 @@
 
 ### 7.1 默认模式（稳定发布）
 
-- 环境：不设置 `RUI_EMOJI_CUSTOM_GLYPH`
-- 目标：行为与历史版本一致，无彩色残影、无控件污染
+- 环境：不设置 `RUI_EMOJI_CUSTOM_GLYPH` / `RUI_TWEMOJI_DIR`
+- 目标：**系统彩色字体光栅**（隔离 FS）+ **槽位光学居中始终开**；不依赖 Twemoji 资产
 - 关键检查：
   - 输入/滚动/checkbox/radio/switch 视觉不被污染
-  - emoji 日志应显示 `mode=disabled`
+  - emoji 日志应显示 `mode=color-font-slot`（或等价）
+  - Bubble 反应条等常见 emoji 可见且在字形盒内居中（非空白/贴左上胶囊）
 
-### 7.2 灰度模式（真实 Emoji 图源）
+### 7.2 灰度模式（Twemoji / 位图覆盖）
 
-- 环境：`RUI_EMOJI_CUSTOM_GLYPH=1`
-- 图源策略：Twemoji 本地资源优先，缺失时字体光栅回退
+- 环境：`RUI_EMOJI_CUSTOM_GLYPH=1` 或有效的 `RUI_TWEMOJI_DIR`
+- 图源策略：Twemoji 本地资源优先，缺失时隔离 FS 字体光栅回退（布局仍走槽位居中）
 - 关键检查：
   - Emoji 可见且无背景残影
   - 命中率随重复输入上升
-  - 关闭开关后可立即回退到稳定模式
+  - 关闭覆盖开关后回退到系统色光栅（槽位居中仍在）
 
 ## 8. 发布闸门与回退
 

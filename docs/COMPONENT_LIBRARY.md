@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §4.3 `Into` 双收（variant/size）  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
@@ -64,7 +64,7 @@ ADR 对齐：纲领 **ADR-6**（ShadCN 无头分层）、**ADR-9**（双书写�
 | 层级 | 路径 | 职责 | **禁止** |
 |------|------|------|----------|
 | 布局 / 交互原语 | `primitives/` | `Box`/`HStack`/`VStack`/`GStack`、`Text`/`Icon`、`interactive`、`overlay`、`path`、`Portal`；**W3：`svg` / `canvas` / `scene3d` 叶**（[`drawing.md`](drawing.md)） | 写死 primary 色、圆角、阴影等视觉常量；第二套 path 格式绕开 `primitives/path` |
-| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`** | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、fragment 解包 | 绑定某一组件的外观变体 |
+| 行为工具 | `utils/popup.rs`、**`presence.rs`**、**`motion.rs`**、**`keyed_overlay.rs`**、**`layout_group.rs`**、`roving.rs`、`focus_trap.rs`、`keyboard.rs`、`text_field.rs`、**`toggle_state.rs`**、**`controlled.rs`**、**`activate_registry.rs`**、**`list_nav.rs`**、**`pointer_drag.rs`**、**`table_sort.rs`**、**`tree_model.rs`**、**`element_pack.rs`**（`take_packed` / `take_fragment`：展开 `rui_fragment` / 匿名多子壳，保留 `data-slot`） | 浮层标记与 placement、退场门、CSS transition 目标/sync、portal 同 key 调和、**rank→位移**、roving、Tab 陷阱、键路由、受控文本写入、布尔/泛化受控、激活注册表、列表键、拖拽会话、表排序、树扁平、**children 拆包** | 绑定某一组件的外观变体 |
 | 设计令牌 | `style/theme.rs`、`color_space.rs`、`tokens/`、`rui_style_tokens` | OKLCH 语义色→sRGB、radius、utility 真源、dark；CPU 混色工具 | 业务状态机；完整 ICC/HDR（见 [`color.md`](color.md)） |
 | 样式组件 | `components/` | **仅产品组件**（Button、Input、Dialog…）；厚产品策略可拆子模块（如 `toast/`、`carousel/`） | 把复杂开合/焦点状态机只藏在样式层且不可测；把私有 chrome 导出为产品 API |
 | 私有壳 | `components/internal/`（`pub(crate)`） | Input/Textarea chrome（`text_edit`）；Dropdown/Context 共享菜单能力（`menu/{checkable,item_chrome,subtree}`）；随组件库分 crate | 当作公开 API 文档化或 prelude 导出；挂到框架 crate 根冒充 runtime；**单组件策略勿塞进此处**；**Dialog 壳在 `dialog.rs`，非 internal** |
@@ -158,7 +158,8 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 4. **仅 Builder 的控件**（如部分 `toast` / `dropdown`）：允许暂无标签，但须在文档与 Gallery 标明；新增稳定面控件**默认双入口**（标签 + Builder），并进入 prelude。  
 5. **热重载**：`template_id` 主要服务含 `ui!` 的模板；纯 Builder 树仍是一等运行时能力，不因无热补丁而降级为「非推荐」。  
 6. **文档与示例**：Getting Started / 组件索引应**至少各给一种写法的完整片段**；标杆组件（Button、Input）两种都展示。  
-7. **RSX camelCase 别名**（`rui_macros`，对位 ShadCN）：`onClick` / `defaultValue` / `captionLayout` / `valueSignal` / `showAlpha` / `sideOffset` / `openSignal` 等映射到 snake_case props；Builder **只**用 snake_case。
+7. **RSX camelCase 别名**（`rui_macros`，对位 ShadCN）：`onClick` / `defaultValue` / `captionLayout` / `valueSignal` / `showAlpha` / `sideOffset` / `openSignal` 等映射到 snake_case props；Builder **只**用 snake_case。  
+8. **`variant` / `size` 等离散外观轴**：RSX 与文档默认仍用**字符串**；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`&str` 与枚举），禁止删掉字符串产品面。细则见 [`component_variants.md`](component_variants.md) **§0**。
 
 ### 3.2 反例（禁止）
 
@@ -168,6 +169,7 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 | 文档暗示「现代写法 = 只能写标签」 | 与项目「掌握代码 / 纯 Rust 拼装」目标冲突 |
 | RSX 与 Builder 走不同状态机或不同 token | 双源真理，无法互嵌保证观感一致 |
 | prelude 只导出标签、废除 Builder re-export | 违反 ADR-9 |
+| Builder 只收枚举、废除 `.variant("outline")` | 打断 ShadCN / `ui!` / 热重载字符串契约；见 [`component_variants.md`](component_variants.md) §0 |
 
 代码锚点（同一按钮 · 双面）：
 
@@ -295,12 +297,14 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 约定 | 要求 |
 |------|------|
-| `variant` | 字符串或枚举；命名对齐 shadcn（`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；**冻结表** [`component_variants.md`](component_variants.md) |
-| `size` | `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
+| `variant` | **产品默认字符串**（对齐 shadcn：`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；对内枚举真源；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`"outline"` 与 `XxxVariant::Outline`）。**冻结表 + §0** [`component_variants.md`](component_variants.md) |
+| `size` | 同上：字符串产品面 + 可选 `Into<XxxSize>`；合法阶梯 `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
 | 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
 | `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](color.md) |
 | 焦点环 | 默认走 `style/focus_ring` + theme `ring`；`focus-visible` 行为与冒烟表一致 |
 | 动效 | hover/focus 可用 spring/cubic（Button 已用 spring + 线性 sRGB lerp）；paint sync 优先，避免整树 rebuild |
+
+**禁区（外观轴）**：为对齐 Freya 等纯枚举 API，废除 Builder / RSX 字符串入口，或拆成 `.variant_str` / `.variant_enum` 两套平行方法。
 
 ### 4.4 浮层
 
@@ -357,8 +361,8 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | 分区 | 组件（`components/` 模块） | 分桶摘要（详见 inventory） |
 |------|----------------------------|----------------------------|
 | **基础** | Button、**Badge**、**AspectRatio**、Label、Separator、Card、Toggle、ToggleGroup、Progress、Image | Button/Label/Separator/Card=`verified`；Badge/AspectRatio=`experimental`；其余=`experimental`（越出 §5.2.1） |
-| **表单** | Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；Form=`experimental`（Context helpers，已降出 §5.2.1；**WP-3.9 ☑** 错误文案与 Input invalid 环同源）；Calendar/Date/Time/Color/File=`experimental` |
-| **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/Dropdown/ContextMenu/Command=`experimental` |
+| **表单** | Input、**InputAdornment**、**InputOTP**、Textarea、Checkbox、Switch、RadioGroup、Slider、Form、Select、Combobox、Calendar、DatePicker、TimePicker、ColorPicker；文件选择为 `utils/file_dialog`（能力，非组件） | Input/Textarea/Checkbox/Switch/RadioGroup/Slider/Select/Combobox=`verified`；InputAdornment/InputOTP=`experimental`；Form=`experimental`（Context helpers，已降出 §5.2.1；**WP-3.9 ☑** 错误文案与 Input invalid 环同源）；Calendar/Date/Time/Color/File=`experimental` |
+| **浮层 / 反馈** | Dialog、Sheet、Popover、Tooltip、HoverCard、Dropdown、ContextMenu、Toast、Command | Dialog/Toast/Tooltip=`verified`；Sheet/Popover/HoverCard/Dropdown/ContextMenu/Command=`experimental` |
 | **数据** | VirtualList、**VirtualMasonry**、Table、TreeView、Pagination、Chart（`define_chart`+cartesian/polar marks / log/time / tooltip / 预设 + RSX `<Chart>`/`<BarChart>`…）、Carousel、Stepper | 全部 `experimental`（§5.2.1 外或深度未承诺）；VirtualMasonry **WP-3.10 ☑**；Pagination=ShadCN 复合 + Builder |
 | **绘制** | Svg（`primitives/svg`）；Canvas（`primitives/canvas`）；Scene3d（`primitives/scene3d`，feature）；B16 / B17 仍规划 | Svg=`experimental`（WP-3.11 ☑）；Canvas=`experimental`（WP-3.12 ☑）；Scene3d=`experimental`（WP-3.13 ☑，默认 feature 关）；B16/B17 未落地；Chart 仍挂「数据」 |
 | **导航** | Tabs、Menubar、Navbar、NavigationMenu、Sidebar；Gallery 另演示 `app::Router` / Navigator / 完整次窗（输入 + Dialog + `shared_slot`） | Tabs=`verified`；其余=`experimental` |
@@ -370,7 +374,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | 优先级 | 规划组件 | 建议分区 |
 |--------|----------|----------|
 | P1 | Avatar、Skeleton、Spinner、Alert、Accordion、Collapsible、Breadcrumb | 基础 / 浮层 / 导航 |
-| P2 | HoverCard、Empty、Kbd、ButtonGroup、InputOTP、InputGroup | 浮层 / 表单 / 基础 |
+| P2 | Empty、ButtonGroup | 表单 / 基础 |
 | 等价不单列 | Drawer→Sheet、Sonner→Toast、NativeSelect→Select、Field→Form 等 | — |
 
 **不在 `components/`、勿当缺失组件**：`Portal`/`overlay`/`path`/`svg`/`canvas`/`scene3d`→`primitives/`；`popup`/`roving`/`focus_trap`/`text_field`→`utils/`。`planned` 未落地前**禁止**写入 prelude 或假装已导出。
@@ -384,7 +388,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 | Button、Label、Input、Textarea、Checkbox、Switch、RadioGroup、Slider、Separator、Card | Chart / Path 绘制细节、Carousel、Command 搜索算法 |
 | ScrollArea / Scrollbar、Tabs、Dialog、Toast、Tooltip | Date/Time/Color 本地化与时区、FilePicker 平台差异 |
 | Select、Combobox（基础开合） | TreeView 大数据、Table 分组/筛选深化；**Form**（Context helpers，非独立产品组件） |
-| | VirtualMasonry（**WP-3.10 ☑** experimental MVP）、Stepper 产品打磨；**Badge** / **AspectRatio**（experimental）；其余 ShadCN planned（Avatar/Skeleton/…，见 inventory §1.9） |
+| | VirtualMasonry（**WP-3.10 ☑** experimental MVP）、Stepper 产品打磨；**Badge** / **AspectRatio** / **Kbd**（experimental）；其余 ShadCN planned（Skeleton/…，见 inventory §1.9） |
 
 **CV 分桶快照（2026-08-12，WP-CV.1 / CV.3）**：§5.2.1 行为控件均已 `verified`；Form = `experimental`（降出组件稳定面）；**broken = 无**（CV.3 签署）；**planned** = ShadCN 未落地对位。升格/降级只改 [`component_inventory.md`](component_inventory.md) §2 并回写本小节。最终发布表以巩固期 **WP-4.1** CHANGELOG 为准。
 

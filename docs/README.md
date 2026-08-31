@@ -16,5 +16,6 @@
 | 公开自绘 | [drawing.md](drawing.md)（Svg / Canvas / 2D·3D；WP-3.11–3.13） |
 | 冻结计划（细则，勿勾选） | [ENGINEERING_IMPLEMENTATION_PLAN.md](ENGINEERING_IMPLEMENTATION_PLAN.md) · [COMPONENT_LIBRARY_PLAN.md](COMPONENT_LIBRARY_PLAN.md) · [REACTIVITY_PLAN.md](REACTIVITY_PLAN.md) |
 | 历史 / 愿景 | [PROJECT.md](PROJECT.md) · [gap_analysis.md](gap_analysis.md) · [STAGE7_ROADMAP.md](STAGE7_ROADMAP.md) · [archive/](archive/README.md) |
+| 对照审计（非执行源） | [REFERENCE_COMPARISON.md](REFERENCE_COMPARISON.md)（六参考）· [FREYA_COMPARISON.md](FREYA_COMPARISON.md)（× Freya） |
 
 手册与专题（冒烟、IME、颜色、发布等）见 AUTHORITY §1.1。
