@@ -610,6 +610,31 @@ mod tests {
     }
 
     #[test]
+    fn into_f32_unitless_string_is_rem_like_tailwind_tokens() {
+        // `text-sm` ≈ 0.875rem；字符串无单位 = rem（非 spacing scale）。
+        assert!((IntoF32::into_f32("0.875") - 14.0).abs() < 1e-6);
+        assert!((IntoF32::into_f32(14) - 14.0).abs() < 1e-6); // Rust 数值 = px
+    }
+
+    #[test]
+    fn into_f32_raw_font_weight_unitless() {
+        assert!((IntoF32Raw::into_f32_raw("600") - 600.0).abs() < 1e-6);
+        assert!((IntoF32Raw::into_f32_raw(600) - 600.0).abs() < 1e-6);
+        // 对比：长度路径会把 "600" 当 600rem
+        assert!((IntoF32::into_f32("600") - 9600.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn into_f32_side_offset_parity_4_eq_4px_not_unitless_1() {
+        // Radix `sideOffset={4}` = 4px；≠ 无单位 `"1"`（1rem=16px）。
+        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("4px")).abs() < 1e-6);
+        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("0.25")).abs() < 1e-6);
+        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("0.25rem")).abs() < 1e-6);
+        assert!((IntoF32::into_f32("1") - 16.0).abs() < 1e-6);
+        assert!((IntoF32::into_f32(4) - IntoF32::into_f32("1")).abs() > 1.0);
+    }
+
+    #[test]
     fn into_border_widths_css_shorthand() {
         assert_eq!(IntoBorderWidths::into_border_widths(2.0_f32), [2.0; 4]);
         assert_eq!(
@@ -782,6 +807,14 @@ impl IntoBorderWidths for &String {
     }
 }
 
+/// Length-ish `f32` for typography / borders / blur (logical px after resolve).
+///
+/// Tailwind / ShadCN 对齐（与 [`CssDim`] / utility 一致）：
+/// - **`&str`**：`px` / `rem` / `em`；**无单位数字 = rem**（根 16px），如 `"0.875"` → 14px
+/// - **Rust 数值**（`f32` / 整数 / `f64`）：**逻辑 px**（同 Radix `sideOffset={4}`、引擎 `.w(100)`）
+/// - **utility class**（`p-4`）：仍走 [`rui_style_tokens`] spacing scale（`n × 0.25rem`），不经本 trait
+///
+/// 无单位 CSS 数（`font-weight` / `flex-grow` / leading 倍率）请用 [`IntoF32Raw`]。
 pub trait IntoF32 {
     fn into_f32(self) -> f32;
 }
@@ -792,12 +825,33 @@ impl IntoF32 for f32 {
     }
 }
 
+impl IntoF32 for f64 {
+    fn into_f32(self) -> f32 {
+        self as f32
+    }
+}
+
 impl IntoF32 for &str {
     fn into_f32(self) -> f32 {
         parse_css_length_px(self, CSS_ROOT_FONT_SIZE_PX).unwrap_or(0.0)
     }
 }
 
+macro_rules! impl_into_f32_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl IntoF32 for $t {
+            fn into_f32(self) -> f32 {
+                self as f32
+            }
+        }
+    )+};
+}
+impl_into_f32_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
+
+/// Unitless / raw `f32`（**不**做 rem 换算）。
+///
+/// 对齐 Tailwind / CSS：`font-weight: 600`、`flex-grow: 1`、`opacity`、leading 倍率等。
+/// `&str` 仅 `parse` 数字（`"600"` → 600），与 [`IntoF32`] 的长度语义分离。
 pub trait IntoF32Raw {
     fn into_f32_raw(self) -> f32;
 }
@@ -808,8 +862,25 @@ impl IntoF32Raw for f32 {
     }
 }
 
+impl IntoF32Raw for f64 {
+    fn into_f32_raw(self) -> f32 {
+        self as f32
+    }
+}
+
 impl IntoF32Raw for &str {
     fn into_f32_raw(self) -> f32 {
         self.trim().parse().unwrap_or(0.0)
     }
 }
+
+macro_rules! impl_into_f32_raw_int {
+    ($($t:ty),+ $(,)?) => {$(
+        impl IntoF32Raw for $t {
+            fn into_f32_raw(self) -> f32 {
+                self as f32
+            }
+        }
+    )+};
+}
+impl_into_f32_raw_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);

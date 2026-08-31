@@ -92,17 +92,14 @@ pub fn plan_emoji_layout_text(text: &str) -> String {
     layout
 }
 
-/// Whether paint replaces emoji with fixed-width slots + color quads (default on).
+/// Whether paint replaces emoji with fixed-width slots + optically centered color quads.
+///
+/// **Always on** for every emoji run (mixed prose and chip leaves alike): ink is
+/// centered in the glyph advance box the same way regular glyphs sit in theirs.
+/// Raster *source* (system color font vs Twemoji/SVG) is separate — see
+/// [`super::emoji_config::emoji_bitmap_override_active`].
 pub fn custom_glyph_layout_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("RUI_EMOJI_CUSTOM_GLYPH")
-            .map(|v| {
-                !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
-            })
-            .unwrap_or(true)
-    })
+    true
 }
 
 /// Text to shape for layout/measure when custom emoji quads are enabled.
@@ -410,6 +407,21 @@ mod tests {
             "ink must fit inside advance (ink={ink} adv={})",
             g.w
         );
+    }
+
+    #[test]
+    fn shape_text_slots_all_emoji_forms() {
+        // Mixed prose and chip leaves alike — every emoji becomes a layout slot.
+        let mixed = shape_text_for_layout("hi 👍 there");
+        assert!(
+            mixed.contains(EMOJI_LAYOUT_SLOT),
+            "mixed text must slot emoji for optical centering"
+        );
+        assert!(mixed.contains("hi"), "non-emoji text must survive");
+        let chip = shape_text_for_layout("😮");
+        assert_eq!(chip.as_ref(), EMOJI_LAYOUT_SLOT.to_string());
+        let plain = shape_text_for_layout("abc");
+        assert_eq!(plain.as_ref(), "abc");
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod cpu_text;
 pub mod css_filter;
 pub mod effect;
 pub mod effect_pass;
+pub mod emoji_config;
 pub mod emoji_detect;
 pub mod emoji_layout;
 pub mod emoji_matrix;
@@ -42,6 +43,7 @@ pub use effect::{
     EffectUniforms, ATTR_EFFECT, ATTR_EFFECT_CAPTURE_CHILDREN, ATTR_EFFECT_STRENGTH,
 };
 pub use effect_pass::EffectPassGpu;
+pub use emoji_config::{configured_twemoji_dir, emoji_bitmap_override_active};
 pub use geometry2d::{gpu2d_enabled, path_to_instances, quads_to_instances};
 pub use glyph_fx::{GlyphFx, GlyphFxKind, ATTR_GLYPH_FX};
 pub use graph::{

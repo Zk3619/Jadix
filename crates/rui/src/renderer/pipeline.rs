@@ -54,7 +54,7 @@ pub struct InstanceInput {
     pub rect_size: [f32; 2],
     pub color: [f32; 4],
     pub border_color: [f32; 4],
-    pub radii: [f32; 4],
+    pub radii: [f32; 4], // CSS border-radius: TL, TR, BR, BL
     pub border_width: f32,
     pub shadow_color: [f32; 4],
     pub shadow_offset: [f32; 2],
@@ -365,7 +365,7 @@ impl RuiPipeline {
         (bind_group, render_pipeline)
     }
 
-    /// 开发态热重载：替换主矩形着色器（入口仍?`vs_main` / `fs_main`）
+    /// Dev hot-reload: replace the main rect shader (entry points stay `vs_main` / `fs_main`).
     pub fn rebuild_wgsl(
         &mut self,
         device: &wgpu::Device,

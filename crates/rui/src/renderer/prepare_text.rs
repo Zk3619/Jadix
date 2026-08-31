@@ -143,6 +143,9 @@ struct FrameTextNodeMeta {
     color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
     shadow_col: Option<[u8; 4]>,
+    shadow_dx: f32,
+    shadow_dy: f32,
+    shadow_blur: f32,
     emoji_cache_key: Option<super::text::EmojiCacheKey>,
 }
 
@@ -343,16 +346,15 @@ fn generate_shadow_bitmap(
 
     let [sr, sg, sb] = [shadow_color[0], shadow_color[1], shadow_color[2]];
     let mut rgba = vec![0u8; pixel_count * 4];
-    // 纹理管线 UV 映射 Y 轴翻转（quad 顶部 → V=1 → 纹理底行），
-    // 写入时直接反转行序使最终显示正确。
-    for src_y in 0..bh as usize {
-        let dst_y = bh as usize - 1 - src_y;
-        let src_row = src_y * bw as usize;
-        let dst_row = dst_y * bw as usize;
+    // Textured quad: rect top → uv.y = 0 → uploaded row 0 (see textured_pipeline).
+    // Do **not** Y-flip here — that matched the old V=1-at-top convention and made
+    // shadows vanish / invert after the Bake/capture UV fix.
+    for y in 0..bh as usize {
+        let row = y * bw as usize;
         for x in 0..bw as usize {
-            let a = alpha_buf[src_row + x].min(255) as u8;
+            let a = alpha_buf[row + x].min(255) as u8;
             if a > 0 {
-                let di = (dst_row + x) * 4;
+                let di = (row + x) * 4;
                 rgba[di] = sr;
                 rgba[di + 1] = sg;
                 rgba[di + 2] = sb;
@@ -759,6 +761,31 @@ fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4
     }
 }
 
+/// Shadow layers translate the whole buffer; using the same `TextBounds` as the fill
+/// clips soft samples. Expand the node clip by outset and intersect the viewport.
+fn shadow_clip_for_glyphon(
+    node_clip: Option<[f32; 4]>,
+    outset: f32,
+    viewport: [f32; 4],
+) -> Option<[f32; 4]> {
+    let c = node_clip?;
+    let expanded = [
+        c[0] - outset,
+        c[1] - outset,
+        c[2] + 2.0 * outset,
+        c[3] + 2.0 * outset,
+    ];
+    clip_rect_to_bounds(expanded, Some(viewport))
+}
+
+/// CSS `text-shadow` is active when a color is set and either blur or offset is non-zero
+/// (`blur=0` is a sharp offset shadow — gallery「横向偏移」).
+#[inline]
+fn text_shadow_active(shadow_color: Option<[u8; 4]>, offset: [f32; 2], blur: f32) -> bool {
+    shadow_color.is_some_and(|c| c[3] > 0)
+        && (blur > 0.0 || offset[0].abs() > 0.0 || offset[1].abs() > 0.0)
+}
+
 fn text_bounds_from_clip(
     clip: Option<[f32; 4]>,
     config: &SurfaceConfiguration,
@@ -803,10 +830,16 @@ fn emoji_svg_enabled() -> bool {
 }
 
 fn emoji_mode_label() -> &'static str {
-    if emoji_custom_glyph_enabled() && emoji_svg_enabled() {
+    if emoji_custom_glyph_enabled()
+        && super::emoji_config::emoji_bitmap_override_active()
+        && emoji_svg_enabled()
+    {
         "color-svg"
-    } else if emoji_custom_glyph_enabled() {
+    } else if super::emoji_config::emoji_bitmap_override_active() {
         "color-twemoji"
+    } else if emoji_custom_glyph_enabled() {
+        // Slots + system/user color-font rasters (optically centered).
+        "color-font-slot"
     } else {
         "font"
     }
@@ -991,57 +1024,8 @@ fn svg_runtime_allowed(stats: super::text::EmojiCacheStats) -> bool {
     (stats.svg_raster_ms / stats.svg_attempts as f64) <= svg_raster_threshold_ms()
 }
 
-fn twemoji_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("RUI_TWEMOJI_DIR") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            return p;
-        }
-    }
-    // Absolute candidates — never rely solely on process cwd.
-    let mut candidates = Vec::new();
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // crates/rui → workspace/assets/twemoji/72x72 (baked at compile time).
-    candidates.push(manifest.join("../../assets/twemoji/72x72"));
-    candidates.push(manifest.join("assets/twemoji/72x72"));
-    if let Some(workspace) = manifest.parent().and_then(|p| p.parent()) {
-        candidates.push(workspace.join("assets/twemoji/72x72"));
-    }
-    candidates.push(PathBuf::from("assets/twemoji/72x72"));
-    candidates.push(PathBuf::from("crates/rui/assets/twemoji/72x72"));
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut walk = cwd;
-        for _ in 0..6 {
-            candidates.push(walk.join("assets/twemoji/72x72"));
-            candidates.push(walk.join("crates/rui/assets/twemoji/72x72"));
-            if !walk.pop() {
-                break;
-            }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("assets/twemoji/72x72"));
-            candidates.push(parent.join("twemoji/72x72"));
-            let mut walk = parent.to_path_buf();
-            for _ in 0..6 {
-                candidates.push(walk.join("assets/twemoji/72x72"));
-                if !walk.pop() {
-                    break;
-                }
-            }
-        }
-    }
-    for c in candidates {
-        if let Ok(canon) = c.canonicalize() {
-            if canon.is_dir() {
-                return canon;
-            }
-        } else if c.is_dir() {
-            return c;
-        }
-    }
-    PathBuf::from("assets/twemoji/72x72")
+fn twemoji_dir() -> Option<PathBuf> {
+    super::emoji_config::twemoji_asset_dir()
 }
 
 fn twemoji_filename(sequence: &str) -> String {
@@ -1184,7 +1168,7 @@ pub(crate) fn load_twemoji_raster(
     sequence: &str,
     pixel_size: u16,
 ) -> Option<super::text::EmojiRaster> {
-    let base = twemoji_dir();
+    let base = twemoji_dir()?;
     let mut path = base.join(twemoji_filename(sequence));
     if !Path::new(&path).exists() {
         let stripped: String = sequence.chars().filter(|&c| c as u32 != 0xFE0F).collect();
@@ -1528,32 +1512,35 @@ fn load_emoji_raster_chain(
     _family: glyphon::Family,
     font_weight: u16,
 ) -> Option<super::text::EmojiRaster> {
-    // 1) Twemoji PNG (preferred — always color), scaled to text size.
-    if let Some(png) = load_twemoji_raster(sequence, pixel_size) {
-        return Some(png);
-    }
-
-    // 2) Optional SVG (feature + env); skip when disabled.
-    if emoji_custom_glyph_enabled() && svg_runtime_allowed(text_renderer.emoji_cache.stats) {
-        text_renderer.emoji_cache.stats.svg_attempts += 1;
-        let start = Instant::now();
-        let seq = sequence.to_string();
-        let px = pixel_size;
-        let svg = std::thread::spawn(move || emoji_svg::load_svg_raster(&seq, px))
-            .join()
-            .ok()
-            .flatten();
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-        text_renderer.emoji_cache.stats.svg_raster_ms += elapsed_ms;
-        if let Some(svg) = svg {
-            text_renderer.emoji_cache.stats.svg_hits += 1;
-            return Some(svg);
+    // Bitmap override only: Twemoji PNG (when dir configured / CUSTOM_GLYPH=1).
+    if super::emoji_config::emoji_bitmap_override_active() {
+        if let Some(png) = load_twemoji_raster(sequence, pixel_size) {
+            return Some(png);
         }
-        text_renderer.emoji_cache.stats.svg_fallback_to_png += 1;
+
+        // Optional SVG (feature + env); skip when disabled.
+        if emoji_custom_glyph_enabled() && svg_runtime_allowed(text_renderer.emoji_cache.stats) {
+            text_renderer.emoji_cache.stats.svg_attempts += 1;
+            let start = Instant::now();
+            let seq = sequence.to_string();
+            let px = pixel_size;
+            let svg = std::thread::spawn(move || emoji_svg::load_svg_raster(&seq, px))
+                .join()
+                .ok()
+                .flatten();
+            let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            text_renderer.emoji_cache.stats.svg_raster_ms += elapsed_ms;
+            if let Some(svg) = svg {
+                text_renderer.emoji_cache.stats.svg_hits += 1;
+                return Some(svg);
+            }
+            text_renderer.emoji_cache.stats.svg_fallback_to_png += 1;
+        }
     }
 
-    // 3) System color-emoji on an *isolated* FontSystem — never open seguimj on the UI FS.
-    // Supersample COLR then bilinear-fit so small UI sizes stay round (not NN blocky).
+    // System/user color-emoji on an *isolated* FontSystem — never open seguimj on the UI FS
+    // while slot layout is on (CBDT leak under alpha=0 slots). Always used as the default
+    // raster path; Twemoji/SVG only when bitmap override is active (above).
     let oversample = pixel_size.saturating_mul(2).clamp(pixel_size, 128);
     load_font_fallback_raster(sequence, oversample, font_weight)
         .map(|r| fit_emoji_to_pixel_square(&r, pixel_size.max(1)))
@@ -1578,6 +1565,47 @@ fn load_emoji_raster_cached(
         .emoji_cache
         .insert_raster(key.clone(), raster.clone());
     Some(raster)
+}
+
+/// CSS `text-underline-offset`：正值让下划线离文字更远（屏幕 Y 向下增大）。
+#[inline]
+fn underline_line_y(
+    box_y: f32,
+    box_h: f32,
+    ul_h: f32,
+    underline_offset: f32,
+    ui_scale: f32,
+    paint_scale: f32,
+) -> f32 {
+    box_y + box_h * paint_scale - (ul_h * 0.45) + (underline_offset * ui_scale * paint_scale)
+}
+
+/// 文本盒 scissor 常贴着 layout bounds；正 `underline-offset` 会画到盒外。
+/// 下/上各扩一点，避免 Breadcrumb / inline link hover 下划线被裁没。
+#[inline]
+fn expand_clip_for_text_decoration(
+    clip: Option<[f32; 4]>,
+    underline: bool,
+    overline: bool,
+    offset: f32,
+    ul_h: f32,
+    ui_scale: f32,
+    paint_scale: f32,
+) -> Option<[f32; 4]> {
+    let Some(c) = clip else {
+        return None;
+    };
+    let grow = (offset.max(0.0) * ui_scale * paint_scale) + ul_h + 1.0;
+    let mut y = c[1];
+    let mut h = c[3];
+    if underline {
+        h += grow;
+    }
+    if overline {
+        y -= grow;
+        h += grow;
+    }
+    Some([c[0], y, c[2], h])
 }
 
 /// 排版文本、构建下划线 `InstanceInput`，并调用 glyphon `prepare`。
@@ -2663,6 +2691,10 @@ pub fn prepare_text_frame(
                             metadata: 0,
                         });
                         rasters.insert(glyph_id, raster);
+                    } else {
+                        log::warn!(
+                            "emoji custom glyph: no raster for {text:?} (Twemoji miss + font fallback failed)"
+                        );
                     }
                 }
                 if emoji_debug_enabled() {
@@ -2748,7 +2780,7 @@ pub fn prepare_text_frame(
         let sdx = st.shadow_offset[0] * ui_scale;
         let sdy = st.shadow_offset[1] * ui_scale;
         let sblur = st.shadow_blur * ui_scale;
-        let has_shadow = st.shadow_color.is_some() && sblur > 0.0;
+        let has_shadow = text_shadow_active(st.shadow_color, [sdx, sdy], sblur);
 
         if has_shadow {
             let Some(sc) = st.shadow_color else { continue };
@@ -2766,41 +2798,34 @@ pub fn prepare_text_frame(
                     });
                 }
                 shadow_skip_indices.insert(i);
-            } else {
-                let entry = &text_renderer.shaped_cache[i];
-                if let Some(bmp) = generate_shadow_bitmap(
-                    &entry.buffer,
-                    unsafe { &mut *text_renderer.font_system },
-                    &mut text_renderer.swash_cache,
-                    sc,
-                    sdx,
-                    sdy,
-                    sblur,
-                ) {
-                    shadow_tex_draws.push(ShadowTexDraw {
-                        cache_key: skey,
-                        rect: [
-                            x + bmp.draw_rect[0],
-                            y + bmp.draw_rect[1],
-                            bmp.draw_rect[2],
-                            bmp.draw_rect[3],
-                        ],
-                    });
-                    shadow_new_bitmaps.push(ShadowNewBitmap {
-                        cache_key: skey,
-                        rgba: bmp.rgba,
-                        width: bmp.width,
-                        height: bmp.height,
-                        draw_rect: bmp.draw_rect,
-                    });
-                    shadow_skip_indices.insert(i);
-                }
-                // generate_shadow_bitmap 失败时跳过阴影（不再回退 glyphon 多层 TextArea）。
-                log::debug!(
-                    target: "rui::text_shadow",
-                    "shadow bitmap rasterize failed; skipping shadow layer"
-                );
+            } else if let Some(bmp) = generate_shadow_bitmap(
+                &text_renderer.shaped_cache[i].buffer,
+                unsafe { &mut *text_renderer.font_system },
+                &mut text_renderer.swash_cache,
+                sc,
+                sdx,
+                sdy,
+                sblur,
+            ) {
+                shadow_tex_draws.push(ShadowTexDraw {
+                    cache_key: skey,
+                    rect: [
+                        x + bmp.draw_rect[0],
+                        y + bmp.draw_rect[1],
+                        bmp.draw_rect[2],
+                        bmp.draw_rect[3],
+                    ],
+                });
+                shadow_new_bitmaps.push(ShadowNewBitmap {
+                    cache_key: skey,
+                    rgba: bmp.rgba,
+                    width: bmp.width,
+                    height: bmp.height,
+                    draw_rect: bmp.draw_rect,
+                });
+                shadow_skip_indices.insert(i);
             }
+            // Bitmap miss → glyphon multi-layer TextArea fallback below (Coverage path).
         }
 
         frame_meta.push(Some(FrameTextNodeMeta {
@@ -2826,6 +2851,9 @@ pub fn prepare_text_frame(
             underline_offset: st.underline_offset,
             color: glyph_color,
             shadow_col: st.shadow_color,
+            shadow_dx: sdx,
+            shadow_dy: sdy,
+            shadow_blur: sblur,
             clip_bounds: scaled_clip,
             emoji_cache_key,
         }));
@@ -2937,11 +2965,91 @@ pub fn prepare_text_frame(
         let entry = &text_renderer.shaped_cache[i];
         if let Some(sc) = tb.shadow_col {
             if !shadow_skip_indices.contains(&i) {
-                log::debug!(
-                    target: "rui::text_shadow",
-                    "shadow not in texture cache and bitmap rasterize failed earlier; skipping"
-                );
-                let _ = sc;
+                // Texture-shadow miss: fall back to glyphon multi-layer TextAreas (Coverage).
+                let radius = tb.shadow_blur;
+                let alpha = sc[3];
+                if alpha > 0 && text_shadow_active(Some(sc), [tb.shadow_dx, tb.shadow_dy], radius) {
+                    let shadow_perf = text_perf_mode();
+                    let center_left = tb.x + tb.shadow_dx;
+                    let center_top = tb.y + tb.dy + tb.shadow_dy;
+                    let (min_radius, min_alpha, base_samples, radial_scale, max_samples) =
+                        match shadow_perf {
+                            TextPerfMode::HighQuality => {
+                                (0.35_f32, 6_u8, 20_usize, 9.0_f32, 72_usize)
+                            }
+                            TextPerfMode::Balanced => (0.8_f32, 20_u8, 12_usize, 6.5_f32, 48_usize),
+                            TextPerfMode::Fast => (1.5_f32, 40_u8, 4_usize, 3.0_f32, 16_usize),
+                        };
+                    const SHARP_BLUR_EPS: f32 = 0.75;
+                    let shadow_bounds_clip = shadow_clip_for_glyphon(
+                        tb.clip_bounds,
+                        radius + tb.shadow_dx.abs() + tb.shadow_dy.abs() + 3.0,
+                        viewport_clip,
+                    );
+                    let bounds = text_bounds_from_clip(shadow_bounds_clip, config);
+
+                    let mut push_shadow_layer = |left: f32, top: f32, layer_alpha: u8| {
+                        if layer_alpha == 0 {
+                            return;
+                        }
+                        let shadow_rect = [left, top, tb.box_w, tb.box_h];
+                        let Some(shadow_visible) = clip_rect_to_bounds(shadow_rect, tb.clip_bounds)
+                        else {
+                            return;
+                        };
+                        if clip_rect_to_bounds(shadow_visible, Some(viewport_clip)).is_none() {
+                            return;
+                        }
+                        text_areas.push(glyphon::TextArea {
+                            buffer: &entry.buffer,
+                            left,
+                            top,
+                            scale: tb.paint_scale,
+                            bounds,
+                            default_color: glyphon::Color::rgba(sc[0], sc[1], sc[2], layer_alpha),
+                            custom_glyphs: tb
+                                .emoji_cache_key
+                                .as_ref()
+                                .map_or(&[], |k| text_renderer.emoji_cache.glyphs_for(k)),
+                        });
+                    };
+
+                    let draw_blur =
+                        radius > SHARP_BLUR_EPS && radius > min_radius && alpha > min_alpha;
+                    if !draw_blur {
+                        push_shadow_layer(center_left, center_top, alpha);
+                    } else {
+                        const GOLDEN_ANGLE: f32 = 2.399_963_1;
+                        let sample_count = (base_samples as f32 + radius * radial_scale)
+                            .round()
+                            .clamp(base_samples as f32, max_samples as f32)
+                            as usize;
+                        let sigma = (radius * 0.58).max(0.75);
+                        let two_sigma2 = 2.0 * sigma * sigma;
+
+                        let mut weight_sum = 1.0_f32;
+                        for idx in 0..sample_count {
+                            let t = (idx as f32 + 0.5) / (sample_count as f32);
+                            let r = radius * t.sqrt();
+                            let w = (-(r * r) / two_sigma2).exp();
+                            weight_sum += w;
+                        }
+                        let inv = 1.0 / weight_sum.max(0.001);
+                        let center_alpha = ((alpha as f32) * inv).round().clamp(0.0, 255.0) as u8;
+                        push_shadow_layer(center_left, center_top, center_alpha);
+
+                        for idx in 0..sample_count {
+                            let t = (idx as f32 + 0.5) / (sample_count as f32);
+                            let r = radius * t.sqrt();
+                            let theta = idx as f32 * GOLDEN_ANGLE;
+                            let rx = theta.cos() * r;
+                            let ry = theta.sin() * r;
+                            let w = (-(r * r) / two_sigma2).exp();
+                            let wa = ((alpha as f32) * w * inv).round().clamp(0.0, 255.0) as u8;
+                            push_shadow_layer(center_left + rx, center_top + ry, wa);
+                        }
+                    }
+                }
             }
         }
 
@@ -3083,11 +3191,20 @@ pub fn prepare_text_frame(
                 dc[2] as f32 / 255.0,
                 dc[3] as f32 / 255.0,
             ];
+            let deco_clip = expand_clip_for_text_decoration(
+                tb.clip_bounds,
+                tb.underline,
+                tb.overline,
+                tb.underline_offset,
+                ul_h,
+                ui_scale,
+                ps,
+            );
             let mut push_line = |x: f32, y: f32, w: f32, h: f32| {
                 if w <= 0.0 || h <= 0.0 {
                     return;
                 }
-                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], tb.clip_bounds)
+                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], deco_clip)
                 else {
                     return;
                 };
@@ -3157,9 +3274,15 @@ pub fn prepare_text_frame(
                 }
             };
             if tb.underline {
-                // Keep underline visually closer to the text bottom edge.
-                let y =
-                    tb.y + tb.box_h * ps - (ul_h * 0.45) - (tb.underline_offset * ui_scale * ps);
+                // CSS `text-underline-offset`: positive = further from the text (down).
+                let y = underline_line_y(
+                    tb.y,
+                    tb.box_h,
+                    ul_h,
+                    tb.underline_offset,
+                    ui_scale,
+                    ps,
+                );
                 draw_at(y);
             }
             if tb.overline {
@@ -3292,6 +3415,68 @@ pub fn prepare_text_frame(
         shadow_tex_draws,
         needs_warmup: !text_renderer.pending_warmup.is_empty(),
         culled_skip_prepare: false,
+    }
+}
+
+#[cfg(test)]
+mod text_shadow_tests {
+    use super::{generate_shadow_bitmap, text_shadow_active};
+    use crate::renderer::font_loader;
+    use crate::renderer::text_hit::best_font_family;
+
+    #[test]
+    fn text_shadow_active_allows_zero_blur_with_offset() {
+        assert!(text_shadow_active(Some([0, 0, 0, 255]), [4.0, 0.0], 0.0));
+        assert!(text_shadow_active(Some([0, 0, 0, 255]), [0.0, 0.0], 2.0));
+        assert!(!text_shadow_active(Some([0, 0, 0, 255]), [0.0, 0.0], 0.0));
+        assert!(!text_shadow_active(None, [4.0, 4.0], 2.0));
+        assert!(!text_shadow_active(Some([0, 0, 0, 0]), [4.0, 4.0], 2.0));
+    }
+
+    #[test]
+    fn shadow_bitmap_keeps_positive_dy_mass_below_centroid() {
+        // Regression: textured UV now maps top→row0; Y-flipping the shadow bitmap
+        // inverted soft shadows after the Bake/capture UV fix.
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        let family = best_font_family(&fs);
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(24.0, 36.0));
+        buffer.set_size(Some(200.0), Some(48.0));
+        let attrs = glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(700));
+        buffer.set_text("Shadow", &attrs, glyphon::Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut fs, false);
+        let mut swash = glyphon::SwashCache::new();
+        let Some(bmp) =
+            generate_shadow_bitmap(&buffer, &mut fs, &mut swash, [0, 0, 0, 200], 0.0, 8.0, 2.0)
+        else {
+            // Fonts unavailable in some CI images.
+            return;
+        };
+        assert!(bmp.width > 0 && bmp.height > 0);
+        assert!(bmp.rgba.chunks_exact(4).any(|p| p[3] > 0));
+
+        let mut sum_a = 0.0_f64;
+        let mut sum_ay = 0.0_f64;
+        for y in 0..bmp.height as usize {
+            for x in 0..bmp.width as usize {
+                let a = bmp.rgba[(y * bmp.width as usize + x) * 4 + 3] as f64;
+                if a > 0.0 {
+                    sum_a += a;
+                    sum_ay += a * y as f64;
+                }
+            }
+        }
+        assert!(sum_a > 0.0);
+        let cy = sum_ay / sum_a;
+        // draw_rect origin is content_min - pad; with +dy the alpha mass sits in the
+        // lower half of the bitmap (not the top — that was the inverted/flipped bug).
+        assert!(
+            cy > bmp.height as f64 * 0.35,
+            "shadow alpha centroid y={cy} should not sit in the top third of h={}",
+            bmp.height
+        );
     }
 }
 
@@ -3894,5 +4079,35 @@ mod input_shaping_stability_tests {
         let first = (0..14).filter(|&x| out.rgba[x * 4 + 3] > 0).count();
         assert_eq!(last, 0, "full-bleed source must gain bottom pad");
         assert_eq!(first, 0, "full-bleed source must gain top pad");
+    }
+
+    #[test]
+    fn underline_offset_positive_moves_away_from_text() {
+        // CSS text-underline-offset: larger → further below the box (larger Y).
+        let y0 = super::underline_line_y(10.0, 20.0, 2.0, 0.0, 1.0, 1.0);
+        let y4 = super::underline_line_y(10.0, 20.0, 2.0, 4.0, 1.0, 1.0);
+        assert!(
+            (y4 - y0 - 4.0).abs() < 0.01,
+            "underline-offset-4 must shift +4px down (y0={y0}, y4={y4})"
+        );
+    }
+
+    #[test]
+    fn underline_offset_survives_tight_text_box_clip() {
+        // Tight leaf scissor = text box; CSS +offset paints below the box.
+        let box_clip = Some([10.0, 10.0, 40.0, 14.0]);
+        let ul_h = 1.0;
+        let y = super::underline_line_y(10.0, 14.0, ul_h, 2.0, 1.0, 1.0);
+        assert!(
+            super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], box_clip).is_none(),
+            "without expansion the underline is fully clipped"
+        );
+        let expanded = super::expand_clip_for_text_decoration(
+            box_clip, true, false, 2.0, ul_h, 1.0, 1.0,
+        );
+        assert!(
+            super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], expanded).is_some(),
+            "decoration clip expand must keep underline visible"
+        );
     }
 }

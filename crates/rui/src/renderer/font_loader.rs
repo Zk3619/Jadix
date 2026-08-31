@@ -6,7 +6,9 @@
 //!
 //! Strategy (aligned with EUI-NEO `loadSharedFontStack`):
 //! 1. Startup: only UI sans (+ weights) + lucide + optional env/feature embeds.
-//! 2. CJK / emoji / symbols / Arabic extras stay as **lazy fallback paths**.
+//! 2. CJK / symbols / Arabic extras stay as **lazy fallback paths**. Color emoji
+//!    stays on an **isolated** FontSystem ([`ensure_emoji_font_fallback`]) because
+//!    emoji always shapes through alpha=0 slots — CBDT in the UI DB would leak.
 //! 3. Before shaping a string, [`ensure_coverage_for_text`] opens only the faces
 //!    required by the codepoints actually present.
 
@@ -614,7 +616,8 @@ fn load_lazy_emoji(db: &mut Database, state: &mut LazyFontState) {
         }
     }
 
-    // System color-emoji faces (mmap). Twemoji path still handles most UI emoji.
+    // System color-emoji faces (mmap). Used for UI FontSystem (system-font mode) and
+    // isolated fallback FS (bitmap-override miss).
     if env_flag_disabled("RUI_LOAD_SYSTEM_EMOJI") {
         return;
     }
@@ -738,8 +741,11 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
         if needs.devanagari && !devanagari_coverage_present(db) {
             todo.devanagari = true;
         }
-        let eager_emoji = env_flag_enabled("RUI_LOAD_SYSTEM_EMOJI");
-        if needs.emoji && eager_emoji && !emoji_coverage_present(db) {
+        // Emoji always uses slot layout + CustomGlyph quads — never inject CBDT into
+        // the UI DB (glyphon ignores text-color alpha for Color glyphs → slot leak).
+        // Rasters come from the isolated fallback FS (`ensure_emoji_font_fallback`).
+        // `RUI_LOAD_SYSTEM_EMOJI=1` is a rare debug escape hatch only.
+        if needs.emoji && env_flag_enabled("RUI_LOAD_SYSTEM_EMOJI") && !emoji_coverage_present(db) {
             todo.emoji = true;
         }
     }
@@ -747,12 +753,13 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
         return;
     }
 
-    // Mark attempted up-front, except emoji: Twemoji is primary; defer seguimj (~12MB)
-    // until `ensure_emoji_font_fallback` (Twemoji miss) or RUI_LOAD_SYSTEM_EMOJI=1.
+    // Mark attempted up-front. Defer emoji on the UI FS unless explicitly eager —
+    // slots + isolated fallback own color emoji.
     let mut mark = todo;
     let eager_emoji = env_flag_enabled("RUI_LOAD_SYSTEM_EMOJI");
     if todo.emoji && !eager_emoji {
         mark.emoji = false;
+        todo.emoji = false;
     }
     state.attempted.merge(mark);
 
@@ -773,8 +780,8 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
         load_lazy_thai(db, &mut state);
         loaded_any = true;
     }
-    if todo.emoji && eager_emoji {
-        log::info!("lazy-loading emoji fonts for coverage (RUI_LOAD_SYSTEM_EMOJI=1)");
+    if todo.emoji {
+        log::info!("lazy-loading emoji fonts into UI FS (RUI_LOAD_SYSTEM_EMOJI debug)");
         state.attempted.emoji = true;
         load_lazy_emoji(db, &mut state);
         loaded_any = true;
@@ -806,10 +813,11 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
     );
 }
 
-/// Open system color-emoji **only** on an isolated FontSystem used by Twemoji-miss
-/// raster fallback (`prepare_text::emoji_fallback_engines`). Never call this on the
-/// UI/layout FontSystem: glyphon ignores text alpha for CBDT Color glyphs, so once
-/// Segoe UI Emoji is in the main DB those fragments paint through “hidden” spans.
+/// Open system color-emoji on an isolated FontSystem used by emoji raster fallback
+/// (`prepare_text::emoji_fallback_engines`) and Twemoji-miss.
+///
+/// Do **not** call this on the UI/layout FontSystem: glyphon ignores text color alpha
+/// for `SwashContent::Color`, so CBDT faces in the main DB paint through “hidden” slots.
 pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
     let mut state = lazy_state();
     let missing_in_db = !emoji_coverage_present(font_system.db());
@@ -817,7 +825,7 @@ pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
         return;
     }
     state.attempted.emoji = true;
-    log::info!("Twemoji miss — lazy-loading system emoji font fallback");
+    log::info!("emoji raster fallback — lazy-loading system/user emoji font");
     load_lazy_emoji(font_system.db_mut(), &mut state);
     apply_default_families(font_system.db_mut());
     crate::text::measure::invalidate_prepare_cache();

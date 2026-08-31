@@ -14,7 +14,7 @@ pub struct TextNodeConfig {
     pub underline: bool,
     /// 与 CSS `text-underline-offset` 一致（逻辑像素）；`None` 用引擎默认。
     pub underline_offset_px: Option<f32>,
-    /// CSS `text-align`（见 [`crate::style::TextAlign`]）。
+    /// CSS `text-align` (see [`crate::style::TextAlign`]).
     pub text_align: crate::style::TextAlign,
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,

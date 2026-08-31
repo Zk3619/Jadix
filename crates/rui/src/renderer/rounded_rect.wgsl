@@ -10,7 +10,7 @@ struct InstanceInput {
     @location(3) rect_size: vec2<f32>,
     @location(4) color: vec4<f32>,
     @location(5) border_color: vec4<f32>,
-    @location(6) radii: vec4<f32>, // top-right, bottom-right, top-left, bottom-left
+    @location(6) radii: vec4<f32>, // CSS border-radius: TL, TR, BR, BL
     @location(7) border_width: f32,
     @location(8) shadow_color: vec4<f32>,
     @location(9) shadow_offset: vec2<f32>,
@@ -129,11 +129,16 @@ fn vs_main(
 }
 
 // 2D Box Signed Distance Field (round corners)
+// `r` = CSS [TL, TR, BR, BL]; `p` is centered (+y down).
+fn select_corner_radius(p: vec2<f32>, r: vec4<f32>) -> f32 {
+    if (p.x > 0.0 && p.y > 0.0) { return r.z; } // BR
+    if (p.x < 0.0 && p.y > 0.0) { return r.w; } // BL
+    if (p.x < 0.0 && p.y < 0.0) { return r.x; } // TL
+    return r.y; // TR
+}
+
 fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    var r_sel = r.x;
-    if (p.x > 0.0 && p.y > 0.0) { r_sel = r.y; }
-    else if (p.x < 0.0 && p.y > 0.0) { r_sel = r.w; }
-    else if (p.x < 0.0 && p.y < 0.0) { r_sel = r.z; }
+    let r_sel = select_corner_radius(p, r);
 
     let q = abs(p) - b + vec2<f32>(r_sel);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_sel;
@@ -141,10 +146,7 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
 // Angle (chamfer/bevel) corner SDF
 fn sd_angle_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    var r_sel = r.x;
-    if (p.x > 0.0 && p.y > 0.0) { r_sel = r.y; }
-    else if (p.x < 0.0 && p.y > 0.0) { r_sel = r.w; }
-    else if (p.x < 0.0 && p.y < 0.0) { r_sel = r.z; }
+    let r_sel = select_corner_radius(p, r);
 
     let q = abs(p) - b;
     let outer = max(q.x, q.y);
@@ -156,10 +158,7 @@ fn sd_angle_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
 // Superellipse corner SDF: |x/a|^n + |y/b|^n = 1
 fn sd_superellipse_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
-    var r_sel = r.x;
-    if (p.x > 0.0 && p.y > 0.0) { r_sel = r.y; }
-    else if (p.x < 0.0 && p.y > 0.0) { r_sel = r.w; }
-    else if (p.x < 0.0 && p.y < 0.0) { r_sel = r.z; }
+    let r_sel = select_corner_radius(p, r);
 
     let q = abs(p) - b + vec2<f32>(r_sel);
     if (q.x <= 0.0 && q.y <= 0.0) {
@@ -172,10 +171,7 @@ fn sd_superellipse_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 
 
 // Notch corner SDF: right-angle step cut
 fn sd_notch_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    var r_sel = r.x;
-    if (p.x > 0.0 && p.y > 0.0) { r_sel = r.y; }
-    else if (p.x < 0.0 && p.y > 0.0) { r_sel = r.w; }
-    else if (p.x < 0.0 && p.y < 0.0) { r_sel = r.z; }
+    let r_sel = select_corner_radius(p, r);
 
     let q = abs(p) - b + vec2<f32>(r_sel);
     if (q.x <= 0.0 && q.y <= 0.0) {
@@ -189,10 +185,7 @@ fn sd_notch_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 
 // Scoop (concave arc) corner SDF
 fn sd_scoop_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    var r_sel = r.x;
-    if (p.x > 0.0 && p.y > 0.0) { r_sel = r.y; }
-    else if (p.x < 0.0 && p.y > 0.0) { r_sel = r.w; }
-    else if (p.x < 0.0 && p.y < 0.0) { r_sel = r.z; }
+    let r_sel = select_corner_radius(p, r);
 
     let q = abs(p) - b;
     let outer = max(q.x, q.y);

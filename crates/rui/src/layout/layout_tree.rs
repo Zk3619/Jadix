@@ -1176,16 +1176,16 @@ fn next_scroll_acc_for_children(element: &Element, scroll_acc: [f32; 2]) -> [f32
     next
 }
 
-/// 一次布局+收集?CPU 细分（毫秒）；见 `AppState` debug `render profile`.
+/// CPU breakdown (ms) for one layout+collect pass; see `AppState` debug `render profile`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LayoutProfileMs {
-    /// `build_and_layout`：建/?Taffy 子树（含 cascade、clear）；`fast` 路径?0
+    /// `build_and_layout`: build/prune Taffy subtree (cascade, clear); `0` on the `fast` path.
     pub rebuild_ms: f32,
-    /// `build_and_layout_fast`：根尺寸、cascade、`update_taffy_node_style(root)`；整树重建路径为 0
+    /// `build_and_layout_fast`: root size, cascade, `update_taffy_node_style(root)`; `0` on full-rebuild path.
     pub setup_ms: f32,
-    /// `compute_layout_with_measure`；`scroll_only` 跳过则为 0
+    /// `compute_layout_with_measure`; `0` when skipped by `scroll_only`.
     pub taffy_compute_ms: f32,
-    /// `collect_instances_mut`（整树展开实例?`TextLayoutInfo`）
+    /// `collect_instances_mut` (expand whole-tree instances + `TextLayoutInfo`).
     pub collect_ms: f32,
 }
 
@@ -1462,7 +1462,7 @@ pub struct RenderResult {
     pub prof: LayoutProfileMs,
 }
 
-/// 单段文本在布局后的几何与样式快照（?glyphon 使用）.
+/// Post-layout geometry/style snapshot for one text run (consumed by glyphon).
 #[derive(Clone)]
 pub struct TextLayoutInfo {
     pub text: String,
@@ -1567,6 +1567,35 @@ fn element_text_clips_to_box(element: &Element) -> bool {
     }
 }
 
+/// Extra clip height so CSS underline-offset / overline can paint past the glyph box.
+fn text_decoration_clip_outset(style: &crate::style::TextStyle) -> f32 {
+    if !style.underline && !style.overline {
+        return 0.0;
+    }
+    let thickness = if style.decoration_thickness > 0.0 {
+        style.decoration_thickness
+    } else {
+        (style.size * 0.07).max(1.0)
+    };
+    style.underline_offset.max(0.0) + thickness + 1.0
+}
+
+fn text_leaf_clip_rect(render_rect: [f32; 4], style: &crate::style::TextStyle) -> [f32; 4] {
+    let deco = text_decoration_clip_outset(style);
+    if deco <= 0.0 {
+        return render_rect;
+    }
+    let mut r = render_rect;
+    if style.underline {
+        r[3] += deco;
+    }
+    if style.overline {
+        r[1] -= deco;
+        r[3] += deco;
+    }
+    r
+}
+
 fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeasureMeta {
     TextMeasureMeta {
         size: element.text_style.size,
@@ -1583,7 +1612,7 @@ fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeas
     }
 }
 
-/// 单次 `compute_layout` 内对 `measured_text_leaf_size` ?memo（Taffy 会对同一叶多次探测）.
+/// Per-`compute_layout` memo for `measured_text_leaf_size` (Taffy probes the same leaf many times).
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 struct TextMeasureCacheKey {
     node: NodeId,
@@ -1622,7 +1651,7 @@ fn element_tree_has_deferred_units(el: &Element) -> bool {
 fn pack_avail_space(d: taffy::style::AvailableSpace) -> u64 {
     match d {
         taffy::style::AvailableSpace::Definite(v) => {
-            // ?2 bit ?tag，低 62 bit ?f32::to_bits（布局里极少用到极大指数）
+            // High 2 bits = tag; low 62 bits = f32::to_bits (huge exponents are rare in layout).
             (3u64 << 62) | ((v.to_bits() as u64) & ((1u64 << 62) - 1))
         }
         taffy::style::AvailableSpace::MinContent => 1u64 << 62,
@@ -3517,17 +3546,57 @@ impl LayoutTree {
                         // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
                         // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
                         let bake_font_size = text_style.size * text_scale;
-                        // Expand to line-height + ink pad; draw the padded quad so glyphs aren't
-                        // clipped. Intersect only with ancestor scroll clip — not the text leaf's
-                        // overflow:hidden (that would crop the pad we just added).
-                        let (bake_w, bake_h, pad) = crate::utils::text_texture::text_xform_bake_box(
-                            draw_w.max(1.0),
-                            draw_h.max(1.0),
-                            bake_font_size,
-                        );
+                        // Expand to line-height + ink pad (+ text-shadow extent); draw the padded
+                        // quad so glyphs/shadow aren't clipped. Intersect only with ancestor scroll
+                        // clip — not the text leaf's overflow:hidden (that would crop the pad).
+                        let shadow_extra = match text_style.shadow_color {
+                            Some(sc)
+                                if sc[3] > 0
+                                    && (text_style.shadow_blur > 0.0
+                                        || text_style.shadow_offset[0].abs() > 0.0
+                                        || text_style.shadow_offset[1].abs() > 0.0) =>
+                            {
+                                crate::utils::text_texture::text_xform_shadow_pad(
+                                    [
+                                        text_style.shadow_offset[0] * text_scale,
+                                        text_style.shadow_offset[1] * text_scale,
+                                    ],
+                                    text_style.shadow_blur * text_scale,
+                                )
+                            }
+                            _ => 0.0,
+                        };
+                        let bake_shadow = match text_style.shadow_color {
+                            Some(sc)
+                                if sc[3] > 0
+                                    && (text_style.shadow_blur > 0.0
+                                        || text_style.shadow_offset[0].abs() > 0.0
+                                        || text_style.shadow_offset[1].abs() > 0.0) =>
+                            {
+                                Some((
+                                    sc,
+                                    [
+                                        text_style.shadow_offset[0] * text_scale,
+                                        text_style.shadow_offset[1] * text_scale,
+                                    ],
+                                    text_style.shadow_blur * text_scale,
+                                ))
+                            }
+                            _ => None,
+                        };
+                        let (bake_w, bake_h, pad) =
+                            crate::utils::text_texture::text_xform_bake_box_ex(
+                                draw_w.max(1.0),
+                                draw_h.max(1.0),
+                                bake_font_size,
+                                shadow_extra,
+                            );
                         let bake_result = if let Some(spans) =
                             element.text_spans.as_ref().filter(|s| !s.is_empty())
                         {
+                            // Rich spans: shadow still expands the quad; glyph shadow bake is
+                            // Coverage-path only for now (span colors complicate soft stamps).
+                            let _ = bake_shadow;
                             crate::utils::text_texture::ensure_text_xform_texture_spans(
                                 spans,
                                 bake_font_size,
@@ -3540,7 +3609,7 @@ impl LayoutTree {
                                 as_sdf,
                             )
                         } else {
-                            crate::utils::text_texture::ensure_text_xform_texture(
+                            crate::utils::text_texture::ensure_text_xform_texture_with_shadow(
                                 text,
                                 bake_font_size,
                                 text_style.weight,
@@ -3550,6 +3619,7 @@ impl LayoutTree {
                                 align,
                                 dpr,
                                 as_sdf,
+                                bake_shadow,
                             )
                         };
                         if let Some((tex_key, _)) = bake_result {
@@ -3634,7 +3704,10 @@ impl LayoutTree {
                             clip_bounds: if text_style.overflow.allows_caret_scroll() {
                                 hidden_input_text_clip(parent_clip, render_rect)
                             } else if element_text_clips_to_box(element) {
-                                Some(intersect_rect(parent_clip, render_rect))
+                                Some(intersect_rect(
+                                    parent_clip,
+                                    text_leaf_clip_rect(render_rect, &text_style),
+                                ))
                             } else {
                                 // Ancestor overflow only for wrapping text: leaf scissor hides spilled
                                 // bidi/emoji glyphs when measure under-counts soft-wrap lines.
@@ -3654,7 +3727,10 @@ impl LayoutTree {
                         let chrome_clip = if text_style.overflow.allows_caret_scroll() {
                             hidden_input_text_clip(parent_clip, render_rect)
                         } else if element_text_clips_to_box(element) {
-                            Some(intersect_rect(parent_clip, render_rect))
+                            Some(intersect_rect(
+                                parent_clip,
+                                text_leaf_clip_rect(render_rect, &text_style),
+                            ))
                         } else {
                             clip
                         };

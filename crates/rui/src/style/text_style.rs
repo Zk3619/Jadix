@@ -369,6 +369,7 @@ pub struct TextStyle {
     /// `None` = CSS `currentColor`（绘制时用本节点 `color`）；`Some` = 显式装饰色。
     pub decoration_color: Option<[u8; 4]>,
     pub decoration_thickness: f32,
+    /// CSS `text-underline-offset`（逻辑 px）：正值让下划线离文字更远（向下）。
     pub underline_offset: f32,
     pub shadow_color: Option<[u8; 4]>,
     pub shadow_offset: [f32; 2],
