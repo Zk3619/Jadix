@@ -57,7 +57,7 @@ impl ShellOverlayOpts {
     }
 }
 
-/// `color`：语义色 / hex；缺省用 `background` 的 RGB。  
+/// `color`: semantic color / hex; the default is RGB of `background`.  
 /// `opacity`：遮罩 alpha，缺省 [`DEFAULT_MODAL_OVERLAY_OPACITY`]。
 pub(crate) fn default_modal_overlay_color(color: Option<&str>, opacity: Option<f32>) -> [f32; 4] {
     let mut c = match color {

@@ -11,7 +11,7 @@
 //! `ui!` 中 `<Tooltip>` / `<TooltipContent>` 由宏展开。Builder
 //! [`tooltip`] / [`TooltipBuilder::trigger`] 仍可用（内部接到同一套实现）。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <Tooltip id="tip">
@@ -27,8 +27,11 @@
 
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -49,12 +52,12 @@ use rui_macros::component;
 // Context
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id` + 触发器 `focus_id`。
+/// Root context: `open` + stable instance `id` + trigger `focus_id`.
 #[derive(Clone)]
 pub struct TooltipCtx {
     pub open: Signal<bool>,
     pub id: String,
-    /// 触发器 focus_id（Content 锚点）；Trigger 挂载时写入。
+    /// Trigger focus_id (Content anchor); written when Trigger mounts.
     pub trigger_fid: Signal<String>,
 }
 
@@ -204,7 +207,7 @@ pub fn TooltipTrigger(id: String, children: Option<Element>) -> Element {
 pub struct TooltipContentOpts {
     /// `top` / `bottom` / `top-start` / …（默认 `bottom`，贴触发器下方）。
     pub side: String,
-    /// 额外 class（utility）。
+    /// Extra class (utility).
     pub class: Option<String>,
 }
 
@@ -218,7 +221,7 @@ impl Default for TooltipContentOpts {
 }
 
 /// solid-ui / shadcn `TooltipContent`：Portal + floating 面板。
-/// `ui!` 中由宏编成此函数（子树在打开时惰性重建）。
+/// `ui!` lowers to this function via the macro (subtree rebuilt lazily when open).
 pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tooltip("TooltipContent");
     let open = ctx.open;
@@ -227,15 +230,18 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
     let placement = tooltip_side_to_placement(&opts.side);
     let class = opts.class.filter(|s| !s.trim().is_empty());
     let view_id = format!("{id}__tooltip_view");
+    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
 
     reactive_anchor(view_id.clone(), move || {
-        let is_open = open.get();
-        let Some(oz) = portal_sync(&id, open, OverlayKind::Tooltip, OverlayMode::Pinned) else {
+        let Some((phase, oz)) = floating_portal_phase(
+            &id,
+            open,
+            &presence,
+            OverlayKind::Tooltip,
+            OverlayMode::Pinned,
+        ) else {
             return Element::new();
         };
-        if !is_open {
-            return Element::new();
-        }
         let mut panel = tooltip_bubble(body());
         if let Some(ref c) = class {
             panel = crate::style::with_class_list(panel, c);
@@ -247,13 +253,26 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "0");
         panel = panel.absolute();
+        if apply_floating_panel_motion(
+            &id,
+            &mut panel,
+            FloatingMotionKind::Fade,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Tooltip,
+            OverlayMode::Pinned,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
 }
 
 // ---------------------------------------------------------------------------
-// Builder（兼容旧 API）
+// Builder (legacy API compatible)
 // ---------------------------------------------------------------------------
 
 pub struct TooltipBuilder {

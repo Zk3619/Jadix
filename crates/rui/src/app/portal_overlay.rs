@@ -1,11 +1,11 @@
 //! Portal 浮层 LIFO 栈：临时浮层登记、Esc 关顶层、按深度分配 z-index。
 //!
-//! 与 [`crate::app::navigator`]（页面栈）分离。常驻 UI 用 [`OverlayMode::Pinned`]，不进栈。
+//! Detached from [`crate::app::navigator`] (page stack). The resident UI uses [`OverlayMode::Pinned`] and does not push onto the stack.
 //! 组件在构建时调用 [`portal_sync`]；内容仍用树内 `rui_portal` 提升。
 //!
-//! **互斥**：新 Popover 关掉栈内 Menu / Popover / Tooltip；新 Menu 关掉其它 Menu / Tooltip
+//! **Mutually exclusive**: New Popover closes the Menu / Popover / Tooltip in the stack; new Menu closes other Menu / Tooltips
 //!（**不**关 Popover，以便 DatePicker 内嵌 Select）。打开 Modal 会关掉这些临时表面。
-//! Modal 之间仍可叠层。
+//! Modals can still be stacked.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ use super::window_scope::{self, WindowScope};
 
 const OVERLAY_Z_BASE: i32 = 1000;
 const OVERLAY_Z_STEP: i32 = 10;
-/// Pinned 浮层约定 z（不入栈；仍低于 Stacked 的 1000+）。
+/// Pinned floating layer convention z (not pushed into the stack; still lower than Stacked's 1000+).
 const PINNED_Z_UNDERLAY: i32 = 900;
 
 /// 浮层类别（调试 / 文档；z 一律按栈序）。
@@ -31,14 +31,14 @@ pub enum OverlayKind {
 /// 是否进入 Esc LIFO 栈。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum OverlayMode {
-    /// 进栈；Esc / `try_close_top` 可关。
+    /// Push to the stack; Esc / `try_close_top` can be closed.
     #[default]
     Stacked,
-    /// 仅 portal 提升用；不进栈、不吃 Esc。
+    /// It is only used for portal promotion; it does not push into the stack and does not eat Esc.
     Pinned,
 }
 
-/// 一层 overlay 的 underlay / panel z-index。
+/// The underlay / panel z-index of an overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OverlayZ {
     pub underlay: i32,
@@ -47,9 +47,16 @@ pub struct OverlayZ {
 
 struct OverlayLayer {
     id: String,
+    /// Logical open — Esc / outside-press set this `false` to start exit.
     open: Signal<bool>,
+    /// Presence keep-alive (`mounted`); when set, layer stays while exit anim plays.
+    keep_alive: Option<Signal<bool>>,
     #[allow(dead_code)]
     kind: OverlayKind,
+}
+
+fn layer_is_active(l: &OverlayLayer) -> bool {
+    l.open.peek() || l.keep_alive.is_some_and(|k| k.peek())
 }
 
 thread_local! {
@@ -72,19 +79,33 @@ fn z_for_index(i: usize) -> OverlayZ {
     }
 }
 
-/// Drop the first already-closed layer and everything stacked above it (nested
+/// Drop the first inactive layer and everything stacked above it (nested
 /// Select inside a closed DatePicker / Dialog). Return still-open signals so the
 /// caller can `try_set(false)` after releasing the stack borrow.
+///
+/// A layer with `open=false` but `keep_alive=true` (exit presence) stays active.
 fn prune_closed(stack: &mut Vec<OverlayLayer>) -> Vec<Signal<bool>> {
     let mut to_close = Vec::new();
-    if let Some(pos) = stack.iter().position(|l| !l.open.peek()) {
+    if let Some(pos) = stack.iter().position(|l| !layer_is_active(l)) {
         for l in stack.drain(pos..) {
             if l.open.peek() {
                 to_close.push(l.open);
             }
+            if let Some(k) = l.keep_alive {
+                if k.peek() {
+                    to_close.push(k);
+                }
+            }
         }
     }
     to_close
+}
+
+fn push_dismiss_signals(layer: &OverlayLayer, out: &mut Vec<Signal<bool>>) {
+    out.push(layer.open);
+    if let Some(k) = layer.keep_alive {
+        out.push(k);
+    }
 }
 
 /// Dropdown / popover style surfaces: only one should be open at a time.
@@ -119,21 +140,48 @@ fn should_dismiss_for_incoming(existing: OverlayKind, incoming: OverlayKind) -> 
     }
 }
 
-/// 与组件 `open` 态对齐。
+/// 与组件 `open` 态对齐（无退场 presence）。
 ///
-/// - [`OverlayMode::Stacked`]：开则 push，关则按 id 弹出；返回栈深度 z。
+/// - [`OverlayMode::Stacked`]: When it is turned on, it will push, and when it is turned off, it will pop up according to id; return to the stack depth z.
 ///   新打开的 Menu/Popover/Tooltip 会关掉栈内其它同类（以及被 Modal 顶替）；Modal 可叠层。
 /// - [`OverlayMode::Pinned`]：不入栈；开时返回约定 z，关时 `None`。
+///
+/// Use [`portal_sync_presence`] when you need to enter and exit the scene: Esc to close the logic `open`, `mounted` to keep alive until the end of the exit.
 pub fn portal_sync(
     id: impl Into<String>,
     open: Signal<bool>,
     kind: OverlayKind,
     mode: OverlayMode,
 ) -> Option<OverlayZ> {
+    portal_sync_inner(id, open, None, kind, mode)
+}
+
+/// [`portal_sync`] with presence keep-alive.
+///
+/// - Esc / outside-press turns off the logic [`open`] (starts to exit)
+/// - [`mounted`] 为 true 时层仍占栈（播退场动画）；drain 后 `mounted=false` 再卸栈
+pub fn portal_sync_presence(
+    id: impl Into<String>,
+    open: Signal<bool>,
+    mounted: Signal<bool>,
+    kind: OverlayKind,
+    mode: OverlayMode,
+) -> Option<OverlayZ> {
+    portal_sync_inner(id, open, Some(mounted), kind, mode)
+}
+
+fn portal_sync_inner(
+    id: impl Into<String>,
+    open: Signal<bool>,
+    keep_alive: Option<Signal<bool>>,
+    kind: OverlayKind,
+    mode: OverlayMode,
+) -> Option<OverlayZ> {
     let id = id.into();
+    let active = open.peek() || keep_alive.is_some_and(|k| k.peek());
     match mode {
         OverlayMode::Pinned => {
-            if open.peek() {
+            if active {
                 Some(OverlayZ {
                     underlay: PINNED_Z_UNDERLAY,
                     panel: PINNED_Z_UNDERLAY + 1,
@@ -147,9 +195,10 @@ pub fn portal_sync(
             // [`try_close_top`]: `open.set` may rebuild and re-enter [`portal_sync`].
             let (z, to_close) = with_stack_mut(|stack| {
                 let mut to_close = prune_closed(stack);
-                if open.peek() {
+                if active {
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
                         stack[pos].open = open;
+                        stack[pos].keep_alive = keep_alive;
                         stack[pos].kind = kind;
                         (Some(z_for_index(pos)), to_close)
                     } else {
@@ -168,7 +217,8 @@ pub fn portal_sync(
                                 return true;
                             }
                             if should_dismiss_for_incoming(l.kind, kind) {
-                                to_close.push(l.open);
+                                // Peer replace / exclusive: kill open + keep_alive (skip exit).
+                                push_dismiss_signals(l, &mut to_close);
                                 false
                             } else {
                                 true
@@ -189,7 +239,12 @@ pub fn portal_sync(
                         if !nested_sub && !had_peer_menu && !menu_over_modal {
                             crate::utils::popup::disarm_underlay_close();
                         }
-                        stack.push(OverlayLayer { id, open, kind });
+                        stack.push(OverlayLayer {
+                            id,
+                            open,
+                            keep_alive,
+                            kind,
+                        });
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
                 } else {
@@ -198,14 +253,14 @@ pub fn portal_sync(
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
                         for l in stack.drain(pos..) {
                             if l.id != id {
-                                to_close.push(l.open);
+                                push_dismiss_signals(&l, &mut to_close);
                             }
                         }
                     }
                     if matches!(kind, OverlayKind::Modal) {
                         stack.retain(|l| {
                             if is_exclusive_surface(l.kind) {
-                                to_close.push(l.open);
+                                push_dismiss_signals(l, &mut to_close);
                                 false
                             } else {
                                 true
@@ -240,7 +295,7 @@ pub fn top_stacked_panel_z() -> Option<i32> {
     z
 }
 
-/// 当前窗口 Stacked 栈里是否有已打开的 Modal（Dialog / Sheet / Drawer）。
+/// Whether there is an open Modal (Dialog/Sheet/Drawer) in the current window Stacked stack.
 pub fn stacked_modal_open() -> bool {
     let (open, to_close) = with_stack_mut(|stack| {
         let to_close = prune_closed(stack);
@@ -255,10 +310,31 @@ pub fn stacked_modal_open() -> bool {
     open
 }
 
+/// Whether an open Menu (dropdown / context) or Modal (command / dialog) is on the stack.
+/// Page-level wheel must not move content underneath these surfaces.
+pub fn stacked_menu_or_modal_open() -> bool {
+    let (open, to_close) = with_stack_mut(|stack| {
+        let to_close = prune_closed(stack);
+        let open = stack
+            .iter()
+            .any(|l| l.open.peek() && matches!(l.kind, OverlayKind::Modal | OverlayKind::Menu));
+        (open, to_close)
+    });
+    for other in to_close {
+        other.try_set(false);
+    }
+    open
+}
+
+/// True when wheel over the page (not a hoisted overlay) must be ignored.
+pub fn overlay_blocks_page_wheel(path: &[super::pointer_events::HitPathEntry]) -> bool {
+    stacked_menu_or_modal_open() && !path.iter().any(|e| e.hoisted_portal)
+}
+
 /// Esc：先 prune 已关层，再关闭并弹出顶层 Stacked。返回是否关掉了一层。
 ///
-/// `open.set` 必须在释放 overlay 栈借用之后调用，否则 reactive rebuild →
-/// [`portal_sync`] 会 `RefCell already borrowed`。
+/// `open.set` must be called after releasing the overlay stack borrowing, otherwise reactive rebuild →
+/// [`portal_sync`] will `RefCell already borrowed`.
 pub fn try_close_top() -> bool {
     let (to_close_top, pruned) = with_stack_mut(|stack| {
         let pruned = prune_closed(stack);
@@ -421,7 +497,7 @@ pub fn overlay_stack_depth_for_test() -> usize {
     with_stack_mut(|s| s.len())
 }
 
-/// Modal 在 stacked 栈中的 `(index, len)`；仅统计 [`OverlayKind::Modal`]。
+/// Modal `(index, len)` in stacked stack; only counts [`OverlayKind::Modal`].
 pub(crate) fn modal_stack_metrics(id: &str) -> (usize, usize) {
     with_stack_mut(|stack| {
         let indices: Vec<usize> = stack
@@ -493,7 +569,7 @@ mod tests {
         assert_eq!(top_stacked_panel_z(), Some(1001));
     }
 
-    /// WP-1.2 / smoke #7：Escape → [`try_close_top`] 只关最顶层，不穿透下层。
+    /// WP-1.2 / smoke #7: Escape → [`try_close_top`] only closes the top layer and does not penetrate the lower layer.
     #[test]
     fn push_two_esc_closes_top_only() {
         clear();
@@ -570,6 +646,58 @@ mod tests {
         let z2 = portal_sync("same", open, OverlayKind::Menu, OverlayMode::Stacked).unwrap();
         assert_eq!(z1, z2);
         assert_eq!(depth(), 1);
+    }
+
+    #[test]
+    fn menu_blocks_page_wheel_outside_hoisted_surface() {
+        clear();
+        let open = Signal::new(true);
+        assert!(portal_sync("ctx", open, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        let page = [dummy_hit(None, None, false)];
+        assert!(
+            overlay_blocks_page_wheel(&page),
+            "context menu must lock page wheel"
+        );
+        let on_menu = [dummy_hit(Some("panel:ctx"), Some("ctx"), true)];
+        assert!(
+            !overlay_blocks_page_wheel(&on_menu),
+            "wheel over the menu panel must still reach overlay scroll"
+        );
+        open.set(false);
+        assert!(portal_sync("ctx", open, OverlayKind::Menu, OverlayMode::Stacked).is_none());
+        assert!(
+            !overlay_blocks_page_wheel(&page),
+            "page wheel resumes after menu closes"
+        );
+    }
+
+    #[test]
+    fn modal_blocks_page_wheel_outside_hoisted_surface() {
+        clear();
+        let open = Signal::new(true);
+        assert!(portal_sync("cmd", open, OverlayKind::Modal, OverlayMode::Stacked).is_some());
+        let page = [dummy_hit(None, None, false)];
+        assert!(
+            overlay_blocks_page_wheel(&page),
+            "command overlay must lock page wheel"
+        );
+        let on_underlay = [dummy_hit(Some("underlay:1000"), None, true)];
+        assert!(
+            !overlay_blocks_page_wheel(&on_underlay),
+            "underlay is hoisted; wheel is consumed without page scroll"
+        );
+    }
+
+    #[test]
+    fn popover_does_not_block_page_wheel() {
+        clear();
+        let open = Signal::new(true);
+        assert!(portal_sync("pop", open, OverlayKind::Popover, OverlayMode::Stacked).is_some());
+        let page = [dummy_hit(None, None, false)];
+        assert!(
+            !overlay_blocks_page_wheel(&page),
+            "popover/tooltip must not lock page scroll"
+        );
     }
 
     #[test]

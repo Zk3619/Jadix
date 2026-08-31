@@ -9,17 +9,17 @@
 //!     ├── DrawerSwipeHandle   // 可选；`show_swipe_handle` 为 true 时 Content 也会自动插入
 //!     ├── DrawerHeader / DrawerTitle / DrawerDescription
 //!     ├── DrawerBody          // 可选滚动区（Header↔Footer）
-//!     ├── DrawerFooter        // mt-auto；也可用 Button + open.set(false)
+//! ├── DrawerFooter // mt-auto; also available Button + open.set(false)
 //!     └── DrawerClose         // 任意子节点点击关闭
 //! ```
 //!
-//! 模态壳 overlay / Portal z 见 [`crate::components::internal::modal_shell`]；
+//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
 //! 面板表面在本模块内实现（默认自底部滑入、顶圆角 + 拖柄）。`ui!` 中 `<Drawer>` /
-//! `<DrawerContent>` 由宏展开。
+//! `<DrawerContent>` is expanded by macro.
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! ui! {
 //!     <Drawer id="share" open={open}>
 //!         <DrawerTrigger>
@@ -41,7 +41,7 @@
 //!     </Drawer>
 //! }
 //!
-//! // B · Builder（无 Trigger；由外部 Signal 开合）
+//! // B · Builder (no Trigger; open/close via external Signal)
 //! Element::from(
 //!     drawer("share")
 //!         .open_signal(open)
@@ -51,9 +51,10 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::reactive::reactive_view;
@@ -82,6 +83,7 @@ use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallo
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -91,7 +93,7 @@ use rui_macros::component;
 /// 抽屉滑入方向（`down` = 自底向上，shadcn 默认）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DrawerDirection {
-    /// 自底向上（`swipeDirection="down"`）。
+    /// Bottom-up (`swipeDirection="down"`).
     #[default]
     Down,
     Up,
@@ -114,6 +116,10 @@ impl DrawerDirection {
             Self::Down | Self::Up => vh.max(1.0),
             Self::Left | Self::Right => vw.max(1.0),
         }
+    }
+
+    fn is_vertical(self) -> bool {
+        matches!(self, Self::Down | Self::Up)
     }
 }
 
@@ -213,7 +219,7 @@ pub fn coerce_snap_point_list(points: Vec<DrawerSnapPoint>) -> Vec<DrawerSnapPoi
 // Context / Builder
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id`。
+/// Root context: `open` + stable instance `id`.
 #[derive(Clone)]
 pub struct DrawerCtx {
     pub open: Signal<bool>,
@@ -225,7 +231,7 @@ fn drawer_context() -> Context<DrawerCtx> {
     *CTX.get_or_init(create_context::<DrawerCtx>)
 }
 
-/// 读取最近的 [`Drawer`] 上下文。
+/// Read the most recent [`Drawer`] context.
 pub fn use_drawer() -> Option<DrawerCtx> {
     use_context(drawer_context())
 }
@@ -282,7 +288,7 @@ pub struct DrawerBuilder {
     body: Option<Box<dyn Fn() -> Element>>,
 }
 
-/// 底滑 Drawer 入口（双写 B；RSX 请用 `<Drawer>`）。
+/// Bottom sliding Drawer entry (double B; please use `<Drawer>` for RSX).
 pub fn drawer(id: impl Into<String>) -> DrawerBuilder {
     DrawerBuilder {
         id: id.into(),
@@ -352,7 +358,7 @@ impl DrawerBuilder {
         self
     }
 
-    /// 对齐 Vaul `shouldScaleBackground` / shadcn `scaleBackground`。
+    /// Aligns with Vaul `shouldScaleBackground` / shadcn `scaleBackground`.
     pub fn scale_background(mut self, enabled: bool) -> Self {
         self.scale_background = enabled;
         self
@@ -418,16 +424,6 @@ fn require_drawer(part: &str) -> DrawerCtx {
         panic!("{part} must be used within <Drawer> / drawer_scope");
     })
 }
-
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
@@ -444,7 +440,7 @@ fn chain_click(mut el: Element, handler: impl FnMut() + 'static) -> Element {
     el
 }
 
-/// shadcn `cn-drawer-handle`：细长胶囊条（`w-[100px] h-2` / 左右为 `w-2 h-[100px]`）。
+/// shadcn `cn-drawer-handle`: Slender capsule strip (`w-[100px] h-2` / left and right `w-2 h-[100px]`).
 fn drawer_swipe_handle_element(
     drawer_id: &str,
     open: Signal<bool>,
@@ -494,7 +490,7 @@ fn drawer_swipe_handle_element(
             .flex_shrink(0.0)
             .into(),
     };
-    el = el.rounded_full();
+    el = el.rounded_full().cursor("grab");
     bind_drawer_drag_region(
         el,
         drawer_id,
@@ -503,6 +499,7 @@ fn drawer_swipe_handle_element(
         direction,
         snap_points,
         snap_to_sequential,
+        true,
     )
 }
 
@@ -511,11 +508,44 @@ fn drawer_swipe_handle_element(
 // ---------------------------------------------------------------------------
 
 /// 对齐 shadcn `cn-drawer-popup`：底滑默认顶圆角、`max-h: calc(100dvh - 6rem)`。
+/// `6rem` inset at 16px root ≈ 96px.
+const DRAWER_Y_INSET_PX: f32 = 96.0;
+
+fn drawer_y_max_h(vh: f32) -> f32 {
+    (vh - DRAWER_Y_INSET_PX).max(120.0)
+}
+
+/// Rest visible height for a Y-axis snap (frac × max-h). Drag/settle keep [`drawer_y_max_h`]
+/// plus translate so swipe does not relayout every frame.
+fn drawer_y_visible_h(frac: f32, vh: f32) -> f32 {
+    (frac.clamp(0.0, 1.0) * drawer_y_max_h(vh)).max(64.0)
+}
+
+/// `(visible_px, extra_translate)` for a vertical drawer.
+///
+/// Rest uses the snap height so `DrawerBody` can overflow-scroll. Drag and snap-settle
+/// keep full max-h + edge translate (visually equivalent, no per-frame layout).
+fn drawer_y_shell_metrics(
+    frac: f32,
+    vh: f32,
+    follow_translate: bool,
+    direction: DrawerDirection,
+) -> (f32, [f32; 2]) {
+    let max_h = drawer_y_max_h(vh);
+    if follow_translate {
+        (max_h, drawer_drag_translate(direction, frac, max_h))
+    } else {
+        (drawer_y_visible_h(frac, vh), [0.0, 0.0])
+    }
+}
+
+/// 对齐 shadcn `cn-drawer-popup`：底滑默认顶圆角、`max-h: calc(100dvh - 6rem)`。
 fn apply_drawer_shell_surface(
     mut panel: Element,
     direction: DrawerDirection,
     width: Option<&str>,
     height: Option<&str>,
+    visible_px: Option<f32>,
 ) -> Element {
     let border = tokens::border();
     let radius = 8.0;
@@ -526,32 +556,42 @@ fn apply_drawer_shell_surface(
 
     match direction {
         DrawerDirection::Down => {
-            let h = height.unwrap_or("auto");
             panel = panel
                 .absolute()
                 .bottom(0.0)
                 .left(0.0)
                 .right(0.0)
                 .w("100%")
-                .h(h)
+                .min_h(0.0)
+                .overflow_y("hidden")
                 .max_h("calc(100dvh - 6rem)")
                 .border_top(border, 1.0)
                 .border_top_left_radius(radius)
                 .border_top_right_radius(radius);
+            panel = if let Some(px) = visible_px {
+                panel.h(px)
+            } else {
+                panel.h(height.unwrap_or("auto"))
+            };
         }
         DrawerDirection::Up => {
-            let h = height.unwrap_or("auto");
             panel = panel
                 .absolute()
                 .top(0.0)
                 .left(0.0)
                 .right(0.0)
                 .w("100%")
-                .h(h)
+                .min_h(0.0)
+                .overflow_y("hidden")
                 .max_h("calc(100dvh - 6rem)")
                 .border_bottom(border, 1.0)
                 .border_bottom_left_radius(radius)
                 .border_bottom_right_radius(radius);
+            panel = if let Some(px) = visible_px {
+                panel.h(px)
+            } else {
+                panel.h(height.unwrap_or("auto"))
+            };
         }
         DrawerDirection::Right => {
             let w = width.unwrap_or("75%");
@@ -563,6 +603,7 @@ fn apply_drawer_shell_surface(
                 .h("100%")
                 .w(w)
                 .max_w("24rem")
+                .overflow_x("hidden")
                 .border_left(border, 1.0)
                 .border_top_left_radius(radius)
                 .border_bottom_left_radius(radius);
@@ -577,6 +618,7 @@ fn apply_drawer_shell_surface(
                 .h("100%")
                 .w(w)
                 .max_w("24rem")
+                .overflow_x("hidden")
                 .border_right(border, 1.0)
                 .border_top_right_radius(radius)
                 .border_bottom_right_radius(radius);
@@ -604,9 +646,24 @@ fn drawer_shell_frame(
     phase: PresencePhase,
 ) -> Element {
     let (vw, vh) = drawer_viewport_size();
-    let axis = direction.axis_viewport(vw, vh);
+    let axis = if direction.is_vertical() {
+        drawer_y_max_h(vh)
+    } else {
+        direction.axis_viewport(vw, vh)
+    };
     let snap_fracs = resolve_snap_fractions(snap_points, axis);
     cache_snap_fracs(modal_id, &snap_fracs);
+
+    let _ = drawer_layout_bump(modal_id).get();
+    let frac = drawer_open_fraction_tracked(modal_id);
+    let dragging = is_drawer_dragging(modal_id);
+    let follow_translate = dragging || is_drawer_y_settling(modal_id);
+    let (visible_px, extra) = if direction.is_vertical() {
+        let (h, extra) = drawer_y_shell_metrics(frac, vh, follow_translate, direction);
+        (Some(h), extra)
+    } else {
+        (None, drawer_drag_translate(direction, frac, axis))
+    };
 
     let handle = |dir: DrawerDirection| {
         drawer_swipe_handle_element(modal_id, open, dir, snap_points, snap_to_sequential)
@@ -619,14 +676,26 @@ fn drawer_shell_frame(
                 kids.push(handle(direction));
             }
             kids.push(inner);
-            vstack().w("100%").min_h("0").children(kids).into()
+            vstack()
+                .w("100%")
+                .h("100%")
+                .min_h("0")
+                .overflow_y("hidden")
+                .children(kids)
+                .into()
         }
         DrawerDirection::Up => {
             let mut kids = vec![inner];
             if show_swipe_handle {
                 kids.push(handle(direction));
             }
-            vstack().w("100%").min_h("0").children(kids).into()
+            vstack()
+                .w("100%")
+                .h("100%")
+                .min_h("0")
+                .overflow_y("hidden")
+                .children(kids)
+                .into()
         }
         DrawerDirection::Right => {
             let mut row: Vec<Element> = Vec::new();
@@ -657,18 +726,37 @@ fn drawer_shell_frame(
         }
     };
 
-    panel = apply_drawer_shell_surface(panel, direction, width, height);
-    panel = swallow_clicks(panel.relative());
+    panel = apply_drawer_shell_surface(panel, direction, width, height, visible_px);
+    // Keep `position: absolute` from the shell surface — `relative()` would put the
+    // panel in stage flow (flex-start / opposite edge) so enter looked like it
+    // crossed the viewport to the dock. Absolute is already a containing block
+    // for the chrome close button.
+    panel = swallow_clicks(panel);
     if let Some(mut close) = chrome_close {
         close = close.absolute().top("1rem").right("1rem").z_index(1);
         panel = panel.child(close);
     }
 
-    let frac = drawer_open_fraction(modal_id);
-    let extra = drawer_drag_translate(direction, frac, axis);
-    let dragging = is_drawer_dragging(modal_id);
+    panel = bind_drawer_drag_region(
+        panel,
+        modal_id,
+        &format!("{modal_id}__panel_drag"),
+        open,
+        direction,
+        snap_points,
+        snap_to_sequential,
+        false,
+    );
 
-    register_drawer_scale_background(modal_id, scale_background, frac);
+    // Scale only at rest after enter/snap — live swipe, enter, and exit would
+    // zoom the page under the mask (Vaul applies this to a single wrapper).
+    let rest_frac = drawer_frac_signal(modal_id).peek();
+    let motion_busy = presence.motion_busy(phase);
+    register_drawer_scale_background(
+        modal_id,
+        scale_background && !motion_busy && !dragging,
+        rest_frac,
+    );
 
     if modal {
         let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
@@ -685,7 +773,13 @@ fn drawer_shell_frame(
         ) {
             request_redraw();
         }
-        let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
+        let stage: Element = r#box()
+            .inset(0.0)
+            .w("100%")
+            .h("100%")
+            .overflow("hidden")
+            .child(panel)
+            .into();
         let stage = mount_viewport_portal_stage(stage, zs.panel);
         mount_modal_layer(overlay_el, stage)
     } else {
@@ -703,7 +797,13 @@ fn drawer_shell_frame(
         ) {
             request_redraw();
         }
-        let stage: Element = r#box().inset(0.0).w("100%").h("100%").child(panel).into();
+        let stage: Element = r#box()
+            .inset(0.0)
+            .w("100%")
+            .h("100%")
+            .overflow("hidden")
+            .child(panel)
+            .into();
         mount_viewport_portal_stage(stage, zs.panel)
     }
 }
@@ -769,7 +869,7 @@ pub fn DrawerClose(children: Option<Element>) -> Element {
     }
 }
 
-/// 顶/底/左/右拖柄（`cn-drawer-handle`）；通常由 [`DrawerContent`] 在 `show_swipe_handle` 时插入。
+/// Top/bottom/left/right drag handle (`cn-drawer-handle`); usually inserted by [`DrawerContent`] during `show_swipe_handle`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerSwipeHandle(_children: Option<Element>) -> Element {
@@ -794,7 +894,7 @@ pub struct DrawerContentOpts {
     pub show_swipe_handle: bool,
     /// 是否模态（`false` 时不渲染遮罩）；默认 `true`。
     pub modal: bool,
-    /// 遮罩色（语义 token / hex）；`None` → theme `background` RGB + 模态默认 alpha。
+    /// Overlay color (semantic token / hex); `None` → theme `background` RGB + modal default alpha.
     pub overlay_color: Option<String>,
     /// 遮罩不透明度 0…1；`None` → 模态默认（见 [`modal_shell`]）。
     pub overlay_opacity: Option<f32>,
@@ -802,15 +902,15 @@ pub struct DrawerContentOpts {
     pub close_on_overlay_click: bool,
     /// 遮罩 backdrop 模糊半径（逻辑 px）；`None` → 模态默认。
     pub overlay_blur: Option<f32>,
-    /// 左 / 右侧宽；`None` → `75%`（`max-w: 24rem`）。
+    /// Left / right width; `None` → `75%` (`max-w: 24rem`).
     pub width: Option<String>,
-    /// 顶 / 底高；`None` → `auto`（`max-h: calc(100dvh - 6rem)`）。
+    /// Top / bottom height; `None` → `auto` (`max-h: calc(100dvh - 6rem)`).
     pub height: Option<String>,
     /// 吸附点（视口比例或像素）；默认 `[1.0]`。
     pub snap_points: Vec<DrawerSnapPoint>,
     /// 对齐 Vaul `snapToSequentialPoint`。
     pub snap_to_sequential_point: bool,
-    /// 对齐 Vaul `shouldScaleBackground` / shadcn `scaleBackground`。
+    /// Aligns with Vaul `shouldScaleBackground` / shadcn `scaleBackground`.
     pub scale_background: bool,
 }
 
@@ -873,6 +973,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
         had_mounted.set(m);
         if !m {
             clear_drawer_scale_background(&id);
+            clear_drawer_y_settling(&id);
             sync_focus_trap(&owner, false, "");
             return Element::new();
         }
@@ -882,7 +983,14 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
         };
 
         let mut inner = body();
-        inner = inner.w("100%").min_h("0").flex_grow(1.0).gap("0");
+        inner = inner
+            .w("100%")
+            .min_h("0")
+            .flex_col()
+            .flex_grow(1.0)
+            .flex_shrink(1.0)
+            .overflow_y("hidden")
+            .gap("0");
 
         let chrome_close = if show_close {
             let o = open;
@@ -949,7 +1057,7 @@ fn collect_drawer_focus_ids(el: &Element, out: &mut Vec<String>) {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerHeader(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -960,7 +1068,7 @@ pub fn DrawerHeader(children: Option<Element>) -> Element {
     )
 }
 
-/// 标题。
+/// Title.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerTitle(children: Option<Element>) -> Element {
@@ -971,7 +1079,7 @@ pub fn DrawerTitle(children: Option<Element>) -> Element {
     }
 }
 
-/// 说明文案。
+/// Description copy.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerDescription(children: Option<Element>) -> Element {
@@ -994,7 +1102,6 @@ pub fn DrawerBody(children: Option<Element>) -> Element {
         .overflow_y("auto")
         .scrollbar_visibility("auto")
         .w("100%")
-        .h("auto")
         .min_h("0")
         .flex_grow(1.0)
         .flex_shrink(1.0)
@@ -1003,11 +1110,11 @@ pub fn DrawerBody(children: Option<Element>) -> Element {
         .into()
 }
 
-/// 固定底栏（`mt-auto flex flex-col gap-2 p-4`）。
+/// Sticky footer (`mt-auto flex flex-col gap-2 p-4`).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DrawerFooter(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -1024,7 +1131,10 @@ pub fn DrawerFooter(children: Option<Element>) -> Element {
 // ---------------------------------------------------------------------------
 
 const DRAWER_CLOSE_THRESHOLD: f32 = 0.28;
+/// Vaul-ish dismiss velocity along the close axis (logical px / s).
+const DRAWER_CLOSE_VELOCITY: f32 = 900.0;
 const SCALE_BG_MAX_SHRINK: f32 = 0.04;
+const DRAWER_DRAG_COMMIT_PX: f32 = 2.0;
 
 thread_local! {
     static DRAWER_VIEWPORT: RefCell<(f32, f32)> = const { RefCell::new((800.0, 600.0)) };
@@ -1032,6 +1142,9 @@ thread_local! {
     static DRAWER_LIVE_FRAC: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG: RefCell<Option<DrawerScaleBg>> = const { RefCell::new(None) };
     static DRAWER_SNAP_FRACS: RefCell<HashMap<String, Vec<f32>>> = RefCell::new(HashMap::new());
+    static DRAWER_SCALE_BG_APPLIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// After a Y-axis snap, keep max-h + translate until CSS settle finishes, then rest height.
+    static DRAWER_Y_SETTLING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 #[derive(Clone)]
@@ -1051,6 +1164,17 @@ struct DrawerDrag {
     snap_fracs: Vec<f32>,
     snap_to_sequential: bool,
     open: Signal<bool>,
+    last_x: f32,
+    last_y: f32,
+    last_t: Instant,
+    /// Positive = closing along swipe direction (px/s).
+    velocity: f32,
+    capture_id: String,
+    /// Handle starts committed; panel waits for [`DRAWER_DRAG_COMMIT_PX`].
+    committed: bool,
+    captured: bool,
+    /// Grow from rest height to max-h on the next rebuild (vertical, start_frac < 1).
+    pending_grow: bool,
 }
 
 /// 由窗口事件循环每帧写入逻辑视口（供吸附 travel 计算）。
@@ -1064,6 +1188,40 @@ pub(crate) fn drawer_viewport_size() -> (f32, f32) {
 
 fn drawer_frac_signal(id: &str) -> Signal<f32> {
     use_signal(&format!("__rui_drawer_open_frac:{id}"), || 1.0_f32)
+}
+
+fn drawer_layout_bump(id: &str) -> Signal<u32> {
+    use_signal(&format!("__rui_drawer_layout_bump:{id}"), || 0_u32)
+}
+
+fn bump_drawer_shell_layout(id: &str) {
+    drawer_layout_bump(id).update(|n| *n = n.wrapping_add(1));
+}
+
+fn mark_drawer_y_settling(id: &str) {
+    DRAWER_Y_SETTLING.with(|s| {
+        s.borrow_mut().insert(id.to_string());
+    });
+}
+
+fn is_drawer_y_settling(id: &str) -> bool {
+    DRAWER_Y_SETTLING.with(|s| s.borrow().contains(id))
+}
+
+fn clear_drawer_y_settling(id: &str) {
+    DRAWER_Y_SETTLING.with(|s| {
+        s.borrow_mut().remove(id);
+    });
+}
+
+/// Snap CSS settle finished: commit rest height so `DrawerBody` can overflow-scroll.
+pub(crate) fn on_modal_slide_settle_complete(modal_id: &str) {
+    let was = DRAWER_Y_SETTLING.with(|s| s.borrow_mut().remove(modal_id));
+    if !was {
+        return;
+    }
+    bump_drawer_shell_layout(modal_id);
+    request_redraw();
 }
 
 fn drawer_snap_index_signal(id: &str) -> Signal<Option<usize>> {
@@ -1095,24 +1253,23 @@ fn reset_drawer_open_fraction(id: &str, snap_points: &[DrawerSnapPoint], axis_px
 }
 
 fn drawer_open_fraction(id: &str) -> f32 {
-    if is_drawer_dragging(id) {
-        if let Some(f) = DRAWER_LIVE_FRAC.with(|m| m.borrow().get(id).copied()) {
-            return f;
-        }
+    if let Some(f) = DRAWER_LIVE_FRAC.with(|m| m.borrow().get(id).copied()) {
+        return f;
     }
     drawer_frac_signal(id).peek()
+}
+
+/// Subscribe so `apply_snap_index` rebuilds rest extra (peek-only left the last drag pose).
+fn drawer_open_fraction_tracked(id: &str) -> f32 {
+    if let Some(f) = DRAWER_LIVE_FRAC.with(|m| m.borrow().get(id).copied()) {
+        return f;
+    }
+    drawer_frac_signal(id).get()
 }
 
 fn set_drawer_live_frac(id: &str, frac: f32) {
     DRAWER_LIVE_FRAC.with(|m| {
         m.borrow_mut().insert(id.to_string(), frac);
-    });
-    DRAWER_SCALE_BG.with(|slot| {
-        if let Some(bg) = slot.borrow_mut().as_mut() {
-            if bg.id == id {
-                bg.open_frac = frac;
-            }
-        }
     });
 }
 
@@ -1153,11 +1310,34 @@ fn begin_drawer_drag(
     snap_points: &[DrawerSnapPoint],
     snap_to_sequential: bool,
     open: Signal<bool>,
+    capture_id: String,
+    exclusive: bool,
 ) {
     let (vw, vh) = drawer_viewport_size();
-    let axis_px = direction.axis_viewport(vw, vh);
+    let axis_px = if direction.is_vertical() {
+        drawer_y_max_h(vh)
+    } else {
+        direction.axis_viewport(vw, vh)
+    };
     let snap_fracs = resolve_snap_fractions(snap_points, axis_px);
-    let start_frac = drawer_frac_signal(&id).peek();
+    let start_frac = drawer_open_fraction(&id);
+    let now = Instant::now();
+    set_drawer_live_frac(&id, start_frac);
+    if exclusive {
+        set_pointer_capture(capture_id.clone());
+    }
+    // Rest Y pose is height=visible extra=0. Do not write max-h translate until the
+    // panel has grown (commit + pending_grow rebuild), or a 0.5-height panel jumps
+    // off-screen.
+    let extra = if direction.is_vertical() {
+        [0.0, 0.0]
+    } else {
+        drawer_drag_translate(direction, start_frac, axis_px)
+    };
+    crate::components::internal::modal_motion::note_modal_shell_drag(
+        &id, extra, true, start_frac,
+    );
+    let grow_id = id.clone();
     DRAWER_DRAG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerDrag {
             id,
@@ -1169,8 +1349,20 @@ fn begin_drawer_drag(
             snap_fracs,
             snap_to_sequential,
             open,
+            last_x: x,
+            last_y: y,
+            last_t: now,
+            velocity: 0.0,
+            capture_id,
+            committed: exclusive,
+            captured: exclusive,
+            pending_grow: false,
         });
     });
+    if exclusive && direction.is_vertical() && start_frac < 0.999 {
+        bump_drawer_shell_layout(&grow_id);
+        request_redraw();
+    }
 }
 
 fn nearest_snap_index(snap_fracs: &[f32], frac: f32) -> usize {
@@ -1194,8 +1386,9 @@ fn nearest_snap(snap_fracs: &[f32], frac: f32) -> f32 {
         .unwrap_or(1.0)
 }
 
-fn sequential_snap_target(snap_fracs: &[f32], current: f32, delta_sign: f32) -> f32 {
-    let idx = nearest_snap_index(snap_fracs, current);
+fn sequential_snap_target(snap_fracs: &[f32], start_frac: f32, delta_sign: f32) -> f32 {
+    // Vaul `snapToSequentialPoint`: step from the press-time snap, not nearest-to-live.
+    let idx = nearest_snap_index(snap_fracs, start_frac);
     if delta_sign < -0.5 {
         snap_fracs
             .get(idx.saturating_sub(1))
@@ -1240,13 +1433,13 @@ pub fn drawer_set_active_snap_point(drawer_id: &str, index: usize) {
     }
 }
 
-/// 切到下一档（更开）。
+/// Switch to the next gear (further open).
 pub fn drawer_snap_to_next(drawer_id: &str) {
     let idx = drawer_active_snap_point(drawer_id).unwrap_or(0);
     drawer_set_active_snap_point(drawer_id, idx + 1);
 }
 
-/// 切到上一档（更关）。
+/// Switch to the previous gear (more off).
 pub fn drawer_snap_to_prev(drawer_id: &str) {
     let idx = drawer_active_snap_point(drawer_id).unwrap_or(0);
     drawer_set_active_snap_point(drawer_id, idx.saturating_sub(1));
@@ -1273,36 +1466,97 @@ fn clear_drawer_scale_background(id: &str) {
     });
 }
 
+/// Vaul `shouldScaleBackground`: fully open shrinks the page; closed is identity.
+/// Do **not** drive this from the live swipe frac — that zooms the blurred underlay.
+fn drawer_background_scale(open_frac: f32) -> f32 {
+    1.0 - open_frac.clamp(0.0, 1.0) * SCALE_BG_MAX_SHRINK
+}
+
+fn reset_non_portal_child_scale(root: &mut Element) {
+    use crate::layout::layout_tree::PORTAL_LAYER_ID;
+    for child in &mut root.children {
+        if child.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
+            continue;
+        }
+        child.style.scale = [1.0, 1.0];
+    }
+}
+
 /// 对齐 Vaul `shouldScaleBackground`：缩放页面层（非 Portal 子树）。
 pub(crate) fn sync_drawer_background_scale(root: &mut Element) {
     use crate::layout::layout_tree::PORTAL_LAYER_ID;
     let Some(state) = DRAWER_SCALE_BG.with(|s| s.borrow().clone()) else {
+        if DRAWER_SCALE_BG_APPLIED.get() {
+            reset_non_portal_child_scale(root);
+            DRAWER_SCALE_BG_APPLIED.set(false);
+        }
         return;
     };
-    let progress = 1.0 - state.open_frac.clamp(0.0, 1.0);
-    let scale = 1.0 - progress * SCALE_BG_MAX_SHRINK;
-    let radius = progress * 12.0;
+    let scale = drawer_background_scale(state.open_frac);
     for child in &mut root.children {
         if child.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
             continue;
         }
         child.style.scale = [scale, scale];
-        if radius > 0.1 {
-            child.style.radii = [radius, radius, radius, radius];
-        }
     }
+    DRAWER_SCALE_BG_APPLIED.set(true);
 }
 
 pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
-    let Some(drag) = DRAWER_DRAG.with(|d| d.borrow().clone()) else {
+    let Some(mut drag) = DRAWER_DRAG.with(|d| d.borrow().clone()) else {
         return false;
     };
+    let now = Instant::now();
+    // Sub-frame dt (1ms) explodes px/s and false-triggers flick-dismiss on the next gesture.
+    let dt = now.duration_since(drag.last_t).as_secs_f32().max(1.0 / 60.0);
+    let close_delta = match drag.direction {
+        DrawerDirection::Down => y - drag.last_y,
+        DrawerDirection::Up => drag.last_y - y,
+        DrawerDirection::Right => x - drag.last_x,
+        DrawerDirection::Left => drag.last_x - x,
+    };
+    drag.velocity = close_delta / dt;
+    drag.last_x = x;
+    drag.last_y = y;
+    drag.last_t = now;
+
     let delta = axis_delta(drag.direction, &drag, x, y);
+    if !drag.committed {
+        if delta.abs() < DRAWER_DRAG_COMMIT_PX {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+            return true;
+        }
+        drag.committed = true;
+        if !drag.captured {
+            set_pointer_capture(drag.capture_id.clone());
+            drag.captured = true;
+        }
+        // Half-open rest is a short panel. Grow to max-h before applying edge
+        // translate, otherwise the compact sheet is shoved off-screen.
+        if drag.direction.is_vertical() && drag.start_frac < 0.999 {
+            drag.pending_grow = true;
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag.clone()));
+            bump_drawer_shell_layout(&drag.id);
+            return true;
+        }
+    }
+    if drag.pending_grow {
+        drag.pending_grow = false;
+    }
+
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
     let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
+    crate::components::internal::modal_motion::note_modal_shell_drag(
+        &drag.id, extra, true, next,
+    );
     crate::components::internal::modal_motion::patch_modal_panel_transform(root, &drag.id, extra);
-    sync_drawer_background_scale(root);
+    crate::components::internal::modal_motion::patch_modal_overlay_opacity(
+        root,
+        &drag.id,
+        next.clamp(0.0, 1.0),
+    );
+    DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
     true
 }
 
@@ -1317,21 +1571,63 @@ pub(crate) fn clear_drawer_drag_if_any() {
         .with(|m| m.borrow().get(&drag.id).copied())
         .unwrap_or_else(|| drawer_frac_signal(&drag.id).peek());
     clear_drawer_live_frac(&drag.id);
-    if frac < DRAWER_CLOSE_THRESHOLD {
+
+    if !drag.committed {
+        let rest = drawer_frac_signal(&drag.id).peek();
+        let extra = if drag.direction.is_vertical() {
+            [0.0, 0.0]
+        } else {
+            drawer_drag_translate(drag.direction, rest, drag.axis_px)
+        };
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id, extra, false, rest,
+        );
+        request_redraw();
+        return;
+    }
+
+    let lowest = drag.snap_fracs.first().copied().unwrap_or(1.0);
+    let dismiss = should_dismiss_drawer(frac, drag.velocity, lowest);
+    if dismiss {
+        let extra = drawer_drag_translate(drag.direction, frac, drag.axis_px);
+        crate::components::internal::modal_motion::note_modal_shell_drag(
+            &drag.id, extra, false, frac,
+        );
         drag.open.set(false);
+        request_redraw();
         return;
     }
     let delta_sign = frac - drag.start_frac;
     let target = if drag.snap_to_sequential {
-        sequential_snap_target(&drag.snap_fracs, frac, delta_sign)
+        sequential_snap_target(&drag.snap_fracs, drag.start_frac, delta_sign)
     } else {
         nearest_snap(&drag.snap_fracs, frac)
     };
+    if drag.direction.is_vertical() {
+        mark_drawer_y_settling(&drag.id);
+    }
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
+    let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
+    let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
+    crate::components::internal::modal_motion::note_modal_shell_drag(
+        &drag.id, to, false, target,
+    );
+    crate::components::internal::modal_motion::arm_modal_slide_settle(&drag.id, from);
     if target < DRAWER_CLOSE_THRESHOLD {
         drag.open.set(false);
     }
     request_redraw();
+}
+
+fn should_dismiss_drawer(frac: f32, velocity: f32, lowest_snap: f32) -> bool {
+    if frac < DRAWER_CLOSE_THRESHOLD {
+        return true;
+    }
+    // Flick-close only when already well below the lowest rest snap — not a
+    // high instantaneous px/s while parked on 0.5.
+    velocity > DRAWER_CLOSE_VELOCITY
+        && frac < lowest_snap
+        && frac < DRAWER_CLOSE_THRESHOLD + 0.08
 }
 
 fn bind_drawer_drag_region(
@@ -1342,13 +1638,35 @@ fn bind_drawer_drag_region(
     direction: DrawerDirection,
     snap_points: &[DrawerSnapPoint],
     snap_to_sequential: bool,
+    exclusive: bool,
 ) -> Element {
     let id = drawer_id.to_string();
     let caps = snap_points.to_vec();
     let cap = capture_id.to_string();
     el.focus_id(cap.clone())
         .on_pointer_down(move |e: &PointerEvent| {
-            if e.phase == EventPhase::Capture {
+            if exclusive {
+                // Handle: bubble + capture so the gesture is exclusive.
+                if e.phase == EventPhase::Capture {
+                    return;
+                }
+                begin_drawer_drag(
+                    id.clone(),
+                    direction,
+                    e.x,
+                    e.y,
+                    &caps,
+                    snap_to_sequential,
+                    open,
+                    cap.clone(),
+                    true,
+                );
+                e.stop_propagation();
+                return;
+            }
+            // Panel: start on capture (child is target) or target (blank panel).
+            // Do not stop_propagation so buttons/inputs still receive the click.
+            if e.phase == EventPhase::Bubble {
                 return;
             }
             begin_drawer_drag(
@@ -1359,9 +1677,9 @@ fn bind_drawer_drag_region(
                 &caps,
                 snap_to_sequential,
                 open,
+                cap.clone(),
+                false,
             );
-            set_pointer_capture(cap.clone());
-            e.stop_propagation();
         })
         .on_pointer_up(move |e: &PointerEvent| {
             if e.phase == EventPhase::Capture {
@@ -1401,5 +1719,138 @@ mod tests {
     fn snap_point_pixels_convert_to_fraction() {
         let pt = DrawerSnapPoint::Pixels(400.0);
         assert!((pt.to_open_fraction(800.0) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn snap_sequential_steps_from_start_not_nearest() {
+        let pts = vec![0.2_f32, 0.5, 1.0];
+        // Dragged past nearest (0.5) toward closed, but sequential should step 1.0 → 0.5.
+        let target = sequential_snap_target(&pts, 1.0, -0.6);
+        assert!((target - 0.5).abs() < 0.01);
+        // Tiny move stays on start snap.
+        let stay = sequential_snap_target(&pts, 1.0, -0.1);
+        assert!((stay - 1.0).abs() < 0.01);
+        let half = sequential_snap_target(&pts, 0.5, -0.2);
+        assert!(
+            (half - 0.5).abs() < 0.01,
+            "small drag from the lowest snap must stay, got {half}"
+        );
+    }
+
+    #[test]
+    fn dismiss_from_half_snap_requires_close_threshold_not_flick() {
+        assert!(!should_dismiss_drawer(0.5, 2000.0, 0.5));
+        assert!(!should_dismiss_drawer(0.48, 2000.0, 0.5));
+        assert!(!should_dismiss_drawer(0.40, 2000.0, 0.5));
+        assert!(should_dismiss_drawer(0.20, 0.0, 0.5));
+        assert!(should_dismiss_drawer(0.30, 2000.0, 0.5));
+    }
+
+    #[test]
+    fn release_snap_extra_is_target_pose_not_fully_open() {
+        let axis = 700.0;
+        let from = drawer_drag_translate(DrawerDirection::Down, 0.42, axis);
+        let to = drawer_drag_translate(DrawerDirection::Down, 0.5, axis);
+        assert!(from[1] > to[1]);
+        assert!(to[1] > 1.0, "0.5 snap must keep a closed-axis offset, got {}", to[1]);
+        let full = drawer_drag_translate(DrawerDirection::Down, 1.0, axis);
+        assert!(full[1].abs() < 0.01);
+    }
+
+    #[test]
+    fn drag_translate_maps_open_frac() {
+        let t = drawer_drag_translate(DrawerDirection::Down, 0.5, 800.0);
+        assert!((t[1] - 400.0).abs() < 0.01);
+        assert!(t[0].abs() < 0.01);
+        let left = drawer_drag_translate(DrawerDirection::Left, 0.0, 400.0);
+        assert!((left[0] + 400.0).abs() < 0.01);
+        let right = drawer_drag_translate(DrawerDirection::Right, 0.0, 400.0);
+        assert!((right[0] - 400.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn drawer_shell_stays_absolute_on_dock_edge() {
+        use taffy::style::Position;
+        let down = apply_drawer_shell_surface(
+            Element::new(),
+            DrawerDirection::Down,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(down.style.position, Position::Absolute);
+        assert!(swallow_clicks(down).style.position == Position::Absolute);
+        let right = apply_drawer_shell_surface(
+            Element::new(),
+            DrawerDirection::Right,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(right.style.position, Position::Absolute);
+    }
+
+    #[test]
+    fn drawer_y_drag_translate_follows_open_frac() {
+        let axis = drawer_y_max_h(800.0);
+        let half = drawer_drag_translate(DrawerDirection::Down, 0.5, axis);
+        assert!(
+            (half[1] - axis * 0.5).abs() < 0.01,
+            "0.5 snap is half of max-h via translate, got {}",
+            half[1]
+        );
+        let closed = drawer_drag_translate(DrawerDirection::Down, 0.0, axis);
+        assert!((closed[1] - axis).abs() < 0.01);
+        let open = drawer_drag_translate(DrawerDirection::Down, 1.0, axis);
+        assert!(open[1].abs() < 0.01);
+    }
+
+    #[test]
+    fn drawer_y_shell_uses_max_h_at_full_open() {
+        use crate::layout::dimension::{dim_kind, DimKind};
+        let max_h = drawer_y_max_h(800.0);
+        let panel = apply_drawer_shell_surface(
+            Element::new(),
+            DrawerDirection::Down,
+            None,
+            None,
+            Some(max_h),
+        );
+        match dim_kind(panel.style.size.height) {
+            DimKind::Length(h) => assert!((h - max_h).abs() < 0.5, "got {h}, want {max_h}"),
+            other => panic!("expected pixel height, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drawer_y_rest_height_follows_open_frac() {
+        let vh = 800.0;
+        let max_h = drawer_y_max_h(vh);
+        let (full_h, full_extra) = drawer_y_shell_metrics(1.0, vh, false, DrawerDirection::Down);
+        assert!((full_h - max_h).abs() < 0.5);
+        assert!(full_extra[1].abs() < 0.01, "rest extra is 0, got {}", full_extra[1]);
+        let (half_h, half_extra) = drawer_y_shell_metrics(0.5, vh, false, DrawerDirection::Down);
+        assert!(
+            (half_h - max_h * 0.5).abs() < 0.5,
+            "0.5 snap rest height should be half max-h, got {half_h}"
+        );
+        assert!(half_extra[1].abs() < 0.01);
+        assert!(half_h + 1.0 < max_h, "half-open must be shorter than full so body can scroll");
+        let (drag_h, drag_extra) = drawer_y_shell_metrics(0.5, vh, true, DrawerDirection::Down);
+        assert!((drag_h - max_h).abs() < 0.5, "drag/settle keep max-h");
+        assert!((drag_extra[1] - max_h * 0.5).abs() < 0.5);
+    }
+
+    #[test]
+    fn background_scale_shrinks_when_open_not_when_closing() {
+        let open = drawer_background_scale(1.0);
+        let closed = drawer_background_scale(0.0);
+        let mid = drawer_background_scale(0.5);
+        assert!((closed - 1.0).abs() < 0.001, "closed page is unscaled, got {closed}");
+        assert!(
+            open < closed && (open - (1.0 - SCALE_BG_MAX_SHRINK)).abs() < 0.001,
+            "open page shrinks (Vaul), got {open}"
+        );
+        assert!(mid > open && mid < closed);
     }
 }

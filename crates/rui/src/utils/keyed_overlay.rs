@@ -15,7 +15,10 @@ use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::tree::Element;
 use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::style::{css_animation_needs_frame, css_transition_needs_frame};
-use crate::utils::popup::portal_panel;
+use crate::utils::popup::{
+    portal_panel, ATTR_FLOATING_ANCHOR_EDGE_Y, ATTR_FLOATING_CONTENT_H,
+    ATTR_FLOATING_EXPAND_MEASURE,
+};
 
 /// 通用 keyed 项前缀（新组件推荐 `ko:{scope}`）。
 pub const KEYED_OVERLAY_PREFIX: &str = "ko:";
@@ -42,10 +45,19 @@ pub(crate) fn is_modal_shell_motion_item(tid: Option<&str>) -> bool {
     })
 }
 
+/// 锚定浮层面板（[`floating_motion`]：`{id}__floating_panel`）。
+pub(crate) fn is_floating_panel_motion_item(tid: Option<&str>) -> bool {
+    tid.is_some_and(|t| t.ends_with("__floating_panel"))
+}
+
 fn modal_shell_should_preserve_motion(prev: &Element) -> bool {
     prev.transition_snapshot.has_active_tweens()
         || css_transition_needs_frame(&prev.style, &prev.transition_snapshot)
         || css_animation_needs_frame(&prev.style, &prev.animation_snapshot)
+}
+
+fn floating_panel_should_preserve_motion(prev: &Element) -> bool {
+    modal_shell_should_preserve_motion(prev) || !prev.style.animations.is_empty()
 }
 
 fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
@@ -59,6 +71,51 @@ fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
         return;
     }
     copy_keyed_motion_state(fresh, prev);
+    if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
+        fresh.style.transition = prev.style.transition.clone();
+    }
+    if fresh.style.animations.is_empty() && !prev.style.animations.is_empty() {
+        fresh.style.animations = prev.style.animations.clone();
+    }
+}
+
+/// Fade / Expand 入场中途：reactive 重建会把 opacity/max-height 打回终态，须吞回 mid。
+fn preserve_floating_panel_motion(fresh: &mut Element, prev: &Element) {
+    if fresh
+        .attrs
+        .get(ATTR_FLOATING_EXPAND_MEASURE)
+        .is_some_and(|s| s == "1")
+    {
+        // Unconstrained measure frame: do not copy the previous viewport-capped max-height
+        // or clipped layout_bounds — that would freeze Expand at overflow height.
+        return;
+    }
+    let fade_enter_mid = prev.style.opacity + 0.02 < fresh.style.opacity;
+    let expand_mid = !matches!(
+        crate::layout::dim_kind(prev.style.max_size.height),
+        crate::layout::DimKind::Auto
+    ) && matches!(
+        crate::layout::dim_kind(fresh.style.max_size.height),
+        crate::layout::DimKind::Auto
+    );
+    if !floating_panel_should_preserve_motion(prev) && !fade_enter_mid && !expand_mid {
+        return;
+    }
+    copy_keyed_motion_state(fresh, prev);
+    // Expand 动画拥有 max-height；copy_keyed 默认只在 transition 时抄。
+    fresh.style.max_size.height = prev.style.max_size.height;
+    fresh.style.min_size.height = prev.style.min_size.height;
+    fresh.style.overflow.y = prev.style.overflow.y;
+    // layout 在 flush 之后；跨 reactive 重建保留测高，避免 Expand 永远等不到 height。
+    if prev.layout_bounds[3] > 1.0 {
+        fresh.layout_bounds = prev.layout_bounds;
+    }
+    if let Some(h) = prev.attrs.get(ATTR_FLOATING_CONTENT_H) {
+        fresh.set_attr(ATTR_FLOATING_CONTENT_H, h.clone());
+    }
+    if let Some(edge) = prev.attrs.get(ATTR_FLOATING_ANCHOR_EDGE_Y) {
+        fresh.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, edge.clone());
+    }
     if fresh.style.transition.is_empty() && !prev.style.transition.is_empty() {
         fresh.style.transition = prev.style.transition.clone();
     }
@@ -100,6 +157,21 @@ pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -
         }
         return preserve;
     }
+    if is_floating_panel_motion_item(fresh.template_id.as_deref()) {
+        let preserve = floating_panel_should_preserve_motion(prev)
+            || prev.style.opacity + 0.02 < fresh.style.opacity
+            || (!matches!(
+                crate::layout::dim_kind(prev.style.max_size.height),
+                crate::layout::DimKind::Auto
+            ) && matches!(
+                crate::layout::dim_kind(fresh.style.max_size.height),
+                crate::layout::DimKind::Auto
+            ));
+        if preserve {
+            preserve_floating_panel_motion(fresh, prev);
+        }
+        return preserve;
+    }
     let preserve = !fresh.style.transition.is_empty()
         && (is_keyed_motion_item(fresh.template_id.as_deref())
             || prev.transition_snapshot.has_active_tweens()
@@ -112,7 +184,7 @@ pub fn preserve_keyed_motion_on_reconcile(fresh: &mut Element, prev: &Element) -
 
 /// hoist 后同 portal key 调和：按 `template_id` 递归合并，保留 mid。
 ///
-/// **勿** adopt `layout_node` — Taffy SlotMap 拓扑会不一致。
+/// **Do not** adopt `layout_node` — Taffy SlotMap topology would become inconsistent.
 pub fn adopt_keyed_overlay(fresh: &mut Element, prev: &mut Element) {
     adopt_overlay_node(fresh, prev);
 }
@@ -165,6 +237,10 @@ fn preserve_keyed_motion_on_hoist(fresh: &mut Element, prev: &Element) {
         preserve_modal_shell_motion(fresh, prev);
         return;
     }
+    if is_floating_panel_motion_item(fresh.template_id.as_deref()) {
+        preserve_floating_panel_motion(fresh, prev);
+        return;
+    }
     let keyed = is_keyed_motion_item(fresh.template_id.as_deref());
     if !keyed
         && fresh.style.transition.is_empty()
@@ -173,7 +249,7 @@ fn preserve_keyed_motion_on_hoist(fresh: &mut Element, prev: &Element) {
     {
         return;
     }
-    // 退场：sync 可能已在 hoist 前把 opacity→0 并 seed tween。勿用 idle mid 盖掉。
+    // Exit: sync may already set opacity→0 and seed the tween before hoist. Do not overwrite with idle mid.
     let fresh_exit_motion = fresh.transition_snapshot.has_active_tweens()
         || fresh.style.opacity + 0.05 < prev.style.opacity;
     if fresh_exit_motion {
@@ -326,6 +402,107 @@ mod tests {
 
         assert!(!preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
         assert!((fresh.style.translate[1] - 520.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn floating_panel_motion_preserves_expand_mid_on_reconcile() {
+        use crate::style::{
+            keyframes_anim_entry, AnimationFillMode, AnimationSnapshot, TimingFunction,
+        };
+        use taffy::style::Dimension;
+
+        let mut prev = Element::new().template_id("menu__floating_panel");
+        prev.style.max_size.height = Dimension::length(40.0);
+        prev.style.opacity = 1.0;
+        prev.style.animations = vec![keyframes_anim_entry(
+            "accordion-down",
+            200.0,
+            TimingFunction::EaseOut,
+            AnimationFillMode::Both,
+        )];
+        prev.animation_snapshot = AnimationSnapshot::default();
+        prev.layout_bounds = [10.0, 20.0, 100.0, 80.0];
+        prev.set_attr(ATTR_FLOATING_CONTENT_H, "200");
+        prev.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+
+        let mut fresh = Element::new().template_id("menu__floating_panel");
+        fresh.style.max_size.height = Dimension::auto();
+        fresh.style.opacity = 1.0;
+
+        assert!(preserve_keyed_motion_on_reconcile(&mut fresh, &prev));
+        assert!(
+            !fresh.style.animations.is_empty(),
+            "accordion-down must survive reconcile"
+        );
+        assert!(
+            matches!(
+                crate::layout::dim_kind(fresh.style.max_size.height),
+                crate::layout::DimKind::Length(_)
+            ),
+            "expand mid max-height must survive"
+        );
+        assert!(
+            (fresh.layout_bounds[3] - 80.0).abs() < f32::EPSILON,
+            "measured height bounds must survive for next flush"
+        );
+        assert_eq!(
+            fresh.attrs.get(ATTR_FLOATING_CONTENT_H).map(String::as_str),
+            Some("200"),
+            "content height must survive reconcile so exit flip stays stable"
+        );
+        assert_eq!(
+            fresh
+                .attrs
+                .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                .map(String::as_str),
+            Some("492")
+        );
+    }
+
+    #[test]
+    fn floating_panel_measure_does_not_copy_clipped_max_height() {
+        use taffy::style::Dimension;
+
+        let mut prev = Element::new().template_id("menu__floating_panel");
+        prev.style.max_size.height = Dimension::length(80.0);
+        prev.layout_bounds = [10.0, 20.0, 100.0, 80.0];
+
+        let mut fresh = Element::new().template_id("menu__floating_panel");
+        fresh.style.max_size.height = Dimension::auto();
+        fresh.set_attr(ATTR_FLOATING_EXPAND_MEASURE, "1");
+        fresh.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+
+        let _ = preserve_keyed_motion_on_reconcile(&mut fresh, &prev);
+        assert!(
+            fresh.style.max_size.height.is_auto(),
+            "measure frame must not inherit the overflow-capped max-height"
+        );
+        assert!(
+            fresh.layout_bounds[3] < 0.5,
+            "measure frame must not inherit clipped layout_bounds"
+        );
+    }
+
+    #[test]
+    fn floating_panel_motion_preserves_fade_mid_on_hoist() {
+        let mut prev = Element::new().template_id("tip__floating_panel");
+        prev.style.opacity = 0.4;
+        prev.style.animations = vec![crate::style::keyframes_anim_entry(
+            "fade-in-0",
+            300.0,
+            crate::style::TimingFunction::EaseOut,
+            crate::style::AnimationFillMode::Both,
+        )];
+
+        let mut fresh = Element::new().template_id("tip__floating_panel");
+        fresh.style.opacity = 1.0;
+
+        adopt_keyed_overlay(&mut fresh, &mut prev);
+        assert!(
+            (fresh.style.opacity - 0.4).abs() < f32::EPSILON,
+            "fade mid opacity must survive hoist adopt"
+        );
+        assert!(!fresh.style.animations.is_empty());
     }
 
     #[test]

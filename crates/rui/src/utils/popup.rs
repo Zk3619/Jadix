@@ -127,6 +127,12 @@ pub const ATTR_FLOATING_GAP: &str = "rui_floating_gap";
 pub const ATTR_FLOATING_STRATEGY: &str = "rui_floating_strategy";
 /// Cursor / point anchor `"x,y"`（逻辑像素）。有值时忽略触发器几何，走 [`compute_cursor_menu_placement`]。
 pub const ATTR_FLOATING_POINT: &str = "rui_floating_point";
+/// Intrinsic content height (logical px) for placement `estimate_h` while accordion clips.
+pub(crate) const ATTR_FLOATING_CONTENT_H: &str = "rui_floating_content_h";
+/// Expand is taking an unconstrained measure frame — placement must not write viewport `max_h`.
+pub(crate) const ATTR_FLOATING_EXPAND_MEASURE: &str = "rui_floating_expand_measure";
+/// Trigger-facing edge y when the panel is placed above; accordion `top` tracks visual height from this.
+pub(crate) const ATTR_FLOATING_ANCHOR_EDGE_Y: &str = "rui_floating_anchor_edge_y";
 
 /// Inset from the viewport edges so floating panels never sit flush against the window.
 pub const FLOATING_VIEWPORT_MARGIN: f32 = 8.0;
@@ -319,11 +325,18 @@ pub fn compute_anchored_placement(
 
     let space_below = (vh - margin - (ty + th) - gap).max(0.0);
     let space_above = (ty - margin - gap).max(0.0);
-    let place_below = if prefer_bottom {
-        space_below >= menu_h_estimate.min(80.0) || space_below >= space_above
-    } else {
-        space_above < menu_h_estimate.min(80.0) && space_below > space_above
-    };
+    // Prefer the requested side when it can hold the full content. Otherwise flip
+    // to the opposite side when it fits — or, when neither fits, always pick the
+    // roomier side so overflow scroll shows as much content as possible.
+    let need = h;
+    let mut place_below = prefer_bottom;
+    if prefer_bottom {
+        if space_below + 0.5 < need && space_above > space_below {
+            place_below = false;
+        }
+    } else if space_above + 0.5 < need && space_below > space_above {
+        place_below = true;
+    }
 
     let max_h = if place_below {
         space_below
@@ -351,7 +364,6 @@ pub fn compute_anchored_placement(
     if x < margin {
         x = margin;
     }
-
     (x, y, max_h, !place_below)
 }
 
@@ -446,19 +458,109 @@ fn dimension_length(v: taffy::style::Dimension) -> Option<f32> {
     crate::layout::dim_length_px(v)
 }
 
+fn height_keyframe_animation_active(el: &Element) -> bool {
+    el.style.animations.iter().any(|a| {
+        matches!(
+            a.name.as_str(),
+            "accordion-down" | "accordion-up" | "collapsible-down" | "collapsible-up"
+        )
+    })
+}
+
+fn expand_measure_pending(el: &Element) -> bool {
+    el.attrs
+        .get(ATTR_FLOATING_EXPAND_MEASURE)
+        .is_some_and(|s| s == "1")
+}
+
+/// Placement must not own `max-size.height` while accordion keyframes run, or while
+/// Expand is measuring unconstrained content height.
+fn skip_placement_max_h(el: &Element) -> bool {
+    height_keyframe_animation_active(el) || expand_measure_pending(el)
+}
+
+fn floating_estimate_h(el: &Element) -> f32 {
+    if let Some(h) = el
+        .attrs
+        .get(ATTR_FLOATING_CONTENT_H)
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|h| *h > 0.5)
+    {
+        return h;
+    }
+    if el.layout_bounds[3] > 0.5 {
+        el.layout_bounds[3]
+    } else {
+        32.0
+    }
+}
+
+/// Last synced viewport-available `max_h` for this overlay, if placement has run.
+pub(crate) fn peek_floating_place_max_h(id: &str) -> Option<f32> {
+    let key = floating_place_signal_key(id);
+    let place = use_signal(key.as_str(), FloatingPlace::default);
+    let p = place.peek();
+    if p == FloatingPlace::default() {
+        return None;
+    }
+    Some(p.max_h)
+}
+
+/// After accordion tick: clip interpolated max-height to the current viewport cap
+/// without retargeting the keyframe baseline (keep `snap.base`, sync `snap.written`).
+/// When placed above, also glue `top` to the trigger-facing edge so expand/collapse
+/// reverse instead of leaving a sliver below the trigger.
+pub(crate) fn clamp_animated_max_h_to_place(el: &mut Element, overlay_id: &str) -> bool {
+    if !height_keyframe_animation_active(el) {
+        return false;
+    }
+    let mut changed = false;
+    if let Some(cap) = peek_floating_place_max_h(overlay_id).filter(|h| *h > 0.0) {
+        if let Some(cur) = dimension_length(el.style.max_size.height) {
+            if cur > cap + 0.5 {
+                let capped = taffy::style::Dimension::length(cap);
+                el.style.max_size.height = capped;
+                el.animation_snapshot.sync_written_max_height(capped);
+                changed = true;
+            }
+        }
+    }
+    let edge = el
+        .attrs
+        .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+        .and_then(|s| s.parse::<f32>().ok());
+    if let Some(edge) = edge {
+        let visual_h = dimension_length(el.style.max_size.height).unwrap_or(0.0);
+        let y = (edge - visual_h).max(FLOATING_VIEWPORT_MARGIN);
+        if inset_length(el.style.inset.top).is_none_or(|v| (v - y).abs() > 0.5) {
+            el.style.inset.top = Element::into_margin_auto(y);
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Write absolute geometry onto a floating panel. Returns whether any field changed.
 ///
 /// Capability only: applies placement numbers + attr-driven size constraints.
 /// Does **not** invent product style defaults (those belong in `components/*`).
 fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
+    write_floating_place_ex(el, place, true)
+}
+
+/// Like [`write_floating_place`], but `write_xy=false` only applies size constraints
+/// (used while content-auto panels are still unmeasured — avoid a 32px-wide center guess).
+fn write_floating_place_ex(el: &mut Element, place: FloatingPlace, write_xy: bool) -> bool {
     let mut changed = false;
-    if inset_length(el.style.inset.left).is_none_or(|v| (v - place.x).abs() > 0.5) {
-        el.style.inset.left = Element::into_margin_auto(place.x);
-        changed = true;
-    }
-    if inset_length(el.style.inset.top).is_none_or(|v| (v - place.y).abs() > 0.5) {
-        el.style.inset.top = Element::into_margin_auto(place.y);
-        changed = true;
+    if write_xy {
+        if inset_length(el.style.inset.left).is_none_or(|v| (v - place.x).abs() > 0.5) {
+            el.style.inset.left = Element::into_margin_auto(place.x);
+            changed = true;
+        }
+        if inset_length(el.style.inset.top).is_none_or(|v| (v - place.y).abs() > 0.5) {
+            el.style.inset.top = Element::into_margin_auto(place.y);
+            changed = true;
+        }
     }
 
     if place.width_auto {
@@ -509,27 +611,36 @@ fn write_floating_place(el: &mut Element, place: FloatingPlace) -> bool {
         }
     }
 
-    // `max_h <= 0` → unbounded (`strategy=fixed` without ATTR_FLOATING_MAX_H).
-    // Viewport-available max must be allowed to **grow** after scroll (no ratchet).
-    if place.max_h <= 0.0 {
-        if !el.style.max_size.height.is_auto() {
-            el.style.max_size.height = taffy::style::Dimension::auto();
+    // Accordion max-height keyframes own `max-size.height`. Placement must not rewrite it
+    // to the viewport cap — that retargets the interpolation base to ~full height:
+    // enter looks instant, exit jumps tall then shrinks (flicker). Measure frames also
+    // skip so we capture unconstrained content height instead of the overflow clip.
+    if !skip_placement_max_h(el) {
+        // `max_h <= 0` → unbounded (`strategy=fixed` without ATTR_FLOATING_MAX_H).
+        // Viewport-available max must be allowed to **grow** after scroll (no ratchet).
+        if place.max_h <= 0.0 {
+            if !el.style.max_size.height.is_auto() {
+                el.style.max_size.height = taffy::style::Dimension::auto();
+                changed = true;
+            }
+        } else if dimension_length(el.style.max_size.height)
+            .is_none_or(|v| (v - place.max_h).abs() > 0.5)
+        {
+            el.style.max_size.height = taffy::style::Dimension::length(place.max_h.max(1.0));
             changed = true;
         }
-    } else if dimension_length(el.style.max_size.height)
-        .is_none_or(|v| (v - place.max_h).abs() > 0.5)
-    {
-        el.style.max_size.height = taffy::style::Dimension::length(place.max_h.max(1.0));
-        changed = true;
     }
 
-    if let Some(raw) = el.attrs.get(ATTR_FLOATING_MIN_H) {
-        let min_h = parse_css_px(raw, 0.0);
-        if min_h > 0.0
-            && dimension_length(el.style.min_size.height).is_none_or(|v| (v - min_h).abs() > 0.5)
-        {
-            el.style.min_size.height = taffy::style::Dimension::length(min_h);
-            changed = true;
+    if !skip_placement_max_h(el) {
+        if let Some(raw) = el.attrs.get(ATTR_FLOATING_MIN_H) {
+            let min_h = parse_css_px(raw, 0.0);
+            if min_h > 0.0
+                && dimension_length(el.style.min_size.height)
+                    .is_none_or(|v| (v - min_h).abs() > 0.5)
+            {
+                el.style.min_size.height = taffy::style::Dimension::length(min_h);
+                changed = true;
+            }
         }
     }
 
@@ -736,11 +847,7 @@ fn apply_floating_menus(
                 .map(|s| s.as_str())
                 .unwrap_or("bottom-start"),
         );
-        let estimate_h = if el.layout_bounds[3] > 0.5 {
-            el.layout_bounds[3]
-        } else {
-            32.0
-        };
+        let estimate_h = floating_estimate_h(el);
         let estimate_w = if width_auto {
             if el.layout_bounds[2] > 0.5 {
                 el.layout_bounds[2].max(menu_w)
@@ -750,6 +857,10 @@ fn apply_floating_menus(
         } else {
             menu_w.max(min_w).max(32.0)
         };
+        // Content-auto + no layout size yet: applying a 32×32 center guess then correcting
+        // after measure is the classic HoverCard / Tooltip open jitter. Size-mode only
+        // until bounds exist; XY lands in one shot on the next sync.
+        let size_unknown = width_auto && el.layout_bounds[2] <= 0.5 && el.layout_bounds[3] <= 0.5;
         let gap = el
             .attrs
             .get(ATTR_FLOATING_GAP)
@@ -765,68 +876,137 @@ fn apply_floating_menus(
             .get(ATTR_FLOATING_STRATEGY)
             .map(|s| s.eq_ignore_ascii_case("fixed"))
             .unwrap_or(false);
-        let (x, y, max_h) = if point.is_some() && !strategy_fixed {
-            let (x, y, available_max_h) = compute_cursor_menu_placement(
-                [tb[0], tb[1]],
-                viewport,
-                estimate_w,
-                estimate_h,
-                gap,
-            );
-            let max_h = el
-                .attrs
-                .get(ATTR_FLOATING_MAX_H)
-                .or_else(|| el.attrs.get("rui_select_max_h"))
-                .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
-                .unwrap_or(available_max_h)
-                .max(1.0);
-            (x, y, max_h)
-        } else if strategy_fixed {
-            let (x, y) = compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
-            let max_h = el
-                .attrs
-                .get(ATTR_FLOATING_MAX_H)
-                .or_else(|| el.attrs.get("rui_select_max_h"))
-                .map(|s| parse_css_px(s, 0.0))
-                .filter(|h| *h > 0.0)
-                .unwrap_or(0.0);
-            (x, y, max_h)
+        if size_unknown {
+            let next = FloatingPlace {
+                x: 0.0,
+                y: 0.0,
+                w: menu_w.max(0.0),
+                max_h: 0.0,
+                width_auto,
+                min_w: min_w.max(0.0),
+            };
+            if write_floating_place_ex(el, next, false) {
+                *changed = true;
+            }
         } else {
-            let (x, y, available_max_h, _) =
-                compute_anchored_placement(tb, viewport, estimate_w, estimate_h, preferred, gap);
-            let max_h = el
-                .attrs
-                .get(ATTR_FLOATING_MAX_H)
-                .or_else(|| el.attrs.get("rui_select_max_h"))
-                .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
-                .unwrap_or(available_max_h)
-                .max(1.0);
-            (x, y, max_h)
-        };
-        let next = FloatingPlace {
-            x,
-            y,
-            w: menu_w.max(0.0),
-            max_h,
-            width_auto,
-            min_w: min_w.max(0.0),
-        };
-        let place_key = floating_place_signal_key(&id);
-        let place = use_signal(place_key.as_str(), FloatingPlace::default);
-        let cur = place.peek();
-        let signal_dirty = (cur.x - next.x).abs() > 0.5
-            || (cur.y - next.y).abs() > 0.5
-            || (cur.w - next.w).abs() > 0.5
-            || (cur.max_h - next.max_h).abs() > 0.5
-            || (cur.min_w - next.min_w).abs() > 0.5
-            || cur.width_auto != next.width_auto;
-        if signal_dirty {
-            place.set_silent(next);
-        }
-        // Always write onto the element: a reopened portal panel is a new node with
-        // `left/top: auto` even when the place signal already holds the right coords.
-        if write_floating_place(el, next) {
-            *changed = true;
+            let (x, mut y, max_h) = if point.is_some() && !strategy_fixed {
+                let (x, y, available_max_h) = compute_cursor_menu_placement(
+                    [tb[0], tb[1]],
+                    viewport,
+                    estimate_w,
+                    estimate_h,
+                    gap,
+                );
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                    .unwrap_or(available_max_h)
+                    .max(1.0);
+                (x, y, max_h)
+            } else if strategy_fixed {
+                let (x, mut y) =
+                    compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
+                // Cover + top: glue the trigger bottom so growing wrap height expands upward
+                // without jumping the seam (estimate→measured churn).
+                let cover = gap < 0.0;
+                let prefer_bottom = matches!(
+                    preferred,
+                    PopupPlacement::BottomStart
+                        | PopupPlacement::BottomEnd
+                        | PopupPlacement::BottomCenter
+                );
+                if cover && !prefer_bottom {
+                    let edge = tb[1] + tb[3];
+                    el.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, format!("{edge}"));
+                    // Prefer animated max-height while accordion clips — layout_bounds can
+                    // still be the full content height and would slam `top` to the final y.
+                    let visual_h = dimension_length(el.style.max_size.height)
+                        .filter(|h| *h >= 0.0)
+                        .filter(|_| height_keyframe_animation_active(el))
+                        .or_else(|| {
+                            (el.layout_bounds[3] > 0.5).then_some(el.layout_bounds[3])
+                        })
+                        .unwrap_or_else(|| estimate_h.max(tb[3]).max(1.0));
+                    y = edge - visual_h;
+                } else if cover {
+                    el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
+                }
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| parse_css_px(s, 0.0))
+                    .filter(|h| *h > 0.0)
+                    .unwrap_or(0.0);
+                (x, y, max_h)
+            } else {
+                let (x, y, available_max_h, _) = compute_anchored_placement(
+                    tb, viewport, estimate_w, estimate_h, preferred, gap,
+                );
+                let max_h = el
+                    .attrs
+                    .get(ATTR_FLOATING_MAX_H)
+                    .or_else(|| el.attrs.get("rui_select_max_h"))
+                    .map(|s| available_max_h.min(parse_css_px(s, available_max_h)))
+                    .unwrap_or(available_max_h)
+                    .max(1.0);
+                (x, y, max_h)
+            };
+            // Reverse expand: keep the trigger-facing edge glued while accordion clips.
+            // Never drop a committed top placement mid-animation — a clip-sized estimate
+            // would re-place the shrinking panel below the trigger (flat sliver flash).
+            // Fixed cover already glued the seam above; skip so negative gap is not
+            // misread as `ty - gap`.
+            let skip_reverse_glue = strategy_fixed && gap < 0.0;
+            if !skip_reverse_glue {
+                let existing_edge = el
+                    .attrs
+                    .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|e| *e > 0.0);
+                let animating_h = height_keyframe_animation_active(el);
+                let placed_above = existing_edge.is_some() || y + 0.5 < tb[1];
+                if placed_above {
+                    let edge = existing_edge
+                        .unwrap_or_else(|| (tb[1] - gap).max(FLOATING_VIEWPORT_MARGIN));
+                    el.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, format!("{edge}"));
+                    if animating_h {
+                        let visual_h = dimension_length(el.style.max_size.height)
+                            .filter(|h| *h >= 0.0)
+                            .unwrap_or(el.layout_bounds[3].max(0.0));
+                        y = (edge - visual_h.min(max_h.max(0.0))).max(FLOATING_VIEWPORT_MARGIN);
+                    }
+                } else if !animating_h {
+                    el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
+                }
+            }
+            let next = FloatingPlace {
+                x,
+                y,
+                w: menu_w.max(0.0),
+                max_h,
+                width_auto,
+                min_w: min_w.max(0.0),
+            };
+            let place_key = floating_place_signal_key(&id);
+            let place = use_signal(place_key.as_str(), FloatingPlace::default);
+            let cur = place.peek();
+            let signal_dirty = (cur.x - next.x).abs() > 0.5
+                || (cur.y - next.y).abs() > 0.5
+                || (cur.w - next.w).abs() > 0.5
+                || (cur.max_h - next.max_h).abs() > 0.5
+                || (cur.min_w - next.min_w).abs() > 0.5
+                || cur.width_auto != next.width_auto;
+            if signal_dirty {
+                place.set_silent(next);
+            }
+            // Always write onto the element: a reopened portal panel is a new node with
+            // `left/top: auto` even when the place signal already holds the right coords.
+            if write_floating_place(el, next) {
+                *changed = true;
+            }
         }
     }
 
@@ -996,19 +1176,19 @@ pub fn floating_portal_anchor(panel: Element) -> Element {
         .pointer_events_box_none()
 }
 
-/// 锚定浮层单一路径：已 [`mark_floating`] 的面板 → 吞点击 + portal + 0×0 布局锚。
+/// 锚定浮层单一路径：已 [`mark_floating`] 的panel → 吞click + portal + 0×0 layout锚。
 ///
-/// Select / Combobox / DatePicker / ColorPicker / Tooltip / 有锚点的 Popover /
-/// Dropdown / ContextMenu / Menubar 必须走这里，禁止 `portal_panel` 当 flex 兄弟。
+/// Select / Combobox / DatePicker / ColorPicker / Tooltip / 有anchor的 Popover /
+/// Dropdown / ContextMenu / Menubar must走这里，must not `portal_panel` 当 flex 兄弟。
 pub fn mount_anchored_overlay(panel: Element, panel_z: i32) -> Element {
     floating_portal_anchor(panel_block_clicks(panel, panel_z))
 }
 
-/// 视口固定 portal 舞台（Dialog / Sheet / CommandOverlay）。
+/// viewport固定 portal 舞台（Dialog / Sheet / CommandOverlay）。
 ///
-/// 舞台本身是全屏居中壳：显式 `box-none`，空白区点击落到 underlay（关闭）。
-/// 舞台内面板只用 [`swallow_clicks`]，**禁止**再包 [`panel_block_clicks`]（会嵌套
-/// `rui_portal`，把面板 hoist 出舞台）。
+/// 舞台本身是全屏居中壳：显式 `box-none`，空白区click落到 underlay（close）。
+/// 舞台内panel只用 [`swallow_clicks`]，**must not**再包 [`panel_block_clicks`]（会嵌套
+/// `rui_portal`，把panel hoist 出舞台）。
 pub fn mount_viewport_portal_stage(mut stage: Element, panel_z: i32) -> Element {
     stage = stage.fixed();
     stage.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
@@ -1024,7 +1204,7 @@ pub fn mount_viewport_portal_stage(mut stage: Element, panel_z: i32) -> Element 
     portal_panel(stage, panel_z).pointer_events_box_none()
 }
 
-/// 模态层：underlay + 已 [`mount_viewport_portal_stage`] 的舞台。
+/// Modal layer: underlay + stage already from [`mount_viewport_portal_stage`].
 pub fn mount_modal_layer(underlay: Element, stage: Element) -> Element {
     Element::new()
         .child(underlay)
@@ -1069,6 +1249,168 @@ mod tests {
         assert!(
             dimension_length(el.style.min_size.height).unwrap_or(0.0) == 0.0,
             "popup must not invent a style min-height"
+        );
+    }
+
+    #[test]
+    fn write_floating_place_skips_max_h_during_accordion_animation() {
+        use crate::style::{keyframes_anim_entry, AnimationFillMode, TimingFunction};
+        use taffy::style::Dimension;
+
+        let mut el = Element::new().absolute().w(160.0);
+        el.style.max_size.height = Dimension::length(24.0);
+        el.style.animations = vec![keyframes_anim_entry(
+            "accordion-down",
+            200.0,
+            TimingFunction::EaseOut,
+            AnimationFillMode::Both,
+        )];
+        let place = FloatingPlace {
+            x: 10.0,
+            y: 20.0,
+            w: 160.0,
+            max_h: 400.0,
+            width_auto: false,
+            min_w: 0.0,
+        };
+        let _ = write_floating_place(&mut el, place);
+        match crate::layout::dim_kind(el.style.max_size.height) {
+            crate::layout::DimKind::Length(h) => assert!(
+                (h - 24.0).abs() < 0.1,
+                "accordion mid max-height must not be replaced by viewport cap, got {h}"
+            ),
+            other => panic!("expected preserved Length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_floating_place_skips_max_h_during_expand_measure() {
+        use taffy::style::Dimension;
+
+        let mut el = Element::new().absolute().w(160.0);
+        el.style.max_size.height = Dimension::auto();
+        el.set_attr(ATTR_FLOATING_EXPAND_MEASURE, "1");
+        let place = FloatingPlace {
+            x: 10.0,
+            y: 20.0,
+            w: 160.0,
+            max_h: 80.0,
+            width_auto: false,
+            min_w: 0.0,
+        };
+        let _ = write_floating_place(&mut el, place);
+        assert!(
+            el.style.max_size.height.is_auto(),
+            "measure frame must keep unconstrained max-height, not viewport cap"
+        );
+    }
+
+    #[test]
+    fn sync_floating_estimate_h_uses_content_h_not_clip() {
+        let mut trigger = Element::new().focus_id("t-clip");
+        // Near the bottom: clipped height would stay below; content height must flip above.
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "clip-menu",
+            "t-clip",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.layout_bounds = [0.0, 0.0, 80.0, 20.0];
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "200");
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let menu = &root.children[1];
+        match inset_length(menu.style.inset.top) {
+            Some(y) => assert!(
+                (y - 292.0).abs() < 0.5,
+                "top must use content height 200 (y=292), not clip 20 (y=536), got {y}"
+            ),
+            None => panic!("expected top inset"),
+        }
+    }
+
+    #[test]
+    fn sync_floating_top_placed_accordion_tracks_visual_height() {
+        use crate::style::{keyframes_anim_entry, AnimationFillMode, TimingFunction};
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("t-up");
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(&mut panel, "up-menu", "t-up", PopupPlacement::BottomStart);
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.layout_bounds = [0.0, 0.0, 80.0, 20.0];
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "200");
+        panel.style.max_size.height = Dimension::length(20.0);
+        panel.style.animations = vec![keyframes_anim_entry(
+            "accordion-down",
+            200.0,
+            TimingFunction::EaseOut,
+            AnimationFillMode::Both,
+        )];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let menu = &root.children[1];
+        // Trigger-facing edge = 500 - 8; visual clip 20 → y = 472 (grows from trigger).
+        // Final content y would be 292 — must not jump there while clipped.
+        match inset_length(menu.style.inset.top) {
+            Some(y) => assert!(
+                (y - 472.0).abs() < 0.5,
+                "upward accordion must track visual height from trigger, got {y}"
+            ),
+            None => panic!("expected top inset"),
+        }
+    }
+
+    #[test]
+    fn sync_floating_exit_keeps_top_placement_when_clip_shrinks() {
+        use crate::style::{keyframes_anim_entry, AnimationFillMode, TimingFunction};
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("t-exit");
+        trigger.layout_bounds = [20.0, 500.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "exit-menu",
+            "t-exit",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.layout_bounds = [0.0, 0.0, 80.0, 20.0];
+        // Rebuild often drops CONTENT_H; clip 20 would flip below (y=536) without a frozen edge.
+        panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        panel.style.max_size.height = Dimension::length(20.0);
+        panel.style.animations = vec![keyframes_anim_entry(
+            "accordion-up",
+            200.0,
+            TimingFunction::EaseIn,
+            AnimationFillMode::Both,
+        )];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let menu = &root.children[1];
+        match inset_length(menu.style.inset.top) {
+            Some(y) => assert!(
+                (y - 472.0).abs() < 0.5,
+                "collapsing top menu must not flip below the trigger, got {y}"
+            ),
+            None => panic!("expected top inset"),
+        }
+        assert_eq!(
+            menu.attrs
+                .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                .map(String::as_str),
+            Some("492")
         );
     }
 
@@ -1252,6 +1594,80 @@ mod tests {
     }
 
     #[test]
+    fn sync_floating_content_auto_defers_xy_until_measured() {
+        let mut trigger = Element::new().focus_id("t-defer");
+        trigger.layout_bounds = [100.0, 40.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating_with_gap(
+            &mut panel,
+            "hc-defer",
+            "t-defer",
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        // Unmeasured first paint — must not commit a 32px-wide center guess.
+        panel.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        assert!(
+            inset_length(root.children[1].style.inset.left).is_none(),
+            "unmeasured content-auto must not write left"
+        );
+        assert!(
+            inset_length(root.children[1].style.inset.top).is_none(),
+            "unmeasured content-auto must not write top"
+        );
+
+        root.children[1].layout_bounds = [0.0, 0.0, 256.0, 80.0];
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        // Center: mid trigger 140 − half panel 128 → x=12.
+        match inset_length(root.children[1].style.inset.left) {
+            Some(x) => assert!((x - 12.0).abs() < 0.5, "x={x}"),
+            None => panic!("expected left after measure"),
+        }
+        match inset_length(root.children[1].style.inset.top) {
+            Some(y) => assert!((y - (40.0 + 28.0 + 4.0)).abs() < 0.5, "y={y}"),
+            None => panic!("expected top after measure"),
+        }
+    }
+
+    #[test]
+    fn sync_floating_explicit_w_stable_before_and_after_layout() {
+        let mut trigger = Element::new().focus_id("t-stable");
+        trigger.layout_bounds = [100.0, 40.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating_with_gap(
+            &mut panel,
+            "hc-stable",
+            "t-stable",
+            PopupPlacement::BottomCenter,
+            4.0,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        panel.set_attr(ATTR_FLOATING_W, "256px");
+        panel.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let x0 = inset_length(root.children[1].style.inset.left).expect("left before layout");
+        assert!((x0 - 12.0).abs() < 0.5, "x0={x0}");
+
+        root.children[1].layout_bounds = [0.0, 0.0, 256.0, 120.0];
+        let _ = sync_floating_placement(&mut root, 800.0, 600.0);
+        let x1 = inset_length(root.children[1].style.inset.left).expect("left after layout");
+        assert!(
+            (x1 - x0).abs() < 0.5,
+            "explicit w must not re-center after layout: {x0} → {x1}"
+        );
+    }
+
+    #[test]
     fn compute_flips_above_when_below_is_tight() {
         // Trigger near bottom; small panel must flip above.
         let trigger = [100.0, 560.0, 80.0, 28.0];
@@ -1266,6 +1682,34 @@ mod tests {
         assert!(flipped, "must flip above when below has no room");
         // ty - gap - h = 560 - 4 - 24 = 532
         assert!((y - 532.0).abs() < 0.5, "y={y}");
+    }
+
+    #[test]
+    fn compute_picks_roomier_side_when_neither_fits() {
+        // Trigger mid-low: below ≈ 100px, above ≈ 400px; content 300 fits neither.
+        // Old min(80) threshold kept below; must open above to maximize scroll viewport.
+        let trigger = [100.0, 420.0, 80.0, 28.0];
+        let (_x, y, max_h, flipped) = compute_anchored_placement(
+            trigger,
+            [800.0, 600.0],
+            160.0,
+            300.0,
+            PopupPlacement::BottomStart,
+            8.0,
+        );
+        assert!(
+            flipped,
+            "neither side fits 300px; must pick the larger (above) side"
+        );
+        // space_above = 420 - 8 - 8 = 404; y = 420 - 8 - min(300, max(404,48))
+        assert!(
+            (max_h - 404.0).abs() < 0.5,
+            "max_h must be the larger side, got {max_h}"
+        );
+        assert!(
+            y + 0.5 < trigger[1],
+            "panel must sit above the trigger, got y={y}"
+        );
     }
 
     #[test]
@@ -1848,6 +2292,49 @@ mod tests {
         assert!(
             (x - 790.0).abs() < 0.1,
             "cover placement must not clamp away from the trigger (got {x})"
+        );
+    }
+
+    #[test]
+    fn fixed_cover_top_glues_bottom_when_height_grows() {
+        let mut trigger = Element::new().focus_id("rx-t");
+        trigger.layout_bounds = [20.0, 200.0, 96.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating_with_gap(
+            &mut panel,
+            "rx-expand",
+            "rx-t",
+            PopupPlacement::TopStart,
+            -28.0,
+        );
+        panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        // First layout: short estimate (collapsed).
+        panel.layout_bounds = [0.0, 0.0, 96.0, 28.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let y0 = inset_length(root.children[1].style.inset.top).expect("top");
+        assert!(
+            (y0 - 200.0).abs() < 0.5,
+            "cover top with h=trigger: panel top aligns with trigger top, got {y0}"
+        );
+
+        // Wrap grew the panel — bottom seam must stay on trigger bottom (228).
+        root.children[1].layout_bounds = [20.0, y0, 96.0, 88.0];
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let y1 = inset_length(root.children[1].style.inset.top).expect("top after grow");
+        assert!(
+            (y1 - (228.0 - 88.0)).abs() < 0.5,
+            "growing upward must keep bottom on trigger bottom, got {y1}"
+        );
+        assert_eq!(
+            root.children[1]
+                .attrs
+                .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                .map(String::as_str),
+            Some("228")
         );
     }
 }
