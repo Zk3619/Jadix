@@ -3,12 +3,12 @@
 //! 文本 / 标签节点：字号、字重、颜色、行高、装饰与常用布局透传。
 //! RSX 标签为 `<Label>`；Builder 入口为 [`label`]，旧别名 [`text_node`]（re-export 为 `text`）。
 //!
-//! ## 用来做什么
+//! ## What it is for
 //! 界面文案、标题、表单旁注等静态或轻量文本，不是可编辑输入。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
-//! <Label text_size="0.875rem" font_weight="600">"标题"</Label>
+//! <Label text_size="0.875" font_weight=600>"标题"</Label>
 //! <Label id="hint" text_color="#888">"说明文字"</Label>
 //! // 关联控件（Solid `for`）：点击标签转发到 `focus_id` 匹配的控件
 //! <Checkbox id="terms" />
@@ -17,7 +17,7 @@
 //! // Element::from(label("t").text("Hello").size(14.0).r#for("terms"))
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! 默认经 [`crate::utils::text_node::apply_label_defaults`]：
 //! 约 14px / weight 500 / leading-none / `min_w=0`。非空 `id` 才写入 `template_id`（I-1：禁 `Some("")`）。
 //! `for` 写入 `attrs["for"]`；指针命中时由 hit path 转发到目标 `on_click`。
@@ -162,7 +162,7 @@ pub fn label_accesskit_id_for(for_target: &str) -> String {
     format!("lbl:for:{for_target}")
 }
 
-/// Solid `for`：写入 attrs，并补齐 `accesskit_id` 供读屏 `labelled_by`。
+/// Solid `for`: Write attrs, and complete `accesskit_id` for reading screen `labelled_by`.
 fn apply_label_for(el: &mut Element, for_id: &str) {
     let for_id = for_id.trim();
     if for_id.is_empty() {
@@ -261,7 +261,7 @@ impl LabelBuilder {
         self
     }
 
-    pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
+    pub fn font_weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
         self.inner = self.inner.weight(weight);
         self
     }
@@ -290,7 +290,7 @@ impl LabelBuilder {
         self
     }
 
-    pub fn leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.inner = self.inner.leading(scale);
         self
     }
@@ -418,7 +418,7 @@ impl LabelBuilder {
         self
     }
 
-    pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn text_leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.inner = self.inner.leading(scale);
         self
     }

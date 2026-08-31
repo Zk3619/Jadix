@@ -1,16 +1,16 @@
 //! # Calendar
 //!
-//! 对照 ShadCN **React Aria** 月历（`registry/bases/aria/ui/calendar.tsx` +
-//! `examples/aria` / sidebar-12 `DatePicker`）：独立月网格，DatePicker 浮层与
+//! Compare ShadCN **React Aria** monthly calendar (`registry/bases/aria/ui/calendar.tsx` +
+//! `examples/aria` / sidebar-12 `DatePicker`): independent monthly grid, DatePicker floating layer and
 //! 侧栏内联共用同一组件。
 //!
-//! - **caption_layout**：`label`（‹ 月份 年份 ›）或 `dropdown`（复用 [`select`] 的月份 / 年份菜单，对位 Aria `CalendarMonthPicker` / `CalendarYearPicker`）。
-//! - **值格式**：ISO **`YYYY-MM-DD`**（本地日历日，无时区）。
+//! - **caption_layout**: `label` (‹ month year ›) or `dropdown` (reuse the month/year menu of [`select`], opposite Aria `CalendarMonthPicker` / `CalendarYearPicker`).
+//! - **Value format**: ISO **`YYYY-MM-DD`** (local calendar day, no time zone).
 //! - **键盘**：←/→ 日；↑/↓ 周；Home/End 周首尾；PageUp/PageDown 月；Enter 选定。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
-//! // A · RSX（sidebar-12 式内联；captionLayout / valueSignal / defaultValue 为宏别名）
+//! // A · RSX (sidebar-12 style inline; captionLayout / valueSignal / defaultValue are macro aliases)
 //! ui! {
 //!     <Calendar id="due" captionLayout="dropdown" />
 //!     <Calendar id="due-c" valueSignal={date_sig} captionLayout="label" />
@@ -42,14 +42,14 @@ use winit::keyboard::{Key, NamedKey};
 
 /// ShadCN `--cell-size`（new-york `--spacing(8)` / sidebar-12 `2.1rem` ≈ 2rem）。
 const CELL: &str = "2rem";
-/// 星期行 + 6 周 × `CELL`，行距 `0.5rem`：`7×2rem + 6×0.5rem`。
-/// `__days` 占位 `h:auto` 在 reconcile 前会塌成 0，日按钮溢出盖住 DateTime `Separator`。
+/// Weekday row + 6 weeks × `CELL`, line spacing `0.5rem`: `7×2rem + 6×0.5rem`.
+/// `__days` placeholder `h:auto` will collapse to 0 before reconciliation, and the day button overflows and covers the DateTime `Separator`.
 const CALENDAR_DAY_GRID_MIN_H: &str = "17rem";
 /// 7×cell + p-3；固定宽度，避免换月/换标题文案时浮层 w-fit 跟着抖。
 const CALENDAR_W: &str = "17.5rem";
 /// dropdown caption：容纳最长月名 `September`（触发器勿 `w:auto`）。
 const MONTH_SELECT_W: &str = "7.25rem";
-/// dropdown caption：四位年份。
+/// dropdown caption: four-digit year.
 const YEAR_SELECT_W: &str = "4.75rem";
 const YEAR_SELECT_LO: i32 = 1900;
 const YEAR_SELECT_HI: i32 = 2100;
@@ -73,7 +73,7 @@ const MONTH_SHORT: [&str; 12] = [
 ];
 const DOW: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
-/// 标题栏：纯标签或月份 / 年份下拉（对位 Aria `captionLayout`）。
+/// Title bar: plain label or month/year dropdown (opposite Aria `captionLayout`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CalendarCaption {
     #[default]
@@ -143,7 +143,7 @@ pub fn format_ymd(y: i32, m: u32, d: u32) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Unix 日 → 公历（Howard Hinnant `civil_from_days`）。
+/// Unix day → Gregorian calendar (Howard Hinnant `civil_from_days`).
 pub fn civil_from_unix_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;

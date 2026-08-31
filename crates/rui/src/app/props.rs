@@ -1,7 +1,7 @@
-//! Solid-style `mergeProps` / `splitProps` / `children()` — Rust 语义，不是 JS Proxy。
+//! Solid-style `mergeProps` / `splitProps` / `children()` — Rust semantics, not JS Proxy.
 //!
-//! - [`merge_props`]: 后源 `Some` 覆盖前源；`None` / 空 `id` 不打掉已有值。
-//! - [`split_props!`](crate::split_props): `mem::take` 列出的字段，剩余可 `..rest` 再 spread。
+//! - [`merge_props`]: The later source `Some` overwrites the previous source; `None` / empty `id` does not delete the existing value.
+//! - [`split_props!`](crate::split_props): `mem::take` lists the fields, and the remaining fields can be spread through `..rest`.
 //! - [`children`]: 把 `Option<Element>` / fragment 展平；闭包版在 render effect 里求值以便订 signal。
 
 use crate::components::base::BaseComponentBuilder;

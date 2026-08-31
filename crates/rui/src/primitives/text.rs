@@ -16,7 +16,7 @@ impl TextBuilder {
         self
     }
 
-    pub fn weight(mut self, weight: impl IntoF32) -> Self {
+    pub fn weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.font_weight(weight);
         self
     }
@@ -50,7 +50,7 @@ impl TextBuilder {
         self
     }
 
-    pub fn leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.text_leading(scale);
         self
     }

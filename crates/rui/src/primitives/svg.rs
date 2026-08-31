@@ -1,11 +1,11 @@
-//! # å¬å¼ `<svg>` å¶ï¼WP-3.11ï¼
+//! # Public `<svg>` leaf (WP-3.11)
 //!
-//! HTML `<svg viewBox>` å¿æºï¼ä½æ¯ **RUI Element å¶åçç¢éåºæ¯å¾**ï¼ä¸æ¯ DOMã
-//! å­å½¢ç¶ï¼`path` / `circle` / `ellipse` / `rect` / `line` / `polyline` / `polygon` / `g`ï¼**ä¸**åå  taffy èç¹ã
-//! ç»å¶èµ°ä¸ Chart åä¸ [`PathCommand`] æ ¸ï¼CPU è¦ççåæ è´´å¾ï¼ï¼`<path d>` ä¸­æ²çº¿å¨ [`decode_path_d`] å±å¹³ä¸º M/L/Zã
-//! emoji-svg / resvg **ä¸ç®**æ¬åã
+//! HTML `<svg viewBox>` mental model, but a **vector scene graph inside an RUI Element leaf**, not the DOM.
+//! Child shapes (`path` / `circle` / `ellipse` / `rect` / `line` / `polyline` / `polygon` / `g`) do **not** each own a taffy node.
+//! Paint uses the same [`PathCommand`] core as Chart (CPU coverage raster atlas); curves in `<path d>` flatten to M/L/Z in [`decode_path_d`].
+//! emoji-svg / resvg are **out of scope** for this module.
 //!
-//! åä¹¦åï¼[`svg`] Builderï¼`ui!` `<svg>` / `<circle>` / `<path>`â¦ï¼è§ `rui_macros`ï¼ã
+//! Dual surface: [`svg`] Builder; `ui!` `<svg>` / `<circle>` / `<path>`… (see `rui_macros`).
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -21,7 +21,7 @@ use crate::primitives::path::{
 };
 use crate::style::parse_color;
 
-/// å­å½¢ç¶ Element æ è®°ï¼åºæ¯å¾ç¼è¯æ¶æ¶è´¹ï¼ä¸è¿å¸å±ï¼ã
+/// Child-shape Element marker (consumed when compiling the scene graph; not laid out).
 pub const ATTR_SVG_KIND: &str = "rui_svg_kind";
 /// Stored resvg scene (`register_svg_scene` hex id).
 pub const ATTR_SVG_SCENE: &str = "rui_svg_scene";
@@ -57,7 +57,7 @@ fn is_elem_defs_tag(tag: &str) -> bool {
     ) || tag.starts_with("fe")
 }
 
-/// SVG ç¨æ·åæ  / å­é¢é â f32ï¼`cx={50}` / `cx="50"` / `50.0`ï¼ã
+/// SVG user units / literals → f32 (`cx={50}` / `cx="50"` / `50.0`).
 pub trait IntoSvgNum {
     fn into_svg_num(self) -> f32;
 }
@@ -196,7 +196,7 @@ impl Affine {
         )
     }
 
-    /// `self` å¨å·¦ï¼å `other`ï¼å `self`ï¼ç¶åæ¢åä½å­åæ¢ï¼ã
+    /// `self` on the left: apply `other` first, then `self` (parent transform wraps child).
     fn mul(self, other: Self) -> Self {
         Self {
             a: self.a * other.a + self.c * other.b,
@@ -2097,7 +2097,7 @@ fn attach_svg_scene(
     el
 }
 
-/// å¬å¼ Svg æ ¹ã
+/// Public Svg root.
 pub struct SvgBuilder {
     el: Element,
     view_box: Option<String>,
@@ -2132,8 +2132,8 @@ impl SvgBuilder {
         self
     }
 
-    /// Hit policy on the Svg leaf（[CSS pointer-events](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)）。
-    /// 默认在 [`From`] 中设为 SVG 专用 `bounding-box`；可覆盖为通用 `auto`/`none` 或其它 SVG 关键字（路径级 fill/stroke）。
+    /// Hit policy on the Svg leaf ([CSS pointer-events](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/pointer-events)).
+    /// Defaults in [`From`] to SVG-only `bounding-box`; override with generic `auto`/`none` or other SVG keywords (path-level fill/stroke).
     pub fn pointer_events(mut self, mode: impl AsRef<str>) -> Self {
         self.el = self.el.pointer_events(mode);
         self
@@ -2173,11 +2173,11 @@ impl From<SvgBuilder> for Element {
         if !builder.has_h {
             el = el.h(100.0);
         }
-        // Default color token = text-foreground（供 currentColor / 主题对齐）.
+        // Default color token = text-foreground (for currentColor / theme alignment).
         if el.text_style.color == crate::style::TextStyle::default().color {
             el.text_style.color = crate::style::parse_text_color("foreground");
         }
-        // SVG 叶默认 `bounding-box`（MDN SVG-only：命中容器）；调用方可覆盖。
+        // SVG leaf defaults to `bounding-box` (MDN SVG-only: hit the container); callers may override.
         if el
             .attrs
             .get(crate::core::tree::ATTR_POINTER_EVENTS)
@@ -2195,7 +2195,7 @@ impl IntoElementList for SvgBuilder {
     }
 }
 
-/// å­å½¢ç¶ Builderï¼`circle` / `ellipse` / `path` / `rect` / `line` / `polyline` / `polygon` / `g`ï¼ã
+/// Child-shape Builder (`circle` / `ellipse` / `path` / `rect` / `line` / `polyline` / `polygon` / `g`).
 pub struct SvgShapeBuilder {
     kind: String,
     attrs: Vec<(String, String)>,

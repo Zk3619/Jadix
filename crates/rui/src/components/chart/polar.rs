@@ -1,5 +1,5 @@
-//! Polar 族 marks + guides（TanStack polar bar/line/area/dot 窄化）。
-//! 值 → 半径；角按类别均分（pie 仍走 [`super::pie`]：值 → 角跨）。
+//! Polar family marks + guides (TanStack polar bar/line/area/dot narrowing).
+//! value → radius; angles divided equally by category (pie still goes [`super::pie`]: value → angle span).
 
 use std::f32::consts::TAU;
 
@@ -96,7 +96,7 @@ fn polar_series_points(
         .collect()
 }
 
-/// Polar 同心环 + 辐条（非 pie 专用）。
+/// Polar concentric rings + spokes (not pie specific).
 pub(crate) fn polar_guide_layers(ctx: &MarkRenderContext<'_>) -> Vec<SceneLayer> {
     let mut layers = Vec::new();
     let cx = ctx.scales.polar_cx();
@@ -146,7 +146,7 @@ pub struct RadialBarMark {
     inner_radius: f32,
 }
 
-/// Polar 柱：角均分，值 → 半径（TanStack polar `bar`）。
+/// Polar column: angular mean, value → radius (TanStack polar `bar`).
 pub fn radial_bar<I, T>(data: I) -> RadialBarMark
 where
     I: IntoIterator<Item = T>,
@@ -209,7 +209,7 @@ impl MarkRender for RadialBarMark {
                 .polar_radius(r.value.max(0.0), inner_f)
                 .max(hole + 1.0);
             let selected = ctx.selected == Some(i);
-            // 与 pie 相同：中心/内半径不动，选中只加大 outerRadius。
+            // Same as pie: the center/inner radius does not change, only the outerRadius is increased when selected.
             let outer = if selected { outer0 + 4.0 } else { outer0 };
             let segs = ((a1 - a0).abs() * outer / 1.25).ceil().max(16.0) as usize;
             let fill = paint_fill(&self.style, ctx.theme, si, i, ctx.selected, 1.0);
@@ -301,7 +301,7 @@ pub struct RadialLineMark {
     default_stroke: f32,
 }
 
-/// Polar 折线：角均分，值 → 半径（TanStack polar `line`）。
+/// Polar polyline: angular bisector, value → radius (TanStack polar `line`).
 pub fn radial_line<I, T>(data: I) -> RadialLineMark
 where
     I: IntoIterator<Item = T>,
@@ -317,7 +317,7 @@ where
     }
 }
 
-/// Polar 面积：折线 + 填到内半径（TanStack polar `area`）。
+/// Polar area: polyline + fill to inner radius (TanStack polar `area`).
 pub fn radial_area<I, T>(data: I) -> RadialLineMark
 where
     I: IntoIterator<Item = T>,
@@ -413,7 +413,7 @@ impl MarkRender for RadialLineMark {
         let inner_f = inner_frac(self.inner_radius, ctx);
         let series = unique_series(&self.rows);
         let mut best: Option<(f32, usize)> = None;
-        // 无上限会抢走 radial_bar 的扇区命中（compose 逆序：dot → line → bar）。
+        // Unlimited will rob radial_bar of sector hits (compose reverse order: dot → line → bar).
         let max_d = (self.style.stroke_width.unwrap_or(self.default_stroke) * 4.0).max(14.0);
         for ser in &series {
             for (di, p) in polar_series_points(&self.rows, ctx, ser, inner_f) {
@@ -464,7 +464,7 @@ pub struct RadialDotMark {
     inner_radius: f32,
 }
 
-/// Polar 散点（TanStack polar `dot`）。
+/// Polar scatter (TanStack polar `dot`).
 pub fn radial_dot<I, T>(data: I) -> RadialDotMark
 where
     I: IntoIterator<Item = T>,

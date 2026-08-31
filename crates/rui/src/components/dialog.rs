@@ -8,14 +8,14 @@
 //! └── DialogContent          // Portal + Overlay + 面板；默认可调遮罩 / 关闭钮
 //!     ├── DialogHeader / DialogTitle / DialogDescription
 //!     ├── DialogBody
-//!     └── DialogFooter       // 也可用 Button + open.set(false)
+//! └── DialogFooter // Also available Button + open.set(false)
 //! ```
 //!
-//! 模态壳 overlay / Portal z 见 [`crate::components::internal::modal_shell`]；
+//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
 //! 面板表面在本模块内实现。确认框直接组合 Header/Footer，
-//! 勿再维护平行 AlertDialog。`ui!` 中 `<Dialog>` / `<DialogContent>` 由宏展开。
+//! Do not maintain parallel AlertDialog anymore. `<Dialog>` / `<DialogContent>` in `ui!` are expanded by macros.
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <Dialog id="edit" open={open}>
@@ -70,13 +70,14 @@ use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallo
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::text_node::build_named_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
 // Context / Builder
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id`。
+/// Root context: `open` + stable instance `id`.
 #[derive(Clone)]
 pub struct DialogCtx {
     pub open: Signal<bool>,
@@ -88,7 +89,7 @@ fn dialog_context() -> Context<DialogCtx> {
     *CTX.get_or_init(create_context::<DialogCtx>)
 }
 
-/// 读取最近的 [`Dialog`] 上下文。
+/// Read the most recent [`Dialog`] context.
 pub fn use_dialog() -> Option<DialogCtx> {
     use_context(dialog_context())
 }
@@ -152,7 +153,7 @@ impl DialogBuilder {
         self.open(open)
     }
 
-    /// 在上下文内构建 Trigger / Content 等子树。
+    /// Build Trigger / Content (and related) subtrees inside the context.
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
         dialog_scope(self.id, self.open, body)
     }
@@ -163,17 +164,6 @@ fn require_dialog(part: &str) -> DialogCtx {
         panic!("{part} must be used within <Dialog> / dialog_scope");
     })
 }
-
-/// `ui!` 多子节点会先打成匿名 VStack；Header/Footer 再拆开接到自己的布局上。
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
@@ -225,7 +215,7 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
     panel
 }
 
-/// Portal + Overlay + Content 壳；`inner` 为面板内整棵子树。
+/// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
 fn dialog_shell_frame(
     modal_id: &str,
     open: Signal<bool>,
@@ -347,11 +337,11 @@ pub struct DialogContentOpts {
     pub show_close: bool,
     /// 遮罩色（语义 token / hex）；`None` → theme background RGB + 默认 alpha。
     pub overlay_color: Option<String>,
-    /// 遮罩不透明度 0…1；`None` → 模态默认（[`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`]，`0.6`）。
+    /// Overlay opacity 0…1; `None` → modal default ([`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`], `0.6`).
     pub overlay_opacity: Option<f32>,
-    /// 点击遮罩是否关闭；默认 `true`。
+    /// Whether clicking the overlay closes; default `true`.
     pub close_on_overlay_click: bool,
-    /// 遮罩 backdrop 模糊半径（逻辑 px）；`None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`]（`4`）。
+    /// Overlay backdrop blur radius (logical px); `None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`] (`4`).
     pub overlay_blur: Option<f32>,
     /// CommandDialog：按内容撑开、`p-0`、不裁剪列表；默认 Dialog 保持滚动裁剪。
     pub hug_content: bool,
@@ -470,7 +460,7 @@ fn collect_dialog_focus_ids(el: &Element, out: &mut Vec<String>) {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DialogHeader(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -484,7 +474,7 @@ pub fn DialogHeader(children: Option<Element>) -> Element {
     )
 }
 
-/// 标题。
+/// Title.
 ///
 /// 必须显式设 `foreground`：[`crate::style::TextStyle`] 默认色是白，叠在浅色面板上会“消失”。
 #[component(crate_path = "crate")]
@@ -504,7 +494,7 @@ pub fn DialogTitle(children: Option<Element>) -> Element {
     }
 }
 
-/// 说明文案。
+/// Description copy.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DialogDescription(children: Option<Element>) -> Element {
@@ -559,7 +549,7 @@ pub fn DialogBody(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DialogFooter(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         crate::primitives::r#box::hstack()
             .w("100%")

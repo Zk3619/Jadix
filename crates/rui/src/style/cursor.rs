@@ -10,7 +10,7 @@ pub struct CursorUrl {
     pub hotspot: Option<(i32, i32)>,
 }
 
-/// 完整 `cursor` 值：`[ url(...) [x y]? , ]* <keyword>`。
+/// Full `cursor` value: `[ url(...) [x y]? , ]* <keyword>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorValue {
     pub images: Vec<CursorUrl>,
@@ -25,8 +25,8 @@ impl CursorValue {
         }
     }
 
-    /// `inherit` / `unset` / 空串 → [`None`](Option::None)（继承祖先）。
-    /// `initial` → `auto`。
+    /// `inherit` / `unset` / empty → [`None`](Option::None) (inherit ancestor).
+    /// `initial` → `auto`.
     ///
     /// 不以逗号切分整串（`data:image/png;base64,...` 内部有逗号）。
     pub fn parse_css(raw: &str) -> Option<Self> {

@@ -1,10 +1,10 @@
-//! Compact scales（TanStack `@tanstack/charts/scales/*` 窄化）。
-//! linear / band / point 为常用面；[`scale_log`] / [`scale_time`] 是 **Rust 专用 scale**
+//! Compact scales (TanStack `@tanstack/charts/scales/*` narrowing).
+//! linear / band / point are commonly used surfaces; [`scale_log`] / [`scale_time`] are **Rust-specific scale**
 //!（对位 TanStack「compact → 专用算法」边界，**不是** JS `d3-scale`）。
 
 use std::f32::consts::TAU;
 
-/// Linear scale：domain → range（TanStack compact `scaleLinear` 窄化）。
+/// Linear scale: domain → range (TanStack compact `scaleLinear` narrowing).
 pub fn scale_linear(domain: (f32, f32), range: (f32, f32)) -> impl Fn(f32) -> f32 {
     let (d0, d1) = domain;
     let (r0, r1) = range;
@@ -14,7 +14,7 @@ pub fn scale_linear(domain: (f32, f32), range: (f32, f32)) -> impl Fn(f32) -> f3
 }
 
 /// Band scale：n 个类别均分 range，返回 (bandwidth, x_for_index)。
-/// `padding` ∈ [0, 1) 为类间距占 step 的比例（≈ TanStack `scaleBand().padding`）。
+/// `padding` ∈ [0, 1) is the proportion of class spacing to step (≈ TanStack `scaleBand().padding`).
 pub fn scale_band(n: usize, range: (f32, f32), padding: f32) -> (f32, impl Fn(usize) -> f32) {
     let n = n.max(1);
     let (r0, r1) = range;
@@ -26,7 +26,7 @@ pub fn scale_band(n: usize, range: (f32, f32), padding: f32) -> (f32, impl Fn(us
     (bw, move |i| r0 + i as f32 * step + gap * 0.5)
 }
 
-/// Point scale：类别中心点，无 bandwidth（≈ TanStack `scalePoint`）。
+/// Point scale: category center point, no bandwidth (≈ TanStack `scalePoint`).
 pub fn scale_point(n: usize, range: (f32, f32), padding: f32) -> impl Fn(usize) -> f32 {
     let n = n.max(1);
     let (r0, r1) = range;
@@ -37,13 +37,13 @@ pub fn scale_point(n: usize, range: (f32, f32), padding: f32) -> impl Fn(usize) 
     move |i| start + i as f32 * step
 }
 
-/// Polar pie 角分配：从 `start` 起按正值占比切满一圈。
+/// Polar pie angle distribution: starting from `start`, cut a full circle according to the proportion of positive values.
 /// 返回 `(start_rad, end_rad)`，约定 0 = 正右、屏幕 y 向下时增大角顺时针。
 pub fn pie_layout(values: &[f32], start: f32) -> Vec<(f32, f32)> {
     pie_layout_span(values, start, start + TAU)
 }
 
-/// Polar 角分配：限制在 `[start, end]`（gauge / 半圆）。
+/// Polar angle assignment: restricted to `[start, end]` (gauge / semicircle).
 pub fn pie_layout_span(values: &[f32], start: f32, end: f32) -> Vec<(f32, f32)> {
     let span = end - start;
     let sum = values.iter().map(|v| v.max(0.0)).sum::<f32>().max(1e-6);
@@ -57,7 +57,7 @@ pub fn pie_layout_span(values: &[f32], start: f32, end: f32) -> Vec<(f32, f32)> 
     out
 }
 
-/// Log scale（base > 1）。domain 非正值钳到 `1e-12`。
+/// Log scale (base > 1). Non-positive domain values ​​are clamped to `1e-12`.
 pub fn scale_log(domain: (f32, f32), range: (f32, f32), base: f32) -> impl Fn(f32) -> f32 {
     let base = base.max(1.0001);
     let ln_b = base.ln();
@@ -93,7 +93,7 @@ pub fn format_time_label(unix_ms: i64, span_ms: i64) -> String {
     }
 }
 
-/// Howard Hinnant `civil_from_days`：Unix 毫秒 → UTC (y, month, day, hour, min)。
+/// Howard Hinnant `civil_from_days`: Unix milliseconds → UTC (y, month, day, hour, min).
 pub fn unix_ms_to_utc(ms: i64) -> (i32, u8, u8, u8, u8) {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86_400);

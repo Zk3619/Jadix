@@ -3,13 +3,13 @@
 //! 可挂到某滚动视口（`target` = viewport rest id，如 [`ScrollArea`](crate::components::ScrollArea) / [`ScrollViewport`](crate::components::ScrollViewport) 的 `id`）的独立滚动条。
 //! **多数场景不必单独用**——`ScrollArea` 已内建横/纵条；本组件用于自定义摆放或拆分布局。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Scrollbar target="sa-main" orientation="vertical" visibility="auto" thickness="10" />
 //! // Element::from(scrollbar("sb").target("sa-main").orientation(Vertical).variant("capsule"))
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - `target` 必须与对应视口的 `id` 一致。
 //! - `visibility`: auto | always | never（never 仍可能可滚内容）。
 //! - `children` 当前忽略。

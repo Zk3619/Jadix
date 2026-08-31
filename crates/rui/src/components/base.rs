@@ -1,21 +1,21 @@
 //! # BaseComponentBuilder
 //!
 //! 组件根节点的共享样式 / 布局 fluent API。`ui!` 宏把标签上的布局属性
-//!（`w` / `gap` / `cols` / `rounded` 等）编译进 `base` 回调，再应用到组件产出的 [`Element`]。
+//!(`w` / `gap` / `cols` / `rounded`, etc.) are compiled into the `base` callback and then applied to the [`Element`] produced by the component.
 //!
-//! ## 用来做什么
+//! ## What it is for
 //! - 给任意组件统一挂尺寸、间距、背景、边框、阴影、定位、grid/flex 辅助属性。
 //! - 在自定义 `w`/`h` 时推算 `auto_text_size`（约边长 × 0.44，夹在 12–14px），供按钮等内嵌文字默认字号。
 //!
-//! ## 怎么用
+//! ## How to use
 //! 应用代码一般不必直接 `new`；在 RSX 上写属性即可：
 //! ```ignore
 //! <Button w="8rem" rounded="0.5rem" gap="0.5rem">"OK"</Button>
 //! <GStack cols="3" gap="0.25rem">…</GStack>
 //! ```
-//! 程序化拼装时：`BaseComponentBuilder::new(el).p("1rem").bg(...)`。
+//! During programmatic assembly: `BaseComponentBuilder::new(el).p("1rem").bg(...)`.
 //!
-//! ## 注意
+//! ## Notes
 //! `text_size` / `font_weight` 会写回根节点；只改 `explicit_*` 而不回写会导致 RSX 样式丢失。
 
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
@@ -101,7 +101,7 @@ impl BaseComponentBuilder {
         self
     }
 
-    /// CSS `aspect-ratio`（数字 / `"16/9"` / `"auto"`…）。见 [`crate::core::tree::parse_css_aspect_ratio`]。
+    /// CSS `aspect-ratio` (numeric / `"16/9"` / `"auto"`…). See [`crate::core::tree::parse_css_aspect_ratio`].
     pub fn aspect_ratio(mut self, ratio: impl crate::core::tree::IntoAspectRatioValue) -> Self {
         self.el = self.el.aspect_ratio(ratio);
         self
@@ -314,16 +314,16 @@ impl BaseComponentBuilder {
     pub fn text_size(mut self, size: impl IntoF32) -> Self {
         let px = size.into_f32();
         self.explicit_text_size_px = Some(px);
-        // 与 `font_weight` 相同：RSX `text_size` 走 `base` 时必须写回根节点，否则仅 `explicit_*` 无消费者。
+        // Same as `font_weight`: RSX `text_size` must be written back to the root node when taking `base`, otherwise only `explicit_*` has no consumers.
         self.el = self.el.text_size(px);
         self
     }
 
-    pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
-        let w = weight.into_f32().round().clamp(100.0, 900.0) as u16;
+    pub fn font_weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
+        let w = weight.into_f32_raw().round().clamp(100.0, 900.0) as u16;
         self.explicit_text_weight = Some(w);
         // RSX 将 `font_weight` 作用在 `base` 回调上；必须写回根节点的 `text_style`，否则
-        // `resolved_text_weight` 从未被消费时字重会丢失（例如 `<Label font_weight="700">`）。
+        // `resolved_text_weight` will lose the font weight when it is never consumed (e.g. `<Label font_weight=600>`).
         self.el = self.el.font_weight(w as f32);
         self
     }
@@ -442,7 +442,7 @@ impl BaseComponentBuilder {
     }
 
     // Text enhancements
-    pub fn leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.text_leading(scale);
         self
     }

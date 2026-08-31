@@ -119,7 +119,7 @@ use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
 type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
-/// Textarea 右下角 resize grip 拖拽状态。
+/// Textarea bottom-right resize-grip drag state.
 struct TextareaResizeDrag {
     field_id: String,
     start_cursor_y: f32,
@@ -165,7 +165,7 @@ struct App {
     scrollbar_fade_active: bool,
     /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
     content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
-    /// Textarea 右下角拖拽改高。
+    /// Textarea bottom-right drag-to-resize height.
     textarea_resize_drag: Option<TextareaResizeDrag>,
     /// Primary touch finger id (winit `Touch.id`); secondary fingers feed pinch.
     primary_touch_id: Option<u64>,
@@ -191,33 +191,34 @@ struct App {
         >,
     >,
     drag_reorder: Option<DragReorderState>,
-    /// ??????? input `rest`?`input:{rest}` ?? id??
+    /// Input `rest` currently being drag-selected (`id` inside `input:{rest}`).
     input_drag_rest: Option<String>,
-    /// ?????UTF-8 ????
+    /// Drag-selection anchor (UTF-8 byte index).
     input_drag_anchor: usize,
-    /// 静态可选文本拖选时的稳定键（`focus_id` / `template_id`）
+    /// Stable key for static selectable-text drag (`focus_id` / `template_id`).
     label_drag_key: Option<String>,
-    /// 静态文本拖选锚点（UTF-8 字节）
+    /// Static text drag-selection anchor (UTF-8 bytes).
     label_drag_anchor: usize,
     /// Jump-mode wheel deltas merged until the next redraw.
     scroll_accum: std::collections::HashMap<String, [f32; 2]>,
     /// Last wheel viewport; reused while the pointer stays put and the rest can still move.
     wheel_sticky_rest: Option<String>,
     wheel_sticky_cursor: [f32; 2],
-    /// ?????????????? overlay scrollbar ? Auto ????
+    /// Scroll area under the pointer (for overlay scrollbar Auto visibility).
     hover_scroll_rest: Option<String>,
-    /// ?????????????????????????
+    /// Scrollbar axis under the pointer (independent H/V show-hide).
     hover_scroll_axis: Option<(String, scroll_support::ScrollAxis)>,
-    /// overlay scrollbar ???????????????/hover/???????
+    /// Overlay scrollbar auto-hide: visible-until deadline (scroll/hover/drag extends it).
     scrollbar_visible_until: std::collections::HashMap<String, std::time::Instant>,
     /// Scroll fling velocity (px/s of offset) seeded by content-pan release; decayed each frame.
     /// Wheel must not write here — it only moves `target_*` (see `handle_mouse_wheel`).
     scroll_velocity: std::collections::HashMap<String, [f32; 2]>,
-    /// `scroll_behavior="smooth"`????????????/????????????????????
+    /// `scroll_behavior="smooth"`: keep animating/redrawing at least until this instant after wheel input,
+    /// so consecutive ticks do not stutter.
     smooth_active_until: std::collections::HashMap<String, std::time::Instant>,
-    /// ????????? `[max_x, max_y]`???????????? target ?????????
+    /// Low-passed max scroll `[max_x, max_y]` to damp layout-metric jitter that makes targets bounce mid-range.
     scroll_max_lowpass: std::collections::HashMap<String, [f32; 2]>,
-    /// ??? `collect_scroll_area_metrics` ??????????? `render()` ?????????
+    /// Hash snapshot from the last `collect_scroll_area_metrics`, used to integrate smooth scroll before `render()`.
     scroll_metrics_cache: std::collections::HashMap<String, ScrollMetrics>,
     /// Duplicate scroll viewport `id` detector: warn once per `id`.
     scroll_metric_duplicate_warned: std::collections::HashSet<String>,

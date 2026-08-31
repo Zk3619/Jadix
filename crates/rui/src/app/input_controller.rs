@@ -30,8 +30,8 @@ fn filter_typed_insert(rest: &str, existing: &str, text: &str) -> String {
     filter_insert_for_type(input_type_for(rest), existing, text)
 }
 
-/// Windows 等平台给 Esc / F 键等 Named 键附带 `event.text`（Esc → U+001B）。
-/// 只有 Space / Enter 的 Named 键才允许走字符插入（空格、Textarea 换行）。
+/// Platforms such as Windows come with `event.text` (Esc → U+001B) for Named keys such as Esc / F keys.
+/// Only the Named key of Space / Enter allows character insertion (space, Textarea newline).
 pub(crate) fn named_key_blocks_text_insert(key: &Key) -> bool {
     match key {
         Key::Named(NamedKey::Space | NamedKey::Enter) => false,
@@ -165,7 +165,7 @@ impl super::App {
                     anchor = v.floor_char_boundary(anchor);
                     let filtered = filter_typed_insert(rest, &v[..anchor], &s);
                     let new_caret = if filtered.is_empty() && !s.is_empty() {
-                        // 全部被 type 过滤：仍清 preedit，不改 value。
+                        // All filtered by type: still clear preedit, do not change value.
                         anchor
                     } else {
                         let (new, new_caret) = apply_ime_commit(&v, anchor, &filtered);
@@ -935,7 +935,7 @@ mod tests {
         assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Space)));
         assert!(!named_key_blocks_text_insert(&Key::Named(NamedKey::Enter)));
         assert!(!named_key_blocks_text_insert(&Key::Character("a".into())));
-        // Character(U+001B) 仍可能出现；由 strip_control_insert 丢掉，不在 Named 守卫里。
+        // Character(U+001B) may still appear; discarded by strip_control_insert, not in the Named guard.
         assert!(!named_key_blocks_text_insert(&Key::Character(
             "\u{1b}".into()
         )));

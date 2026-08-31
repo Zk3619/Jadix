@@ -1,27 +1,27 @@
 //! # Carousel
 //!
-//! 对齐 solid-ui / ShadCN **Carousel**（Embla 心智，无第三方引擎）：
+//! Align solid-ui/ShadCN **Carousel** (Embla Mind, no 3rd party engine):
 //!
 //! ```text
 //! Carousel / CarouselSingle / CarouselMulti / CarouselStack
-//! ├── variant = single | multi | stack   // 统一变体；专用标签锁定 variant
+//! ├── variant = single | multi | stack // Unified variant; dedicated tag lock variant
 //! ├── [Prev] Content [Next]             // controls=outside|inside
-//! └── CarouselDots（可选；Single/Stack 默认开，Multi 默认关）
+//! └── CarouselDots (optional; Single/Stack is on by default, Multi is off by default)
 //! ```
 //!
-//! - **`<Carousel variant="…">`**：统一入口，用 `variant` 统筹 single / multi / stack。
-//! - **`<CarouselSingle>` / `<CarouselMulti>` / `<CarouselStack>`**：宏侧锁定变体，用法更精准。
-//! - **切换动画**：轨道与 Stack 卡片均用 CSS `transition`（transform / opacity）。
-//! - **无缝循环**：`seamless`（且 `loop`）时轨道首尾克隆；跨界同向滑入后瞬移复位。
-//! - **拖拽**：`snap=false` 且无 autoplay 时可自由停靠；与 `loop+seamless` 组合时拖拽中折回真实带（吸附/自由均如此，避免拖出白屏）。
-//! - **步进**：`scrollBy="slide"|"page"`；`pageSnap="peek"|"viewport"`（page 时裁切尾项衔接下页 / 整屏推进）。
-//! - **控件位**：`controls="outside"|"inside"`。
+//! - **`<Carousel variant="…">`**: Unified entrance, use `variant` to coordinate single / multi / stack.
+//! - **`<CarouselSingle>` / `<CarouselMulti>` / `<CarouselStack>`**: Macro side locking variant, more precise usage.
+//! - **Switch animation**: Both tracks and Stack cards use CSS `transition` (transform / opacity).
+//! - **Seamless Loop**: When `seamless` (and `loop`), the track is cloned at the beginning and end; it is reset after sliding in the same direction across borders.
+//! - **Drag**: `snap=false` and no autoplay can be freely docked; when combined with `loop+seamless`, the real band will be folded during dragging (this is true for both snapping and free, to avoid dragging out of the white screen).
+//! - **Step**: `scrollBy="slide"|"page"`; `pageSnap="peek"|"viewport"` (when page is cut, the tail item is connected to the next page/full screen advancement).
+//! - **Control bits**: `controls="outside"|"inside"`.
 //!
-//! ## 模块拆分（产品层，非框架原语）
-//! - [`track`] / [`snap`] / [`loop_anim`] / [`autoplay`] / [`geometry`] / [`drag`] / [`content`] / [`builder`]：本组件私有拆层
-//! - 拖拽会话见 [`utils::pointer_drag`](crate::utils::pointer_drag)
+//! ## Module split (product layer, not framework primitives)
+//! - [`track`] / [`snap`] / [`loop_anim`] / [`autoplay`] / [`geometry`] / [`drag`] / [`content`] / [`builder`]: This component’s private layering
+//! - For drag sessions see [`utils::pointer_drag`](crate::utils::pointer_drag)
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <Carousel id="via-variant" variant="single" autoplay={4000}>…</Carousel>
@@ -35,7 +35,7 @@
 //! }
 //! ```
 //!
-//! Builder：`carousel` / `carousel_single` / `carousel_multi` / `carousel_stack`，或 `.variant(...)`。
+//! Builder: `carousel` / `carousel_single` / `carousel_multi` / `carousel_stack`, or `.variant(...)`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -65,6 +65,7 @@ use crate::utils::motion::{
 };
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 
 mod autoplay;
 pub mod builder;
@@ -95,12 +96,12 @@ const SLOT_PREV: &str = "carousel-previous";
 const SLOT_NEXT: &str = "carousel-next";
 const SLOT_DOTS: &str = "carousel-dots";
 const DRAG_THRESHOLD_PX: f32 = 28.0;
-/// 轨道翻页：CSS `transition: transform`（含 translate），不再走独立 Spring。
+/// Orbital page turning: CSS `transition: transform` (including translate), no longer independent of Spring.
 const TRACK_TRANSITION_MS: f32 = 400.0;
-/// Stack coverflow 切项：transform + opacity。
+/// Stack coverflow cut item: transform + opacity.
 const STACK_TRANSITION_MS: f32 = 320.0;
 
-/// 轨道方向（对位 ShadCN `orientation` / Embla `axis`）。
+/// Orbital orientation (counterpoint ShadCN `orientation` / Embla `axis`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselOrientation {
     #[default]
@@ -124,13 +125,13 @@ impl CarouselOrientation {
     }
 }
 
-/// 导航按钮相对内容区的位置。
+/// The position of the navigation button relative to the content area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselControls {
-    /// 内容两侧外部（默认，对位 ShadCN `-left/right-12` 心智）。
+    /// Content outside both sides (default, counterpoint ShadCN `-left/right-12` mental).
     #[default]
     Outside,
-    /// 叠在内容内侧。
+    /// Stacked inside the content.
     Inside,
 }
 
@@ -150,13 +151,13 @@ impl CarouselControls {
     }
 }
 
-/// 上一 / 下一 步进单位。
+/// Previous/next step unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselScrollBy {
-    /// 每次移动 1 张（默认）。
+    /// Move 1 frame at a time (default).
     #[default]
     Slide,
-    /// 每次移动一整屏（`floor(per_view).max(1)` 张）。
+    /// Move one full screen (`floor(per_view).max(1)` pictures) at a time.
     Page,
 }
 
@@ -177,19 +178,19 @@ impl CarouselScrollBy {
 }
 
 /// 轮播变体（`variant`）：由 `<Carousel variant>` 统筹，或由
-/// `<CarouselSingle>` / `<CarouselMulti>` / `<CarouselStack>` 锁定。
+/// `<CarouselSingle>` / `<CarouselMulti>` / `<CarouselStack>` Lock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselVariant {
-    /// 单页满幅。
+    /// Full page.
     #[default]
     Single,
-    /// 多列列表（`per_view` peek）。
+    /// Multi-column lists (`per_view` peek).
     Multi,
-    /// 两侧堆叠（coverflow 心智）。
+    /// Stacked on both sides (coverflow mind).
     Stack,
 }
 
-/// 旧名；请优先使用 [`CarouselVariant`]。
+/// Old name; use [`CarouselVariant`] in preference.
 pub type CarouselKind = CarouselVariant;
 
 impl CarouselVariant {
@@ -222,10 +223,10 @@ impl CarouselVariant {
     }
 }
 
-/// 多列 + 整页翻页时的末端对齐。
+/// Multi-column + end alignment when turning full page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselEndAlign {
-    /// 尾部追加空白，便于整页翻到空槽。
+    /// Add a blank space at the end to facilitate turning the entire page to an empty slot.
     Pad,
     /// 末项贴齐内容区右缘（默认）。
     #[default]
@@ -248,13 +249,13 @@ impl CarouselEndAlign {
     }
 }
 
-/// 多列 + `scrollBy=page` 时的整页步进策略。
+/// Full page stepping strategy when using multiple columns + `scrollBy=page`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselPageSnap {
-    /// 当页被裁切的尾项成为下页首项（步进 `floor(perView)` 格；默认，体验更佳）。
+    /// When the page is cropped, the last item becomes the first item of the next page (step by `floor(perView)` grid; default, better experience).
     #[default]
     Peek,
-    /// 按整屏视口推进（步进 ≈ `perView` 槽宽，可停在非整格）。
+    /// Advance by the whole screen viewport (step ≈ `perView` slot width, can stop at non-full screen).
     Viewport,
 }
 
@@ -275,13 +276,13 @@ impl CarouselPageSnap {
     }
 }
 
-/// 多列卡片宽度策略。
+/// Multi-column card width strategy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CarouselItemSizing {
-    /// 宽 = 视口 / `perView`（百分比 basis，可裁切 peek）。
+    /// Width = viewport / `perView` (percentage basis, croppable peek).
     #[default]
     Fraction,
-    /// 固定 `itemWidth`；靠溢出裁切 peek。
+    /// Fixed `itemWidth`; clipping peek by overflow.
     Fixed,
 }
 
@@ -301,34 +302,34 @@ impl CarouselItemSizing {
     }
 }
 
-/// 轮播上下文（复合子树 / [`use_carousel`]）。
+/// Carousel context (composite subtree / [`use_carousel`]).
 #[derive(Clone)]
 pub struct CarouselCtx {
     pub id: String,
     pub index: Signal<usize>,
     pub count: Signal<usize>,
     pub orientation: CarouselOrientation,
-    /// 首尾是否允许绕回导航。
+    /// Whether wraparound navigation is allowed at the beginning and end.
     pub loop_slides: bool,
-    /// 绕回时是否用首尾克隆做无缝（`loop=false` 时恒 false）。
+    /// Whether to use head and tail clones to make seamless looping (`loop=false` always false).
     pub seamless: bool,
-    /// 松手是否吸附到格点（`autoplay>0` 时强制 true）。
+    /// Whether to release the hand and adsorb to the grid point (forced true when `autoplay>0`).
     pub snap: bool,
-    /// 一屏可见页数（`1` = 单页；`2.2` = 两页半 peek）；`fixed` 时仍用于 page 步进估算。
+    /// Number of pages visible on one screen (`1` = single page; `2.2` = two and a half pages peek); still used for page step estimation when `fixed` is used.
     pub per_view: f32,
     pub autoplay_ms: u64,
     pub controls: CarouselControls,
     pub scroll_by: CarouselScrollBy,
     pub variant: CarouselVariant,
     pub end_align: CarouselEndAlign,
-    /// `scrollBy=page` 时：裁切尾项衔接下页（peek）或整屏推进（viewport）。
+    /// When `scrollBy=page`: Crop the last item to connect to the next page (peek) or advance the entire screen (viewport).
     pub page_snap: CarouselPageSnap,
     pub item_sizing: CarouselItemSizing,
-    /// `fixed` 模式下解析后的卡片宽（逻辑 px）；`fraction` 时为 0。
+    /// Parsed card width (logical px) in `fixed` mode; 0 in `fraction`.
     pub item_width_px: f32,
-    /// 是否自动注入底部进度点（显式 `<CarouselDots/>` 始终保留）。
+    /// Whether to automatically inject bottom progress dots (explicit `<CarouselDots/>` is always retained).
     pub show_dots: bool,
-    /// 两侧堆叠层数（默认 1 = 左右各一张）。
+    /// Number of stacking layers on both sides (default 1 = one on each side).
     pub stack_sides: u32,
     pub drag_px: Signal<f32>,
     pub viewport_len: Signal<f32>,
@@ -345,12 +346,12 @@ fn offset_target(id: &str) -> Signal<f32> {
 
 thread_local! {
     static AUTOPLAY_AT: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
-    /// 无缝循环：先滚到首/尾克隆槽，到位后再瞬移到真实项（[`LoopAnim`]）。
-    /// 寿命长于组件树；`sync_offset_target` 在它存在时会直接 return——丢掉 flag 却不 settle 会半途冻结。
+    /// Seamless loop: first roll to the first/last clone slot, then teleport to the real item ([`LoopAnim`]) when in place.
+    /// The lifespan is longer than the component tree; `sync_offset_target` will return directly when it exists - if the flag is dropped but not settled, it will freeze halfway.
     static LOOP_ANIM: RefCell<HashMap<String, LoopAnim>> = RefCell::new(HashMap::new());
-    /// 上一帧轨道视觉 translate（供拖拽起点；CSS tween 插值后的值）。
+    /// The previous frame's track visual translate (for dragging starting point; CSS tween interpolated value).
     static LAST_VISUAL_OFFSET: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
-    /// 下一帧先钉到该 offset，再 seed CSS 基线；随后可写新目标以续播动画（避免瞬移后跳过 transition）。
+    /// The next frame is pinned to this offset first, and then the CSS baseline is seeded; then a new target can be written to continue the animation (to avoid skipping the transition after teleporting).
     static INSTANT_SNAP_TO: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
 }
 
@@ -411,7 +412,7 @@ fn last_visual_offset(id: &str) -> f32 {
     })
 }
 
-/// 完成无缝段：瞬移到真实槽。index 已在 begin 时切到 settle（dots 同步），此处再确认一次。
+/// Complete the seamless segment: Teleport to the real slot. The index has been switched to settle (dots synchronization) when begin, please confirm again here.
 fn finish_loop_anim(id: &str, index: Signal<usize>) {
     let Some(anim) = take_loop_anim(id) else {
         return;
@@ -421,7 +422,7 @@ fn finish_loop_anim(id: &str, index: Signal<usize>) {
     index.set(anim.settle_index);
 }
 
-/// 导航打断无缝段：把当前克隆坐标 remap 到真实槽。
+/// Navigation breaks seamless segments: remap current clone coordinates to real slots.
 fn resolve_loop_anim_keep_offset(id: &str, index: Signal<usize>) {
     let Some(anim) = take_loop_anim(id) else {
         return;
@@ -433,7 +434,7 @@ fn resolve_loop_anim_keep_offset(id: &str, index: Signal<usize>) {
     index.set(anim.settle_index);
 }
 
-/// 挂载时清理 thread_local 残留。
+/// Clean up thread_local residue when mounting.
 fn reset_carousel_ephemeral(id: &str) {
     let _ = take_loop_anim(id);
     let _ = take_instant_snap_to(id);
@@ -450,8 +451,8 @@ fn animate_offset_to(id: &str, target: f32) {
     offset_target(id).set(target);
 }
 
-/// 从已知视觉位置续播 CSS 动画（拖拽松手 / 无缝跨界）：先钉基线再设目标。
-/// 否则 transition 刚恢复时 snapshot 为空，会 `from=to=新目标` 瞬跳闪烁。
+/// Resume CSS animation from a known visual position (drag to release/seamless crossover): nail the baseline first and then set the target.
+/// Otherwise, the snapshot will be empty when the transition is just restored, and `from=to=new target` will flash.
 fn animate_offset_from(id: &str, from_visual: f32, target: f32) {
     request_instant_snap_to(id, from_visual);
     offset_target(id).set(target);
@@ -494,9 +495,9 @@ fn ensure_stack_card_css_transition(el: &mut Element) {
     });
 }
 
-/// 堆叠缩放写在壳上；子树保持 scale=1，由 collect 的 `ancestor_scale` /
-/// `ancestor_linear` 继承（文本走 `paint_scale` + glyphon 矩阵，与壳共用父级变换）。
-/// 这样矩形与文本共用同一父级缩放，避免各自绕中心缩放导致拖拽时文字脱节。
+/// Stack scaling is written on the shell; the subtree remains scale=1, as determined by collect's `ancestor_scale`/
+/// `ancestor_linear` inheritance (text takes `paint_scale` + glyphon matrix, shares parent transformation with shell).
+/// In this way, the rectangle and the text share the same parent scale to avoid scaling around the center and causing the text to become disconnected when dragging.
 fn reset_stack_descendant_scales(el: &mut Element) {
     for child in &mut el.children {
         if (child.style.scale[0] - 1.0).abs() > 0.001 || (child.style.scale[1] - 1.0).abs() > 0.001
@@ -510,20 +511,20 @@ fn reset_stack_descendant_scales(el: &mut Element) {
     }
 }
 
-/// 按与中心的连续距离插值缩放 / 透明度 / z（拖拽跟手，避免 ad=0.5 硬切跳变）。
+/// Interpolate scale/transparency/z at a continuous distance from center (drag to avoid hard-cut transitions of ad=0.5).
 fn stack_card_appearance(ad: f32, sides: f32, idx: usize, count: usize) -> (f32, f32, i32) {
     let visible = ad <= sides + 0.01;
     if !visible {
         return (0.68, 0.0, 0);
     }
-    // ad=0 → sc1/op1；ad=1 → ≈0.82/0.72；ad≥2 → 下限。
+    // ad=0 → sc1/op1; ad=1 → ≈0.82/0.72; ad≥2 → lower limit.
     let sc = (1.0 - 0.18 * ad).clamp(0.72, 1.0);
     let op = if ad <= 1.0 {
         (1.0 - 0.28 * ad).clamp(0.72, 1.0)
     } else {
         (0.72 - 0.14 * (ad - 1.0)).clamp(0.42, 0.72)
     };
-    // 细粒度 z + 槽位打破并列（前后项 ad 接近时 z 曾相同，band 乱序导致文字「停跟」）。
+    // Fine-grained z + slot breaks juxtaposition (z used to be the same when the preceding and following items ad were close, and the band was out of order, causing the text to "stop following").
     let z = ((10_000.0 - ad * 1_000.0) * 10.0).round() as i32 + (count - idx) as i32;
     (sc, op, z.max(1))
 }
@@ -539,7 +540,7 @@ fn apply_axis_translate(el: &mut Element, orientation: CarouselOrientation, x_or
     };
 }
 
-/// 深拷贝滑块视觉树（无交互 / 无 layout node），供轨道首尾克隆。
+/// Deep copy of the slider visual tree (no interaction / no layout node) for head and tail cloning of tracks.
 fn clone_carousel_slide_visual(src: &Element) -> Element {
     let mut el = Element::new();
     el.style = src.style.clone();
@@ -569,7 +570,7 @@ fn carousel_context() -> Context<CarouselCtx> {
     *CTX.get_or_init(create_context::<CarouselCtx>)
 }
 
-/// 读取最近的 [`Carousel`] 上下文。
+/// Read the most recent [`Carousel`] context.
 pub fn use_carousel() -> Option<CarouselCtx> {
     use_context(carousel_context())
 }
@@ -579,23 +580,12 @@ fn require_carousel(part: &str) -> CarouselCtx {
         panic!("{part} must be used within <Carousel|CarouselSingle|CarouselMulti|CarouselStack> / carousel_scope");
     })
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
-}
-
 fn is_carousel_item(el: &Element) -> bool {
     el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_ITEM)
 }
 
 fn lucide_chevron(name: &str) -> Element {
-    // 与 Calendar / Button+Icon 一致：不强制宽高，交给父级 flex 居中到圆心。
+    // Consistent with Calendar / Button+Icon: the width and height are not forced, and the parent flex is left to center the circle.
     let glyph = lucide_glyph(name).unwrap_or_else(|| "?".into());
     build_icon_text_node(glyph)
         .text_size(16.0)
@@ -614,7 +604,7 @@ fn can_scroll_prev(ctx: &CarouselCtx) -> bool {
     if !effective_snap(ctx)
         || (ctx.variant == CarouselVariant::Multi && ctx.scroll_by == CarouselScrollBy::Page)
     {
-        // 自由停靠 / 整页：以 offset 为准（page 停靠可不在整数格）。
+        // Free docking/full page: subject to offset (page docking does not need to be in an integer format).
         return offset_target(&ctx.id).peek() < -0.5;
     }
     ctx.index.peek() > 0
@@ -642,7 +632,7 @@ fn scroll_prev(ctx: &CarouselCtx) {
     if n == 0 {
         return;
     }
-    // 上一段无缝未完成：remap 到真实槽再继续（勿 finish 瞬切到站）。
+    // The previous section is seamless and unfinished: remap to the real slot and then continue (do not finish and cut to the stop instantly).
     if loop_anim(&ctx.id).is_some() {
         resolve_loop_anim_keep_offset(&ctx.id, ctx.index);
     }
@@ -667,7 +657,7 @@ fn scroll_prev(ctx: &CarouselCtx) {
             bump_autoplay(ctx);
             return;
         }
-        // Stack / 无克隆：直接落到环形目标。
+        // Stack / No Clone: ​​Fall directly to the ring target.
         ctx.index.set((cur + n - d) % n.max(1));
     } else if !wraps_nav(ctx) {
         ctx.index.set(cur.saturating_sub(d));
@@ -728,15 +718,15 @@ fn bump_autoplay(ctx: &CarouselCtx) {
     );
 }
 
-/// 拖拽开始：清掉 deadline，避免松手后立刻用拖拽期间已到期的旧计时翻页。
-/// （悬停暂停仍由 `paused` 表达；拖拽本身靠 `is_carousel_dragging_id` 拦住 tick。）
+/// Drag and drop start: Clear the deadline to avoid turning the page with the old timer that has expired during the dragging period immediately after letting go.
+/// (Hover pauses are still expressed by `paused`; dragging itself is blocked by `is_carousel_dragging_id`.)
 fn clear_autoplay_deadline(id: &str, autoplay_ms: u64) {
     if autoplay_ms > 0 {
         set_next_autoplay_at(id, None);
     }
 }
 
-/// 拖拽结束：重新起算完整间隔（不改 `paused`，以免打断悬停暂停）。
+/// End of dragging: Recalculate the complete interval (do not change `paused` to avoid interrupting the hovering pause).
 fn restart_autoplay_deadline(id: &str, autoplay_ms: u64) {
     if autoplay_ms == 0 {
         set_next_autoplay_at(id, None);
@@ -748,7 +738,7 @@ fn restart_autoplay_deadline(id: &str, autoplay_ms: u64) {
     );
 }
 
-/// 悬停：暂停并清掉 deadline。
+/// Hover: Pause and clear deadline.
 fn pause_autoplay_clock(id: &str, paused: Signal<bool>, autoplay_ms: u64) {
     paused.set(true);
     if autoplay_ms > 0 {
@@ -756,7 +746,7 @@ fn pause_autoplay_clock(id: &str, paused: Signal<bool>, autoplay_ms: u64) {
     }
 }
 
-/// 悬停结束：恢复并重新起算完整间隔。
+/// Hover End: Resume and restart the full interval.
 fn resume_autoplay_clock(id: &str, paused: Signal<bool>, autoplay_ms: u64) {
     paused.set(false);
     restart_autoplay_deadline(id, autoplay_ms);
@@ -833,7 +823,7 @@ fn assemble_carousel_chrome(
                 .flex_grow(1.0)
                 .min_w(0.0)
                 .min_h(0.0)
-                // 勿 w(100%)：与 Prev/Next 同处一行时会挤占/错算视口宽度。
+                // Do not w(100%): When placed on the same line as Prev/Next, the viewport width will be squeezed/miscalculated.
                 .child(stage_body)
                 .into();
             stage
@@ -872,7 +862,7 @@ fn assemble_carousel_chrome(
     };
 
     if let Some(d) = dots {
-        // 间距放在 chrome 列 gap：reactive_view 会冲掉 placeholder 上的 mt。
+        // Spacing on the chrome column gap:reactive_view will wash out the mt on the placeholder.
         col = col.gap("0.5rem").child(d);
     }
     for r in rest {
@@ -881,7 +871,7 @@ fn assemble_carousel_chrome(
     col
 }
 
-/// 提供 Carousel 上下文并构建子树（宏 `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` / Builder 共用）。
+/// Provides a Carousel context and builds a subtree (shared with macros `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` / Builder).
 #[allow(clippy::too_many_arguments)]
 pub fn carousel_scope(
     id: impl Into<String>,
@@ -906,7 +896,7 @@ pub fn carousel_scope(
     use crate::layout::dimension::IntoF32;
 
     let id = resolve_instance_id(id, "carousel");
-    // thread_local 的 LOOP_ANIM / 拖拽会跨重挂载残留，而 sync 在 loop_anim 存在时直接 return。
+    // thread_local's LOOP_ANIM/drag will remain across remounts, and sync will return directly when loop_anim exists.
     reset_carousel_ephemeral(&id);
     let orientation = CarouselOrientation::parse(&orientation.into());
     let controls = CarouselControls::parse(&controls.into());
@@ -927,7 +917,7 @@ pub fn carousel_scope(
         0.0
     };
     let show_dots = dots.unwrap_or_else(|| variant.default_dots());
-    // Single 强制一屏一卡；Multi 用传入 / 默认 per_view（0 = 用变体默认）。
+    // Single forces one screen and one card; Multi uses incoming/default per_view (0 = uses variant default).
     let per_view = match variant {
         CarouselVariant::Single => 1.0,
         CarouselVariant::Stack => 1.0,
@@ -940,13 +930,13 @@ pub fn carousel_scope(
         }
     };
     let stack_sides = stack_sides.clamp(1, 5);
-    // 所有 kind 尊重 `loop`；`seamless` 默认跟 loop，且 loop=false 时强制关闭。
+    // All kinds respect `loop`; `seamless` defaults to loop and is forced to close when loop=false.
     let seamless = if !loop_slides {
         false
     } else {
         seamless.unwrap_or(true)
     };
-    // autoplay 开启时强制吸附。
+    // Force adsorption when autoplay is turned on.
     let snap = snap || autoplay_ms > 0;
     let index = index.unwrap_or_else(|| use_signal(format!("{id}__idx").as_str(), || 0usize));
     let count = use_signal(format!("{id}__count").as_str(), || 0usize);
@@ -1181,7 +1171,7 @@ mod tests {
         create_root(|| {
             let el: Element = carousel_multi("t-car-noloop")
                 .loop_slides(false)
-                .seamless(true) // 应被 loop=false 强制关掉
+                .seamless(true) // Should be forced off by loop=false
                 .slide(|| r#box().w("100%").h("4rem").into())
                 .slide(|| r#box().w("100%").h("4rem").into())
                 .slide(|| r#box().w("100%").h("4rem").into())
@@ -1261,7 +1251,7 @@ mod tests {
             let track = content.children.first().expect("track");
             let offset = track.style.translate[0];
             let step = vp / 2.2;
-            // per_view=2.2 → need_view=3 → cc=min(3,3)=3；index0 停在 -cc*step。
+            // per_view=2.2 → need_view=3 → cc=min(3,3)=3; index0 stops at -cc*step.
             let cc = 3.0f32;
             assert!(
                 (offset + cc * step).abs() < 3.0,
@@ -1272,7 +1262,7 @@ mod tests {
                 (tgt - offset).abs() < 1.0 || track.transition_snapshot.has_active_tweens(),
                 "translate should match offset target; translate={offset} target={tgt}"
             );
-            // 首个真实项（跳过前缀克隆）左缘 ≈ 视口左缘。
+            // First real item (skip prefix clone) left edge ≈ viewport left edge.
             let items: Vec<_> = track
                 .children
                 .iter()
@@ -1285,7 +1275,7 @@ mod tests {
             );
             let first_real = items[cc as usize];
             let left_delta = (first_real.layout_bounds[0] + offset) - content.layout_bounds[0];
-            // layout_bounds 可能已含 transform，也可能不含；两种口径都接受小误差。
+            // layout_bounds may or may not include transform; both methods accept small errors.
             assert!(
                 left_delta.abs() < 4.0 || (first_real.layout_bounds[0] - content.layout_bounds[0]).abs() < 4.0,
                 "first real slide should be left-aligned; left_delta={left_delta} item_x={} content_x={} offset={offset}",
@@ -1305,7 +1295,7 @@ mod tests {
             let drag_px = use_signal("t-car-free-drag__drag", || 0.0f32);
             let viewport_len = use_signal("t-car-free-drag__vlen", || 400.0f32);
             let paused = use_signal("t-car-free-drag__paused", || false);
-            // 起步 offset=0，拖 -70px → 视觉 -70；步长≈181.8，若吸附会到 0 或 -181.8。
+            // Starting offset=0, drag -70px → visual -70; step size ≈181.8, if adsorbed, it will reach 0 or -181.8.
             snap_offset_to(id, 0.0);
             begin_carousel_drag(CarouselDrag {
                 id: id.into(),
@@ -1340,7 +1330,7 @@ mod tests {
                 (parked % step).abs() > 1.0 && (parked % step + step).abs() > 1.0,
                 "parked offset must not land on an integer grid; parked={parked} step={step}"
             );
-            // 回归：松手后 index→nearest 时，轨道自动 sync 不得把自由 offset 拉回格点。
+            // Regression: When index→nearest is released after letting go, the track automatically syncs and must not pull the free offset back to the grid point.
             let ctx = CarouselCtx {
                 id: id.into(),
                 index,
@@ -1381,12 +1371,12 @@ mod tests {
         let start = -(cc as f32) * step; // -200
         let end = start - (n as f32) * step; // -700
         assert!((wrap_loop_offset(start, n, cc, step) - start).abs() < 0.01);
-        // 进入前缀：比 start 更正 → 折到末段
+        // Entering prefix: corrected than start → fold to the end
         let into_prefix = start + 40.0;
         let w = wrap_loop_offset(into_prefix, n, cc, step);
         assert!((w - (into_prefix - n as f32 * step)).abs() < 0.01);
         assert!(w < start && w > end);
-        // 进入后缀：≤ end → 折到首段
+        // Enter suffix: ≤ end → fold to the first paragraph
         let into_suffix = end - 30.0;
         let w2 = wrap_loop_offset(into_suffix, n, cc, step);
         assert!((w2 - (into_suffix + n as f32 * step)).abs() < 0.01);
@@ -1405,7 +1395,7 @@ mod tests {
             let step = 440.0 / 2.2;
             let cc = 3usize;
             let start = -(cc as f32) * step;
-            // 从 index0 拖进前缀克隆区
+            // Drag from index0 into the prefix clone area
             snap_offset_to(id, start);
             begin_carousel_drag(CarouselDrag {
                 id: id.into(),
@@ -1428,7 +1418,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            drag_px.set(55.0); // visual = start+55 → 前缀
+            drag_px.set(55.0); // visual = start+55 → prefix
             end_carousel_drag();
             let parked = offset_target(id).peek();
             assert!(
@@ -1480,7 +1470,7 @@ mod tests {
             };
             let vp = 440.0f32;
             let step = vp / 2.2;
-            // perView=2.2：首屏裁切尾项 index=2；peek 翻页后该项成为下页首项 → offset=-2*step。
+            // perView=2.2: Crop the last item on the first screen index=2; after peeking, the item becomes the first item on the next page → offset=-2*step.
             scroll_next(&ctx);
             let after_btn = offset_target(id).peek();
             assert!(
@@ -1516,7 +1506,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            // 过半页才跟下一页（page=2*step）；不再用「小位移也强制±1」。
+            // Only follow the next page after half a page (page=2*step); no longer use "small displacements are also forced to ±1".
             let page = 2.0 * step;
             drag_px.set(-(page * 0.55));
             end_carousel_drag();
@@ -1586,7 +1576,7 @@ mod tests {
             let cc = 1usize;
             let hi = 2usize;
             let n = 3usize;
-            // 停在末项
+            // stop at last item
             let base = -((hi + cc) as f32) * step;
             snap_offset_to(id, base);
             let _ = take_instant_snap_to(id);
@@ -1611,7 +1601,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            // 拖过末项进入「下一」方向，应在 tick 中 wrap 回真实带（而非克隆/空白）。
+            // Dragging past the last item into the "next" direction should wrap back to the real band in ticks (not clone/blank).
             let _ = tick_carousel_drag(200.0 - (step + 50.0), 0.0);
             let mid = offset_target(id).peek();
             let start = -(cc as f32) * step;
@@ -1626,7 +1616,7 @@ mod tests {
                 "drag wrap should not leave a pending clone loop anim"
             );
             let parked = offset_target(id).peek();
-            // 吸附到格点：真实带内 -(i+cc)*step
+            // Adsorb to grid point: within the true band -(i+cc)*step
             let grid = (0..=hi)
                 .map(|i| -((i + cc) as f32) * step)
                 .any(|g| (parked - g).abs() < 1.0);
@@ -1677,7 +1667,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            // 尾项拖出过半，进入后缀克隆半程（尚未触发整周 wrap）。
+            // The tail item is dragged out more than halfway and enters the suffix cloning process (the full wrap has not yet been triggered).
             drag_px.set(-(step * 0.6));
             end_carousel_drag();
             assert_eq!(index.peek(), 0, "dots should already show first");
@@ -1694,7 +1684,7 @@ mod tests {
                 "target must be clone slot, not real first ({first_off}); got {}",
                 offset_target(id).peek()
             );
-            // 到达克隆槽后 settle → 真实首项
+            // After reaching the clone slot, settle → the real first item
             finish_loop_anim(id, index.clone());
             assert!((offset_target(id).peek() - first_off).abs() < 1.0);
             assert_eq!(index.peek(), 0);
@@ -1712,10 +1702,10 @@ mod tests {
             let viewport_len = use_signal("t-car-snap-visual__vlen", || 300.0f32);
             let step = 300.0f32;
             let cc = 1usize;
-            // 起拖已在半途（模拟动画中途抓取），再拖到后项几乎满幅。
+            // The dragging is already halfway (simulating grabbing in the middle of the animation), and then the dragging is until the next item is almost full.
             let start_ideal = -(cc as f32) * step;
             let base = start_ideal - step * 0.55;
-            let extra = -step * 0.40; // 合计约 0.95 格 → nearest=1
+            let extra = -step * 0.40; // Total about 0.95 cells → nearest=1
             snap_offset_to(id, base);
             let _ = take_instant_snap_to(id);
             index.set(0);
@@ -1740,7 +1730,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            // 本次手势位移很小（低于旧阈值），但视觉已过半并接近后项。
+            // This time the gesture displacement is small (below the old threshold), but the vision is halfway through and close to the posterior term.
             drag_px.set(extra);
             assert!(extra.abs() > DRAG_THRESHOLD_PX || (base - start_ideal).abs() > step * 0.5);
             end_carousel_drag();
@@ -1768,7 +1758,7 @@ mod tests {
             let drag_px = use_signal("t-car-ap-drag__drag", || 0.0f32);
             let viewport_len = use_signal("t-car-ap-drag__vlen", || 300.0f32);
             let paused = use_signal("t-car-ap-drag__paused", || false);
-            // 模拟拖拽前计时已快到期。
+            // The timer is about to expire before simulating drag.
             set_next_autoplay_at(id, Some(Instant::now() + Duration::from_millis(50)));
             begin_carousel_drag(CarouselDrag {
                 id: id.into(),
@@ -1845,7 +1835,7 @@ mod tests {
             let content = find_slot(&root, SLOT_CONTENT).expect("content");
             let stage = content.layout_bounds;
             let stage_mid = stage[0] + stage[2] * 0.5;
-            // 高度由内容（slide h=8rem）撑开，与 Single 视口一致，不应再有固定空高。
+            // The height is supported by the content (slide h=8rem), consistent with the Single viewport, and there should no longer be a fixed empty height.
             assert!(
                 (stage[3] - 128.0).abs() < 24.0,
                 "stack stage height should follow slide content (~8rem); got {}",
@@ -1884,7 +1874,7 @@ mod tests {
                     (child_sc - 1.0).abs() < 0.01,
                     "content scale stays 1; shell carries coverflow scale via ancestor_scale / paint_scale"
                 );
-                // 卡宽应为视口百分比（与 Single basis% 同模式），而非固定 px/rem。
+                // Card width should be a percentage of the viewport (same mode as Single basis%), not fixed px/rem.
                 assert!(
                     (w - stage[2] * 0.46).abs() < 8.0,
                     "card width should be ~46% of stage; w={w} stage={}",
@@ -1947,13 +1937,13 @@ mod tests {
             let step = stack_step_px(w);
             let card_w = w * 0.46;
             let side_sc = 0.82;
-            // 侧卡外缘相对舞台左缘（中心在 W/2 - step）。
+            // The outer edge of the side card is relative to the left edge of the stage (centered at W/2 - step).
             let outer = w * 0.5 - step - card_w * side_sc * 0.5;
             assert!(
                 outer >= -0.5,
                 "narrow w={w}: step={step} must keep scaled side inside stage (outer={outer})"
             );
-            // 回归：旧 clamp(min=56) 在 w≲234 时会裁掉圆角。
+            // Regression: old clamp(min=56) would clip rounded corners when w≲234.
             if w < 230.0 {
                 assert!(
                     step < 56.0,
@@ -1996,7 +1986,7 @@ mod tests {
                 orientation: CarouselOrientation::Horizontal,
                 autoplay_ms: 0,
             });
-            // 拖过半格 → 下一张。
+            // Drag half a frame → next picture.
             drag_px.set(-(step * 0.6));
             snap_offset_to(id, -(step * 0.6));
             end_carousel_drag();
@@ -2026,7 +2016,7 @@ mod tests {
         });
     }
 
-    /// 回归：窄屏 + controls=outside 时 Single 首项应对齐满幅 A，而不是露出 B/C。
+    /// Return: When narrow screen + controls=outside, the first item of Single should be aligned with the full A, instead of exposing the B/C.
     #[test]
     fn narrow_outside_single_parks_on_first_slide_full_width() {
         use crate::core::reactivity::create_root;
@@ -2116,7 +2106,7 @@ mod tests {
         });
     }
 
-    /// 用户复现尺寸 828×320：侧栏 + max_w 36rem + outside，首项必须满幅。
+    /// User reproduction size 828×320: sidebar + max_w 36rem + outside, the first item must be full.
     #[test]
     fn size_828x320_outside_single_shows_full_first_slide() {
         use crate::core::reactivity::create_root;
@@ -2187,7 +2177,7 @@ mod tests {
         });
     }
 
-    /// 宽→窄：残留大 slot 宽 / 旧 offset 不得让 index0 停在 B/C。
+    /// Wide→Narrow: The remaining large slot width/old offset must not allow index0 to stop at B/C.
     #[test]
     fn resize_wide_to_narrow_realigns_single_loop_track() {
         use crate::core::reactivity::create_root;
@@ -2253,7 +2243,7 @@ mod tests {
         });
     }
 
-    /// 回归：视口未就绪时不得把克隆轨道目标 set 到 step≈1 的假 ideal（≈0）。
+    /// Regression: Clone track targets must not be set to a false ideal (≈0) of step≈1 when the viewport is not ready.
     #[test]
     fn looping_build_does_not_park_offset_at_fake_step_before_viewport() {
         use crate::core::reactivity::create_root;

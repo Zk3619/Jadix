@@ -1,6 +1,6 @@
 //! # Collapsible
 //!
-//! 对照 ShadCN **base** [`collapsible.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/collapsible.tsx)：
+//! Compare ShadCN **base** [`collapsible.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/collapsible.tsx):
 //!
 //! ```text
 //! Collapsible                      // Root：open / defaultOpen；单面板开合
@@ -8,15 +8,15 @@
 //! └── CollapsibleContent           // Panel：overflow-hidden + `@keyframes collapsible-down/up`
 //! ```
 //!
-//! 进出场对位 ShadCN 社区惯例 `collapsible-down` / `collapsible-up`（height 0 ↔ content-height，200ms），
+//! Entry and exit matchup ShadCN community practice `collapsible-down` / `collapsible-up` (height 0 ↔ content-height, 200ms),
 //! 与 Accordion 的 `accordion-down/up` **同形不同名**（官方 base 默认无动画；有动画时用独立 keyframes）。
 //!
-//! `ui!` 中 `<Collapsible>` / `<CollapsibleContent>` 由宏展开（[`collapsible_scope`] /
-//! [`collapsible_content`]）。Builder [`collapsible`] 与 RSX 共用实现。
+//! `<Collapsible>` in `ui!` / `<CollapsibleContent>` is expanded by macro ([`collapsible_scope`] /
+//![`collapsible_content`]). Builder [`collapsible`] Shared implementation with RSX.
 //!
-//! ## 用法（双写）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A · RSX（camelCase 宏别名：defaultOpen / openSignal）
+//! // A · RSX (camelCase macro alias: defaultOpen/openSignal)
 //! ui! {
 //!     <Collapsible id="faq" defaultOpen={true}>
 //!         <CollapsibleTrigger>"Can I use this in my project?"</CollapsibleTrigger>
@@ -26,7 +26,7 @@
 //!     </Collapsible>
 //! }
 //!
-//! // B · Builder（只 snake_case）
+//! // B · Builder (snake_case only)
 //! collapsible("faq")
 //!     .default_open(true)
 //!     .trigger(|| Element::new().text("Can I use this in my project?"))
@@ -35,7 +35,7 @@
 //!     })
 //! ```
 //!
-//! **身份（WP-2.8）**：`id` 可选；空串 → [`resolve_instance_id`]。
+//! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -851,7 +851,7 @@ pub struct CollapsibleBuilder {
     content: Option<Box<dyn Fn() -> Element>>,
 }
 
-/// 复合 Collapsible 入口（对位 `<Collapsible>`）。
+/// Composite Collapsible entry (opposite `<Collapsible>`).
 pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
     CollapsibleBuilder {
         id: id.into(),
@@ -870,7 +870,7 @@ impl CollapsibleBuilder {
         self
     }
 
-    /// 与 [`Self::open_signal`] 相同。
+    /// Same as [`Self::open_signal`].
     pub fn open(self, s: Signal<bool>) -> Self {
         self.open_signal(s)
     }

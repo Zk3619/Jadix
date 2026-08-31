@@ -63,7 +63,7 @@ pub struct MouseEvent {
     pub phase: EventPhase,
     /// [`UIEvent.detail`](https://developer.mozilla.org/zh-CN/docs/Web/API/UIEvent/detail) — click count.
     pub detail: u8,
-    /// 当前正在分发的节点**可视**盒（窗口逻辑像素 `[x,y,w,h]`，已扣祖先 scroll）。
+    /// The **visual** box of the node currently being distributed (window logical pixel `[x,y,w,h]`, ancestor scroll has been deducted).
     pub current_bounds: [f32; 4],
     /// [`Event.type`](https://developer.mozilla.org/zh-CN/docs/Web/API/Event/type): `click`, `mousedown`, …
     pub event_type: &'static str,
@@ -416,7 +416,7 @@ fn hit_path_rec(
 
 /// Find element by `focus_id`, falling back to `template_id`.
 ///
-/// **Must prefer `focus_id`**：组合 Checkbox 外层与控制面可能共用同一 `template_id`，
+/// **Must prefer `focus_id`**: The combined Checkbox outer layer and control surface may share the same `template_id`,
 /// 若先匹配 `template_id` 会命中无 `on_click` 的外层行，导致 Label `for` 点击无法切换。
 pub fn find_by_focus_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
     if let Some(found) = find_by_focus_id_exact(el, id) {

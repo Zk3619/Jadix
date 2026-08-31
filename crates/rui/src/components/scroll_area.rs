@@ -3,7 +3,7 @@
 //! 产品层滚动容器：[`ScrollViewport`](crate::components::ScrollViewport) + 内建横/纵滚动条。
 //! 无条裁剪或自定义条请用 viewport / `Box`+`overflow`，见 [`crate::core::scroll_viewport`]。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <ScrollArea id="sa-main" w="100%" h="100%"
 //!   scrollbar_visibility="auto" overflow_y="auto" overflow_x="auto">
@@ -12,7 +12,7 @@
 //! ```
 //! 读偏移：`use_signal(scroll_offset_y_signal_key("sa-main"), 0.0)`。
 //!
-//! ## 注意
+//! ## Notes
 //! - **稳定唯一 `id` 必需**（所有滚动信号键都依赖它）。
 //! - 默认 inset inside、visibility auto、条在 right / bottom；`scroll_behavior` 默认
 //!   [`smooth`](crate::core::scroll_viewport::SCROLL_BEHAVIOR_SMOOTH)，瞬时跳转用
@@ -186,7 +186,7 @@ impl ScrollAreaBuilder {
         self
     }
 
-    /// `"smooth"`（默认）或 `"jump"`（瞬时）。
+    /// `"smooth"` (default) or `"jump"` (instant).
     pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
         self.scroll_behavior = mode.into();
         self

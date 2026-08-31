@@ -489,7 +489,7 @@ where
 /// Like [`reactive_component_live`], with explicit placeholder size.
 ///
 /// Calendar 等放进 DateTime 浮层时须 `h: auto`：默认 `100%×100%` 会按面板高度拉伸，
-/// 日网格盖住下方 `Separator`。
+/// The day grid covers the `Separator` below.
 pub fn reactive_component_live_sized<P, F>(
     anchor_id: impl Into<String>,
     props: P,

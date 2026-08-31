@@ -14,7 +14,7 @@
 //! RUI 根组件自动拼 Control + Thumb；文案可内嵌（自动横排 + Label `for`），
 //! 或与旁侧 [`Label`](crate::components::Label) 用 Solid `id` / `for` 配对。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // 内嵌文案
 //! <Switch>"Airplane Mode"</Switch>
@@ -33,11 +33,11 @@
 //! { Element::from(switch("demo").checked_signal(on_sig)) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__switch`）；多实例请保证 `id` 唯一或依赖自动 id。
 //! - 状态用 `peek` + 每帧 style sync；拇指位移 / 轨道色走 CSS
 //!   `transition-transform` / `transition-colors`（~150ms）。
-//! - 可聚焦；Space / Enter 切换与按钮同路径；内嵌文案 / Label `for` 点击转发到本控件。
+//! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;

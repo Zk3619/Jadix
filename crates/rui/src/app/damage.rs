@@ -54,7 +54,7 @@ pub enum FrameClearPolicy {
 static PARTIAL_LOAD_FRAMES: AtomicU64 = AtomicU64::new(0);
 static FULL_CLEAR_FRAMES: AtomicU64 = AtomicU64::new(0);
 
-/// Present-pass Load vs Clear counters (WP-2.2 / Gallery 验收).
+/// Present-pass Load vs Clear counters (WP-2.2 / Gallery acceptance).
 pub fn partial_load_frame_count() -> u64 {
     PARTIAL_LOAD_FRAMES.load(Ordering::Relaxed)
 }
@@ -63,7 +63,7 @@ pub fn full_clear_frame_count() -> u64 {
     FULL_CLEAR_FRAMES.load(Ordering::Relaxed)
 }
 
-/// Reset counters (Gallery「重置计数」/ tests).
+/// Reset counters (Gallery "Reset counters" / tests).
 pub fn reset_frame_policy_counters() {
     PARTIAL_LOAD_FRAMES.store(0, Ordering::Relaxed);
     FULL_CLEAR_FRAMES.store(0, Ordering::Relaxed);

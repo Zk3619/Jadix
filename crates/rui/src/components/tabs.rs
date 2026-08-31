@@ -13,7 +13,7 @@
 //! - [`tabs_headless`]：无头 index + ←/→（自绘标签行）
 //! - [`tabs_list`]：`options` 便捷条（内部 ToggleGroup `joined`）
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // 复合 RSX（推荐；宏走 tabs_scope）
 //! <Tabs id="settings" value={tab} default_value="account">
@@ -50,7 +50,7 @@
 //! )
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 未传 `value` 时用内部信号 `{id}__tabs`；多实例请保证 `id` 唯一。
 //! - Trigger `focus_id = "{tabs_id}:{value}"`；方向键只移焦点环，点击 / Enter / Space 改选中。
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
@@ -67,6 +67,7 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{LineStyle, WhiteSpace};
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
+use crate::utils::take_packed;
 use rui_macros::component;
 use std::sync::OnceLock;
 use taffy::style::{AlignItems, Display, FlexDirection, JustifyContent};
@@ -131,16 +132,6 @@ fn require_tabs(part: &str) -> TabsCtx {
     use_tabs().unwrap_or_else(|| {
         panic!("{part} must be used within <Tabs> / tabs_scope");
     })
-}
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
 }
 
 fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {

@@ -1,8 +1,8 @@
-//! Carousel seamless 环动画状态（产品层）。
+//! Carousel seamless ring animation state (product layer).
 //!
-//! 拖拽中途不得撕环：打断时须 settle，不能只丢 flag。
+//! Don't tear off the ring during dragging: you must settle when interrupting, and you can't just throw the flag.
 
-/// 无缝循环：先滚到首/尾克隆槽，到位后再瞬移到真实项。
+/// Seamless loop: first roll to the first/last clone slot, then teleport to the real item after reaching the position.
 #[derive(Clone, Copy, Debug)]
 pub struct LoopAnim {
     pub target_offset: f32,
@@ -10,7 +10,7 @@ pub struct LoopAnim {
     pub settle_offset: f32,
 }
 
-/// 视觉 offset 是否已到达 loop 目标（容差内）。
+/// Whether the visual offset has reached the loop target (within tolerance).
 pub fn loop_reached(visual: f32, target: f32, epsilon: f32) -> bool {
     (visual - target).abs() <= epsilon
 }

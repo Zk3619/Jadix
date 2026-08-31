@@ -1,4 +1,4 @@
-//! Marks：几何层。内置 Bar/Line/Area/Pie/Dot/Rule + [`custom_mark`]（TanStack `createMark` 窄化）。
+//! Marks: Geometry layer. Built-in Bar/Line/Area/Pie/Dot/Rule + [`custom_mark`] (TanStack `createMark` narrowed).
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
@@ -14,7 +14,7 @@ use super::datum::{
 use super::scale::{pie_layout_span, ResolvedScales};
 use super::theme::{ChartPaint, ChartTheme, MarkStyle};
 
-/// Mark 向 scale 贡献的 channel 值（编译前）。
+/// The channel value contributed by Mark to scale (before compilation).
 #[derive(Clone, Debug, Default)]
 pub struct MarkChannels {
     pub x_cats: Vec<String>,
@@ -63,12 +63,12 @@ impl SceneLayer {
     }
 }
 
-/// Mark `render` / `hit` 上下文（对照 TanStack `MarkRenderContext`）。
+/// Mark `render` / `hit` context (compare TanStack `MarkRenderContext`).
 pub struct MarkRenderContext<'a> {
     pub scales: &'a ResolvedScales,
     pub theme: &'a ChartTheme,
     pub selected: Option<usize>,
-    /// Polar 外接正方形边长（笛卡尔图等于 plot 高）。
+    /// Polar circumscribes the side length of the square (Cartesian plot equals plot height).
     pub polar_size: f32,
     pub polar_start: f32,
     pub polar_end: f32,
@@ -134,7 +134,7 @@ pub(crate) trait MarkRender {
     }
 }
 
-/// 类型擦除的一层 mark（可进 [`super::define_chart`]）。
+/// A layer of mark for type erasure (can enter [`super::define_chart`]).
 #[derive(Clone)]
 pub struct ChartMark {
     inner: Rc<dyn MarkRender>,
@@ -290,7 +290,7 @@ pub(crate) fn paint_stroke(
     theme.dim_if_unselected(c, datum_i, selected)
 }
 
-/// 每个 datum 一颗圆，画在折线之上。选中加大 + 浅底描边；**不**按 `di0` 整组变淡。
+/// Each datum is a circle, drawn on the polyline. Select Enlarge + Light Stroke; **Do not** press `di0` to make the whole group lighter.
 pub(crate) fn filled_dot_layers(
     indexed: &[(usize, Point2)],
     series_i: usize,
@@ -368,7 +368,7 @@ pub struct BarYMark {
     horizontal: bool,
 }
 
-/// 垂直柱（TanStack `barY`）。`series` → 类内并排分组。
+/// Vertical column (TanStack `barY`). `series` → Group side by side within a class.
 pub fn bar_y<I, T>(data: I) -> BarYMark
 where
     I: IntoIterator<Item = T>,
@@ -382,7 +382,7 @@ where
     }
 }
 
-/// 水平柱（TanStack `barX`）。
+/// Horizontal bar (TanStack `barX`).
 pub fn bar_x<I, T>(data: I) -> BarYMark
 where
     I: IntoIterator<Item = T>,
@@ -477,7 +477,7 @@ impl MarkRender for BarYMark {
                     let y1 = ctx.scales.y(val.max(0.0));
                     let y0 = ctx.scales.y0();
                     let (top, bot) = if y1 <= y0 { (y1, y0) } else { (y0, y1) };
-                    // +1px：光栅半开区间会裁掉 y==plot_h 的最后一行，柱底会离轴线一条缝。
+                    // +1px: The half-open range of the raster will cut off the last line of y==plot_h, and the bottom of the column will be a gap away from the axis.
                     let cmds = rounded_rect(
                         x0,
                         top,
@@ -597,12 +597,12 @@ pub struct LineYMark {
     rows: Vec<ChartDatum>,
     style: MarkStyle,
     area: bool,
-    /// 折线下铺面积，但 kind 仍是 `line`（区别于 Area mark）。
+    /// The paving area under the polyline, but kind is still `line` (different from Area mark).
     fill_under: bool,
     default_stroke: f32,
 }
 
-/// 折线（TanStack `lineY`）。`series` → 多条独立折线。
+/// Polyline (TanStack `lineY`). `series` → multiple independent polylines.
 pub fn line_y<I, T>(data: I) -> LineYMark
 where
     I: IntoIterator<Item = T>,
@@ -618,7 +618,7 @@ where
     }
 }
 
-/// 面积（TanStack `areaY`）：基线 0 + 描边。
+/// Area (TanStack `areaY`): Baseline 0 + Stroke.
 pub fn area_y<I, T>(data: I) -> LineYMark
 where
     I: IntoIterator<Item = T>,
@@ -733,7 +733,7 @@ impl MarkRender for LineYMark {
                 continue;
             }
             let pts: Vec<Point2> = indexed.iter().map(|(_, p)| *p).collect();
-            // 折线/面积是整条 series，不能用 datum[0] 当选中键，否则选中非首点会整图变淡。
+            // The polyline/area is the entire series. You cannot use datum[0] as the selected key, otherwise the entire image will fade when non-first points are selected.
             if want_fill {
                 let mut area_pts = pts.clone();
                 if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
@@ -827,7 +827,7 @@ pub struct PieMark {
     inner_radius: f32,
 }
 
-/// Polar pie / donut（TanStack polar `pie`，`inner_radius` > 0 为环）。
+/// Polar pie / donut (TanStack polar `pie`, `inner_radius` > 0 is a ring).
 pub fn pie<I, T>(data: I) -> PieMark
 where
     I: IntoIterator<Item = T>,
@@ -880,14 +880,14 @@ impl MarkRender for PieMark {
         let s = ctx.polar_size.max(48.0);
         let cx = s * 0.5;
         let cy = s * 0.5;
-        // 留出选中外扩余量（TanStack radialArc：中心/内半径不动，只加大 outerRadius）。
+        // Leave a margin for the selected outer expansion (TanStack radialArc: the center/inner radius remains unchanged, only the outerRadius is increased).
         let r0 = s * 0.40;
         let inner0 = r0 * self.inner_radius;
         let values: Vec<f32> = self.rows.iter().map(|d| d.value).collect();
         let angles = pie_layout_span(&values, ctx.polar_start, ctx.polar_end);
         let mut layers = Vec::new();
         let mut selected_layer: Option<SceneLayer> = None;
-        // 外缘约 1.5px 角重叠；同色描边封 AA（lineJoin round 的光栅等价）。
+        // The outer edge overlaps at about 1.5px; the same color stroke seals AA (the raster equivalent of lineJoin round).
         let eps = (1.5 / r0.max(1.0)).clamp(0.008, 0.04);
         for (i, &(a0_raw, a1_raw)) in angles.iter().enumerate() {
             if (a1_raw - a0_raw).abs() < 1e-5 {
@@ -1120,7 +1120,7 @@ pub struct RuleMark {
     vertical: bool,
 }
 
-/// 水平参考线（TanStack `ruleY`）。
+/// Horizontal reference line (TanStack `ruleY`).
 pub fn rule_y(values: impl IntoIterator<Item = f32>) -> RuleMark {
     RuleMark {
         id: String::new(),
@@ -1135,7 +1135,7 @@ pub fn rule_y(values: impl IntoIterator<Item = f32>) -> RuleMark {
     }
 }
 
-/// 垂直参考线（TanStack `ruleX`）。类别名或数值下标。
+/// Vertical guide line (TanStack `ruleX`). Category name or numerical subscript.
 pub fn rule_x_num(values: impl IntoIterator<Item = f32>) -> RuleMark {
     RuleMark {
         id: String::new(),
@@ -1239,7 +1239,7 @@ impl From<RuleMark> for ChartMark {
 }
 
 // ---------------------------------------------------------------------------
-// custom_mark（TanStack createMark 窄化）
+// custom_mark (TanStack createMark narrowing)
 // ---------------------------------------------------------------------------
 
 struct CustomMarkInner {
@@ -1301,7 +1301,7 @@ pub struct CustomMarkBuilder {
 }
 
 impl CustomMarkBuilder {
-    /// 向共享 scale 贡献 domain（否则自定义层不参与轴推断）。
+    /// Contribute domain to the shared scale (otherwise the custom layer does not participate in axis inference).
     pub fn channels(mut self, ch: MarkChannels) -> Self {
         self.channels = ch;
         self

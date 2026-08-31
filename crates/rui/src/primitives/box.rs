@@ -1,6 +1,6 @@
 //! 布局原语：flex 容器、间距、背景、溢出等，最终落成一棵 [`Element`]。
 //!
-//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` / `Div` / `div` 由宏映射到
+//! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box` 由宏映射到
 //! 本 Builder；SVG 形状用小写/Pascal `<rect>` / `<Rect>`（见 `primitives::svg`）。
 //! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]。
 
@@ -754,7 +754,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
+    pub fn font_weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.font_weight(weight);
         self
     }
@@ -799,7 +799,7 @@ impl BoxBuilder {
         self
     }
 
-    pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn text_leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
         self.el = self.el.text_leading(scale);
         self
     }
@@ -886,11 +886,6 @@ impl crate::core::tree::IntoElementList for BoxBuilder {
 
 pub fn r#box() -> BoxBuilder {
     BoxBuilder::new()
-}
-
-/// HTML-ish alias for [`r#box`] — preferred in `ui!` as `<div>` / `<Div>`.
-pub fn div() -> BoxBuilder {
-    r#box()
 }
 
 pub fn hstack() -> BoxBuilder {

@@ -1,17 +1,17 @@
 //! # Checkbox
 //!
 //! 对齐 solid-ui / Kobalte **Checkbox** 控制面 + ShadCN 选中态色板：
-//! `size-4`、`rounded-sm`、未选 `border-primary`、选中 `bg-primary` + Lucide `check`。
-//! 支持受控 / 非受控、`disabled`、`invalid`（`aria-invalid` 观感）。
+//! `size-4`, `rounded-sm`, unselected `border-primary`, selected `bg-primary` + Lucide `check`.
+//! Supports controlled/uncontrolled, `disabled`, `invalid` (`aria-invalid` look and feel).
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // 内嵌文案（推荐组合写法；自动横排 + Label `for` / aria-labelledby）
 //! <Checkbox>"Accept terms and conditions"</Checkbox>
 //! <Checkbox>
 //!     <Label font_weight="500">"Accept terms"</Label>
 //! </Checkbox>
-//! // 与旁侧 Label 配对（Solid `for`）
+//! // Pair with side Label (Solid `for`)
 //! <HStack gap="0.5rem" items="center">
 //!     <Checkbox id="terms" />
 //!     <Label for="terms">"Accept terms and conditions"</Label>
@@ -28,10 +28,10 @@
 //! { Element::from(checkbox("demo").checked_signal(sig).invalid(true)) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__checkbox`）；多实例请保证 `id` 唯一或依赖自动 id。
 //! - 状态用 `peek` + 每帧 style sync；Indicator 始终保留勾选字形，未选中仅字色透明。
-//! - 可聚焦；Space / Enter 切换与按钮同路径；内嵌文案 / Label `for` 点击转发到本控件。
+//! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 
 use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
 use crate::core::reactivity::Signal;
@@ -49,14 +49,14 @@ use rui_macros::component;
 const ATTR_INVALID: &str = "data-invalid";
 const ATTR_INDICATOR: &str = "data-slot";
 const SLOT_INDICATOR: &str = "checkbox-indicator";
-/// solid-ui Control 为 `size-4`（16px）；Indicator 勾选略小于框，便于视觉居中。
+/// The solid-ui Control is `size-4` (16px); the Indicator checkbox is slightly smaller than the box to facilitate visual centering.
 const BOX_PX: f32 = 16.0;
 const CHECK_PX: f32 = 12.0;
 /// 未选边框略粗于 1px，小尺寸上更易辨认（仍接近 solid-ui `border`）。
 const BORDER_W: f32 = 1.5;
 
 fn unchecked_bg() -> [f32; 4] {
-    // solid-ui / shadcn：浅底；dark 略用 input 透明叠底
+    // solid-ui / shadcn: shallow bottom; dark slightly uses input transparent overlay
     if is_dark_theme() {
         let mut c = parse_color("input");
         c[3] = 0.3;
@@ -69,7 +69,7 @@ fn unchecked_bg() -> [f32; 4] {
 }
 
 fn unchecked_border(invalid: bool) -> [f32; 4] {
-    // solid-ui：未选 `border-primary`（比 border-input 更清晰）；invalid → destructive
+    // solid-ui: unchecked `border-primary` (clearer than border-input); invalid → destructive
     if invalid {
         parse_color("destructive")
     } else {
@@ -89,7 +89,7 @@ fn check_glyph() -> String {
     lucide_glyph("check").unwrap_or_else(|| "✓".into())
 }
 
-/// solid-ui `CheckboxPrimitive.Indicator`：固定盒内居中的 Lucide `check`。
+/// solid-ui `CheckboxPrimitive.Indicator`: Fixed Lucide `check` centered inside the box.
 /// 未选中时仍保留字形，仅把字色 alpha 置 0——避免「空节点 0×0 → 选中后对号不进布局」。
 fn build_indicator(fg: [u8; 4]) -> Element {
     let mut icon = build_icon_text_node(check_glyph())
@@ -475,7 +475,7 @@ pub(crate) fn sync_checkbox_checked_subtree(
                     }
                 }
                 // 与 Switch 一致：选中态切换必须 LayoutChanged，否则 StyleChanged 的局部 damage
-                // 可能不重跑字形/不扩脏区，表现为「黑底无对号」。
+                // It is possible not to rerun glyphs/not to expand the dirty area, which appears as "black background without check mark".
                 crate::app::damage::push_frame_paint_damage(el.layout_bounds);
                 *impact = impact.merge(LayoutStatus::LayoutChanged);
             }

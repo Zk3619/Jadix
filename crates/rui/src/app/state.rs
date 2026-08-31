@@ -123,7 +123,7 @@ pub(super) struct AppState {
     scrollbar_base_style: std::collections::HashMap<String, ScrollbarBaseStyle>,
     #[cfg(debug_assertions)]
     pub(super) hot_reload_overrides: Vec<crate::app::hot_reload::TemplateFragment>,
-    /// 避免 CLI 对同一文件连续发送「内容相同、无 diff」的补丁时二次注入搞乱布局。
+    /// This prevents the CLI from confusing the layout with secondary injection when it continuously sends "same content, no diff" patches to the same file.
     #[cfg(debug_assertions)]
     last_applied_template_hash: HashMap<String, String>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
@@ -143,7 +143,7 @@ pub(super) struct AppState {
     render_prof_frames: u32,
     render_prof_pre_ms: f32,
     render_prof_layout_ms: f32,
-    /// `RenderResult.prof`：`build_and_layout` 建/剪 Taffy（与总 `layout` 互补读）。
+    /// `RenderResult.prof`: `build_and_layout` build/prun Taffy (complementary read with total `layout`).
     render_prof_layout_rebuild_ms: f32,
     render_prof_layout_setup_ms: f32,
     render_prof_layout_taffy_ms: f32,
@@ -185,8 +185,8 @@ pub(super) struct AppState {
     chrome: super::window_chrome::WindowOptions,
 }
 
-/// `queue.write_buffer` 在 submit 时先于 render pass 执行；同一 buffer 多次写 offset 0
-/// 会只留下最后一次（饼图一进视口，折线实例被盖成饼图矩形）。须一次打包、按 instance range 画。
+/// `queue.write_buffer` is executed before render pass during submit; the same buffer is written to offset 0 multiple times.
+/// Only the last time will be left (as soon as the pie chart enters the viewport, the polyline instance is covered into a pie chart rectangle). It must be packaged once and drawn according to instance range.
 fn upload_textured_instance_buffer(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -264,6 +264,67 @@ fn hash_present_underline_layers(
     }
     for ul in overlay_band_underlines {
         hasher.write(bytemuck::cast_slice(ul));
+    }
+}
+
+/// Draw CSS `text-shadow` bitmaps. Must run **after** the band's opaque fills and
+/// **before** glyphon glyphs — otherwise page-stack card backgrounds cover the quads
+/// (gallery「Text-shadow」vanishes whenever `page_stack_bands` is non-empty).
+fn draw_shadow_tex_draws<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    draws: &[crate::renderer::prepare_text::ShadowTexDraw],
+    shadow_tex_cache: &'pass HashMap<u64, super::image_registry::GpuImageTexture>,
+    textured_pipeline: &'pass TexturedQuadPipeline,
+    device: &wgpu::Device,
+) {
+    for sd in draws {
+        let Some(gpu_img) = shadow_tex_cache.get(&sd.cache_key) else {
+            continue;
+        };
+        let inst = TexturedInstanceInput {
+            rect_pos: [sd.rect[0], sd.rect[1]],
+            rect_size: [sd.rect[2], sd.rect[3]],
+            tint: [1.0, 1.0, 1.0, 1.0],
+            uv_offset: [0.0, 0.0],
+            uv_scale: [1.0, 1.0],
+            transform: crate::style::transform::MAT2D_IDENTITY,
+            flags: 0.0,
+            _pad: [0.0; 3],
+        };
+        let shadow_inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Shadow instance"),
+            contents: bytemuck::cast_slice(&[inst]),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        pass.set_pipeline(&textured_pipeline.render_pipeline);
+        pass.set_bind_group(0, &gpu_img.bind_group, &[]);
+        pass.set_vertex_buffer(0, textured_pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
+        pass.set_index_buffer(
+            textured_pipeline.index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        pass.draw_indexed(0..textured_pipeline.num_indices, 0, 0..1);
+    }
+}
+
+/// Where textured `text-shadow` quads must be submitted relative to page fills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // exercised by unit tests + documents draw-site contract
+enum TextShadowDrawSlot {
+    /// No page-stack bands: after all page rects/textures, before glyphon.
+    AfterPageFills,
+    /// CarouselStack / z-index bands: inside each band after fills, before that band's text.
+    PerBandAfterRects,
+}
+
+#[inline]
+#[allow(dead_code)]
+fn text_shadow_draw_slot(has_page_stack_bands: bool) -> TextShadowDrawSlot {
+    if has_page_stack_bands {
+        TextShadowDrawSlot::PerBandAfterRects
+    } else {
+        TextShadowDrawSlot::AfterPageFills
     }
 }
 
@@ -1406,7 +1467,7 @@ impl AppState {
         active_drag_rest: Option<&str>,
         text_force_fast_mode: bool,
         // 无拇指拖拽时：overlay 淡入淡出会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
-        // collect 用滚动信号画轨道/拇指（与 ViewportsOnly 同源路径）。
+        // collect draws the track/thumb with the scroll signal (same path as ViewportsOnly).
         scrollbar_skip_flex_layout: bool,
         // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
         // caret paint). Class `:hover` is **frozen** here — content sliding under a still cursor
@@ -1498,18 +1559,18 @@ impl AppState {
                 && sync_collect.portal_layout_changed
                 && !sync_collect.page_layout_changed;
         let impact_before_chrome = sync_impact;
-        // Button hover chrome: skip on scroll-only frames (exclusive hover is frozen; CSS
-        // transition paint can wait). Walking every gallery WP Button each smooth-scroll frame was measurable.
-        if !scroll_paint_only {
-            crate::components::button::sync_button_hover_paint_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-                viewport_w,
-                viewport_h,
-                [0.0, 0.0],
-            );
-        }
+        // Button hover chrome: always sync — scroll frames update layout before this pass,
+        // and pointer hover may have left on the prior post-layout reconcile while
+        // `scroll_paint_only` was true (signal already false; skipping sync stuck hover
+        // until scroll settled).
+        crate::components::button::sync_button_hover_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+            viewport_w,
+            viewport_h,
+            [0.0, 0.0],
+        );
         if !scroll_paint_only {
             crate::components::command::sync_command_item_paint_subtree(
                 &mut self.root_element,
@@ -1665,7 +1726,7 @@ impl AppState {
         }
         let layout_for_build_base =
             Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
-        // `layout_for_build` 仅在 `devtools` 时会被额外合并一次；非 devtools 构建无需 mut。
+        // `layout_for_build` will only be merged once for `devtools`; no mut is required for non-devtools builds.
         #[cfg(feature = "devtools")]
         let mut layout_for_build = layout_for_build_base;
         #[cfg(not(feature = "devtools"))]
@@ -1679,6 +1740,7 @@ impl AppState {
         }
 
         let portal_moves = hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
+        crate::components::drawer::sync_drawer_background_scale(&mut self.root_element);
 
         // Modal overlay/panel live on the hoisted portal tree. Flush seeds enter/exit
         // keyframes; CSS then ticks **once** on those nodes. Pre-hoist class-variant
@@ -1691,6 +1753,8 @@ impl AppState {
         let modal_css_ticking = crate::components::internal::modal_motion::tick_hoisted_modal_css(
             &mut self.root_element,
         );
+        // Floating Expand 依赖 layout_bounds 测高；Fade 也可在 layout 后 seed。
+        // Do not flush immediately after hoist (the floating layer height is still 0 at this time, and reactive reconstruction will flush out mid).
         if modal_needs_frame || modal_css_ticking {
             self.window.request_redraw();
         }
@@ -1849,8 +1913,8 @@ impl AppState {
         }
         // Scroll offsets do not affect Taffy sizing; skip full `compute_layout` when only
         // viewports were synced (no scrollbar thumb/style changes this frame).
-        // `StyleChanged` from per-frame chrome（颜色/阴影等）不改变 flex 几何时可与 `Clean` 一样走
-        // scroll-only；`LayoutChanged`（如边框宽度、下划线开关）仍必须跑 `compute_layout`。
+        // `StyleChanged` from per-frame chrome (color/shading, etc.) can be used the same as `Clean` without changing the flex geometry
+        // scroll-only; `LayoutChanged` (such as border width, underline switch) must still run `compute_layout`.
         // Full + overlay 淡入淡出 / 平滑滚：预更新已写滚动条样式，flex 树在 Clean 下与上一帧同构。
         //
         // Mid-scroll exception: after entering a huge page (gallery layout WP), glyphon_fit spill
@@ -1880,8 +1944,8 @@ impl AppState {
                     crate::core::tree::LayoutStatus::StructureChanged
                 ));
         // When the scrollbar prepass is `ViewportsOnly`, track/thumb Taffy styles are not updated.
-        // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect 用信号几何，
-        // 避免仅 hover 颜色每帧全量 Taffy。
+        // Chrome may set `StyleChanged` while scrollbars use overlay collect — collect with signal geometry,
+        // Avoid just hovering the full color Taffy every frame.
         // Keep overlay collect while dragging a thumb: idle frames paint via overlay, and
         // switching to Taffy on press used to jump the thumb by the track border (~1px down-right).
         let scrollbar_overlay_collect = scrollbar_update_resolved
@@ -1910,7 +1974,7 @@ impl AppState {
             )
         };
         // 浮层：首帧用占位坐标，布局后按触发器/视口纠正。滚动时只改 left/top —
-        // 只 dirty 浮层节点 + fast compute，禁止每帧全量重建 Taffy（打开 DatePicker 后整页滚动卡顿）。
+        // Only dirty floating layer nodes + fast compute, prohibiting full reconstruction of Taffy every frame (the whole page scrolls and freezes after opening DatePicker).
         if crate::utils::popup::sync_floating_placement(
             &mut self.root_element,
             logical_w,
@@ -1928,6 +1992,32 @@ impl AppState {
                 scrollbar_overlay_collect,
                 None,
             );
+        }
+        // Floating motion: Expand can read height measurement only after seed/tick of layout (and placement sync).
+        let floating_needs_frame =
+            crate::components::internal::floating_motion::flush_floating_motion_subtree(
+                &mut self.root_element,
+            );
+        let floating_css_ticking =
+            crate::components::internal::floating_motion::tick_hoisted_floating_css(
+                &mut self.root_element,
+            );
+        if floating_needs_frame || floating_css_ticking {
+            // Expand 写入的 max-height keyframe 需再跑一趟 Taffy，本帧才能裁剪高度。
+            crate::components::internal::floating_motion::mark_floating_panels_layout_dirty(
+                &self.root_element,
+                &mut self.layout_tree,
+            );
+            render_result = self.layout_tree.build_and_layout_fast_ex(
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+                false,
+                scrollbar_overlay_collect,
+                None,
+            );
+            self.window.request_redraw();
         }
         let layout_done = Instant::now();
 
@@ -2183,11 +2273,13 @@ impl AppState {
         let shadow_cached_keys: std::collections::HashSet<u64> =
             self.shadow_tex_cache.keys().copied().collect();
         let mut page_stack_band_underlines: Vec<Vec<InstanceInput>> = Vec::new();
+        let mut page_stack_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>> =
+            Vec::new();
         let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
             self.ensure_page_stack_band_text_renderers(page_stack_band_ranges.len());
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
+            let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             let mut caret_all = Vec::new();
-            let mut shadow_all = Vec::new();
             let mut needs_warmup = false;
             let mut culled = false;
             let text_prepare_begin = Instant::now();
@@ -2240,7 +2332,7 @@ impl AppState {
                 }
                 underlines.push(prep_out.underline_instances);
                 caret_all.extend(prep_out.caret_instances);
-                shadow_all.extend(prep_out.shadow_tex_draws);
+                shadow_bands.push(prep_out.shadow_tex_draws);
             }
             if culled {
                 self.window.request_redraw();
@@ -2250,6 +2342,7 @@ impl AppState {
                     self.last_shadow_tex_draws.clone(),
                 )
             } else {
+                let shadow_all: Vec<_> = shadow_bands.iter().flatten().cloned().collect();
                 self.last_text_nodes_cache = self.text_nodes[..overlay_text_start].to_vec();
                 self.last_text_ui_scale = ui_scale;
                 self.last_text_surface_size = [self.config.width, self.config.height];
@@ -2275,6 +2368,7 @@ impl AppState {
                     }
                 }
                 page_stack_band_underlines = underlines;
+                page_stack_band_shadows = shadow_bands;
                 (Vec::new(), caret_all, shadow_all)
             }
         } else if text_cache_valid {
@@ -2363,12 +2457,15 @@ impl AppState {
         self.ensure_overlay_band_text_renderers(overlay_band_ranges.len());
         let mut overlay_band_underlines: Vec<Vec<InstanceInput>> =
             Vec::with_capacity(overlay_band_ranges.len());
+        let mut overlay_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>> =
+            Vec::with_capacity(overlay_band_ranges.len());
         let mut overlay_needs_warmup = false;
         for (band_i, band) in overlay_band_ranges.iter().enumerate() {
             let text_lo = band.text.0;
             let text_hi = band.text.1;
             if text_lo >= text_hi {
                 overlay_band_underlines.push(Vec::new());
+                overlay_band_shadows.push(Vec::new());
                 continue;
             }
             let shadow_cached_keys: std::collections::HashSet<u64> =
@@ -2414,6 +2511,7 @@ impl AppState {
                 overlay_needs_warmup = true;
             }
             overlay_band_underlines.push(overlay_prep.underline_instances);
+            overlay_band_shadows.push(overlay_prep.shadow_tex_draws);
         }
         if overlay_needs_warmup {
             self.window.request_redraw();
@@ -2506,6 +2604,15 @@ impl AppState {
                 d.cache_key.hash(&mut hasher);
                 for v in d.rect {
                     v.to_bits().hash(&mut hasher);
+                }
+            }
+            for band in &overlay_band_shadows {
+                band.len().hash(&mut hasher);
+                for d in band {
+                    d.cache_key.hash(&mut hasher);
+                    for v in d.rect {
+                        v.to_bits().hash(&mut hasher);
+                    }
                 }
             }
             let frame_fp = hasher.finish();
@@ -2601,9 +2708,12 @@ impl AppState {
             .iter()
             .map(|b| b.backdrop_blur)
             .fold(0.0_f32, f32::max);
+        // Only underlays that actually blur — the panel band is opacity=1 for the
+        // whole slide and would pin σ at full strength (instant blur, then pop off).
         let modal_underlay_opacity = overlay_split
             .bands
             .iter()
+            .filter(|b| b.backdrop_blur > 0.5)
             .map(|b| b.underlay_opacity)
             .fold(0.0_f32, f32::max);
         let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
@@ -2647,38 +2757,6 @@ impl AppState {
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
                     );
-                    for sd in &shadow_tex_draws {
-                        let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
-                            continue;
-                        };
-                        let inst = TexturedInstanceInput {
-                            rect_pos: [sd.rect[0], sd.rect[1]],
-                            rect_size: [sd.rect[2], sd.rect[3]],
-                            tint: [1.0, 1.0, 1.0, 1.0],
-                            uv_offset: [0.0, 0.0],
-                            uv_scale: [1.0, 1.0],
-                            transform: crate::style::transform::MAT2D_IDENTITY,
-                            flags: 0.0,
-                            _pad: [0.0; 3],
-                        };
-                        let shadow_inst_buf =
-                            self.device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Shadow instance (scene)"),
-                                    contents: bytemuck::cast_slice(&[inst]),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                });
-                        page_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                        page_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                        page_pass
-                            .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
-                        page_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
-                        page_pass.set_index_buffer(
-                            self.textured_pipeline.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        page_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
-                    }
                     if has_page_stack_bands {
                         for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
                             if band.paint_ops.0 < band.paint_ops.1 {
@@ -2773,6 +2851,15 @@ impl AppState {
                                     );
                                 }
                             }
+                            if let Some(sds) = page_stack_band_shadows.get(band_i) {
+                                draw_shadow_tex_draws(
+                                    &mut page_pass,
+                                    sds,
+                                    &self.shadow_tex_cache,
+                                    &self.textured_pipeline,
+                                    &self.device,
+                                );
+                            }
                             if band.text.0 < band.text.1 {
                                 if band_i == 0 {
                                     self.text_renderer.render(&mut page_pass);
@@ -2836,6 +2923,13 @@ impl AppState {
                                 0..underline_instances.len() as u32,
                             );
                         }
+                        draw_shadow_tex_draws(
+                            &mut page_pass,
+                            &shadow_tex_draws,
+                            &self.shadow_tex_cache,
+                            &self.textured_pipeline,
+                            &self.device,
+                        );
                         self.text_renderer.render(&mut page_pass);
                     }
                     if overlay_chrome_start > 0 {
@@ -2926,42 +3020,6 @@ impl AppState {
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
             );
-            // Text-shadow quads: before page stacking bands so higher-z card fills cover them.
-            if !use_backdrop_blur && has_page_stack_bands {
-                for sd in &shadow_tex_draws {
-                    let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
-                        continue;
-                    };
-                    let inst = TexturedInstanceInput {
-                        rect_pos: [sd.rect[0], sd.rect[1]],
-                        rect_size: [sd.rect[2], sd.rect[3]],
-                        tint: [1.0, 1.0, 1.0, 1.0],
-                        uv_offset: [0.0, 0.0],
-                        uv_scale: [1.0, 1.0],
-                        transform: crate::style::transform::MAT2D_IDENTITY,
-                        flags: 0.0,
-                        _pad: [0.0; 3],
-                    };
-                    let shadow_inst_buf =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("Shadow instance"),
-                                contents: bytemuck::cast_slice(&[inst]),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            });
-                    render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                    render_pass
-                        .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
-                    render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
-                    render_pass.set_index_buffer(
-                        self.textured_pipeline.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
-                }
-            }
-
             // Page layer: tree-order rects + textures (Solid/CSS stacking with portal overlays).
             // With in-page stacking bands (CarouselStack): each band is `rects → text` so
             // higher-z card fills occlude lower cards' glyphs.
@@ -3059,6 +3117,16 @@ impl AppState {
                             }
                         }
 
+                        if let Some(sds) = page_stack_band_shadows.get(band_i) {
+                            draw_shadow_tex_draws(
+                                &mut render_pass,
+                                sds,
+                                &self.shadow_tex_cache,
+                                &self.textured_pipeline,
+                                &self.device,
+                            );
+                        }
+
                         if band.text.0 < band.text.1 {
                             if band_i == 0 {
                                 self.text_renderer.render(&mut render_pass);
@@ -3102,38 +3170,13 @@ impl AppState {
             }
 
             if !use_backdrop_blur && !has_page_stack_bands {
-                for sd in &shadow_tex_draws {
-                    let Some(gpu_img) = self.shadow_tex_cache.get(&sd.cache_key) else {
-                        continue;
-                    };
-                    let inst = TexturedInstanceInput {
-                        rect_pos: [sd.rect[0], sd.rect[1]],
-                        rect_size: [sd.rect[2], sd.rect[3]],
-                        tint: [1.0, 1.0, 1.0, 1.0],
-                        uv_offset: [0.0, 0.0],
-                        uv_scale: [1.0, 1.0],
-                        transform: crate::style::transform::MAT2D_IDENTITY,
-                        flags: 0.0,
-                        _pad: [0.0; 3],
-                    };
-                    let shadow_inst_buf =
-                        self.device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("Shadow instance"),
-                                contents: bytemuck::cast_slice(&[inst]),
-                                usage: wgpu::BufferUsages::VERTEX,
-                            });
-                    render_pass.set_pipeline(&self.textured_pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &gpu_img.bind_group, &[]);
-                    render_pass
-                        .set_vertex_buffer(0, self.textured_pipeline.vertex_buffer.slice(..));
-                    render_pass.set_vertex_buffer(1, shadow_inst_buf.slice(..));
-                    render_pass.set_index_buffer(
-                        self.textured_pipeline.index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    render_pass.draw_indexed(0..self.textured_pipeline.num_indices, 0, 0..1);
-                }
+                draw_shadow_tex_draws(
+                    &mut render_pass,
+                    &shadow_tex_draws,
+                    &self.shadow_tex_cache,
+                    &self.textured_pipeline,
+                    &self.device,
+                );
             }
 
             if !has_page_stack_bands && !underline_instances.is_empty() && !use_backdrop_blur {
@@ -3307,6 +3350,16 @@ impl AppState {
                             0..ul.len() as u32,
                         );
                     }
+                }
+
+                if let Some(sds) = overlay_band_shadows.get(band_i) {
+                    draw_shadow_tex_draws(
+                        &mut render_pass,
+                        sds,
+                        &self.shadow_tex_cache,
+                        &self.textured_pipeline,
+                        &self.device,
+                    );
                 }
 
                 if band.text.0 < band.text.1 {
@@ -3586,8 +3639,8 @@ fn update_scrollbar_elements(
     }
 
     // Update children first so nested scrollbars also work.
-    // Full 模式剪枝：无 ScrollArea 子树且子节点本身也不是 scroll/scrollbar 焦点时，不再下降
-    // （避免对纯静态 UI 大子树做 612 次无意义递归；轨道/拇指仍由「本节点」在下方逻辑处理。）
+    // Full mode pruning: When there is no ScrollArea subtree and the child node itself is not the scroll/scrollbar focus, it will no longer drop.
+    // (Avoid 612 meaningless recursions on a purely static UI large subtree; the track/thumb is still logically processed by "this node" below.)
     for child in &mut el.children {
         let descend = child.scroll_viewport_subtree_count > 0
             || child.focus_id.as_deref().is_some_and(|f| {
@@ -3642,10 +3695,10 @@ fn update_scrollbar_elements(
     let allow_y = !overflow_y.eq_ignore_ascii_case("hidden")
         && !overflow_y.eq_ignore_ascii_case("clip")
         && !overflow_y.eq_ignore_ascii_case("visible");
-    // 双轴 inside 布局时，角落预留只应发生在“对向轴真正会占据角落”的场景：
-    // - 对向轴可滚动（会显示可交互轨道），或
-    // - 对向轴显式 `always`（即使不可滚动也要求保留轨道槽位）。
-    // `auto && !can_scroll` 若仍预留，会让部分内层轨道看起来被多扣了一截。
+    // When dual-axis inside layout, corner reservation should only occur in the scenario where "opposite axis will really occupy the corner":
+    // - The opposite axis is scrollable (interactive tracks will be displayed), or
+    // - Explicit `always` for opposite axis (requires track slots to be reserved even if not scrollable).
+    // `auto && !can_scroll` If it is still reserved, it will make some inner tracks look like they have been extended.
     let vis_x_other = use_signal(&scrollbar_visibility_signal_key(&rest, "x"), || {
         "auto".to_string()
     })
@@ -4485,13 +4538,13 @@ mod hot_reload_inject {
                 .as_deref()
                 .is_some_and(|h| h == tpl.hash.as_str())
             {
-                // 与 CLI 同 hash：树来自刚编译的 ui!，勿再按索引覆盖（易与 `{expr}` 槽位错位）。
+                //Same hash as CLI: the tree comes from the newly compiled ui!, do not overwrite by index (easy to misalign with `{expr}` slot).
                 continue;
             }
             let _ = inject_style_attrs(target, &tpl.style_attrs);
             // 从 ui!() 回调得到的新树是编译期字符串；热更的增量 replacement 的 `from` 是「上一版热更」
             // 的 literal，与当前树中的字往往对不上，单靠 replacement 会在 resize/信号重绘时失效。
-            // 持久化里带有完整 `text_literals` 快照时，按 DFS 一次性写回（与 inject_hot_reload_partial 一致）。
+            // When persistence contains a complete `text_literals` snapshot, DFS writes it back in one go (consistent with inject_hot_reload_partial).
             let mut text_ok = false;
             if !tpl.text_literals.is_empty() {
                 text_ok = inject_text_literals(target, &tpl.text_literals);
@@ -4816,6 +4869,25 @@ mod hot_reload_inject {
         }
     }
 } // mod hot_reload_inject
+
+#[cfg(test)]
+mod text_shadow_draw_slot_tests {
+    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
+
+    #[test]
+    fn page_stack_bands_require_per_band_shadow_slot() {
+        // Regression: drawing all text-shadows before page_stack band fills makes them
+        // invisible under opaque card backgrounds (gallery Text-shadow section).
+        assert_eq!(
+            text_shadow_draw_slot(true),
+            TextShadowDrawSlot::PerBandAfterRects
+        );
+        assert_eq!(
+            text_shadow_draw_slot(false),
+            TextShadowDrawSlot::AfterPageFills
+        );
+    }
+}
 
 #[cfg(test)]
 mod template_path_tests {

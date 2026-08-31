@@ -4,9 +4,9 @@
 //! `Reference/ShadCN-UI/.../ui/aspect-ratio.tsx` — `relative` + CSS `aspect-ratio`
 //!（[`crate::core::tree::parse_css_aspect_ratio`] / MDN）。
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! <AspectRatio ratio={16.0 / 9.0} w="100%">
 //!     <Image src="photo.jpg" w="100%" h="100%" />
 //! </AspectRatio>
@@ -25,13 +25,14 @@
 //! <Box w="12rem" aspect-ratio="1 / 1" bg="muted" />
 //! ```
 //!
-//! ## 注意
-//! - **展示型**：空 `id` 不写 `template_id`（WP-2.8）。
+//! ## Notes
+//! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
 //! - 容器设 `w`（或父级定宽）且另一轴为 auto 时，比例才会约束盒子（MDN）。
 //! - 子节点宜 `w/h=100%`（或 absolute 铺满）以填满裁剪区；组件会把子节点铺满。
 
 use crate::core::tree::{parse_css_aspect_ratio, Element, IntoAspectRatioValue};
 use crate::primitives::r#box::r#box;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -83,23 +84,12 @@ impl From<String> for AspectRatioValue {
         Self::from(s.as_str())
     }
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
-}
-
 pub struct AspectRatioBuilder {
     ratio: f32,
     children: Vec<Element>,
 }
 
-/// Builder 入口（ADR-9 面 B）。
+/// Builder entry (ADR-9 surface B).
 pub fn aspect_ratio() -> AspectRatioBuilder {
     AspectRatioBuilder {
         ratio: 1.0,

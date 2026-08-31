@@ -309,7 +309,7 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
         return Some(text.to_string());
     }
 
-    // Label：用自身文案；勿把内嵌 Checkbox 勾选字形拼进读屏名。
+    // Label: use own text; do not fold nested Checkbox check glyphs into the accessible name.
     if role == Role::Label {
         if let Some(t) = el.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             return Some(t.to_string());
@@ -317,7 +317,7 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
         return collect_label_caption(el);
     }
 
-    // 已有 labelledby 时，名称交给关联 Label（避免勾选 glyph 当可读名）。
+    // When labelledby already exists, defer name to the associated Label (avoid check glyph as accessible name).
     let has_labelled_by =
         el.attrs.contains_key("accesskit_labelled_by") || el.attrs.contains_key("aria-labelledby");
     if has_labelled_by
@@ -384,7 +384,7 @@ fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bo
 
 fn collect_visible_text_skip_lucide(el: &Element, parts: &mut Vec<String>) {
     if el.text_style.font_family.as_deref() == Some("lucide") {
-        // 勾选 / 图标字形不当 accessible name；仍可下钻非 lucide 子节点。
+        // Check/icon glyphs must not be the accessible name; still walk non-lucide children.
         for child in &el.children {
             collect_visible_text_skip_lucide(child, parts);
         }
@@ -551,7 +551,7 @@ fn walk_subtree(
     under_name_from_contents: bool,
     for_map: &HashMap<String, String>,
 ) {
-    // Fold plain caption text into the ancestor control name (avoid "按钮" + nested Label).
+    // Fold plain caption text into the ancestor control name (avoid "button" + nested Label).
     if under_name_from_contents && is_plain_text_name_leaf(el) {
         return;
     }

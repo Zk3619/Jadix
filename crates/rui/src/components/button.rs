@@ -1,25 +1,29 @@
 //! # Button
 //!
-//! ShadCN 风格可点击按钮：变体（default / outline / ghost / link / success /
-//! warning / destructive / …）、尺寸、禁用、hover 过渡与焦点环。
+//! ShadCN style clickable button: variant (default / outline / ghost / link / success /
+//! warning / destructive / ...), size, disable, hover transition and focus ring.
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Button variant="outline" size="sm" on_click={move |_| { … }}>"保存"</Button>
-//! <Button id="hw-hover" variant="ghost">"悬停"</Button>
-//! <Button variant="success">"完成"</Button>
+//! <Button id="hw-hover" variant="ghost">"hover"</Button>
+//! <Button variant="success">"Complete"</Button>
 //! <Button variant="warn">"注意"</Button> // warn ≡ warning
-//! // 或：Element::from(button("ok").variant("default").on_click(…))
+//! // Or: Element::from(button("ok").variant("default").on_click(…))
 //! ```
 //!
-//! ## 注意
-//! - **对齐 ShadCN / solid-ui**：普通文案默认 `whitespace-nowrap` + `flex-shrink: 0`
-//!  （基类 `inline-flex shrink-0 … whitespace-nowrap`），动态文案变宽时拉宽按钮而非内部换行。
+//! ## Notes
+//! - **Alignment ShadCN/solid-ui**: Normal copy default `whitespace-nowrap` + `flex-shrink: 0`
+//!  (Base class `inline-flex shrink-0 … whitespace-nowrap`), when the dynamic copy becomes wider, the button will be widened instead of wrapping internally.
 //!  Lucide 图标叶不加 nowrap，避免方按钮内图标偏右。
-//! - **`id` 非必填心智**：无稳定焦点/测试需求时可省略；空 `id` → 自动 `btn-N`（会话内递增，**不**保证跨 rebuild 同一逻辑实例）。
-//! - 多实例非受控、稳定焦点、冒烟选择器：请显式稳定 `id`（见 `docs/COMPONENT_LIBRARY.md` §4.2）。
-//! - hover / focus 用 `peek` + 每帧 paint sync；hover 色走 CSS `transition-colors`（~150ms）。
-//! - 子节点可为文字或图标；Lucide 图标会保留自身 `text_size`。
+//! - **`id` is optional**: can be omitted when there is no stable focus/testing requirements; empty `id` → automatic `btn-N` (incremented within the session, **not** guaranteed to rebuild the same logical instance across rebuilds).
+//! - Multi-instance uncontrolled, stable focus, smoke selectors: please explicitly stabilize the `id` (see `docs/COMPONENT_LIBRARY.md` §4.2).
+//! - Hover / focus using `peek` + paint sync per frame; hover color walking CSS `transition-colors` (~150ms).
+//! - Child nodes can be text or icons; Lucide icons retain their own `text_size`.
+//! - `ui!` multi-child packs into a `rui_fragment`; Button unpacks via
+//!   [`crate::utils::take_packed`] so captions get the variant foreground
+//!   (outline → `foreground`). Slotted shells such as
+//!   [`crate::components::Kbd`] / `KbdGroup` keep their own chrome.
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
@@ -33,14 +37,27 @@ use crate::style::{
     focus_ring_style, is_dark_theme, lerp_display_srgb_linear, mix_display_srgb_in_oklab,
     TimingFunction, TransitionEntry, TransitionProperty,
 };
+use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Tailwind v4 `shadow-xs`（保留常量供文档/对照；当前 Button 变体不再默认挂 shadow）。
+const ATTR_SLOT: &str = "data-slot";
+
+/// Keycap shells keep muted chrome during hover / bind paint (do not recolor captions).
+fn is_preserved_button_child_slot(el: &Element) -> bool {
+    matches!(
+        el.attrs.get(ATTR_SLOT).map(String::as_str),
+        Some("kbd" | "kbd-group")
+    )
+}
+
+/// Tailwind v4 `shadow-xs` (constants reserved for documentation/reference; current Button variants no longer have shadow by default).
 #[allow(dead_code)]
 const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
-/// Link 变体 hover 下划线默认间距（逻辑 px；正值在本引擎中向上靠近字形）。
+/// Link variant hover underline spacing (logical px; default **2**).
+/// Positive pushes the line **away** from the glyph (CSS `text-underline-offset`).
+/// ShadCN Button uses `underline-offset-4` (4px); Breadcrumb / tight inline keep 2.
 const LINK_UNDERLINE_OFFSET_PX: f32 = 2.0;
 
 fn link_underline_offset_px(builder: &ButtonBuilder) -> f32 {
@@ -68,7 +85,7 @@ impl ColorExt for [f32; 4] {
     }
 }
 
-/// Focus ring（Hard/Soft via [`focus_ring_params`]）的单槽 `box-shadow`。
+/// Single slot `box-shadow` for Focus ring (Hard/Soft via [`focus_ring_params`]).
 /// 当前 shadcn Base/Aria Button 文档站变体不再挂 `shadow-xs`。
 fn button_shadow_style_for_sync(
     is_focused: bool,
@@ -88,7 +105,7 @@ fn button_shadow_style_for_sync(
     (0.0, [0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 0.0)
 }
 
-/// CSS hover chrome duration（对标短 `transition-colors`）。
+/// CSS hover chrome duration (short to `transition-colors`).
 const BUTTON_HOVER_TRANSITION_MS: f32 = 150.0;
 
 fn ensure_button_css_transition(el: &mut Element) {
@@ -120,7 +137,7 @@ fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
     }
 }
 
-/// `link` + 显式 rest 字色（如 Breadcrumb muted）：hover 切 `foreground`。
+/// `link` + explicit rest text color (such as Breadcrumb muted): hover cuts `foreground`.
 fn link_caption_color(
     explicit_rest: Option<[u8; 4]>,
     variant_text: [u8; 4],
@@ -175,10 +192,10 @@ fn lerp_text_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
     ]
 }
 
-/// Tailwind / CSS `color-mix(..., fg alpha%, transparent)` 叠在 `background` 上的不透明等价色。
+/// Tailwind / CSS `color-mix(..., fg alpha%, transparent)` The opaque equivalent color overlaid on the `background`.
 ///
-/// 使用 **直通道 sRGB alpha 合成**（与文档站 canvas 采样一致：`primary/80`→`#333`、
-/// `destructive/10`→`#fde6e7`）。勿用 Oklab 混合替代——会把结果抬亮。
+/// Use **straight channel sRGB alpha synthesis** (consistent with document site canvas sampling: `primary/80`→`#333`,
+/// `destructive/10`→`#fde6e7`). Don’t use Oklab Hybrid Substitute – it will overstate the results.
 fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
     let bg = parse_color("background");
     let a = alpha.clamp(0.0, 1.0);
@@ -190,7 +207,7 @@ fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
     ]
 }
 
-/// `color-mix(in oklch, base, other pct%)` — pct 为 other 占比（0–100）。
+/// `color-mix(in oklch, base, other pct%)` — pct is the proportion of other (0–100).
 fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32; 4] {
     let t = (other_pct / 100.0).clamp(0.0, 1.0);
     let mut out = mix_display_srgb_in_oklab(base, other, t);
@@ -198,8 +215,8 @@ fn color_mix_oklch_pct(base: [f32; 4], other: [f32; 4], other_pct: f32) -> [f32;
     out
 }
 
-/// Soft semantic tint（与 Toast 语义色同源，配方对齐 destructive）：
-/// `accent/10` → hover `accent/20`（暗色 `20/30`）；字色为不透明 accent。
+/// Soft semantic tint (same origin as Toast semantic color, recipe aligned destructive):
+/// `accent/10` → hover `accent/20` (dark color `20/30`); the text color is opaque accent.
 fn soft_semantic_chrome(
     accent: [f32; 4],
     text: [u8; 4],
@@ -217,9 +234,9 @@ fn soft_semantic_chrome(
 /// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
 /// - default: `bg-primary` → hover `primary/80`
 /// - secondary: `bg-secondary` → hover `color-mix(secondary, foreground 5%)`
-/// - success / warning / destructive: soft tint（见 [`soft_semantic_chrome`]）；
-///   success=`green-600`、warning=`orange-600`（与 Toast tone 同源）、destructive token
-/// - outline / ghost / link：见各分支
+/// - success / warning / destructive: soft tint (see [`soft_semantic_chrome`]);
+///   success=`green-600`, warning=`orange-600` (same origin as Toast tone), destructive token
+/// - outline / ghost / link: see each branch
 pub(crate) fn button_chrome_for_variant(
     variant: &str,
     hover_t: f32,
@@ -269,7 +286,7 @@ pub(crate) fn button_chrome_for_variant(
                 parse_color("accent")
             };
             // 与 hover 同 RGB、α=0：CSS 非预乘插值只动 alpha，避免透明黑→有色脏闪。
-            // 勿走 `lerp_premultiplied`（α≈0 时会折成黑），端点必须保留 RGB。
+            // Do not use `lerp_premultiplied` (it will fold into black when α≈0), the endpoints must retain RGB.
             let rest_bg = [hover_bg[0], hover_bg[1], hover_bg[2], 0.0];
             let bg = if t >= 0.5 { hover_bg } else { rest_bg };
             let tc = lerp_text_rgba(
@@ -308,7 +325,7 @@ pub(crate) fn button_chrome_for_variant(
 }
 
 // ─── ShadCN-UI Button Variants ───────────────────────────────────────────────
-/// Button `variant`：ShadCN 基线 + 语义 soft tint（success / warning）+ Toast 同源色。
+/// Button `variant`: ShadCN baseline + semantic soft tint (success/warning) + Toast homologous color.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum ButtonVariant {
     #[default]
@@ -371,7 +388,7 @@ impl ButtonVariant {
 pub enum ButtonSize {
     #[default]
     Default,
-    /// 行内文字链（Breadcrumb / 内联导航）：零 padding · `h-auto`。
+    /// Inline text chain (Breadcrumb / inline navigation): zero padding · `h-auto`.
     Inline,
     Xs,
     Sm,
@@ -556,7 +573,9 @@ pub fn Button(
     }
 
     if let Some(c) = children {
-        builder = builder.child(c);
+        for kid in take_packed(c) {
+            builder = builder.child(kid);
+        }
     }
 
     let mut el: Element = builder.into();
@@ -603,7 +622,7 @@ pub fn button(id: impl AsRef<str>) -> ButtonBuilder {
         on_click: None,
         container: hstack()
             // ShadCN Button base: `inline-flex shrink-0 items-center justify-center gap-2`
-            // （`whitespace-nowrap` 落在文案叶子上，见 From）。
+            // (`whitespace-nowrap` falls on copywriting leaves, see From).
             .rounded(size.corner_radius())
             .gap(size.gap())
             .justify_center()
@@ -681,7 +700,7 @@ impl ButtonBuilder {
         self
     }
 
-    /// Link hover 下划线 offset（逻辑 px；正值在本引擎中向上靠近字形）。
+    /// Link hover underline offset (logical px; CSS `text-underline-offset`, positive = down).
     pub fn text_underline_offset(mut self, px: impl IntoF32) -> Self {
         self.text_style.underline_offset_px = Some(px.into_f32());
         self
@@ -736,7 +755,7 @@ impl ButtonBuilder {
     }
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
-        self.content.push(child.into());
+        self.content.extend(take_packed(child.into()));
         self
     }
 
@@ -835,7 +854,7 @@ impl From<ButtonBuilder> for Element {
         let focused = use_signal("__rui_button_focus_id", String::new);
         let focus_visible = use_signal("__rui_focus_visible", || false);
 
-        // `peek`：不把 hover / 焦点订阅到根 `create_effect`，避免悬停、点输入框、Tab 等触发整树 `rebuild_ui`。
+        // `peek`: Do not subscribe hover/focus to the root `create_effect` to avoid hovering, clicking the input box, Tab, etc. to trigger the entire tree `rebuild_ui`.
         // hover 由 `sync_button_hover_paint_subtree` 写回；焦点环由同函数内 `sync_button_focus_ring_shadow` 写回。
         let is_hovered = hovered.peek() && !builder.disabled;
         let is_focused = focused.peek() == builder.id && focus_visible.peek() && !builder.disabled;
@@ -999,6 +1018,8 @@ impl From<ButtonBuilder> for Element {
                 }
                 el = el.child(text_node);
             } else {
+                // Structured children (Kbd / KbdGroup / Icon shells, …) attach as-is.
+                // Keycap slots keep muted chrome; captions were hoisted via take_packed.
                 el = el.child(child);
             }
         }
@@ -1081,6 +1102,9 @@ fn paint_button_root_from_hover(
         color4_near(el.style.bg_color, bg) && el.style.border_width == target_bw && root_color_ok;
     let mut text_children_ok = true;
     for child in &el.children {
+        if is_preserved_button_child_slot(child) {
+            continue;
+        }
         if child.text.is_none() {
             continue;
         }
@@ -1093,7 +1117,7 @@ fn paint_button_root_from_hover(
         } else {
             child.text_style.underline_offset
         };
-        // link：保持 `None`（currentColor），勿钉死 Some(rgb)。
+        // link: keep `None`(currentColor), don't pin Some(rgb).
         if child.text_style.underline != underline
             || child.text_style.color != c
             || (desc.variant == "link" && child.text_style.decoration_color.is_some())
@@ -1118,7 +1142,7 @@ fn paint_button_root_from_hover(
     let old_bg = el.style.bg_color;
     let old_bc = el.style.border_color;
 
-    // 每帧写目标色；`tick_element_transitions` 再插回 mid（与 Carousel/Toast 同口径）。
+    // Write the target color every frame; `tick_element_transitions` is then inserted back into mid (same caliber as Carousel/Toast).
     el.style.bg_color = bg;
     match border {
         Some(b_color) => {
@@ -1130,7 +1154,7 @@ fn paint_button_root_from_hover(
             el.style.border_width_sides = None;
         }
     }
-    // ButtonGroup 连体：写回 border 后重套圆角 / 绘制叠边标记。
+    // ButtonGroup conjoined: write back the border and then fillet it/draw the overlapping mark.
     crate::components::button_group::apply_button_group_join_chrome(el);
     let mut layout_hit = el.style.border_width != old_bw;
     let mut style_hit =
@@ -1141,6 +1165,9 @@ fn paint_button_root_from_hover(
     }
 
     for child in &mut el.children {
+        if is_preserved_button_child_slot(child) {
+            continue;
+        }
         if child.text.is_none() {
             continue;
         }
@@ -1168,19 +1195,27 @@ fn paint_button_root_from_hover(
                     .attrs
                     .insert("text_underline_offset".to_string(), "1".to_string());
             }
-            // currentColor：勿写 Some(rgb)/attr，让 cascade 与 prepare_text 跟字色走。
+            // currentColor: Don't write Some(rgb)/attr, let cascade and prepare_text follow the text color.
             child.text_style.decoration_color = None;
             child.attrs.remove("text_decoration_color");
         }
-        if prev_u != underline {
+        let child_layout_hit = if prev_u != underline {
+            // Link hover underline is paint-only; Taffy remeasure thrashes hit boxes
+            // (Breadcrumb link hover could spuriously leave after one miss frame).
+            desc.variant != "link"
+        } else {
+            false
+        };
+        if child_layout_hit {
             layout_hit = true;
         } else if child.text_style.color != old_tc
+            || prev_u != underline
             || prev_dc != child.text_style.decoration_color
             || (prev_uo - child.text_style.underline_offset).abs() > 0.01
         {
             style_hit = true;
         }
-        if child.layout_node.is_some() {
+        if child_layout_hit && child.layout_node.is_some() {
             layout_tree.update_taffy_node_style(child);
         }
     }
@@ -1276,7 +1311,7 @@ fn sync_button_focus_ring_shadow(
 /// Solid-style in-place bind for `<Button variant={sig.get()}>`.
 ///
 /// Updates [`ButtonHoverPaint::variant`] and rest-state chrome without rebuilding the button tree.
-/// Unknown names fall back to `default`（WP-3.8 词汇表）。
+/// Unknown names fall back to `default` (WP-3.8 Glossary).
 pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
     let variant = ButtonVariant::from(variant.as_ref()).as_paint_key();
     let Some(desc) = el.button_hover_paint.as_mut() else {
@@ -1307,6 +1342,9 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
         }
     }
     for child in &mut el.children {
+        if is_preserved_button_child_slot(child) {
+            continue;
+        }
         if child.text.is_some() {
             child.text_style.color = text_color;
         }
@@ -1327,7 +1365,7 @@ pub fn apply_bound_button_disabled(el: &mut Element, disabled: bool) -> LayoutSt
     LayoutStatus::StyleChanged
 }
 
-/// 把 `{focus_id}_hover` 与全局焦点环同步到带 [`Element::button_hover_paint`] 的节点（不经过根 `create_effect`）。
+/// Synchronize `{focus_id}_hover` with the global focus ring to the node with [`Element::button_hover_paint`] (without going through the root `create_effect`).
 pub(crate) fn sync_button_hover_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
@@ -1559,5 +1597,72 @@ mod chrome_tests {
         let (unknown, ..) = button_chrome_for_variant("nope", 0.0);
         let (default, ..) = button_chrome_for_variant("default", 0.0);
         assert_eq!(hex(unknown), hex(default));
+    }
+
+    #[test]
+    fn outline_button_unpacks_ui_vstack_and_paints_caption_foreground() {
+        use super::{Button, ButtonProps, ButtonVariant};
+        use crate::components::kbd::kbd_group;
+        use crate::primitives::r#box::vstack;
+
+        // Mimic ui! multi-child pack: anonymous VStack wrapping caption + KbdGroup.
+        let packed = Element::from(vstack().children(vec![
+            Element::new().text("Search"),
+            kbd_group().kbd("⌘").kbd("K").into(),
+        ]));
+        let el = Button(ButtonProps {
+            variant: Some(ButtonVariant::Outline),
+            children: Some(packed),
+            ..Default::default()
+        });
+        let want_fg = parse_text_color("foreground");
+        let caption = el
+            .children
+            .iter()
+            .find(|c| c.text.as_deref() == Some("Search"))
+            .expect("Search caption must be hoisted to the button row");
+        assert_eq!(
+            caption.text_style.color, want_fg,
+            "outline caption must use foreground, not default white"
+        );
+        let group = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd-group"))
+            .expect("KbdGroup shell must stay intact");
+        assert!(
+            group.children.iter().all(|k| {
+                k.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd")
+                    && k.children.iter().any(|leaf| {
+                        leaf.text.is_some()
+                            && leaf.text_style.color == parse_text_color("muted-foreground")
+                    })
+            }),
+            "Kbd captions must keep muted-foreground"
+        );
+    }
+
+    #[test]
+    fn outline_button_alone_kbd_group_is_not_dismantled() {
+        use super::{Button, ButtonProps, ButtonVariant};
+        use crate::components::kbd::kbd_group;
+
+        let el = Button(ButtonProps {
+            variant: Some(ButtonVariant::Outline),
+            children: Some(kbd_group().kbd("⌘").kbd("K").into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            el.children.len(),
+            1,
+            "sole KbdGroup must not be unpacked into raw keycaps"
+        );
+        assert_eq!(
+            el.children[0]
+                .attrs
+                .get("data-slot")
+                .map(|s| s.as_str()),
+            Some("kbd-group")
+        );
     }
 }

@@ -1,4 +1,4 @@
-//! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
+//! Carousel product-layer submodule — shares parent symbols via `use super::*`.
 
 use super::geometry::*;
 use super::*;
@@ -34,7 +34,7 @@ thread_local! {
 }
 
 pub(super) fn begin_carousel_drag(drag: CarouselDrag) {
-    // 拖拽打断无缝段时必须 settle，不能只丢 flag（否则弹簧停在半途且 target 残留）。
+    // When dragging to interrupt a seamless segment, you must settle, and you cannot just drop the flag (otherwise the spring will stop halfway and the target will remain).
     finish_loop_anim(&drag.id, drag.index);
     clear_autoplay_deadline(&drag.id, drag.autoplay_ms);
     crate::utils::pointer_drag::begin(
@@ -139,7 +139,7 @@ pub(super) fn drag_nearest_index(
         return drag.index.peek().min(hi);
     }
     let logical = ((-visual / step).round() as i32) - cc as i32;
-    // Stack 无克隆带，但 loop 仍应按环形取 nearest。
+    // Stack has no clone band, but loop should still be chosen nearest according to the loop shape.
     if drag.wraps && (cc > 0 || drag.variant == CarouselVariant::Stack) {
         let n_i = n as i32;
         let wrapped = ((logical % n_i) + n_i) % n_i;
@@ -170,7 +170,7 @@ pub(super) fn resolve_snap_index(
     }
 }
 
-/// 无缝 + 吸附松手：按视觉最近**轨道格**（可含首尾克隆）吸附。
+/// Seamless + adsorption and release: adsorb according to the nearest **track grid** (can include head and tail clones) visually.
 /// 若目标落在克隆槽，走 [`LoopAnim`] 再瞬移回真实带，避免尾项→首项反向长滚。
 pub(super) fn end_seamless_snap_drag(
     drag: &CarouselDrag,
@@ -256,7 +256,7 @@ pub(super) fn end_carousel_drag() {
                 return;
             }
 
-            // Multi + page：按整页吸附；目标以视觉所在页为准（过半页跟 nearest）。
+            // Multi + page: Adsorb to the entire page; the target is based on the visual page (more than half of the page and nearest).
             if drag.variant == CarouselVariant::Multi
                 && drag.scroll_by == CarouselScrollBy::Page
                 && cc == 0
@@ -285,7 +285,7 @@ pub(super) fn end_carousel_drag() {
                 return;
             }
 
-            // 无缝吸附：可停在克隆格，再 loop_anim 回真实带（勿直接 animate 到对侧真实槽）。
+            // Seamless adsorption: You can stop at the clone grid and then loop_anim back to the real zone (do not animate directly to the opposite real slot).
             if cc > 0 {
                 end_seamless_snap_drag(&drag, visual, step, n, cc, hi);
                 return;
@@ -297,7 +297,7 @@ pub(super) fn end_carousel_drag() {
             let ideal = {
                 let raw_off = ((idx + cc) as f32) * step;
                 if drag.variant == CarouselVariant::Stack && drag.wraps {
-                    // 环形：ideal 可越过线性 clamp（与 ideal_offset 一致）。
+                    // Ring: ideal can cross the linear clamp (consistent with ideal_offset).
                     -raw_off
                 } else {
                     drag_clamp_offset(&drag, -raw_off)
@@ -330,8 +330,8 @@ pub(crate) fn tick_carousel_drag(x: f32, y: f32) -> bool {
             drag.drag_px.set(delta);
             let raw = drag.base_offset + delta;
             let next = if drag.loop_clones > 0 {
-                // 拖出克隆周期外会白屏：折回真实带。吸附松手若仍停在克隆半程，
-                // 由 end_seamless_snap_drag 走 LoopAnim，而非直接滚到对侧真实槽。
+                // Dragging out of the clone cycle will result in a white screen: fold back to the real band. If you release the adsorption and still stop at the halfway point of cloning,
+                // Use end_seamless_snap_drag to walk the LoopAnim instead of rolling directly to the opposite real slot.
                 let n = drag.count.peek().max(1);
                 let step = drag_step_px(drag);
                 let wrapped = wrap_loop_offset(raw, n, drag.loop_clones, step);

@@ -11,7 +11,7 @@
 //!     └── children / RadioGroupItemLabel
 //! ```
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // 复合 RSX（推荐；宏走 radio_group_scope）
 //! <RadioGroup id="tier" value={tier} default_value="free">
@@ -40,7 +40,7 @@
 //! ) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 未传 `value` 时用内部信号 `{id}__radio`；多实例请保证 `id` 唯一。
 //! - 项 `focus_id = "{group_id}:{value}"`；选中态 `peek` + 每帧 style sync，不订阅根 effect。
 //! - 兼容旧 prop 名 `selected`（宏映射到 `value`）。
@@ -56,6 +56,7 @@ use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::LineStyle;
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
+use crate::utils::take_fragment;
 use rui_macros::component;
 use std::sync::OnceLock;
 
@@ -92,11 +93,6 @@ fn require_radio_group(part: &str) -> RadioGroupCtx {
     use_radio_group().unwrap_or_else(|| {
         panic!("{part} must be used within <RadioGroup> / radio_group_scope");
     })
-}
-
-fn take_packed(el: Element) -> Vec<Element> {
-    // 宏多子节点打成 `rui_fragment`；勿把 RadioGroupItem 的横排（control+label）拆开。
-    crate::utils::take_fragment(el)
 }
 
 fn unpack_item_children(mut children: Vec<Element>) -> Vec<Element> {
@@ -328,7 +324,7 @@ pub fn radio_group_scope(
                 disabled,
             },
         );
-        let kids = take_packed(body());
+        let kids = take_fragment(body());
         let mut root: Element = vstack()
             .gap("0.5rem")
             .w("100%")

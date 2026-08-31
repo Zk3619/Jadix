@@ -85,7 +85,7 @@ pub(crate) fn element_self_pointer_hit(el: &Element, x: f32, y: f32, vx: f32, vy
     if mode == PointerEvents::BoundingBox {
         return true;
     }
-    // SVG 叶上 CSS `auto` ≡ `visiblePainted`（MDN）。
+    // SVG leaf on CSS `auto` ≡ `visiblePainted` (MDN).
     let geom_mode = if mode == PointerEvents::Auto
         && crate::primitives::path::element_has_path_geometry(&el.attrs)
     {
@@ -145,7 +145,7 @@ pub(super) fn children_share_same_z_index(el: &Element) -> bool {
     el.children.iter().all(|c| c.style.z_index == z0)
 }
 
-/// 与 [`crate::components::input`] 中展示串一致：`preedit` 插在 `committed` 的 `ime_anchor` 字节位置。
+/// Consistent with the string shown in [`crate::components::input`]: `preedit` is inserted at the `ime_anchor` byte position of `committed`.
 pub(super) fn input_display_text(
     committed: &str,
     preedit: &str,
@@ -435,7 +435,7 @@ fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> L
 /// 返回的 bounds 为**屏幕/可视坐标**（已扣祖先 `scroll_acc`），与
 /// [`find_input_text_at`] 及指针 `(x,y)` 同一空间。切勿返回未滚动的
 /// `layout_bounds`，否则 ScrollArea 内拖选会把 `my` clamp 到错误行，表现为
-/// 「点选一字却跨行选中」。
+/// "Click one word but select across lines."
 pub(super) fn find_input_text_leaf_for_rest(
     el: &Element,
     inherited_fid: Option<&str>,
@@ -788,12 +788,28 @@ fn find_selectable_text_at_hit(
     }
 }
 
+#[inline]
 pub(super) fn update_hovers(
     el: &Element,
     x: f32,
     y: f32,
     scroll_offset: [f32; 2],
     cbs: &mut Vec<(HoverCb, bool)>,
+) {
+    reconcile_pointer_hovers(el, x, y, scroll_offset, cbs, false);
+}
+
+/// Diff pointer hover against the current layout tree.
+///
+/// `immediate_miss_leave`: when content slides under a stationary cursor (smooth scroll),
+/// leave on the first miss instead of the 2-frame jitter deferral used for spring/layout noise.
+pub(super) fn reconcile_pointer_hovers(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_offset: [f32; 2],
+    cbs: &mut Vec<(HoverCb, bool)>,
+    immediate_miss_leave: bool,
 ) {
     let target = match pick_hover_target(el, x, y, scroll_offset) {
         HoverHit::Hit(slot) => slot,
@@ -851,9 +867,9 @@ pub(super) fn update_hovers(
     // Without this, leave→spring(0) + next-frame enter→spring(1) flashes sidebar items.
     let streak = HOVER_MISS_STREAK.get().saturating_add(1);
     HOVER_MISS_STREAK.set(streak);
-    if streak < 2 {
+    if streak < 2 && !immediate_miss_leave {
         // The deferred leave MUST pump its own frame. `update_hovers` only runs from
-        // `CursorMoved` and from the non-scroll redraw pass, so if the pointer leaves the
+        // `CursorMoved` and the post-layout redraw pass, so if the pointer leaves the
         // element and then stops, nothing produces miss #2 and the leave is lost forever
         // (Toast's hover stack then stays expanded with every auto-dismiss timer frozen).
         crate::primitives::interactive::mark_hover_paint_dirty();
@@ -1776,6 +1792,50 @@ mod hover_occlusion_tests {
         update_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run);
         assert!(to_run.is_empty());
         assert_eq!(leaves.get(), 0);
+    }
+
+    #[test]
+    fn scroll_content_leave_fires_immediately_under_stationary_pointer() {
+        clear_hover_tracking();
+        let leaves = Rc::new(Cell::new(0u32));
+        let leaves_cb = leaves.clone();
+
+        let mut btn: Element = interactive(Element::new().w(80.0).h(32.0))
+            .focus_id("scroll-btn")
+            .on_hover(move |h| {
+                if !h {
+                    leaves_cb.set(leaves_cb.get() + 1);
+                }
+            })
+            .into();
+        btn.layout_bounds = [20.0, 100.0, 80.0, 32.0];
+
+        let mut viewport = Element::new();
+        viewport.focus_id = Some("scroll:main".into());
+        viewport.style.overflow.y = taffy::style::Overflow::Visible;
+        viewport.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(btn);
+
+        let mut root = Element::new().child(viewport);
+        root.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+
+        let mut to_run = Vec::new();
+        reconcile_pointer_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run, false);
+        assert_eq!(to_run.len(), 1);
+        assert!(to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+
+        viewport_scroll_bump(&mut root, 80.0);
+        reconcile_pointer_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run, true);
+        assert_eq!(to_run.len(), 1, "scroll must leave immediately under still pointer");
+        assert!(!to_run[0].1);
+        for (cb, is_hover) in to_run.drain(..) {
+            (*cb.borrow_mut())(is_hover);
+        }
+        assert_eq!(leaves.get(), 1);
     }
 
     fn viewport_scroll_bump(root: &mut Element, sy: f32) {

@@ -16,7 +16,7 @@
 //! `ui!` 中 `<Progress>` 由宏展开为 [`progress_scope`]（子树先拿到上下文）。
 //! Builder [`progress`] 简单条与 `.child(|| …)` 复合面共用同一套实现。
 //!
-//! ## 用法（双写）
+//! ## Usage (dual style)
 //! ```ignore
 //! // A · RSX（camelCase 宏别名：valueSignal）
 //! ui! {
@@ -27,7 +27,7 @@
 //!     <Progress value={0.4} />
 //! }
 //!
-//! // B · Builder（只 snake_case）
+//! // B · Builder (snake_case only)
 //! progress()
 //!     .id("upload")
 //!     .value_signal(pct)
@@ -49,7 +49,7 @@
 //! progress().default_value(0.4)
 //! ```
 //!
-//! **身份（WP-2.8）**：`id` 可选；空串 → [`resolve_instance_id`]。
+//! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
 use std::sync::OnceLock;
 
@@ -63,6 +63,7 @@ use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::resolve_instance_id;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -346,26 +347,13 @@ pub fn ProgressIndicator(class: Option<String>, children: Option<Element>) -> El
     Element::new().w(0.0).h(0.0)
 }
 
-// ---------------------------------------------------------------------------
-// Label / Value
-// ---------------------------------------------------------------------------
-
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 /// ShadCN `ProgressLabel`（`text-sm` / `font-medium`）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ProgressLabel(children: Option<Element>) -> Element {
     let _ = require_progress("ProgressLabel");
     let fg = parse_text_color("foreground");
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     if kids.len() == 1 {
         let c = kids.into_iter().next().unwrap();
         if c.children.is_empty() && c.text.as_ref().is_some_and(|t| !t.is_empty()) {

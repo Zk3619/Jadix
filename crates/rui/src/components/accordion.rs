@@ -1,28 +1,28 @@
 //! # Accordion
 //!
-//! 对照 ShadCN **base** [`accordion.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/accordion.tsx)：
+//! Compare ShadCN **base** [`accordion.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/accordion.tsx):
 //!
 //! ```text
 //! Accordion                      // Root：single | multiple；value 为已展开项 id 列表
 //! └── AccordionItem              // value + border-b
-//!     ├── AccordionTrigger       // Header + chevron（展开旋转）
+//! ├── AccordionTrigger // Header + chevron (expand rotation)
 //!     └── AccordionContent       // Panel：overflow-hidden + `@keyframes accordion-down/up`
 //! ```
 //!
-//! 进出场对位 ShadCN `accordion-down` / `accordion-up`（height 0 ↔ content-height，200ms ease-out）：
-//! 与 [`dialog`](super::dialog) 相同，走 **CSS `@keyframes`** + `AnimationSnapshot` 推进，不用 MotionStyle 手写插值。
-//! Chevron 为 `transform`（rotate）CSS transition。
+//! Entry and exit alignment ShadCN `accordion-down` / `accordion-up` (height 0 ↔ content-height, 200ms ease-out):
+//! Same as [`dialog`](super::dialog), using **CSS `@keyframes`** + `AnimationSnapshot` to advance, without MotionStyle handwritten interpolation.
+//! Chevron is the `transform` (rotate) CSS transition.
 //!
 //! 样式对位 `cn-accordion` / `cn-accordion-item` / `cn-accordion-trigger` /
 //! `cn-accordion-content`：`flex w-full flex-col` · 项 `border-b` · 触发器 `py-4 text-sm font-medium`
-//! · 内容 `pb-4 text-sm font-normal text-muted-foreground`。
+//! · Content `pb-4 text-sm font-normal text-muted-foreground`.
 //!
-//! `ui!` 中 `<Accordion>` / `<AccordionContent>` 由宏展开（[`accordion_scope`] /
-//! [`accordion_content`]）。Builder [`accordion`] 与 RSX 共用实现。
+//! `<Accordion>` in `ui!` / `<AccordionContent>` is expanded by macro ([`accordion_scope`] /
+//![`accordion_content`]). Builder [`accordion`] Shared implementation with RSX.
 //!
-//! ## 用法（双写）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A · RSX（camelCase 宏别名：defaultValue / valueSignal）
+//! // A · RSX (camelCase macro alias: defaultValue / valueSignal)
 //! ui! {
 //!     <Accordion id="faq" defaultValue={vec!["item-1".into()]}>
 //!         <AccordionItem value="item-1">
@@ -40,7 +40,7 @@
 //!     </Accordion>
 //! }
 //!
-//! // B · Builder（只 snake_case）
+//! // B · Builder (snake_case only)
 //! accordion("faq")
 //!     .default_value(vec!["item-1".into()])
 //!     .item("item-1", "Is it accessible?", || {
@@ -51,7 +51,7 @@
 //!     })
 //! ```
 //!
-//! **身份（WP-2.8）**：`id` 可选；空串 → [`resolve_instance_id`]。
+//! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -500,7 +500,7 @@ pub fn accordion_scope(
 /// 宏 `<AccordionContent>`：按 Item 上下文显隐 + 进出场过渡。
 ///
 /// 显隐由 [`reactive_anchor`] + [`ExitGate`] 负责：收起时保持挂载至退场动画结束
-/// （对位 Dialog/Sheet presence；勿在 placeholder 上再套 `Display::None` 的 reactive_sync）。
+/// (Compare Dialog/Sheet presence; do not apply reactive_sync of `Display::None` to placeholder).
 pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
     let acc = require_accordion("AccordionContent");
     let item = require_accordion_item("AccordionContent");
@@ -1018,7 +1018,7 @@ pub struct AccordionBuilder {
     items: Vec<AccordionItemSpec>,
 }
 
-/// 复合 Accordion 入口（对位 `<Accordion>`）。
+/// Composite Accordion entry (opposite `<Accordion>`).
 pub fn accordion(id: impl Into<String>) -> AccordionBuilder {
     AccordionBuilder {
         id: id.into(),

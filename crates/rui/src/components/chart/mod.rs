@@ -1,24 +1,24 @@
 //! # Chart（experimental · WP-3.2 grammar）
 //!
-//! 对照 [TanStack Charts](https://github.com/TanStack/charts) 的 **grammar 心智**，不搬运行时：
+//! Compare the **grammar mind** of [TanStack Charts](https://github.com/TanStack/charts) without moving the runtime:
 //! - **Data as rows**：[`ChartDatum`]（label + value + 可选 `series` / `time`）。
 //! - **Scales**（Rust compact，对位 TanStack 边界、**不是** JS D3）：linear / band / point /
 //!   [`scale_log`] / [`scale_time`]。
-//! - **Marks**：笛卡尔 [`bar_y`] [`line_y`] [`area_y`] [`dot`] [`rule_*`]；polar
+//! - **Marks**: Descartes [`bar_y`] [`line_y`] [`area_y`] [`dot`] [`rule_*`]; polar
 //!   [`pie`] [`radial_bar`] [`radial_line`] [`radial_area`] [`radial_dot`]；[`custom_mark`]。
 //! - **Theme / interaction**：[`ChartTheme`] / [`ChartConfig`] / [`TooltipIndicator`] / [`MarkStyle`]；`.tooltip(true)` / `.crosshair(true)`。
-//! - **Composition**：[`define_chart`] 按声明顺序叠层；预设是薄封装（含 `donut_chart` / `radial_chart`）。
-//! - **Scene**：mark → [`crate::primitives::path::PathCommand`] → 同一 path 核。
+//! - **Composition**: [`define_chart`] stacks in the order of declaration; the default is thin packaging (including `donut_chart` / `radial_chart`).
+//! - **Scene**: mark → [`crate::primitives::path::PathCommand`] → same path core.
 //!
-//! 分层（详见 `docs/drawing.md` §8）：
+//! Layering (see `docs/drawing.md` §8 for details):
 //!
 //! ```text
 //! 禁区     DOM · SVG 1.1 全家桶 · JS D3 运行时 · 换渲染器
-//! 可加深   polar 族 · 时间轴 · Rust 专用 scale（log/time）· Chart tooltip/crosshair
+//! Deepen the polar family · Timeline · Rust-specific scale (log/time) · Chart tooltip/crosshair
 //! 别的包   公开 <svg>（WP-3.11）· Canvas paint（WP-3.12）· 通用运动原语（B17）
 //! ```
 //!
-//! 双书写：Builder [`define_chart`] / 预设 fn；RSX [`Chart`] / [`BarChart`] / …
+//! Double writing: Builder [`define_chart`] / Default fn; RSX [`Chart`] / [`BarChart`] / …
 //!
 //! **身份（WP-2.8）**：展示型不要求用户 `id`；空 / 省略 → 不写 `template_id`（I-1）。
 
@@ -827,7 +827,7 @@ mod tests {
         );
         let min_y = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min);
         let max_y = pts.iter().map(|p| p.1).fold(0.0f32, f32::max);
-        // 底角圆角：柱底可略超出 plot_h（+1px 盖住光栅半开裁剪），顶点多于 4。
+        // Bottom corner rounding: The bottom of the column can be slightly beyond plot_h (+1px to cover the raster for half-open cropping), with more than 4 vertices.
         assert!(max_y <= 81.5, "bottom still within plot, max_y={max_y}");
         assert!(min_y >= 7.0, "top pad leaves headroom, min_y={min_y}");
     }

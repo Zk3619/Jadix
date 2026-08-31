@@ -8,7 +8,7 @@
 //! - 产品层：[`crate::components::ScrollArea`] = viewport + 内建 Scrollbar
 //! - RSX 标签：[`crate::components::ScrollViewport`]
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! scroll_viewport("list")
 //!   .overflow_y("auto")
@@ -368,7 +368,7 @@ impl ScrollViewportBuilder {
         self
     }
 
-    /// `"smooth"`（默认）或 `"jump"`（瞬时）。
+    /// `"smooth"` (default) or `"jump"` (instant).
     pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
         self.scroll_behavior = mode.into();
         self

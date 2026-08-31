@@ -9,11 +9,11 @@ use crate::tokens;
 /// 色板 / 常量色 / 按系列取色。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartPaint {
-    /// 直接 RGBA（0..=1）。
+    /// Direct RGBA (0..=1).
     Rgba([f32; 4]),
-    /// [`ChartTheme::palette`] 下标。
+    /// [`ChartTheme::palette`] subscript.
     Palette(usize),
-    /// 按 series / datum 下标循环色板（TanStack color scale）。
+    /// Press the series / datum subscript to cycle the color palette (TanStack color scale).
     Series,
 }
 
@@ -41,10 +41,10 @@ pub struct MarkStyle {
     pub fill: Option<ChartPaint>,
     pub stroke: Option<ChartPaint>,
     pub stroke_width: Option<f32>,
-    /// 与 muted/background **混色**（path 核扫描线不吃真 alpha，见 WP-3.2）。
+    /// **Mix color** with muted/background (path kernel scanline does not eat true alpha, see WP-3.2).
     pub fill_opacity: Option<f32>,
     pub stroke_opacity: Option<f32>,
-    /// 虚线：[on, off, on, off, …] 逻辑 px；空 = 实线。
+    /// Dashed line: [on, off, on, off, …] logical px; empty = solid line.
     pub stroke_dash: Option<Vec<f32>>,
     /// 柱的值端圆角（垂直柱顶 / 水平柱外端）；`None` 时 bar 用默认 4px。
     pub corner_radius: Option<f32>,
@@ -88,7 +88,7 @@ impl MarkStyle {
     }
 }
 
-/// shadcn `ChartTooltipContent` `indicator`：`dot` | `line` | `dashed`。未知 → [`Dot`](Self::Dot)。
+/// shadcn `ChartTooltipContent` `indicator`: `dot` | `line` | `dashed`. Unknown → [`Dot`](Self::Dot).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TooltipIndicator {
     #[default]
@@ -142,7 +142,7 @@ impl ChartSeriesConfig {
     }
 }
 
-/// shadcn `ChartConfig`：key → label / color（不替代 mark 级 `.fill()`）。
+/// shadcn `ChartConfig`: key → label / color (does not replace mark-level `.fill()`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChartConfig {
     pub entries: HashMap<String, ChartSeriesConfig>,
@@ -180,7 +180,7 @@ impl ChartConfig {
         keys
     }
 
-    /// 用 config 色覆盖 theme palette 对应槽；无色条目保持原 palette。
+    /// Overwrite the corresponding slot of the theme palette with the config color; colorless entries retain the original palette.
     pub fn apply_palette_overrides(&self, theme: &mut ChartTheme) {
         if self.entries.is_empty() {
             return;
@@ -206,7 +206,7 @@ impl FromIterator<(String, ChartSeriesConfig)> for ChartConfig {
     }
 }
 
-/// 对照 TanStack `theme`：foreground / muted / grid / background / palette。
+/// Compare TanStack `theme`: foreground / muted / grid / background / palette.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartTheme {
     pub background: [f32; 4],
@@ -241,7 +241,7 @@ impl ChartTheme {
         }
     }
 
-    /// 灰度阶梯（TanStack theme palette matrix · neutral）。
+    /// Grayscale gradient (TanStack theme palette matrix · neutral).
     pub fn neutral() -> Self {
         let (background, foreground, muted, grid, border) = Self::chrome();
         Self {
@@ -260,7 +260,7 @@ impl ChartTheme {
         }
     }
 
-    /// 更高饱和分类色（仍走 token / Tailwind 族名，无魔法 hex）。
+    /// Higher saturated classification color (still using token / Tailwind family name, no magic hex).
     pub fn vibrant() -> Self {
         let (background, foreground, muted, grid, border) = Self::chrome();
         Self {
@@ -279,7 +279,7 @@ impl ChartTheme {
         }
     }
 
-    /// 单色阶（foreground 系混色）。
+    /// Single color level (foreground color mixing).
     pub fn monochrome() -> Self {
         let (background, foreground, muted, grid, border) = Self::chrome();
         let fg = foreground;
@@ -333,7 +333,7 @@ impl ChartTheme {
         }
     }
 
-    /// 不透明混色：`opacity=1` 原色，`0` 为 `mix_with`。
+    /// Opaque mixed colors: `opacity=1` is the original color, `0` is `mix_with`.
     pub fn mix_opacity(&self, color: [f32; 4], opacity: f32, mix_with: [f32; 4]) -> [f32; 4] {
         lerp_rgb(color, mix_with, 1.0 - opacity.clamp(0.0, 1.0))
     }

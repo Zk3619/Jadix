@@ -7,7 +7,7 @@
 //! - 单选支持 ←/→/↑/↓ / Home / End **只移焦点环**；Enter / Space / 点击才改选中
 //! - 选中态通过组件根的 [`crate::core::tree::ReactiveSync`] 原位同步，不订阅根 UI effect。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! Element::from(
 //!   toggle_group("align")

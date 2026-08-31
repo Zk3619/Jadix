@@ -490,7 +490,7 @@ pub struct TextEditPaintSync {
     pub resize_max_h: f32,
     /// Command 过滤框等：无边框/阴影/焦点环，视觉壳由外层提供。
     pub plain_chrome: bool,
-    /// CSS `text-align`（见 [`crate::style::TextAlign`]）。
+    /// CSS `text-align` (see [`crate::style::TextAlign`]).
     pub text_align: crate::style::TextAlign,
     /// Textarea 单行溢出：软换行（默认）或横向滚动。
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
@@ -1256,8 +1256,8 @@ impl Element {
         self.attrs.insert("text_size".to_string(), "1".to_string());
         self
     }
-    pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
-        let w = weight.into_f32().round().clamp(100.0, 900.0) as u16;
+    pub fn font_weight(mut self, weight: impl IntoF32Raw) -> Self {
+        let w = weight.into_f32_raw().round().clamp(100.0, 900.0) as u16;
         self.text_style.weight = w;
         self.attrs
             .insert("font_weight".to_string(), "1".to_string());
@@ -1430,9 +1430,9 @@ impl Element {
             .insert("line_height".to_string(), "1".to_string());
         self
     }
-    pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
+    pub fn text_leading(mut self, scale: impl IntoF32Raw) -> Self {
         self.text_style.line_height_px = None;
-        self.text_style.line_height_scale = Some(scale.into_f32().max(0.01));
+        self.text_style.line_height_scale = Some(scale.into_f32_raw().max(0.01));
         self.attrs.insert("leading".to_string(), "1".to_string());
         self
     }
@@ -1742,17 +1742,17 @@ impl Element {
     pub fn border_block_end(self, color: [f32; 4], width: impl IntoF32) -> Self {
         self.border_bottom(color, width)
     }
-    // border-radius longhand
+    // border-radius longhand (CSS order on `Style.radii`: TL TR BR BL)
     pub fn border_top_left_radius(mut self, r: f32) -> Self {
-        self.style.radii[2] = r.max(0.0);
-        self
-    }
-    pub fn border_top_right_radius(mut self, r: f32) -> Self {
         self.style.radii[0] = r.max(0.0);
         self
     }
-    pub fn border_bottom_right_radius(mut self, r: f32) -> Self {
+    pub fn border_top_right_radius(mut self, r: f32) -> Self {
         self.style.radii[1] = r.max(0.0);
+        self
+    }
+    pub fn border_bottom_right_radius(mut self, r: f32) -> Self {
+        self.style.radii[2] = r.max(0.0);
         self
     }
     pub fn border_bottom_left_radius(mut self, r: f32) -> Self {

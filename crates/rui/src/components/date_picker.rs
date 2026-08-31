@@ -3,17 +3,17 @@
 //! 对照 ShadCN Aria `date-picker`（sidebar-12 内联 [`Calendar`] + 触发器浮层）：
 //! HTML `date` / `datetime-local` / `month` / `week` / `time`。
 //!
-//! **格式（本地，无时区）**
+//! **Format (local, no time zone)**
 //! - `date`：`YYYY-MM-DD`
 //! - `datetime-local`：`YYYY-MM-DDTHH:MM:SS`（24h；兼容无秒的 `THH:MM`）
 //! - `month`：`YYYY-MM`
-//! - `week`：该周周一 `YYYY-MM-DD`
+//! - `week`: Monday of the week `YYYY-MM-DD`
 //! - `time`：`HH:MM:SS`（24h；三个 Combobox，兼容 `HH:MM`）
 //!
 //! **键盘**：DatePicker 触发器 Enter/Space 开合、Esc 关浮层；打开后方向键改日（见 [`Calendar`]）。
 //! TimePicker 为三个 Combobox（输入过滤 + ↑↓ / Esc）。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <DatePicker id="due" kind="date" captionLayout="dropdown" />
@@ -309,7 +309,7 @@ fn sync_datetime_value_from_hms(
     minute: Signal<String>,
     second: Signal<String>,
 ) {
-    // 只走 HMS → val；勿先从 val 回写 HMS，否则会把刚选的秒抹回旧值。
+    // Only go to HMS → val; do not write back HMS from val first, otherwise the newly selected seconds will be erased back to the old value.
     let hs = hour.get();
     let ms = minute.get();
     let ss = second.get();
@@ -389,7 +389,7 @@ fn month_nav_buttons(id: &str, year: Signal<i32>, month: Signal<u32>) -> (Elemen
     (prev, next)
 }
 
-/// HTML `date` / `datetime-local` / `month` / `week` 选择器。
+/// HTML `date` / `datetime-local` / `month` / `week` selectors.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DatePicker(
@@ -419,7 +419,7 @@ pub fn DatePicker(
     b.into()
 }
 
-/// HTML `input type="time"` 选择器。
+/// HTML `input type="time"` selector.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TimePicker(
@@ -637,7 +637,7 @@ fn build_date_picker_view(
                 let _ = month.get();
             }
             // isolate_reads：is_tracking 仍为 true，Calendar/Combobox 才能注册 anchor。
-            // 不可 untrack（current_effect=None → reactive_anchor 直接 return → 浮层只剩分割线/冒号）。
+            // Untrackable (current_effect=None → reactive_anchor returns directly → only the dividing line/colon is left in the floating layer).
             isolate_reads(|| {
                 build_date_picker_floating_panel(
                     &id, kind, caption, oz.panel, open, val, year, month, hour, minute, second,
@@ -799,7 +799,7 @@ fn build_date_picker_floating_panel(
                 .child(title)
                 .child(next)
                 .into();
-            // MVP：选周 → 写入该周周一的 YYYY-MM-DD（简化）
+            // MVP: Select a week → Write YYYY-MM-DD on Monday of that week (simplified)
             let first_wd = weekday(y, m, 1);
             let dim = days_in_month(y, m);
             let mut week_start = 1u32;

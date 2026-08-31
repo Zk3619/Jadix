@@ -1,6 +1,6 @@
-//! Carousel snap / nearest-index（产品层，随 carousel 目录）。
+//! Carousel snap / nearest-index (product layer, shipped with carousel directory).
 
-/// 由当前轨道 offset 推导 nearest index。
+/// The nearest index is derived from the current orbit offset.
 pub fn index_from_offset(
     off: f32,
     step: f32,
@@ -25,7 +25,7 @@ pub fn index_from_offset(
     }
 }
 
-/// 松手后吸附到格点：返回目标 offset（负方向）。
+/// After letting go, snap to the grid point: return to the target offset (negative direction).
 pub fn snap_target_for_index(index: usize, step: f32, clone_count: usize) -> f32 {
     -((index + clone_count) as f32) * step
 }

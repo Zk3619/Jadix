@@ -360,7 +360,7 @@ fn queue_decoded(id: impl Into<String>, img: &DecodedImage) {
     queue_image_rgba8(id, img.width, img.height, img.rgba.clone());
 }
 
-/// 解码任意支持的图像字节并排队上传。
+/// Decode any supported image bytes and queue them for upload.
 pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
     let Some(img) = decode_bytes(bytes, DecodeOptions::image()) else {
         return false;
@@ -376,14 +376,14 @@ pub fn queue_image_from_path(id: impl Into<String>, path: impl AsRef<str>) -> bo
     queue_image_from_src(id, path.as_ref())
 }
 
-/// 从 `data:` / 本地路径解码并排队。同一 `id` 只解码一次；GPU 驱逐后由
+/// Decode and queue from `data:` / local path. The same `id` is decoded only once; after GPU eviction it is
 /// [`flush_src_textures`] 从 CPU 缓存回补。禁止 `http(s)`。
 pub fn queue_image_from_src(id: impl Into<String>, src: &str) -> bool {
     let id = id.into();
     ensure_src_loaded(&id, src).is_ready()
 }
 
-/// 推进所有活跃 GIF 贴图帧；有帧切换时返回 `true`（应请求重绘）。
+/// Advance all active GIF texture frames; returns `true` when there is a frame switch (redraw on request).
 pub fn tick_gif_textures(dt: f32) -> bool {
     if dt <= 0.0 {
         return false;
@@ -422,7 +422,7 @@ pub fn tick_gif_textures(dt: f32) -> bool {
     any
 }
 
-/// 是否有正在播放的 GIF（用于帧泵）。
+/// Is there a GIF playing (for frame pumping).
 pub fn any_gif_playing() -> bool {
     GIF_PLAY
         .lock()

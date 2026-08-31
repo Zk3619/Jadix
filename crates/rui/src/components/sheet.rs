@@ -13,13 +13,13 @@
 //!     └── SheetClose         // 任意子节点点击关闭
 //! ```
 //!
-//! 模态壳 overlay / Portal z 见 [`crate::components::internal::modal_shell`]；
+//! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
 //! 贴边面板表面在本模块内实现。`ui!` 中 `<Sheet>` /
 //! `<SheetContent>` 由宏展开。
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! ui! {
 //!     <Sheet id="edit" open={open}>
 //!         <SheetTrigger>
@@ -41,7 +41,7 @@
 //!     </Sheet>
 //! }
 //!
-//! // B · Builder（无 Trigger；由外部 Signal 开合）
+//! // B · Builder (no Trigger; open/close via external Signal)
 //! Element::from(
 //!     sheet("edit")
 //!         .open_signal(open)
@@ -79,6 +79,7 @@ use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallo
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -135,7 +136,7 @@ impl From<String> for SheetSide {
 // Context / Builder
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id`。
+/// Root context: `open` + stable instance `id`.
 #[derive(Clone)]
 pub struct SheetCtx {
     pub open: Signal<bool>,
@@ -295,20 +296,6 @@ fn require_sheet(part: &str) -> SheetCtx {
         panic!("{part} must be used within <Sheet> / sheet_scope");
     })
 }
-
-/// `ui!` 多子节点会先打成匿名 VStack；Header/Footer 再拆开接到自己的布局上。
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
@@ -395,7 +382,7 @@ fn apply_sheet_shell_surface(
     panel
 }
 
-/// Portal + Overlay + Content 壳；`inner` 为面板内整棵子树。
+/// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
 fn sheet_shell_frame(
     modal_id: &str,
     open: Signal<bool>,
@@ -414,7 +401,9 @@ fn sheet_shell_frame(
     // Swallow clicks only — nesting `panel_block_clicks` under stage nests `rui_portal`.
     let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
     panel = apply_sheet_shell_surface(panel, side, width, height);
-    panel = swallow_clicks(panel.relative());
+    // Keep `position: absolute` so the sheet docks on `side` and slides in from
+    // that edge (`relative()` would lay it out at flex-start / the opposite edge).
+    panel = swallow_clicks(panel);
     if let Some(mut close) = chrome_close {
         // shadcn: absolute top-4 right-4
         close = close.absolute().top("1rem").right("1rem").z_index(1);
@@ -514,13 +503,13 @@ pub struct SheetContentOpts {
     pub side: SheetSide,
     /// 右上角仅图标 ghost 关闭钮；默认 `true`（对齐 shadcn `showCloseButton`）。
     pub show_close: bool,
-    /// 遮罩色（语义 token / hex）；`None` → theme `background` RGB + 模态默认 alpha。
+    /// Overlay color (semantic token / hex); `None` → theme `background` RGB + modal default alpha.
     pub overlay_color: Option<String>,
-    /// 遮罩不透明度 0…1；`None` → 模态默认（[`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`]，`0.6`）。
+    /// Overlay opacity 0…1; `None` → modal default ([`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`], `0.6`).
     pub overlay_opacity: Option<f32>,
-    /// 点击遮罩是否关闭；默认 `true`。
+    /// Whether clicking the overlay closes; default `true`.
     pub close_on_overlay_click: bool,
-    /// 遮罩 backdrop 模糊半径（逻辑 px）；`None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`]（`4`）。
+    /// Overlay backdrop blur radius (logical px); `None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`] (`4`).
     pub overlay_blur: Option<f32>,
     /// 左右侧宽；`None` → `75%`（`max-w: 24rem`）。
     pub width: Option<String>,
@@ -640,7 +629,7 @@ fn collect_sheet_focus_ids(el: &Element, out: &mut Vec<String>) {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SheetHeader(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -694,11 +683,11 @@ pub fn SheetBody(children: Option<Element>) -> Element {
         .into()
 }
 
-/// 固定底栏（`mt-auto flex flex-col gap-2 p-4`）。
+/// Sticky footer (`mt-auto flex flex-col gap-2 p-4`).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SheetFooter(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -744,5 +733,19 @@ mod tests {
         assert_eq!(SheetSide::from("LEFT"), SheetSide::Left);
         assert_eq!(SheetSide::from("top"), SheetSide::Top);
         assert_eq!(SheetSide::from("bottom"), SheetSide::Bottom);
+    }
+
+    #[test]
+    fn sheet_shell_stays_absolute_on_dock_edge() {
+        use taffy::style::Position;
+        let right = apply_sheet_shell_surface(Element::new(), SheetSide::Right, None, None);
+        assert_eq!(right.style.position, Position::Absolute);
+        assert_eq!(
+            swallow_clicks(right).style.position,
+            Position::Absolute,
+            "swallow_clicks must not reset dock positioning to relative"
+        );
+        let bottom = apply_sheet_shell_surface(Element::new(), SheetSide::Bottom, None, None);
+        assert_eq!(bottom.style.position, Position::Absolute);
     }
 }

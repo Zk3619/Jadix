@@ -65,10 +65,10 @@ fn parse_css_len_px(token: &str, root_font_size_px: f32) -> Option<f32> {
     None
 }
 
-/// 解析单个 `box-shadow`（不支持逗号多阴影；先做单阴影满足组件根依赖）。
+/// Parse a single `box-shadow` (no comma-separated multi-shadow yet; one shadow covers component roots).
 ///
-/// 语义参考 MDN：`<color>? && <length>{2,4} && inset?`。
-/// `color` 与本项目语义色系统对齐（`parse_color`）。
+/// Semantics follow MDN: `<color>? && <length>{2,4} && inset?`.
+/// `color` uses this project's semantic color system (`parse_color`).
 pub fn parse_box_shadow(s: impl AsRef<str>) -> BoxShadow {
     let raw = s.as_ref().trim();
     if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
@@ -427,6 +427,7 @@ pub struct Style {
     /// Distance between the outline and the border edge (CSS `outline-offset`).
     /// Positive = outward, negative = inward. Default 0.
     pub outline_offset: f32,
+    /// Corner radii in CSS `border-radius` order: **`[TL, TR, BR, BL]`**.
     pub radii: [f32; 4],
     pub shadow_color: [f32; 4],
     pub shadow_offset: [f32; 2],

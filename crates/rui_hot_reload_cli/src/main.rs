@@ -14,11 +14,11 @@ mod rsx_text_order;
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
 /// 合并同一轮编辑器/fs 触发的多条 notify。
 const DEBOUNCE_MS: u64 = 400;
-/// 轮询兜底：两次发送至少间隔这么久，避免 15s 窗口内反复扫到同一文件。
+/// 轮询兜底：两次发送至少间隔这么久，avoid 15s window内反复扫到同一文件。
 const POLL_DEBOUNCE_MS: u64 = 2500;
-/// 轮询只关心「最近刚动过」的源文件，窗口过长会与 notify 重复推送。
+/// 轮询只关心「最近刚动过」的源文件，window过长会与 notify 重复推送。
 const POLL_RECENT_MS: u64 = 1200;
-/// notify 路径为空时的兜底扫描窗口（略大于一次保存的抖动）。
+/// notify 路径为空时的兜底扫描window（略大于一次保存的抖动）。
 const NOTIFY_EMPTY_FALLBACK_MS: u64 = 800;
 
 fn display_watch_path(path: &Path, root: &Path) -> String {

@@ -3,13 +3,13 @@
 //! 对齐 solid-ui / Kobalte **ToggleButton**：两态按下按钮（pressed on/off），
 //! 不是 Switch 轨道。变体 `default` / `outline`；尺寸 `sm` / `default` / `lg`。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Toggle variant="outline">"B"</Toggle>
 //! { Element::from(toggle("italic").pressed_signal(on).variant("outline").text("I")) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! Space/Enter 经焦点路径触发 `on_click` 切换；受控用 `pressed` / `pressed_signal`。
 //! **身份（WP-2.8 / 3.7）**：`id` 可空 → [`resolve_instance_id`]；布尔状态走
 //! [`crate::utils::toggle_state::resolve_bool_signal`]（受控 XOR Owner 作用域非受控）。

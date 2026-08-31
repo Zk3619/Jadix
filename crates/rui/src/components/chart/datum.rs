@@ -1,8 +1,8 @@
-//! Mark-local rows（TanStack：各 mark 直接吃行，不强制 series 包一层）。
+//! Mark-local rows (TanStack: Each mark eats the row directly, and the series is not forced to include one layer).
 
 use std::rc::Rc;
 
-/// 一行观测。`series` ≈ TanStack `z`；`time` 为 Unix **毫秒**（时间轴）。
+/// A line of observations. `series` ≈ TanStack `z`; `time` is Unix **milliseconds** (timeline).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartDatum {
     pub label: String,
@@ -77,7 +77,7 @@ impl From<(i64, f32)> for ChartDatum {
     }
 }
 
-/// RSX `selected={…}`：可传 `usize` 或 `Option<usize>`。
+/// RSX `selected={…}`: `usize` or `Option<usize>` can be passed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ChartSelected(pub Option<usize>);
 
@@ -93,7 +93,7 @@ impl From<Option<usize>> for ChartSelected {
     }
 }
 
-/// RSX / Builder 选中回调。
+/// RSX/Builder check callback.
 #[derive(Clone)]
 pub struct ChartSelect(pub Rc<dyn Fn(usize)>);
 
@@ -117,14 +117,14 @@ pub(crate) fn rows_from_values_labels(values: &[f32], labels: &[String]) -> Vec<
         .collect()
 }
 
-/// 结构化 tooltip 行（对位 shadcn `ChartTooltipContent` 一项）。
+/// Structured tooltip row (opposite shadcn `ChartTooltipContent` item).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartTooltipItem {
     pub label: String,
     pub value: f32,
-    /// 系列 / config key（可选）。
+    /// Series/config key (optional).
     pub series_key: Option<String>,
-    /// 顶栏类目 / 日期（有系列时显示，对位 shadcn tooltip label）。
+    /// Top column category/date (displayed when there is a series, aligned with the shadcn tooltip label).
     pub header: Option<String>,
 }
 
@@ -137,7 +137,7 @@ impl ChartTooltipItem {
         }
     }
 
-    /// 兼容旧单行文案。
+    /// Compatible with old one-line copywriting.
     pub fn flat_text(&self) -> String {
         format!("{}  {}", self.label, self.display_value())
     }
@@ -152,7 +152,7 @@ pub(crate) fn datum_hover_item(rows: &[ChartDatum], index: usize) -> Option<Char
     } else {
         format!("{}", index + 1)
     };
-    // 有系列：顶栏 = 类目，行标签 = 系列名；无系列：行标签 = 类目。
+    // With series: top column = category, row label = series name; without series: row label = category.
     let (label, header) = match r.series.as_ref() {
         Some(s) => (s.clone(), Some(category)),
         None => (category, None),

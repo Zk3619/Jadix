@@ -1,6 +1,6 @@
 //! NavigationHost：把 [`super::Navigator`] 页面栈渲染为 Element 树。
 //!
-//! - Host：内容区叠放；埋层 `pointer_events_none`
+//! - Host: content area stacking; buried layer `pointer_events_none`
 //! - Sheet：portal + underlay（点击 pop）
 //! - 根节点挂 [`super::Navigator::unmount_hook`]；命名信号由 [`super::Navigator::dispose`] 显式释放
 //!

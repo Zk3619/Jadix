@@ -61,8 +61,11 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::components::label::label;
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
@@ -617,16 +620,27 @@ fn reaction_bar_chrome(chips: Vec<Element>) -> BoxBuilder {
         .children(chips)
 }
 
-fn reaction_expand_chrome(chips: Vec<Element>, side: BubbleReactionsSide) -> BoxBuilder {
+fn reaction_expand_chrome(
+    chips: Vec<Element>,
+    side: BubbleReactionsSide,
+    expand_class: Option<&str>,
+) -> Element {
+    // Top: wrap-reverse keeps the first chip row on the trigger-facing (bottom) edge while
+    // accordion max-height clips overflow at the top — unveil grows up, chips do not slide.
     let wrap = match side {
         BubbleReactionsSide::Bottom => "wrap",
         BubbleReactionsSide::Top => "wrap-reverse",
     };
-    reaction_bar_chrome(chips)
+    let mut el: Element = reaction_bar_chrome(chips)
         .wrap(wrap)
         .justify("flex-start")
         .max_w(REACTION_EXPAND_MAX_W)
-        .overflow("visible")
+        .overflow("hidden")
+        .into();
+    if let Some(c) = expand_class.map(str::trim).filter(|s| !s.is_empty()) {
+        el = with_class_list(el, c);
+    }
+    el
 }
 
 fn overflow_reaction_chip(count: u32, _expanded: Signal<bool>, reactions_id: String) -> Element {
@@ -675,6 +689,8 @@ struct BubbleReactionsEntry {
     last_expanded: Cell<bool>,
     side: Cell<BubbleReactionsSide>,
     align: Cell<BubbleReactionsAlign>,
+    /// Optional utility class for the expand portal chrome (default = reaction bar paint).
+    expand_class: String,
     bar_hover: Cell<bool>,
     panel_hover: Cell<bool>,
     hover_armed: Cell<bool>,
@@ -692,6 +708,7 @@ fn register_bubble_reactions_entry(
     expanded: Signal<bool>,
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
+    expand_class: String,
 ) {
     BUBBLE_REACTIONS.with(|map| {
         map.borrow_mut().insert(
@@ -703,6 +720,7 @@ fn register_bubble_reactions_entry(
                 last_expanded: Cell::new(false),
                 side: Cell::new(side),
                 align: Cell::new(align),
+                expand_class,
                 bar_hover: Cell::new(false),
                 panel_hover: Cell::new(false),
                 hover_armed: Cell::new(false),
@@ -742,12 +760,14 @@ fn note_reactions_hover(id: &str, part: HoverPart, on: bool) {
 /// Open this expand and dismiss every other reaction popover (portal_sync exclusive
 /// is not enough: a stale panel can sit on the hoist layer after id/handler rebuilds).
 fn open_reaction_expand(id: &str) {
-    let mut others: Vec<Signal<bool>> = Vec::new();
-    BUBBLE_REACTIONS.with(|m| {
+    let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) = BUBBLE_REACTIONS.with(|m| {
         let map = m.borrow();
+        let mut others = Vec::new();
+        let mut self_exp = None;
         for (other_id, e) in map.iter() {
             if other_id == id {
                 e.hover_armed.set(true);
+                self_exp = Some(e.expanded);
                 continue;
             }
             if e.expanded.peek() {
@@ -757,10 +777,11 @@ fn open_reaction_expand(id: &str) {
                 others.push(e.expanded);
             }
         }
-        if let Some(e) = map.get(id) {
-            e.expanded.try_set(true);
-        }
+        (self_exp, others)
     });
+    if let Some(s) = self_exp {
+        s.try_set(true);
+    }
     for s in others {
         s.try_set(false);
     }
@@ -824,8 +845,9 @@ fn build_reaction_expand_panel(
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
     chips: Vec<Element>,
+    expand_class: Option<&str>,
 ) -> Element {
-    let mut panel: Element = reaction_expand_chrome(chips, side).into();
+    let mut panel = reaction_expand_chrome(chips, side, expand_class);
     panel.set_attr(ATTR_REACTIONS_OVERLAY, "1");
     panel.set_attr(ATTR_SIDE, side.as_str());
     panel.set_attr(ATTR_ALIGN, align.as_str());
@@ -838,6 +860,7 @@ fn build_reaction_expand_panel(
     );
     panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
     panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+    // wrap-reverse already packs the first line to the trigger edge; keep cross-start.
     panel.align_content_kw("flex-start").absolute()
 }
 
@@ -908,6 +931,7 @@ fn build_bubble_reactions_element(
     side: BubbleReactionsSide,
     align: BubbleReactionsAlign,
     layout: BubbleReactionsLayout,
+    expand_class: Option<String>,
     kids: Vec<Element>,
 ) -> Element {
     let seq = BUBBLE_REACTIONS_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -916,6 +940,7 @@ fn build_bubble_reactions_element(
     let exp_key = format!("{reactions_id}__exp");
     let expanded = use_signal(exp_key.as_str(), || false);
     let all_items = normalize_reaction_items(kids);
+    let expand_class = expand_class.unwrap_or_default();
 
     register_bubble_reactions_entry(
         reactions_id.clone(),
@@ -924,6 +949,7 @@ fn build_bubble_reactions_element(
         expanded,
         side,
         align,
+        expand_class,
     );
     register_bubble_reactions_redraw(&reactions_id, expanded);
 
@@ -937,26 +963,18 @@ fn build_bubble_reactions_element(
 
     let view_id = format!("{reactions_id}__expand_view");
     let portal_id = reactions_id.clone();
+    let presence = use_floating_presence(&reactions_id, FloatingMotionKind::Expand);
     reactive_anchor(view_id.clone(), move || {
-        let is_open = expanded.get();
-        if !is_open {
-            let _ = portal_sync(
-                &portal_id,
-                expanded,
-                OverlayKind::Popover,
-                OverlayMode::Stacked,
-            );
-            return Element::new().w(0.0).h(0.0);
-        }
-        let Some(oz) = portal_sync(
+        let Some((phase, oz)) = floating_portal_phase(
             &portal_id,
             expanded,
+            &presence,
             OverlayKind::Popover,
             OverlayMode::Stacked,
         ) else {
             return Element::new().w(0.0).h(0.0);
         };
-        let (chips, side, align, fid) = BUBBLE_REACTIONS.with(|m| {
+        let (chips, side, align, fid, expand_class) = BUBBLE_REACTIONS.with(|m| {
             let map = m.borrow();
             match map.get(&portal_id) {
                 Some(e) => (
@@ -964,19 +982,41 @@ fn build_bubble_reactions_element(
                     e.side.get(),
                     e.align.get(),
                     e.focus_id.clone(),
+                    e.expand_class.clone(),
                 ),
                 None => (
                     Vec::new(),
                     BubbleReactionsSide::Bottom,
                     BubbleReactionsAlign::End,
                     String::new(),
+                    String::new(),
                 ),
             }
         });
-        let mut panel = build_reaction_expand_panel(&portal_id, &fid, side, align, chips);
+        let mut panel = build_reaction_expand_panel(
+            &portal_id,
+            &fid,
+            side,
+            align,
+            chips,
+            Some(expand_class.as_str()).filter(|s| !s.is_empty()),
+        );
         apply_stored_floating_place(&mut panel, &portal_id);
         // Don't seed the 160px floating default; width matches the trigger after sync.
         panel = panel.w("auto");
+        if apply_floating_panel_motion(
+            &portal_id,
+            &mut panel,
+            FloatingMotionKind::Expand,
+            phase,
+            &presence,
+            expanded,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         let hover_id = portal_id.clone();
         let panel_fid = format!("{hover_id}__panel");
         panel = interactive(panel)
@@ -1417,6 +1457,7 @@ pub struct BubbleReactionsBuilder {
     side: BubbleReactionsSide,
     align: Option<BubbleReactionsAlign>,
     layout: BubbleReactionsLayout,
+    expand_class: String,
     children: Vec<Element>,
 }
 
@@ -1426,6 +1467,7 @@ pub fn bubble_reactions() -> BubbleReactionsBuilder {
         side: BubbleReactionsSide::Bottom,
         align: None,
         layout: BubbleReactionsLayout::Row,
+        expand_class: String::new(),
         children: Vec::new(),
     }
 }
@@ -1446,6 +1488,12 @@ impl BubbleReactionsBuilder {
         self
     }
 
+    /// Utility class for the expand portal chrome (default keeps reaction-bar paint).
+    pub fn expand_class(mut self, c: impl Into<String>) -> Self {
+        self.expand_class = c.into();
+        self
+    }
+
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
         self
@@ -1463,6 +1511,7 @@ impl From<BubbleReactionsBuilder> for Element {
             side: Some(builder.side),
             align: builder.align,
             layout: Some(builder.layout),
+            expand_class: Some(builder.expand_class).filter(|s| !s.is_empty()),
             children: {
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
@@ -1518,6 +1567,7 @@ pub fn BubbleContent(children: Option<Element>) -> Element {
 /// - `side`：`top` / `bottom`（默认 `bottom`）
 /// - `align`：`start` / `center` / `end`（及 `left` / `right`）。省略时左气泡右下、右气泡左下。
 /// - `layout`：`row` 独立行占位（默认）；`overlay` 叠在气泡外侧，不挡正文。
+/// - `expand_class`：展开 Portal 容器的 utility class（默认保持折叠反应条同款绘制）。
 /// - 超过 3 个时折叠为 `+N`，悬停 / 点击打开根级 Portal 浮层（与菜单 / Popover 互斥；不占文档流，可盖住邻条；底条只向下、顶条只向上）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
@@ -1525,6 +1575,7 @@ pub fn BubbleReactions(
     side: BubbleReactionsSide,
     align: Option<BubbleReactionsAlign>,
     layout: BubbleReactionsLayout,
+    expand_class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
@@ -1538,7 +1589,7 @@ pub fn BubbleReactions(
             }
         }
     };
-    let mut el = build_bubble_reactions_element(side, align, layout, kids);
+    let mut el = build_bubble_reactions_element(side, align, layout, expand_class, kids);
     if inherit {
         el.set_attr(ATTR_ALIGN_INHERIT, "1");
     }
@@ -1552,6 +1603,18 @@ mod tests {
     use crate::core::reactivity::{create_root, Signal};
     use crate::layout::layout_tree::LayoutTree;
     use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_GAP};
+
+    fn find_desc_attr<'a>(el: &'a Element, attr: &str) -> Option<&'a Element> {
+        if el.attrs.contains_key(attr) {
+            return Some(el);
+        }
+        for c in &el.children {
+            if let Some(hit) = find_desc_attr(c, attr) {
+                return Some(hit);
+            }
+        }
+        None
+    }
 
     #[test]
     fn bubble_variants_set_slot_and_paint_key() {
@@ -2250,6 +2313,7 @@ mod tests {
             BubbleReactionsSide::Bottom,
             BubbleReactionsAlign::End,
             overlay_reaction_chips(&["👍", "🔥", "👀", "🎉", "👏"].map(str::to_string)),
+            None,
         );
         assert_eq!(overlay.children.len(), 5, "overlay shows all reactions");
         assert_eq!(
@@ -2318,6 +2382,7 @@ mod tests {
             BubbleReactionsSide::Top,
             BubbleReactionsAlign::End,
             overlay_reaction_chips(&["👍", "🔥", "👀", "🎉", "👏"].map(str::to_string)),
+            None,
         );
         assert_eq!(overlay.style.position, taffy::style::Position::Absolute);
         assert_eq!(
@@ -2344,6 +2409,11 @@ mod tests {
                 .get(ATTR_FLOATING_STRATEGY)
                 .map(|s| s.as_str()),
             Some("fixed")
+        );
+        assert_eq!(
+            overlay.style.overflow.y,
+            taffy::style::Overflow::Hidden,
+            "top expand clips extra rows at the top so wrap-reverse unveils upward"
         );
     }
 
@@ -2570,6 +2640,7 @@ mod tests {
             BubbleReactionsSide::Bottom,
             BubbleReactionsAlign::Start,
             overlay_reaction_chips(&items),
+            None,
         );
         overlay = overlay.w(bar_w);
         let mut host = Element::new().w(400.0).child(overlay);
@@ -2586,6 +2657,41 @@ mod tests {
             overlay.layout_bounds[3] > IntoF32::into_f32(REACTION_CHIP_SIZE) * 2.0,
             "8 chips must wrap onto a second row instead of overflowing (h={:.1})",
             overlay.layout_bounds[3]
+        );
+    }
+
+    #[test]
+    fn bubble_reaction_expand_class_applies_to_panel_chrome() {
+        let overlay = build_reaction_expand_panel(
+            "rx-cls",
+            "trigger",
+            BubbleReactionsSide::Bottom,
+            BubbleReactionsAlign::Start,
+            overlay_reaction_chips(&["👍", "🔥"].map(str::to_string)),
+            Some("bg-card shadow-md"),
+        );
+        assert!(
+            overlay
+                .class_set
+                .as_ref()
+                .map(|s| {
+                    s.base.iter().any(|c| c == "bg-card")
+                        && s.base.iter().any(|c| c == "shadow-md")
+                })
+                .unwrap_or(false),
+            "expand_class must land on expand chrome class_set"
+        );
+        let default_overlay = build_reaction_expand_panel(
+            "rx-def",
+            "trigger",
+            BubbleReactionsSide::Top,
+            BubbleReactionsAlign::End,
+            overlay_reaction_chips(&["👍"].map(str::to_string)),
+            None,
+        );
+        assert_eq!(
+            default_overlay.attrs.get(ATTR_SIDE).map(|s| s.as_str()),
+            Some("top")
         );
     }
 

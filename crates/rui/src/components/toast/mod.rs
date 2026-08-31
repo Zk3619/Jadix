@@ -13,7 +13,7 @@
 //!   语义色落在边框、阴影与文案/图标上；容器底保持 popover。
 //!   非 `default` 默认在左侧居中显示语气图标，可用 [`.icon(false)`](ToastBuilder::icon) 关闭。
 //!
-//! ## 模块拆分（产品层，非框架原语）
+//! ## Module split (product layer, not framework primitives)
 //! - [`timer`] / [`queue`] / [`swipe`] / [`motion`] / [`view`] / [`host`]：本组件私有拆层
 //! - 退场时长判定吃 [`utils::presence::exit_elapsed`](crate::utils::presence::exit_elapsed)
 //! - 入退场/堆叠位移吃 [`utils::motion::MotionStyle`](crate::utils::motion::MotionStyle)
@@ -21,7 +21,7 @@
 //! - 堆叠/列表 rank→位移吃 [`utils::layout_group`](crate::utils::layout_group)
 //! - 拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! { <Toaster variant="stack" overflow="displace" limit={3} /> }
 //! ui! { <Toaster variant="list" overflow="wait" limit={5} /> }
@@ -34,7 +34,7 @@
 //!     .show();
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 宿主锚点 0×0（不进 flex 分栏）；舞台提升到窗口根 portal 层（与 Dialog / Command 同层）。
 //!   `ui! { <Toaster/> }` 会盖掉根 `template_id`，因此锚点必须是子节点。
 //! - 队列项 id 仅内部递增；关闭：关闭钮，或朝靠近边缘方向拖拽松手（四角两边、中位垂直反向）。

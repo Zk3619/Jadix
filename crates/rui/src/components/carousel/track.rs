@@ -1,10 +1,10 @@
-//! Carousel 轨道偏移纯函数（产品层）。
+//! Carousel orbit offset pure function (product layer).
 //!
-//! CSS / 变体壳留在 `carousel/mod.rs`；此处只算 ideal / clamp / index。
+//! CSS/variant shells stay in `carousel/mod.rs`; only ideal / clamp / index are counted here.
 
 use super::snap;
 
-/// Stack coverflow 侧移步长（与卡宽公式一致：视口 × 0.46 × 0.52）。
+/// Stack coverflow sideways step (matches card-width formula: viewport × 0.46 × 0.52).
 pub fn stack_step_px(viewport_w: f32) -> f32 {
     const CARD_WIDTH_FRAC: f32 = 0.46;
     const SIDE_SCALE_AT_AD1: f32 = 0.82;
@@ -29,11 +29,11 @@ pub struct IdealOffsetInput {
     pub clone_count: usize,
     pub page_delta: f32,
     pub is_stack: bool,
-    /// Multi + page + 非无缝环。
+    /// Multi + page + non-seamless loop.
     pub multi_page_linear: bool,
     pub track_loops: bool,
     pub wraps_nav: bool,
-    /// 非环时 clamp 下界（最负 offset）。
+    /// Lower bound for clamp when not a loop (most negative offset).
     pub min_offset: f32,
 }
 

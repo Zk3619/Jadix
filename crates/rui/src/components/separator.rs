@@ -13,13 +13,13 @@
 //! ```
 //! 不要写 `w("100%").mx("-…")` — 百分比宽 + 负 `mx` 在 flex 下会左右不对称。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Separator />
 //! { Element::from(separator().vertical(true)) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! 垂直分割线时，父级宜 `items="stretch"` 且有明确高度，否则可能看不见。
 
 use crate::core::tree::Element;

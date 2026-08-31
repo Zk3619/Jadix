@@ -62,7 +62,7 @@ pub fn next_sub_seq(parent_id: &str) -> usize {
     })
 }
 
-/// `active_slot` 形如 `"dd_active"` / `"ctx_active"` → 信号键 `{sid}__{active_slot}`。
+/// `active_slot` is in the form of `"dd_active"` / `"ctx_active"` → signal key `{sid}__{active_slot}`.
 pub fn focus_submenu_first_item(sid: &str, active_slot: &str, activate_count: usize) {
     let active = use_signal(format!("{sid}__{active_slot}").as_str(), || usize::MAX);
     let next = if activate_count == 0 {

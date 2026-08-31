@@ -12,13 +12,13 @@
 //! └── CardFooter
 //! ```
 //!
-//! 根容器：`bg-card`、边框、圆角、轻阴影，以及 `py` + 区间 `gap`（shadcn v4）。
+//! Root container: `bg-card`, borders, rounded corners, light shadow, and `py` + interval `gap` (shadcn v4).
 //! 分区只加水平 `px`；纯子节点也能吃到根上的垂直内边距。
 //!
-//! `ui!` 中 `<Card>` / `<CardHeader>` 等由通用 PascalCase → `*Props` 展开（与
-//! [`DialogHeader`](crate::components::DialogHeader) 相同，无需专用 scope）。
+//! `<Card>` / `<CardHeader>` in `ui!` are expanded by general PascalCase → `*Props` (with
+//! [`DialogHeader`](crate::components::DialogHeader) is the same, no dedicated scope is required).
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <Card>
@@ -42,23 +42,13 @@
 use crate::core::tree::{parse_color, Element};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
+use crate::utils::take_packed;
 use crate::style::parse_text_color;
 use crate::tokens;
 use rui_macros::component;
 
 const ATTR_CARD_SLOT: &str = "rui_card_slot";
 const SLOT_ACTION: &str = "action";
-
-/// `ui!` 多子节点会先打成匿名 VStack；分区再拆开接到自己的布局上。
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_card_action(el: &Element) -> bool {
     el.attrs
         .get(ATTR_CARD_SLOT)
@@ -72,7 +62,7 @@ fn is_card_action(el: &Element) -> bool {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Card(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -94,7 +84,7 @@ pub fn Card(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CardHeader(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let (actions, rest): (Vec<_>, Vec<_>) = kids.into_iter().partition(|c| is_card_action(c));
 
     if actions.is_empty() {
@@ -109,7 +99,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
         );
     }
 
-    // 与 Action 并排时不要 `w(100%)`：百分比宽 + 旁侧按钮会把 Header 撑破父级。
+    // Don't use `w(100%)` when side by side with Action: percentage width + side button will make the Header burst out of the parent.
     let title_block: Element = vstack()
         .gap("0.375rem")
         .flex_grow(1.0)
@@ -166,7 +156,7 @@ pub fn CardDescription(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CardAction(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut el: Element = hstack()
         .items_center()
         .gap(tokens::SPACE_2)
@@ -177,11 +167,11 @@ pub fn CardAction(children: Option<Element>) -> Element {
     el
 }
 
-/// 主内容区（水平 `px`；垂直间距由根 [`Card`] 的 `gap` / `py` 承担）。
+/// Main content area (horizontal `px`; vertical spacing is taken by the `gap` / `py` of the root [`Card`]).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CardContent(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         vstack()
             .w("100%")
@@ -197,7 +187,7 @@ pub fn CardContent(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CardFooter(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     Element::from(
         hstack()
             .w("100%")

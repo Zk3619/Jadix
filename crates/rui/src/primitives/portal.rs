@@ -17,23 +17,23 @@
 //! - Body-mounted nodes are viewport-`fixed`; local `mount=` hosts keep host-relative absolute.
 //! - Missing `mount` target falls back to the root layer (same as Solid falling back to body).
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // Default: root portal layer (Solid `<Portal>` → document.body)
 //! <Portal id="overlay-root">
 //!   <Show when={open.get()}>
-//!     <div absolute=true inset="0" z_index="900">…</div>
+//!     <Box absolute=true inset="0" z_index="900">…</Box>
 //!   </Show>
 //! </Portal>
 //!
 //! // Local: mount into a host by template_id (Solid `<Portal mount={el}>`)
-//! <div id="card-host" relative=true w="100%" h="12rem">…</div>
+//! <Box id="card-host" relative=true w="100%" h="12rem">…</Box>
 //! <Portal id="card-overlay" mount="card-host">
-//!   <div absolute=true inset="0" bg="black">…</div>
+//!   <Box absolute=true inset="0" bg="black">…</Box>
 //! </Portal>
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - Host lookup uses [`Element::template_id`]. Box/Rect/VStack `id` sets template_id.
 //! - The Portal root uses [`pointer_events_box_none`](crate::core::tree::Element::pointer_events_box_none)
 //!   so an empty wrapper does not steal scroll/clicks; interactive children stay hittable.

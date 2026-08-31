@@ -1,9 +1,9 @@
-//! 与 `rui_macros::ui!` 展开后的 **文本节点 DFS 顺序** 对齐的 literal 提取。
-//! 线性扫描会漏掉 `Icon`（字形来自 `name="..."` 属性），导致与运行时 `count_text_nodes` 不一致。
+//! 与 `rui_macros::ui!` 展开后的 **text节点 DFS 顺序** align的 literal 提取。
+//! 线性扫描会漏掉 `Icon`（字形来自 `name="..."` property），导致与运行时 `count_text_nodes` 不一致。
 //!
 //! `Button` 的 `Into<Element>` 先把 `.child(icon)` 放进 `base.el`，再把 `label` 用 `build_text_node` **追加**到
-//! 子节点末尾（见 `button.rs`），因此 DFS 是「先图标子树，后按钮文案」。普通 `Element`/`Label` 仍是
-//! 父 `el.text` 先于子树（见 `replace_text_at_index_inner`）。
+//! child末尾（见 `button.rs`），因此 DFS 是「先图标subtree，后按钮copy」。普通 `Element`/`Label` 仍是
+//! 父 `el.text` 先于subtree（见 `replace_text_at_index_inner`）。
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -17,7 +17,7 @@ enum Node {
 #[derive(Debug)]
 struct ElementNode {
     name: String,
-    /// 仅保留用于 `Icon` 的 `name` 等；值均为引号内字面值。
+    /// 仅keepused for `Icon` 的 `name` 等；值均为引号内字面值。
     attrs: Vec<(String, String)>,
     children: Vec<Node>,
 }
@@ -272,7 +272,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// `Button` 与 `button.rs` `content_slots`：宏展开顺序即子节点顺序（`Text` / `Icon` / 嵌套元素交错）。
+/// `Button` 与 `button.rs` `content_slots`：宏展开顺序即child顺序（`Text` / `Icon` / 嵌套元素交错）。
 fn dfs_collect_button(el: &ElementNode, out: &mut Vec<String>) {
     for c in &el.children {
         match c {
@@ -287,7 +287,7 @@ fn dfs_collect_button(el: &ElementNode, out: &mut Vec<String>) {
     }
 }
 
-/// 与 `replace_text_at_index_inner` 一致：先父级 `el.text`（宏里连续 `.text()` 仅最后一个有效），再子树 DFS。
+/// 与 `replace_text_at_index_inner` 一致：先父级 `el.text`（宏里连续 `.text()` 仅最后一个valid），再subtree DFS。
 fn dfs_collect_element(el: &ElementNode, out: &mut Vec<String>) {
     if el.name == "Icon" {
         if let Some((_, nm)) = el.attrs.iter().find(|(k, _)| k == "name") {
@@ -326,7 +326,7 @@ fn dfs_collect_root(node: &Node, out: &mut Vec<String>) {
     }
 }
 
-/// 与运行时 `inject_text_literals_by_id` / `count_text_nodes` 的 DFS 顺序对齐。
+/// 与运行时 `inject_text_literals_by_id` / `count_text_nodes` 的 DFS 顺序align。
 pub fn extract_text_literals_tree_order(body: &str) -> Vec<String> {
     let mut p = Parser::new(body);
     let roots = match p.parse_root_nodes() {

@@ -1,13 +1,13 @@
-//! 页面 / 视图导航栈（与 [`crate::app::portal_overlay`] 浮层栈分离）。
+//! Page/view navigation stack (separate from [`crate::app::portal_overlay`] overlay stack).
 //!
 //! - 每窗口 / 每 [`navigation_host`] 一个 [`Navigator`]
 //! - typed `Route: Clone + Eq + Hash`
 //! - 默认 keep-alive；root 路由 `bring_to_front` / 重复 `push` 会**截断栈**
-//! - Esc：先 portal_overlay，再 [`try_pop_active`]
-//! - Host 卸载：[`Element::on_unmount`](crate::core::tree::Element::on_unmount) 清除 active 注册（不删命名信号，避免首帧 rebuild 误伤）
+//! - Esc: portal_overlay first, then [`try_pop_active`]
+//! - Host uninstall: [`Element::on_unmount`](crate::core::tree::Element::on_unmount) Clear active registration (do not delete named signals to avoid accidental damage during the first frame rebuild)
 //! - 显式释放：[`Navigator::dispose`]
 //! - 转场：[`Transition`] + [`FrameState`]；由 [`tick_active`] 推进
-//! - 栈 → Element：[`navigation_host`]（[`host`]）
+//! - Stack → Element: [`navigation_host`]([`host`])
 //!
 //! z（Host 渲染）：`Host = 100 + i*10`，`Sheet = 500 + i*50`。
 
@@ -26,7 +26,7 @@ use crate::core::tree::UnmountHook;
 /// Host 内容区基线 z。
 pub const VIEW_HOST_Z_BASE: i32 = 100;
 pub const VIEW_HOST_Z_STEP: i32 = 10;
-/// Sheet 基线 z（始终高于 Host，低于 portal_overlay 的 1000）。
+/// Sheet baseline z (always above Host, below portal_overlay's 1000).
 pub const VIEW_SHEET_Z_BASE: i32 = 500;
 pub const VIEW_SHEET_Z_STEP: i32 = 50;
 
@@ -42,7 +42,7 @@ pub fn navigator_signal_key(host_id: &str) -> String {
     format!("__rui_navigator:{host_id}")
 }
 
-/// 页面呈现方式。
+/// Page rendering method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Presentation {
     #[default]
@@ -59,7 +59,7 @@ pub enum FrameState {
     Exiting,
 }
 
-/// 转场类型（v1：无 / 滑入滑出）。
+/// Transition type (v1: none / slide in and slide out).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Transition {
     #[default]
@@ -139,7 +139,7 @@ struct NavInner<R: Clone + Eq + Hash + 'static> {
     next_key: u64,
 }
 
-/// 页面栈控制器（可 Clone 的句柄）。
+/// Page stack controller (cloneable handle).
 #[derive(Clone)]
 pub struct Navigator<R: Clone + Eq + Hash + 'static> {
     host_id: String,
@@ -174,8 +174,8 @@ impl<R: Clone + Eq + Hash + 'static> Navigator<R> {
         state.set_silent(inner);
 
         // Host 离开树时只清 active 注册。不要 `remove_named_signal`：
-        // 启动时 `app_builder` 会先非追踪建一棵树，再在 root effect 里 rebuild；
-        // 若此处删信号，deferred 的 reactive host 读栈会 unwrap 到 None。
+        // When starting, `app_builder` will first build a tree without tracking, and then rebuild it in the root effect;
+        // If the signal is deleted here, the deferred's reactive host reading stack will unwrap to None.
         let hid = host_id.clone();
         let unmount = UnmountHook::new(move || {
             clear_active_navigator(&hid);
@@ -286,7 +286,7 @@ impl<R: Clone + Eq + Hash + 'static> Navigator<R> {
 
     pub fn pop(&self) -> bool {
         let mut inner = self.state.peek();
-        // 找最后一个非 Exiting 帧
+        // Find the last non-Exiting frame
         let Some(idx) = inner
             .frames
             .iter()
@@ -491,7 +491,7 @@ pub fn try_pop_active() -> bool {
     pop()
 }
 
-/// 每帧推进活跃 Navigator 转场；若仍在动画则返回 true（应继续 redraw）。
+/// Advance the active Navigator transition each frame; returns true if still animating (redraw should continue).
 pub fn tick_active(dt: f32) -> bool {
     // Same re-entrancy rule as `try_pop_active`: `tick` may rebuild or re-arm.
     let Some((id, tick)) =

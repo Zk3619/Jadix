@@ -2,7 +2,7 @@
 //!
 //! GPU 纹理矩形：已上传的纹理键，或 `src`（本地路径 / `data:` URL）解码后上传。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! rui::queue_image_rgba8("demo", width, height, rgba_bytes);
 //! <Image texture="demo" w="5.5rem" h="5.5rem" />
@@ -10,16 +10,16 @@
 //! <Image src="assets/photo.jpg" w="8rem" h="8rem" />
 //! <Image src="data:image/svg+xml,..." w="2rem" h="2rem" />
 //!
-//! // CSS `aspect-ratio`（定宽、另一轴 auto 时生效；亦可用 utility `aspect-video`）
+//! // CSS `aspect-ratio` (effective when fixed width, another axis is auto; utility `aspect-video` can also be used)
 //! <Image src="assets/photo.jpg" w="12rem" aspect_ratio="16/9" rounded="0.5rem" />
 //! <Image src="assets/photo.jpg" w="12rem" aspect-ratio="1 / 1" />
 //!
-//! // HTML / Solid 风格别名（宏与 prelude 均可用）
+//! // HTML / Solid style alias (both macro and prelude available)
 //! <Img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! <img src="assets/photo.jpg" w="8rem" h="8rem" />
 //! ```
 //!
-//! JPEG/GIF/WebP/… 由内置 `image` 解码；SVG 需 `svg` feature。
+//! JPEG/GIF/WebP/… decoded by built-in `image`; SVG requires `svg` feature.
 //! 与 [`crate::components::AspectRatio`] 容器二选一或组合：容器负责裁剪铺满，属性直接钉在 Image 上。
 
 use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
@@ -61,7 +61,7 @@ pub fn Image(
     el
 }
 
-/// HTML / Solid 风格别名：与 [`Image`] 相同（`<Img>` / `Img(…)`）。
+/// HTML / Solid style alias: Same as [`Image`] (`<Img>` / `Img(…)`).
 pub use Image as Img;
-/// 与 [`ImageProps`] 相同。
+/// Same as [`ImageProps`].
 pub use ImageProps as ImgProps;

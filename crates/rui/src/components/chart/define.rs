@@ -1,4 +1,4 @@
-//! `define_chart`：marks + scales + theme → 同一 path 核场景（TanStack ChartSpec 窄化）。
+//! `define_chart`: marks + scales + theme → same path kernel scenario (TanStack ChartSpec narrowing).
 
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
@@ -25,7 +25,7 @@ use super::polar::polar_guide_layers;
 use super::scale::{format_time_label, resolve_scales, resolve_scales_pad, AxisSpec, ScaleKind};
 use super::theme::{ChartConfig, ChartTheme, TooltipIndicator};
 
-/// RSX `<Chart definition={…} />` 入参。
+/// RSX `<Chart definition={…} />` input parameter.
 #[derive(Clone)]
 pub struct ChartDefinition(pub ChartBuilder);
 
@@ -35,7 +35,7 @@ impl From<ChartBuilder> for ChartDefinition {
     }
 }
 
-/// TanStack `defineChart({ marks, x, y, theme, guides })` 的 RUI Builder。
+/// RUI Builder for TanStack `defineChart({ marks, x, y, theme, guides })`.
 #[derive(Clone)]
 pub struct ChartBuilder {
     id: String,
@@ -43,15 +43,15 @@ pub struct ChartBuilder {
     x: Option<AxisSpec>,
     y: Option<AxisSpec>,
     theme: ChartTheme,
-    /// shadcn `ChartConfig`：系列 label / color。
+    /// shadcn `ChartConfig`: Series label/color.
     config: ChartConfig,
     guides: bool,
     legend: bool,
     axis_labels: bool,
-    /// 笛卡尔图高（px）。Polar 用 [`Self::size`]。
+    /// Cartesian figure height (px). Polar uses [`Self::size`].
     height: f32,
     width: Option<f32>,
-    /// Polar 正方形边长。
+    /// Polar side length of the square.
     polar_size: f32,
     polar_start: f32,
     polar_end: f32,
@@ -71,14 +71,14 @@ pub struct ChartBuilder {
     layout_h: Option<f32>,
     plot_size_signal: Option<Signal<(f32, f32)>>,
     tooltip_scene: Option<Rc<RefCell<Option<TooltipScene>>>>,
-    /// Live tooltip 岛 id（`{key}__tip__view`）；有值时 compile 只插 placeholder。
+    /// Live tooltip island id (`{key}__tip__view`); when there is a value, compile only inserts placeholder.
     overlay_key: Option<String>,
     /// `h="full"` / `100%`：占位与绘图区吃满父级高度。
     height_fluid: bool,
     on_select: Option<Rc<dyn Fn(usize)>>,
 }
 
-/// 入口：组合 marks，而不是选用固定图表类型。
+/// Entry: combine marks instead of selecting a fixed chart type.
 pub fn define_chart() -> ChartBuilder {
     ChartBuilder {
         id: String::new(),
@@ -277,7 +277,7 @@ impl ChartBuilder {
         self.polar_end = rad;
         self
     }
-    /// Polar 内半径比例（径向柱/线；pie 仍用 mark `.inner_radius`）。
+    /// Polar inner radius scale (radial cylinder/line; pie still uses mark `.inner_radius`).
     pub fn polar_inner(mut self, frac: f32) -> Self {
         self.polar_inner = frac.clamp(0.0, 0.85);
         self
@@ -289,7 +289,7 @@ impl ChartBuilder {
         self
     }
 
-    /// shadcn `ChartTooltipContent` indicator：`dot` | `line` | `dashed`（未知 → dot）。
+    /// shadcn `ChartTooltipContent` indicator: `dot` | `line` | `dashed` (unknown → dot).
     pub fn tooltip_indicator(mut self, indicator: impl Into<TooltipIndicator>) -> Self {
         self.tooltip_indicator = indicator.into();
         self
@@ -406,7 +406,7 @@ fn cartesian_frame(
         let h = format!("{height}px");
         frame = frame.h(h.as_str()).min_h(h.as_str());
     }
-    // shadcn ChartContainer：透明底，网格 border/50；外壳 Card 由应用承担。
+    // shadcn ChartContainer: transparent bottom, grid border/50; shell Card is borne by the application.
     // 网格必须在 plot（含 bar path 贴图）下层：绝对定位 + z=0，plot z=1。
     // overflow visible：tooltip 靠翻转留在图内，不用 hidden 裁切。
     frame = frame.bg(theme.background);
@@ -436,7 +436,7 @@ fn cartesian_frame(
         base = base.bg(theme.border);
         frame = frame.child(base);
     }
-    // 柱/线贴图裁在绘图区内；tooltip overlay 是后续兄弟，不被 clip。
+    // The column/line texture is clipped in the drawing area; tooltip overlay is the follow-up brother and will not be clipped.
     frame.child(plot.z_index(1).overflow("hidden"))
 }
 
@@ -683,7 +683,7 @@ fn live_selected_chart(builder: ChartBuilder) -> Element {
         } else {
             compile_cartesian(b)
         };
-        // 图 reconcile 会换上新的 overlay placeholder；bump 让 tooltip 岛在其后把内容填回去。
+        // The image reconcile will be replaced with a new overlay placeholder; the bump will allow the tooltip island to fill in the content afterwards.
         plot_gen.set(plot_gen.peek().wrapping_add(1));
         el
     });
@@ -812,7 +812,7 @@ pub(crate) fn tooltip_pin_place(
 }
 
 fn tooltip_indicator_el(indicator: TooltipIndicator, color: [f32; 4]) -> Element {
-    // shadcn：dot `h-2.5 w-2.5`、line `w-1`、dashed 边框；`rounded-[2px]`。
+    // shadcn: dot `h-2.5 w-2.5`, line `w-1`, dashed border; `rounded-[2px]`.
     match indicator {
         TooltipIndicator::Dot => {
             let el: Element = r#box()
@@ -1662,7 +1662,7 @@ fn compile_polar(builder: ChartBuilder) -> Element {
         })
         .unwrap_or_default();
     let legend_el = pie_legend_rows(&pairs, &theme, &config, selected);
-    // shadcn ChartLegendContent：图下方水平图例（非侧栏）。
+    // shadcn ChartLegendContent: Horizontal legend below the chart (not sidebar).
     let root: Element = vstack()
         .gap("0.75rem")
         .items_center()
@@ -1679,7 +1679,7 @@ pub(crate) fn pie_legend_rows(
     config: &ChartConfig,
     selected: Option<usize>,
 ) -> Element {
-    // shadcn ChartLegendContent：水平 flex + 8×8 rounded-[2px] 色块。
+    // shadcn ChartLegendContent: horizontal flex + 8×8 rounded-[2px] color block.
     let mut legend = hstack().gap("1rem").wrap("wrap").flex_shrink(0.0);
     for (i, (lab, _val)) in labels.iter().enumerate() {
         let display = config.label_for(lab).unwrap_or(lab.as_str());

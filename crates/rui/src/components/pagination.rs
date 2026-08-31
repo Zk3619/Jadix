@@ -11,15 +11,15 @@
 //!         └── PaginationEllipsis
 //! ```
 //!
-//! **身份（WP-2.8）**：展示型壳，**不要求**用户 `id`；空 / 省略 → 不写 `template_id`（I-1）。
+//! **Identity (WP-2.8)**: presentational shell; user `id` **not required**; empty/omitted → no `template_id` (I-1).
 //! 受控页码用 [`Signal`]；Builder 未传则按实例键建内部信号。
 //!
 //! `ui!` 中 `<Pagination>` / `<PaginationLink>` 等由通用 PascalCase → `*Props` 展开
 //!（与 [`Navbar`](crate::components::Navbar) 相同，无需专用 scope）。
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐）
+//! // A. Composite RSX (recommended)
 //! ui! {
 //!     <Pagination>
 //!         <PaginationContent>
@@ -70,6 +70,7 @@ use crate::primitives::r#box::hstack;
 use crate::style::with_class_list;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 
 /// 页码格（icon 按钮）约 `2.25rem`。
 const PAGE_SLOT_PX: f32 = 36.0;
@@ -89,30 +90,6 @@ const SLOT_PREV: &str = "pagination-previous";
 const SLOT_NEXT: &str = "pagination-next";
 const SLOT_ELLIPSIS: &str = "pagination-ellipsis";
 const SLOT_JUMPER: &str = "pagination-jumper";
-
-/// `ui!` 多子节点会先打成匿名 VStack / fragment；再拆开接到自己的布局上。
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    // Previous / Next 等 Button 根常有 icon+caption 多子节点；若按「裸多子」拆包，
-    // 会丢掉 interactive 根上的 on_click / data-slot（表现为上一页/下一页无法点击）。
-    if el.on_click.is_some()
-        || el.focus_id.is_some()
-        || el.button_hover_paint.is_some()
-        || el.template_id.is_some()
-        || el.attrs.contains_key(ATTR_SLOT)
-    {
-        return vec![el];
-    }
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn lucide_icon(name: &str, size_px: f32) -> Element {
     let glyph = lucide_glyph(name).unwrap_or_else(|| "…".into());
     // 图标勿抢点击：命中应落到外层 Button / interactive。
@@ -698,7 +675,7 @@ pub fn PaginationLink(
 
 /// 上一页：chevron-left + 文案（默认 `"Previous"`）。
 ///
-/// `hide_text`：仅显示图标（窄屏压缩时由 Builder 开启）。
+/// `hide_text`: icon only (Builder enables on narrow/compressed layouts).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn PaginationPrevious(
@@ -757,7 +734,7 @@ pub fn PaginationPrevious(
 
 /// 下一页：文案（默认 `"Next"`）+ chevron-right。
 ///
-/// `hide_text`：仅显示图标（窄屏压缩时由 Builder 开启）。
+/// `hide_text`: icon only (Builder enables on narrow/compressed layouts).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn PaginationNext(

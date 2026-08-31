@@ -1,18 +1,18 @@
 //! # ButtonGroup
 //!
-//! ShadCN **base** 按钮组：对齐
+//! ShadCN **base** Button Group: Alignment
 //! `Reference/ShadCN-UI/.../bases/base/ui/button-group.tsx`。
 //!
 //! ```text
 //! ButtonGroup                    // role=group · flex · orientation
-//! ├── Button / …                 // 相邻圆角合并 · 绘制期叠边（均匀边框走 SDF）
-//! ├── ButtonGroupText            // 组内文案槽（flex 壳 + 文案子节点）
-//! └── ButtonGroupSeparator       // 组内分割线（默认竖线）
+//! ├── Button / … // Merge adjacent fillets · Overlap edges during drawing (uniform borders go to SDF)
+//! ├── ButtonGroupText // Copy slot in the group (flex shell + copy sub-node)
+//! └── ButtonGroupSeparator //Separating line within the group (default vertical line)
 //! ```
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! <ButtonGroup>
 //!     <Button variant="outline">"Copy"</Button>
 //!     <Button variant="outline">"Paste"</Button>
@@ -32,21 +32,22 @@
 //! button_group().orientation("vertical").separator().child(…)
 //! ```
 //!
-//! ## 注意
-//! - **展示型**：空 `id` 不写 `template_id`（WP-2.8）。
+//! ## Notes
+//! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
 //! - `ui!` 多子节点会包 fragment；根会 [`take_packed`] 拆开再按方向排。
-//! - 圆角 / 共享边：对齐 ShadCN 连体观感，但**不把 -1px 写进布局**（竖组 `-mt` 会吃掉
-//!   容器高度，下一段标题叠上来；再叠 `z-index` 就会盖住下层）。相邻段只把**绘制盒
-//!   向共享边加宽 1px**（远侧边仍在布局位置）。整框平移会把中间项的另一侧也带走，
-//!   后面的 Separator / 第三项就会露出双线。`ButtonGroupSeparator` 仍两侧 `-1px` 嵌缝。
-//!   Hover 写色后须经 [`apply_button_group_join_chrome`] 重套圆角。
-//! - `<ButtonGroup>` / Text / Separator 走通用 PascalCase → `*Props`（与 Pagination 同，无需专用 scope）。
+//! - Rounded corners/shared edges: align ShadCN for a one-piece look, but **do not write -1px into the layout** (vertical group `-mt` will eat it
+//!   The height of the container, the next section of title will be stacked; if you stack `z-index` again, it will cover the lower layer). Adjacent segments only draw boxes
+//!   Widen the shared edge by 1px** (the far edge is still in layout position). Panning the entire frame will also take away the other side of the middle item.
+//!   The subsequent Separator/third item will reveal double lines. `ButtonGroupSeparator` still has `-1px` caulking on both sides.
+//!   Hover must go through [`apply_button_group_join_chrome`] to refill the corners after writing the color.
+//! - `<ButtonGroup>` / Text / Separator takes the general PascalCase → `*Props` (same as Pagination, no special scope is required).
 
 use crate::components::separator::separator;
 use crate::core::tree::{CssDim, Element, UnitSlot};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::with_class_list;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -54,7 +55,7 @@ const SLOT_ROOT: &str = "button-group";
 const SLOT_TEXT: &str = "button-group-text";
 const SLOT_SEPARATOR: &str = "button-group-separator";
 
-/// 标记组内可折叠段（Button hover paint 会读）。
+/// Marks collapsible segments within a group (read by Button hover paint).
 pub(crate) const ATTR_GROUP_EDGE: &str = "rui_button_group_edge";
 pub(crate) const ATTR_GROUP_ORIENTATION: &str = "rui_button_group_orientation";
 
@@ -63,13 +64,13 @@ const EDGE_MIDDLE: &str = "middle";
 const EDGE_END: &str = "end";
 const EDGE_ONLY: &str = "only";
 
-/// 绘制期向共享边加宽（不进 Taffy）。`x` = 左侧 +1px，`y` = 上侧 +1px。
+/// Drawtime widens toward shared edges (without entering Taffy). `x` = left +1px, `y` = top +1px.
 pub(crate) const ATTR_PAINT_NUDGE: &str = "rui_button_group_nudge";
 
-/// ShadCN Button 默认圆角 `rounded-md` ≈ 0.375rem。
+/// ShadCN Button default rounded corners `rounded-md` ≈ 0.375rem.
 const JOIN_RADIUS_PX: f32 = 0.375 * 16.0;
 
-/// 组方向。
+/// group direction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ButtonGroupOrientation {
     #[default]
@@ -109,29 +110,7 @@ impl From<String> for ButtonGroupOrientation {
     }
 }
 
-fn is_identity_node(el: &Element) -> bool {
-    el.on_click.is_some()
-        || el.focus_id.is_some()
-        || el.button_hover_paint.is_some()
-        || el.template_id.is_some()
-        || el.attrs.contains_key(ATTR_SLOT)
-}
-
-/// `ui!` 多子节点会打成 VStack / fragment；递归拆开再按组方向重排。
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if is_identity_node(&el) {
-        return vec![el];
-    }
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1")
-        || (el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1)
-    {
-        return std::mem::take(&mut el.children)
-            .into_iter()
-            .flat_map(take_packed)
-            .collect();
-    }
-    vec![el]
-}
+/// `ui!` multi-child packs into `rui_fragment` / anonymous shell; unpack via `take_packed`, then rearrange by group direction.
 
 fn slot_of(el: &Element) -> Option<&str> {
     el.attrs.get(ATTR_SLOT).map(String::as_str)
@@ -141,7 +120,7 @@ fn is_separator_slot(el: &Element) -> bool {
     slot_of(el) == Some(SLOT_SEPARATOR)
 }
 
-/// 参与圆角/边框折叠的段：Button、组内 Text，或其它带 `data-slot` 的非分割线子项。
+/// Segments participating in rounded corners/border folding: Button, Text within a group, or other non-splitting line items with `data-slot`.
 fn is_join_segment(el: &Element) -> bool {
     if is_separator_slot(el) {
         return false;
@@ -156,23 +135,23 @@ fn is_join_segment(el: &Element) -> bool {
     }
 }
 
-/// 内部半径顺序 **[TR, BR, TL, BL]**（见 `devtools/style_edit`）。
+/// CSS `border-radius` 顺序 **[TL, TR, BR, BL]**（与 [`crate::style::Style::radii`] 一致）。
 fn join_radii(edge: &str, vertical: bool, r: f32) -> [f32; 4] {
     match edge {
         EDGE_ONLY => [r, r, r, r],
-        EDGE_START if vertical => [r, 0.0, r, 0.0], // TL TR
-        EDGE_END if vertical => [0.0, r, 0.0, r],   // BL BR
+        EDGE_START if vertical => [r, r, 0.0, 0.0], // TL TR
+        EDGE_END if vertical => [0.0, 0.0, r, r],   // BR BL
         EDGE_MIDDLE => [0.0, 0.0, 0.0, 0.0],
-        EDGE_START => [0.0, 0.0, r, r], // TL BL
-        EDGE_END => [r, r, 0.0, 0.0],   // TR BR
+        EDGE_START => [r, 0.0, 0.0, r], // TL BL
+        EDGE_END => [0.0, r, r, 0.0],   // TR BR
         _ => [r, r, r, r],
     }
 }
 
-/// 清掉旧版布局叠边残留（负 margin / z-index / translate），保持均匀边框。
+/// Clear the overlapped edges (negative margin / z-index / translate) of the old version of the layout and maintain a uniform border.
 ///
-/// 绘制叠边标记 [`ATTR_PAINT_NUDGE`] 由 [`mark_join_segment`] 写入；此处不改 attr，
-/// 以便 hover 重套 chrome 时不会把「分隔符后的 End」又标成叠边。
+/// Draw overlap mark [`ATTR_PAINT_NUDGE`] written by [`mark_join_segment`]; do not change attr here,
+/// This will prevent the "End after the separator" from being marked as overlapped when hovering over chrome.
 fn overlap_shared_edge(el: &mut Element) {
     if el.style.translate != [0.0, 0.0] {
         el.style.translate = [0.0, 0.0];
@@ -196,9 +175,9 @@ fn overlap_shared_edge(el: &mut Element) {
     }
 }
 
-/// 连体段绘制：向共享边伸出 1px（原点左/上移，尺寸加宽），远侧边仍在布局位置。
+/// Drawing of conjoined segments: extends 1px toward the shared edge (origin moved left/up, size widened), with the far side still in the layout position.
 ///
-/// 整框平移会把中间项的右/下边也带走，后面的 Separator 或第三项就会和这条边并成 2px。
+/// Panning the entire frame will also take away the right/bottom edge of the middle item, and the subsequent Separator or third item will merge with this edge to form 2px.
 pub(crate) fn button_group_paint_nudge(el: &Element) -> [f32; 2] {
     match el.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str) {
         Some("x") => [-1.0, 0.0],
@@ -207,7 +186,7 @@ pub(crate) fn button_group_paint_nudge(el: &Element) -> [f32; 2] {
     }
 }
 
-/// 按组标记重写圆角与共享边（装配 + Button hover 写色后共用）。
+/// Rewrite fillets and shared edges by group tag (shared after assembly + Button hover color writing).
 pub(crate) fn apply_button_group_join_chrome(el: &mut Element) {
     let Some(edge) = el.attrs.get(ATTR_GROUP_EDGE).cloned() else {
         return;
@@ -255,7 +234,7 @@ fn mark_join_segment(
     apply_button_group_join_chrome(el);
 }
 
-/// Separator 嵌进两侧边框：1px 线 + 两侧 -1px margin（对齐 ShadCN）。
+/// Separator embeds borders on both sides: 1px line + -1px margin on both sides (aligned to ShadCN).
 fn nest_group_separator(el: &mut Element, orientation: ButtonGroupOrientation) {
     let zero_min = taffy::style::Dimension::length(0.0);
     if orientation.is_vertical() {
@@ -294,7 +273,7 @@ fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
         } else {
             EDGE_MIDDLE
         };
-        // 仅与前一连体段相邻时绘制叠边；夹 Separator 时由 sep 的 -1px 嵌缝负责。
+        // The overlapping edges are only drawn adjacent to the previous conjoined segment; the -1px caulk of the separator is responsible for this when clamping a Separator.
         let overlap_prev = k > 0 && i == segment_idx[k - 1] + 1;
         mark_join_segment(&mut kids[i], edge, orientation, overlap_prev);
     }
@@ -339,7 +318,7 @@ fn build_button_group(
 // RSX parts
 // ---------------------------------------------------------------------------
 
-/// 根：`role=group` · 横向/纵向 flex · 子项圆角合并。
+/// Root: `role=group` · Horizontal/vertical flex · Children's rounded corners are merged.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ButtonGroup(
@@ -356,7 +335,7 @@ pub fn ButtonGroup(
     build_button_group(&id, orient, class, kids)
 }
 
-/// 组内文案槽：flex 壳 + 文案子节点（勿把 text 写在带 border 的根上，stretch 后会贴顶）。
+/// Copywriting slot in the group: flex shell + copywriting sub-node (do not write text on the root with border, it will stick to the top after stretching).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ButtonGroupText(class: Option<String>, children: Option<Element>) -> Element {
@@ -369,7 +348,7 @@ pub fn ButtonGroupText(class: Option<String>, children: Option<Element>) -> Elem
             }
         })
         .unwrap_or_default();
-    // 对齐 new-york-v4：`rounded-md border bg-muted px-4 text-sm font-medium`
+    // Alignment new-york-v4: `rounded-md border bg-muted px-4 text-sm font-medium`
     let caption = build_text_node(
         label,
         TextNodeConfig {
@@ -411,7 +390,7 @@ fn extract_text(el: &Element) -> String {
     String::new()
 }
 
-/// 组内分割线：默认 `orientation=vertical`（横组里的竖线）；可显式水平。
+/// Dividing line within the group: Default is `orientation=vertical` (vertical line in the horizontal group); can be explicitly horizontal.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ButtonGroupSeparator(
@@ -420,7 +399,7 @@ pub fn ButtonGroupSeparator(
     children: Option<Element>,
 ) -> Element {
     let _ = children;
-    // ShadCN 默认 vertical separator（横组共享竖线）。
+    // ShadCN defaults to vertical separator (horizontal groups share vertical lines).
     let vertical = match orientation.as_deref().map(str::trim) {
         Some("horizontal") | Some("row") => false,
         _ => true,
@@ -431,8 +410,8 @@ pub fn ButtonGroupSeparator(
         "data-orientation",
         if vertical { "vertical" } else { "horizontal" },
     );
-    // self-stretch：横组竖线撑满行高；竖组横线撑满列宽。
-    // 勿用 `h/w: 100%`；交给 align-self: stretch。负 margin 由 `nest_group_separator` 写入。
+    // self-stretch: The vertical lines in the horizontal group fill the row height; the horizontal lines in the vertical group fill the column width.
+    // Don't use `h/w: 100%`; leave it to align-self: stretch. Negative margins are written by `nest_group_separator`.
     if vertical {
         el = el
             .h("auto")
@@ -457,7 +436,7 @@ pub fn ButtonGroupSeparator(
 }
 
 // ---------------------------------------------------------------------------
-// Builder（ADR-9 面 B）
+// Builder (ADR-9 surface B)
 // ---------------------------------------------------------------------------
 
 enum ButtonGroupPart {
@@ -466,7 +445,7 @@ enum ButtonGroupPart {
     Text(String),
 }
 
-/// Builder 状态。
+/// Builder state.
 pub struct ButtonGroupBuilder {
     id: String,
     class: String,
@@ -474,7 +453,7 @@ pub struct ButtonGroupBuilder {
     parts: Vec<ButtonGroupPart>,
 }
 
-/// Builder 入口。
+/// Builder entry.
 pub fn button_group() -> ButtonGroupBuilder {
     ButtonGroupBuilder {
         id: String::new(),
@@ -510,7 +489,7 @@ impl ButtonGroupBuilder {
         self
     }
 
-    /// 插入分割线。未指定时：横组→竖线，竖组→横线。
+    /// Insert dividing line. When not specified: horizontal group → vertical line, vertical group → horizontal line.
     pub fn separator(mut self) -> Self {
         let vertical = !self.orientation.is_vertical();
         self.parts.push(ButtonGroupPart::Separator { vertical });
@@ -526,7 +505,7 @@ impl ButtonGroupBuilder {
         self
     }
 
-    /// 便捷：outline 按钮 + 可选点击。
+    /// Convenience: outline button + optional click.
     pub fn button(mut self, label: impl Into<String>, on_click: impl FnMut() + 'static) -> Self {
         use crate::components::button::button;
         let mut click = on_click;
@@ -618,14 +597,14 @@ mod tests {
             second.attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_END)
         );
-        // 内部 [TR, BR, TL, BL]：首段左圆、次段右圆；次段绘制期叠边，布局不写负 margin。
+        // CSS [TL, TR, BR, BL]: start = left corners; end = right corners.
         assert_eq!(
             first.style.radii,
-            [0.0, 0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX]
+            [JOIN_RADIUS_PX, 0.0, 0.0, JOIN_RADIUS_PX]
         );
         assert_eq!(
             second.style.radii,
-            [JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0, 0.0]
+            [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]
         );
         assert!(
             second.style.border_is_uniform(),
@@ -687,8 +666,8 @@ mod tests {
             "button after separator must still join as end"
         );
         // Start: left round only; End: right round only (facing sides square → no pill gap).
-        assert_eq!(a.style.radii, [0.0, 0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX]);
-        assert_eq!(b.style.radii, [JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0, 0.0]);
+        assert_eq!(a.style.radii, [JOIN_RADIUS_PX, 0.0, 0.0, JOIN_RADIUS_PX]);
+        assert_eq!(b.style.radii, [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]);
         // End 在 Separator 之后：布局叠边交给 sep，按钮不再绘制偏移（否则会盖住 1px 线）。
         assert!(
             b.attrs.get(ATTR_PAINT_NUDGE).is_none(),
@@ -757,7 +736,7 @@ mod tests {
         assert_eq!(el.children[1].style.radii, [0.0; 4]);
         assert_eq!(
             el.children[3].style.radii,
-            [JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0, 0.0]
+            [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]
         );
         assert_eq!(
             el.children[1]
@@ -865,7 +844,7 @@ mod tests {
         use crate::primitives::r#box::vstack;
 
         let (_handle, _) = create_root(|| {
-            // 宏把多子节点打成 VStack；take_packed 必须拆开，否则横组会变成一列且无叠边。
+            // The macro converts multiple child nodes into VStack; take_packed must be split, otherwise the horizontal group will become one column without overlapping edges.
             let packed = {
                 let mut list = Vec::new();
                 list.extend(
@@ -994,7 +973,7 @@ mod tests {
             "join chrome must keep paint nudge after set_uniform"
         );
         assert!(kid.style.border_is_uniform());
-        assert_eq!(kid.style.radii, [JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0, 0.0]);
+        assert_eq!(kid.style.radii, [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]);
     }
 
     #[test]

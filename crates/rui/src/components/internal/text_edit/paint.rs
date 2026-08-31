@@ -231,6 +231,20 @@ fn sync_one_text_edit_paint(
             el.style.shadow_inset = false;
             container_layout = true;
         }
+        let want_inv = if invalid { "true" } else { "" };
+        let cur_inv = el
+            .attrs
+            .get("data-invalid")
+            .map(String::as_str)
+            .unwrap_or("");
+        if cur_inv != want_inv {
+            if want_inv.is_empty() {
+                el.attrs.remove("data-invalid");
+            } else {
+                el.set_attr("data-invalid", want_inv);
+            }
+            container_style = true;
+        }
     } else if is_focused {
         if !focus_ring_shadow_matches_color(el, true, ring_color) {
             let (blur, spread) = focus_ring_params(focus_ring_style());
@@ -663,7 +677,7 @@ fn sync_one_text_edit_paint(
                     break;
                 }
             }
-            // Post-render publish wins when larger; never shrink below live text measure.
+            // cannot travel past the caret (gallery: "只能滚动极小值").
             // After Enter, `ch` is still one frame stale — replacing scroll_content_h made
             // max_sy too small until the user typed and collect refreshed the signal.
             if ch > vh_eff + 0.5 {
@@ -673,7 +687,7 @@ fn sync_one_text_edit_paint(
             let content_fits = vh_eff > 1.0 && scroll_content_h <= vh_eff + 0.5;
             // Only pull scroll to the caret when the caret *moves* (typing / arrows).
             // Running this every focused frame clamps sy to caret_top — wheel/scrollbar
-            // cannot travel past the caret (gallery: "只能滚动极小值").
+            // cannot travel past the caret (gallery: "Can only scroll minimum value").
             let last_caret_key = format!("__rui_ta_scroll_caret_{}", desc.base_id);
             let last_caret = use_signal(&last_caret_key, || None::<usize>).peek();
             let caret_moved = last_caret != Some(caret_byte);

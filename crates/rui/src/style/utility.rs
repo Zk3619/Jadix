@@ -350,14 +350,17 @@ pub fn tick_active_css_transitions_subtree(
     let has_active_css = el.transition_snapshot.has_active_tweens();
     let css_needs =
         super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-    let defer_modal_enter = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
+    let defer_shell_css = crate::components::internal::modal_motion::modal_shell_defer_css_tick(
         el.template_id.as_deref(),
-    );
+    )
+        || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+            el.template_id.as_deref(),
+        );
 
     if has_spin || has_css_anim || has_active_css || css_needs {
         let before = el.style.clone();
         let spun = tick_animate_spin(el);
-        let css_anim = if has_css_anim || !el.style.animations.is_empty() {
+        let css_anim = if !defer_shell_css && (has_css_anim || !el.style.animations.is_empty()) {
             super::animation::tick_element_animations(
                 &mut el.style,
                 &mut el.animation_snapshot,
@@ -366,7 +369,7 @@ pub fn tick_active_css_transitions_subtree(
         } else {
             false
         };
-        let css_trans = if !defer_modal_enter
+        let css_trans = if !defer_shell_css
             && (has_active_css || css_needs || !el.style.transition.is_empty())
         {
             super::animation::tick_element_transitions_locked(
@@ -612,16 +615,22 @@ fn sync_class_variants_subtree_inner(
             let before_text = el.text_style.clone();
             let local = resolve_class_variants(el, &ctx);
             let spun = tick_animate_spin(el);
-            let css_anim = super::animation::tick_element_animations(
-                &mut el.style,
-                &mut el.animation_snapshot,
-                frame_dt(),
-            );
-            let defer_modal_enter =
+            let defer_shell_css =
                 crate::components::internal::modal_motion::modal_shell_defer_css_tick(
                     el.template_id.as_deref(),
+                ) || crate::components::internal::floating_motion::floating_panel_defer_css_tick(
+                    el.template_id.as_deref(),
                 );
-            let css_trans = if !defer_modal_enter {
+            let css_anim = if !defer_shell_css {
+                super::animation::tick_element_animations(
+                    &mut el.style,
+                    &mut el.animation_snapshot,
+                    frame_dt(),
+                )
+            } else {
+                false
+            };
+            let css_trans = if !defer_shell_css {
                 super::animation::tick_element_transitions_locked(
                     &mut el.style,
                     &mut el.transition_snapshot,

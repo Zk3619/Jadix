@@ -7,11 +7,11 @@ use std::time::Instant;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoplayAction {
     Skip,
-    /// 推进 loop settle / finish。
+    /// Advance loop settle / finish.
     FinishLoop,
-    /// 到期翻页。
+    /// Turn the page when it expires.
     Advance,
-    /// 尚未排程，需 bump deadline。
+    /// Not yet scheduled, need to bump deadline.
     ArmDeadline,
 }
 

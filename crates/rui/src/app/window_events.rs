@@ -31,7 +31,7 @@ pub(super) fn tick_input_drag_select_at(
     };
     // Clamp into the scrollport before hit-test. A wrap=off leaf is often wider than
     // the clip; using the raw pointer X maps selection far ahead of the visible edge
-    // ("落差") and feels disconnected from edge auto-scroll.
+    // ("gap") and feels disconnected from edge auto-scroll.
     let (hx, hy) = super::tree_hit::clamp_pointer_to_textarea_scrollport(root, rest, x, y);
     let vk = crate::components::input::input_value_signal_key(rest);
     let pk = crate::components::input::input_preedit_signal_key(rest);
@@ -135,10 +135,15 @@ impl super::App {
         }
         crate::app::reactive::drain_deferred_view_remounts();
         crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
         if crate::components::bubble::flush_reaction_hover_dismiss() {
             window.request_redraw();
         }
+        if crate::components::avatar::flush_avatar_group_hover_dismiss() {
+            window.request_redraw();
+        }
     }
+
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
     /// [`Self::handle_secondary_*`] — they never borrow or swap the primary UI tree.
@@ -224,6 +229,35 @@ impl super::App {
             }
         }
         // Fallback: click inside the focused field's layout box (padding / empty chrome).
+        if let Some((bounds, scroll_acc)) =
+            super::tree_hit::find_bounds_by_focus_id(root, focused, [0.0, 0.0])
+        {
+            let vx = bounds[0] - scroll_acc[0];
+            let vy = bounds[1] - scroll_acc[1];
+            if x >= vx && x <= vx + bounds[2] && y >= vy && y <= vy + bounds[3] {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Keep InputOTP focus when the press hits the OTP root (or lands in its layout box).
+    pub(super) fn pointer_keeps_otp_focus(
+        root: &crate::core::tree::Element,
+        focused: &str,
+        path: &[super::pointer_events::HitPathEntry],
+        x: f32,
+        y: f32,
+    ) -> bool {
+        if !crate::components::input_otp::is_input_otp_focus(focused) {
+            return false;
+        }
+        if path
+            .iter()
+            .any(|e| e.focus_id.as_deref() == Some(focused))
+        {
+            return true;
+        }
         if let Some((bounds, scroll_acc)) =
             super::tree_hit::find_bounds_by_focus_id(root, focused, [0.0, 0.0])
         {
@@ -595,7 +629,7 @@ impl super::App {
                 .map(|e| {
                     let [_, br, _, bl] = e.style.resolved_border_widths();
                     // CSS % padding resolves against the containing block width. For a
-                    // stretched field, border-box ≈ CB; subtract own border so we don't
+                    // stretched field, border-box → CB; subtract own border so we don't
                     // treat the stroke as part of the percentage basis.
                     let basis = (visual[2] - bl - br).max(0.0);
                     let pad_l = match crate::layout::lp_kind(e.style.padding.left) {
@@ -735,7 +769,7 @@ impl super::App {
     }
 
     fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
-        // Small window to bridge discrete wheel ticks (prevents “move-stop-move”).
+        // Small window to bridge discrete wheel ticks (prevents "move-stop-move").
         let until = now + std::time::Duration::from_millis(200);
         self.smooth_active_until.insert(rest.to_string(), until);
     }
@@ -1023,8 +1057,8 @@ impl super::App {
                 None
             };
 
-        // Slider 拖拽在 drop(state_borrow) 之后再 set Signal，避免 bind_text →
-        // try_update_element_by_template_id 与本处 borrow_mut 重入。
+        // After slider drag: drop(state_borrow) before Signal::set to avoid bind_text /
+        // try_update_element_by_template_id re-entering this borrow_mut.
         let slider_drag_x = x;
 
         let mut input_drag_keep_redraw = false;
@@ -1091,7 +1125,8 @@ impl super::App {
 
         if self.left_button_down && self.scrollbar_drag.is_none() {
             if let Some(drag) = self.drag_reorder.as_mut() {
-                // 指针不在本列表任一拖拽手柄上时，回到「源行」下标，避免 hover 卡在最后一根有效行。
+                // When the pointer is not over any drag handle in this list, fall back to the
+                // source-row index so hover does not stick on the last valid row.
                 let mut new_hover = drag.from_index;
                 if let Some(fid) =
                     super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
@@ -1129,6 +1164,9 @@ impl super::App {
 
         let drawer_dragging =
             crate::components::drawer::tick_drawer_drag(&mut state.root_element, x, y);
+        if drawer_dragging {
+            state.mark_full_redraw();
+        }
 
         drop(state_borrow);
         self.note_long_press_move(phys_x, phys_y);
@@ -1164,6 +1202,7 @@ impl super::App {
             || resizable_dragging
             || drawer_dragging
             || crate::components::internal::modal_motion::tick_modal_presence()
+            || crate::components::internal::floating_motion::tick_floating_presence()
             || crate::components::accordion::tick_accordion_panel_presence()
             || crate::components::collapsible::tick_collapsible_panel_presence()
             || crate::primitives::canvas::take_canvas_wants_redraw()
@@ -1295,7 +1334,11 @@ impl super::App {
         }
         crate::app::reactive::drain_deferred_view_remounts();
         crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
         if crate::components::bubble::flush_reaction_hover_dismiss() {
+            window.request_redraw();
+        }
+        if crate::components::avatar::flush_avatar_group_hover_dismiss() {
             window.request_redraw();
         }
 
@@ -1474,7 +1517,7 @@ impl super::App {
                 } else {
                     crate::components::input::caret_index_from_display_hit(&rest, ix)
                 };
-                // Double-click in the blank beside the line ink → select that hard line.
+                // Double-click in the blank beside the line ink — select that hard line.
                 let line_sel = if self.click_count >= 2
                     && crate::renderer::hit_test_input_is_line_side_blank(
                         state.text_renderer.font_system_mut(),
@@ -1790,7 +1833,7 @@ impl super::App {
             if pev.is_consumed() {
                 self.content_scroll_drag = None;
             }
-            // `on_click` / Label `for` 在 pointer up（抬起）时触发，对标 DOM click。
+            // `on_click` / Label `for` fire on pointer up (DOM click timing).
 
             let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
             if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
@@ -1832,7 +1875,7 @@ impl super::App {
                 need_paint_sync_redraw = true;
             }
 
-            // Browser-like: pointer down outside the focused text field clears its focus.
+            // Browser-like: pointer down outside the focused text field / InputOTP clears focus.
             // Keep focus when hitting the field chrome, caret, adornments, resize, or inner scroll.
             {
                 let focused =
@@ -1848,6 +1891,17 @@ impl super::App {
                             x,
                             y,
                         )
+                    } else {
+                        true
+                    };
+                    if !keep {
+                        crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                            .set(String::new());
+                        need_paint_sync_redraw = true;
+                    }
+                } else if crate::components::input_otp::is_input_otp_focus(&focused) {
+                    let keep = if let Some(st) = (*self.state.borrow()).as_ref() {
+                        Self::pointer_keeps_otp_focus(&st.root_element, &focused, &path, x, y)
                     } else {
                         true
                     };
@@ -1995,8 +2049,8 @@ impl super::App {
             entry[0] += dx;
             entry[1] += dy;
         }
-        // `auto` 条的弹簧目标只在 post-render 根据 `visible_until` 设置，与退场同一拍：
-        // 若在 tick 之前 set(1)，空闲后首帧 dt 夹紧仍会把 0→1 积成瞬跳。
+        // `auto` bar spring targets are set post-render from `visible_until`, same beat as exit:
+        // setting 1 before tick lets the first idle-frame dt clamp still hit ~0 and accumulate a jump.
     }
 
     pub(super) fn handle_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
@@ -2029,6 +2083,15 @@ impl super::App {
             [0.0, 0.0],
             &mut target_rests,
         );
+
+        // Command overlay / context menu / dropdown: page behind the surface must not scroll.
+        // Overlay-internal ScrollAreas still receive wheel when the pointer is on the hoisted panel.
+        let wheel_path = super::pointer_events::hit_path(&state.root_element, x, y);
+        if super::portal_overlay::overlay_blocks_page_wheel(&wheel_path) {
+            self.wheel_sticky_rest = None;
+            drop(state_borrow);
+            return;
+        }
 
         let cursor_stable = (x - self.wheel_sticky_cursor[0]).abs() < 2.0
             && (y - self.wheel_sticky_cursor[1]).abs() < 2.0;
@@ -2178,6 +2241,7 @@ impl super::App {
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();
         crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+        crate::components::internal::floating_motion::drain_pending_floating_unmounts();
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
             Some(s) if s.window.id() == id => s,
@@ -2398,7 +2462,7 @@ impl super::App {
         const SMOOTH_SCROLL_TAU_SEC: f32 = 0.095;
         /// Cap per-frame blend so a long `dt` (e.g. first frame after idle) or a single wheel tick
         /// never moves more than ~this fraction of remaining distance in one frame — avoids a visible
-        /// “jump” on one tick; nested outer scroll (large range) benefits most.
+        /// "jump" on one tick; nested outer scroll (large range) benefits most.
         const SMOOTH_SCROLL_MAX_ALPHA: f32 = 0.20;
         const SMOOTH_SCROLL_SNAP_PX: f32 = 0.20;
         /// Keep requesting redraws until this close to target (slightly tighter than before).
@@ -2775,18 +2839,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let hover_cursor_pick =
                     super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
-                // Skip exclusive `on_hover` diff on scroll-only frames: hit-test jitter under the
-                // layout-page tween/redraw storm was leave/enter thrashing sidebar springs.
-                // CursorMoved still runs `update_hovers`; the first non-scroll frame resyncs.
-                if !scroll_paint_only {
-                    super::tree_hit::update_hovers(
-                        &state.root_element,
-                        hx,
-                        hy,
-                        [0.0, 0.0],
-                        &mut hover_to_run,
-                    );
-                }
+                // Content moves under a stationary cursor during smooth scroll — re-diff
+                // signal-driven hover (`on_hover` / Button chrome). CSS `:hover` variants
+                // stay frozen via `tick_active_css_transitions_subtree` only.
+                super::tree_hit::reconcile_pointer_hovers(
+                    &state.root_element,
+                    hx,
+                    hy,
+                    [0.0, 0.0],
+                    &mut hover_to_run,
+                    scroll_paint_only,
+                );
 
                 // Never reset the OS cursor from a primary redraw while the pointer lives on
                 // another window — that would wipe secondary I-beam / Pointer mid-hover.
@@ -2809,7 +2872,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     (s.width as f32 / scale, s.height as f32 / scale)
                 };
                 // Prefer painted text leaf (render_x/y already scroll-adjusted). Focus-box
-                // − scroll_acc is fallback when the leaf was culled / not collected.
+                // + scroll_acc is fallback when the leaf was culled / not collected.
                 let ime_data = if super::ime_support::is_text_edit_focus(&fid) {
                     let painted = super::ime_support::painted_text_edit_visual_bounds(
                         &state.text_nodes,
@@ -2853,7 +2916,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let has_input_caret = state
                     .text_nodes
                     .iter()
-                    .any(|n| n.style.input_caret.is_some());
+                    .any(|n| n.style.input_caret.is_some())
+                    || crate::components::input_otp::take_otp_caret_blink_needed();
                 let svg_smil_active =
                     crate::primitives::svg::subtree_has_svg_smil(&state.root_element);
                 let anim_icon_active =
@@ -2880,7 +2944,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         .or_insert([raw_max_x, raw_max_y]);
                     // Low-pass raw extent so clamp(tx, max) does not jitter frame-to-frame (middle-scroll bounce).
                     // Snap *up* immediately when content grows (textarea hard newlines) — a stale
-                    // lp≈0 after an empty field would clamp wheel targets to 0 and look unscrollable.
+                    // lp[1] after an empty field would clamp wheel targets to 0 and look unscrollable.
                     const LP: f32 = 0.78;
                     if raw_max_x > lp[0] + 0.5 {
                         lp[0] = raw_max_x;
@@ -3097,7 +3161,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let keep_visible_y =
                         (is_hover || is_hover_y) || is_dragging_y || now < visible_until_y;
 
-                    // Keep the old activity signal (used elsewhere) as “any axis visible”.
+                    // Keep the old activity signal (used elsewhere) as "any axis visible".
                     let keep_visible = is_hover
                         || is_dragging
                         || now < visible_until_x
@@ -3195,7 +3259,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let new_ch = content_h.max(0.0);
 
                     // Update vw/vh/cw/ch **atomically** when any one crosses the noise threshold.
-                    // Per-field updates let e.g. vh refresh while ch stays stale → `ch - vh` becomes 0,
+                    // Per-field updates let e.g. vh refresh while ch stays stale — `ch - vh` becomes 0,
                     // thumb jumps to the track start and `!can_scroll` collapses hit targets.
                     let pv = vw.peek();
                     let ph = vh.peek();
@@ -3228,8 +3292,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Keep the redraw pump alive only while content is still animating.
                 // For the scrollbar `visible_until` hold window, sleep until the deadline via
                 // `about_to_wait` + WaitUntil (one wake starts fade-out) instead of ~1.5s of frames.
-                // Switch 等 chrome 在本帧 render/sync 里才 `set` tween（晚于上方 tick），
-                // 必须在此用 `any_ui_animation_active` 补泵，否则停在第 0 帧。
+                // Switch chrome only sets its tween in this render/sync (after the prior tick);
+                // pump `any_ui_animation_active` here or it stalls on frame 0.
                 let ui_anim_active = crate::style::any_ui_animation_active();
                 if smooth_scroll_animating
                     || scrollbar_fade_animating
@@ -3262,7 +3326,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
                 crate::app::reactive::drain_deferred_view_remounts();
                 crate::components::internal::modal_motion::drain_pending_modal_unmounts();
+                crate::components::internal::floating_motion::drain_pending_floating_unmounts();
                 if crate::components::bubble::flush_reaction_hover_dismiss() {
+                    window.request_redraw();
+                }
+                if crate::components::avatar::flush_avatar_group_hover_dismiss() {
                     window.request_redraw();
                 }
                 if crate::primitives::interactive::take_hover_paint_dirty() {
@@ -3568,7 +3636,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             super::pointer_events::PointerKind::DoubleClick,
                         );
                     }
-                    // Legacy `on_click` / Label `for`：在 pointer up 触发（对标 DOM click）。
+                    // Legacy `on_click` / Label `for`: fire on pointer up (DOM click timing).
                     if !pev.is_consumed() {
                         let via_label = label_for_focus.is_some();
                         if via_label || detail < 2 {

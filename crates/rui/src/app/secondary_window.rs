@@ -444,7 +444,8 @@ impl SecondaryWindowState {
         self.has_input_caret = render_result
             .text_nodes
             .iter()
-            .any(|n| n.style.input_caret.is_some());
+            .any(|n| n.style.input_caret.is_some())
+            || crate::components::input_otp::take_otp_caret_blink_needed();
 
         let scaled_instances = scale_instances(&render_result.instances, scale);
         self.num_instances = render_result.instances.len() as u32;

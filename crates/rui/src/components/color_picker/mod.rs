@@ -1,22 +1,22 @@
 //! # ColorPicker
 //!
-//! 对照 Reader `color-picker` + [solid-color](https://github.com/xbmlz/solid-color)
-//! （HSV 面积 + 色相/透明度滑块 + 色板 + 格式）：对应 HTML `input type="color"`。
+//! Compare Reader `color-picker` + [solid-color](https://github.com/xbmlz/solid-color)
+//! (HSV area + hue/transparency slider + color palette + format): Corresponds to HTML `input type="color"`.
 //!
 //! **格式**：`hex` / `hex8` / `rgb` / `rgba` / `hsl` / `hsla`；面板内左侧
-//! [`select`] 切类型、右侧 [`input`] 编辑色值，始终同一行。
+//! [`select`] changes the type, and the right side [`input`] edits the color value, always on the same line.
 //! **默认变体**：不再按是否支持透明度拆两套 UI（格式列表固定六项；色相下滑条含 alpha）。
-//! **variant**：`default` 浮层；`inline` 展开；以及 `compact` / `sketch` / `chrome` /
+//! **variant**: `default` floating layer; `inline` expansion; and `compact` / `sketch` / `chrome` /
 //! `github` / `twitter` / `material` / `block` / `circle` / `slider`。
 //! **键盘**：触发器 Enter/Space 开合、Esc 关闭；面积 ←→ 饱和度 ↑↓ 明度；
-//! 色相/透明度滑块 ←→ 步进。
+//! Hue/Transparency slider ←→ step.
 //!
 //! ## 模块拆分（产品层）
 //! - [`model`]：色空间 / 解析 / 格式化
 //! - [`drag`]：SV 拖拽会话
 //! - [`view`]：纹理与面板 UI
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! ui! {
 //!     <ColorPicker id="accent" value="#3b82f6" />

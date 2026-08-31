@@ -1,9 +1,9 @@
 //! # System tray
 //!
-//! 系统托盘图标 + 菜单。默认构建为可编译 stub；启用 feature `system-tray` 后接入
-//! [`tray-icon`](https://crates.io/crates/tray-icon)（内含 muda 菜单）。
+//! System tray icon + menu. The default build is a compilable stub; enable feature `system-tray` and access it.
+//! [`tray-icon`](https://crates.io/crates/tray-icon) (contains muda menu).
 //! 菜单点击从原生线程经 [`crate::app::run_on_ui_thread`] 回到 UI 线程再调 `on_click`。
-//! 见 [`docs/tray.md`](../../../../docs/tray.md)。
+//! See [`docs/tray.md`](../../../../docs/tray.md).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -132,7 +132,7 @@ struct NativeTray {
     _items: Vec<tray_icon::menu::MenuItem>,
 }
 
-/// 开始构建托盘图标。
+/// Start building the tray icon.
 pub fn tray_icon() -> TrayIconBuilder {
     TrayIconBuilder {
         tooltip: String::new(),

@@ -1,4 +1,4 @@
-//! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
+//! Carousel product-layer submodule — shares parent symbols via `use super::*`.
 
 use super::content::*;
 use super::*;
@@ -50,7 +50,7 @@ pub fn carousel(id: impl Into<String>) -> CarouselBuilder {
     }
 }
 
-/// 单页满幅 Builder（`CarouselSingle` / `variant=single`）。
+/// Single-page full-width Builder (`CarouselSingle` / `variant=single`).
 pub fn carousel_single(id: impl Into<String>) -> CarouselBuilder {
     carousel(id).variant(CarouselVariant::Single).per_view(1.0)
 }
@@ -63,7 +63,7 @@ pub fn carousel_multi(id: impl Into<String>) -> CarouselBuilder {
         .scroll_by(CarouselScrollBy::Slide)
 }
 
-/// 两侧堆叠 Builder（`CarouselStack` / `variant=stack`）。
+/// Stack Builder(`CarouselStack` / `variant=stack`) on both sides.
 pub fn carousel_stack(id: impl Into<String>) -> CarouselBuilder {
     carousel(id).variant(CarouselVariant::Stack).per_view(1.0)
 }
@@ -125,7 +125,7 @@ impl CarouselBuilder {
         self
     }
 
-    /// 旧名；请优先使用 [`Self::variant`]。
+    /// Old name; please use [`Self::variant`] first.
     pub fn kind(self, k: CarouselKind) -> Self {
         self.variant(k)
     }

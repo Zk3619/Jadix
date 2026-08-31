@@ -14,7 +14,7 @@
 //! `ui!` 中 `<ResizablePanelGroup>` 由宏展开为 [`resizable_panel_group_scope`]。
 //! Builder [`resizable`] 两栏便捷入口与复合面共用同一套实现。
 //!
-//! ## 用法（双写）
+//! ## Usage (dual style)
 //! ```ignore
 //! // A · RSX（camelCase 宏别名：withHandle / defaultSize / minSize / maxSize）
 //! ui! {
@@ -29,7 +29,7 @@
 //!     </ResizablePanelGroup>
 //! }
 //!
-//! // B · Builder（只 snake_case）
+//! // B · Builder (snake_case only)
 //! resizable("split")
 //!     .orientation("horizontal")
 //!     .height(192.0)
@@ -39,7 +39,7 @@
 //!     .right(|| label("").text("Right").into())
 //! ```
 //!
-//! **身份（WP-2.8）**：`id` 可选；空串 → [`resolve_instance_id`]。
+//! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

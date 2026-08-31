@@ -13,9 +13,9 @@
 //!     └── BreadcrumbSeparator
 //! ```
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! <Breadcrumb>
 //!     <BreadcrumbList>
 //!         <BreadcrumbItem>
@@ -42,11 +42,12 @@
 //! breadcrumb().ellipsis().page("Current")
 //! ```
 //!
-//! ## 注意
-//! - **展示型**：空 `id` 不写 `template_id`（WP-2.8）。
-//! - `ui!` 多子节点会包 fragment；List / Item 会 [`take_packed`] 拆开横排。
-//! - [`BreadcrumbLink`] / [`BreadcrumbPage`] 共用 `text-sm` · `font-normal`（14px / 400）；Link muted → foreground hover。
-//! - 勿对 Link 使用 `leading-none`：`text-sm` 默认行高才容得下统一 2px 下划线 offset。
+//! ## Notes
+//! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
+//! - `ui!` Multiple child nodes will pack fragments; List / Item will [`take_packed`] split horizontally.
+//! - [`BreadcrumbLink`] / [`BreadcrumbPage`] share `text-sm` · `font-normal` (14px / 400); Link muted → foreground hover.
+//! - Don't use `leading-none` for Link: keep default line height so glyphs aren't cramped;
+//!   underline-offset paints below the box and relies on decoration clip expansion.
 //! - [`BreadcrumbSeparator`] / [`BreadcrumbEllipsis`] 默认 Lucide chevron / more-horizontal。
 
 use crate::components::base::BaseComponentBuilder;
@@ -56,6 +57,7 @@ use crate::primitives::r#box::hstack;
 use crate::style::{parse_text_color as theme_fg, with_class_list};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -79,27 +81,6 @@ fn breadcrumb_caption_config(color: [u8; 4]) -> TextNodeConfig {
         ..Default::default()
     }
 }
-
-/// `ui!` 多子节点 fragment / 匿名 VStack → 展平为 List / Item 子项。
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.on_click.is_some()
-        || el.focus_id.is_some()
-        || el.template_id.is_some()
-        || el.attrs.contains_key(ATTR_SLOT)
-    {
-        return vec![el];
-    }
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn extract_text_leaf(el: &Element) -> String {
     if let Some(t) = &el.text {
         if !t.is_empty() {
@@ -123,15 +104,30 @@ fn lucide_icon(name: &str, size_px: f32) -> Element {
         .pointer_events("none")
 }
 
+/// Stable `focus_id` when callers omit `id` — rebuild must not mint `btn-N` (hover signal loss).
+fn breadcrumb_link_focus_id(id: &str, label: &str, disambiguator: Option<usize>) -> String {
+    if !id.trim().is_empty() {
+        return id.trim().to_string();
+    }
+    let label = label.trim();
+    match (label.is_empty(), disambiguator) {
+        (true, Some(idx)) => format!("breadcrumb-link:{idx}"),
+        (true, None) => "breadcrumb-link".to_string(),
+        (false, Some(idx)) => format!("breadcrumb-link:{label}:{idx}"),
+        (false, None) => format!("breadcrumb-link:{label}"),
+    }
+}
+
 fn build_breadcrumb_link(
     id: &str,
     label: &str,
+    disambiguator: Option<usize>,
     mut on_click: Handler<()>,
     class: Option<String>,
 ) -> Element {
-    let btn_id = if id.trim().is_empty() { "" } else { id };
+    let btn_id = breadcrumb_link_focus_id(id, label, disambiguator);
     let muted = parse_text_color("muted-foreground");
-    let mut btn = button(btn_id)
+    let mut btn = button(&btn_id)
         .variant("link")
         .size("inline")
         .font_weight(BREADCRUMB_TEXT_WEIGHT)
@@ -152,7 +148,7 @@ fn page_text_node(label: &str) -> Element {
     build_text_node(label, breadcrumb_caption_config(theme_fg("foreground")))
 }
 
-/// 去掉列表末尾多余的分隔符（RSX 误写 / 展平 fragment 时防御）。
+/// Remove extra delimiters at the end of the list (to prevent RSX from miswriting/flattening fragments).
 fn strip_trailing_separators(mut kids: Vec<Element>) -> Vec<Element> {
     while matches!(
         kids.last()
@@ -168,7 +164,7 @@ fn strip_trailing_separators(mut kids: Vec<Element>) -> Vec<Element> {
 // RSX parts
 // ---------------------------------------------------------------------------
 
-/// 根：`nav` · `aria-label="breadcrumb"`。
+/// Root: `nav` · `aria-label="breadcrumb"`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Breadcrumb(
@@ -223,7 +219,7 @@ pub fn BreadcrumbList(class: Option<String>, children: Option<Element>) -> Eleme
     el
 }
 
-/// 单项壳：`inline-flex items-center gap-1.5`。
+/// Single item shell: `inline-flex items-center gap-1.5`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn BreadcrumbItem(class: Option<String>, children: Option<Element>) -> Element {
@@ -241,7 +237,7 @@ pub fn BreadcrumbItem(class: Option<String>, children: Option<Element>) -> Eleme
     el
 }
 
-/// 可点击段：Button `link` 变体。
+/// Clickable segment: Button `link` variant.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn BreadcrumbLink(
@@ -255,7 +251,7 @@ pub fn BreadcrumbLink(
         .map(extract_text_leaf)
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
-    build_breadcrumb_link(&id, &label, on_click, class)
+    build_breadcrumb_link(&id, &label, None, on_click, class)
 }
 
 /// 当前页：`aria-current="page"` · 不可导航。
@@ -297,7 +293,7 @@ pub fn BreadcrumbPage(class: Option<String>, children: Option<Element>) -> Eleme
     el
 }
 
-/// 分隔符：默认 chevron-right。
+/// Separator: Default chevron-right.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn BreadcrumbSeparator(class: Option<String>, children: Option<Element>) -> Element {
@@ -358,7 +354,7 @@ enum BreadcrumbBuilderPart {
     Ellipsis,
 }
 
-/// Builder 状态（ADR-9 面 B）。
+/// Builder status (ADR-9 Side B).
 pub struct BreadcrumbBuilder {
     id: String,
     class: String,
@@ -366,7 +362,7 @@ pub struct BreadcrumbBuilder {
     parts: Vec<BreadcrumbBuilderPart>,
 }
 
-/// Builder 入口。
+/// Builder entry.
 pub fn breadcrumb() -> BreadcrumbBuilder {
     BreadcrumbBuilder {
         id: String::new(),
@@ -414,8 +410,8 @@ impl BreadcrumbBuilder {
 impl From<BreadcrumbBuilder> for Element {
     fn from(builder: BreadcrumbBuilder) -> Self {
         let mut list_kids = Vec::new();
-        for (i, part) in builder.parts.into_iter().enumerate() {
-            if i > 0 {
+        for (part_idx, part) in builder.parts.into_iter().enumerate() {
+            if part_idx > 0 {
                 list_kids.push(BreadcrumbSeparator(BreadcrumbSeparatorProps {
                     class: None,
                     children: None,
@@ -427,7 +423,13 @@ impl From<BreadcrumbBuilder> for Element {
                 BreadcrumbBuilderPart::Link { label, on_click } => {
                     list_kids.push(BreadcrumbItem(BreadcrumbItemProps {
                         class: None,
-                        children: Some(build_breadcrumb_link("", &label, on_click, None)),
+                        children: Some(build_breadcrumb_link(
+                            "",
+                            &label,
+                            Some(part_idx),
+                            on_click,
+                            None,
+                        )),
                         base: None,
                         ..Default::default()
                     }));
@@ -528,7 +530,12 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_inline_button() {
-        let el = build_breadcrumb_link("", "Home", Handler::default(), None);
+        let el = build_breadcrumb_link("", "Home", None, Handler::default(), None);
+        assert_eq!(
+            el.focus_id.as_deref(),
+            Some("breadcrumb-link:Home"),
+            "empty id must use stable breadcrumb focus_id, not auto btn-N"
+        );
         assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_LINK));
         assert!(el.button_hover_paint.is_some());
         assert_eq!(
@@ -572,7 +579,7 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_and_page_typography_match() {
-        let link = build_breadcrumb_link("", "Settings", Handler::default(), None);
+        let link = build_breadcrumb_link("", "Settings", None, Handler::default(), None);
         let page = BreadcrumbPage(BreadcrumbPageProps {
             class: None,
             children: Some(Element::new().text("Profile")),
@@ -598,7 +605,7 @@ mod tests {
         assert_ne!(
             link_text.text_style.line_height_scale,
             Some(1.0),
-            "breadcrumb must not use leading-none — tight line box makes 2px underline hug text"
+            "breadcrumb must not use leading-none (keep readable line box with Page)"
         );
     }
 
@@ -677,6 +684,37 @@ mod tests {
                 .iter()
                 .any(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_SEPARATOR)),
             "builder inserts separators between segments"
+        );
+    }
+
+    #[test]
+    fn builder_link_ids_are_stable() {
+        let el: Element = breadcrumb()
+            .link("Home", || {})
+            .link("Docs", || {})
+            .page("Breadcrumb")
+            .into();
+        let list = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LIST))
+            .expect("list");
+        let link_ids: Vec<_> = list
+            .children
+            .iter()
+            .filter_map(|item| {
+                item.children.first().and_then(|link| {
+                    (link.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LINK))
+                        .then(|| link.focus_id.clone())
+                })
+            })
+            .collect();
+        assert_eq!(
+            link_ids,
+            vec![
+                Some("breadcrumb-link:Home:0".to_string()),
+                Some("breadcrumb-link:Docs:1".to_string()),
+            ]
         );
     }
 

@@ -1,12 +1,12 @@
 //! # Badge
 //!
-//! ShadCN / solid-ui 风格徽标：状态标签、计数胶囊、轻量标签。
+//! ShadCN / solid-ui style logos: status labels, count capsules, lightweight labels.
 //! 对齐 `Reference/ShadCN-UI/.../ui/badge.tsx`：`inline-flex w-fit shrink-0` +
 //! `variant`（default / secondary / success / warning / destructive(=error) / outline / ghost / link）。
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! <Badge>"New"</Badge>
 //! <Badge variant="success">"Done"</Badge>
 //! <Badge variant="warning">"Retry"</Badge>
@@ -26,12 +26,12 @@
 //! Element::from(badge().variant("warn").text("Caution")) // warn ≡ warning
 //! ```
 //!
-//! ## 注意
-//! - **展示型**：默认不要求用户 `id`；空串不写 `template_id`（WP-2.8）。
-//! - 结构为 chrome 容器 + 文案/图标叶（BorderBox），避免单节点 pad+center 的 ContentBox 陷阱。
+//! ## Notes
+//! - **Display type**: User `id` is not required by default; do not write `template_id` in an empty string (WP-2.8).
+//! - The structure is chrome container + copywriting/icon leaf (BorderBox), avoiding the ContentBox trap of single node pad+center.
 //! - `ui!` 多子节点会包成 `VStack`；Badge 会拆开并横排，同时按变体重着色（否则白字 + 裁切空壳）。
-//! - 动态 `variant={sig.get()}` 由宏降为 [`apply_bound_badge_variant`]（与 Button 同源）。
-//! - 语义色（success / warning / destructive）为 Button soft tint 的 rest 态，非实心填充。
+//! - Dynamic `variant={sig.get()}` is reduced from macro to [`apply_bound_badge_variant`] (same origin as Button).
+//! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
 use crate::core::tree::{
     parse_color, parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus,
@@ -39,25 +39,13 @@ use crate::core::tree::{
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::is_dark_theme;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_BADGE: &str = "badge";
 const ATTR_VARIANT: &str = "rui_badge_variant";
-
-/// `ui!` 把组件的多个子节点包成单根 `VStack`（或 `rui_fragment`）。徽标要横排图标+文案，
-/// 必须拆开；否则会竖排进 `overflow:hidden` 被裁成空壳，且叶节点仍是默认白字。
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
-}
-
-/// Badge `variant`：ShadCN 基线 + 语义色（success / warning）+ `error`≡destructive。
+/// Badge `variant`: ShadCN baseline + semantic color (success/warning) + `error`≡destructive.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum BadgeVariant {
     #[default]
@@ -117,7 +105,7 @@ impl BadgeVariant {
 
 fn badge_chrome(variant: &str) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
     let dark = is_dark_theme();
-    // Soft tint 与 Button rest chrome 同源（浅 10% / 暗 20% 叠 background）。
+    // Soft tint is the same as Button rest chrome (10% lighter / 20% darker stacked background).
     let soft = |accent: [f32; 4]| -> [f32; 4] {
         let a = if dark { 0.2 } else { 0.1 };
         let bg = parse_color("background");

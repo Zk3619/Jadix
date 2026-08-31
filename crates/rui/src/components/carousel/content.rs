@@ -1,4 +1,4 @@
-//! Carousel 产品层子模块 — 经 `use super::*` 共享父模块符号。
+//! Carousel product-layer submodule — shares parent symbols via `use super::*`.
 
 use super::drag::*;
 use super::geometry::*;
@@ -57,7 +57,7 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
             let _ = sync_ctx.drag_px.peek();
             let vp = sync_ctx.viewport_len.peek();
             // 视口尚未测到时勿用假 step（旧 fallback=96）写 translate/scale，
-            // 否则首帧/首屏放大前会把侧卡甩出裁切区，随后内部像「钉在旧位、周围空白」。
+            // Otherwise, before the first frame/first screen is enlarged, the side card will be thrown out of the cropping area, and then the interior will look like "nailed to the old position with blank space around it."
             if vp <= 1.0 {
                 return LayoutStatus::Clean;
             }
@@ -81,7 +81,7 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
                 el.style.transition.clear();
                 el.transition_snapshot = Default::default();
             } else if el.style.transition.is_empty() {
-                // 刚松手：把 CSS 基线钉在当前视觉位置，再开 transition 播到目标（避免 from=to 瞬跳）。
+                // Just let go: pin the CSS baseline to the current visual position, and then turn on the transition to reach the target (avoiding from=to instantaneous jump).
                 crate::style::snap_element_transitions_to_current(
                     &el.style,
                     &mut el.transition_snapshot,
@@ -96,7 +96,7 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
             el.style.shadow_offset = [0.0, 0.0];
 
             let mut changed = false;
-            // 勿铺不透明底板（过渡/侧卡会露出异常白板）；遮挡靠 page_stack_bands。
+            // Do not lay an opaque bottom board (the transition/side card will expose the abnormal whiteboard); rely on page_stack_bands for occlusion.
             if el.style.bg_color[3] > 0.01 {
                 el.style.bg_color = [0.0, 0.0, 0.0, 0.0];
                 changed = true;
@@ -106,8 +106,8 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
                 el.style.translate[0] = tx;
                 changed = true;
             }
-            // 缩放写在壳上（与 translate 同一节点 / 同一 transition），子树 scale=1；
-            // collect 经 ancestor_scale / paint_scale 让文字跟壳一起缩放（含 rotate 时走
+            // The scaling is written on the shell (same node/same transition as translate), subtree scale=1;
+            // collect via ancestor_scale / paint_scale to make the text scale with the shell (including rotate)
             // ancestor_linear → glyphon TextArea.transform）。
             // 拖拽时无阈值：每帧写入，避免与矩形连续插值不同步。
             let scale_eps = if dragging { 0.0 } else { 0.001 };
@@ -225,7 +225,7 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     stage
 }
 
-/// solid-ui / ShadCN `CarouselContent`：`overflow-hidden` + 弹簧轨道（可拖拽）。
+/// solid-ui/ShadCN `CarouselContent`: `overflow-hidden` + spring track (dragable).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CarouselContent(children: Option<Element>) -> Element {
@@ -288,7 +288,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
         track_items.push(spacer);
     }
 
-    // 对位 ShadCN：fraction → basis=100%/perView；fixed → 固定 itemWidth。
+    // Alignment ShadCN: fraction → basis=100%/perView; fixed → fixed itemWidth.
     let basis_frac = 1.0 / ctx.per_view.max(0.25);
     let horizontal = ctx.orientation == CarouselOrientation::Horizontal;
     let fixed_px = if ctx.item_sizing == CarouselItemSizing::Fixed && ctx.item_width_px > 1.0 {
@@ -341,7 +341,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
     track
         .attrs
         .insert("data-carousel-track".to_string(), "1".to_string());
-    // CSS `transition: transform`（含 translate）；目标由 offset_target signal 驱动。
+    // CSS `transition: transform` (including translate); target driven by offset_target signal.
     ensure_track_css_transition(&mut track);
 
     let track_ctx = ctx.clone();
@@ -351,14 +351,14 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
         let _ = track_ctx.viewport_len.peek();
         let _ = offset_target(&track_ctx.id).peek();
 
-        // 写入目标前先读上一帧 CSS 插值后的视觉值。
+        // Read the CSS interpolated visual value of the previous frame before writing to the target.
         let visual = match track_ctx.orientation {
             CarouselOrientation::Horizontal => el.style.translate[0],
             CarouselOrientation::Vertical => el.style.translate[1],
         };
         set_last_visual_offset(&track_ctx.id, visual);
         maybe_finish_loop_snap(&track_ctx, visual);
-        // snap=false：松手后 index 仅为 dots nearest，不得把自由 offset 拉回格点。
+        // snap=false: After letting go, the index is only dots nearest, and the free offset must not be pulled back to the grid point.
         auto_sync_offset_if_snapping(&track_ctx);
 
         let x_or_y = if is_carousel_dragging_id(&track_ctx.id) {
@@ -473,7 +473,7 @@ pub fn CarouselItem(children: Option<Element>) -> Element {
     let gap = if ctx.variant == CarouselVariant::Single || ctx.variant == CarouselVariant::Stack {
         0.0
     } else {
-        // Multi 槽间距用左右各 0.375rem。
+        // Multi slot spacing is 0.375rem on the left and right.
         0.375
     };
     // Content 会按 per_view 写入 basis%；此处只锁 shrink，避免被内容撑破。
@@ -613,8 +613,8 @@ pub fn CarouselDots(children: Option<Element>) -> Element {
         }
         row
     });
-    // 与内容区间距由 assemble_carousel_chrome 的列 gap 负责（勿写 placeholder.mt：
-    // reactive 调和会用内部 fragment 覆盖根样式）。
+    // The gap between the content area and the content area is taken care of by the column gap of assemble_carousel_chrome (do not write placeholder.mt:
+    // reactive reconciliation will override the root style with an inner fragment).
     el = el.w("100%").h("auto").min_h("0.5rem");
     el.attrs
         .insert(ATTR_SLOT.to_string(), SLOT_DOTS.to_string());

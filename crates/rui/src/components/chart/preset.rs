@@ -1,4 +1,4 @@
-//! 预设图表：`bar_chart` / `line_chart` / `area_chart` / `pie_chart` / `donut_chart` /
+//! Default charts: `bar_chart` / `line_chart` / `area_chart` / `pie_chart` / `donut_chart` /
 //! `radial_chart` 与 RSX 标签。内部都走 [`super::define_chart`]，只是固定 mark 组合。
 
 use std::rc::Rc;
@@ -150,7 +150,7 @@ impl BarChartBuilder {
         self.corner_radius = Some(px.max(0.0));
         self
     }
-    /// 柱基线端圆角。无底轴时若未设则跟值端。
+    /// Fillet the base end of the column. When there is no bottom axis, if it is not set, it will follow the value end.
     pub fn corner_radius_base(mut self, px: f32) -> Self {
         self.corner_radius_base = Some(px.max(0.0));
         self

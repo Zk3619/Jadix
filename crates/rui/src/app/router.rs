@@ -1,17 +1,17 @@
 //! # Desktop Router
 //!
-//! 命名路由表 + 历史后退/前进，当前路由挂 [`Signal`]。
+//! Named routing table + history backward/forward, current route hangs [`Signal`].
 //!
 //! ## vs Navigator
 //!
 //! | | **Router**（本模块） | **Navigator** |
 //! |---|---|---|
-//! | 模型 | `name → render` 路由表 | typed 页面栈 + 转场 |
-//! | 历史 | back / forward 双端栈 | push / pop（可 keep-alive） |
+//! | Model | `name → render` routing table | typed page stack + transition |
+//! | History | back / forward double-ended stack | push / pop (can keep-alive) |
 //! | 呈现 | 替换当前视图 | Host / Sheet + transition |
-//! | 适用 | 桌面多页 / URL-like 导航 | 向导、模态页栈、移动式转场 |
+//! | Applicable | Desktop multi-page / URL-like navigation | Wizard, modal page stack, mobile transition |
 //!
-//! 二者可并存：Router 管「去哪一页」，Navigator 管「页内栈与动画」。
+//! The two can coexist: Router manages "which page to go to", and Navigator manages "in-page stack and animation".
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -22,7 +22,7 @@ use crate::core::tree::Element;
 
 type RouteRender = Rc<dyn Fn() -> Element>;
 
-/// 桌面 Router：路由表 + 历史。
+/// Desktop Router: Route Table + History.
 #[derive(Clone)]
 pub struct Router {
     id: String,
@@ -61,7 +61,7 @@ impl Router {
         self.routes.insert(name.into(), Rc::new(render));
     }
 
-    /// 导航到命名路由；压入后退栈并清空前进栈。
+    /// Navigate to the named route; push the back stack and clear the forward stack.
     pub fn navigate(&self, name: impl Into<String>) {
         let name = name.into();
         let cur = self.current.peek();
@@ -109,7 +109,7 @@ impl Router {
         true
     }
 
-    /// 根据当前路由渲染；未知路由返回空 Element。
+    /// Renders based on the current route; unknown routes return an empty Element.
     pub fn view(&self) -> Element {
         let routes = self.routes.clone();
         let current = self.current;

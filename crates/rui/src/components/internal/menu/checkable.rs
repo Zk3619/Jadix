@@ -15,7 +15,7 @@ use crate::utils::text_node::build_icon_text_node;
 const ATTR_INDICATOR: &str = "data-slot";
 const SLOT_CHECKBOX_INDICATOR: &str = "checkbox-indicator";
 const SLOT_RADIO_INDICATOR: &str = "radio-indicator";
-/// 与 [`crate::components::radio_group`] 的 `rui_radio_value` 一致，供全局 sync 读取。
+/// Consistent with `rui_radio_value` of [`crate::components::radio_group`], for global sync to read.
 const ATTR_RADIO_VALUE: &str = "rui_radio_value";
 
 const BOX_PX: f32 = 16.0;
@@ -78,7 +78,7 @@ fn build_check_indicator(fg: [u8; 4]) -> Element {
     icon
 }
 
-/// solid-ui Checkbox Control：`size-4 rounded-sm border-primary`；挂 `checkbox_sync`。
+/// solid-ui Checkbox Control: `size-4 rounded-sm border-primary`; hang `checkbox_sync`.
 pub(crate) fn menu_checkbox_control(checked: Signal<bool>) -> Element {
     let on = checked.peek();
     let (bg, border) = if on {
@@ -137,7 +137,7 @@ fn build_radio_dot(on: bool) -> Element {
     dot
 }
 
-/// solid-ui Radio ItemControl：圆形 `size-4` + 中心实心点；挂 `radio_selected_sync`。
+/// solid-ui Radio ItemControl: circle `size-4` + center solid point; hang `radio_selected_sync`.
 pub(crate) fn menu_radio_control(selected: Signal<String>, value: &str) -> Element {
     let on = selected.peek() == value;
     let mut control: Element = hstack()

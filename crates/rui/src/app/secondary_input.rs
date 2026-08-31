@@ -344,7 +344,7 @@ impl super::App {
                         use_signal("__rui_button_focus_id", String::new).set(fid);
                     }
 
-                    // Blur text edit when pressing outside the focused field (secondary tree).
+                    // Blur text edit / InputOTP when pressing outside the focused control.
                     {
                         let focused = use_signal("__rui_button_focus_id", String::new).peek();
                         if super::ime_support::is_text_edit_focus(&focused) {
@@ -357,6 +357,24 @@ impl super::App {
                                             &focused,
                                             &path,
                                             input_drag_fid.as_deref(),
+                                            x,
+                                            y,
+                                        )
+                                    })
+                                    .unwrap_or(true)
+                            };
+                            if !keep {
+                                use_signal("__rui_button_focus_id", String::new).set(String::new());
+                            }
+                        } else if crate::components::input_otp::is_input_otp_focus(&focused) {
+                            let keep = {
+                                let secs = self.secondaries.borrow();
+                                secs.get(&id)
+                                    .map(|sec| {
+                                        Self::pointer_keeps_otp_focus(
+                                            &sec.root_element,
+                                            &focused,
+                                            &path,
                                             x,
                                             y,
                                         )

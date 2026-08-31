@@ -482,7 +482,7 @@ pub fn style_snapshot(style: &Style) -> StyleSnapshot {
         border_style: format!("{:?}", style.border_style),
         border_radius: format!(
             "{:.0} {:.0} {:.0} {:.0}",
-            style.radii[2], style.radii[0], style.radii[1], style.radii[3]
+            style.radii[0], style.radii[1], style.radii[2], style.radii[3]
         ),
         border_collapse: style.border_collapse,
         border_spacing: format!(
@@ -964,7 +964,7 @@ pub fn cssom_text_from_element(el: &Element) -> String {
         "border-radius",
         &format!(
             "{:.0}px {:.0}px {:.0}px {:.0}px",
-            style.radii[2], style.radii[0], style.radii[1], style.radii[3]
+            style.radii[0], style.radii[1], style.radii[2], style.radii[3]
         ),
     );
     push_decl(

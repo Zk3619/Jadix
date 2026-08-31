@@ -75,7 +75,7 @@ pub(crate) fn has_pending_scroll_item_align() -> bool {
     })
 }
 
-/// 用布局后的真实 `content_h` / `viewport_h` 对齐。度量未就绪时保留请求。
+/// Aligned with real `content_h` / `viewport_h` after layout. The request is retained when the metric is not ready.
 pub(crate) fn apply_pending_scroll_item_into_view(
     rest: &str,
     viewport_h: f32,
@@ -489,8 +489,8 @@ pub(crate) fn set_scroll_offset_with_behavior(
 
     let sx = crate::core::reactivity::use_signal(&sx_key, || 0.0_f32);
     let sy = crate::core::reactivity::use_signal(&sy_key, || 0.0_f32);
-    // peek：调用方常在 tracked effect 内（Select/Combobox 菜单）。`.get()` 会把整棵菜单订到
-    // 滚动偏移/behavior，滚轮或布局一动就重建上百个 Item → 悬停闪烁。
+    // peek: The caller is always inside the tracked effect (Select/Combobox menu). `.get()` will order the entire menu to
+    // Scroll offset/behavior, hundreds of Items are rebuilt as soon as the scroll wheel or layout is moved → Hover flashing.
     let tx = crate::core::reactivity::use_signal(&tx_key, || sx.peek());
     let ty = crate::core::reactivity::use_signal(&ty_key, || sy.peek());
     let _behavior = crate::core::reactivity::use_signal(&behavior_key, || {

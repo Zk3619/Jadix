@@ -387,6 +387,14 @@ impl AnimationSnapshot {
     pub fn lock(&self) -> AnimationLock {
         self.lock
     }
+
+    /// After an external clamp of animated `max-height` (viewport cap), keep `written`
+    /// matching `Style` so the next tick does not treat the cap as a new cascade baseline.
+    pub(crate) fn sync_written_max_height(&mut self, max_height: taffy::style::Dimension) {
+        if let Some(w) = self.written.as_mut() {
+            w.max_height = max_height;
+        }
+    }
 }
 
 /// Build one CSS `animation` list item that references a registered [`super::keyframes`] name.
@@ -823,7 +831,7 @@ fn extract_prop(style: &super::Style, prop: TransitionProperty) -> ([f32; 8], u8
             let h = crate::layout::dim_length_px(style.max_size.height).unwrap_or(0.0);
             ([h, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1)
         }
-        // Independent transform props: translate → rotate → scale（与 resolve 顺序一致）。
+        // Independent transform props: translate → rotate → scale (matches resolve order).
         TransitionProperty::Transform | TransitionProperty::Translate => (
             [
                 style.translate[0],
@@ -901,7 +909,7 @@ const ALL_PROPS: &[TransitionProperty] = &[
     TransitionProperty::Filter,
 ];
 
-/// 无 class 变体的节点也要能推进 CSS transition（如 Carousel 轨道）。
+/// Nodes without class variants must still advance CSS transitions (e.g. Carousel track).
 /// 有活跃 tween，或目标相对已记录的 `to` 已变，或尚未建档需要 seed。
 pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSnapshot) -> bool {
     if style.transition.is_empty() {
@@ -1405,7 +1413,7 @@ mod css_transition_dt_tests {
         set_css_transition_timeline_ms(0.0);
         let mut style = Style::default();
         style.translate = [-100.0, 0.0];
-        style.scale = [1.0, 1.0];
+        // Simulate Carousel seamless jump: pin at -100 and seed, then write new target -300.
         style.transition.push(TransitionEntry {
             property: TransitionProperty::Transform,
             duration_ms: 100.0,
@@ -1413,7 +1421,7 @@ mod css_transition_dt_tests {
             timing: TimingFunction::Linear,
         });
         let mut snap = TransitionSnapshot::default();
-        // 模拟 Carousel 无缝瞬移：钉在 -100 并 seed，再写新目标 -300。
+        // Simulate Carousel seamless jump: pin at -100 and seed, then write new target -300.
         snap_element_transitions_to_current(&style, &mut snap);
         style.translate = [-300.0, 0.0];
         assert!(tick_element_transitions(&mut style, &mut snap, 0.0));
@@ -1443,7 +1451,7 @@ mod tests {
             elapsed_mid > 0.04,
             "expected ~50ms progress, got {elapsed_mid}"
         );
-        // Chrome sync 风格：每帧再 set 同一目标
+        // Chrome sync style: set the same target again each frame
         tw.set(1.0);
         tw.set(1.0);
         assert!(
@@ -1462,7 +1470,7 @@ mod tests {
     fn tick_clamps_near_zero_dt_so_first_frames_still_advance() {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
-        // 首屏连帧 / 重复 RedrawRequested 常见 raw dt≈0
+        // First-screen back-to-back frames / repeated RedrawRequested often yield raw dt≈0
         let _ = tick_animations(0.0);
         let elapsed = tw.0.borrow().elapsed;
         assert!(
@@ -1477,7 +1485,7 @@ mod tests {
     fn tick_clamps_huge_dt_so_idle_wake_does_not_teleport() {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
-        // Wait 数秒后首帧：未夹紧会一次走完 150ms
+        // First frame after Wait for several seconds: without clamping, 150ms would finish in one step
         let _ = tick_animations(2.0);
         assert!(
             tw.0.borrow().active,

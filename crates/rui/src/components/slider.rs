@@ -13,14 +13,14 @@
 //!     └── spacer
 //! ```
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Slider id="volume" value={level} default_value={0.4} />
 //! <Slider id="vol2" defaultValue={0.5} step={0.01} />
 //! { Element::from(slider("volume").value_signal(level).step(0.05)) }
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 默认值域 `0..=1`；可用 `min` / `max` / `step` 扩展。
 //! - 点击 / 拖拽按指针 x **连续**设值（不按 `step` 吸附）；键盘 ←/→（或 ↑/↓）按 `step`（默认 0.05）调节。
 //! - 悬停 / 拖拽时拇指阴影加深（~150ms cubic），静止为紧凑接触阴影。

@@ -41,7 +41,7 @@ pub use path::{
     ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
 pub use portal::{Portal, PortalProps};
-pub use r#box::{div, gstack, hstack, r#box, vstack, BoxBuilder};
+pub use r#box::{gstack, hstack, r#box, vstack, BoxBuilder};
 pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };

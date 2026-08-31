@@ -378,7 +378,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         "border-radius" | "border_radius" => apply_border_radius(el, value),
         "border-top-left-radius" | "border_top_left_radius" => {
             if let Ok(v) = parse_f32(value) {
-                el.style.radii[2] = v.max(0.0);
+                el.style.radii[0] = v.max(0.0);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
@@ -386,7 +386,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "border-top-right-radius" | "border_top_right_radius" => {
             if let Ok(v) = parse_f32(value) {
-                el.style.radii[0] = v.max(0.0);
+                el.style.radii[1] = v.max(0.0);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
@@ -394,7 +394,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "border-bottom-right-radius" | "border_bottom_right_radius" => {
             if let Ok(v) = parse_f32(value) {
-                el.style.radii[1] = v.max(0.0);
+                el.style.radii[2] = v.max(0.0);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
@@ -408,16 +408,8 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
-        // Logical radius properties (LTR mapping)
+        // Logical radius properties (LTR: start-start=TL, start-end=TR, end-end=BR, end-start=BL)
         "border-start-start-radius" | "border_start_start_radius" => {
-            if let Ok(v) = parse_f32(value) {
-                el.style.radii[2] = v.max(0.0);
-                LayoutStatus::StyleChanged
-            } else {
-                LayoutStatus::Clean
-            }
-        }
-        "border-start-end-radius" | "border_start_end_radius" => {
             if let Ok(v) = parse_f32(value) {
                 el.style.radii[0] = v.max(0.0);
                 LayoutStatus::StyleChanged
@@ -425,9 +417,17 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
                 LayoutStatus::Clean
             }
         }
-        "border-end-end-radius" | "border_end_end_radius" => {
+        "border-start-end-radius" | "border_start_end_radius" => {
             if let Ok(v) = parse_f32(value) {
                 el.style.radii[1] = v.max(0.0);
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        }
+        "border-end-end-radius" | "border_end_end_radius" => {
+            if let Ok(v) = parse_f32(value) {
+                el.style.radii[2] = v.max(0.0);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
@@ -1185,7 +1185,7 @@ fn apply_border_color_shorthand(el: &mut Element, value: &str) -> LayoutStatus {
 }
 
 fn apply_border_radius(el: &mut Element, value: &str) -> LayoutStatus {
-    // radii order: [top-right, bottom-right, top-left, bottom-left]
+    // `Style.radii` is CSS order: TL TR BR BL
     let parts: Vec<&str> = value.split_whitespace().collect();
     let vals: Vec<f32> = parts.iter().filter_map(|s| parse_f32(s).ok()).collect();
     match vals.as_slice() {
@@ -1194,16 +1194,18 @@ fn apply_border_radius(el: &mut Element, value: &str) -> LayoutStatus {
             LayoutStatus::StyleChanged
         }
         [tb, lr] => {
-            // CSS order: TL TR BR BL -> internal [TR, BR, TL, BL]
-            el.style.radii = [*lr, *lr, *tb, *tb];
+            // CSS: TL=TR=tb? No — 2-value is [top-left&bottom-right, top-right&bottom-left]
+            // → [tl/br, tr/bl] stored as [tl, tr, br, bl] = [tb, lr, tb, lr]
+            el.style.radii = [*tb, *lr, *tb, *lr];
             LayoutStatus::StyleChanged
         }
-        [tl, tr_br, bl] => {
-            el.style.radii = [*tr_br, *tr_br, *tl, *bl];
+        [tl, tr_bl, br] => {
+            // CSS 3-value: TL | TR&BL | BR
+            el.style.radii = [*tl, *tr_bl, *br, *tr_bl];
             LayoutStatus::StyleChanged
         }
         [tl, tr, br, bl] => {
-            el.style.radii = [*tr, *br, *tl, *bl];
+            el.style.radii = [*tl, *tr, *br, *bl];
             LayoutStatus::StyleChanged
         }
         _ => LayoutStatus::Clean,

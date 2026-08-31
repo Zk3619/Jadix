@@ -29,7 +29,7 @@ pub(super) struct HotReloadState {
 
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 impl HotReloadState {
-    /// `wake`：TCP 线程收到补丁后唤醒主线程事件循环（`ControlFlow::Wait` 下否则可能一直阻塞到用户输入）。
+    /// `wake`: after TCP thread receives a patch, wake the main event loop (under `ControlFlow::Wait` it may otherwise block until user input).
     pub(super) fn new(wake: EventLoopProxy<RuiUserEvent>) -> Self {
         let (tx, rx) = mpsc::channel();
         let pending_count = Arc::new(AtomicUsize::new(0));
@@ -129,7 +129,7 @@ impl HotReloadState {
 #[derive(Debug, Clone, Default)]
 pub(super) struct HotReloadBatch {
     pub(super) count: usize,
-    /// 若本批含 `TemplatePatch`，记录其中一个源文件路径（仅用于日志）。
+    /// If this batch contains a `TemplatePatch`, record one source path (logging only).
     pub(super) last_patch_file: String,
     pub(super) force_reload: bool,
     pub(super) merged_templates: Vec<TemplateFragment>,
@@ -207,8 +207,8 @@ enum IncomingMessage {
     },
 }
 
-/// WP-R.6：`templates: []` 表示文件解析成功但没有 `ui!` 块，必须整树 `rebuild_ui`，
-/// 禁止对反应槽做模糊/空补丁注入。
+/// WP-R.6: `templates: []` means the file parsed but has no `ui!` blocks — must full-tree `rebuild_ui`,
+/// do not inject vague/empty patches into reactive slots.
 #[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 fn ingest_template_patch(
     batch: &mut HotReloadBatch,

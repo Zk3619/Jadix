@@ -503,13 +503,29 @@ impl ApplicationHandler<super::RuiUserEvent> for super::App {
             }
         }
 
-        // Carousel 自动轮播。
+        // Carousel automatically rotates.
         if crate::components::carousel::tick_carousel_autoplay() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
         }
         if let Some(wake) = crate::components::carousel::carousel_next_wake_at() {
+            if wake <= now {
+                if let Some(state) = (*self.state.borrow()).as_ref() {
+                    state.window.request_redraw();
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
+        // HoverCard openDelay / closeDelay（Solid 式 UI 线程定时器）。
+        if crate::components::hover_card::tick_hover_card() {
+            if let Some(state) = (*self.state.borrow()).as_ref() {
+                state.window.request_redraw();
+            }
+        }
+        if let Some(wake) = crate::components::hover_card::hover_card_next_wake_at() {
             if wake <= now {
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();

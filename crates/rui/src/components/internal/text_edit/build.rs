@@ -24,16 +24,16 @@ pub(crate) struct TextEditBuildParams {
     pub input_type: InputType,
     pub clearable: bool,
     pub password_toggle: bool,
-    /// `type=number` 时显示增减触发器。
+    /// Show step triggers when `type=number`.
     pub number_steppers: bool,
-    /// `type=number` 步进量。
+    /// `type=number` Step amount.
     pub step: f64,
     pub text_size_px: f32,
     pub font_weight: u16,
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
     pub value: Option<Signal<String>>,
-    /// CSS `text-align`（默认 `start`）。
+    /// CSS `text-align` (default `start`).
     pub text_align: crate::style::TextAlign,
     /// Single-line: preconfigured BoxBuilder (hstack chrome).
     /// Multi-line: ignore; build relative flex_col box inside.
@@ -44,6 +44,8 @@ pub(crate) struct TextEditBuildParams {
     pub resize_max_h: f32,
     /// Multiline only: soft-wrap (default) or horizontal scroll.
     pub wrap_mode: crate::utils::text_field::TextareaWrapMode,
+    /// Command / InputAdornment 内嵌控件：无边框/阴影/焦点环（外壳提供 chrome）。
+    pub plain_chrome: bool,
 }
 pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let TextEditBuildParams {
@@ -68,6 +70,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resizable,
         resize_max_h,
         wrap_mode,
+        plain_chrome,
     } = params;
 
     if let Some(sig) = value {
@@ -169,7 +172,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;
     }
 
-    let mut border_c = if invalid {
+    let mut border_c = if plain_chrome {
+        [0.0, 0.0, 0.0, 0.0]
+    } else if invalid {
         parse_color("destructive")
     } else if is_focused {
         crate::style::focus_ring_border_color()
@@ -215,9 +220,13 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .expect("single-line text edit requires single_line_container")
             .overflow("hidden")
     };
-    container = container.bg(bg).border(border_c, 1.0);
-    if !is_focused && !disabled {
-        container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
+    if plain_chrome {
+        container = container.bg(bg).border(border_c, 0.0);
+    } else {
+        container = container.bg(bg).border(border_c, 1.0);
+        if !is_focused && !disabled {
+            container = container.shadow([0.0, 0.0, 0.0, 0.06], 1.0);
+        }
     }
 
     let mut text_el = build_text_node(
@@ -397,7 +406,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let resizable = multiline && resizable && !disabled;
 
     let mut el: Element = container.into();
-    if is_focused {
+    if is_focused && !plain_chrome {
         let ring_color = if invalid {
             crate::style::focus_ring_destructive_color()
         } else {
@@ -454,8 +463,8 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
 
     if resizable {
         let resize_fid = crate::utils::text_field::textarea_resize_focus_id(&field_id);
-        // ShadCN / solid-ui / 浏览器原生风格：一长一短两条 45° 斜线（／）。
-        // 轴距角点为 `d` 时线长 = d√2，中心距右/下各 d/2；端点落在底边与右边。
+        // ShadCN / solid-ui / Browser native style: two 45° slashes (/), one long and one short.
+        // When the wheelbase corner point is `d`, the line length = d√2, the center distance is d/2 to the right/bottom; the endpoints fall on the bottom and right sides.
         // chrome 圆角 0.375rem≈6px：d 必须 > 圆角，否则端点落在圆角外侧被裁成角尖短划。
         // `rotate` 只作用于本节点绘制实例，故每条线各自旋转。
         let mut stroke = parse_color("muted-foreground");
@@ -623,7 +632,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         resizable,
         resize_min_h,
         resize_max_h,
-        plain_chrome: false,
+        plain_chrome,
         text_align,
         wrap_mode,
     };
@@ -645,6 +654,12 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         .insert("accesskit_role".to_string(), "textinput".to_string());
     if !placeholder.is_empty() {
         out.attrs.insert("placeholder".to_string(), placeholder);
+    }
+    if plain_chrome {
+        out.set_attr("data-slot", "input-adornment-control");
+        if invalid {
+            out.set_attr("data-invalid", "true");
+        }
     }
     out
 }

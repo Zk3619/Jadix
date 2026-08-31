@@ -290,7 +290,7 @@ pub(crate) fn on_ime_composition_ended() {
 /// `area_*`：**组字起点**（composition origin），不是插入符末端。
 /// `composing`：当前有 preedit / IME active。
 ///
-/// Windows 策略：
+/// Windows policy:
 /// - **键入**：只维护 `IMR`（X=组字起点）；Imm 仅组字开始一次；**不**动候选 HWND（横向交给 TIP）。
 /// - **滚动**：现代中文 TIP 常忽略组字中 Imm/IMR 的 Y 更新 → 仅此时对已闩锁候选 HWND
 ///   做 **ΔY** `SetWindowPos`（不改 X、不改尺寸、不每帧绝对钉死）。

@@ -23,7 +23,7 @@
 //! 预设内部用复合零件的视觉契约（边框、表头 muted-foreground、选中 muted），
 //! 不承诺分组 / 列 pinning / 多列排序（见 `docs/component_inventory.md`）。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! // 复合 RSX（静态小表）
 //! ui! {
@@ -71,6 +71,7 @@ use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_TABLE_SLOT: &str = "rui_table_slot";
@@ -86,17 +87,6 @@ const HEAD_H_COMFORTABLE: f32 = 48.0;
 const ROW_H_DEFAULT: f32 = 40.0;
 const ROW_H_COMPACT: f32 = 32.0;
 const ROW_H_COMFORTABLE: f32 = 48.0;
-
-/// `ui!` 多子节点会先打成匿名 VStack；分区再拆开接到自己的布局上。
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn slot_of(el: &Element) -> Option<&str> {
     el.attrs.get(ATTR_TABLE_SLOT).map(|s| s.as_str())
 }
@@ -195,7 +185,7 @@ impl TableDensity {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut caption = Vec::new();
     let mut header = Vec::new();
     let mut body = Vec::new();
@@ -238,7 +228,7 @@ pub fn Table(class: Option<String>, children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableHeader(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     mark_slot(
         vstack().w("100%").min_w(0.0).children(kids).into(),
         SLOT_HEADER,
@@ -249,7 +239,7 @@ pub fn TableHeader(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableBody(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     mark_slot(
         vstack().w("100%").min_w(0.0).children(kids).into(),
         SLOT_BODY,
@@ -260,7 +250,7 @@ pub fn TableBody(children: Option<Element>) -> Element {
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn TableFooter(children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let fg = tokens::primary_foreground_text();
     let mut styled = kids;
     for k in &mut styled {
@@ -289,7 +279,7 @@ pub fn TableRow(
     mut on_click: Handler,
     children: Option<Element>,
 ) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut row: Element = hstack()
         .w("100%")
         .min_w(0.0)
@@ -351,7 +341,7 @@ pub fn TableHead(w: Option<String>, align: Option<String>, children: Option<Elem
         .map(parse_align)
         .unwrap_or(TableAlign::Start);
     let muted = parse_text_color("muted-foreground");
-    let mut kids = children.map(take_packed_children).unwrap_or_default();
+    let mut kids = children.map(take_packed).unwrap_or_default();
     if kids.is_empty() {
         kids.push(Element::from(
             text("").size(TEXT_SM).weight(500.0).color(muted),
@@ -389,7 +379,7 @@ pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Elem
         .map(parse_align)
         .unwrap_or(TableAlign::Start);
     let fg = parse_text_color("foreground");
-    let mut kids = children.map(take_packed_children).unwrap_or_default();
+    let mut kids = children.map(take_packed).unwrap_or_default();
     if kids.is_empty() {
         kids.push(Element::from(
             text("").size(TEXT_SM).weight(400.0).color(fg),
@@ -421,7 +411,7 @@ pub fn TableCell(w: Option<String>, align: Option<String>, children: Option<Elem
 #[allow(non_snake_case)]
 pub fn TableCaption(children: Option<Element>) -> Element {
     let muted = parse_text_color("muted-foreground");
-    let mut kids = children.map(take_packed_children).unwrap_or_default();
+    let mut kids = children.map(take_packed).unwrap_or_default();
     for k in &mut kids {
         style_textish(k, TEXT_SM, 400.0, muted);
     }

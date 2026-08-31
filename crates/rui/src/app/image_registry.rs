@@ -5,7 +5,7 @@ pub struct GpuImageTexture {
     pub bind_group: wgpu::BindGroup,
 }
 
-/// wgpu `write_texture` 要求每行字节数为 [`wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`]（256）的倍数。
+/// wgpu `write_texture` requires bytes-per-row to be a multiple of [`wgpu::COPY_BYTES_PER_ROW_ALIGNMENT`] (256).
 pub(crate) fn padded_bytes_per_row(width: u32) -> u32 {
     let unpadded = width.saturating_mul(4);
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
