@@ -9,7 +9,7 @@ fn format_with_signal_get_lowers_to_bind_text() {
     let n = use_signal("__rui_test_fmt_bind_ext", || 0_i32);
     n.set_silent(0);
     let el = rui::ui! {
-        <div>{ format!("n={}", n.get()) }</div>
+        <Box>{ format!("n={}", n.get()) }</Box>
     };
     fn find_bind(el: &Element) -> bool {
         if el

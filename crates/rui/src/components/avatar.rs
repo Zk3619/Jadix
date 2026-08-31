@@ -15,9 +15,9 @@
 //! └── AvatarGroupCount
 //! ```
 //!
-//! ## 用法（双写法 · ADR-9）
+//! ## Usage (dual style · ADR-9)
 //! ```ignore
-//! // A · RSX / 标签
+//! // A · RSX / tags
 //! <Avatar>
 //!     <AvatarImage src="assets/user.png" alt="@shadcn" />
 //!     <AvatarFallback>"CN"</AvatarFallback>
@@ -31,7 +31,13 @@
 //! <AvatarGroup>
 //!     <Avatar><AvatarFallback>"A"</AvatarFallback></Avatar>
 //!     <Avatar><AvatarFallback>"B"</AvatarFallback></Avatar>
-//!     <AvatarGroupCount>"+3"</AvatarGroupCount>
+//!     <AvatarGroupCount>
+//!         "+3"
+//!         <Avatar><AvatarFallback>"X"</AvatarFallback></Avatar>
+//!     </AvatarGroupCount>
+//! </AvatarGroup>
+//! <AvatarGroup expand_placement="top-start" expand_class="bg-card shadow-lg">
+//!     …
 //! </AvatarGroup>
 //!
 //! // B · Builder
@@ -54,35 +60,51 @@
 //! avatar().fallback_icon("user")
 //! avatar().fallback_image("assets/placeholder.png")
 //! avatar().fallback_with(|fb| fb.text("AB").child(custom_node))
-//! avatar_fallback().icon("user").into() // 须在 avatar_scope / <Avatar> 内
+//! avatar_fallback().icon("user").into() // Must be within avatar_scope / <Avatar>
 //! ```
 //!
-//! ## 注意
-//! - **展示型**：空 `id` 不写 `template_id`（WP-2.8）。
-//! - `<Avatar>` 由宏展开为 [`avatar_scope`]，子件读取 [`AvatarCtx`] 的 `size`。
-//! - 图片层叠在 Fallback 之上；`AvatarImage` 解码为**圆形 alpha 遮罩**贴图（GPU 纹理管线无
+//! ## Notes
+//! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
+//! - `<Avatar>` is expanded by the macro to [`avatar_scope`], and the component reads the `size` of [`AvatarCtx`].
+//! - Image layered on top of Fallback; `AvatarImage` decoded into **circular alpha mask** map (GPU texture pipeline no
 //!   border-radius clip），失败 / 空 `src` / Pending 时 opacity=0，Fallback 露出。
 //! - 动态 `size={sig.get()}` → [`apply_bound_avatar_size`]（Solid bind，不整树重建）。
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use crate::app::pending_images::{
     ensure_avatar_src_loaded, texture_key_for_avatar_src, track_src_load_signal, AvatarImageMask,
     SrcLoadState,
 };
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::apply_bound_size;
 use crate::app::reactive::bind_attr;
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::badge::{apply_badge_variant_paint, BadgeVariant};
 use crate::components::base::BaseComponentBuilder;
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
+    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
+    Context, Signal,
 };
 use crate::core::tree::{parse_color, Element, IntoF32, LayoutStatus};
+use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{parse_text_color, with_class_list};
+use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
+use crate::utils::popup::{
+    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
+};
 use crate::utils::text_node::build_named_icon_text_node;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -94,12 +116,14 @@ const SLOT_FALLBACK: &str = "avatar-fallback";
 const SLOT_BADGE: &str = "avatar-badge";
 const SLOT_GROUP: &str = "avatar-group";
 const SLOT_GROUP_COUNT: &str = "avatar-group-count";
+/// Same overlap as the collapsed group (`-space-x-2`) so overlay faces keep their origin.
+const GROUP_OVERLAP: &str = "-0.5rem";
 
 // ---------------------------------------------------------------------------
 // Size
 // ---------------------------------------------------------------------------
 
-/// Avatar `size`：`default` · `sm` · `lg`（对位 ShadCN `data-size`）。
+/// Avatar `size`: `default` · `sm` · `lg` (counterpoint to ShadCN `data-size`).
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub enum AvatarSize {
     #[default]
@@ -125,7 +149,7 @@ impl AvatarSize {
         }
     }
 
-    /// 根容器边长（new-york `size-8` / `size-6` / `size-10`）。
+    /// Root container side length (new-york `size-8` / `size-6` / `size-10`).
     pub fn box_dim(self) -> &'static str {
         match self {
             Self::Sm => "1.5rem",
@@ -259,7 +283,7 @@ fn avatar_context() -> Context<AvatarCtx> {
     *CTX.get_or_init(create_context::<AvatarCtx>)
 }
 
-/// 读取最近的 [`Avatar`] 上下文。
+/// Read the most recent [`Avatar`] context.
 pub fn use_avatar() -> Option<AvatarCtx> {
     use_context(avatar_context())
 }
@@ -269,17 +293,6 @@ fn require_avatar(part: &str) -> AvatarCtx {
         panic!("{part} must be used within <Avatar> / avatar_scope");
     })
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    if el.text.as_ref().is_none_or(|t| t.is_empty()) && el.children.len() > 1 {
-        return std::mem::take(&mut el.children);
-    }
-    vec![el]
-}
-
 fn apply_root_shape(el: &mut Element, shape: AvatarShape) {
     el.set_attr(ATTR_SHAPE, shape.as_str());
     *el = shape.apply_radii(std::mem::take(el));
@@ -480,6 +493,7 @@ pub fn avatar_scope(
 // ---------------------------------------------------------------------------
 
 const ATTR_LOAD_STATE: &str = "data-load-state";
+const ATTR_AVATAR_SRC: &str = "data-avatar-src";
 
 fn load_state_label(state: SrcLoadState) -> &'static str {
     match state {
@@ -531,6 +545,7 @@ fn build_avatar_texture_layer(src: &str, slot: Option<&str>) -> Element {
         el.set_attr(ATTR_LOAD_STATE, "failed");
         el.style.opacity = 0.0;
     } else {
+        el.set_attr(ATTR_AVATAR_SRC, src);
         let key = texture_key_for_avatar_src(src, mask);
         let load = use_signal(format!("{key}__src_load").as_str(), || {
             ensure_avatar_src_loaded(&key, src, mask)
@@ -635,18 +650,497 @@ fn apply_group_ring(mut el: Element) -> Element {
     el
 }
 
-fn build_avatar_group(children: Vec<Element>) -> Element {
-    let mut row = hstack().items_center();
-    for (i, child) in children.into_iter().enumerate() {
+/// Snapshot of an avatar face for expand-panel rebuild (Element is not Clone).
+#[derive(Clone, Debug)]
+struct AvatarFaceSpec {
+    size: AvatarSize,
+    shape: AvatarShape,
+    src: Option<String>,
+    fallback: Option<String>,
+}
+
+fn src_from_avatar_texture_key(key: &str) -> Option<String> {
+    let rest = key.strip_prefix("rui-avatar-src:")?;
+    let (_mask, src) = rest.split_once(':')?;
+    if src.is_empty() {
+        None
+    } else {
+        Some(src.to_string())
+    }
+}
+
+fn extract_fallback_label(el: &Element) -> Option<String> {
+    if let Some(t) = el.text.as_ref().filter(|s| !s.is_empty()) {
+        if el.text_style.font_family.as_deref() != Some("lucide") {
+            return Some(t.clone());
+        }
+    }
+    el.children.iter().find_map(extract_fallback_label)
+}
+
+fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
+    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) != Some(SLOT_AVATAR) {
+        return None;
+    }
+    let size = el
+        .attrs
+        .get(ATTR_SIZE)
+        .map(|s| AvatarSize::parse(s))
+        .unwrap_or_default();
+    let shape = el
+        .attrs
+        .get(ATTR_SHAPE)
+        .map(|s| AvatarShape::parse(s))
+        .unwrap_or_default();
+    let mut src = None;
+    let mut fallback = None;
+    fn walk(el: &Element, src: &mut Option<String>, fallback: &mut Option<String>) {
+        match el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) {
+            Some(SLOT_IMAGE) => {
+                if src.is_none() {
+                    if let Some(s) = el.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
+                        *src = Some(s.clone());
+                    } else if let Some(key) = el.image_texture.as_deref() {
+                        *src = src_from_avatar_texture_key(key);
+                    }
+                }
+            }
+            Some(SLOT_FALLBACK) => {
+                if fallback.is_none() {
+                    *fallback = extract_fallback_label(el);
+                }
+            }
+            _ => {}
+        }
+        for c in &el.children {
+            walk(c, src, fallback);
+        }
+    }
+    walk(el, &mut src, &mut fallback);
+    Some(AvatarFaceSpec {
+        size,
+        shape,
+        src,
+        fallback,
+    })
+}
+
+fn rebuild_face(spec: &AvatarFaceSpec) -> Element {
+    let mut b = avatar()
+        .size(spec.size.as_str())
+        .shape(spec.shape.as_str());
+    if let Some(src) = spec.src.as_deref().filter(|s| !s.is_empty()) {
+        b = b.image(src);
+    }
+    match spec.fallback.as_deref().filter(|s| !s.is_empty()) {
+        Some(fb) => b.fallback(fb).into(),
+        None if spec.src.as_deref().filter(|s| !s.is_empty()).is_none() => {
+            b.fallback("?").into()
+        }
+        None => b.into(),
+    }
+}
+
+fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> Element {
+    let mut panel: Element = hstack()
+        .w("auto")
+        .flex_grow(0.0)
+        .flex_shrink(0.0)
+        .align_self_kw("flex-start")
+        .overflow("hidden")
+        .items_center()
+        .justify("center")
+        .wrap("wrap")
+        .gap(0.0)
+        .p(tokens::SPACE_2)
+        .rounded("0.75rem")
+        .bg(tokens::popover())
+        .border_style("solid")
+        .border_width(1.0)
+        .border_color(tokens::border())
+        .shadow([0.0, 0.0, 0.0, 0.12], 10.0)
+        .children(faces)
+        .into();
+    if let Some(c) = expand_class.map(str::trim).filter(|s| !s.is_empty()) {
+        panel = with_class_list(panel, c);
+    }
+    panel
+}
+
+fn expand_placement_from_attr(raw: &str) -> PopupPlacement {
+    PopupPlacement::from_attr(raw.trim())
+}
+
+fn expand_cover_gap_for_group(trigger_h: f32) -> f32 {
+    -trigger_h.max(1.0)
+}
+
+struct AvatarGroupEntry {
+    focus_id: String,
+    faces: Vec<AvatarFaceSpec>,
+    /// Faces that sit in the collapsed group (not nested under Count). Overlay keeps these
+    /// on the same overlapping origin, then extra faces expand beside / below.
+    visible_n: usize,
+    expanded: Signal<bool>,
+    placement: Cell<PopupPlacement>,
+    expand_class: String,
+    group_hover: Cell<bool>,
+    panel_hover: Cell<bool>,
+    hover_armed: Cell<bool>,
+}
+
+thread_local! {
+    static AVATAR_GROUPS: RefCell<HashMap<String, AvatarGroupEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+static AVATAR_GROUP_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+fn register_avatar_group_entry(
+    id: String,
+    focus_id: String,
+    faces: Vec<AvatarFaceSpec>,
+    visible_n: usize,
+    expanded: Signal<bool>,
+    placement: PopupPlacement,
+    expand_class: String,
+) {
+    AVATAR_GROUPS.with(|m| {
+        m.borrow_mut().insert(
+            id,
+            AvatarGroupEntry {
+                focus_id,
+                faces,
+                visible_n,
+                expanded,
+                placement: Cell::new(placement),
+                expand_class,
+                group_hover: Cell::new(false),
+                panel_hover: Cell::new(false),
+                hover_armed: Cell::new(false),
+            },
+        );
+    });
+}
+
+fn unregister_avatar_group(id: &str) {
+    AVATAR_GROUPS.with(|m| {
+        m.borrow_mut().remove(id);
+    });
+}
+
+fn open_avatar_group_expand(id: &str) {
+    let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) = AVATAR_GROUPS.with(|m| {
+        let map = m.borrow();
+        let mut others = Vec::new();
+        let mut self_exp = None;
+        for (k, e) in map.iter() {
+            if k == id {
+                e.hover_armed.set(true);
+                self_exp = Some(e.expanded);
+                continue;
+            }
+            if e.expanded.peek() {
+                e.hover_armed.set(false);
+                e.group_hover.set(false);
+                e.panel_hover.set(false);
+                others.push(e.expanded);
+            }
+        }
+        (self_exp, others)
+    });
+    // Never try_set while AVATAR_GROUPS is borrowed — reactive rebuild re-enters the map.
+    if let Some(s) = self_exp {
+        s.try_set(true);
+    }
+    for o in others {
+        o.try_set(false);
+    }
+}
+
+fn note_avatar_group_hover(id: &str, panel: bool, on: bool) {
+    AVATAR_GROUPS.with(|m| {
+        if let Some(e) = m.borrow().get(id) {
+            if panel {
+                e.panel_hover.set(on);
+            } else {
+                e.group_hover.set(on);
+            }
+            if on {
+                e.hover_armed.set(true);
+            }
+        }
+    });
+}
+
+fn dismiss_idle_avatar_group_hovers() -> bool {
+    let to_close: Vec<Signal<bool>> = AVATAR_GROUPS.with(|m| {
+        let mut out = Vec::new();
+        for e in m.borrow().values() {
+            if !e.expanded.peek() || !e.hover_armed.get() {
+                continue;
+            }
+            if e.group_hover.get() || e.panel_hover.get() {
+                continue;
+            }
+            e.hover_armed.set(false);
+            out.push(e.expanded);
+        }
+        out
+    });
+    let mut any = false;
+    for s in to_close {
+        if s.peek() && s.try_set(false) {
+            any = true;
+        }
+    }
+    any
+}
+
+/// Event-loop: collapse avatar +N expand when pointer leaves group and panel.
+pub(crate) fn flush_avatar_group_hover_dismiss() -> bool {
+    dismiss_idle_avatar_group_hovers()
+}
+
+fn register_avatar_group_redraw(group_id: &str, expanded: Signal<bool>) {
+    let key = format!("{group_id}__redraw");
+    use_signal(key.as_str(), move || {
+        create_effect(move || {
+            let _ = expanded.get();
+            crate::app::runtime::request_redraw();
+        });
+    });
+}
+
+fn overlay_group_faces(faces: &[AvatarFaceSpec], visible_n: usize) -> Vec<Element> {
+    faces
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let mut el = apply_group_ring(rebuild_face(f));
+            // Visible faces keep the collapsed overlap so they stay on the original x.
+            // Overflow faces sit beside them with a normal gap.
+            if i > 0 && i < visible_n {
+                el = el.ml(GROUP_OVERLAP);
+            } else if i >= visible_n && i > 0 {
+                el = el.ml(tokens::SPACE_1);
+            }
+            el
+        })
+        .collect()
+}
+
+fn build_avatar_group_expand_panel(
+    floating_id: &str,
+    trigger_fid: &str,
+    placement: PopupPlacement,
+    faces: &[AvatarFaceSpec],
+    visible_n: usize,
+    expand_class: Option<&str>,
+    trigger_h: f32,
+) -> Element {
+    let chips = overlay_group_faces(faces, visible_n);
+    let mut panel = default_expand_container(chips, expand_class);
+    panel.set_attr("data-avatar-group-overlay", "1");
+    mark_floating_with_gap(
+        &mut panel,
+        floating_id,
+        trigger_fid,
+        placement,
+        expand_cover_gap_for_group(trigger_h),
+    );
+    panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
+    // Content-sized: do not stretch to a full-width group shell / trigger.
+    panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+    panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+    panel.align_content_kw("flex-start").absolute()
+}
+
+fn collect_count_faces(el: &Element, faces: &mut Vec<AvatarFaceSpec>) {
+    if let Some(spec) = extract_face_spec(el) {
+        faces.push(spec);
+        return;
+    }
+    for c in &el.children {
+        collect_count_faces(c, faces);
+    }
+}
+
+fn split_group_children(children: Vec<Element>) -> (Vec<Element>, Option<Element>, Vec<AvatarFaceSpec>, usize) {
+    let mut avatars = Vec::new();
+    let mut count = None;
+    let mut faces = Vec::new();
+    let mut visible_n = 0usize;
+    for child in children {
+        if child.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP_COUNT) {
+            // Overflow avatars nested under Count (optional) join the expand face list.
+            collect_count_faces(&child, &mut faces);
+            count = Some(child);
+        } else if let Some(spec) = extract_face_spec(&child) {
+            faces.push(spec.clone());
+            avatars.push(child);
+            visible_n += 1;
+        } else {
+            avatars.push(child);
+        }
+    }
+    (avatars, count, faces, visible_n)
+}
+
+fn build_avatar_group(
+    children: Vec<Element>,
+    expand_placement: PopupPlacement,
+    expand_class: Option<String>,
+) -> Element {
+    let (avatars, count_el, faces, visible_n) = split_group_children(children);
+    let seq = AVATAR_GROUP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let group_id = format!("avatar_grp_{seq}");
+    let focus_id = format!("{group_id}__focus");
+    let exp_key = format!("{group_id}__exp");
+    let expanded = use_signal(exp_key.as_str(), || false);
+    let expand_class = expand_class.unwrap_or_default();
+
+    register_avatar_group_entry(
+        group_id.clone(),
+        focus_id.clone(),
+        faces,
+        visible_n,
+        expanded,
+        expand_placement,
+        expand_class,
+    );
+    register_avatar_group_redraw(&group_id, expanded);
+
+    let mut row = hstack()
+        .w("auto")
+        .flex_grow(0.0)
+        .flex_shrink(0.0)
+        .align_self_kw("flex-start")
+        .items_center();
+    let mut avatar_n = 0usize;
+    for child in avatars.into_iter() {
         let mut c = apply_group_ring(child);
-        if i > 0 {
-            c = c.ml("-0.5rem");
+        if avatar_n > 0 {
+            c = c.ml(GROUP_OVERLAP);
         }
         row = row.child(c);
+        avatar_n += 1;
     }
-    let mut el: Element = row.into();
-    el.set_attr(ATTR_SLOT, SLOT_GROUP);
-    el
+    if let Some(mut count) = count_el {
+        let open_id = group_id.clone();
+        let click_id = group_id.clone();
+        let hover_id = group_id.clone();
+        count = interactive(count)
+            .on_click(move || open_avatar_group_expand(&click_id))
+            .on_hover(move |h| {
+                note_avatar_group_hover(&hover_id, false, h);
+                if h {
+                    open_avatar_group_expand(&open_id);
+                }
+            })
+            .into();
+        if avatar_n > 0 {
+            count = count.ml(GROUP_OVERLAP);
+        }
+        row = row.child(count);
+    }
+
+    let view_id = format!("{group_id}__expand_view");
+    let portal_id = group_id.clone();
+    let presence = use_floating_presence(&group_id, FloatingMotionKind::Expand);
+    reactive_anchor(view_id.clone(), move || {
+        let Some((phase, oz)) = floating_portal_phase(
+            &portal_id,
+            expanded,
+            &presence,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+        ) else {
+            return Element::new().w(0.0).h(0.0);
+        };
+        let (faces, fid, placement, expand_class, visible_n) = AVATAR_GROUPS.with(|m| {
+            let map = m.borrow();
+            match map.get(&portal_id) {
+                Some(e) => (
+                    e.faces.clone(),
+                    e.focus_id.clone(),
+                    e.placement.get(),
+                    e.expand_class.clone(),
+                    e.visible_n,
+                ),
+                None => (
+                    Vec::new(),
+                    String::new(),
+                    PopupPlacement::BottomStart,
+                    String::new(),
+                    0,
+                ),
+            }
+        });
+        let trigger_h = faces
+            .first()
+            .map(|f| IntoF32::into_f32(f.size.box_dim()))
+            .unwrap_or(32.0);
+        let mut panel = build_avatar_group_expand_panel(
+            &portal_id,
+            &fid,
+            placement,
+            &faces,
+            visible_n,
+            Some(expand_class.as_str()).filter(|s| !s.is_empty()),
+            trigger_h,
+        );
+        apply_stored_floating_place(&mut panel, &portal_id);
+        panel = panel.w("auto");
+        if apply_floating_panel_motion(
+            &portal_id,
+            &mut panel,
+            FloatingMotionKind::Expand,
+            phase,
+            &presence,
+            expanded,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
+        let hover_id = portal_id.clone();
+        panel = interactive(panel)
+            .focus_id(format!("{hover_id}__panel"))
+            .on_hover(move |h| note_avatar_group_hover(&hover_id, true, h))
+            .into();
+        mount_anchored_overlay(panel, oz.panel)
+    });
+    let placeholder = reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none();
+
+    let hover_id = group_id.clone();
+    let mut row_el: Element = row.into();
+    row_el.focus_id = Some(focus_id.clone());
+    let mut shell: Element = interactive(
+        hstack()
+            .w("auto")
+            .flex_grow(0.0)
+            .flex_shrink(0.0)
+            .align_self_kw("flex-start")
+            .items_center()
+            .overflow("visible")
+            .children(vec![row_el, placeholder])
+            .into(),
+    )
+    .on_hover(move |h| note_avatar_group_hover(&hover_id, false, h))
+    .into();
+
+    shell.set_attr(ATTR_SLOT, SLOT_GROUP);
+    // Trigger bounds follow the compact face row, not a stretch-full parent.
+    shell.focus_id = Some(focus_id);
+    shell.set_attr(
+        "data-state",
+        if expanded.peek() { "open" } else { "closed" },
+    );
+    let id_cleanup = group_id;
+    shell = shell.on_unmount(move || unregister_avatar_group(&id_cleanup));
+    shell
 }
 
 fn build_avatar_group_count(
@@ -669,9 +1163,32 @@ fn build_avatar_group_count(
         .min_w(dim)
         .min_h(dim)
         .into();
-    el = el.display_flex().items_center().justify_center();
+    el = el
+        .display_flex()
+        .items_center()
+        .justify_center()
+        .overflow("hidden");
     el.set_attr(ATTR_SLOT, SLOT_GROUP_COUNT);
     for mut c in children {
+        if c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR) {
+            // Keep overflow faces in the tree for expand specs, but out of flex flow so
+            // they cannot shove the +N label sideways or inflate the capsule width.
+            c = c
+                .absolute()
+                .left(0.0)
+                .top(0.0)
+                .w(0.0)
+                .h(0.0)
+                .min_w(0.0)
+                .min_h(0.0)
+                .max_w(0.0)
+                .max_h(0.0)
+                .opacity(0.0)
+                .overflow("hidden")
+                .pointer_events_box_none();
+            el = el.child(c);
+            continue;
+        }
         if c.text.is_some() {
             let node = build_text_node(
                 c.text.take().unwrap_or_default(),
@@ -698,7 +1215,7 @@ fn build_avatar_group_count(
 }
 
 // ---------------------------------------------------------------------------
-// AvatarFallback builder（RSX / AvatarBuilder 共用）
+// AvatarFallback builder (common to RSX / AvatarBuilder)
 // ---------------------------------------------------------------------------
 
 /// Fallback 内容构建器：文本 · Lucide Icon · Image · 任意子节点。
@@ -774,7 +1291,7 @@ pub struct AvatarBuilder {
     body: Option<Box<dyn FnOnce() -> Element>>,
 }
 
-/// Builder 入口（ADR-9 面 B）。
+/// Builder entry (ADR-9 surface B).
 pub fn avatar() -> AvatarBuilder {
     AvatarBuilder {
         id: String::new(),
@@ -806,7 +1323,7 @@ impl AvatarBuilder {
         self
     }
 
-    /// 复合面：在 scope 内构建 Image / Fallback / Badge。
+    /// Composite surface: Build Image / Fallback / Badge within scope.
     pub fn child(mut self, body: impl FnOnce() -> Element + 'static) -> Self {
         self.body = Some(Box::new(body));
         self
@@ -832,17 +1349,17 @@ impl AvatarBuilder {
         self.push_fallback(avatar_fallback().text(text))
     }
 
-    /// 便捷：Lucide 图标回退。
+    /// Convenience: Lucide icon fallback.
     pub fn fallback_icon(self, name: impl AsRef<str>) -> Self {
         self.push_fallback(avatar_fallback().icon(name))
     }
 
-    /// 便捷：铺满 Fallback 层的图片（非 [`AvatarImage`] 加载管线）。
+    /// Convenient: images filled with Fallback layers (not [`AvatarImage`] loading pipeline).
     pub fn fallback_image(self, src: impl Into<String>) -> Self {
         self.push_fallback(avatar_fallback().image(src))
     }
 
-    /// 复合回退：在 [`avatar_fallback`] 上继续 `.text` / `.icon` / `.child`。
+    /// Composite fallback: continue `.text` / `.icon` / `.child` on [`avatar_fallback`].
     pub fn fallback_with(
         self,
         build: impl FnOnce(AvatarFallbackBuilder) -> AvatarFallbackBuilder + 'static,
@@ -850,7 +1367,7 @@ impl AvatarBuilder {
         self.push_fallback(build(avatar_fallback()))
     }
 
-    /// 便捷：仅图片（可再链 `.fallback` / `.fallback_icon` 等）。
+    /// Convenience: only images (can be linked to `.fallback` / `.fallback_icon`, etc.).
     pub fn image(mut self, src: impl Into<String>) -> Self {
         let src = src.into();
         self.body = Some(Box::new(move || {
@@ -887,7 +1404,7 @@ impl From<AvatarBuilder> for Element {
 // RSX components
 // ---------------------------------------------------------------------------
 
-/// ShadCN `Avatar` 根容器。
+/// ShadCN `Avatar` root container.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Avatar(
@@ -915,7 +1432,7 @@ pub fn Avatar(
     el
 }
 
-/// 头像图片层（`aspect-square size-full object-cover` 心智）。
+/// Avatar image layer (`aspect-square size-full object-cover` mental).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AvatarImage(
@@ -933,7 +1450,7 @@ pub fn AvatarImage(
     el
 }
 
-/// 图片不可用时的回退（`bg-muted` + 居中；支持文本 / Icon / Image / 任意子节点）。
+/// Fallback when the image is unavailable (`bg-muted` + centered; supports text / Icon / Image / any child node).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AvatarFallback(
@@ -970,15 +1487,29 @@ pub fn AvatarBadge(
     build_avatar_badge(variant, kids, base_builder)
 }
 
-/// 重叠排列的多头像行（`-space-x-2` + `ring-background`）。
+/// Overlapping rows of multiple heads (`-space-x-2` + `ring-background`).
+///
+/// - `expand_placement`: floating expand side for `+N` (default `bottom-start`, in-place cover).
+/// - `expand_class`: utility class for the expand container (default = popover / border / shadow tokens).
+/// - Hover/click `AvatarGroupCount` opens a portal covering the group: visible faces keep their
+///   overlapping origin, then the chrome hugs the row (equal padding, width auto) so
+///   overflow faces expand beside / below without stretching the panel.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn AvatarGroup(children: Option<Element>) -> Element {
+pub fn AvatarGroup(
+    expand_placement: Option<String>,
+    expand_class: Option<String>,
+    children: Option<Element>,
+) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    build_avatar_group(kids)
+    let placement = expand_placement
+        .as_deref()
+        .map(expand_placement_from_attr)
+        .unwrap_or(PopupPlacement::BottomStart);
+    build_avatar_group(kids, placement, expand_class)
 }
 
-/// 组内「+N」计数胶囊。
+/// "+N" counting capsules in the group.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AvatarGroupCount(
@@ -1076,6 +1607,213 @@ mod tests {
             el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some(SLOT_GROUP_COUNT)
         );
+    }
+
+    fn collect_texts(el: &Element, out: &mut Vec<String>) {
+        if let Some(t) = el.text.as_ref().filter(|s| !s.is_empty()) {
+            out.push(t.clone());
+        }
+        for c in &el.children {
+            collect_texts(c, out);
+        }
+    }
+
+    #[test]
+    fn avatar_group_count_keeps_label_when_overflow_faces_nested() {
+        let el = AvatarGroupCount(AvatarGroupCountProps {
+            size: Some(AvatarSize::Default),
+            children: Some({
+                let mut f = Element::new();
+                f.set_attr("rui_fragment", "1");
+                f = f.children(vec![
+                    Element::new().text("+3"),
+                    avatar_with_fallback("D"),
+                    avatar_with_fallback("E"),
+                    avatar_with_fallback("F"),
+                ]);
+                f
+            }),
+            ..Default::default()
+        });
+        let mut texts = Vec::new();
+        collect_texts(&el, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("+3")),
+            "+N label must stay on the count capsule, got {texts:?}"
+        );
+        let nested: Vec<&Element> = el
+            .children
+            .iter()
+            .filter(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR))
+            .collect();
+        assert_eq!(nested.len(), 3, "overflow faces stay as count children");
+        for n in nested {
+            assert_eq!(
+                n.style.position,
+                taffy::style::Position::Absolute,
+                "overflow faces must be out of the count flex flow"
+            );
+            assert_eq!(
+                crate::layout::dim_length_px(n.style.min_size.width),
+                Some(0.0)
+            );
+        }
+    }
+
+    fn avatar_with_fallback(label: &str) -> Element {
+        avatar().fallback(label).into()
+    }
+
+    #[test]
+    fn avatar_group_expand_panel_covers_down_and_wraps_faces() {
+        use crate::core::reactivity::create_root;
+        use crate::utils::popup::{
+            ATTR_FLOATING, ATTR_FLOATING_GAP, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY,
+        };
+
+        let (_owner, group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                avatar_with_fallback("B"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some({
+                        let mut f = Element::new();
+                        f.set_attr("rui_fragment", "1");
+                        f = f.children(vec![Element::new().text("+1"), avatar_with_fallback("C")]);
+                        f
+                    }),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                expand_placement: Some("bottom-start".into()),
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+
+        assert_eq!(
+            group.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
+            Some(SLOT_GROUP)
+        );
+
+        let group_id = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .keys()
+                .next()
+                .cloned()
+                .expect("avatar group registry")
+        });
+        let faces = AVATAR_GROUPS.with(|m| {
+            let map = m.borrow();
+            let e = map.get(&group_id).expect("entry");
+            assert_eq!(e.faces.len(), 3, "visible A/B + nested C");
+            assert_eq!(e.visible_n, 2);
+            assert_eq!(e.placement.get(), PopupPlacement::BottomStart);
+            e.faces.clone()
+        });
+
+        let panel = build_avatar_group_expand_panel(
+            &group_id,
+            "fid",
+            PopupPlacement::BottomStart,
+            &faces,
+            2,
+            None,
+            32.0,
+        );
+        assert_eq!(
+            panel
+                .attrs
+                .get("data-avatar-group-overlay")
+                .map(|s| s.as_str()),
+            Some("1")
+        );
+        assert_eq!(
+            panel.attrs.get(ATTR_FLOATING).map(|s| s.as_str()),
+            Some(group_id.as_str())
+        );
+        assert_eq!(
+            panel.attrs.get(ATTR_FLOATING_STRATEGY).map(|s| s.as_str()),
+            Some("fixed")
+        );
+        assert_eq!(
+            panel
+                .attrs
+                .get(ATTR_FLOATING_MATCH_TRIGGER)
+                .map(|s| s.as_str()),
+            Some("0"),
+            "expand width is auto, not stretched to the trigger"
+        );
+        let gap: f32 = panel
+            .attrs
+            .get(ATTR_FLOATING_GAP)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        assert!(gap < 0.0, "in-place cover uses negative gap, got {gap}");
+        assert_eq!(panel.children.len(), 3, "expand chrome wraps all faces");
+        let overlap = IntoF32::into_f32(GROUP_OVERLAP);
+        let ml = crate::layout::lpa_length_px(panel.children[1].style.margin.left)
+            .expect("overlap margin");
+        assert!(
+            (ml - overlap).abs() < 0.5,
+            "visible overlay faces keep group overlap, got {ml}"
+        );
+        let overflow_ml = crate::layout::lpa_length_px(panel.children[2].style.margin.left)
+            .expect("overflow gap");
+        let gap_px = IntoF32::into_f32(tokens::SPACE_1);
+        assert!(
+            (overflow_ml - gap_px).abs() < 0.5,
+            "overflow faces use a normal gap, got {overflow_ml}"
+        );
+        let pad_l = crate::layout::lp_length_px(panel.style.padding.left).unwrap_or(0.0);
+        let pad_r = crate::layout::lp_length_px(panel.style.padding.right).unwrap_or(0.0);
+        let pad_t = crate::layout::lp_length_px(panel.style.padding.top).unwrap_or(0.0);
+        let pad_b = crate::layout::lp_length_px(panel.style.padding.bottom).unwrap_or(0.0);
+        assert!(
+            (pad_l - pad_r).abs() < 0.5 && (pad_t - pad_b).abs() < 0.5 && pad_l > 0.0,
+            "expand chrome uses equal padding so faces sit centered, got L{pad_l} R{pad_r} T{pad_t} B{pad_b}"
+        );
+        assert_eq!(
+            panel.style.justify_content,
+            Some(taffy::style::JustifyContent::CENTER)
+        );
+    }
+
+    #[test]
+    fn avatar_group_open_does_not_reborrow_registry() {
+        use crate::core::reactivity::create_root;
+
+        let (_owner, _group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some(Element::new().text("+1")),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        let group_id = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .keys()
+                .next()
+                .cloned()
+                .expect("avatar group registry")
+        });
+        // Synchronous signal writes used to borrow_mut the registry and panic on re-enter.
+        note_avatar_group_hover(&group_id, false, true);
+        open_avatar_group_expand(&group_id);
+        AVATAR_GROUPS.with(|m| {
+            assert!(m.borrow().get(&group_id).unwrap().expanded.peek());
+        });
     }
 
     #[test]

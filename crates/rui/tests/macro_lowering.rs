@@ -46,7 +46,7 @@ thread_local! {
 fn ReactiveChip(id: String, label: Signal<String>) -> Element {
     REACTIVE_CHIP_BODY.with(|c| c.set(c.get() + 1));
     ui! {
-        <div>{ label.get() }</div>
+        <Box>{ label.get() }</Box>
     }
 }
 
@@ -56,7 +56,7 @@ fn text_child_get_lowers_to_bind() {
     let label = use_signal("__rui_wp_r7_text", || "hello".to_string());
     label.set_silent("hello".to_string());
     let el = ui! {
-        <div>{ label.get() }</div>
+        <Box>{ label.get() }</Box>
     };
     let mut ids = Vec::new();
     collect_ids(&el, &mut ids);
@@ -74,7 +74,7 @@ fn if_else_get_lowers_to_bind() {
     let ok = use_signal("__rui_wp_r7_if", || true);
     ok.set_silent(true);
     let el = ui! {
-        <div>{ if ok.get() { "Ready" } else { "Blocked" } }</div>
+        <Box>{ if ok.get() { "Ready" } else { "Blocked" } }</Box>
     };
     assert!(
         template_contains(&el, ":bind#"),
@@ -90,7 +90,7 @@ fn deref_get_lowers_to_bind() {
     let n = use_signal("__rui_wp_r7_deref", || 3_i32);
     n.set_silent(3);
     let el = ui! {
-        <div>{ (*&n).get().to_string() }</div>
+        <Box>{ (*&n).get().to_string() }</Box>
     };
     assert!(
         template_contains(&el, ":bind#"),
@@ -105,11 +105,11 @@ fn show_when_get_lowers_to_show_reactive() {
     let open = use_signal("__rui_wp_r7_show", || true);
     open.set_silent(true);
     let el = ui! {
-        <div>
+        <Box>
             <Show when={open.get()}>
-                <div>"panel"</div>
+                <Box>"panel"</Box>
             </Show>
-        </div>
+        </Box>
     };
     let mut ids = Vec::new();
     collect_ids(&el, &mut ids);
@@ -280,11 +280,11 @@ fn match_key_get_lowers_to_switch_reactive() {
     let tab = use_signal("__rui_wp_r7_match_key", || 0_i32);
     tab.set_silent(0);
     let el = ui! {
-        <div>
+        <Box>
             <Match key={tab.get()}>
                 { |k| Element::new().text(format!("arm-{k}")) }
             </Match>
-        </div>
+        </Box>
     };
     let mut ids = Vec::new();
     collect_ids(&el, &mut ids);
@@ -301,16 +301,16 @@ fn match_when_arms_lower_to_match_when_reactive() {
     let ok = use_signal("__rui_wp_r7_match_when", || true);
     ok.set_silent(true);
     let el = ui! {
-        <div>
+        <Box>
             <Match fallback={Element::new().text("none")}>
                 <MatchArm when={ok.get()}>
-                    <div>"yes"</div>
+                    <Box>"yes"</Box>
                 </MatchArm>
                 <When when={!ok.get()}>
-                    <div>"no"</div>
+                    <Box>"no"</Box>
                 </When>
             </Match>
-        </div>
+        </Box>
     };
     let mut ids = Vec::new();
     collect_ids(&el, &mut ids);
@@ -391,11 +391,11 @@ fn reactive_island_inner_get_still_lowers_to_bind() {
     // Compile-time: `{get()}` inside `<Reactive>` must still be bind_text (see rui_macros
     // `rsx_lowering_tests`). Runtime: the island placeholder is the ui! child.
     let el = ui! {
-        <div>
+        <Box>
             <Reactive id={"wp-r7-isle"}>
-                <div>{ label.get() }</div>
+                <Box>{ label.get() }</Box>
             </Reactive>
-        </div>
+        </Box>
     };
     assert!(
         template_contains(&el, "wp-r7-isle"),
@@ -410,9 +410,9 @@ fn unknown_attr_get_lowers_to_bind_attr() {
     let status = use_signal("__rui_wp_r7_attr", || "ok".to_string());
     status.set_silent("ok".to_string());
     let el = ui! {
-        <div>
-            <div data_status={status.get()} />
-        </div>
+        <Box>
+            <Box data_status={status.get()} />
+        </Box>
     };
     let mut ids = Vec::new();
     collect_ids(&el, &mut ids);
@@ -435,7 +435,7 @@ fn with_lowers_to_bind_peek_does_not() {
     let label = use_signal("__rui_wp_r7_with", || "w".to_string());
     label.set_silent("w".to_string());
     let with_el = ui! {
-        <div>{ label.with(|s| s.clone()) }</div>
+        <Box>{ label.with(|s| s.clone()) }</Box>
     };
     assert!(
         template_contains(&with_el, ":bind#"),
@@ -444,7 +444,7 @@ fn with_lowers_to_bind_peek_does_not() {
     assert!(find_text(&with_el, "w"));
 
     let peek_el = ui! {
-        <div>{ label.peek().clone() }</div>
+        <Box>{ label.peek().clone() }</Box>
     };
     assert!(
         !template_contains(&peek_el, ":bind#"),

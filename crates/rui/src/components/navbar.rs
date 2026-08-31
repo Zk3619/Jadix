@@ -1,24 +1,24 @@
 //! # Navbar
 //!
 //! 顶栏布局壳（对齐站点 Header 习惯）：左侧 brand / 中间导览 / 右侧 actions。
-//! 链接导览请嵌 [`crate::components::navigation_menu`]；应用命令见
-//! [`crate::components::menubar`]；页面栈见 [`crate::app::navigator::navigation_host`]。
+//! Please embed [`crate::components::navigation_menu`] for link navigation; see the application command
+//! [`crate::components::menubar`]; see [`crate::app::navigator::navigation_host`] for the page stack.
 //!
 //! ```text
 //! Navbar
 //! ├── NavbarBrand
-//! ├── NavbarCenter          // 常嵌 NavigationMenu
+//! ├── NavbarCenter // often embedded NavigationMenu
 //! └── NavbarActions
 //! ```
 //!
-//! **身份（WP-2.8）**：展示型壳，**不要求**用户 `id`；空 / 省略 → 不写 `template_id`（I-1）。
+//! **Identity (WP-2.8)**: presentational shell; user `id` **not required**; empty/omitted → no `template_id` (I-1).
 //!
-//! `ui!` 中 `<Navbar>` / `<NavbarBrand>` 等由通用 PascalCase → `*Props` 展开（与
-//! [`Card`](crate::components::Card) 相同，无需专用 scope）。
+//! `<Navbar>` / `<NavbarBrand>` in `ui!` are expanded by general PascalCase → `*Props` (with
+//! [`Card`](crate::components::Card) is the same, no dedicated scope is required).
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐）
+//! // A. Composite RSX (recommended)
 //! ui! {
 //!     <Navbar>
 //!         <NavbarBrand><Label font_weight="600">"RUI"</Label></NavbarBrand>
@@ -49,26 +49,13 @@ use crate::core::tree::Element;
 use crate::primitives::r#box::hstack;
 use crate::style::with_class_list;
 use crate::tokens;
+use crate::utils::take_packed;
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_NAVBAR: &str = "navbar";
 const SLOT_BRAND: &str = "navbar-brand";
 const SLOT_CENTER: &str = "navbar-center";
 const SLOT_ACTIONS: &str = "navbar-actions";
-
-/// `ui!` 多子节点会先打成匿名 VStack / fragment；再拆开接到自己的布局上。
-fn take_packed_children(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        return std::mem::take(&mut el.children);
-    }
-    let bare = el.text.as_ref().is_none_or(|t| t.is_empty());
-    if bare && el.children.len() > 1 {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn paint_navbar_root(mut bar: Element, id: &str, class: Option<String>) -> Element {
     bar = bar
         .bg(tokens::background())
@@ -92,7 +79,7 @@ fn paint_navbar_root(mut bar: Element, id: &str, class: Option<String>) -> Eleme
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Navbar(id: String, class: Option<String>, children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut bar = hstack()
         .w("100%")
         .min_w(0.0)
@@ -110,7 +97,7 @@ pub fn Navbar(id: String, class: Option<String>, children: Option<Element>) -> E
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn NavbarBrand(class: Option<String>, children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
         .gap("0.75rem")
         .items_center()
@@ -140,7 +127,7 @@ pub fn NavbarCenter(
     justify: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let justify = justify
         .as_deref()
         .map(str::trim)
@@ -171,7 +158,7 @@ pub fn NavbarCenter(
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn NavbarActions(class: Option<String>, children: Option<Element>) -> Element {
-    let kids = children.map(take_packed_children).unwrap_or_default();
+    let kids = children.map(take_packed).unwrap_or_default();
     let mut row = hstack()
         .gap("0.5rem")
         .items_center()

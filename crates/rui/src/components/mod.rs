@@ -14,26 +14,30 @@
 //! [`ScrollArea`] / [`Scrollbar`] / RSX [`ScrollViewport`] 等产品层封装。
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
 //!
-//! ## 横切约定
+//! ## Cross-cutting convention
 //! - **身份**：勿给每个控件强行编造 `id`。展示型默认不需要；有状态非受控多实例才需要稳定实例键；
 //!   焦点 / a11y / 浮层锚点用 `focus_id`（可带前缀）。详见 `docs/COMPONENT_LIBRARY.md` §4.2。
 //! - 有状态控件若用全局 `use_signal("{id}__…")`，多实例必须稳定唯一键（空 id 撞键会串状态）。
 //! - 受控状态用 [`crate::core::reactivity::Signal`]；未传则组件按实例键建内部信号。
-//! - 浮层类（Select / Popover / Dialog / Dropdown / Tooltip / ContextMenu）走统一 floating sync 与 [`crate::app::portal_overlay`] Esc 栈。
-//! - ContextMenu：`<ContextMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group（宏 `context_menu_scope`）；Builder [`context_menu`]。
-//! - DropdownMenu：`<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub（宏 `dropdown_menu_scope`）；Builder [`dropdown_menu`]。
-//! - Menubar：`<Menubar>` / Menu / Trigger / Content / Item…（宏 `menubar_scope` / `menubar_menu`；内容复用 DropdownMenu）；Builder [`menubar`]。
-//! - Tabs：复合 `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent`（宏 `tabs_scope`）；无头条带仍可用 [`tabs_headless`] + `<Show>`。
-//! - Avatar：`<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>`（宏 → [`avatar_scope`]）；Builder [`avatar`]。
+//! - Floating layer classes (Select / Popover / Dialog / Dropdown / Tooltip / HoverCard / ContextMenu) use floating sync and [`crate::app::portal_overlay`] Esc stack to unify.
+//! - HoverCard: `<HoverCard>` / Trigger / Content (macro `hover_card_scope` / `hover_card_content`); Builder [`hover_card`].
+//! - ContextMenu: `<ContextMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group (macro `context_menu_scope`); Builder [`context_menu`].
+//! - DropdownMenu: `<DropdownMenu>` / Trigger / Content / Item / CheckboxItem / RadioGroup / RadioItem / Label / Separator / Shortcut / Group / Sub (macro `dropdown_menu_scope`); Builder [`dropdown_menu`].
+//! - Menubar: `<Menubar>` / Menu / Trigger / Content / Item… (macro `menubar_scope` / `menubar_menu`; content reuse DropdownMenu); Builder [`menubar`].
+//! - Tabs: Composite `<Tabs>` / `TabsList` / `TabsTrigger` / `TabsContent` (macro `tabs_scope`); headless bands are still available [`tabs_headless`] + `<Show>`.
+//! - Avatar: `<Avatar>` / `<AvatarImage>` / `<AvatarFallback>` / `<AvatarBadge>` / `<AvatarGroup>` (macro → [`avatar_scope`]); Builder [`avatar`].
 //! - Badge：展示型 `<Badge variant>` / [`badge`]（default/secondary/destructive/outline/ghost/link）。
 //! - Breadcrumb：`<Breadcrumb>` / `BreadcrumbList` / `BreadcrumbItem` / `BreadcrumbLink` / `BreadcrumbPage` / `BreadcrumbSeparator` / `BreadcrumbEllipsis`；Builder [`breadcrumb`]。
 //! - ButtonGroup：`<ButtonGroup>` / `ButtonGroupText` / `ButtonGroupSeparator`；Builder [`button_group`]。
+//! - InputAdornment: `<InputAdornment>` / Addon / Text / Button / Input / Textarea (opposite ShadCN InputGroup); Builder [`input_adornment`].
+//! - InputOTP: `<InputOTP>` / Group / Slot / Separator (对位 ShadCN InputOTP); Builder [`input_otp`].
 //! - AspectRatio：展示型 `<AspectRatio ratio>` / [`aspect_ratio`]（CSS `aspect-ratio` 容器；Image 等亦可直接写 `aspect_ratio`/`aspect-ratio` 属性）。
-//! - Collapsible：复合 `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent`（宏 `collapsible_scope` / `collapsible_content`）；Builder [`collapsible`]。
-//! - Carousel：`<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots（宏 `carousel_scope`）；Builder [`.slide`](carousel::CarouselBuilder::slide)。
+//! - Kbd: presentational `<Kbd>` / `<KbdGroup>` / [`kbd`] / [`kbd_group`] (keycap chrome; no special `ui!` scope).
+//! - Collapsible: Composite `<Collapsible>` / `CollapsibleTrigger` / `CollapsibleContent` (macro `collapsible_scope` / `collapsible_content`); Builder [`collapsible`].
+//! - Carousel: `<Carousel variant>` / `<CarouselSingle|Multi|Stack>` + Content/Item/Prev/Next/Dots (macro `carousel_scope`); Builder [`.slide`](carousel::CarouselBuilder::slide).
 //! - 颜色 / 日期：[`calendar`] / [`date_picker`] / [`time_picker`] / [`color_picker`]（触发器样式各自维护）。原生文件对话框在 [`crate::utils::file_dialog`]；Tab 焦点陷阱在 [`crate::utils::focus_trap`]（能力，非组件）。
 //! - 导航分工：[`navbar`] 布局壳；[`navigation_menu`] 链接导览（ShadCN）；[`menubar`] 应用命令；
-//!   [`pagination`] 数据分页导航（ShadCN）。页面栈宿主在 [`crate::app::navigator::navigation_host`]。
+//! [`pagination`] Data paging navigation (ShadCN). The page stack host is [`crate::app::navigator::navigation_host`].
 #![allow(non_snake_case)]
 
 /// 组件库私有实现（不进产品面）。
@@ -63,8 +67,12 @@ pub mod dialog;
 pub mod drawer;
 pub mod dropdown_menu;
 pub mod form;
+pub mod hover_card;
 pub mod image;
 pub mod input;
+pub mod input_adornment;
+pub mod input_otp;
+pub mod kbd;
 pub mod label;
 pub mod menubar;
 pub mod navbar;
@@ -239,6 +247,10 @@ pub use form::{
     clear_all_errors, clear_field_error, field_error, field_invalid, form_errors_signal,
     form_field, form_provider, form_validate, set_field_error, use_form, FormState,
 };
+pub use hover_card::{
+    hover_card, hover_card_content, hover_card_scope, hover_card_surface, use_hover_card,
+    HoverCardBuilder, HoverCardContentOpts, HoverCardCtx, HoverCardTrigger, HoverCardTriggerProps,
+};
 pub use image::{Image, ImageProps, Img, ImgProps};
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
@@ -248,6 +260,18 @@ pub use input::{
     input_type_signal_key, input_value_signal_key, Input, InputBuilder, InputProps, InputType,
     IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
 };
+pub use input_adornment::{
+    input_adornment, InputAdornment, InputAdornmentAddon, InputAdornmentAddonProps,
+    InputAdornmentAlign, InputAdornmentBuilder, InputAdornmentButton, InputAdornmentButtonProps,
+    InputAdornmentInput, InputAdornmentInputProps, InputAdornmentProps, InputAdornmentText,
+    InputAdornmentTextProps, InputAdornmentTextarea, InputAdornmentTextareaProps,
+};
+pub use input_otp::{
+    input_otp, input_otp_focus_id, input_otp_scope, use_input_otp, InputOTP, InputOTPGroup,
+    InputOTPGroupProps, InputOTPProps, InputOTPSeparator, InputOTPSeparatorProps, InputOTPSlot,
+    InputOTPSlotProps, InputOtpBuilder, InputOtpCtx, InputOtpPattern, INPUT_OTP_FOCUS_PREFIX,
+};
+pub use kbd::{kbd, kbd_group, Kbd, KbdBuilder, KbdGroup, KbdGroupBuilder, KbdGroupProps, KbdProps};
 pub use label::{
     enable_label_selection, label, label_selection_signal_key, selectable_text_key,
     text_node as text, try_copy_label_selection, Label, LabelBuilder, LabelProps,

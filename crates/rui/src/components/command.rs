@@ -1,21 +1,21 @@
 //! # Command
 //!
-//! 对齐 shadcn/ui Base [`command.tsx`](https://github.com/shadcn-ui/ui) 与 solid-ui `command.tsx`：
-//! 复合件 **Command / CommandInput / CommandList / CommandEmpty / CommandGroup /
-//! CommandSeparator / CommandItem / CommandShortcut**。
+//! Aligns with shadcn/ui Base [`command.tsx`](https://github.com/shadcn-ui/ui) and solid-ui `command.tsx`:
+//! Composite **Command / CommandInput / CommandList / CommandEmpty / CommandGroup /
+//! CommandSeparator / CommandItem / CommandShortcut**.
 //!
-//! 三种表面：
-//! - **行内** [`Command`]：嵌在 Card 等布局里。
-//! - **Dialog** [`CommandDialog`]：组合 Dialog（居中模态，`show_close=false`），不改 `dialog.rs`。
-//! - **纯浮层** [`command_overlay_scope`] / `<CommandOverlay>`：ShadCN CommandDialog 式视口 **top-1/3** 居中；
-//!   舞台走 [`mount_viewport_portal_stage`](crate::utils::popup::mount_viewport_portal_stage)（非 Dialog 居中 chrome）。
+//! Three surfaces:
+//! - **Inline** [`Command`]: embed in Card or other layout.
+//! - **Dialog** [`CommandDialog`]: compose Dialog (centered modal, `show_close=false`); does not change `dialog.rs`.
+//! - **Pure overlay** [`command_overlay_scope`] / `<CommandOverlay>`: ShadCN CommandDialog-style viewport **top-1/3** centered;
+//!   stage via [`mount_viewport_portal_stage`](crate::utils::popup::mount_viewport_portal_stage) (not Dialog centered chrome).
 //!
-//! 行为对照 cmdk：**类型即搜**，↑↓ 高亮，Enter 执行；浮层 / Dialog 下 Esc 关闭。
+//! cmdk-like behavior: **type-to-filter**, ↑↓ highlight, Enter run; Esc closes overlay / Dialog.
 //!
-//! ## 用法（复合 / 类前端）
+//! ## Usage (composite / front-end style)
 //!
 //! ```ignore
-//! // 行内（Card 内嵌）
+//! // Inline (nested in Card)
 //! ui! {
 //!     <Command id="cmd">
 //!         <CommandInput placeholder="Type a command or search..." />
@@ -35,7 +35,7 @@
 //!     </Command>
 //! }
 //!
-//! // 命令面板：VS Code 式顶部居中浮层
+//! // Command palette: VS Code-style top-centered overlay
 //! ui! {
 //!     <CommandOverlay id="pal" open={open}>
 //!         <CommandInput placeholder="Type a command or search..." />
@@ -46,7 +46,7 @@
 //!     </CommandOverlay>
 //! }
 //!
-//! // 命令面板：复用 Dialog（居中模态）
+//! // Command palette: reuse Dialog (centered modal)
 //! ui! {
 //!     <CommandDialog id="pal-dlg" open={open_dlg}>
 //!         <CommandInput placeholder="Type a command or search..." />
@@ -58,13 +58,13 @@
 //! }
 //! ```
 //!
-//! ## 用法（Builder）
+//! ## Usage (Builder)
 //!
 //! ```ignore
 //! command("pal")
-//!     .open_signal(open) // 默认顶部居中浮层
+//!     .open_signal(open) // default: top-centered overlay
 //!     .action(CommandAction::new("ping", "Ping", || log::info!("ping")))
-//! // 居中 Dialog：`.dialog()`
+//! // Centered Dialog: `.dialog()`
 //!     .action(CommandAction::new("ping", "Ping", || log::info!("ping")))
 //! ```
 
@@ -72,11 +72,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode, OverlayZ};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
+};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, clear_pending_floating_enter, floating_portal_phase,
+    sync_floating_presence, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -98,6 +102,7 @@ use crate::utils::popup::{
 };
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
@@ -105,7 +110,7 @@ use winit::keyboard::{Key, NamedKey};
 // Context
 // ---------------------------------------------------------------------------
 
-/// 键盘 / 空状态用的可见项快照。
+/// Snapshot of visible items for keyboard / empty state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandVisibleItem {
     pub value: String,
@@ -113,14 +118,14 @@ pub struct CommandVisibleItem {
     pub disabled: bool,
 }
 
-/// Command 展示表面。
+/// Command display surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CommandSurface {
-    /// 嵌在现有布局中（无 portal）。
+    /// Embedded in existing layout (no portal).
     Inline,
-    /// 复用 Dialog：视口居中模态。
+    /// Reuse Dialog: viewport-centered modal.
     Dialog,
-    /// VS Code 式：视口顶部居中纯浮层。
+    /// VS Code-style: top-centered pure overlay.
     #[default]
     Overlay,
 }
@@ -131,7 +136,7 @@ impl CommandSurface {
     }
 }
 
-/// Command 根上下文（复合子件共享）。
+/// Command root context (shared by composite children).
 #[derive(Clone)]
 pub struct CommandCtx {
     pub id: String,
@@ -149,7 +154,7 @@ fn command_context() -> Context<CommandCtx> {
     *CTX.get_or_init(create_context::<CommandCtx>)
 }
 
-/// 读取最近的 [`Command`] 上下文。
+/// Read the nearest [`Command`] context.
 pub fn use_command() -> Option<CommandCtx> {
     use_context(command_context())
 }
@@ -159,21 +164,6 @@ fn require_command(part: &str) -> CommandCtx {
         panic!("{part} must be used within <Command> / <CommandDialog> / <CommandOverlay> / command_scope");
     })
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else if !el.children.is_empty()
-        && el.text.is_none()
-        && el.on_click.is_none()
-        && el.focus_id.is_none()
-    {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn extract_text_leaf(el: &Element) -> String {
     if let Some(t) = &el.text {
         return t.clone();
@@ -238,7 +228,7 @@ fn reset_command_session(id: &str) {
     use_signal(format!("{id}__cmd_active").as_str(), || 0usize).set(0);
 }
 
-/// 过滤框只拦截列表导航 / 执行 / 关闭。退格、Delete、左右方向、Home/End、字符一律交给文本编辑。
+/// Filter box only consumes list nav / run / dismiss. Backspace, Delete, arrows, Home/End, and chars go to text editing.
 fn command_filter_consumes_key(key: &Key) -> bool {
     crate::utils::list_nav::is_list_nav_key(key)
 }
@@ -250,10 +240,10 @@ fn set_command_active(active: Signal<usize>, next: usize) {
     }
 }
 
-/// solid-ui / shadcn Command 根：`flex size-full flex-col overflow-hidden rounded-md bg-popover
-/// text-popover-foreground`。
-/// DialogContent 固定 `p-1.5rem`；面板内用负边距抵消，对齐 CommandDialog `p-0`（不改 dialog.rs）。
-/// Overlay / Dialog 按内容撑开；勿 `overflow:hidden` + `min_h:0`（flex 会把固有高度压成 0）。
+/// solid-ui / shadcn Command root: `flex size-full flex-col overflow-hidden rounded-md bg-popover
+/// text-popover-foreground`.
+/// DialogContent pads `p-1.5rem`; negate inside the panel to match CommandDialog `p-0` (leave dialog.rs alone).
+/// Overlay / Dialog size to content; avoid `overflow:hidden` + `min_h:0` (flex would crush intrinsic height to 0).
 fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
     let hug = is_palette(surface);
     let kids: Vec<Element> = if hug {
@@ -277,7 +267,7 @@ fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
     let mut root: Element = root.into();
     match surface {
         CommandSurface::Dialog => {
-            // CommandDialog `hug_content` 面板已有 bg/圆角；勿再铺一层方形 popover 底。
+            // CommandDialog `hug_content` panel already has bg/radius; do not paint another square popover backdrop.
         }
         CommandSurface::Inline => {
             root = root
@@ -299,8 +289,8 @@ fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
 // Scopes
 // ---------------------------------------------------------------------------
 
-/// 提供上下文并按当前 query 重建壳（不注册 `reactive_view`）。
-/// Overlay / Dialog 的外层 effect 必须调用本函数，以便订阅 query 且避免嵌套 100% 占位塌高。
+/// Provide context and rebuild the shell from the current query (no `reactive_view` registration).
+/// Outer Overlay / Dialog effects must call this so they subscribe to query and avoid nested 100% placeholder height collapse.
 fn command_paint(
     id: String,
     open: Signal<bool>,
@@ -343,7 +333,7 @@ fn command_paint(
         }
         command_root_shell(surface, take_packed(body()))
     });
-    // DialogContent 会给返回根写 `min_h:0` + `flex_grow:1`。固有高度放在内层，避免被压成 0。
+    // DialogContent sets `min_h:0` + `flex_grow:1` on the returned root. Keep intrinsic height on the inner shell so it is not crushed to 0.
     if surface == CommandSurface::Dialog {
         vstack().w("100%").flex_shrink(0.0).child(painted).into()
     } else {
@@ -360,9 +350,9 @@ fn command_placeholder(placeholder: impl Into<String>) -> String {
     }
 }
 
-/// 提供 Command 上下文并构建子树（`ui!` `<Command>` / Builder 共用）。
+/// Provide Command context and build the subtree (shared by `ui!` `<Command>` / Builder).
 ///
-/// 已在 Command 上下文内时（例如 [`command_dialog_scope`] 内再包 `<Command>`）只套视觉壳。
+/// When already inside a Command context (e.g. `<Command>` nested in [`command_dialog_scope`]), only wrap the visual shell.
 pub fn command_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -385,11 +375,11 @@ pub fn command_scope(
         let placeholder = placeholder.clone();
         move || command_paint(id.clone(), open, placeholder.clone(), surface, body.clone())
     });
-    // 100%×100% 会在 auto 高度父级（Dialog / Overlay）里塌成 0。
+    // 100%×100% collapses to 0 inside auto-height parents (Dialog / Overlay).
     reactive_placeholder_sized(view_id, "100%", "auto")
 }
 
-/// ShadCN / solid-ui `CommandDialog`：`Dialog` + `DialogContent(show_close=false)` + Command 壳。
+/// ShadCN / solid-ui `CommandDialog`: `Dialog` + `DialogContent(show_close=false)` + Command shell.
 pub fn command_dialog_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -436,8 +426,8 @@ pub fn command_dialog_scope(
             },
         )
     });
-    // DialogContent 默认 100%×100% 占位；若留在 HStack/卡片流里会撑破布局。
-    // 0×0 锚点仍能 hoist 出 underlay/stage（与 Select / Combobox 相同）。
+    // DialogContent defaults to 100%×100% placeholder; leaving it in an HStack/card flow blows out layout.
+    // A 0×0 anchor still hoists underlay/stage (same as Select / Combobox).
     Element::new()
         .w(0.0)
         .h(0.0)
@@ -446,13 +436,13 @@ pub fn command_dialog_scope(
         .child(reactive_placeholder_sized(reset_view, 0.0, 0.0).pointer_events_box_none())
 }
 
-/// VS Code 式命令面板：视口顶部居中，透明点击关闭层，不走 Dialog。
+/// VS Code-style command palette: top-centered in the viewport, transparent dismiss layer, no Dialog.
 ///
-/// 宿主对齐 [`command_dialog_scope`] / Select：`0×0` 锚点，避免在 gallery 卡片
-/// `VStack` / `ScrollArea` 里被 `100%×100%` 占位撑破或压成 0。
-/// 舞台对齐已能显示的 Dialog：`inset(0)` 铺满 portal 层，再在其上顶部居中放面板。
-/// 不要用「只有 left/right、高度 auto」的绝对定位 `hstack` 当提升根——在 auto 高父级里
-/// Taffy 交叉轴 stretch 会把面板高度收成 0，gallery 里看起来就像没打开。
+/// Host matches [`command_dialog_scope`] / Select: `0×0` anchor so gallery cards
+/// `VStack` / `ScrollArea` are not blown out or crushed by a `100%×100%` placeholder.
+/// Stage matches a visible Dialog: `inset(0)` fills the portal layer, then top-centers the panel.
+/// Do not use an absolutely positioned `hstack` with only left/right and auto height as the hoist root — inside an auto-height parent
+/// Taffy cross-axis stretch collapses panel height to 0 and the gallery looks like it never opened.
 pub fn command_overlay_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -464,20 +454,22 @@ pub fn command_overlay_scope(
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__cmd_open").as_str(), || false));
     let body: Rc<dyn Fn() -> Element> = Rc::new(body);
     let view_id = format!("{id}__cmd_overlay");
+    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
     reactive_anchor(view_id.clone(), {
         let id = id.clone();
         let body = body.clone();
         let placeholder = placeholder.clone();
         move || {
-            let _ = open.get();
-            let Some(oz) = portal_sync(&id, open, OverlayKind::Modal, OverlayMode::Stacked) else {
+            let Some((phase, oz)) = floating_portal_phase(
+                &id,
+                open,
+                &presence,
+                OverlayKind::Modal,
+                OverlayMode::Stacked,
+            ) else {
                 reset_command_session(&id);
                 return Element::new();
             };
-            if !open.peek() {
-                reset_command_session(&id);
-                return Element::new();
-            }
             let inner = command_paint(
                 id.clone(),
                 open,
@@ -485,12 +477,12 @@ pub fn command_overlay_scope(
                 CommandSurface::Overlay,
                 body.clone(),
             );
-            command_overlay_frame(open, oz, inner)
+            command_overlay_frame(open, oz, inner, &id, phase, &presence)
         }
     });
-    // 锚点必须是子节点：gallery 用 `let el = ui! { <CommandOverlay/> }` 时，顶层 `ui!`
-    // 会 `template_id(file:line:column)` 盖掉根节点身份，`try_reconcile_subtree` 就找不到
-    // `{id}__cmd_overlay`，打开后的舞台被丢掉。CommandDialog 的 0×0 外壳同理。
+    // Anchor must be a child: when gallery does `let el = ui! { <CommandOverlay/> }`, the outer `ui!`
+    // stamps `template_id(file:line:column)` over the root identity so `try_reconcile_subtree` cannot find
+    // `{id}__cmd_overlay` and the opened stage is dropped. Same for CommandDialog's 0×0 shell.
     Element::new()
         .w(0.0)
         .h(0.0)
@@ -498,10 +490,17 @@ pub fn command_overlay_scope(
         .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
-/// 透明 underlay + 视口舞台（ShadCN `top-1/3` 水平居中面板）。提升的是铺满视口的舞台。
-fn command_overlay_frame(open: Signal<bool>, oz: OverlayZ, inner: Element) -> Element {
-    // ShadCN aria CommandDialog：`top-1/3 translate-y-0 overflow-hidden p-0`；
-    // 宽度对齐 DialogContent `w-full max-w-lg`。solid-ui 为 `overflow-hidden p-0`。
+/// Transparent underlay + viewport stage (ShadCN `top-1/3` horizontally centered panel). What is hoisted is the full-viewport stage.
+fn command_overlay_frame(
+    open: Signal<bool>,
+    oz: OverlayZ,
+    inner: Element,
+    overlay_id: &str,
+    phase: crate::utils::presence::PresencePhase,
+    presence: &crate::components::internal::floating_motion::FloatingPresenceHandle,
+) -> Element {
+    // ShadCN aria CommandDialog: `top-1/3 translate-y-0 overflow-hidden p-0`;
+    // width matches DialogContent `w-full max-w-lg`. solid-ui uses `overflow-hidden p-0`.
     let mut panel: Element = vstack()
         .w("32rem")
         .min_w("16rem")
@@ -517,31 +516,36 @@ fn command_overlay_frame(open: Signal<bool>, oz: OverlayZ, inner: Element) -> El
         .border_width(1.0)
         .border_color(tokens::border())
         .shadow([0.0, 0.0, 0.0, 0.16], 16.0);
-    // 勿 `overflow:hidden`：Taffy 会把该节点当成滚动盒，auto 高下列表主轴被压成 0
-    //（只剩 flex_shrink:0 的搜索行）。圆角由面板自身 SDF 绘制，不依赖裁剪。
+    // Avoid `overflow:hidden`: Taffy treats the node as a scroll box and crushes the list main axis to 0 under auto height
+    //(only the flex_shrink:0 search row remains). Corner radius is painted by the panel SDF, not by clipping.
     panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
-    // 舞台已 portal；勿再 `panel_block_clicks`（会嵌套 `rui_portal`，把面板 hoist 出居中舞台）。
+    // Stage is already portaled; do not wrap `panel_block_clicks` (nested `rui_portal` would hoist the panel out of the centered stage).
     panel = swallow_clicks(panel);
+    if apply_floating_panel_motion(
+        overlay_id,
+        &mut panel,
+        FloatingMotionKind::Fade,
+        phase,
+        presence,
+        open,
+        OverlayKind::Modal,
+        OverlayMode::Stacked,
+        None,
+    ) {
+        crate::app::runtime::request_redraw();
+    }
 
-    // 全宽行 + justify center：避免列上 `align-items:center` 把面板收成 min-content，
-    // 或 stretch 成主栏全宽（左缘贴侧栏分割线，圆角被 overflow AABB 切成竖边）。
-    let row: Element = hstack()
-        .w("100%")
-        .flex_shrink(0.0)
-        .flex_grow(0.0)
-        .justify("center")
-        .items("start")
-        .child(panel)
-        .into();
-
-    // `fixed`：视口包含块 + collect 清祖先 overflow clip（即使 hoist 尚未打上 hoisted 标记）。
+    // `fixed`: viewport containing block + collect clears ancestor overflow clips (even before the hoisted flag is set).
+    // Cross-axis center the palette; a full-width centering row would eat left/right clicks
+    // that must reach the underlay (close on outside press).
     let mut stage: Element = vstack()
         .inset(0.0)
         .w("100%")
         .h("100%")
         .justify("start")
+        .items("center")
         .pt("33.333dvh")
-        .child(row)
+        .child(panel)
         .into();
     stage = mount_viewport_portal_stage(stage, oz.panel);
 
@@ -552,7 +556,7 @@ fn command_overlay_frame(open: Signal<bool>, oz: OverlayZ, inner: Element) -> El
 // Data + Builder
 // ---------------------------------------------------------------------------
 
-/// 一条可过滤命令。
+/// One filterable command.
 #[derive(Clone)]
 pub struct CommandAction {
     pub id: String,
@@ -584,7 +588,7 @@ impl CommandAction {
     }
 }
 
-/// Builder 分组。
+/// Builder group.
 #[derive(Clone)]
 pub struct CommandGroupData {
     pub heading: String,
@@ -619,7 +623,7 @@ pub struct CommandBuilder {
     surface: CommandSurface,
 }
 
-/// 命令面板入口。传 [`CommandBuilder::open_signal`] 时默认顶部居中浮层；[`.dialog()`](CommandBuilder::dialog) 走 Dialog。
+/// Command palette entry. With [`CommandBuilder::open_signal`], defaults to top-centered overlay; [`.dialog()`](CommandBuilder::dialog) uses Dialog.
 pub fn command(id: impl Into<String>) -> CommandBuilder {
     CommandBuilder {
         id: id.into(),
@@ -656,12 +660,12 @@ impl CommandBuilder {
         self.entries.push(CommandEntry::Separator);
         self
     }
-    /// 视口顶部居中纯浮层（默认）。
+    /// Top-centered pure overlay (default).
     pub fn overlay(mut self) -> Self {
         self.surface = CommandSurface::Overlay;
         self
     }
-    /// 复用 Dialog 的居中模态。
+    /// Reuse Dialog as a centered modal.
     pub fn dialog(mut self) -> Self {
         self.surface = CommandSurface::Dialog;
         self
@@ -783,7 +787,7 @@ impl crate::core::tree::IntoElementList for CommandBuilder {
 // Compound parts
 // ---------------------------------------------------------------------------
 
-/// RSX `<Command>`：有复合子树时走 [`command_scope`]；否则走 Builder。
+/// RSX `<Command>`: with a composite subtree uses [`command_scope`]; otherwise the Builder path.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Command(
@@ -794,7 +798,7 @@ pub fn Command(
     children: Option<Element>,
 ) -> Element {
     if let Some(c) = children {
-        // `ui!` 复合路径由宏走 [`command_scope`]（每次按 query 重建）。
+        // `ui!` composite path is lowered by the macro to [`command_scope`] (rebuilds each query).
         let cell = RefCell::new(Some(c));
         return command_scope(
             id,
@@ -817,7 +821,7 @@ pub fn Command(
     b.into()
 }
 
-/// ShadCN / solid-ui `CommandInput`：底边框 + 搜索图标 + 透明输入。
+/// ShadCN / solid-ui `CommandInput`: bottom border + search icon + transparent input.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> Element {
@@ -911,7 +915,7 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
         false
     });
 
-    // 搜索图标在圆角输入壳内部左侧；壳与面板之间留白，底部分割线不顶满宽。
+    // Search icon sits inside the rounded input shell on the left; leave gap between shell and panel so the bottom divider is not full-bleed.
     let mut shell: Element = hstack()
         .w("100%")
         .h("2.25rem")
@@ -959,8 +963,8 @@ pub fn CommandList(children: Option<Element>) -> Element {
         set_command_active(ctx.active, n - 1);
     }
     let scroll_id = format!("{}:list", ctx.id);
-    // Overlay / Dialog 父级高度为 auto：`overflow: auto` 在 Taffy 里会变成 0 高滚动盒。
-    // 这两处只用 `max-h` 按内容撑开；行内才用 ScrollArea 填满父级。
+    // Overlay / Dialog parent height is auto: `overflow: auto` becomes a 0-tall scroll box in Taffy.
+    // Here only use `max-h` to grow with content; ScrollArea that fills the parent is for inline only.
     if ctx.surface == CommandSurface::Inline {
         return scroll_area(scroll_id.as_str())
             .overflow_y("auto")
@@ -972,8 +976,8 @@ pub fn CommandList(children: Option<Element>) -> Element {
             .child(col)
             .into();
     }
-    // Overlay / Dialog：按内容撑开。不要写死 `h:`（会矮于分组标题+项，Billing 会画出白底）。
-    // 也不要 `overflow:auto`（auto 高父级里 Taffy 滚动盒高度为 0）。
+    // Overlay / Dialog: size to content. Do not hard-code `h:` (shorter than group heading+items paints a white Billing gap).
+    // Also avoid `overflow:auto` (Taffy scroll-box height is 0 under auto-height parents).
     let mut list: Element = vstack()
         .w("100%")
         .flex_shrink(0.0)
@@ -985,7 +989,7 @@ pub fn CommandList(children: Option<Element>) -> Element {
 }
 
 fn command_empty_ui(msg: &str) -> Element {
-    // solid-ui CommandEmpty：`py-6 text-center text-sm`
+    // solid-ui CommandEmpty: `py-6 text-center text-sm`
     let t: Element = text(msg)
         .size(14.0)
         .color(parse_text_color("muted-foreground"))
@@ -998,7 +1002,7 @@ fn command_empty_ui(msg: &str) -> Element {
         .into()
 }
 
-/// `CommandEmpty`：登记文案；真正绘制由 [`CommandList`] 在无可见项时插入（不依赖 RSX 顺序）。
+/// `CommandEmpty`: registers copy; actual paint is inserted by [`CommandList`] when nothing is visible (order-independent of RSX).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CommandEmpty(children: Option<Element>) -> Element {
@@ -1017,7 +1021,7 @@ pub fn CommandEmpty(children: Option<Element>) -> Element {
     Element::new().w(0.0).h(0.0)
 }
 
-/// `CommandGroup`：`p-1` + heading（`text-xs text-muted-foreground`）；过滤后无项则隐藏。
+/// `CommandGroup`: `p-1` + heading (`text-xs text-muted-foreground`); hidden when filtering leaves no items.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CommandGroup(heading: Option<String>, children: Option<Element>) -> Element {
@@ -1061,7 +1065,7 @@ pub fn CommandSeparator(children: Option<Element>) -> Element {
     el
 }
 
-/// ShadCN / solid-ui `CommandItem`：高亮 `bg-accent`；可选 check；有 Shortcut 时不显示 check。
+/// ShadCN / solid-ui `CommandItem`: highlight `bg-accent`; optional check; hide check when a Shortcut is present.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CommandItem(
@@ -1173,8 +1177,8 @@ pub fn CommandItem(
 
     let mut hit: Element = interactive(row)
         .on_hover(move |h| {
-            // 禁止 `Signal::set`：会在 hover 分发中途重建整棵 Command 树，
-            // 导致高亮卡死、后续项收不到悬停、点击（Toast）失效。
+            // Do not `Signal::set`: that rebuilds the whole Command tree mid-hover dispatch,
+            // freezing highlight, dropping later hover targets, and breaking click (Toast).
             if h && !disabled {
                 set_command_active(active, ix);
             }
@@ -1184,7 +1188,7 @@ pub fn CommandItem(
                 return;
             }
             set_command_active(active, ix);
-            // 与 Dialog Confirm 相同：先跑 on_click（例如入队 Toast），再关浮层。
+            // Same as Dialog Confirm: run on_click first (e.g. enqueue Toast), then close the overlay.
             batch(|| {
                 activate_click();
                 if dismissible {
@@ -1233,7 +1237,7 @@ fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
     }
 }
 
-/// 每帧按 `{id}__cmd_active` 写回高亮（`peek`，不订阅根 effect）。
+/// Each frame writes highlight from `{id}__cmd_active` (`peek`, no root-effect subscription).
 pub(crate) fn sync_command_item_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
@@ -1364,8 +1368,7 @@ mod tests {
     }
 
     fn overlay_palette_panel(stage: &Element) -> &Element {
-        let row = stage.children.first().expect("centering row");
-        row.children.first().expect("palette panel")
+        stage.children.first().expect("palette panel")
     }
 
     #[test]
@@ -1378,7 +1381,17 @@ mod tests {
                 panel: 1001,
             };
             let inner = Element::new().w(200.0).h(48.0).bg([0.2, 0.2, 0.2, 1.0]);
-            let frame = command_overlay_frame(open, oz, inner);
+            let presence = use_floating_presence("cmd-overlay-frame-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                inner,
+                "cmd-overlay-frame-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
             Element::new().w(800.0).h(600.0).child(frame)
         });
 
@@ -1414,6 +1427,61 @@ mod tests {
     }
 
     #[test]
+    fn command_overlay_empty_sides_hit_underlay() {
+        use crate::app::pointer_events::hit_path;
+
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let oz = OverlayZ {
+                underlay: 1000,
+                panel: 1001,
+            };
+            let inner = Element::new().w(200.0).h(48.0).bg([0.2, 0.2, 0.2, 1.0]);
+            let presence = use_floating_presence("cmd-overlay-sides-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                inner,
+                "cmd-overlay-sides-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
+            Element::new().w(800.0).h(600.0).child(frame)
+        });
+
+        let _ = hoist_portal_subtrees(&mut root);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+
+        let stage = find_hoisted_panel(&root, "panel:1001");
+        let panel = overlay_palette_panel(stage);
+        let [px, py, pw, ph] = panel.layout_bounds;
+        assert!(
+            px > 8.0,
+            "palette must not span the viewport; left={px} w={pw}"
+        );
+        let left_x = (px - 24.0).max(4.0);
+        let right_x = (px + pw + 24.0).min(796.0);
+        let mid_y = py + ph * 0.5;
+        for (name, x) in [("left", left_x), ("right", right_x)] {
+            let path = hit_path(&root, x, mid_y);
+            assert!(
+                path.iter().any(|e| {
+                    e.portal_key
+                        .as_deref()
+                        .is_some_and(|k| k.starts_with("underlay:"))
+                }),
+                "{name} of command palette must hit underlay so outside click closes; path keys={:?}",
+                path.iter().filter_map(|e| e.portal_key.as_deref()).collect::<Vec<_>>()
+            );
+        }
+        clear_overlay_stack();
+    }
+
+    #[test]
     fn command_overlay_close_then_toast_does_not_leave_underlay() {
         use crate::components::toast::host::paint_toast_host;
         use crate::components::toast::toast_push;
@@ -1424,7 +1492,17 @@ mod tests {
                 underlay: 1000,
                 panel: 1001,
             };
-            let frame = command_overlay_frame(open, oz, Element::new().w(200.0).h(48.0));
+            let presence = use_floating_presence("cmd-overlay-toast-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                Element::new().w(200.0).h(48.0),
+                "cmd-overlay-toast-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
             Element::new()
                 .w(800.0)
                 .h(600.0)
@@ -1530,7 +1608,17 @@ mod tests {
                 CommandSurface::Overlay,
                 gallery_overlay_body(),
             );
-            let frame = command_overlay_frame(open, oz, inner);
+            let presence = use_floating_presence("cmd-overlay-radius-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                inner,
+                "cmd-overlay-radius-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
             let host = Element::new()
                 .w(0.0)
                 .h(0.0)
@@ -1673,7 +1761,17 @@ mod tests {
                 .child(Element::new().w("100%").h(36.0).bg([0.2, 0.2, 0.2, 1.0]))
                 .child(Element::new().w("100%").h(80.0).bg([0.3, 0.3, 0.3, 1.0]))
                 .into();
-            let frame = command_overlay_frame(open, oz, inner);
+            let presence = use_floating_presence("cmd-overlay-gallery-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                inner,
+                "cmd-overlay-gallery-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
             let host = Element::new()
                 .w(0.0)
                 .h(0.0)

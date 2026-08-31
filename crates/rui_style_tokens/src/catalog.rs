@@ -189,7 +189,7 @@ pub enum KnownUtility<'a> {
     PeerMarker {
         name: Option<&'a str>,
     },
-    /// Tailwind `box-border` → `box-sizing: border-box`（RUI 默认）。
+    /// Tailwind `box-border` → `box-sizing: border-box`（RUI default）。
     BoxBorder,
     /// Tailwind `box-content` → `box-sizing: content-box`。
     BoxContent,

@@ -15,15 +15,15 @@
 //!     ├── DropdownMenuGroup
 //!     └── DropdownMenuSub
 //!         ├── DropdownMenuSubTrigger  // chevron-right；悬停打开
-//!         └── DropdownMenuSubContent  // 右侧嵌套菜单
+//! └── DropdownMenuSubContent // Nested menu on the right
 //! ```
 //!
-//! `ui!` 中 `<DropdownMenu>` / `<DropdownMenuContent>` / `<DropdownMenuRadioGroup>` 由宏展开。
-//! Builder [`dropdown_menu`]（别名 [`dropdown`]）仍可用。
+//! `<DropdownMenu>` / `<DropdownMenuContent>` / `<DropdownMenuRadioGroup>` in `ui!` are expanded by macros.
+//! Builder [`dropdown_menu`] (alias [`dropdown`]) is still available.
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐；宏走 dropdown_menu_scope）
+//! // A. Composite RSX (recommended; macro go dropdown_menu_scope)
 //! ui! {
 //!     <DropdownMenu id="dd">
 //!         <DropdownMenuTrigger>
@@ -43,14 +43,14 @@
 //!     </DropdownMenu>
 //! }
 //!
-//! // B. Builder（便捷入口）
+//! // B. Builder (convenient entrance)
 //! dropdown_menu("dd", || button("t").text("Open").into(), || {
 //!     /* menu body Element */
 //! })
 //! ```
 //!
-//! ## 注意
-//! - 打开后 ↑↓ / Home / End 走 roving；Enter / Space 激活高亮项；Esc 经 overlay 栈关闭。
+//! ## Notes
+//! - When open, ↑↓ / Home / End use roving; Enter/Space activate the highlighted item; Esc closes via the overlay stack.
 //! - 未传 `open` 时用内部信号 `{id}__dd_open`；多实例请保证 `id` 唯一。
 //! - 与 ContextMenu 的差异：左键切换、始终相对 Trigger 锚点（无鼠标原点）。
 //! - 本模块是**菜单**（命令/勾选/单选），不是 Select 类选项列表。
@@ -63,8 +63,11 @@ use std::sync::OnceLock;
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -118,7 +121,7 @@ const ACTIVE_NONE: usize = usize::MAX;
 // Context
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id` + 触发器锚点 + roving 高亮。
+/// Root context: `open` + stable instance `id` + trigger anchor + roving highlight.
 #[derive(Clone)]
 pub struct DropdownMenuCtx {
     pub open: Signal<bool>,
@@ -245,7 +248,7 @@ fn open_or_remount_sub_ex(sub_id: &str, sub_open: Signal<bool>, refresh_hover: b
     subtree::open_or_remount_sub_ex(sub_id, sub_open, refresh_hover);
 }
 
-/// 读取最近的 [`DropdownMenu`] 上下文。
+/// Read the most recent [`DropdownMenu`] context.
 pub fn use_dropdown_menu() -> Option<DropdownMenuCtx> {
     use_context(dropdown_menu_context())
 }
@@ -480,7 +483,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                     return false;
                 }
                 if let Some(cb) = take_activate(&menu_id, ix) {
-                    // Close is owned by each activate (Item/Radio)；Checkbox 不关。
+                    // Close is owned by each activate (Item/Radio); Checkbox is not closed.
                     // SubTrigger open + move highlight into the submenu first row.
                     cb();
                     if let Some(sid) = dropdown_menu_open_sub_id(&menu_id) {
@@ -569,10 +572,12 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
 /// `DropdownMenuContent` 选项（`ui!` / [`dropdown_menu_content`] 共用）。
 #[derive(Clone, Debug)]
 pub struct DropdownMenuContentOpts {
-    /// `bottom-start` / `right` / …（默认 `bottom-start`）。
+    /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
-    /// 额外 class（utility）。
+    /// Extra class (utility).
     pub class: Option<String>,
+    /// 面板动效；默认 Expand（从上到下展开）。Fade 可显式传入。
+    pub(crate) motion: FloatingMotionKind,
 }
 
 impl Default for DropdownMenuContentOpts {
@@ -580,12 +585,24 @@ impl Default for DropdownMenuContentOpts {
         Self {
             placement: "bottom-start".into(),
             class: None,
+            motion: FloatingMotionKind::Expand,
+        }
+    }
+}
+
+impl DropdownMenuContentOpts {
+    /// `ui!` / 宏入口：只暴露 placement / class；`motion` 保持 crate 内默认 Expand。
+    pub fn new(placement: impl Into<String>, class: Option<String>) -> Self {
+        Self {
+            placement: placement.into(),
+            class,
+            motion: FloatingMotionKind::Expand,
         }
     }
 }
 
 /// solid-ui / shadcn `DropdownMenuContent`：Portal + floating 面板。
-/// `ui!` 中由宏编成此函数（子树在打开时惰性重建）。
+/// `ui!` lowers to this function via the macro (subtree rebuilt lazily when open).
 pub fn dropdown_menu_content(
     opts: DropdownMenuContentOpts,
     body: impl Fn() -> Element + 'static,
@@ -602,16 +619,25 @@ pub fn dropdown_menu_content(
         PopupPlacement::from_attr(&opts.placement)
     };
     let class = opts.class.filter(|s| !s.trim().is_empty());
+    let motion = opts.motion;
     let view_id = format!("{id}__dd_view");
+    let presence = use_floating_presence(&id, motion);
 
     reactive_anchor(view_id.clone(), move || {
-        let is_open = open.get();
-        let Some(oz) = portal_sync(&id, open, OverlayKind::Menu, OverlayMode::Stacked) else {
+        let Some((phase, oz)) = floating_portal_phase(
+            &id,
+            open,
+            &presence,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
+            if !open.peek() {
+                close_open_subs(&menu_id);
+            }
             return Element::new().w(0.0).h(0.0);
         };
-        if !is_open {
+        if !open.peek() {
             close_open_subs(&menu_id);
-            return Element::new().w(0.0).h(0.0);
         }
 
         reset_activates(&menu_id);
@@ -662,6 +688,19 @@ pub fn dropdown_menu_content(
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
         apply_stored_floating_place(&mut panel, &id);
+        if apply_floating_panel_motion(
+            &id,
+            &mut panel,
+            motion,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
@@ -792,7 +831,7 @@ pub fn DropdownMenuCheckboxItem(
     let active = ctx.active;
     let menu_id = ctx.id.clone();
     let ix = activate_count(&ctx.id);
-    // 全局键：跨 Content 开关存活。勿用 use_scoped_signal——关菜单 dispose 后 paint sync 仍可能 peek。
+    // Global key: survives across Content open/close. Do not use use_scoped_signal — after menu dispose, paint sync may still peek.
     let check = checked.unwrap_or_else(|| {
         use_signal(
             format!("{}__cbox{}__menu_cbox", ctx.id, ix).as_str(),
@@ -906,7 +945,7 @@ fn require_dropdown_menu_radio_group(part: &str) -> DropdownMenuRadioGroupCtx {
     })
 }
 
-/// solid-ui / shadcn `DropdownMenuRadioGroup`：包裹一组 [`DropdownMenuRadioItem`]。
+/// solid-ui/shadcn `DropdownMenuRadioGroup`: Wraps a group of [`DropdownMenuRadioItem`].
 pub fn dropdown_menu_radio_group(
     id: Option<String>,
     value: Option<Signal<String>>,
@@ -974,7 +1013,7 @@ pub fn DropdownMenuRadioItem(
             if disabled {
                 return;
             }
-            // 先写值再关：全局 radio 信号跨 Content 存活；try_set 防极端 dispose 竞态。
+            // Set value before close: global radio signal survives across Content; try_set guards extreme dispose races.
             let _ = group_value.try_set(item_value.clone());
             open.set(false);
             on_click.borrow_mut().call(());
@@ -1075,7 +1114,7 @@ fn require_dropdown_menu_sub(part: &str) -> DropdownMenuSubCtx {
     })
 }
 
-/// solid-ui / shadcn `DropdownMenuSub`：包裹 SubTrigger + SubContent。
+/// solid-ui/shadcn `DropdownMenuSub`: wraps SubTrigger + SubContent.
 pub fn dropdown_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> Element {
     let parent = require_dropdown_menu("DropdownMenuSub");
     let seq = next_sub_seq(&parent.id);
@@ -1218,6 +1257,15 @@ pub fn dropdown_menu_sub_content(
     class: Option<String>,
     body: impl Fn() -> Element + 'static,
 ) -> Element {
+    dropdown_menu_sub_content_ex(class, FloatingMotionKind::Expand, body)
+}
+
+/// SubContent with animation type (Menubar passes Expand).
+pub(crate) fn dropdown_menu_sub_content_ex(
+    class: Option<String>,
+    motion: FloatingMotionKind,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
     let parent = require_dropdown_menu("DropdownMenuSubContent");
     let sub = require_dropdown_menu_sub("DropdownMenuSubContent");
     let parent_open = parent.open;
@@ -1226,11 +1274,10 @@ pub fn dropdown_menu_sub_content(
     let trigger_fid = sub.trigger_fid;
     let class = class.filter(|s| !s.trim().is_empty());
     let view_id = format!("{sid}__view");
+    let presence = use_floating_presence(&sid, motion);
 
     reactive_anchor(view_id.clone(), move || {
         let parent_is_open = parent_open.get();
-        let is_open = sub_open.get();
-        // Remount bump from SubTrigger hover/click (same-value open would not re-run).
         let remount_n = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
         if !parent_is_open {
             if sub_open.peek() {
@@ -1238,15 +1285,24 @@ pub fn dropdown_menu_sub_content(
             }
             use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
+            let _ = floating_portal_phase(
+                &sid,
+                sub_open,
+                &presence,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+            );
             return Element::new().w(0.0).h(0.0);
         }
-        if !is_open {
+        let Some((phase, oz)) = floating_portal_phase(
+            &sid,
+            sub_open,
+            &presence,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
             use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
-            let _ = portal_sync(&sid, sub_open, OverlayKind::Menu, OverlayMode::Stacked);
-            return Element::new().w(0.0).h(0.0);
-        }
-        let Some(oz) = portal_sync(&sid, sub_open, OverlayKind::Menu, OverlayMode::Stacked) else {
             log::debug!(
                 target: "rui::menu_sub",
                 "sub_content portal_sync NONE sid={sid} parent_open={parent_is_open} remount={remount_n}"
@@ -1308,6 +1364,19 @@ pub fn dropdown_menu_sub_content(
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
         apply_stored_floating_place(&mut panel, &sid);
+        if apply_floating_panel_motion(
+            &sid,
+            &mut panel,
+            motion,
+            phase,
+            &presence,
+            sub_open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         let mounted = mount_anchored_overlay(panel, oz.panel);
         log::debug!(
             target: "rui::menu_sub",
@@ -1426,7 +1495,7 @@ pub fn DropdownMenuShortcut(children: Option<Element>) -> Element {
     el
 }
 
-/// solid-ui / shadcn `DropdownMenuGroup`：分组容器。
+/// solid-ui/shadcn `DropdownMenuGroup`: Group container.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DropdownMenuGroup(children: Option<Element>) -> Element {
@@ -1445,7 +1514,7 @@ pub fn DropdownMenuGroup(children: Option<Element>) -> Element {
 // Builder
 // ---------------------------------------------------------------------------
 
-/// 与 [`DropdownMenuBuilder`] 相同（历史别名）。
+/// Same as [`DropdownMenuBuilder`] (historical alias).
 pub type DropdownBuilder = DropdownMenuBuilder;
 
 pub struct DropdownMenuBuilder {
@@ -1473,7 +1542,7 @@ pub fn dropdown_menu(
     }
 }
 
-/// 历史别名：请优先用 [`dropdown_menu`]。
+/// Historical aliases: Please use [`dropdown_menu`] first.
 pub fn dropdown(
     id: impl Into<String>,
     trigger: impl Fn() -> Element + 'static,
@@ -1525,6 +1594,7 @@ impl From<DropdownMenuBuilder> for Element {
                 DropdownMenuContentOpts {
                     placement: side,
                     class: None,
+                    motion: FloatingMotionKind::Expand,
                 },
                 move || menu(),
             );

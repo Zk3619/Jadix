@@ -43,17 +43,34 @@ fn prelude_badge_dual_surface_compiles() {
 }
 
 #[test]
+fn prelude_kbd_dual_surface_compiles() {
+    let _b: Element = kbd().text("⌘").into();
+    let _g: Element = kbd_group().kbd("Ctrl").kbd("K").into();
+    let el = ui! {
+        <HStack gap="0.5rem" items="center">
+            <Kbd>"⌘"</Kbd>
+            <KbdGroup>
+                <Kbd>"Ctrl"</Kbd>
+                <Kbd>"K"</Kbd>
+            </KbdGroup>
+            { Element::from(kbd().text("Esc")) }
+        </HStack>
+    };
+    let _: Element = el;
+}
+
+#[test]
 fn prelude_aspect_ratio_dual_surface_compiles() {
     let _b: Element = aspect_ratio().ratio(16.0 / 9.0).into();
     let el = ui! {
         <HStack gap="0.5rem" w="20rem">
             <AspectRatio ratio="16/9" w="10rem">
-                <div w="100%" h="100%" bg="muted" />
+                <Box w="100%" h="100%" bg="muted" />
             </AspectRatio>
             { Element::from(aspect_ratio().ratio("1/1").child(Element::new().w("100%").h("100%")))
                 .w("6rem") }
             <Image texture="demo" w="6rem" aspect_ratio="4/3" />
-            <div w="6rem" aspect_ratio={1.5} bg="muted" />
+            <Box w="6rem" aspect_ratio={1.5} bg="muted" />
         </HStack>
     };
     let _: Element = el;
@@ -177,6 +194,94 @@ fn prelude_svg_tag_and_builder_compile() {
             <circle cx="50" cy="50" r="20" fill="primary" />
             <path d="M10 80 L90 80" stroke="foreground" fill="none" />
         </svg>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_hover_card_dual_surface_compiles() {
+    let open = use_signal("pre-hc-open", || false);
+    let _b = hover_card("pre-hc-b").open_signal(open).child(|| {
+        let mut frag = Element::new();
+        frag.set_attr("rui_fragment", "1");
+        frag.children(vec![
+            HoverCardTrigger(HoverCardTriggerProps {
+                id: String::new(),
+                open_delay: None,
+                close_delay: None,
+                children: Some(button("pre-hc-btn").variant("link").text("@rui").into()),
+                base: None,
+            }),
+            hover_card_content(HoverCardContentOpts::default(), || {
+                Element::from(label("pre-hc-body").text("Builder hover card"))
+            }),
+        ])
+    });
+    let el = ui! {
+        <HoverCard id="pre-hc-tag" open={open}>
+            <HoverCardTrigger openDelay=10 closeDelay=100>
+                <Button variant="link" size="sm">"@nextjs"</Button>
+            </HoverCardTrigger>
+            <HoverCardContent side="bottom" align="center" sideOffset=4 class="w-64">
+                <Label font_weight=600>"@nextjs"</Label>
+                <Label text_size="0.875" color="muted-foreground">
+                    "The React Framework – created and maintained by @vercel."
+                </Label>
+            </HoverCardContent>
+        </HoverCard>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_input_adornment_dual_surface_compiles() {
+    let _b: Element = input_adornment()
+        .addon(
+            "inline-start",
+            InputAdornmentText(InputAdornmentTextProps {
+                class: None,
+                children: Some(Element::new().text("https://")),
+                base: None,
+                ..Default::default()
+            }),
+        )
+        .child(
+            input("pre-ia-b")
+                .placeholder("example.com")
+                .plain_chrome(true),
+        )
+        .into();
+    let el = ui! {
+        <InputAdornment>
+            <InputAdornmentAddon align="inline-start">
+                <InputAdornmentText>"https://"</InputAdornmentText>
+            </InputAdornmentAddon>
+            <InputAdornmentInput id="pre-ia-t" placeholder="example.com" />
+            <InputAdornmentAddon align="inline-end">
+                <InputAdornmentButton size="xs" variant="ghost">"Go"</InputAdornmentButton>
+            </InputAdornmentAddon>
+        </InputAdornment>
+    };
+    let _: Element = el;
+}
+
+#[test]
+fn prelude_input_otp_dual_surface_compiles() {
+    let _b: Element = input_otp("pre-otp-b").max_length(6).separator_at(3).into();
+    let el = ui! {
+        <InputOTP id="pre-otp-t" maxLength={6}>
+            <InputOTPGroup>
+                <InputOTPSlot index={0} />
+                <InputOTPSlot index={1} />
+                <InputOTPSlot index={2} />
+            </InputOTPGroup>
+            <InputOTPSeparator />
+            <InputOTPGroup>
+                <InputOTPSlot index={3} />
+                <InputOTPSlot index={4} />
+                <InputOTPSlot index={5} />
+            </InputOTPGroup>
+        </InputOTP>
     };
     let _: Element = el;
 }

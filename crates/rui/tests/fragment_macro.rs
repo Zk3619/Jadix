@@ -15,6 +15,43 @@ fn fragment_sets_attr_and_children() {
 }
 
 #[test]
+fn product_component_multi_child_packs_as_fragment_not_vstack() {
+    // ui! children slot is single-root; product components must pack as rui_fragment
+    // (not VStack) so take_packed can hoist row captions without wrong flex direction.
+    use rui::prelude::*;
+
+    let el = ui! {
+        <Button variant="outline">
+            "Search"
+            <Kbd>"⌘"</Kbd>
+        </Button>
+    };
+    // After Button::take_packed, caption + Kbd are siblings on the button row.
+    assert!(
+        el.children
+            .iter()
+            .any(|c| c.text.as_deref() == Some("Search")),
+        "Search caption must be unpacked onto the button"
+    );
+    assert!(
+        el.children.iter().any(|c| {
+            c.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd")
+        }),
+        "Kbd shell must remain intact"
+    );
+    let search = el
+        .children
+        .iter()
+        .find(|c| c.text.as_deref() == Some("Search"))
+        .unwrap();
+    assert_eq!(
+        search.text_style.color,
+        rui::style::parse_text_color("foreground"),
+        "outline caption uses foreground"
+    );
+}
+
+#[test]
 fn into_element_list_flattens_fragment() {
     use rui::core::tree::IntoElementList;
 

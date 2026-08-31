@@ -1,19 +1,19 @@
 //! # Input
 //!
 //! 单行文本输入的 **样式层**：IME、选区、caret、placeholder、invalid，
-//! 以及 HTML 风格的 [`InputType`]。信号键 / 受控绑定 / focus 前缀见 [`crate::utils::text_field`]。
+//! and HTML-style [`InputType`]. See [`crate::utils::text_field`] for signal key / controlled binding / focus prefixes.
 //! 值与光标状态按 `id` 隔离。
 //!
-//! ## 用法
+//! ## Usage
 //! ```ignore
 //! <Input id="email" type="email" clearable=true />
-//! <Input id="pw" type="password" password_toggle=true clearable=true placeholder="密码" />
+//! <Input id="pw" type="password" password_toggle=true clearable=true placeholder="password" />
 //! <Input id="n" type="number" number_steppers=true />
 //! <Input id="q" type="search" clearable=true />
 //! ```
 //!
 //! ## `type`（对齐 HTML `<input type>` 文本族）
-//! | 值 | 行为 |
+//! | value | behavior |
 //! |----|------|
 //! | `text`（默认） | 明文 |
 //! | `password` | 显示为 `•`，底层仍存原文；**禁用 IME**、仅 ASCII；可选 `password_toggle` |
@@ -24,16 +24,16 @@
 //!
 //! ## 可选尾饰
 //! - `clearable`：有内容时显示叉号，点击清空（缺省 `false`）。
-//! - 编辑快捷键（Ctrl/Cmd）：全选 A、复制 C、粘贴 V、剪切 X；Shift+方向键扩展选区。
-//! - `password_toggle`：仅 `type=password`；切换掩码 / 明文（缺省 `false`）。
+//! - Editing shortcut keys (Ctrl/Cmd): Select all A, copy C, paste V, cut X; Shift + arrow keys to expand the selection.
+//! - `password_toggle`: `type=password` only; toggle mask/plaintext (default `false`).
 //! - `number_steppers`：仅 `type=number`；右侧上下增减触发器（solid-ui `NumberField` 风格）；`step` 默认 `1`；可长按连发（缺省 `false`）。
 //!
 //! 选择器类（color / file / date / …）见独立占位组件，不进本 `type`。
 //!
-//! ## 注意
+//! ## Notes
 //! - **必须稳定唯一 `id`**。
-//! - `focus_id` 为 `input:{id}`。
-//! - 显式 `invalid=true` 与类型校验叠加。
+//! - `focus_id` is `input:{id}`.
+//! - Explicit `invalid=true` overlaps with type checking.
 //! - 单行编辑默认 [`crate::style::TextOverflow::Hidden`]（原生 `<input>`：裁切溢出，光标/选区可滚出）。
 //!   `truncate` / `text-overflow: ellipsis|clip|newline` 用于 Label、Button 等不可编辑文本，**不会**作用在 Input 上。
 
@@ -66,7 +66,7 @@ pub(crate) use crate::utils::text_field::{
 
 /// 长按步进：首次按下后延迟再开始连发。
 const NUMBER_STEP_HOLD_DELAY: Duration = Duration::from_millis(400);
-/// 长按连发间隔。
+/// Long press the burst interval.
 const NUMBER_STEP_HOLD_INTERVAL: Duration = Duration::from_millis(50);
 
 struct NumberStepHold {
@@ -83,10 +83,10 @@ thread_local! {
 /// 全局：当前会话是否收到过 IME `Enabled`（用于区分直输与组字）。
 pub const IME_ACTIVE_SIGNAL: &str = "__rui_ime_active";
 
-/// 密码掩码字符（与多数桌面 UI 一致）。
+/// Password mask characters (consistent with most desktop UIs).
 const PASSWORD_MASK: char = '•';
 
-/// 仅参与 cosmic/glyphon 排版，不计入 `Element::text`；行尾薄空格使拉丁度量参与行盒，减轻纯中文 IME 拼音阶段的垂直抖动。
+/// Only participates in cosmic/glyphon typesetting, not included in `Element::text`; thin spaces at the end of lines enable Latin metrics to participate in line boxes, reducing vertical jitter in the pinyin stage of pure Chinese IME.
 ///
 /// Historical shaping probe (U+2009). No longer attached on focus: `input_caret` already
 /// forces Advanced shaping, and the thin space pulled Latin fallbacks that shifted CJK baselines.
@@ -223,7 +223,7 @@ pub fn filter_tel_insert(_existing: &str, insert: &str) -> String {
         .collect()
 }
 
-/// 过滤 `type="email"`：本地部分与域名常用字符（不含空白）。
+/// Filter `type="email"`: common characters in local part and domain name (excluding spaces).
 pub fn filter_email_insert(_existing: &str, insert: &str) -> String {
     insert
         .chars()
@@ -233,7 +233,7 @@ pub fn filter_email_insert(_existing: &str, insert: &str) -> String {
         .collect()
 }
 
-/// 过滤 `type="url"`：可打印 ASCII，去掉空白与控制符。
+/// Filter `type="url"`: print ASCII, remove whitespace and control characters.
 pub fn filter_url_insert(_existing: &str, insert: &str) -> String {
     insert.chars().filter(|c| c.is_ascii_graphic()).collect()
 }
@@ -518,7 +518,7 @@ pub struct InputBuilder {
     input_type: InputType,
     clearable: bool,
     password_toggle: bool,
-    /// `type=number` 时显示增减触发器。
+    /// Show step triggers when `type=number`.
     number_steppers: bool,
     /// `type=number` 步进量；默认 `1`。
     step: f64,
@@ -527,8 +527,10 @@ pub struct InputBuilder {
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
     value: Option<Signal<String>>,
-    /// CSS `text-align`（默认 `start`）。
+    /// CSS `text-align` (default `start`).
     text_align: crate::style::TextAlign,
+    /// 内嵌于 InputAdornment / Command：无自身边框与焦点环。
+    plain_chrome: bool,
 }
 
 /// RSX `<Input>`：见模块文档。
@@ -625,13 +627,14 @@ pub fn input(id: &str) -> InputBuilder {
         password_toggle: false,
         number_steppers: false,
         step: 1.0,
-        // shadcn/ui Input：`text-sm`；类名通常不含 font-medium → 400。
+        // shadcn/ui Input: `text-sm`; class names usually do not contain font-medium → 400.
         text_size_px: 0.875 * 16.0,
         font_weight: 400,
         line_height_px: None,
         leading_scale: None,
         value: None,
         text_align: crate::style::TextAlign::Start,
+        plain_chrome: false,
     }
 }
 
@@ -668,7 +671,7 @@ impl InputBuilder {
         self.number_steppers = v;
         self
     }
-    /// `type=number` 增减步进；≤0 时回退为 `1`。
+    /// `type=number` increases or decreases step; when ≤0, it falls back to `1`.
     pub fn step(mut self, v: impl IntoF32) -> Self {
         let s = v.into_f32() as f64;
         self.step = if s.is_finite() && s > 0.0 { s } else { 1.0 };
@@ -707,8 +710,8 @@ impl InputBuilder {
         self.leading_scale = None;
         self
     }
-    pub fn text_leading(mut self, scale: impl IntoF32) -> Self {
-        self.leading_scale = Some(scale.into_f32());
+    pub fn text_leading(mut self, scale: impl crate::core::tree::IntoF32Raw) -> Self {
+        self.leading_scale = Some(scale.into_f32_raw());
         self.line_height_px = None;
         self
     }
@@ -724,12 +727,12 @@ impl InputBuilder {
     pub fn text_leading_relaxed(self) -> Self {
         self.text_leading(1.625)
     }
-    /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
+    /// Controlled value: see [`crate::utils::text_field::bind_controlled_value`].
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
     }
-    /// CSS `text-align`（如 `"center"` / `"start"` / `"justify"`）。
+    /// CSS `text-align` (like `"center"` / `"start"` / `"justify"`).
     pub fn text_align(mut self, align: impl AsRef<str>) -> Self {
         self.text_align = crate::style::TextAlign::parse(align.as_ref());
         self
@@ -749,8 +752,25 @@ impl InputBuilder {
     pub fn text_overflow(self, _mode: impl Into<crate::style::TextOverflow>) -> Self {
         self
     }
-    pub fn font_weight(mut self, weight: impl IntoF32) -> Self {
-        self.font_weight = weight.into_f32().round() as u16;
+    pub fn font_weight(mut self, weight: impl crate::core::tree::IntoF32Raw) -> Self {
+        self.font_weight = weight.into_f32_raw().round() as u16;
+        self
+    }
+
+    /// 去边框/阴影/焦点环，供 [`crate::components::input_adornment`] / Command 外壳使用。
+    pub fn plain_chrome(mut self, v: bool) -> Self {
+        self.plain_chrome = v;
+        if v {
+            self.container = self
+                .container
+                .rounded(0.0)
+                .w("auto")
+                .h("100%")
+                .flex_grow(1.0)
+                .min_w("0")
+                .px("0.75rem")
+                .py("0.25rem");
+        }
         self
     }
 
@@ -796,7 +816,7 @@ pub(crate) fn input_adornment_button(
     }
 }
 
-/// solid-ui `NumberFieldIncrement/DecrementTrigger`：`size-4` 上下箭头。
+/// solid-ui `NumberFieldIncrement/DecrementTrigger`: `size-4` Up and down arrows.
 pub(crate) fn input_number_step_button(
     template_id: String,
     glyph: String,
@@ -924,6 +944,7 @@ impl From<InputBuilder> for Element {
             resizable: false,
             resize_max_h: 0.0,
             wrap_mode: crate::utils::text_field::TextareaWrapMode::Word,
+            plain_chrome: builder.plain_chrome,
         })
     }
 }

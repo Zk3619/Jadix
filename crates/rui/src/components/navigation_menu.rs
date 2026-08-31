@@ -25,9 +25,9 @@
 //! [`navigation_menu_scope`] / [`navigation_menu_item`] / [`navigation_menu_content`]。
 //! Builder [`navigation_menu`] 仍可用。
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐）
+//! // A. Composite RSX (recommended)
 //! ui! {
 //!     <NavigationMenu id="main">
 //!         <NavigationMenuList>
@@ -75,8 +75,11 @@ use rui_macros::component;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
@@ -92,6 +95,7 @@ use crate::utils::popup::{
 use crate::utils::resolve_instance_id;
 use crate::utils::roving::{focus_by_id, focus_roving_key, FocusRovingAxis};
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::{take_fragment, take_packed};
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_ROOT: &str = "navigation-menu";
@@ -225,29 +229,6 @@ fn require_navigation_menu_item(part: &str) -> NavigationMenuItemCtx {
     })
 }
 
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else if !el.children.is_empty()
-        && el.text.is_none()
-        && el.on_click.is_none()
-        && el.focus_id.is_none()
-    {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
-/// 仅拆 `rui_fragment`；保留 List / Item 等真实布局节点（勿把 List 拆进根 vstack）。
-fn take_fragment_kids(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
@@ -356,7 +337,7 @@ pub fn navigation_menu_scope(
                 viewport,
             },
         );
-        let kids = take_fragment_kids(body());
+        let kids = take_fragment(body());
         // 根壳只包 List（横排）+ 可选 Viewport；不要 flex_grow / w-full 撑破 Navbar 中栏。
         // 勿设 align-self:start：父级是 NavbarCenter(hstack) 时 cross-axis 为竖直，
         // start 会顶对齐并盖掉 items-center（Builder/RSX 均会「上移」）。
@@ -404,7 +385,7 @@ pub struct NavigationMenuContentOpts {
 }
 
 /// shadcn `NavigationMenuContent`：Portal + floating 面板。
-/// `ui!` 中由宏编成此函数（子树在打开时惰性重建）。
+/// `ui!` lowers to this function via the macro (subtree rebuilt lazily when open).
 pub fn navigation_menu_content(
     opts: NavigationMenuContentOpts,
     body: impl Fn() -> Element + 'static,
@@ -420,18 +401,21 @@ pub fn navigation_menu_content(
     let class = opts.class.filter(|s| !s.trim().is_empty());
     let _ = menu.viewport;
     let view_id = format!("{overlay_key}__nm_content_view");
+    let presence = use_floating_presence(&overlay_key, FloatingMotionKind::Expand);
 
     // Portal 内容必须用 0×0 占位（对齐 DropdownMenuContent）；切勿 reactive_view 默认 100%×100%。
     reactive_anchor(view_id.clone(), move || {
         let is_open = expanded.get().as_deref() == Some(value.as_str());
         open.set(is_open);
-        let Some(oz) = portal_sync(&overlay_key, open, OverlayKind::Menu, OverlayMode::Stacked)
-        else {
+        let Some((phase, oz)) = floating_portal_phase(
+            &overlay_key,
+            open,
+            &presence,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
             return Element::new().w(0.0).h(0.0);
         };
-        if !is_open {
-            return Element::new().w(0.0).h(0.0);
-        }
 
         let _guard = enter_content_body();
         let rows = body();
@@ -496,6 +480,19 @@ pub fn navigation_menu_content(
         );
         panel.set_attr("rui_floating_match_trigger", "0");
         panel.set_attr("rui_floating_min_w", "14rem");
+        if apply_floating_panel_motion(
+            &overlay_key,
+            &mut panel,
+            FloatingMotionKind::Expand,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         let panel = panel_block_clicks(panel, oz.panel);
         mount_anchored_overlay(panel, oz.panel)
     });

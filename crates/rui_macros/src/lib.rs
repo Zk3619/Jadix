@@ -36,6 +36,16 @@ fn expr_as_i32(value: &Expr) -> Option<i32> {
     }
 }
 
+/// CSS length / distance（`sideOffset` / blur / height…）：`4` ≡ `"4px"`；无单位字符串 = rem。
+fn quote_length_f32(e: &Expr) -> proc_macro2::TokenStream {
+    quote! { rui::core::tree::IntoF32::into_f32(#e) }
+}
+
+/// 无单位纯数值（字重 / opacity / flex / leading 倍率 / progress 分数…）。
+fn quote_unitless_f32(e: &Expr) -> proc_macro2::TokenStream {
+    quote! { rui::core::tree::IntoF32Raw::into_f32_raw(#e) }
+}
+
 /// HTML-ish bool attrs: `true` / `"true"` / `"1"` / `"yes"` / `"on"` (and false counterparts).
 fn parse_bool_str(raw: &str) -> Option<bool> {
     match raw.trim().to_ascii_lowercase().as_str() {
@@ -865,21 +875,26 @@ fn expand_node(
                 name_str == "Tabs" && !el.attributes.iter().any(|(k, _)| k == "count");
             let accordion_is_compound = name_str == "Accordion";
             let collapsible_is_compound = name_str == "Collapsible";
+            let input_otp_is_compound = name_str == "InputOTP";
             let carousel_is_compound = matches!(
                 name_str.as_str(),
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
             );
-            // 复合壳若只需 `*Props`（无 scope）：Pagination / Navbar / Badge / Card /
-            // ButtonGroup / Breadcrumb 等走下方通用 PascalCase 展开，勿加入本特殊列表。
+            // Presentational shells that only need `*Props` (no scope): Pagination / Navbar /
+            // Badge / Card / ButtonGroup / Breadcrumb / Kbd / KbdGroup — use the generic
+            // PascalCase expansion below; do not add them to this special-case list.
             if name_str == "Reactive"
                 || name_str == "Show"
                 || name_str == "Popover"
                 || name_str == "PopoverContent"
+                || name_str == "HoverCard"
+                || name_str == "HoverCardContent"
                 || name_str == "Progress"
                 || name_str == "Bubble"
                 || name_str == "Avatar"
                 || name_str == "Accordion"
                 || name_str == "Collapsible"
+                || input_otp_is_compound
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
                 || name_str == "DialogContent"
@@ -979,7 +994,7 @@ fn expand_node(
                         quote! { None }
                     };
                     let default_ts = if let Some(v) = value_lit {
-                        quote! { (#v) as f32 }
+                        quote_unitless_f32(v)
                     } else {
                         quote! { 0.0f32 }
                     };
@@ -1275,6 +1290,100 @@ fn expand_node(
                     };
                 }
 
+                if input_otp_is_compound {
+                    // ShadCN compound InputOTP：先 provide context 再构建 Group/Slot/Separator。
+                    let id_expr = get_attr("id");
+                    let max_expr = get_attr("max_length").or_else(|| get_attr("maxLength"));
+                    let value_expr = get_attr("value")
+                        .or_else(|| get_attr("value_signal"))
+                        .or_else(|| get_attr("valueSignal"));
+                    let disabled_expr = get_attr("disabled");
+                    let invalid_expr = get_attr("invalid");
+                    let pattern_expr = get_attr("pattern");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:InputOTP#{}", file!(), line!(), #idx) }
+                    };
+                    let max_ts = if let Some(m) = max_expr {
+                        quote! { (#m) as usize }
+                    } else {
+                        quote! { 6usize }
+                    };
+                    let value_ts = if let Some(v) = value_expr {
+                        quote! { Some(#v) }
+                    } else {
+                        quote! { None }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let invalid_ts = if let Some(d) = invalid_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let pattern_ts = if let Some(p) = pattern_expr {
+                        quote! {
+                            rui::components::InputOtpPattern::parse(&(#p).to_string())
+                        }
+                    } else {
+                        quote! { rui::components::InputOtpPattern::Digits }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::input_otp_scope(
+                            #id_ts,
+                            #max_ts,
+                            #value_ts,
+                            #disabled_ts,
+                            #invalid_ts,
+                            #pattern_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
                 if name_str == "ResizablePanelGroup" {
                     let id_expr = get_attr("id");
                     let ori_expr = get_attr("orientation");
@@ -1323,7 +1432,8 @@ fn expand_node(
                         quote! { None }
                     };
                     let height_ts = if let Some(h) = h_expr {
-                        quote! { Some((#h) as f32) }
+                        let px = quote_length_f32(h);
+                        quote! { Some(#px) }
                     } else {
                         quote! { None }
                     };
@@ -1385,6 +1495,50 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::popover_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "HoverCard" {
+                    // Provide context *before* Trigger/Content (eager props order).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        // Fragment so Trigger can sit beside Content without an extra column.
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:HoverCard#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::hover_card_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -2325,7 +2479,7 @@ fn expand_node(
                         quote! { true }
                     };
                     let per_view_ts = if let Some(p) = per_view_expr {
-                        quote! { (#p) as f32 }
+                        quote_unitless_f32(p)
                     } else {
                         default_per_view
                     };
@@ -2571,7 +2725,10 @@ fn expand_node(
                         .unwrap_or_else(|| quote! { None });
                     let overlay_opacity = get_attr("overlay_opacity")
                         .or_else(|| get_attr("overlayOpacity"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_unitless_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let close_on_overlay = get_attr("close_on_overlay_click")
                         .or_else(|| get_attr("closeOnOverlayClick"))
@@ -2581,7 +2738,10 @@ fn expand_node(
                         .or_else(|| get_attr("overlayBlur"))
                         .or_else(|| get_attr("backdrop_blur"))
                         .or_else(|| get_attr("backdropBlur"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_length_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
@@ -2641,7 +2801,10 @@ fn expand_node(
                         .unwrap_or_else(|| quote! { None });
                     let overlay_opacity = get_attr("overlay_opacity")
                         .or_else(|| get_attr("overlayOpacity"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_unitless_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let close_on_overlay = get_attr("close_on_overlay_click")
                         .or_else(|| get_attr("closeOnOverlayClick"))
@@ -2651,7 +2814,10 @@ fn expand_node(
                         .or_else(|| get_attr("overlayBlur"))
                         .or_else(|| get_attr("backdrop_blur"))
                         .or_else(|| get_attr("backdropBlur"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_length_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let width = get_attr("w")
                         .or_else(|| get_attr("width"))
@@ -2740,7 +2906,10 @@ fn expand_node(
                         .unwrap_or_else(|| quote! { None });
                     let overlay_opacity = get_attr("overlay_opacity")
                         .or_else(|| get_attr("overlayOpacity"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_unitless_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let close_on_overlay = get_attr("close_on_overlay_click")
                         .or_else(|| get_attr("closeOnOverlayClick"))
@@ -2750,7 +2919,10 @@ fn expand_node(
                         .or_else(|| get_attr("overlayBlur"))
                         .or_else(|| get_attr("backdrop_blur"))
                         .or_else(|| get_attr("backdropBlur"))
-                        .map(|e| quote! { Some((#e) as f32) })
+                        .map(|e| {
+                            let v = quote_length_f32(e);
+                            quote! { Some(#v) }
+                        })
                         .unwrap_or_else(|| quote! { None });
                     let width = get_attr("w")
                         .or_else(|| get_attr("width"))
@@ -2866,7 +3038,7 @@ fn expand_node(
                         .unwrap_or_else(|| quote! { "center".to_string() });
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
-                        .map(|e| quote! { (#e) as f32 })
+                        .map(|e| quote_length_f32(e))
                         .unwrap_or_else(|| quote! { 4.0f32 });
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
@@ -2909,6 +3081,62 @@ fn expand_node(
                                 side_offset: #side_offset,
                                 class: #class,
                                 strategy: #strategy,
+                                width: #width,
+                            },
+                            move || #child_el,
+                        )
+                    };
+                }
+
+                if name_str == "HoverCardContent" {
+                    let side = get_attr("side")
+                        .or_else(|| get_attr("placement"))
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "bottom".to_string() });
+                    let align = get_attr("align")
+                        .map(|e| quote! { (#e).to_string() })
+                        .unwrap_or_else(|| quote! { "center".to_string() });
+                    let side_offset = get_attr("side_offset")
+                        .or_else(|| get_attr("sideOffset"))
+                        .map(|e| quote_length_f32(e))
+                        .unwrap_or_else(|| quote! { 4.0f32 });
+                    let class = get_attr("class")
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let width = get_attr("width")
+                        .or_else(|| get_attr("w"))
+                        .map(|e| quote! { Some((#e).to_string()) })
+                        .unwrap_or_else(|| quote! { None });
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        // Body is rebuilt inside hover_card_content's reactive_anchor.
+                        expanded_children.push(expand_node(child, node_counter, true));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                if __list.len() == 1 {
+                                    __list.remove(0)
+                                } else {
+                                    let mut __v = rui::primitives::vstack();
+                                    __v = __v.children(__list);
+                                    rui::core::tree::Element::from(__v)
+                                }
+                            }
+                        }
+                    };
+                    return quote! {
+                        rui::components::hover_card_content(
+                            rui::components::HoverCardContentOpts {
+                                side: #side,
+                                align: #align,
+                                side_offset: #side_offset,
+                                class: #class,
                                 width: #width,
                             },
                             move || #child_el,
@@ -3273,10 +3501,7 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::dropdown_menu_content(
-                            rui::components::DropdownMenuContentOpts {
-                                placement: #placement,
-                                class: #class,
-                            },
+                            rui::components::DropdownMenuContentOpts::new(#placement, #class),
                             move || #child_el,
                         )
                     };
@@ -4120,7 +4345,6 @@ fn expand_node(
                     "Icon",
                     "AnimatedIcon",
                     "Box",
-                    "Div",
                     "Text",
                     "Interactive",
                     "Svg",
@@ -4797,7 +5021,7 @@ fn expand_node(
                                 Some("normal") => quote! { b = b.leading_normal(); },
                                 Some("relaxed") => quote! { b = b.leading_relaxed(); },
                                 _ => {
-                                    quote! { b = b.leading(rui::core::tree::IntoF32::into_f32(#value)); }
+                                    quote! { b = b.leading(rui::core::tree::IntoF32Raw::into_f32_raw(#value)); }
                                 }
                             };
                             base_calls.push(call);
@@ -4970,16 +5194,21 @@ fn expand_node(
                                 "numberSteppers" => {
                                     syn::Ident::new("number_steppers", attr.span())
                                 }
+                                "maxLength" => syn::Ident::new("max_length", attr.span()),
                                 // Calendar / DatePicker / ColorPicker / Command（Aria + Reader）
                                 "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
                                 "valueSignal" => syn::Ident::new("value_signal", attr.span()),
                                 "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
                                 "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
-                                // Popover / Tooltip / floating
+                                // Popover / Tooltip / HoverCard / floating
                                 "openSignal" => syn::Ident::new("open_signal", attr.span()),
                                 "sideOffset" => syn::Ident::new("side_offset", attr.span()),
                                 "alignOffset" => syn::Ident::new("align_offset", attr.span()),
                                 "anchorFocusId" => syn::Ident::new("anchor_focus_id", attr.span()),
+                                // HoverCard Trigger：`delay` ≡ `openDelay`（对位 PreviewCard demo）
+                                "openDelay" => syn::Ident::new("open_delay", attr.span()),
+                                "closeDelay" => syn::Ident::new("close_delay", attr.span()),
+                                "delay" => syn::Ident::new("open_delay", attr.span()),
                                 // Resizable
                                 "withHandle" => syn::Ident::new("with_handle", attr.span()),
                                 "defaultSize" => syn::Ident::new("default_size", attr.span()),
@@ -5025,6 +5254,26 @@ fn expand_node(
                                 quote! { Some(rui::core::reactivity::untrack(|| (#value).into())) }
                             } else {
                                 quote! { Some((#value).into()) }
+                            }
+                        } else if matches!(final_attr_name.as_str(), "open_delay" | "close_delay") {
+                            // Unsuffixed `{10}` → u64（不必写 `10_u64`）；与 Carousel autoplay 一致。
+                            if expr_reads_get(value) {
+                                quote! { Some(rui::core::reactivity::untrack(|| (#value) as u64)) }
+                            } else {
+                                quote! { Some((#value) as u64) }
+                            }
+                        } else if matches!(
+                            final_attr_name.as_str(),
+                            "side_offset" | "align_offset"
+                        ) {
+                            // Length：`4` ≡ `"4px"`；无单位字符串 = rem。
+                            let v = quote_length_f32(value);
+                            if expr_reads_get(value) {
+                                quote! {
+                                    Some(rui::core::reactivity::untrack(|| { #v }))
+                                }
+                            } else {
+                                quote! { Some(#v) }
                             }
                         } else if expr_reads_get(value) {
                             // Avoid subscribing the parent effect during props construction.
@@ -5077,7 +5326,9 @@ fn expand_node(
                             in_reactive_boundary,
                         ));
                     }
-                    // 多子节点默认包进 VStack（组件 children 槽是单根）；布局原语 HStack/VStack/GStack 走下方 primitive 路径。
+                    // Multi-child → `rui_fragment` (single-root children slot). Layout
+                    // primitives HStack/VStack/GStack use the primitive path below.
+                    // Runtime unpacks via `rui::utils::take_packed` / `take_fragment`.
                     if expanded_children.len() == 1 {
                         let first = &expanded_children[0];
                         children_expr = quote! {
@@ -5087,9 +5338,9 @@ fn expand_node(
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
-                                    let mut __v = rui::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    rui::core::tree::Element::from(__v)
+                                    let mut __frag = rui::core::tree::Element::new();
+                                    __frag.set_attr("rui_fragment", "1");
+                                    __frag.children(__list)
                                 }
                             })
                         };
@@ -5102,9 +5353,9 @@ fn expand_node(
                                 if __list.len() == 1 {
                                     __list.remove(0)
                                 } else {
-                                    let mut __v = rui::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    rui::core::tree::Element::from(__v)
+                                    let mut __frag = rui::core::tree::Element::new();
+                                    __frag.set_attr("rui_fragment", "1");
+                                    __frag.children(__list)
                                 }
                             })
                         };
@@ -5166,8 +5417,8 @@ fn expand_node(
                     "HStack" => quote! { rui::primitives::hstack() },
                     // Grid 为 GStack 的 HTML/Solid 风格别名。
                     "GStack" | "Grid" => quote! { rui::primitives::gstack() },
-                    // Layout container (HTML-ish). `Rect` is SVG — use `<div>` / `<Div>` / `<Box>`.
-                    "Box" | "Div" | "div" => quote! { rui::primitives::div() },
+                    // Layout container. `Rect` is SVG — use `<Box>`.
+                    "Box" => quote! { rui::primitives::r#box() },
                     "Interactive" => {
                         quote! { rui::primitives::interactive(rui::core::tree::Element::new()) }
                     }
@@ -5400,8 +5651,6 @@ fn expand_node(
                         "ScrollArea"
                             | "ScrollViewport"
                             | "Box"
-                            | "Div"
-                            | "div"
                             | "VStack"
                             | "HStack"
                             | "GStack"
@@ -5927,7 +6176,10 @@ fn expand_node(
                         }
                     }
                     "font_weight" | "text_weight" => {
-                        element = quote! { #element.font_weight(rui::core::tree::IntoF32::into_f32(#value)) }
+                        // Unitless（Tailwind `font-[600]`）；走 IntoF32Raw，勿用长度 rem 路径。
+                        element = quote! {
+                            #element.font_weight(rui::core::tree::IntoF32Raw::into_f32_raw(#value))
+                        }
                     }
                     "underline" => element = quote! { #element.underline(#value) },
                     "text_decoration" | "textDecoration" | "decoration" => {
@@ -6004,9 +6256,11 @@ fn expand_node(
                                 element = quote! { #element.text_leading_relaxed() }
                             }
                         } else if is_custom {
-                            element = quote! { #element.leading(rui::core::tree::IntoF32::into_f32(#value)) }
+                            let v = quote_unitless_f32(value);
+                            element = quote! { #element.leading(#v) }
                         } else {
-                            element = quote! { #element.text_leading(rui::core::tree::IntoF32::into_f32(#value)) }
+                            let v = quote_unitless_f32(value);
+                            element = quote! { #element.text_leading(#v) }
                         }
                     }
                     "size" => {
@@ -6559,20 +6813,20 @@ mod rsx_lowering_tests {
     #[test]
     fn match_when_emits_match_when_reactive() {
         let s = expand(
-            r#"<Match fallback={fallback}><MatchArm when={ok.get()}><div></div></MatchArm></Match>"#,
+            r#"<Match fallback={fallback}><MatchArm when={ok.get()}><Box></Box></MatchArm></Match>"#,
         );
         assert!(s.contains("match_when_reactive"), "{s}");
     }
 
     #[test]
     fn reactive_island_emits_bind_text() {
-        let s = expand(r#"<Reactive id={"isle"}><div>{ label.get() }</div></Reactive>"#);
+        let s = expand(r#"<Reactive id={"isle"}><Box>{ label.get() }</Box></Reactive>"#);
         assert!(s.contains("bind_text"), "{s}");
     }
 
     #[test]
     fn unknown_attr_emits_bind_attr() {
-        let s = expand("<div data_status={status.get()} />");
+        let s = expand("<Box data_status={status.get()} />");
         assert!(s.contains("bind_attr"), "{s}");
         assert!(s.contains("apply_bound_attr"), "{s}");
     }
@@ -6580,7 +6834,7 @@ mod rsx_lowering_tests {
     #[test]
     fn animation_play_state_get_emits_bind_prop() {
         let s = expand(
-            r#"<div animation="1s linear infinite spin" animation_play_state={ if play.get() { "running" } else { "paused" } } />"#,
+            r#"<Box animation="1s linear infinite spin" animation_play_state={ if play.get() { "running" } else { "paused" } } />"#,
         );
         assert!(s.contains("bind_prop"), "{s}");
         assert!(s.contains("apply_bound_animation_play_state"), "{s}");
@@ -6589,16 +6843,64 @@ mod rsx_lowering_tests {
     #[test]
     fn for_key_fallback_emits_keyed_with_fallback() {
         let s = expand(
-            r#"<For each={items.get()} key={*item} item={item} fallback={empty}><div></div></For>"#,
+            r#"<For each={items.get()} key={*item} item={item} fallback={empty}><Box></Box></For>"#,
         );
         assert!(s.contains("for_keyed_reactive_with_fallback"), "{s}");
     }
 
     #[test]
     fn with_emits_bind_text_peek_does_not() {
-        let with_s = expand("<div>{ label.with(|s| s.clone()) }</div>");
+        let with_s = expand("<Box>{ label.with(|s| s.clone()) }</Box>");
         assert!(with_s.contains("bind_text"), "{with_s}");
-        let peek_s = expand("<div>{ label.peek() }</div>");
+        let peek_s = expand("<Box>{ label.peek() }</Box>");
         assert!(!peek_s.contains("bind_text"), "{peek_s}");
+    }
+
+    #[test]
+    fn hover_card_delay_casts_unsuffixed_int_to_u64() {
+        let s = expand(r#"<HoverCardTrigger openDelay={10} closeDelay={100}></HoverCardTrigger>"#);
+        assert!(s.contains("as u64"), "{s}");
+        assert!(s.contains("open_delay"), "{s}");
+        assert!(s.contains("close_delay"), "{s}");
+        // Must not rely on `.into()` alone (unsuffixed int → u64 fails).
+        assert!(!s.contains("open_delay : Some ((10) . into ())"), "{s}");
+    }
+
+    #[test]
+    fn hover_card_side_offset_uses_into_f32() {
+        let s = expand(r#"<HoverCardContent sideOffset={4}></HoverCardContent>"#);
+        assert!(s.contains("IntoF32"), "{s}");
+        assert!(s.contains("side_offset"), "{s}");
+        let s_px = expand(r#"<HoverCardContent sideOffset="4px"></HoverCardContent>"#);
+        assert!(s_px.contains("IntoF32"), "{s_px}");
+        let s_rem = expand(r#"<HoverCardContent sideOffset="0.25"></HoverCardContent>"#);
+        assert!(s_rem.contains("IntoF32"), "{s_rem}");
+    }
+
+    #[test]
+    fn bare_lit_number_and_bool_attrs_parse() {
+        let s = expand(
+            r#"<HoverCardTrigger openDelay=10 closeDelay=100></HoverCardTrigger>"#,
+        );
+        assert!(s.contains("as u64"), "{s}");
+        let s2 = expand(r#"<HoverCardContent sideOffset=4></HoverCardContent>"#);
+        assert!(s2.contains("IntoF32"), "{s2}");
+        let s3 = expand(r#"<Label font_weight=600 text_size="0.875"></Label>"#);
+        assert!(s3.contains("font_weight (600)") || s3.contains("font_weight(600)"), "{s3}");
+        assert!(s3.contains("0.875"), "{s3}");
+    }
+
+    #[test]
+    fn length_attrs_use_into_f32_unitless_use_raw() {
+        let blur = expand(r#"<DialogContent overlayBlur="4px" overlayOpacity=0.5></DialogContent>"#);
+        assert!(blur.contains("IntoF32"), "{blur}");
+        assert!(blur.contains("IntoF32Raw") || blur.contains("into_f32_raw"), "{blur}");
+        let h = expand(r#"<ResizablePanelGroup h="12rem"></ResizablePanelGroup>"#);
+        assert!(h.contains("IntoF32"), "{h}");
+        let lead = expand(r#"<Box leading=1.5></Box>"#);
+        assert!(
+            lead.contains("into_f32_raw") || lead.contains("IntoF32Raw"),
+            "{lead}"
+        );
     }
 }

@@ -1,10 +1,10 @@
-//! # Combobox（ShadCN React Aria 可过滤下拉）
+//! # Combobox (ShadCN React Aria can filter the drop-down)
 //!
-//! 产品面与样式对齐 shadcn/ui **React Aria** 基座
+//! Product surface & styles align with shadcn/ui **React Aria** base
 //! ([`combobox.tsx`](https://github.com/shadcn-ui/ui/blob/main/apps/v4/registry/bases/aria/ui/combobox.tsx)
 //! + `cn-combobox-*` / `cn-combobox-*-aria`)，浮层 chrome / 选项行与 [`super::select`] 一致。
 //!
-//! ## 用法（复合 / 类前端）
+//! ## Usage (composite/class front end)
 //!
 //! ```ignore
 //! ui! {
@@ -26,13 +26,13 @@
 //! }
 //! ```
 //!
-//! ## 用法（Builder 便捷入口）
+//! ## Usage (Builder convenient entrance)
 //!
 //! ```ignore
 //! Element::from(
 //!     combobox("city")
 //!         .value_signal(city)
-//!         .placeholder("搜索城市…")
+//! .placeholder("Search city...")
 //!         .clearable(true)
 //!         .group(
 //!             ComboboxGroupData::new("east")
@@ -44,7 +44,7 @@
 //! )
 //! ```
 //!
-//! ## 行为要点
+//! ## Behavioral points
 //! - **选中值**与**输入/过滤文案**分离：选中后框内显示完整 label，不是 value id。
 //! - 打开且输入文案仍等于当前 label 时列出全部项，便于切换；开始编辑后按 label 过滤。
 //! - 关闭时若输入为空则清空选中；否则把输入恢复为当前选中项的 label。
@@ -53,11 +53,14 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::button::button;
 use crate::components::input::{
     input, input_adornment_button, input_value_signal_key, lucide_named,
+};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -79,6 +82,7 @@ use crate::utils::popup::{
 };
 use crate::utils::text_field::{commit_value, commit_value_sig};
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
@@ -94,7 +98,7 @@ pub struct ComboboxVisibleItem {
     pub disabled: bool,
 }
 
-/// Combobox 根上下文（复合子件共享）。
+/// Combobox root context (shared by composite components).
 #[derive(Clone)]
 pub struct ComboboxCtx {
     pub id: String,
@@ -121,7 +125,7 @@ fn combobox_context() -> Context<ComboboxCtx> {
     *CTX.get_or_init(create_context::<ComboboxCtx>)
 }
 
-/// 读取最近的 [`Combobox`] 上下文。
+/// Read the most recent [`Combobox`] context.
 pub fn use_combobox() -> Option<ComboboxCtx> {
     use_context(combobox_context())
 }
@@ -253,7 +257,7 @@ pub fn combobox_scope(
         };
         root = Element::from(shell);
         if !trigger_class.is_empty() && (full_width || has_width) {
-            // 把 `w-*` 落到壳上，Input 再 `w-100%` 填满壳。
+            // Drop `w-*` onto the shell, Input then `w-100%` to fill the shell.
             root = with_class_list(root, &trigger_class);
         }
         root.template_id = Some(format!("{id}__combobox"));
@@ -274,21 +278,6 @@ fn class_has_width_token(class: &str) -> bool {
         t.starts_with("w-") || t.starts_with("min-w-") || t.starts_with("max-w-")
     })
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else if !el.children.is_empty()
-        && el.text.is_none()
-        && el.on_click.is_none()
-        && el.focus_id.is_none()
-    {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn extract_text_leaf(el: &Element) -> String {
     if let Some(t) = &el.text {
         return t.clone();
@@ -538,31 +527,30 @@ pub fn combobox_content(
 
     let id_for_effect = id.clone();
     let input_store = use_signal(input_value_signal_key(&id).as_str(), String::new);
+    let presence = use_floating_presence(&id, FloatingMotionKind::Expand);
+    let max_h_cap = max_height.as_deref().and_then(parse_css_length_px);
+    let presence_for_cleanup = presence.clone();
     reactive_anchor(view_id.clone(), move || {
-        let is_open = open.get();
         let _ = active.get();
         let _ = input_store.get();
         let _ = value.get();
-        if !is_open {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-            let _ = portal_sync(
-                &id_for_effect,
-                open,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
-            return Element::new().w(0.0).h(0.0);
-        }
-        let Some(oz) = portal_sync(
+        let Some((phase, oz)) = floating_portal_phase(
             &id_for_effect,
             open,
+            &presence,
             OverlayKind::Menu,
             OverlayMode::Stacked,
         ) else {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
             return Element::new().w(0.0).h(0.0);
         };
+        if !open.peek() {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
+        }
 
         let cur = value.peek();
         let ix0 = active_index_for_value(&visible.peek(), &cur);
@@ -649,25 +637,51 @@ pub fn combobox_content(
         if !content_class.is_empty() {
             menu = with_class_list(menu, &content_class);
         }
+        if apply_floating_panel_motion(
+            &id_for_effect,
+            &mut menu,
+            FloatingMotionKind::Expand,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            max_h_cap,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
 
         mount_anchored_overlay(menu, oz.panel)
     });
     if crate::core::reactivity::is_tracking() {
         let open_reset = open;
         let id_reset = id.clone();
+        let presence_reset = presence_for_cleanup.clone();
         crate::core::reactivity::on_cleanup(move || {
             if open_reset.peek() {
                 open_reset.set(false);
             }
-            let _ = portal_sync(
+            let _ = floating_portal_phase(
                 &id_reset,
                 open_reset,
+                &presence_reset,
                 OverlayKind::Menu,
                 OverlayMode::Stacked,
             );
         });
     }
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+}
+
+fn parse_css_length_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix("rem") {
+        n.trim().parse::<f32>().ok().map(|v| v * 16.0)
+    } else if let Some(n) = s.strip_suffix("px") {
+        n.trim().parse().ok()
+    } else {
+        s.parse().ok()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +813,7 @@ pub fn ComboboxItem(
     row.accesskit_role("option")
 }
 
-/// ShadCN / solid-ui 菜单分割线：`-mx-1 my-1 h-px bg-border`（同 [`crate::components::select::SelectSeparator`]）。
+/// ShadCN / solid-ui menu dividing line: `-mx-1 my-1 h-px bg-border` (same as [`crate::components::select::SelectSeparator`]).
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ComboboxSeparator(children: Option<Element>) -> Element {
@@ -831,7 +845,7 @@ pub fn ComboboxEmpty(children: Option<Element>) -> Element {
     Element::from(vstack().w("100%").px("0.375rem").py("0.5rem").child(empty))
 }
 
-/// Aria `cn-combobox-item` 行。
+/// Aria `cn-combobox-item` line.
 fn combobox_item_row(
     bid: &str,
     label_text: &str,
@@ -910,7 +924,7 @@ fn combobox_item_row(
 }
 
 // ---------------------------------------------------------------------------
-// 数据模型 + Builder
+//Data Model + Builder
 // ---------------------------------------------------------------------------
 
 /// Builder 选项项。
@@ -936,7 +950,7 @@ impl ComboboxItemData {
     }
 }
 
-/// Builder 分组。
+/// Builder grouping.
 #[derive(Clone, Debug, Default)]
 pub struct ComboboxGroupData {
     pub id: String,
@@ -1194,7 +1208,7 @@ fn build_builder_entries(entries: &[ComboboxEntry]) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// RSX `<Combobox>` 根
+// RSX `<Combobox>` root
 // ---------------------------------------------------------------------------
 
 /// RSX `<Combobox>`：有复合子树时走 [`combobox_scope`]；否则走 Builder。

@@ -15,21 +15,21 @@
 //!     ├── ContextMenuGroup
 //!     └── ContextMenuSub
 //!         ├── ContextMenuSubTrigger  // chevron-right；悬停打开
-//!         └── ContextMenuSubContent  // 右侧嵌套菜单
+//! └── ContextMenuSubContent // Nested menu on the right
 //! ```
 //!
-//! `ui!` 中 `<ContextMenu>` / `<ContextMenuContent>` / `<ContextMenuRadioGroup>` 由宏展开。Builder
+//! `<ContextMenu>` / `<ContextMenuContent>` / `<ContextMenuRadioGroup>` in `ui!` are expanded by macros. Builder
 //! [`context_menu`] / [`ContextMenuBuilder::trigger`] 仍可用（内部接到同一套实现）。
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐；宏走 context_menu_scope）
+//! // A. Composite RSX (recommended; macro context_menu_scope)
 //! ui! {
 //!     <ContextMenu id="ctx">
 //!         <ContextMenuTrigger>
-//!             <div p="0.75rem" bg="muted" class="rounded-md">
+//!             <Box p="0.75rem" bg="muted" class="rounded-md">
 //!                 <Label>"右键打开"</Label>
-//!             </div>
+//!             </Box>
 //!         </ContextMenuTrigger>
 //!         <ContextMenuContent>
 //!             <ContextMenuLabel>"Actions"</ContextMenuLabel>
@@ -45,16 +45,16 @@
 //!     </ContextMenu>
 //! }
 //!
-//! // B. Builder（便捷入口，内建 Trigger + Content + Items）
+//! // B. Builder (convenient entrance, built-in Trigger + Content + Items)
 //! context_menu("ctx")
 //!     .item("Copy", || toast_push("Copy", 1500))
 //!     .item("Paste", || toast_push("Paste", 1500))
 //!     .trigger(|| { /* 触发区域 Element */ })
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 右键打开时以**鼠标位置**为原点向右下展开；空间不足时先换向，再视口内平移，最后夹高度并内部滚动。
-//! - 打开后 ↑↓ / Home / End 走 roving；Enter / Space 激活高亮项；Esc 经 overlay 栈关闭。
+//! - When open, ↑↓ / Home / End use roving; Enter/Space activate the highlighted item; Esc closes via the overlay stack.
 //! - 未传 `open` 时用内部信号 `{id}__ctx_open`；多实例请保证 `id` 唯一。
 
 use std::cell::RefCell;
@@ -65,8 +65,11 @@ use std::sync::OnceLock;
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::components::internal::menu::checkable::{menu_checkbox_control, menu_radio_control};
 use crate::components::internal::menu::{item_chrome, subtree};
 use crate::components::label::label;
@@ -121,7 +124,7 @@ const ACTIVE_NONE: usize = usize::MAX;
 // Context
 // ---------------------------------------------------------------------------
 
-/// Root 上下文：`open` + 稳定实例 `id` + 触发器锚点 + roving 高亮。
+/// Root context: `open` + stable instance `id` + trigger anchor + roving highlight.
 #[derive(Clone)]
 pub struct ContextMenuCtx {
     pub open: Signal<bool>,
@@ -243,7 +246,7 @@ fn open_or_remount_sub_ex(sub_id: &str, sub_open: Signal<bool>, refresh_hover: b
     subtree::open_or_remount_sub_ex(sub_id, sub_open, refresh_hover);
 }
 
-/// 读取最近的 [`ContextMenu`] 上下文。
+/// Read the most recent [`ContextMenu`] context.
 pub fn use_context_menu() -> Option<ContextMenuCtx> {
     use_context(context_menu_context())
 }
@@ -545,9 +548,9 @@ pub fn ContextMenuTrigger(id: String, children: Option<Element>) -> Element {
 /// `ContextMenuContent` 选项（`ui!` / [`context_menu_content`] 共用）。
 #[derive(Clone, Debug)]
 pub struct ContextMenuContentOpts {
-    /// `bottom-start` / `right` / …（默认 `bottom-start`）。
+    /// `bottom-start` / `right` / … (default `bottom-start`).
     pub placement: String,
-    /// 额外 class（utility）。
+    /// Extra class (utility).
     pub class: Option<String>,
 }
 
@@ -561,7 +564,7 @@ impl Default for ContextMenuContentOpts {
 }
 
 /// solid-ui / shadcn `ContextMenuContent`：Portal + floating 面板。
-/// `ui!` 中由宏编成此函数（子树在打开时惰性重建）。
+/// `ui!` lowers to this function via the macro (subtree rebuilt lazily when open).
 pub fn context_menu_content(
     opts: ContextMenuContentOpts,
     body: impl Fn() -> Element + 'static,
@@ -580,17 +583,25 @@ pub fn context_menu_content(
     };
     let class = opts.class.filter(|s| !s.trim().is_empty());
     let view_id = format!("{id}__ctx_view");
+    let presence = use_floating_presence(&id, FloatingMotionKind::Fade);
 
     reactive_anchor(view_id.clone(), move || {
-        let is_open = open.get();
         // Do not subscribe to `active` — highlight is paint-synced (hover must not rebuild).
         let _ = cursor.get();
-        let Some(oz) = portal_sync(&id, open, OverlayKind::Menu, OverlayMode::Stacked) else {
+        let Some((phase, oz)) = floating_portal_phase(
+            &id,
+            open,
+            &presence,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
+            if !open.peek() {
+                close_open_subs(&menu_id);
+            }
             return Element::new().w(0.0).h(0.0);
         };
-        if !is_open {
+        if !open.peek() {
             close_open_subs(&menu_id);
-            return Element::new().w(0.0).h(0.0);
         }
 
         reset_activates(&menu_id);
@@ -653,6 +664,19 @@ pub fn context_menu_content(
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
         apply_stored_floating_place(&mut panel, &id);
+        if apply_floating_panel_motion(
+            &id,
+            &mut panel,
+            FloatingMotionKind::Fade,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
@@ -784,7 +808,7 @@ pub fn ContextMenuCheckboxItem(
     let active = ctx.active;
     let menu_id = ctx.id.clone();
     let ix = activate_count(&ctx.id);
-    // 全局键：跨 Content 开关存活。勿用 use_scoped_signal——关菜单 dispose 后 paint sync 仍可能 peek。
+    // Global key: survives across Content open/close. Do not use use_scoped_signal — after menu dispose, paint sync may still peek.
     let check = checked.unwrap_or_else(|| {
         use_signal(
             format!("{}__cbox{}__menu_cbox", ctx.id, ix).as_str(),
@@ -898,8 +922,8 @@ fn require_context_menu_radio_group(part: &str) -> ContextMenuRadioGroupCtx {
     })
 }
 
-/// solid-ui / shadcn `ContextMenuRadioGroup`：包裹一组 [`ContextMenuRadioItem`]。
-/// `ui!` 中由宏编成此函数（子树在 `provide_context` **之后**求值）。
+/// solid-ui/shadcn `ContextMenuRadioGroup`: Wraps a group of [`ContextMenuRadioItem`].
+/// `ui!` lowers to this function via the macro (subtree evaluated **after** `provide_context`).
 pub fn context_menu_radio_group(
     id: Option<String>,
     value: Option<Signal<String>>,
@@ -967,7 +991,7 @@ pub fn ContextMenuRadioItem(
             if disabled {
                 return;
             }
-            // 先写值再关：全局 radio 信号跨 Content 存活；try_set 防极端 dispose 竞态。
+            // Set value before close: global radio signal survives across Content; try_set guards extreme dispose races.
             let _ = group_value.try_set(item_value.clone());
             open.set(false);
             on_click.borrow_mut().call(());
@@ -1068,8 +1092,8 @@ fn require_context_menu_sub(part: &str) -> ContextMenuSubCtx {
     })
 }
 
-/// solid-ui / shadcn `ContextMenuSub`：包裹 SubTrigger + SubContent。
-/// `ui!` 中由宏编成此函数（子树在 `provide_context` **之后**求值）。
+/// solid-ui/shadcn `ContextMenuSub`: wraps SubTrigger + SubContent.
+/// `ui!` lowers to this function via the macro (subtree evaluated **after** `provide_context`).
 pub fn context_menu_sub(id: Option<String>, body: impl FnOnce() -> Element) -> Element {
     let parent = require_context_menu("ContextMenuSub");
     let seq = next_sub_seq(&parent.id);
@@ -1209,7 +1233,7 @@ pub fn ContextMenuSubTrigger(
 
 /// solid-ui / shadcn `ContextMenuSubContent`：相对 SubTrigger 向右弹出。
 ///
-/// 独立 [`reactive_anchor`]（在父 Content 的 `isolate_reads` 中注册）。父菜单**不要**
+/// Independent [`reactive_anchor`] (registered in the parent Content's `isolate_reads`). Parent Menu **Don't**
 /// 订阅 sub open，否则整树重建会打断悬停。
 pub fn context_menu_sub_content(
     class: Option<String>,
@@ -1224,10 +1248,10 @@ pub fn context_menu_sub_content(
     let cursor = parent.cursor;
     let class = class.filter(|s| !s.trim().is_empty());
     let view_id = format!("{sid}__view");
+    let presence = use_floating_presence(&sid, FloatingMotionKind::Fade);
 
     reactive_anchor(view_id.clone(), move || {
         let parent_is_open = parent_open.get();
-        let is_open = sub_open.get();
         // Remount bump from SubTrigger (same-value open would not re-run).
         let _ = use_signal(format!("{sid}__remount").as_str(), || 0u32).get();
         if !parent_is_open {
@@ -1237,15 +1261,24 @@ pub fn context_menu_sub_content(
             // Clear sticky submenu highlight when the root menu closes.
             use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
+            let _ = floating_portal_phase(
+                &sid,
+                sub_open,
+                &presence,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+            );
             return Element::new().w(0.0).h(0.0);
         }
-        if !is_open {
+        let Some((phase, oz)) = floating_portal_phase(
+            &sid,
+            sub_open,
+            &presence,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+        ) else {
             use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE)
                 .set_silent(ACTIVE_NONE);
-            let _ = portal_sync(&sid, sub_open, OverlayKind::Menu, OverlayMode::Stacked);
-            return Element::new().w(0.0).h(0.0);
-        }
-        let Some(oz) = portal_sync(&sid, sub_open, OverlayKind::Menu, OverlayMode::Stacked) else {
             return Element::new().w(0.0).h(0.0);
         };
 
@@ -1306,6 +1339,19 @@ pub fn context_menu_sub_content(
         panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
         panel.set_attr(ATTR_FLOATING_MIN_W, "12rem");
         apply_stored_floating_place(&mut panel, &sid);
+        if apply_floating_panel_motion(
+            &sid,
+            &mut panel,
+            FloatingMotionKind::Fade,
+            phase,
+            &presence,
+            sub_open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            None,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
         mount_anchored_overlay(panel, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
@@ -1369,7 +1415,7 @@ pub fn ContextMenuLabel(inset: bool, children: Option<Element>) -> Element {
 
 /// solid-ui / shadcn `ContextMenuSeparator`：`-mx-1 my-1 h-px bg-border`。
 ///
-/// 经 [`Element::menu_bleed`] 抵消 Content `p-1`；勿手写 `w-full` + 负 `mx`。
+/// Cancel Content `p-1` via [`Element::menu_bleed`]; do not hand-write `w-full` + negative `mx`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ContextMenuSeparator(children: Option<Element>) -> Element {
@@ -1410,7 +1456,7 @@ pub fn ContextMenuShortcut(children: Option<Element>) -> Element {
     el
 }
 
-/// solid-ui / shadcn `ContextMenuGroup`：分组容器。
+/// solid-ui/shadcn `ContextMenuGroup`: Group container.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ContextMenuGroup(children: Option<Element>) -> Element {
@@ -1426,7 +1472,7 @@ pub fn ContextMenuGroup(children: Option<Element>) -> Element {
 }
 
 // ---------------------------------------------------------------------------
-// Builder（兼容旧 API）
+// Builder (legacy API compatible)
 // ---------------------------------------------------------------------------
 
 /// Builder / 便捷 API 用的数据项（RSX 请用组件 [`ContextMenuItem`]）。
@@ -1466,7 +1512,7 @@ impl ContextMenuAction {
     }
 }
 
-/// 旧名别名（[`ContextMenuAction`]）。
+/// Old name alias ([`ContextMenuAction`]).
 #[deprecated(note = "use ContextMenuAction; ContextMenuItem is now the RSX component")]
 pub type ContextMenuItemData = ContextMenuAction;
 

@@ -6,7 +6,7 @@
 //! Menubar
 //! ├── MenubarMenu                 // 单段下拉（内部 dropdown_menu_scope）
 //! │   ├── MenubarTrigger          // 顶栏触发器；open 时 accent；←→ 切邻菜单
-//! │   └── MenubarContent          // Portal + floating（同 DropdownMenuContent）
+//! │ └── MenubarContent // Portal + floating (same as DropdownMenuContent)
 //! │       ├── MenubarLabel
 //! │       ├── MenubarItem
 //! │       ├── MenubarCheckboxItem
@@ -19,12 +19,12 @@
 //! │           └── MenubarSubContent
 //! ```
 //!
-//! `ui!` 中 `<Menubar>` / `<MenubarMenu>` / `<MenubarContent>` / `<MenubarSub>` /
-//! `<MenubarRadioGroup>` / `<MenubarSubContent>` 由宏展开。Builder [`menubar`] 仍可用。
+//! `ui!` in `<Menubar>` / `<MenubarMenu>` / `<MenubarContent>` / `<MenubarSub>` /
+//! `<MenubarRadioGroup>` / `<MenubarSubContent>` are expanded by macros. Builder [`menubar`] is still available.
 //!
-//! ## 用法（双写法）
+//! ## Usage (dual style)
 //! ```ignore
-//! // A. 复合 RSX（推荐；宏走 menubar_scope / menubar_menu）
+//! // A. Composite RSX (recommended; macro menubar_scope / menubar_menu)
 //! ui! {
 //!     <Menubar id="mb">
 //!         <MenubarMenu id="file">
@@ -43,14 +43,14 @@
 //!     </Menubar>
 //! }
 //!
-//! // B. Builder（便捷：sections → 复合实现）
+//! // B. Builder (convenience: sections → composite implementation)
 //! menubar("mb")
 //!     .section(MenuSection::new("file", "File", vec![
 //!         MenuItem::new("new", "New", || toast_push("New", 1500)),
 //!     ]))
 //! ```
 //!
-//! ## 注意
+//! ## Notes
 //! - 关闭时：←→ / Home / End **只移动触发器焦点环**。
 //! - 打开时：↓ 进入菜单 roving；←→ **切换相邻菜单**（portal Menu 排他关其它）。
 //! - 任一菜单已打开时，悬停其它 Trigger 会切换打开。
@@ -71,12 +71,12 @@ use crate::components::button::button;
 use crate::components::dropdown_menu::{
     attach_dropdown_menu_trigger_keys, dropdown_menu_active_is_sub_trigger, dropdown_menu_content,
     dropdown_menu_open_sub_id, dropdown_menu_radio_group, dropdown_menu_scope, dropdown_menu_sub,
-    dropdown_menu_sub_content, use_dropdown_menu, DropdownMenuCheckboxItem,
-    DropdownMenuCheckboxItemProps, DropdownMenuContentOpts, DropdownMenuGroup,
-    DropdownMenuGroupProps, DropdownMenuItem, DropdownMenuItemProps, DropdownMenuLabel,
-    DropdownMenuLabelProps, DropdownMenuRadioItem, DropdownMenuRadioItemProps,
-    DropdownMenuSeparator, DropdownMenuSeparatorProps, DropdownMenuShortcut,
-    DropdownMenuShortcutProps, DropdownMenuSubTrigger, DropdownMenuSubTriggerProps,
+    use_dropdown_menu, DropdownMenuCheckboxItem, DropdownMenuCheckboxItemProps,
+    DropdownMenuContentOpts, DropdownMenuGroup, DropdownMenuGroupProps, DropdownMenuItem,
+    DropdownMenuItemProps, DropdownMenuLabel, DropdownMenuLabelProps, DropdownMenuRadioItem,
+    DropdownMenuRadioItemProps, DropdownMenuSeparator, DropdownMenuSeparatorProps,
+    DropdownMenuShortcut, DropdownMenuShortcutProps, DropdownMenuSubTrigger,
+    DropdownMenuSubTriggerProps,
 };
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -87,6 +87,7 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::popup::disarm_underlay_close;
 use crate::utils::resolve_instance_id;
+use crate::utils::take_packed;
 use crate::utils::roving::{focus_by_id, focus_roving_key, roving_move, FocusRovingAxis};
 
 const ATTR_SLOT: &str = "data-slot";
@@ -181,7 +182,7 @@ fn open_neighbor_menu(bar_id: &str, from_ix: usize, delta: i32) {
     focus_by_id(format!("{}__dd_trigger", other.id));
 }
 
-/// 读取最近的 [`Menubar`] 上下文。
+/// Read the most recent [`Menubar`] context.
 pub fn use_menubar() -> Option<MenubarCtx> {
     use_context(menubar_context())
 }
@@ -197,21 +198,6 @@ fn require_dropdown_in_menubar(part: &str) -> crate::components::dropdown_menu::
         panic!("{part} must be used within <MenubarMenu> / menubar_menu");
     })
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else if !el.children.is_empty()
-        && el.text.is_none()
-        && el.on_click.is_none()
-        && el.focus_id.is_none()
-    {
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn is_text_leaf(el: &Element) -> bool {
     el.children.is_empty() && el.text.as_ref().is_some_and(|t| !t.is_empty())
 }
@@ -361,7 +347,7 @@ impl Default for MenubarContentOpts {
     }
 }
 
-/// solid-ui / shadcn `MenubarContent`：复用 DropdownMenuContent（gap≈8）。
+/// solid-ui / shadcn `MenubarContent`: reuse DropdownMenuContent (gap≈8); expand animation.
 pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let _ = require_dropdown_in_menubar("MenubarContent");
     let el = dropdown_menu_content(
@@ -372,26 +358,31 @@ pub fn menubar_content(opts: MenubarContentOpts, body: impl Fn() -> Element + 's
                 opts.placement
             },
             class: opts.class,
+            motion: crate::components::internal::floating_motion::FloatingMotionKind::Expand,
         },
         body,
     );
     retag_slot(el, SLOT_CONTENT)
 }
 
-/// 嵌套子菜单（复用 dropdown_menu_sub）。
+/// Nested submenu (reuse dropdown_menu_sub).
 pub fn menubar_sub(id: Option<String>, body: impl FnOnce() -> Element) -> Element {
     let _ = require_dropdown_in_menubar("MenubarSub");
     dropdown_menu_sub(id, body)
 }
 
-/// 子菜单内容。
+/// Submenu content (expansion animation).
 pub fn menubar_sub_content(class: Option<String>, body: impl Fn() -> Element + 'static) -> Element {
     let _ = require_dropdown_in_menubar("MenubarSubContent");
     // Keep dropdown-menu-sub-content slot / placeholder identity for floating sync.
-    dropdown_menu_sub_content(class, body)
+    crate::components::dropdown_menu::dropdown_menu_sub_content_ex(
+        class,
+        crate::components::internal::floating_motion::FloatingMotionKind::Expand,
+        body,
+    )
 }
 
-/// Radio 组（复用 dropdown_menu_radio_group）。
+/// Radio group (reuse dropdown_menu_radio_group).
 pub fn menubar_radio_group(
     id: Option<String>,
     value: Option<Signal<String>>,
@@ -567,7 +558,7 @@ pub fn MenubarTrigger(id: String, class: Option<String>, children: Option<Elemen
 // Item / Label / Separator / Shortcut / Group / Checkbox / Radio / SubTrigger
 // ---------------------------------------------------------------------------
 
-/// solid-ui / shadcn `MenubarItem`（底层 [`DropdownMenuItem`]）。
+/// solid-ui/shadcn `MenubarItem` (underlying [`DropdownMenuItem`]).
 ///
 /// 保留 `dropdown-menu-item` data-slot，供 [`sync_dropdown_menu_item_paint_subtree`] 写回悬停高亮。
 #[component(crate_path = "crate")]
@@ -728,7 +719,7 @@ pub fn MenubarSubTrigger(
 }
 
 // ---------------------------------------------------------------------------
-// Builder（双写便捷入口）
+//Builder (double-write convenient entry)
 // ---------------------------------------------------------------------------
 
 /// Builder / 便捷 API 用的数据项（RSX 请用组件 [`MenubarItem`]）。

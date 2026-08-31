@@ -43,6 +43,7 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         resizable: true,
         resize_max_h: None,
         wrap_mode: TextareaWrapMode::Word,
+        plain_chrome: false,
     }
 }
 
@@ -56,6 +57,7 @@ pub struct TextareaBuilder {
     resizable: bool,
     resize_max_h: Option<f32>,
     wrap_mode: TextareaWrapMode,
+    plain_chrome: bool,
 }
 
 impl TextareaBuilder {
@@ -96,9 +98,15 @@ impl TextareaBuilder {
         self
     }
 
-    /// 受控值：见 [`crate::utils::text_field::bind_controlled_value`]。
+    /// Controlled value: see [`crate::utils::text_field::bind_controlled_value`].
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
+        self
+    }
+
+    /// 去边框/阴影/焦点环，供 [`crate::components::input_adornment`] 外壳使用。
+    pub fn plain_chrome(mut self, v: bool) -> Self {
+        self.plain_chrome = v;
         self
     }
 }
@@ -115,6 +123,7 @@ impl From<TextareaBuilder> for Element {
             resizable,
             resize_max_h,
             wrap_mode,
+            plain_chrome,
         } = b;
 
         let field_id = if id.is_empty() {
@@ -148,9 +157,10 @@ impl From<TextareaBuilder> for Element {
             single_line_container: None,
             multiline: true,
             rows,
-            resizable,
+            resizable: resizable && !plain_chrome,
             resize_max_h,
             wrap_mode,
+            plain_chrome,
         })
     }
 }

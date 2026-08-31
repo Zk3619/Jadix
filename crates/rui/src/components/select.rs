@@ -1,6 +1,6 @@
 //! # Select（ShadCN React Aria 复合组件）
 //!
-//! 产品面与样式对齐 shadcn/ui **React Aria** 基座
+//! Product surface & styles align with shadcn/ui **React Aria** base
 //! (`registry/bases/aria/ui/select.tsx` + `cn-select-*` / `cn-select-*-aria`)：
 //!
 //! ```ignore
@@ -33,11 +33,14 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{
     bind_style, bind_text, reactive_anchor, reactive_placeholder_sized, StylePatch,
 };
 use crate::components::button::button;
+use crate::components::internal::floating_motion::{
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
@@ -56,6 +59,7 @@ use crate::utils::popup::{
     ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
 };
 use crate::utils::text_node::build_icon_text_node;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -383,29 +387,26 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
     // Use a real reactive placeholder (hash + unmount hook) so Dialog remount can
     // re-register the menu effect after teardown.
     let id_for_effect = id.clone();
+    let presence = use_floating_presence(&id, FloatingMotionKind::Expand);
+    let max_h_cap = max_height.as_deref().and_then(parse_css_length_px);
     reactive_anchor(view_id.clone(), move || {
-        // 先订阅 open，再 sync；关闭时 portal_sync 返回 None 也必须保留订阅。
-        let is_open = open.get();
-        if !is_open {
-            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
-                "{id_for_effect}:menu_scroll"
-            ));
-            let _ = portal_sync(
-                &id_for_effect,
-                open,
-                OverlayKind::Menu,
-                OverlayMode::Stacked,
-            );
-            return Element::new().w(0.0).h(0.0);
-        }
-        let Some(oz) = portal_sync(
+        let Some((phase, oz)) = floating_portal_phase(
             &id_for_effect,
             open,
+            &presence,
             OverlayKind::Menu,
             OverlayMode::Stacked,
         ) else {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
             return Element::new().w(0.0).h(0.0);
         };
+        if !open.peek() {
+            crate::app::scroll_support::cancel_scroll_item_into_view(&format!(
+                "{id_for_effect}:menu_scroll"
+            ));
+        }
 
         // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
         let rows = untrack(|| body());
@@ -497,10 +498,34 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         if !content_class.is_empty() {
             menu = with_class_list(menu, &content_class);
         }
+        if apply_floating_panel_motion(
+            &id_for_effect,
+            &mut menu,
+            FloatingMotionKind::Expand,
+            phase,
+            &presence,
+            open,
+            OverlayKind::Menu,
+            OverlayMode::Stacked,
+            max_h_cap,
+        ) {
+            crate::app::runtime::request_redraw();
+        }
 
         mount_anchored_overlay(menu, oz.panel)
     });
     reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+}
+
+fn parse_css_length_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix("rem") {
+        n.trim().parse::<f32>().ok().map(|v| v * 16.0)
+    } else if let Some(n) = s.strip_suffix("px") {
+        n.trim().parse().ok()
+    } else {
+        s.parse().ok()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +615,7 @@ pub fn SelectItem(
 
 /// ShadCN / solid-ui 菜单分割线：`-mx-1 my-1 h-px bg-border`。
 ///
-/// 经 [`Element::menu_bleed`] 抵消 Content `p-1`；勿手写 `w-full` + 负 `mx`。
+/// Cancel Content `p-1` via [`Element::menu_bleed`]; do not hand-write `w-full` + negative `mx`.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn SelectSeparator(children: Option<Element>) -> Element {
@@ -644,22 +669,6 @@ fn count_select_items(el: &Element) -> usize {
     }
     el.children.iter().map(count_select_items).sum()
 }
-
-fn take_packed(mut el: Element) -> Vec<Element> {
-    if el.attrs.get("rui_fragment").map(|s| s.as_str()) == Some("1") {
-        std::mem::take(&mut el.children)
-    } else if !el.children.is_empty()
-        && el.text.is_none()
-        && el.on_click.is_none()
-        && el.focus_id.is_none()
-    {
-        // ui! 多子节点常包成匿名 VStack
-        std::mem::take(&mut el.children)
-    } else {
-        vec![el]
-    }
-}
-
 fn extract_text_leaf(el: &Element) -> String {
     if let Some(t) = &el.text {
         return t.clone();
@@ -1355,5 +1364,53 @@ mod tests {
             SelectScrollSelected::None
         );
         assert_eq!(SelectScrollSelected::parse(""), SelectScrollSelected::None);
+    }
+
+    #[test]
+    fn content_keeps_panel_tid_while_exiting() {
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::components::internal::floating_motion::floating_mounted_signal;
+        use crate::core::reactivity::Signal;
+        use crate::utils::presence::PresencePhase;
+
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let id = "sel-exit-smoke";
+            let presence = use_floating_presence(id, FloatingMotionKind::Expand);
+            let Some((phase, _)) =
+                floating_portal_phase(id, open, &presence, OverlayKind::Menu, OverlayMode::Stacked)
+            else {
+                panic!("must mount when open");
+            };
+            assert_eq!(phase, PresencePhase::Present);
+
+            open.set(false);
+            let Some((phase, _)) =
+                floating_portal_phase(id, open, &presence, OverlayKind::Menu, OverlayMode::Stacked)
+            else {
+                panic!("must stay mounted while exiting");
+            };
+            assert_eq!(phase, PresencePhase::Exiting);
+            assert!(floating_mounted_signal(&presence).peek());
+
+            let mut panel = Element::new();
+            apply_floating_panel_motion(
+                id,
+                &mut panel,
+                FloatingMotionKind::Expand,
+                phase,
+                &presence,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            assert_eq!(
+                panel.template_id.as_deref(),
+                Some("sel-exit-smoke__floating_panel")
+            );
+        });
+        clear_overlay_stack();
     }
 }
