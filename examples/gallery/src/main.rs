@@ -8974,6 +8974,113 @@ mod mount_tests {
         rui::app::reactive::reset_registered_anchors();
     }
 
+    fn set_scroll_offset(el: &mut rui::core::tree::Element, rest: &str, offset: [f32; 2]) -> bool {
+        let want = format!("scroll:{rest}");
+        if el.focus_id.as_deref() == Some(want.as_str()) {
+            el.scroll_offset = offset;
+            return true;
+        }
+        el.children
+            .iter_mut()
+            .any(|c| set_scroll_offset(c, rest, offset))
+    }
+
+    fn scroll_metrics_xy(
+        result: &rui::core::tree::RenderResult,
+        rest: &str,
+    ) -> ([f32; 4], [f32; 2], [f32; 2]) {
+        result
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id == rest)
+            .map(|m| (m.1, m.2, m.3))
+            .unwrap_or_else(|| panic!("missing scroll metrics for {rest}"))
+    }
+
+    #[test]
+    fn data_section_scroll_metrics_stable_across_offsets() {
+        // Gallery data page: charts (overflow:visible ticks), nested Table/Tree/Masonry
+        // scrollports, and CarouselStack. Outer `scroll-data` content size must not
+        // breathe as cards enter/leave the clip — that jitters the page thumb.
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let mut tree = rui::core::reactivity::isolate_reads(|| {
+                        gallery_section_body("data")
+                    });
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let first = layout.build_and_layout(&mut tree, 900.0, 600.0, [-1.0, -1.0]);
+                    let (vp0, max0, content0) = scroll_metrics_xy(&first, "scroll-data");
+                    assert!(
+                        content0[1] > vp0[3] + 8.0 && max0[1] > 8.0,
+                        "data section must overflow the 600px viewport (content_h={} vp_h={} max_y={})",
+                        content0[1],
+                        vp0[3],
+                        max0[1]
+                    );
+
+                    let samples: Vec<f32> = {
+                        let step = (max0[1] / 8.0).max(40.0);
+                        let mut v = vec![0.0_f32];
+                        let mut y = step;
+                        while y < max0[1] {
+                            v.push(y);
+                            y += step;
+                        }
+                        v.push(max0[1]);
+                        v
+                    };
+
+                    for &sy in &samples {
+                        assert!(
+                            set_scroll_offset(&mut tree, "scroll-data", [0.0, sy]),
+                            "scroll:scroll-data viewport must exist"
+                        );
+                        let fast = layout.build_and_layout_fast(
+                            &mut tree,
+                            900.0,
+                            600.0,
+                            [-1.0, -1.0],
+                            true,
+                            false,
+                        );
+                        let (vp, max, content) = scroll_metrics_xy(&fast, "scroll-data");
+                        assert!(
+                            (content[1] - content0[1]).abs() < 1.0
+                                && (content[0] - content0[0]).abs() < 1.0
+                                && (vp[2] - vp0[2]).abs() < 1.0
+                                && (vp[3] - vp0[3]).abs() < 1.0
+                                && (max[1] - max0[1]).abs() < 1.0
+                                && (max[0] - max0[0]).abs() < 1.0,
+                            "scroll_only metrics jitter at sy={sy}: \
+                             base content={content0:?} vp={vp0:?} max={max0:?}; \
+                             now content={content:?} vp={vp:?} max={max:?}"
+                        );
+                    }
+
+                    assert!(
+                        set_scroll_offset(&mut tree, "scroll-data", [0.0, max0[1]]),
+                        "scroll:scroll-data viewport must exist"
+                    );
+                    let full = layout.build_and_layout(&mut tree, 900.0, 600.0, [-1.0, -1.0]);
+                    let (vp, max, content) = scroll_metrics_xy(&full, "scroll-data");
+                    assert!(
+                        (content[1] - content0[1]).abs() < 1.0
+                            && (content[0] - content0[0]).abs() < 1.0
+                            && (max[1] - max0[1]).abs() < 1.0,
+                        "full collect at bottom must keep metrics: \
+                         base content={content0:?} max={max0:?}; now content={content:?} max={max:?} vp={vp:?}"
+                    );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
+
     #[test]
     fn forms_input_showcase_mark_invalid_button_has_caption() {
         rui::app::reactive::reset_registered_anchors();
