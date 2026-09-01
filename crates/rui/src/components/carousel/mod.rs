@@ -81,11 +81,12 @@ pub use builder::{carousel, carousel_multi, carousel_single, carousel_stack, Car
 pub(crate) use drag::is_carousel_dragging;
 use drag::*;
 pub(crate) use drag::{
-    carousel_next_wake_at, clear_carousel_drag_if_any, tick_carousel_autoplay, tick_carousel_drag,
+    begin_carousel_paint_frame, carousel_next_wake_at, clear_carousel_drag_if_any,
+    tick_carousel_autoplay, tick_carousel_drag,
 };
 use geometry::*;
 
-use autoplay::{decide_autoplay, AutoplayAction};
+use autoplay::{decide_autoplay, gate_autoplay_visibility, AutoplayAction};
 use loop_anim::{loop_reached, LoopAnim};
 
 const ATTR_SLOT: &str = "data-slot";
@@ -1796,6 +1797,137 @@ mod tests {
                 "must restart full interval, not fire stale timer; wait={wait:?}"
             );
             assert!(!paused.peek(), "drag must not leave hover-paused stuck");
+        });
+    }
+
+    #[test]
+    fn first_viewport_measure_does_not_flag_layout_resize() {
+        use crate::core::reactivity::create_root;
+        create_root(|| {
+            let id = "t-car-vlen-first";
+            let viewport_len = use_signal("t-car-vlen-first__vlen", || 0.0f32);
+            let ctx = CarouselCtx {
+                id: id.into(),
+                index: use_signal("t-car-vlen-first__idx", || 0usize),
+                count: use_signal("t-car-vlen-first__count", || 3usize),
+                orientation: CarouselOrientation::Horizontal,
+                loop_slides: true,
+                seamless: false,
+                snap: true,
+                per_view: 1.0,
+                autoplay_ms: 0,
+                controls: CarouselControls::Outside,
+                scroll_by: CarouselScrollBy::Slide,
+                variant: CarouselVariant::Single,
+                end_align: CarouselEndAlign::Flush,
+                page_snap: CarouselPageSnap::Peek,
+                item_sizing: CarouselItemSizing::Fraction,
+                item_width_px: 0.0,
+                show_dots: false,
+                stack_sides: 1,
+                drag_px: use_signal("t-car-vlen-first__drag", || 0.0f32),
+                viewport_len,
+                paused: use_signal("t-car-vlen-first__paused", || false),
+            };
+            assert!(
+                !apply_viewport_len(&ctx, 400.0),
+                "first measure (0→width) is not a Taffy resize"
+            );
+            assert!((ctx.viewport_len.peek() - 400.0).abs() < 0.1);
+            assert!(
+                apply_viewport_len(&ctx, 520.0),
+                "real resize still reports applied"
+            );
+        });
+    }
+
+    #[test]
+    fn carousel_sync_first_measure_is_not_layout_changed() {
+        use crate::core::reactivity::create_root;
+        create_root(|| {
+            let mut root: Element = carousel_single("t-car-sync-vlen")
+                .autoplay_ms(4000)
+                .loop_slides(true)
+                .slide(|| r#box().w("100%").h("4rem").into())
+                .slide(|| r#box().w("100%").h("4rem").into())
+                .slide(|| r#box().w("100%").h("4rem").into())
+                .into();
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 600.0, 400.0, [-1.0, -1.0]);
+            let mut impact = LayoutStatus::Clean;
+            crate::core::tree::sync_reactive_elements_subtree(
+                &mut root,
+                &mut layout,
+                &mut impact,
+                600.0,
+                400.0,
+                [0.0, 0.0],
+            );
+            assert_ne!(
+                impact,
+                LayoutStatus::LayoutChanged,
+                "first viewport measure must not FullClear the page (scrollbar flash)"
+            );
+            unregister_autoplay("t-car-sync-vlen");
+        });
+    }
+
+    #[test]
+    fn autoplay_does_not_advance_offscreen_or_on_enter() {
+        use crate::core::reactivity::create_root;
+        create_root(|| {
+            let id = "t-car-ap-vis";
+            let index = use_signal("t-car-ap-vis__idx", || 0usize);
+            let count = use_signal("t-car-ap-vis__count", || 3usize);
+            count.set(3);
+            let ctx = CarouselCtx {
+                id: id.into(),
+                index: index.clone(),
+                count,
+                orientation: CarouselOrientation::Horizontal,
+                loop_slides: true,
+                seamless: false,
+                snap: true,
+                per_view: 1.0,
+                autoplay_ms: 4000,
+                controls: CarouselControls::Outside,
+                scroll_by: CarouselScrollBy::Slide,
+                variant: CarouselVariant::Single,
+                end_align: CarouselEndAlign::Flush,
+                page_snap: CarouselPageSnap::Peek,
+                item_sizing: CarouselItemSizing::Fraction,
+                item_width_px: 0.0,
+                show_dots: false,
+                stack_sides: 1,
+                drag_px: use_signal("t-car-ap-vis__drag", || 0.0f32),
+                viewport_len: use_signal("t-car-ap-vis__vlen", || 300.0f32),
+                paused: use_signal("t-car-ap-vis__paused", || false),
+            };
+            register_autoplay(&ctx);
+
+            begin_carousel_paint_frame();
+            stamp_carousel_painted(id);
+            tick_carousel_autoplay();
+            assert_eq!(index.peek(), 0, "first on-screen tick restarts clock");
+
+            set_next_autoplay_at(id, Some(Instant::now() - Duration::from_millis(1)));
+            begin_carousel_paint_frame();
+            tick_carousel_autoplay();
+            assert_eq!(index.peek(), 0, "offscreen must not Advance");
+
+            set_next_autoplay_at(id, Some(Instant::now() - Duration::from_millis(1)));
+            begin_carousel_paint_frame();
+            stamp_carousel_painted(id);
+            tick_carousel_autoplay();
+            assert_eq!(index.peek(), 0, "enter must not catch-up Advance");
+
+            set_next_autoplay_at(id, Some(Instant::now() - Duration::from_millis(1)));
+            begin_carousel_paint_frame();
+            stamp_carousel_painted(id);
+            tick_carousel_autoplay();
+            assert_eq!(index.peek(), 1, "on-screen autoplay must still Advance");
+
+            unregister_autoplay(id);
         });
     }
 

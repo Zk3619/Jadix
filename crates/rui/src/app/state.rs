@@ -1541,6 +1541,7 @@ impl AppState {
         let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
         let (viewport_w, viewport_h) = self.logical_size();
         crate::components::drawer::set_drawer_viewport_size(viewport_w, viewport_h);
+        crate::components::carousel::begin_carousel_paint_frame();
         crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
             &mut self.layout_tree,

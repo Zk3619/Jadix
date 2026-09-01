@@ -291,6 +291,7 @@ pub(super) fn apply_viewport_len(ctx: &CarouselCtx, new_len: f32) -> bool {
     if !effective_snap(ctx) {
         if prev <= 1.0 {
             snap_offset_to(&ctx.id, ideal_offset(ctx));
+            return false;
         } else {
             let cur = offset_target(&ctx.id).peek();
             let scaled = if ctx.item_sizing == CarouselItemSizing::Fixed {
@@ -311,10 +312,12 @@ pub(super) fn apply_viewport_len(ctx: &CarouselCtx, new_len: f32) -> bool {
     let ideal = ideal_offset(ctx);
     if prev <= 1.0 {
         snap_offset_to(&ctx.id, ideal);
-    } else {
-        // Idle/turning page: Change target, CSS transition retarget from current visual value (no hard snap).
-        offset_target(&ctx.id).set(ideal);
+        // First measure (0 → real width) is not a Taffy resize. Returning true used to
+        // promote `LayoutChanged` → FullClear, yanking the parent ScrollArea thumb.
+        return false;
     }
+    // Idle/turning page: Change target, CSS transition retarget from current visual value (no hard snap).
+    offset_target(&ctx.id).set(ideal);
     true
 }
 

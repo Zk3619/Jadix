@@ -537,11 +537,20 @@ fn paint_sidebar_menu_button_fg(
 ) {
     if el.text.is_some() {
         el.text_style.color = fg;
+        // Stamp inherit-lock attrs. Chrome writes color/weight/size without going through
+        // `Element::text_color` — otherwise the next full `cascade_inheritable_text_style`
+        // (portal hoist / overlay enter) copies `TextStyle::default` white from the
+        // uncolored Header/Footer slot onto RSX string leaves. Idle frames skip cascade
+        // (`scroll_only`), so the flash is only on the animation's first layout.
+        el.attrs.insert("text_color".into(), "1".into());
         if el.text_style.font_family.as_deref() == Some("lucide") {
             el.text_style.size = 16.0;
+            el.attrs.insert("text_size".into(), "1".into());
         } else {
             el.text_style.weight = weight;
             el.text_style.size = size_px;
+            el.attrs.insert("font_weight".into(), "1".into());
+            el.attrs.insert("text_size".into(), "1".into());
         }
     }
     for child in &mut el.children {
@@ -759,21 +768,25 @@ fn wrap_sidebar_inner(kids: Vec<Element>, variant: SidebarVariant, _side: Sideba
         .h("100%")
         .w("100%")
         .min_h(0.0)
-        .overflow_y("hidden")
         .bg(parse_color("sidebar"));
-    match variant {
-        SidebarVariant::Floating => {
-            el = el
-                .rounded("0.5rem")
-                .border(parse_color("sidebar-border"), 1.0)
-                .box_shadow_color([0.0, 0.0, 0.0, 0.05])
-                .box_shadow_blur(2.0)
-                .box_shadow_offset_x(0.0)
-                .box_shadow_offset_y(1.0)
-                .box_shadow_spread(0.0);
-        }
-        SidebarVariant::Inset | SidebarVariant::Sidebar => {}
-    }
+    // Header / Footer sit *outside* `SidebarContent`'s scroll viewport. A column-wide
+    // `overflow-y: hidden` makes their glyphs share that clip. On the first frame of any
+    // overlay animation (toast / dropdown / …) a full Taffy rebuild can momentarily size
+    // this clip to the flex-1 content band — header + footer text vanish, then recover.
+    // ShadCN keeps overflow on `SidebarContent` only. Floating still clips to the rounded
+    // shell so square header/footer fills do not square off the corners.
+    el = match variant {
+        SidebarVariant::Floating => el
+            .overflow_y("hidden")
+            .rounded("0.5rem")
+            .border(parse_color("sidebar-border"), 1.0)
+            .box_shadow_color([0.0, 0.0, 0.0, 0.05])
+            .box_shadow_blur(2.0)
+            .box_shadow_offset_x(0.0)
+            .box_shadow_offset_y(1.0)
+            .box_shadow_spread(0.0),
+        SidebarVariant::Inset | SidebarVariant::Sidebar => el.overflow_y("visible"),
+    };
     el.set_attr(ATTR_SLOT, SLOT_INNER);
     el.set_attr(ATTR_SIDEBAR, "sidebar");
     el
@@ -897,7 +910,15 @@ pub fn Sidebar(
 pub fn SidebarHeader(class: Option<String>, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut el = slot_children(class, SLOT_HEADER, "header", kids);
-    el = el.p("0.5rem").gap("0.5rem").flex_shrink(0.0);
+    // Inherit-lock `sidebar-foreground` so RSX string leaves (`"RUI Gallery"`) do not
+    // pick up `TextStyle::default` white on the first full cascade of an overlay enter.
+    el = el
+        .p("0.5rem")
+        .gap("0.5rem")
+        .flex_shrink(0.0)
+        .overflow_x("visible")
+        .overflow_y("visible")
+        .text_color(parse_text_color("sidebar-foreground"));
     el
 }
 
@@ -907,7 +928,13 @@ pub fn SidebarHeader(class: Option<String>, children: Option<Element>) -> Elemen
 pub fn SidebarFooter(class: Option<String>, children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut el = slot_children(class, SLOT_FOOTER, "footer", kids);
-    el = el.p("0.5rem").gap("0.5rem").flex_shrink(0.0);
+    el = el
+        .p("0.5rem")
+        .gap("0.5rem")
+        .flex_shrink(0.0)
+        .overflow_x("visible")
+        .overflow_y("visible")
+        .text_color(parse_text_color("sidebar-foreground"));
     el
 }
 
@@ -953,6 +980,7 @@ fn paint_group_label_text(el: &mut Element) {
     let fg = parse_text_color("sidebar-foreground/70");
     if el.text.is_some() {
         el.text_style.color = fg;
+        el.attrs.insert("text_color".into(), "1".into());
     }
     for child in &mut el.children {
         paint_group_label_text(child);
@@ -1542,6 +1570,63 @@ mod tests {
         );
     }
 
+    fn rsx_string_menu_button(id: &str, label: &str) -> Element {
+        SidebarMenuButton(SidebarMenuButtonProps {
+            id: id.into(),
+            is_active: None,
+            variant: None,
+            size: None,
+            class: None,
+            on_click: None,
+            children: Some(Element::from(label)),
+            base: None,
+        })
+    }
+
+    fn first_text_leaf(el: &Element) -> Option<&Element> {
+        if el.text.is_some() {
+            return Some(el);
+        }
+        el.children.iter().find_map(first_text_leaf)
+    }
+
+    #[test]
+    fn rsx_string_menu_button_fg_survives_full_cascade() {
+        // Gallery Header/Footer: `<SidebarMenuButton>"RUI Gallery"</SidebarMenuButton>`
+        // has no `text_color` attr. Overlay enter runs a full cascade; without the
+        // inherit-lock stamp, `TextStyle::default` white overwrites sidebar-foreground.
+        let mut btn = rsx_string_menu_button("gal-workspace", "RUI Gallery");
+        let fg = parse_text_color("sidebar-foreground");
+        let leaf = first_text_leaf(&btn).expect("text leaf");
+        assert_eq!(leaf.text_style.color, fg);
+        assert!(
+            leaf.attrs.contains_key("text_color"),
+            "paint must lock color against cascade"
+        );
+
+        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut btn);
+        let leaf = first_text_leaf(&btn).expect("text leaf after cascade");
+        assert_eq!(
+            leaf.text_style.color, fg,
+            "cascade must not reset RSX string leaves to default white"
+        );
+        assert_ne!(leaf.text_style.color, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn header_slot_inherits_sidebar_foreground() {
+        let el = SidebarHeader(SidebarHeaderProps {
+            class: None,
+            children: Some(Element::from("RUI Gallery")),
+            base: None,
+        });
+        assert_eq!(
+            el.text_style.color,
+            parse_text_color("sidebar-foreground")
+        );
+        assert!(el.attrs.contains_key("text_color"));
+    }
+
     #[test]
     fn menu_button_outline_ring_only_when_active() {
         let rest: Element = sidebar_menu_button("nav-o")
@@ -1589,6 +1674,44 @@ mod tests {
             "inset inner must not be wrapped in a rounded shell"
         );
         assert_eq!(inner.style.border_width, 0.0);
+        assert_eq!(
+            inner.style.overflow.y,
+            taffy::style::Overflow::Visible,
+            "inset inner must not clip Header/Footer glyphs (overflow lives on SidebarContent)"
+        );
+    }
+
+    #[test]
+    fn header_and_footer_do_not_clip_overflow() {
+        let header = SidebarHeader(SidebarHeaderProps {
+            class: None,
+            children: None,
+            base: None,
+        });
+        let footer = SidebarFooter(SidebarFooterProps {
+            class: None,
+            children: None,
+            base: None,
+        });
+        assert_eq!(header.style.overflow.x, taffy::style::Overflow::Visible);
+        assert_eq!(header.style.overflow.y, taffy::style::Overflow::Visible);
+        assert_eq!(footer.style.overflow.x, taffy::style::Overflow::Visible);
+        assert_eq!(footer.style.overflow.y, taffy::style::Overflow::Visible);
+    }
+
+    #[test]
+    fn floating_inner_still_clips_to_rounded_shell() {
+        let el: Element = sidebar("float")
+            .variant(SidebarVariant::Floating)
+            .into();
+        fn find_inner<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_INNER) {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_inner)
+        }
+        let inner = find_inner(&el).expect("sidebar-inner");
+        assert_eq!(inner.style.overflow.y, taffy::style::Overflow::Hidden);
     }
 
     #[test]

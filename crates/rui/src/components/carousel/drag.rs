@@ -1,5 +1,7 @@
 //! Carousel product-layer submodule — shares parent symbols via `use super::*`.
 
+use std::cell::Cell;
+
 use super::geometry::*;
 use super::*;
 
@@ -31,6 +33,11 @@ pub(super) struct CarouselDrag {
 thread_local! {
     static CAROUSEL_DRAG: RefCell<Option<CarouselDrag>> = const { RefCell::new(None) };
     static AUTOPLAY_REG: RefCell<HashMap<String, CarouselCtx>> = RefCell::new(HashMap::new());
+    /// Incremented once per `App::render` before reactive_sync. Offscreen skip means no stamp
+    /// this frame → autoplay must not Advance (and must not busy-wake the event loop).
+    static PAINT_FRAME: Cell<u64> = const { Cell::new(0) };
+    static LAST_PAINT_FRAME: RefCell<HashMap<String, u64>> = RefCell::new(HashMap::new());
+    static LAST_TICK_VISIBLE: RefCell<HashMap<String, bool>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn begin_carousel_drag(drag: CarouselDrag) {
@@ -366,14 +373,18 @@ pub(crate) fn tick_carousel_autoplay() -> bool {
     let mut advanced = false;
     AUTOPLAY_REG.with(|reg| {
         for ctx in reg.borrow().values() {
-            match decide_autoplay(
+            let visible = carousel_painted_this_frame(&ctx.id);
+            let was = last_tick_visible(&ctx.id);
+            set_last_tick_visible(&ctx.id, visible);
+            let inner = decide_autoplay(
                 ctx.autoplay_ms,
                 ctx.paused.peek(),
                 is_carousel_dragging_id(&ctx.id),
                 loop_anim(&ctx.id).is_some(),
                 now,
                 next_autoplay_at(&ctx.id),
-            ) {
+            );
+            match gate_autoplay_visibility(visible, visible && !was, inner) {
                 AutoplayAction::Skip => {}
                 AutoplayAction::FinishLoop => {
                     maybe_finish_loop_snap(ctx, last_visual_offset(&ctx.id));
@@ -390,13 +401,17 @@ pub(crate) fn tick_carousel_autoplay() -> bool {
     advanced
 }
 
-/// 下一次自动轮播唤醒时刻。
+/// 下一次自动轮播唤醒时刻。离屏实例不参与，避免逾期 deadline 把事件循环空转。
 pub(crate) fn carousel_next_wake_at() -> Option<Instant> {
     AUTOPLAY_REG.with(|reg| {
         reg.borrow()
             .values()
             .filter_map(|c| {
-                if c.autoplay_ms == 0 || c.paused.peek() || is_carousel_dragging_id(&c.id) {
+                if c.autoplay_ms == 0
+                    || c.paused.peek()
+                    || is_carousel_dragging_id(&c.id)
+                    || !carousel_painted_this_frame(&c.id)
+                {
                     None
                 } else {
                     next_autoplay_at(&c.id)
@@ -432,5 +447,38 @@ pub(super) fn register_autoplay(ctx: &CarouselCtx) {
 pub(super) fn unregister_autoplay(id: &str) {
     AUTOPLAY_REG.with(|r| {
         r.borrow_mut().remove(id);
+    });
+    LAST_PAINT_FRAME.with(|m| {
+        m.borrow_mut().remove(id);
+    });
+    LAST_TICK_VISIBLE.with(|m| {
+        m.borrow_mut().remove(id);
+    });
+}
+
+/// Call once at the start of each `App::render`, before carousel `reactive_sync`.
+pub(crate) fn begin_carousel_paint_frame() {
+    PAINT_FRAME.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+pub(super) fn stamp_carousel_painted(id: &str) {
+    let frame = PAINT_FRAME.with(|c| c.get());
+    LAST_PAINT_FRAME.with(|m| {
+        m.borrow_mut().insert(id.to_string(), frame);
+    });
+}
+
+fn carousel_painted_this_frame(id: &str) -> bool {
+    let frame = PAINT_FRAME.with(|c| c.get());
+    LAST_PAINT_FRAME.with(|m| m.borrow().get(id).copied() == Some(frame))
+}
+
+fn last_tick_visible(id: &str) -> bool {
+    LAST_TICK_VISIBLE.with(|m| m.borrow().get(id).copied().unwrap_or(false))
+}
+
+fn set_last_tick_visible(id: &str, visible: bool) {
+    LAST_TICK_VISIBLE.with(|m| {
+        m.borrow_mut().insert(id.to_string(), visible);
     });
 }

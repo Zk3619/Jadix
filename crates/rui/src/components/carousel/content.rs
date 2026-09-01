@@ -4,6 +4,16 @@ use super::drag::*;
 use super::geometry::*;
 use super::*;
 
+/// Viewport length is a measured signal, not a Taffy geometry change.
+/// `LayoutChanged` here FullClears the window (parent ScrollArea thumb flash).
+fn viewport_measure_status(applied: bool) -> LayoutStatus {
+    if applied {
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
 fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // 与 Single/Multi 一致：舞台宽度 = 视口 100%；高度由内容撑开（不用写死 rem）。
     // 绝对卡不占文档流，故放隐形测量槽（首卡克隆）提供高度；卡面 h(100%) 填满舞台。
@@ -170,14 +180,12 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // 避免 step 变了但 offset 仍按旧步长 → progress 漂移（首屏放大后卡位错乱/空白）。
     let vp_ctx = ctx.clone();
     stage = stage.reactive_sync(move |el, _lt: &mut LayoutTree| {
+        stamp_carousel_painted(&vp_ctx.id);
         let len = el.layout_bounds[2];
         let off = offset_target(&vp_ctx.id).peek();
         set_last_visual_offset(&vp_ctx.id, off);
         auto_sync_offset_if_snapping(&vp_ctx);
-        if apply_viewport_len(&vp_ctx, len) {
-            return LayoutStatus::LayoutChanged;
-        }
-        LayoutStatus::Clean
+        viewport_measure_status(apply_viewport_len(&vp_ctx, len))
     });
 
     let capture_id = format!("{}:content", ctx.id);
@@ -403,6 +411,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
 
     let vp_ctx = ctx.clone();
     viewport = viewport.reactive_sync(move |el, _lt: &mut LayoutTree| {
+        stamp_carousel_painted(&vp_ctx.id);
         let len = match vp_ctx.orientation {
             CarouselOrientation::Horizontal => el.layout_bounds[2],
             CarouselOrientation::Vertical => el.layout_bounds[3],
@@ -410,11 +419,9 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
         let prev = vp_ctx.viewport_len.peek();
         let thresh = (prev.abs() * 0.01).max(2.0);
         if len > 1.0 && (prev - len).abs() > thresh {
-            if apply_viewport_len(&vp_ctx, len) {
-                return LayoutStatus::LayoutChanged;
-            }
-            // 运动中仅挂起：不 LayoutChanged，避免翻页卡顿。
-            return LayoutStatus::Clean;
+            // Size catch-up / window resize: retarget offset via signals + StyleChanged.
+            // Do not LayoutChanged — that FullClears the page and yanks outer scrollbars.
+            return viewport_measure_status(apply_viewport_len(&vp_ctx, len));
         }
         LayoutStatus::Clean
     });
