@@ -64,7 +64,7 @@ pub use focus_ring::{
 pub use gradient::{
     ensure_gradient_texture, flush_gradient_textures, gradient_texture_radii,
     gradient_texture_size, parse_gradient, rasterize_gradient, sample_gradient,
-    sample_gradient_in_box, set_gradient_raster_dpi, ColorHint, ColorStop, ConicGradient, Gradient,
+    sample_gradient_in_box, set_gradient_raster_dpi, gradient_raster_dpi, ColorHint, ColorStop, ConicGradient, Gradient,
     GradientPosition, LinearGradient, RadialExtent, RadialGradient, RadialShape, RadialSize,
 };
 pub use keyframes::{

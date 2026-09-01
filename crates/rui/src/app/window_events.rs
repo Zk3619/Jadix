@@ -29,33 +29,40 @@ pub(super) fn tick_input_drag_select_at(
         return matches!(hscroll, super::tree_hit::TextDragHScrollTick::Scrolled)
             || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
     };
-    // Clamp into the scrollport before hit-test. A wrap=off leaf is often wider than
-    // the clip; using the raw pointer X maps selection far ahead of the visible edge
-    // ("gap") and feels disconnected from edge auto-scroll.
-    let (hx, hy) = super::tree_hit::clamp_pointer_to_textarea_scrollport(root, rest, x, y);
     let vk = crate::components::input::input_value_signal_key(rest);
     let pk = crate::components::input::input_preedit_signal_key(rest);
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
     let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
     let ui_scale = scale.max(1.0);
-    let mx = if style.overflow.allows_caret_scroll()
-        || style.white_space == crate::style::WhiteSpace::Nowrap
-    {
-        hx + leaf_scroll[0]
-    } else {
-        (hx + leaf_scroll[0]).clamp(bounds[0], bounds[0] + bounds[2])
-    };
-    // Y already clamped to the scrollport; leaf_scroll keeps content-space alignment.
-    let my = hy + leaf_scroll[1];
-    let ix = crate::renderer::hit_test_input_text_index(
-        font_system,
-        &display_el,
-        mx,
-        my,
-        bounds,
-        &style,
-        ui_scale,
+    let (mx, my, hit_bounds, hit_style) = super::tree_hit::input_drag_select_hit_space(
+        root, rest, x, y, bounds, &style, leaf_scroll,
     );
+    // Same mapping as pointer-down. Raw `hit_test_input_text_index` clamps Y onto the
+    // last ink line, so a press in empty chrome (caret → doc end) plus this tick
+    // became a selection from that line to the end.
+    let ix = if !style.overflow.allows_caret_scroll() {
+        crate::renderer::hit_test_textarea_click_caret_index(
+            font_system,
+            &display_el,
+            x + leaf_scroll[0],
+            y + leaf_scroll[1],
+            bounds,
+            &hit_style,
+            ui_scale,
+            mx,
+            my,
+        )
+    } else {
+        crate::renderer::hit_test_input_text_index(
+            font_system,
+            &display_el,
+            mx,
+            my,
+            hit_bounds,
+            &hit_style,
+            ui_scale,
+        )
+    };
     let caret_ix = if committed.is_empty() && pre.is_empty() {
         0
     } else {
@@ -1057,11 +1064,9 @@ impl super::App {
                 None
             };
 
-        // After slider drag: drop(state_borrow) before Signal::set to avoid bind_text /
-        // try_update_element_by_template_id re-entering this borrow_mut.
-        let slider_drag_x = x;
 
         let mut input_drag_keep_redraw = false;
+        let mut text_drag_scrollbar_bump: Option<String> = None;
         let drag_sel_update: Option<(String, usize, usize, usize)> =
             if self.left_button_down && self.scrollbar_drag.is_none() {
                 if self.input_drag_rest.is_some() {
@@ -1084,6 +1089,10 @@ impl super::App {
                         rest,
                         anchor,
                     );
+                    if input_drag_keep_redraw {
+                        text_drag_scrollbar_bump =
+                            Some(crate::utils::text_field::textarea_scroll_rest(rest));
+                    }
                     None
                 } else if let Some(key) = self.label_drag_key.as_ref() {
                     if let Some((bounds, display_el, style, leaf_scroll)) =
@@ -1169,6 +1178,19 @@ impl super::App {
         }
 
         drop(state_borrow);
+        if let Some(scroll_rest) = text_drag_scrollbar_bump {
+            let now = std::time::Instant::now();
+            self.bump_scrollbar_visible_until_axis(
+                &scroll_rest,
+                super::scroll_support::ScrollAxis::X,
+                now,
+            );
+            self.bump_scrollbar_visible_until_axis(
+                &scroll_rest,
+                super::scroll_support::ScrollAxis::Y,
+                now,
+            );
+        }
         self.note_long_press_move(phys_x, phys_y);
         self.sync_mouse_enter_leave(x, y, &mouse_path, MouseButton::Left);
         // Canvas ink: keep dispatching to the press target so the stroke follows the pointer
@@ -1190,7 +1212,7 @@ impl super::App {
         );
         self.last_client_pos = Some([x, y]);
 
-        let slider_dragging = crate::components::slider::tick_slider_drag(slider_drag_x);
+        let slider_dragging = crate::components::slider::tick_slider_drag(x, y);
         let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
         let color_dragging = crate::components::color_picker::tick_color_drag(x, y);
         let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
@@ -1497,17 +1519,50 @@ impl super::App {
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
-                let mx = x + leaf_scroll[0];
-                let my = y + leaf_scroll[1];
-                let ix = crate::renderer::hit_test_input_text_index(
-                    state.text_renderer.font_system_mut(),
-                    &display_el,
-                    mx,
-                    my,
-                    bounds,
-                    &style,
-                    ui_scale,
-                );
+                let is_textarea =
+                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                let (mx, my, hit_bounds, hit_style) = if is_textarea {
+                    super::tree_hit::input_text_edit_pointer_space(
+                        &state.root_element,
+                        &rest,
+                        x,
+                        y,
+                        bounds,
+                        &style,
+                        leaf_scroll,
+                    )
+                } else {
+                    (
+                        x + leaf_scroll[0],
+                        y + leaf_scroll[1],
+                        bounds,
+                        style.clone(),
+                    )
+                };
+                let ix = if is_textarea {
+                    let raw_mx = x + leaf_scroll[0];
+                    crate::renderer::hit_test_textarea_click_caret_index(
+                        state.text_renderer.font_system_mut(),
+                        &display_el,
+                        raw_mx,
+                        y + leaf_scroll[1],
+                        bounds,
+                        &hit_style,
+                        ui_scale,
+                        mx,
+                        my,
+                    )
+                } else {
+                    crate::renderer::hit_test_input_text_index(
+                        state.text_renderer.font_system_mut(),
+                        &display_el,
+                        mx,
+                        my,
+                        hit_bounds,
+                        &hit_style,
+                        ui_scale,
+                    )
+                };
                 let vk = crate::components::input::input_value_signal_key(&rest);
                 let pk = crate::components::input::input_preedit_signal_key(&rest);
                 let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
@@ -1522,10 +1577,14 @@ impl super::App {
                     && crate::renderer::hit_test_input_is_line_side_blank(
                         state.text_renderer.font_system_mut(),
                         &display_el,
-                        mx,
+                        if is_textarea {
+                            x + leaf_scroll[0]
+                        } else {
+                            mx
+                        },
                         my,
                         bounds,
-                        &style,
+                        if is_textarea { &hit_style } else { &style },
                         ui_scale,
                     ) {
                     crate::utils::keyboard::select_line_range(&committed, caret_ix)
@@ -1837,6 +1896,8 @@ impl super::App {
 
             let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
             if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
+                let is_textarea_drag =
+                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
                 // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
@@ -1854,8 +1915,22 @@ impl super::App {
                         .set(Some((caret_ix, caret_ix)));
                     self.input_drag_anchor = caret_ix;
                 }
-                self.input_drag_rest = Some(rest);
+                self.input_drag_rest = Some(rest.clone());
                 crate::utils::text_field::set_text_drag_select_active(true);
+                if is_textarea_drag {
+                    let scroll_rest = crate::utils::text_field::textarea_scroll_rest(&rest);
+                    let now = std::time::Instant::now();
+                    self.bump_scrollbar_visible_until_axis(
+                        &scroll_rest,
+                        super::scroll_support::ScrollAxis::X,
+                        now,
+                    );
+                    self.bump_scrollbar_visible_until_axis(
+                        &scroll_rest,
+                        super::scroll_support::ScrollAxis::Y,
+                        now,
+                    );
+                }
                 self.label_drag_key = None;
                 self.content_scroll_drag = None;
                 // End wheel-bridge so the focus frame is not stuck in text_force_fast.
@@ -2658,6 +2733,11 @@ impl super::App {
         for rest in &rests_offset_moved {
             self.bump_smooth_active_until(rest, now);
         }
+        if !rests_offset_moved.is_empty()
+            && crate::components::avatar::dismiss_avatar_group_expands_on_scroll()
+        {
+            crate::app::runtime::request_redraw();
+        }
 
         let mut re_borrow = match self.state.try_borrow_mut() {
             Ok(b) => b,
@@ -3152,14 +3232,25 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         d.rest == *rest && d.axis == super::scroll_support::ScrollAxis::Y
                     });
 
+                    let text_drag_on_rest = crate::utils::text_field::text_drag_select_active()
+                        && self
+                            .input_drag_rest
+                            .as_ref()
+                            .is_some_and(|id| crate::utils::text_field::textarea_scroll_rest(id) == *rest);
+
                     // Independent per-axis visibility.
                     // - hover over content: allow both
                     // - hover over scrollbar: only that axis
                     // - wheel: axis-specific visible_until
-                    let keep_visible_x =
-                        (is_hover || is_hover_x) || is_dragging_x || now < visible_until_x;
-                    let keep_visible_y =
-                        (is_hover || is_hover_y) || is_dragging_y || now < visible_until_y;
+                    // - text drag-select edge auto-scroll: keep bars visible while scrolling
+                    let keep_visible_x = (is_hover || is_hover_x)
+                        || is_dragging_x
+                        || now < visible_until_x
+                        || text_drag_on_rest;
+                    let keep_visible_y = (is_hover || is_hover_y)
+                        || is_dragging_y
+                        || now < visible_until_y
+                        || text_drag_on_rest;
 
                     // Keep the old activity signal (used elsewhere) as "any axis visible".
                     let keep_visible = is_hover
@@ -3193,8 +3284,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         // still hoverable. Never force fade to 0 when that axis is actively hovered,
                         // dragged, or in the post-wheel visibility window — otherwise `auto` bars only
                         // appear after scrolling bumps `raw_max` above the threshold.
-                        let spring_eligible_x =
-                            raw_max_x > 0.5 || is_hover_x || is_dragging_x || now < visible_until_x;
+                        let spring_eligible_x = raw_max_x > 0.5
+                            || is_hover_x
+                            || is_dragging_x
+                            || now < visible_until_x
+                            || text_drag_on_rest;
                         let target_x_vis = match vis_x.as_str() {
                             "never" => 0.0,
                             "always" => 1.0,
@@ -3224,8 +3318,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     if axis_y_enabled {
                         let fade_y =
                             crate::style::use_ui_transition_cubic(keys.spring_y.as_str(), 0.0);
-                        let spring_eligible_y =
-                            raw_max_y > 0.5 || is_hover_y || is_dragging_y || now < visible_until_y;
+                        let spring_eligible_y = raw_max_y > 0.5
+                            || is_hover_y
+                            || is_dragging_y
+                            || now < visible_until_y
+                            || text_drag_on_rest;
                         let target_y_vis = match vis_y.as_str() {
                             "never" => 0.0,
                             "always" => 1.0,

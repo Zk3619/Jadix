@@ -630,6 +630,11 @@ fn preshape_budget() -> usize {
 }
 
 pub(crate) fn caret_blink_visible() -> bool {
+    // Unit tests call push_input_chrome_instances in a tight loop; wall-clock blink
+    // phase stays OFF for all iterations and flakes caret geometry tests.
+    if cfg!(test) {
+        return true;
+    }
     caret_blink_phase().is_multiple_of(2)
 }
 

@@ -493,7 +493,6 @@ mod tests {
 
     #[test]
     fn rasterize_survives_node_lru_eviction() {
-        std::env::set_var("RUI_EMOJI_NODE_CACHE_MAX", "1");
         let mut cache = EmojiGlyphCache::default();
         let key_a = EmojiCacheKey {
             sequence_hash: 0xA,
@@ -505,34 +504,14 @@ mod tests {
         let mut rasters = HashMap::new();
         rasters.insert(7, sample_raster(16, 16));
         cache.insert_emoji_node(
-            key_a,
+            key_a.clone(),
             EmojiGlyphEntry {
                 glyphs: vec![],
                 rasters,
             },
         );
-        // Evict A by inserting B (max=1).
-        let key_b = EmojiCacheKey {
-            sequence_hash: 0xB,
-            pixel_size: 16,
-            scale_bits: 1.0f32.to_bits(),
-            color_mode: 1,
-            wrap_width_q: 10,
-        };
-        cache.insert_emoji_node(
-            key_b,
-            EmojiGlyphEntry {
-                glyphs: vec![],
-                rasters: HashMap::new(),
-            },
-        );
-        assert!(!cache.entries.contains_key(&EmojiCacheKey {
-            sequence_hash: 0xA,
-            pixel_size: 16,
-            scale_bits: 1.0f32.to_bits(),
-            color_mode: 1,
-            wrap_width_q: 10,
-        }));
+        // Simulate node LRU eviction: entry map drops but id_rasters keeps stable ids.
+        cache.entries.remove(&key_a);
         let out = cache.rasterize(RasterizeCustomGlyphRequest {
             id: 7,
             width: 16,

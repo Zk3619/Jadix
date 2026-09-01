@@ -396,6 +396,98 @@ pub fn hit_test_input_text_index(
     line_start + local
 }
 
+/// True when `(mx, my)` sits below the last hard/visual line of a textarea leaf.
+/// Native behavior: click empty space under the last line → caret at document end.
+pub fn hit_test_textarea_below_last_line(
+    display: &str,
+    my: f32,
+    bounds: [f32; 4],
+    style: &TextStyle,
+) -> bool {
+    let y = bounds[1];
+    let lh = line_height_for_style(style, 1.0).max(1.0);
+    let line_count = textarea_line_count(display, bounds, style);
+    let content_bottom = y + line_count as f32 * lh;
+    // Strictly below the last line box — clicks on the last line keep precise hit-test.
+    my > content_bottom + 1.0
+}
+
+/// Textarea press: line-start / line-end padding → that line; other empty chrome → doc end.
+pub fn hit_test_textarea_click_caret_index(
+    font_system: &mut glyphon::FontSystem,
+    display: &str,
+    pointer_x: f32,
+    pointer_y: f32,
+    leaf_bounds: [f32; 4],
+    style: &TextStyle,
+    ui_scale: f32,
+    hit_mx: f32,
+    hit_my: f32,
+) -> usize {
+    let y = leaf_bounds[1];
+    let lh = line_height_for_style(style, 1.0).max(1.0);
+    let content_bottom =
+        y + textarea_line_count(display, leaf_bounds, style) as f32 * lh;
+    // Use the unclamped pointer Y. Soft-wrap pointer space clamps `hit_my` onto the
+    // leaf, which would otherwise map empty chrome onto the last line and start a drag.
+    if pointer_y > content_bottom + 1.0 {
+        return display.len();
+    }
+    let on_a_line_band = pointer_y >= y - 1.0 && pointer_y <= content_bottom + 1.0;
+    if on_a_line_band
+        && (pointer_x < leaf_bounds[0]
+            || pointer_x > leaf_bounds[0] + leaf_bounds[2].max(0.0)
+            || hit_test_input_is_line_side_blank(
+                font_system,
+                display,
+                pointer_x,
+                pointer_y,
+                leaf_bounds,
+                style,
+                ui_scale,
+            ))
+    {
+        return hit_test_input_text_index(
+            font_system,
+            display,
+            pointer_x,
+            pointer_y,
+            leaf_bounds,
+            style,
+            ui_scale,
+        );
+    }
+    hit_test_input_text_index(
+        font_system,
+        display,
+        hit_mx,
+        hit_my,
+        leaf_bounds,
+        style,
+        ui_scale,
+    )
+}
+
+fn textarea_line_count(display: &str, bounds: [f32; 4], style: &TextStyle) -> usize {
+    use crate::style::WhiteSpace;
+    let soft_wrap =
+        style.white_space != WhiteSpace::Nowrap && !style.overflow.allows_caret_scroll();
+    if soft_wrap {
+        crate::text::soft_visual_line_byte_ranges(
+            display,
+            style.size,
+            style.weight,
+            line_height_for_style(style, 1.0).max(1.0),
+            bounds[2].max(1.0),
+            style.wrap_mode.to_line_break_source(),
+        )
+        .len()
+        .max(1)
+    } else {
+        display.split('\n').count().max(1)
+    }
+}
+
 /// True when `(mx, my)` is in the horizontal blank beside a hard line's ink
 /// (left/right of glyphs, including padding outside the text leaf).
 ///
@@ -479,7 +571,9 @@ pub fn hit_test_input_is_line_side_blank(
         family,
         wrap_limit,
     );
-    let content_w = if style.overflow.allows_caret_scroll() {
+    let content_w = if style.overflow.allows_caret_scroll()
+        || style.white_space == crate::style::WhiteSpace::Nowrap
+    {
         measured
     } else {
         measured.min(box_w)
@@ -630,6 +724,80 @@ mod tests {
     }
 
     #[test]
+    fn textarea_click_padding_snaps_to_line_start_and_end() {
+        let mut fs = test_font_system();
+        let text = "abcdefghijklmnop";
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.white_space = crate::style::WhiteSpace::Nowrap;
+        style.overflow = TextOverflow::Clip;
+        let bounds = [32.0, 8.0, 200.0, 21.0];
+        let left = hit_test_textarea_click_caret_index(
+            &mut fs, text, 8.0, 16.0, bounds, &style, 1.0, 32.0, 16.0,
+        );
+        assert_eq!(left, 0, "scrollport left padding must snap to line start");
+        let right = hit_test_textarea_click_caret_index(
+            &mut fs, text, 250.0, 16.0, bounds, &style, 1.0, 232.0, 16.0,
+        );
+        assert_eq!(
+            right,
+            text.len(),
+            "scrollport / trailing blank must snap to line end"
+        );
+    }
+
+    #[test]
+    fn textarea_click_line_padding_does_not_jump_to_doc_end() {
+        let mut fs = test_font_system();
+        let line0 = "short";
+        let text = format!("{line0}\nsecond-line-here");
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        style.white_space = crate::style::WhiteSpace::Nowrap;
+        style.overflow = TextOverflow::Clip;
+        let bounds = [32.0, 8.0, 80.0, 42.0];
+        let left = hit_test_textarea_click_caret_index(
+            &mut fs, &text, 8.0, 16.0, bounds, &style, 1.0, 32.0, 16.0,
+        );
+        assert_eq!(left, 0, "first-line left padding must be line start, not doc end");
+        let right = hit_test_textarea_click_caret_index(
+            &mut fs, &text, 200.0, 16.0, bounds, &style, 1.0, 112.0, 16.0,
+        );
+        assert_eq!(
+            right,
+            line0.len(),
+            "first-line right padding must be that line's end, got {right}"
+        );
+        let below = hit_test_textarea_click_caret_index(
+            &mut fs, &text, 40.0, 80.0, bounds, &style, 1.0, 40.0, 80.0,
+        );
+        assert_eq!(below, text.len(), "true below-last-line blank still goes to doc end");
+        // Soft-wrap pointer space clamps Y onto the last line. Center empty chrome
+        // must still be doc-end, not a mid-line glyph (which starts drag-select).
+        let clamped_last_line_y = bounds[1] + 21.0 + 10.0;
+        let below_clamped = hit_test_textarea_click_caret_index(
+            &mut fs,
+            &text,
+            48.0,
+            80.0,
+            bounds,
+            &style,
+            1.0,
+            48.0,
+            clamped_last_line_y,
+        );
+        assert_eq!(
+            below_clamped,
+            text.len(),
+            "Y-clamped empty chrome must not hit a glyph, got {below_clamped}"
+        );
+    }
+
+    #[test]
     fn line_side_blank_detects_padding_and_ink_gap() {
         let mut fs = test_font_system();
         let text = "hi";
@@ -673,5 +841,27 @@ mod tests {
         assert!(!hit_test_input_is_line_side_blank(
             &mut fs, text, 2.0, 30.0, bounds, &style, 1.0
         ));
+    }
+
+    #[test]
+    fn textarea_below_last_line_detects_blank_under_ink() {
+        let text = "line1\nline2";
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(21.0);
+        let bounds = [0.0, 0.0, 200.0, 80.0];
+        assert!(
+            hit_test_textarea_below_last_line(text, 50.0, bounds, &style),
+            "click below last line body"
+        );
+        assert!(
+            !hit_test_textarea_below_last_line(text, 25.0, bounds, &style),
+            "click on second line must not count as below"
+        );
+        assert!(
+            !hit_test_textarea_below_last_line(text, 43.0, bounds, &style),
+            "click on last line baseline must not count as below"
+        );
     }
 }

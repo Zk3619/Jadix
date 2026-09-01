@@ -1607,6 +1607,16 @@ impl AppState {
                 &mut self.layout_tree,
                 &mut sync_impact,
             );
+            crate::components::sidebar::sync_sidebar_rail_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
             crate::components::bubble::sync_bubble_reactions_subtree(
                 &mut self.root_element,
                 &mut sync_impact,

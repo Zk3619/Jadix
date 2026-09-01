@@ -235,6 +235,9 @@ impl super::App {
                 crate::app::runtime::request_redraw();
                 return true;
             }
+            if crate::components::sidebar::try_toggle_sidebar_from_key(&event, &self.modifiers) {
+                return true;
+            }
         }
         if event.state == ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {

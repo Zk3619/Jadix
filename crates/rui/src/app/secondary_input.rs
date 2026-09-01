@@ -235,17 +235,49 @@ impl super::App {
                         .map(
                             |(rest, bounds, display_el, style, leaf_scroll, focus_id)| {
                                 let ui_scale = scale.max(1.0);
-                                let mx = x + leaf_scroll[0];
-                                let my = y + leaf_scroll[1];
-                                let ix = crate::renderer::hit_test_input_text_index(
-                                    sec.text_renderer.font_system_mut(),
-                                    &display_el,
-                                    mx,
-                                    my,
-                                    bounds,
-                                    &style,
-                                    ui_scale,
-                                );
+                                let is_textarea =
+                                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                                let (mx, my, hit_bounds, hit_style) = if is_textarea {
+                                    super::tree_hit::input_text_edit_pointer_space(
+                                        &sec.root_element,
+                                        &rest,
+                                        x,
+                                        y,
+                                        bounds,
+                                        &style,
+                                        leaf_scroll,
+                                    )
+                                } else {
+                                    (
+                                        x + leaf_scroll[0],
+                                        y + leaf_scroll[1],
+                                        bounds,
+                                        style.clone(),
+                                    )
+                                };
+                                let ix = if is_textarea {
+                                    crate::renderer::hit_test_textarea_click_caret_index(
+                                        sec.text_renderer.font_system_mut(),
+                                        &display_el,
+                                        x + leaf_scroll[0],
+                                        y + leaf_scroll[1],
+                                        bounds,
+                                        &hit_style,
+                                        ui_scale,
+                                        mx,
+                                        my,
+                                    )
+                                } else {
+                                    crate::renderer::hit_test_input_text_index(
+                                        sec.text_renderer.font_system_mut(),
+                                        &display_el,
+                                        mx,
+                                        my,
+                                        hit_bounds,
+                                        &hit_style,
+                                        ui_scale,
+                                    )
+                                };
                                 let vk = crate::components::input::input_value_signal_key(&rest);
                                 let pk = crate::components::input::input_preedit_signal_key(&rest);
                                 let committed = use_signal(&vk, String::new).get();
@@ -261,10 +293,14 @@ impl super::App {
                                     && crate::renderer::hit_test_input_is_line_side_blank(
                                         sec.text_renderer.font_system_mut(),
                                         &display_el,
-                                        mx,
+                                        if is_textarea {
+                                            x + leaf_scroll[0]
+                                        } else {
+                                            mx
+                                        },
                                         my,
                                         bounds,
-                                        &style,
+                                        if is_textarea { &hit_style } else { &style },
                                         ui_scale,
                                     ) {
                                     crate::utils::keyboard::select_line_range(&committed, caret_ix)

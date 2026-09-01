@@ -1060,7 +1060,7 @@ mod tests {
         let size = 14.0;
         let lh = size * 1.5;
         let prepared = prepare(text, size, 500, lh);
-        let intrinsic = intrinsic_width(&prepared);
+        let intrinsic = snap_content_text_width(intrinsic_width(&prepared));
         let avail = (intrinsic * 0.5).max(1.0);
         let (w, h) = measure_leaf(text, size, 500, lh, None, Some(avail), 0.0, true);
         assert!(

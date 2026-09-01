@@ -19,7 +19,8 @@ use crate::core::scroll_viewport::{
     scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
     scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
     scroll_scrollbar_x_side_signal_key, scroll_scrollbar_y_side_signal_key,
-    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+    scroll_viewport_axis_offset, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+    SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
@@ -1101,7 +1102,6 @@ enum ScrollSiblingBandAction {
     StopAfter,
 }
 
-#[inline]
 fn scroll_sibling_band_action(
     child_abs: [f32; 2],
     child_size: [f32; 2],
@@ -1158,6 +1158,46 @@ fn skipped_sibling_extent(child: &Element, child_abs: [f32; 2], child_size: [f32
     } else {
         scroll_sibling_extent(child_abs, child_size)
     }
+}
+
+/// In-flow Taffy descendant extent relative to `origin_y` (viewport content-box top).
+/// Clip-cull / band-cull must not drop the last CommandList row from `content_h`.
+fn taffy_inflow_descendant_h(
+    taffy: &TaffyTree,
+    element: &Element,
+    node: NodeId,
+    origin_y: f32,
+) -> f32 {
+    let Ok(child_nodes) = taffy.children(node) else {
+        return 0.0;
+    };
+    let n = element.children.len().min(child_nodes.len());
+    let mut h = 0.0_f32;
+    for i in 0..n {
+        let child = &element.children[i];
+        if child.style.position == Position::Absolute || child.style.position_fixed {
+            continue;
+        }
+        let Ok(cl) = taffy.layout(child_nodes[i]) else {
+            continue;
+        };
+        let top = origin_y + cl.location.y;
+        h = h.max(top + cl.size.height);
+        if child
+            .focus_id
+            .as_deref()
+            .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX))
+        {
+            continue;
+        }
+        h = h.max(taffy_inflow_descendant_h(
+            taffy,
+            child,
+            child_nodes[i],
+            top,
+        ));
+    }
+    h
 }
 
 #[cfg(feature = "devtools")]
@@ -2564,6 +2604,40 @@ impl LayoutTree {
         }
     }
 
+    /// Stamp `layout_bounds` for clip-culled descendants from Taffy so max-scroll tests and
+    /// scroll-into-view still see the last row (collect skips paint, not geometry).
+    fn stamp_descendants_layout_bounds_from_taffy(
+        &self,
+        element: &mut Element,
+        node: NodeId,
+        abs: [f32; 2],
+        size: [f32; 2],
+    ) {
+        let Ok(child_nodes) = self.taffy.children(node) else {
+            return;
+        };
+        let pass = [
+            abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
+            abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
+        ];
+        let n = element.children.len().min(child_nodes.len());
+        for i in 0..n {
+            let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+                continue;
+            };
+            let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
+            let child_size = [cl.size.width, cl.size.height];
+            element.children[i].layout_bounds =
+                [child_abs[0], child_abs[1], child_size[0], child_size[1]];
+            self.stamp_descendants_layout_bounds_from_taffy(
+                &mut element.children[i],
+                child_nodes[i],
+                child_abs,
+                child_size,
+            );
+        }
+    }
+
     /// `ancestor_scroll_viewport_rest`: nearest ancestor `scroll:{id}` viewport id for this subtree.
     /// Used so nested ScrollAreas do not inflate parent content extents (matches
     /// `scroll_support::collect_descendant_extent`); fixes thumb math for middle layers in 3+ nesting.
@@ -2865,6 +2939,9 @@ impl LayoutTree {
                 };
                 element.collect_extent = extent;
                 element.collect_extent_valid = true;
+                self.stamp_descendants_layout_bounds_from_taffy(
+                    element, node, [abs_x, abs_y], [lay_w, lay_h],
+                );
                 // Parent already has fresh layout_bounds + paint_visual; refresh descendants
                 // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
                 #[cfg(feature = "devtools")]
@@ -3366,7 +3443,15 @@ impl LayoutTree {
             } else {
                 (render_x, render_y, lay_w, lay_h)
             };
-            let text_x = text_x0 - text_style.scroll_x.max(0.0) * text_scale;
+            // wrap=off textarea pans via viewport `scroll_acc` (signal sx). Do not also
+            // subtract `text_style.scroll_x` (single-line Hidden input only).
+            let viewport_nowrap_edit = text_style.white_space == crate::style::WhiteSpace::Nowrap
+                && !text_style.overflow.allows_caret_scroll();
+            let text_x = if viewport_nowrap_edit {
+                text_x0
+            } else {
+                text_x0 - text_style.scroll_x.max(0.0) * text_scale
+            };
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
             let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
             // Glyphon cannot rotate. Lucide + spin/rotate → cached glyph texture + element
@@ -3766,10 +3851,10 @@ impl LayoutTree {
         let scroll_y = is_scroll_viewport
             || matches!(element.style.overflow.y, taffy::style::Overflow::Scroll);
         if scroll_x {
-            next_scroll_acc[0] += element.scroll_offset[0];
+            next_scroll_acc[0] += scroll_viewport_axis_offset(element, is_scroll_viewport, true);
         }
         if scroll_y {
-            next_scroll_acc[1] += element.scroll_offset[1];
+            next_scroll_acc[1] += scroll_viewport_axis_offset(element, is_scroll_viewport, false);
         }
 
         let pass_to_children = element
@@ -4202,17 +4287,27 @@ impl LayoutTree {
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 let content_w = (max_right - abs_x).max(layout.size.width);
-                let mut content_h = (max_bottom - abs_y).max(layout.size.height);
-                // Textarea: floor content_h by explicit Length children + padding. A flex-sized
-                // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
-                // still holds the real field-sizing-content height.
-                if rest.ends_with("__ta_scroll") {
-                    content_h = crate::utils::text_field::textarea_scroll_content_h(
+                let content_h = if rest.ends_with("__ta_scroll") {
+                    // Floor content_h by explicit Length children + padding. A flex-sized
+                    // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
+                    // still holds the real field-sizing-content height.
+                    crate::utils::text_field::textarea_scroll_content_h(
                         element,
                         abs_y,
                         layout.size.height,
-                    );
-                }
+                    )
+                } else {
+                    // Children are laid out in the content box; padding-bottom sits *after*
+                    // the last child and must still be reachable at max scroll.
+                    let pad_b = crate::layout::lp_length_px(element.style.padding.bottom)
+                        .unwrap_or(0.0)
+                        .max(0.0);
+                    let from_collect = (max_bottom - abs_y + pad_b).max(layout.size.height);
+                    // Clip-cull of the last row must not shrink max-scroll (CommandList / DialogBody).
+                    let from_taffy =
+                        taffy_inflow_descendant_h(&self.taffy, element, node, 0.0) + pad_b;
+                    from_collect.max(from_taffy)
+                };
                 scroll_metrics.push((
                     rest.to_string(),
                     [abs_x, abs_y, layout.size.width, layout.size.height],
@@ -4629,6 +4724,11 @@ fn push_input_chrome_instances(
     };
     let soft_wrap = style.white_space == crate::style::WhiteSpace::Normal
         && !style.overflow.allows_caret_scroll();
+    // wrap=off textarea: viewport-pan like native `<input>` — do not clamp chrome to
+    // the content leaf width (selection/caret must track signal `sx`).
+    let viewport_nowrap_edit = style.white_space == crate::style::WhiteSpace::Nowrap
+        && !style.overflow.allows_caret_scroll();
+    let pan = style.overflow.allows_caret_scroll() || viewport_nowrap_edit;
     // Soft-wrap: visual rows from measure layout (matches glyphon soft paint).
     // Nowrap / single-line Hidden: hard-`\n` rows only.
     let soft_ranges: Vec<(usize, usize)> = if soft_wrap {
@@ -4759,7 +4859,6 @@ fn push_input_chrome_instances(
                 line_height,
             );
             let align_dx = style.align_inline_offset(line_w, box_w);
-            let pan = style.overflow.allows_caret_scroll();
             let sel_w = if pan {
                 (end_w - prefix_w).max(0.0)
             } else {
@@ -4806,7 +4905,7 @@ fn push_input_chrome_instances(
         // Soft-wrap: do not clamp to `box_w - caret_w` — that parked the hairline on the
         // last glyph when a visual line filled the leaf (gallery soft-wrap caret bug).
         caret_x = caret_x.max(x);
-    } else if !style.overflow.allows_caret_scroll() {
+    } else if !pan {
         caret_x = caret_x.min(x + box_w - caret_w).max(x);
     }
     let c = style.color;
@@ -5152,6 +5251,81 @@ mod prepared_text_attach_tests {
         assert!(
             (caret_y - expected_y).abs() < 0.5,
             "caret should be vertically centered on line 1 (y={caret_y}, expected={expected_y})"
+        );
+    }
+
+    #[test]
+    fn nowrap_textarea_selection_highlight_follows_viewport_scroll() {
+        let text = "abcdefghijklmnop";
+        let lh = 21.0_f32;
+        let prefix_mid = prefix_width_logical(text, 4, 14.0, 400, lh);
+        let prefix_end = prefix_width_logical(text, 8, 14.0, 400, lh);
+        let scroll_x = 80.0_f32;
+        let layout_x = 20.0_f32;
+        let text_x = layout_x - scroll_x;
+
+        let mut style = TextStyle::default();
+        style.size = 14.0;
+        style.weight = 400;
+        style.line_height_px = Some(lh);
+        style.color = [0, 0, 0, 255];
+        style.white_space = crate::style::WhiteSpace::Nowrap;
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: 8,
+            selection: Some((0, 8)),
+            selection_bg: [80, 120, 200, 90],
+            overwrite_highlight: None,
+        });
+
+        let mut selection = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            text_x,
+            0.0,
+            800.0,
+            lh,
+            None,
+            1.0,
+        );
+        assert_eq!(selection.len(), 1);
+        assert!(
+            (selection[0].rect_pos[0] - text_x).abs() < 1.5,
+            "selection start must track panned text origin"
+        );
+        assert!(
+            (selection[0].rect_size[0] - prefix_end).abs() < 2.0,
+            "selection width must stay glyph-tight"
+        );
+
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: 8,
+            selection: Some((4, 8)),
+            selection_bg: [80, 120, 200, 90],
+            overwrite_highlight: None,
+        });
+        selection.clear();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            text_x,
+            0.0,
+            800.0,
+            lh,
+            None,
+            1.0,
+        );
+        assert_eq!(selection.len(), 1);
+        assert!(
+            (selection[0].rect_pos[0] - (text_x + prefix_mid)).abs() < 1.5,
+            "mid-line selection must follow sx (x={} expected={})",
+            selection[0].rect_pos[0],
+            text_x + prefix_mid
         );
     }
 

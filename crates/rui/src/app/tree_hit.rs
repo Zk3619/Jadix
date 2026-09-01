@@ -267,10 +267,14 @@ pub(crate) fn next_hit_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2
     let scroll_x = is_scroll_viewport || matches!(ox, taffy::style::Overflow::Scroll);
     let scroll_y = is_scroll_viewport || matches!(oy, taffy::style::Overflow::Scroll);
     if scroll_x {
-        next[0] += el.scroll_offset[0];
+        next[0] += crate::core::scroll_viewport::scroll_viewport_axis_offset(
+            el, is_scroll_viewport, true,
+        );
     }
     if scroll_y {
-        next[1] += el.scroll_offset[1];
+        next[1] += crate::core::scroll_viewport::scroll_viewport_axis_offset(
+            el, is_scroll_viewport, false,
+        );
     }
     next
 }
@@ -588,10 +592,16 @@ fn find_input_text_at_hit(
             }
         }
     }
-    // Padding / empty chrome of the field: children missed (pointer is not on the
-    // text leaf) but the click is still inside this `input:` / `textarea:` box.
-    // Do not steal clear/reveal adornment hits.
-    if let Some(id) = el.focus_id.as_deref() {
+    // Padding / empty chrome, and the inner textarea `scroll:` region: children
+    // missed (pointer is not on the text leaf) but the click is still inside the
+    // field. The region would otherwise `Hit(None)` and swallow the chrome fallback
+    // — wrap=off blank clicks then only focus, caret defaults to document end.
+    let field_id = el
+        .focus_id
+        .as_deref()
+        .filter(|id| is_text_edit_focus_id(id))
+        .or(text_edit_fid.filter(|id| is_text_edit_focus_id(id)));
+    if let Some(id) = field_id {
         let rest = id
             .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
             .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
@@ -834,7 +844,8 @@ pub(super) fn reconcile_pointer_hovers(
             if !reenter && rc_changed {
                 if let HoverKey::Focus(fid) = &next.key {
                     let key = format!("{fid}_hover");
-                    if !crate::core::reactivity::use_signal(&key, || false).peek() {
+                    let sig = crate::core::reactivity::use_signal(&key, || false);
+                    if sig.is_alive() && !sig.peek() {
                         reenter = true;
                     }
                 }
@@ -1115,6 +1126,78 @@ pub(super) fn clamp_pointer_to_textarea_scrollport(
     (
         x.clamp(clip[0], clip[0] + clip[2]),
         y.clamp(clip[1], clip[1] + clip[3]),
+    )
+}
+
+/// Map pointer + leaf metadata into the coordinate space expected by
+/// [`crate::renderer::hit_test_input_text_index`] during an active drag-select.
+///
+/// Pointer space for input/textarea hit-testing: for `wrap=off` textarea the viewport
+/// `sx` is already baked into [`visual_xy`] leaf bounds (same as layout collect
+/// `text_x`); hit bounds stay on the leaf with `scroll_x = 0`. Pointer X/Y may still
+/// clamp to the scrollport clip so edge drag-select tracks the visible edge.
+pub(super) fn input_text_edit_pointer_space(
+    root: &Element,
+    rest: &str,
+    x: f32,
+    y: f32,
+    leaf_bounds: [f32; 4],
+    style: &crate::style::TextStyle,
+    leaf_scroll: [f32; 2],
+) -> (f32, f32, [f32; 4], crate::style::TextStyle) {
+    input_text_edit_pointer_space_impl(root, rest, x, y, leaf_bounds, style, leaf_scroll)
+}
+
+/// While drag-selecting in a `wrap=off` textarea, prefer [`input_text_edit_pointer_space`].
+pub(super) fn input_drag_select_hit_space(
+    root: &Element,
+    rest: &str,
+    x: f32,
+    y: f32,
+    leaf_bounds: [f32; 4],
+    style: &crate::style::TextStyle,
+    leaf_scroll: [f32; 2],
+) -> (f32, f32, [f32; 4], crate::style::TextStyle) {
+    input_text_edit_pointer_space_impl(root, rest, x, y, leaf_bounds, style, leaf_scroll)
+}
+
+fn input_text_edit_pointer_space_impl(
+    root: &Element,
+    rest: &str,
+    x: f32,
+    y: f32,
+    leaf_bounds: [f32; 4],
+    style: &crate::style::TextStyle,
+    leaf_scroll: [f32; 2],
+) -> (f32, f32, [f32; 4], crate::style::TextStyle) {
+    use crate::style::WhiteSpace;
+
+    let (hx, hy) = clamp_pointer_to_textarea_scrollport(root, rest, x, y);
+    let mx_base = hx + leaf_scroll[0];
+    let my = hy + leaf_scroll[1];
+
+    if style.white_space == WhiteSpace::Nowrap && !style.overflow.allows_caret_scroll() {
+        if let Some(clip) = textarea_scrollport_visual_clip(root, rest) {
+            let mut hit_style = style.clone();
+            // Viewport pan is in leaf visual x via `next_hit_scroll_acc`; do not also
+            // add `scroll_x` or use clip origin (misses region padding → caret偏右).
+            hit_style.scroll_x = 0.0;
+            let mx = mx_base.clamp(clip[0], clip[0] + clip[2]);
+            let my = my.clamp(clip[1], clip[1] + clip[3]);
+            return (mx, my, leaf_bounds, hit_style);
+        }
+    }
+
+    let mx = if style.overflow.allows_caret_scroll() || style.white_space == WhiteSpace::Nowrap {
+        mx_base
+    } else {
+        mx_base.clamp(leaf_bounds[0], leaf_bounds[0] + leaf_bounds[2])
+    };
+    (
+        mx,
+        my.clamp(leaf_bounds[1], leaf_bounds[1] + leaf_bounds[3]),
+        leaf_bounds,
+        style.clone(),
     )
 }
 
@@ -1839,8 +1922,27 @@ mod hover_occlusion_tests {
     }
 
     fn viewport_scroll_bump(root: &mut Element, sy: f32) {
-        if let Some(vp) = root.children.get_mut(1) {
-            vp.scroll_offset[1] = sy;
+        fn bump(el: &mut Element, sy: f32) -> bool {
+            if el
+                .focus_id
+                .as_deref()
+                .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
+            {
+                el.scroll_offset[1] = sy;
+                return true;
+            }
+            for child in &mut el.children {
+                if bump(child, sy) {
+                    return true;
+                }
+            }
+            false
+        }
+        if !bump(root, sy) {
+            // Legacy gallery shell: sidebar + main viewport siblings.
+            if let Some(vp) = root.children.get_mut(1) {
+                vp.scroll_offset[1] = sy;
+            }
         }
     }
 }
@@ -1985,6 +2087,20 @@ mod textarea_text_hit_tests {
         assert_eq!(hit.0, "ta-hit");
         assert_eq!(hit.5, format!("{TEXTAREA_FOCUS_PREFIX}ta-hit"));
         assert!(hit.2.contains('\n'), "display must include hard newlines");
+    }
+
+    #[test]
+    fn find_input_text_at_hits_scrollport_padding_not_only_leaf() {
+        let (root, lh) = textarea_like_tree();
+        let line0_y = 58.0 + lh * 0.4;
+        let left = find_input_text_at(&root, None, 10.0, line0_y, [0.0, 0.0])
+            .expect("left region padding must resolve to the textarea leaf");
+        assert_eq!(left.0, "ta-hit");
+        assert_eq!(left.1[0], 34.0, "must return leaf bounds, not the scrollport");
+
+        let below = find_input_text_at(&root, None, 120.0, 90.0, [0.0, 0.0])
+            .expect("empty clip below a short leaf must still resolve to the textarea");
+        assert_eq!(below.0, "ta-hit");
     }
 
     #[test]
@@ -2163,6 +2279,61 @@ mod drag_select_bounds_tests {
             assert_eq!(tick, TextDragHScrollTick::Scrolled);
             let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
             assert!(sx > 0.5, "inner edge hot-zone must advance sx, got {sx}");
+        });
+    }
+
+    #[test]
+    fn input_drag_select_hit_space_uses_leaf_visual_bounds_for_nowrap() {
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::core::scroll_viewport::{
+            focus_id_for_scroll_viewport, scroll_offset_x_signal_key,
+        };
+        use crate::style::TextOverflow;
+        use crate::utils::text_field::textarea_scroll_rest;
+
+        create_root(|| {
+            let id = "ta-drag-hit-sx";
+            let rest = textarea_scroll_rest(id);
+            let vp_fid = focus_id_for_scroll_viewport(&rest);
+
+            use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).set_silent(120.0);
+
+            let mut leaf = Element::new();
+            leaf.layout_bounds = [32.0, 68.0, 800.0, 40.0];
+            leaf.text = Some("padding: 8px 16px; background: #ffffff; border-radius: 6px".into());
+            leaf.text_style.white_space = crate::style::WhiteSpace::Nowrap;
+            leaf.text_style.overflow = TextOverflow::Clip;
+            leaf.focus_id = Some(format!("textarea:{id}"));
+
+            let mut viewport = Element::new();
+            viewport.focus_id = Some(vp_fid);
+            viewport.style.overflow.x = Overflow::Scroll;
+            viewport.style.overflow.y = Overflow::Scroll;
+            viewport.layout_bounds = [20.0, 40.0, 200.0, 120.0];
+            // Tree scroll still zero — signal owns sx during drag edge auto-scroll.
+            viewport.scroll_offset = [0.0, 0.0];
+            // Leaf visual x = layout_x − sx (padding inset from clip left).
+            let leaf_visual = [-88.0, 68.0, 800.0, 40.0];
+            let style = leaf.text_style.clone();
+            viewport = viewport.child(leaf);
+            let (mx, _, hit_bounds, hit_style) = input_drag_select_hit_space(
+                &viewport,
+                id,
+                500.0,
+                80.0,
+                leaf_visual,
+                &style,
+                [0.0, 0.0],
+            );
+
+            assert_eq!(hit_bounds, leaf_visual);
+            assert_eq!(hit_style.scroll_x, 0.0);
+            assert!((mx - 220.0).abs() < 0.5, "pointer must clamp to clip right, got {mx}");
+            let content_x = mx - hit_bounds[0];
+            assert!(
+                (content_x - 308.0).abs() < 0.5,
+                "content x must match panned leaf origin at clip edge, got {content_x}"
+            );
         });
     }
 }

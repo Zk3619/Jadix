@@ -1426,6 +1426,42 @@ fn push_f_attr(buf: &mut String, name: &str, val: f32) {
     }
 }
 
+/// Theme tokens (`primary`, `border`, `chart-1`, …) are not CSS named colors.
+/// resvg/usvg drops unknown paints → fully transparent pixmap while the leaf
+/// still occupies layout (Gallery ProgressCircle looks like empty space).
+fn svg_paint_to_css(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty()
+        || s.eq_ignore_ascii_case("none")
+        || s.eq_ignore_ascii_case("currentcolor")
+        || s.eq_ignore_ascii_case("transparent")
+        || s.starts_with("url(")
+        || s.starts_with('#')
+        || s.contains('(')
+    {
+        return s.to_string();
+    }
+    match crate::style::try_parse_color(s) {
+        Some(c) => {
+            let r = (c[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+            let g = (c[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+            let b = (c[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+            let a = c[3].clamp(0.0, 1.0);
+            if a >= 1.0 - f32::EPSILON {
+                format!("rgb({r},{g},{b})")
+            } else {
+                format!("rgba({r},{g},{b},{a:.4})")
+            }
+        }
+        None => s.to_string(),
+    }
+}
+
+fn push_paint_attr(buf: &mut String, name: &str, val: Option<&str>) {
+    let owned = val.map(svg_paint_to_css);
+    push_attr(buf, name, owned.as_deref());
+}
+
 fn emit_stroke_attrs(
     buf: &mut String,
     stroke: &Option<String>,
@@ -1437,7 +1473,7 @@ fn emit_stroke_attrs(
     push_attr(buf, "fill-rule", Some(fill_rule.as_str()));
     push_attr(buf, "stroke-linecap", Some(linecap.as_str()));
     push_attr(buf, "stroke-linejoin", Some(linejoin.as_str()));
-    push_attr(buf, "stroke", stroke.as_deref());
+    push_paint_attr(buf, "stroke", stroke.as_deref());
     if stroke.is_some() && stroke_width > 0.0 {
         push_f_attr(buf, "stroke-width", stroke_width);
     }
@@ -1467,7 +1503,7 @@ fn emit_gradient_stops(buf: &mut String, stops: &[GradientStop]) {
     for st in stops {
         buf.push_str("<stop");
         push_attr(buf, "offset", Some(&st.offset));
-        push_attr(buf, "stop-color", Some(&st.color));
+        push_paint_attr(buf, "stop-color", Some(&st.color));
         if st.opacity < 1.0 {
             push_f_attr(buf, "stop-opacity", st.opacity);
         }
@@ -1643,7 +1679,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             push_f_attr(buf, "cx", *cx);
             push_f_attr(buf, "cy", *cy);
             push_f_attr(buf, "r", *r);
-            push_attr(buf, "fill", fill.as_deref());
+            push_paint_attr(buf, "fill", fill.as_deref());
             emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
             if *opacity < 1.0 {
                 push_f_attr(buf, "opacity", *opacity);
@@ -1673,7 +1709,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             push_f_attr(buf, "cy", *cy);
             push_f_attr(buf, "rx", *rx);
             push_f_attr(buf, "ry", *ry);
-            push_attr(buf, "fill", fill.as_deref());
+            push_paint_attr(buf, "fill", fill.as_deref());
             emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
             if *opacity < 1.0 {
                 push_f_attr(buf, "opacity", *opacity);
@@ -1697,7 +1733,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             buf.push_str("<path");
             push_id_clip(buf, id, clip_path);
             push_attr(buf, "d", Some(d));
-            push_attr(buf, "fill", fill.as_deref());
+            push_paint_attr(buf, "fill", fill.as_deref());
             emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
             if *opacity < 1.0 {
                 push_f_attr(buf, "opacity", *opacity);
@@ -1727,7 +1763,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             push_f_attr(buf, "y", *y);
             push_f_attr(buf, "width", *w);
             push_f_attr(buf, "height", *h);
-            push_attr(buf, "fill", fill.as_deref());
+            push_paint_attr(buf, "fill", fill.as_deref());
             emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
             if *opacity < 1.0 {
                 push_f_attr(buf, "opacity", *opacity);
@@ -1755,7 +1791,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             push_f_attr(buf, "y1", *y1);
             push_f_attr(buf, "x2", *x2);
             push_f_attr(buf, "y2", *y2);
-            push_attr(buf, "stroke", stroke.as_deref());
+            push_paint_attr(buf, "stroke", stroke.as_deref());
             if stroke.is_some() && *stroke_width > 0.0 {
                 push_f_attr(buf, "stroke-width", *stroke_width);
             }
@@ -1786,7 +1822,7 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             buf.push_str(tag);
             push_id_clip(buf, id, clip_path);
             emit_points_attr(buf, points);
-            push_attr(buf, "fill", fill.as_deref());
+            push_paint_attr(buf, "fill", fill.as_deref());
             emit_stroke_attrs(buf, stroke, *stroke_width, *linecap, *linejoin, *fill_rule);
             if *opacity < 1.0 {
                 push_f_attr(buf, "opacity", *opacity);
@@ -1804,7 +1840,11 @@ fn emit_svg_node(buf: &mut String, node: &SvgNode) {
             buf.push('<');
             buf.push_str(tag);
             for (k, v) in attrs {
-                push_attr(buf, k, Some(v.as_str()));
+                if matches!(k.as_str(), "fill" | "stroke" | "stop-color" | "color") {
+                    push_paint_attr(buf, k, Some(v.as_str()));
+                } else {
+                    push_attr(buf, k, Some(v.as_str()));
+                }
             }
             let empty = children.is_empty() && text.as_ref().map(|s| s.is_empty()).unwrap_or(true);
             if empty {
@@ -2000,6 +2040,17 @@ fn hash_svg_node(h: &mut DefaultHasher, node: &SvgNode) {
     }
 }
 
+/// Logical leaf size → raster pixels. Window DPI (same as gradient textures) plus
+/// 2× SSAA so thin strokes (ProgressCircle, chart lines) stay sharp after
+/// `scale_textured_draws` stretches logical quads to the swapchain.
+fn svg_raster_pixel_size(logical: [f32; 2]) -> (u32, u32) {
+    let dpi = crate::style::gradient_raster_dpi().max(1.0);
+    let scale = (dpi * 2.0).clamp(2.0, 4.0);
+    let w = (logical[0].max(1.0) * scale).round().clamp(2.0, 1024.0) as u32;
+    let h = (logical[1].max(1.0) * scale).round().clamp(2.0, 1024.0) as u32;
+    (w, h)
+}
+
 /// Unified resvg raster path for `<svg>` leaves (SMIL-aware).
 pub fn svg_raster_from_element_attrs(
     attrs: &std::collections::HashMap<String, String>,
@@ -2010,8 +2061,7 @@ pub fn svg_raster_from_element_attrs(
     let id = u64::from_str_radix(scene_hex.trim(), 16).ok()?;
     let scene = SVG_SCENE_STORE.with(|s| s.borrow().get(&id).cloned())?;
     let target = crate::primitives::path::path_target_leaf_size(attrs, [leaf_w, leaf_h]);
-    let w = target[0].round().max(2.0) as u32;
-    let h = target[1].round().max(2.0) as u32;
+    let (w, h) = svg_raster_pixel_size(target);
     let smil_t = scene
         .has_smil
         .then(crate::primitives::svg_smil::smil_time_secs);
@@ -2042,6 +2092,16 @@ pub fn svg_raster_from_element_attrs(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn emit_svg_document_from_element_attrs(
+    attrs: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let scene_hex = attrs.get(ATTR_SVG_SCENE)?;
+    let id = u64::from_str_radix(scene_hex.trim(), 16).ok()?;
+    let scene = SVG_SCENE_STORE.with(|s| s.borrow().get(&id).cloned())?;
+    Some(emit_svg_document_at(&scene.nodes, scene.vb, None))
+}
+
 fn attach_svg_scene(
     mut el: Element,
     nodes: &[SvgNode],
@@ -2069,8 +2129,7 @@ fn attach_svg_scene(
     if nodes.is_empty() {
         return el;
     }
-    let dim_w = vb[2].round().max(16.0) as u32;
-    let dim_h = vb[3].round().max(16.0) as u32;
+    let (dim_w, dim_h) = svg_raster_pixel_size([vb[2].max(16.0), vb[3].max(16.0)]);
     let vb_raw = view_box_raw
         .and_then(parse_view_box)
         .unwrap_or([0.0, 0.0, vb[2], vb[3]]);
@@ -2548,6 +2607,16 @@ impl IntoElementList for SvgShapeBuilder {
 mod tests {
     use super::*;
     use crate::primitives::path::{points_from_commands, rasterize_layers_rgba};
+
+    #[test]
+    fn svg_raster_pixel_size_is_at_least_2x() {
+        crate::style::set_gradient_raster_dpi(1.0);
+        assert_eq!(svg_raster_pixel_size([64.0, 64.0]), (128, 128));
+        crate::style::set_gradient_raster_dpi(1.5);
+        let (w, h) = svg_raster_pixel_size([64.0, 64.0]);
+        assert!(w >= 192 && h >= 192, "1.5 dpi + 2× SSAA, got {w}×{h}");
+        crate::style::set_gradient_raster_dpi(1.0);
+    }
 
     fn sample_svg() -> Element {
         svg()

@@ -18,11 +18,6 @@ pub(crate) fn mark_hover_paint_dirty() {
 }
 
 #[inline]
-pub(crate) fn peek_hover_paint_dirty() -> bool {
-    HOVER_PAINT_DIRTY.get()
-}
-
-#[inline]
 pub(crate) fn take_hover_paint_dirty() -> bool {
     HOVER_PAINT_DIRTY.replace(false)
 }

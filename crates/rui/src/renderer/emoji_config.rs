@@ -4,7 +4,7 @@
 //! [`super::emoji_layout::custom_glyph_layout_enabled`]. This module only chooses the
 //! bitmap source. See `docs/assets_and_icons_architecture.md` §11.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// True when the app opted into Twemoji/SVG as the emoji raster source.
@@ -141,8 +141,8 @@ mod tests {
 
     #[test]
     fn configured_dir_rejects_missing_path() {
-        // Unit-level: Path::is_dir on a nonsense path.
-        let p = Path::new("/this/rui/twemoji/dir/does/not/exist");
+        // Unit-level: PathBuf::is_dir on a nonsense path.
+        let p = PathBuf::from("/this/rui/twemoji/dir/does/not/exist");
         assert!(!p.is_dir());
     }
 }
