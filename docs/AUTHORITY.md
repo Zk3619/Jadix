@@ -46,7 +46,7 @@ AUTHORITY.md                         ★ 唯一入口 + 唯一勾选源（本文
 │
 ├─ 数据表（随代码改，不另开计划）
 │   component_inventory.md           分桶 + id 策略 + planned
-│   component_variants.md            variant/size/受控命名（WP-3.8）
+│   component_variants.md            variant/size/受控命名（WP-3.8）；§0 为 COMPONENT_LIBRARY §3.1.1 实例
 │
 ├─ 操作手册（验收步骤，不是第二套 WP）
 │   desktop_smoke · a11y_smoke · ime · keyboard_nav

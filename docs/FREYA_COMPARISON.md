@@ -152,7 +152,7 @@ use_state / write
 | **组件定义** | `#[component] fn Foo() -> Element`（默认 Owner） | `impl Component for Foo { fn render(&self) -> impl IntoElement }` |
 | **根组件** | 应用闭包 / 元素树 | `fn() -> impl IntoElement` 或 `App` trait |
 | **子节点** | `Element` / Builder / 宏节点互嵌 | `IntoElement`；`String`/`&str` 可直接当 label |
-| **样式入口** | `class` / utility / `bind_class` / theme token；**`variant`/`size` 默认字符串**，Builder 可 `Into` 双收枚举（见 [`component_variants.md`](component_variants.md) §0） | 方法链：`.background` `.padding` `.font_size` …；变体多走 **枚举**（如 `ButtonStyleVariant`） |
+| **样式入口** | `class` / utility / `bind_class` / theme token；**离散属性默认字符串 + 链式**；Builder 可 `Into` 双收预设枚举（见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1**；`variant`/`size` 实例见 [`component_variants.md`](component_variants.md) §0） | 方法链：`.background` `.padding` `.font_size` …；变体多走 **枚举**（如 `ButtonStyleVariant`） |
 | **扩展** | primitives + utils 行为下沉 | `KeyExt`、element expansions、插件 crate |
 
 Freya AGENTS 强调：动态改元素时用 `when` / `map` 链式改最后返回值，而不是先存变量再改——这是 **Builder 流畅 API** 纪律。  
@@ -210,7 +210,7 @@ Freya 在 **编辑器 / Markdown / Terminal** 上明显更宽；RUI 在 **表单
 
 RUI 的样式赌注是「**写过 Tailwind 的人零学习曲线**」；Freya 是「**纯 Rust 链式、无 class 字符串**」。两者 DX 优劣取决于目标用户，不是绝对高低。
 
-**变体 API**：Freya 用枚举（常配 `impl Into<…>`）是自然选择（无 `variant="…"` RSX 面）。RUI **保留字符串产品面**（`ui!` / ShadCN / 热重载）；Builder 可学 Freya 做成 `impl Into<XxxVariant>` **双收**，**禁止**删掉 `&str` 只留 `Enum::Variant`。权威口径：[`component_variants.md`](component_variants.md) §0 · [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §3.1 / §4.3。
+**变体 API**：Freya 用枚举（常配 `impl Into<…>`）是自然选择（无 `variant="…"` RSX 面）。RUI **保留字符串产品面**（`ui!` / ShadCN / 热重载）；Builder 可学 Freya 做成 `impl Into<XxxVariant>` **双收**，**禁止**删掉 `&str` 只留 `Enum::Variant`。权威口径：[`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1**（全属性）· [`component_variants.md`](component_variants.md) §0（variant/size 冻结）· §3.1 / §4.3。
 
 ---
 
@@ -325,7 +325,7 @@ RUI 的样式赌注是「**写过 Tailwind 的人零学习曲线**」；Freya �
 | R05 | **`#[component]` 宏** | `rui_macros` | `impl Component` 手写 | 保持 |
 | R06 | **utility class / 变体前缀** | `hover:` `focus-visible:` `data-[…]` + `rui_style_tokens` | 方法链属性 | 保持 |
 | R07 | **OKLCH 语义 Theme** | `tokens/` + `color_space` | theming 结构不同 | 保持 |
-| R08 | **variant 字符串产品面 + `Into` 双收口径** | [`component_variants.md`](component_variants.md) §0 | 枚举为主 | 保持 |
+| R08 | **离散属性字符串产品面 + 链式 + `Into` 双收** | [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1** · [`component_variants.md`](component_variants.md) §0 | 枚举为主 | 保持 |
 | R09 | **自研热重载 CLI** | `rui_hot_reload_cli` | 依赖 `dioxus-cli` `dx` | 保持路径；可学 dx UX |
 | R10 | **工程纲领 / ADR / CV 门禁** | AUTHORITY · COMPONENT_LIBRARY · inventory 分桶 | 产品文档强、纲领式分桶弱 | 保持 |
 | R11 | **taffy Flex/Grid（Web 对齐）** | 锁定 | torin（非完整 CSS Grid） | 保持 |

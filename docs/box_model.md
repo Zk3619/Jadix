@@ -20,7 +20,8 @@ RUI 用 **Taffy** 做 Flex/Grid 盒模型：默认 **`box-sizing: border-box`**�
 
 ```text
   Builder / ui! / utility class
-            │  IntoCssDim · IntoCssRectPair（vw/em/calc 延迟）
+            │  IntoCssDim · IntoCssRectPair（vw/em/calc 延迟；开放域，见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) §3.1.1）
+            │  离散预设属性：链式字符串默认；可选预设枚举双收（variant / pointer_events / cursor …）
             ▼
   Style { size, min/max, padding, margin, border_*, box_sizing, unit_specs, … }
             │  Style::to_taffy_style_with(UnitCtx { viewport, font_size })

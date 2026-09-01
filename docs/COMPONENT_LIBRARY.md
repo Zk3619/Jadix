@@ -3,7 +3,7 @@
 > **文档地位**：组件产品面的**领域规范**（选型、分层、API 契约、清单口径）。  
 > **从属关系**：服从 [`ENGINEERING_GRADE_FRAMEWORK.md`](ENGINEERING_GRADE_FRAMEWORK.md) 六条门槛与禁区；**执行排期 / CV 门禁**见 [`AUTHORITY.md`](AUTHORITY.md)。冻结细则 [`COMPONENT_LIBRARY_PLAN.md`](COMPONENT_LIBRARY_PLAN.md)。  
 > **事实来源**：`crates/rui/src/{primitives,tokens,components,style,utils}`（私有壳在 `components/internal/`）、`examples/gallery`、[`headless.md`](headless.md)、[`color.md`](color.md)、[`drawing.md`](drawing.md)。  
-> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §4.3 `Into` 双收（variant/size）  
+> **日期**：2026-08-12（§5.2 拆分为组件稳定面 / 样式承诺面）；执行移交 2026-08-12；**2026-08-13** 自绘面（Svg/Canvas）链入；**2026-08-17** §2.3 作者面；**2026-08-17** §4.4 浮层单一路径（WP-3.4）；**2026-08-17** §2.1 布尔态 `toggle_state`（WP-3.7）；**2026-08-17** §4.3 词汇表 [`component_variants.md`](component_variants.md)（WP-3.8）；**2026-08-18** Form 校验路径（WP-3.9）；**2026-08-18** VirtualMasonry（WP-3.10）；**2026-08-31** §3.1.1 Builder 属性：链式优先 + `Into` 双收（全属性口径）；**2026-08-31** §4.3 `Into` 双收（variant/size 冻结实例）  
 
 交叉文档：[`component_inventory.md`](component_inventory.md) · [`component_variants.md`](component_variants.md) · [`element_identity.md`](element_identity.md) · [`custom_components.md`](custom_components.md) · [`keyboard_nav.md`](keyboard_nav.md) · [`desktop_smoke.md`](desktop_smoke.md) · [`REACTIVITY.md`](REACTIVITY.md) · [`reactivity_and_hot_reload.md`](reactivity_and_hot_reload.md) · [`color.md`](color.md) · [`a11y_smoke.md`](a11y_smoke.md) · [`drawing.md`](drawing.md)
 
@@ -159,7 +159,58 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 5. **热重载**：`template_id` 主要服务含 `ui!` 的模板；纯 Builder 树仍是一等运行时能力，不因无热补丁而降级为「非推荐」。  
 6. **文档与示例**：Getting Started / 组件索引应**至少各给一种写法的完整片段**；标杆组件（Button、Input）两种都展示。  
 7. **RSX camelCase 别名**（`rui_macros`，对位 ShadCN）：`onClick` / `defaultValue` / `captionLayout` / `valueSignal` / `showAlpha` / `sideOffset` / `openSignal` 等映射到 snake_case props；Builder **只**用 snake_case。  
-8. **`variant` / `size` 等离散外观轴**：RSX 与文档默认仍用**字符串**；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`&str` 与枚举），禁止删掉字符串产品面。细则见 [`component_variants.md`](component_variants.md) **§0**。
+8. **Builder 属性值**：**链式优先**；具预设值或固定运行时语义的属性允许 **字符串 + 可选枚举** 同一方法双收；开放域尺寸等走 `IntoCssDim` / `IntoF32`，不滥造枚举。总则见 **§3.1.1**；`variant` / `size` 冻结表见 [`component_variants.md`](component_variants.md) **§0**。
+
+### 3.1.1 Builder 属性值：链式优先 + `Into` 双收
+
+本节是 **Element / `*Builder` / `BaseComponentBuilder` 等链式 setter** 的通用口径。[`component_variants.md`](component_variants.md) **§0** 是其在 `variant` / `size` 外观轴上的**冻结实例**；[`box_model.md`](box_model.md) §1 的 `IntoCssDim` 是**开放域**反例。
+
+#### 链式优先（默认写法）
+
+凡能在 Builder 上设置的属性，**默认在 `.into()` 之前**用同名链式方法完成，保持一条 fluent 链到 `Element`。
+
+| 推荐 | 不推荐（除非链上暂无法表达） |
+|------|------------------------------|
+| `hstack().w("100%").pointer_events("none").into()` | `let mut el = hstack().w("100%").into(); el = el.pointer_events_none();` |
+| `button("save").variant("outline").disabled(true).into()` | 先 `into()` 再对 `Element` 逐字段二次赋值 |
+
+`Element` 上的便捷方法（如 `pointer_events_none()`、`cursor_not_allowed()`）可保留作语法糖或存量兼容；**文档、Gallery、新代码默认展示链式** `.pointer_events(…)` / `.cursor(…)`，不在示例里暗示「现代写法 = 只能先 `into()`」。
+
+RSX / `ui!` 属性与 Builder 链式方法**同一语义**（§3.1 第 3 条）；宏展开仍应落到公开 Builder，而非绕过链式另造私有 setter。
+
+#### `Into` 双收（字符串 + 可选枚举）
+
+产品面 **默认仍是字符串**（对齐 CSS / ShadCN / `ui!` / 热重载模板）。对内可用枚举做真源；Builder **不得**只收枚举、废除 `&str`。
+
+| 面 | 约定 | 禁止 |
+|----|------|------|
+| **RSX** | `pointer_events="none"` / `variant="outline"`（字符串或可解析值） | 强迫用户在标签里写 `XxxEnum::Variant` |
+| **Builder 产品示例** | `.pointer_events("none")`、`.variant("outline")`（文档 / Gallery **默认**） | 文档暗示「现代写法 = 只能传枚举」 |
+| **Builder 类型增强** | 参数 `impl Into<…>`（或等价：`From<&str>` + `From<XxxPreset>`），使 `"none"` **与** 预设枚举 **同一方法** 都能传 | 为对齐 Freya 删掉字符串重载；第二套平行 API（`.xxx_str` / `.xxx_enum`） |
+| **内部** | 枚举 + `FromStr` / `parse`；未知 → 文档化 default | 组件内再发明一套未登记字符串别名 |
+
+合法调用（同一方法、同一链）：
+
+```rust
+hstack().w("100%").pointer_events("none").child(separator()).into();
+// 类型增强落地后亦可（枚举名避开 Rust `None` 等歧义）：
+// hstack().w("100%").pointer_events(Pe::Ignore).child(separator()).into();
+```
+
+#### 何时加枚举、何时不加
+
+| 属性类 | 示例 | 约定 |
+|--------|------|------|
+| **离散预设**（有限合法值 + 固定命中/绘制/布局语义） | `variant` / `size` / `pointer_events` / `cursor` / Scrollbar `variant` | **允许**加专用预设枚举；字符串仍为产品默认与 RSX 面 |
+| **开放域**（连续、任意 CSS 长度/颜色/ calc） | `w` / `h` / `p` / `font_size` / `gap` | 用 `IntoCssDim` / `IntoF32` / `IntoCssRectPair` 等 trait，**不**为每个合法字符串发明枚举 |
+| **行为回调** | `on_click` / `on_hover` | 闭包 / `Handler`；不走字符串枚举 |
+| **便捷语法糖** | `pointer_events_none()`、`cursor_text()` | 可保留；等价于链式 `.pointer_events("none")` 等，**非**第二产品面 |
+
+**枚举仅针对具有预设值或固定运行时行为的属性**——即：合法值可有限列举，且每个值在框架内有明确、可测的语义（命中策略、chrome 分支、parse 回退等）。仅为「少打引号」而为开放字符串域加枚举，视为过度设计。
+
+**命名**：Builder 预设枚举的 variant 应避开 Rust 关键字与标准库歧义（CSS `none` → 预设枚举用 `Ignore` 等，而非 `None`）。运行时解析真源（如 `PointerEvents`）与面向作者的 Builder 预设（如未来的 `Pe`）可分层；对内 `parse` / `as_str` 保持单一真理。
+
+**现状**：多数 Builder 仍是 `fn xxx(self, v: &str)` + 内部 `parse`（等价于「只开了字符串半边」）。`Into` 双收与链式优先是 **允许且鼓励** 的增强，不要求一次全仓改完；新增 / 触碰相关 API 时优先遵守本节。
 
 ### 3.2 反例（禁止）
 
@@ -169,7 +220,9 @@ use rui::prelude::*; // 标签入口 + Builder/`fn` + 布局原语 + Element/Sig
 | 文档暗示「现代写法 = 只能写标签」 | 与项目「掌握代码 / 纯 Rust 拼装」目标冲突 |
 | RSX 与 Builder 走不同状态机或不同 token | 双源真理，无法互嵌保证观感一致 |
 | prelude 只导出标签、废除 Builder re-export | 违反 ADR-9 |
-| Builder 只收枚举、废除 `.variant("outline")` | 打断 ShadCN / `ui!` / 热重载字符串契约；见 [`component_variants.md`](component_variants.md) §0 |
+| Builder 只收枚举、废除 `.variant("outline")` | 打断 ShadCN / `ui!` / 热重载字符串契约；见 **§3.1.1** · [`component_variants.md`](component_variants.md) §0 |
+| 先 `.into()` 再改属性，而链上可一次写完 | 破坏 fluent 一致性；见 **§3.1.1** 链式优先 |
+| 为 `w("50%")` 等开放域强造枚举 | 应用 `IntoCssDim`；见 **§3.1.1** · [`box_model.md`](box_model.md) |
 
 代码锚点（同一按钮 · 双面）：
 
@@ -297,7 +350,7 @@ Gallery / 示例：**只在演示焦点、多实例、测试选择器处写 id**
 
 | 约定 | 要求 |
 |------|------|
-| `variant` | **产品默认字符串**（对齐 shadcn：`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；对内枚举真源；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`"outline"` 与 `XxxVariant::Outline`）。**冻结表 + §0** [`component_variants.md`](component_variants.md) |
+| `variant` | **产品默认字符串**（对齐 shadcn：`default` / `secondary` / `outline` / `ghost` / `success` / `warning` / `destructive` / `link`…）；对内枚举真源；Builder 鼓励 `impl Into<XxxVariant>` **双收**（`"outline"` 与 `XxxVariant::Outline`）。通用口径 **§3.1.1**；**冻结表 + §0** [`component_variants.md`](component_variants.md) |
 | `size` | 同上：字符串产品面 + 可选 `Into<XxxSize>`；合法阶梯 `xs` / `sm` / `default` / `lg` / `icon*`；与 Button 对齐者优先复用，差异须登记冻结表 |
 | 颜色 | 经 `parse_color("primary")` 等语义名；令牌源为 OKLCH→display sRGB（[`color.md`](color.md)）；禁止组件内硬编码与 Theme 无关的色值 |
 | `outline` 变体 | 语义是 **border**（盒模型边框），**不是** CSS `outline` 属性；焦点环用 shadow/`ring`，见 [`color.md`](color.md) |

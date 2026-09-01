@@ -2,13 +2,15 @@
 
 > **从属**：[COMPONENT_LIBRARY.md](COMPONENT_LIBRARY.md) §3（双书写）· §4.3（外观）· §4.2.5（状态）。  
 > **范围**：仅 [`component_inventory.md`](component_inventory.md) **verified** 控件。experimental（Toggle / ToggleGroup / ColorPicker…）不进本冻结。  
-> **日期**：2026-08-17；**2026-08-31** §0 `Into` 双收（字符串产品面 + 可选枚举）
+> **日期**：2026-08-17；**2026-08-31** §0 `Into` 双收（字符串产品面 + 可选枚举）；**2026-08-31** 明确为 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1** 在 `variant` / `size` 轴上的冻结实例
 
 未知 `variant` / `size` **回退 `default`**（可测）。禁止在 verified 控件里发明第二套 Button 同名、不同语义的词汇而不登记本表。
 
 ---
 
 ## 0. Builder：`Into` 双收（字符串 + 枚举）
+
+> **上位规范**：链式优先、`Into` 双收、何时加枚举见 [`COMPONENT_LIBRARY.md`](COMPONENT_LIBRARY.md) **§3.1.1**。本节仅约束 **`variant` / `size` 外观轴** 的冻结词汇与 parse 回退；其它离散属性（如 `pointer_events`、`cursor`）适用同一 §3.1.1 总则，但不进本表。
 
 产品面 **默认仍是字符串**（对齐 ShadCN / `ui!` 属性 / 热重载模板）。对内用枚举（`ButtonVariant`、`BubbleVariant`…）做真源；Builder **不得**只收枚举、废除 `&str`。
 
@@ -46,7 +48,9 @@ button("save").variant(ButtonVariant::Outline);
 
 **与 Freya 的边界**：Freya 主路径是纯枚举链式 API（无 `variant="…"` RSX 面）。RUI **学其 `Into` 双收思路作 Builder 增强**，**不**把「只能写 `Enum::Variant`」当成产品默认。对照见 [`FREYA_COMPARISON.md`](FREYA_COMPARISON.md) §6 / §10。
 
-**现状**：多数 Builder 仍是 `fn variant(self, v: &str)` + 内部 `parse`（等价于「只开了字符串半边」）。`Into` 双收是 **允许且鼓励的增强**，不要求一次全仓改完；新增 / 触碰变体 API 时优先改成 `impl Into<…>`。experimental 控件（如 Bubble）同样适用本条。
+**现状**：多数 Builder 仍是 `fn variant(self, v: &str)` + 内部 `parse`（等价于「只开了字符串半边」）。`Into` 双收是 **允许且鼓励的增强**，不要求一次全仓改完；新增 / 触碰变体 API 时优先改成 `impl Into<…>`。experimental 控件（如 Bubble）同样适用本条与 **§3.1.1**。
+
+**其它离散属性（示意，非本表冻结）**：`pointer_events`、`cursor` 等同样 **默认链式字符串**（如 `.pointer_events("none")`），并可按需增加 Builder 预设枚举（variant 名避开 `None`）；开放域尺寸仍走 `IntoCssDim`，见 [`box_model.md`](box_model.md)。
 
 ---
 

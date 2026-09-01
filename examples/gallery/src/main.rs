@@ -25,6 +25,8 @@ use rui::primitives::{
 use rui::style::{parse_color, parse_text_color, TextSpan};
 use rui::ui;
 use rui::utils::animated_icon;
+use rui::utils::lucide::lucide_glyph;
+use rui::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -4566,6 +4568,19 @@ fn RadioSliderShowcase() -> rui::core::tree::Element {
                 <Label text_size="0.875rem">{ format!("Level: {:.0}%", level.get() * 100.0) }</Label>
                 <Slider id="gallery:slider_disabled" defaultValue={0.6} disabled=true />
                 <Label text_size="0.75rem" color="muted-foreground">"Disabled"</Label>
+
+                <Separator />
+
+                <Label font_weight="700" text_size="0.875rem">"Slider · orientation=vertical"</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "纵向滑块：拖拽 / ↑↓ 调值，与上方横向示例共用 level signal。"
+                </Label>
+                <HStack gap="1.5rem" items="end">
+                    <VStack gap="0.375rem" items="center">
+                        <Slider id="gallery:slider_vertical" orientation="vertical" value={level} default_value={0.4} />
+                        <Label text_size="0.75rem" color="muted-foreground">{ format!("{:.0}%", level.get() * 100.0) }</Label>
+                    </VStack>
+                </HStack>
             </VStack>
         </MyCard>
     }
@@ -4979,7 +4994,7 @@ fn gallery_secondary_shell_root() -> Element {
     // (ScrollArea-as-root clips / sizes the portal layer incorrectly).
     ui! {
         <VStack w="100%" h="100%" bg="background">
-            <ScrollArea id="gal-sec-scroll" flex_grow="1" h="100%" overflow_y="auto" overflow_x="auto">
+            <ScrollArea id="gal-sec-scroll" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto">
                 <VStack w="100%" p="1.5rem" gap="0.75rem">
                     <Label font_weight="700" text_size="1.125rem">"Secondary shell"</Label>
                     <Label text_size="0.875rem" color="muted-foreground" leading="normal">
@@ -5796,7 +5811,7 @@ fn OverlayFeedbackShowcase() -> Element {
                 <DialogTrigger>
                     <Button variant="outline" size="sm">Dialog</Button>
                 </DialogTrigger>
-                <DialogContent overlay_blur={8.0}>
+                <DialogContent>
                     <DialogHeader>
                         <DialogTitle>Gallery Dialog</DialogTitle>
                         <DialogDescription>
@@ -6386,6 +6401,10 @@ fn OverlayFeedbackShowcase() -> Element {
         </ContextMenu>
     };
     let progress_el: Element = progress().value_signal(progress_val).into();
+    let progress_vertical_el: Element = progress()
+        .orientation("vertical")
+        .value_signal(progress_val)
+        .into();
 
     ui! {
         <MyCard title="Command · Dialog · Sheet · Drawer · Toast · Tooltip · HoverCard · Dropdown · Progress">
@@ -6575,6 +6594,32 @@ fn OverlayFeedbackShowcase() -> Element {
                         "Builder 双写（简单条，无 Label）："
                     </Label>
                     { progress_el }
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "ProgressCircle（md / sm / lg，与上方共用 value_signal）："
+                    </Label>
+                    <HStack gap="1rem" items="center" wrap="wrap">
+                        <ProgressCircle id="gal-progress-circle-md" valueSignal={progress_val} size={ProgressCircleSize::Md} />
+                        <ProgressCircle id="gal-progress-circle-sm" valueSignal={progress_val} size={ProgressCircleSize::Sm} />
+                        <ProgressCircle id="gal-progress-circle-lg" valueSignal={progress_val} size={ProgressCircleSize::Lg} />
+                    </HStack>
+                    <Separator />
+                    <Label font_weight="600" text_size="0.875rem">{ "orientation=vertical" }</Label>
+                    <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                        "线条型 Progress 纵向：默认高 8rem，与 Bump 共用 value_signal。"
+                    </Label>
+                    <HStack gap="1.5rem" items="end" wrap="wrap">
+                        <VStack gap="0.375rem" items="center">
+                            <Label text_size="0.75rem" color="muted-foreground">{ "RSX" }</Label>
+                            <Progress id="gal-progress-vertical" orientation="vertical" valueSignal={progress_val}>
+                                <ProgressLabel>"Upload"</ProgressLabel>
+                                <ProgressValue />
+                            </Progress>
+                        </VStack>
+                        <VStack gap="0.375rem" items="center">
+                            <Label text_size="0.75rem" color="muted-foreground">{ "Builder" }</Label>
+                            { progress_vertical_el }
+                        </VStack>
+                    </HStack>
                     <Button variant="outline" size="sm" on_click={move || {
                         let v = bump.peek();
                         bump.set(if v >= 1.0 { 0.0 } else { (v + 0.1).min(1.0) });
@@ -6863,6 +6908,40 @@ fn DrawingScene3dShowcase() -> Element {
     }
 }
 
+fn gal_sample_tree_roots() -> Vec<TreeNode> {
+    vec![TreeNode {
+        id: "root".into(),
+        label: "Workspace".into(),
+        children: vec![
+            TreeNode {
+                id: "src".into(),
+                label: "src".into(),
+                children: vec![
+                    TreeNode {
+                        id: "main".into(),
+                        label: "main.rs".into(),
+                        children: vec![],
+                    },
+                    TreeNode {
+                        id: "lib".into(),
+                        label: "lib.rs".into(),
+                        children: vec![],
+                    },
+                ],
+            },
+            TreeNode {
+                id: "docs".into(),
+                label: "Docs".into(),
+                children: vec![TreeNode {
+                    id: "readme".into(),
+                    label: "README.md".into(),
+                    children: vec![],
+                }],
+            },
+        ],
+    }]
+}
+
 #[component]
 fn DataChartShowcase() -> Element {
     let table_sel = use_signal("gal_dt_sel", || None::<usize>);
@@ -6870,8 +6949,11 @@ fn DataChartShowcase() -> Element {
     let expanded = use_signal("gal_tree_exp", || {
         let mut s = HashSet::new();
         s.insert("root".into());
+        s.insert("src".into());
         s
     });
+    let expanded_rsx = expanded;
+    let sample_roots = gal_sample_tree_roots();
 
     let table_el: Element = table("gal-table")
         .columns([
@@ -6889,40 +6971,29 @@ fn DataChartShowcase() -> Element {
         })
         .into();
 
-    let tree_el: Element = tree_view("gal-tree")
-        .height(180.0)
+    let tree_collapsible_el: Element = tree_view("gal-tree-collapsible")
+        .variant(TreeViewVariant::Collapsible)
+        .height(160.0)
         .expanded_signal(expanded)
-        .roots([TreeNode {
-            id: "root".into(),
-            label: "Workspace".into(),
-            children: vec![
-                TreeNode {
-                    id: "src".into(),
-                    label: "src".into(),
-                    children: vec![
-                        TreeNode {
-                            id: "main".into(),
-                            label: "main.rs".into(),
-                            children: vec![],
-                        },
-                        TreeNode {
-                            id: "lib".into(),
-                            label: "lib.rs".into(),
-                            children: vec![],
-                        },
-                    ],
-                },
-                TreeNode {
-                    id: "docs".into(),
-                    label: "Docs".into(),
-                    children: vec![TreeNode {
-                        id: "readme".into(),
-                        label: "README.md".into(),
-                        children: vec![],
-                    }],
-                },
-            ],
-        }])
+        .expanded_storage_key("gal_tree_exp")
+        .roots(sample_roots.clone())
+        .into();
+
+    let tree_flat_el: Element = tree_view("gal-tree-flat")
+        .variant("flat")
+        .height(140.0)
+        .row_height(32.0)
+        .expanded_signal(expanded)
+        .expanded_storage_key("gal_tree_exp")
+        .roots(sample_roots.clone())
+        .into();
+
+    let tree_accordion_el: Element = tree_view("gal-tree-accordion")
+        .variant(TreeViewVariant::Accordion)
+        .height(160.0)
+        .expanded_signal(expanded)
+        .expanded_storage_key("gal_tree_exp")
+        .roots(sample_roots)
         .into();
 
     let bar_rows = vec![
@@ -7403,8 +7474,27 @@ fn DataChartShowcase() -> Element {
                 <Label text_size="0.875rem">
                     { format!("Selected row: {:?}", table_sel.get()) }
                 </Label>
-                <Label font_weight="600" text_size="0.875rem">{ "TreeView" }</Label>
-                { tree_el }
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · collapsible（真树 · Builder）" }</Label>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "递归 Collapsible + chevron-right；`hover:bg-accent` · `text-sm`。展开集合与 flat / accordion 共用 expandedSignal。"
+                </Label>
+                { tree_collapsible_el }
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · flat（VirtualList · Builder）" }</Label>
+                { tree_flat_el }
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · accordion（每层兄弟 Accordion · Builder）" }</Label>
+                { tree_accordion_el }
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · RSX collapsible" }</Label>
+                <TreeView id="gal-tree-rsx" variant="collapsible" expandedSignal={expanded_rsx} expandedStorageKey="gal_tree_exp" height={140.0}>
+                    <TreeViewItem id="root" label="Workspace">
+                        <TreeViewItem id="src" label="src">
+                            <TreeViewItem id="main" label="main.rs" />
+                            <TreeViewItem id="lib" label="lib.rs" />
+                        </TreeViewItem>
+                        <TreeViewItem id="docs" label="Docs">
+                            <TreeViewItem id="readme" label="README.md" />
+                        </TreeViewItem>
+                    </TreeViewItem>
+                </TreeView>
                 <Label font_weight="600" text_size="0.875rem">{ "BarChart" }</Label>
                 <BarChart
                     id="gal-bar"
@@ -7492,6 +7582,129 @@ fn VirtualMasonryShowcase() -> Element {
                     "1000 张变高卡片、3 列最短列优先；只挂视口+overscan。滚动应只换可见格，不掉帧。experimental，不进稳定面。"
                 </Label>
                 { masonry }
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn SidebarShowcase() -> Element {
+    let picked = use_signal("gal_sidebar_picked", || "overview".to_string());
+
+    fn demo_btn(id: &str, label: &str, key: &'static str, picked: Signal<String>) -> Element {
+        let btn: Element = sidebar_menu_button(id)
+            .size("sm")
+            .text(label)
+            .on_click({
+                let picked = picked;
+                move || picked.set(key.to_string())
+            })
+            .into();
+        rui::app::reactive::bind_prop(
+            btn,
+            format!("{id}__active"),
+            move || picked.get() == key,
+            |mounted, active| apply_bound_sidebar_menu_button_active(mounted, active),
+        )
+    }
+
+    let builder_shell: Element = sidebar("gal-sidebar-demo-b")
+        .w("14rem")
+        .header(
+            Element::from(
+                vstack()
+                    .w("100%")
+                    .p("0.75rem")
+                    .gap("0.25rem")
+                    .child(
+                        label("gal-sidebar-demo-b-title")
+                            .text("Builder")
+                            .size(14.0)
+                            .font_weight(600.0),
+                    ),
+            ),
+        )
+        .item(demo_btn(
+            "gal-sidebar-demo-b-overview",
+            "Overview",
+            "overview",
+            picked,
+        ))
+        .item(demo_btn("gal-sidebar-demo-b-team", "Team", "team", picked))
+        .footer(
+            Element::from(
+                label("gal-sidebar-demo-b-foot")
+                    .text("sidebar() builder")
+                    .size(11.0)
+                    .color(parse_text_color("muted-foreground")),
+            ),
+        )
+        .into();
+
+    let picked_r = picked;
+    ui! {
+        <MyCard title="Sidebar（ShadCN 复合壳）">
+            <VStack gap="1rem" w="100%">
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "双写法：RSX 复合标签（SidebarProvider / SidebarMenuButton / isActive）与 Builder。语义色 sidebar / sidebar-accent；Gallery 壳亦用此结构。"
+                </Label>
+                <Label font_weight="700" text_size="0.875rem">"A · RSX 分组 + 菜单按钮"</Label>
+                <Box w="100%" max_w="36rem" h="14rem" rounded="0.5rem" bg="border" p="1px">
+                    <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
+                        <HStack w="100%" h="100%" gap="0">
+                            <Sidebar id="gal-sidebar-demo-a" w="14rem">
+                                <SidebarHeader>
+                                    <Label font_weight="600" text_size="0.875rem">"Projects"</Label>
+                                </SidebarHeader>
+                                <SidebarContent>
+                                    <SidebarGroup>
+                                        <SidebarGroupLabel>"Application"</SidebarGroupLabel>
+                                        <SidebarGroupContent>
+                                            <SidebarMenu>
+                                                <SidebarMenuItem>
+                                                    <SidebarMenuButton
+                                                        id="gal-sidebar-demo-a-overview"
+                                                        isActive={picked_r.get() == "overview"}
+                                                        size="sm"
+                                                        on_click={move || picked_r.set("overview".into())}
+                                                    >
+                                                        "Overview"
+                                                    </SidebarMenuButton>
+                                                </SidebarMenuItem>
+                                                <SidebarMenuItem>
+                                                    <SidebarMenuButton
+                                                        id="gal-sidebar-demo-a-team"
+                                                        isActive={picked_r.get() == "team"}
+                                                        size="sm"
+                                                        on_click={move || picked_r.set("team".into())}
+                                                    >
+                                                        "Team"
+                                                    </SidebarMenuButton>
+                                                </SidebarMenuItem>
+                                            </SidebarMenu>
+                                        </SidebarGroupContent>
+                                    </SidebarGroup>
+                                    <SidebarSeparator />
+                                    <SidebarInput id="gal-sidebar-demo-a-search" placeholder="Search…" />
+                                </SidebarContent>
+                            </Sidebar>
+                            <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
+                                <Label color="foreground">{ format!("Picked: {}", picked_r.get()) }</Label>
+                            </Box>
+                        </HStack>
+                    </Box>
+                </Box>
+                <Label font_weight="700" text_size="0.875rem">"B · Builder 双写"</Label>
+                <Box w="100%" max_w="36rem" h="14rem" rounded="0.5rem" bg="border" p="1px">
+                    <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
+                        <HStack w="100%" h="100%" gap="0">
+                            { builder_shell }
+                            <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
+                                <Label color="foreground">{ format!("Picked: {}", picked.get()) }</Label>
+                            </Box>
+                        </HStack>
+                    </Box>
+                </Box>
             </VStack>
         </MyCard>
     }
@@ -7879,35 +8092,112 @@ fn MenubarStepperShowcase() -> Element {
     }
 }
 
-fn nav_item(section: Signal<String>, id: &'static str, label: &'static str) -> Element {
+fn nav_item(
+    section: Signal<String>,
+    id: &'static str,
+    label_text: &'static str,
+    icon: &str,
+) -> Element {
     let s_click = section;
     let s_bind = section;
-    let active = section.peek() == id;
-    let el: Element = button(format!("gal-nav-{id}"))
-        .variant(if active { "secondary" } else { "ghost" })
-        .size("sm")
+    let mut row = hstack()
         .w("100%")
+        .items_center()
+        .gap("0.5rem")
+        .flex_grow(1.0)
+        .min_w(0.0);
+    if let Some(glyph) = lucide_glyph(icon) {
+        row = row.child(
+            build_icon_text_node(glyph)
+                .text_size(16.0)
+                .text_color(parse_text_color("sidebar-foreground"))
+                .pointer_events("none"),
+        );
+    }
+    row = row.child(
+        build_text_node(
+            label_text,
+            TextNodeConfig {
+                size_px: 14.0,
+                weight: 400,
+                color: parse_text_color("sidebar-foreground"),
+                ..Default::default()
+            },
+        )
+        .flex_grow(1.0)
+        .min_w(0.0),
+    );
+    let btn: Element = sidebar_menu_button(format!("gal-nav-{id}"))
         .on_click(move || s_click.set(id.to_string()))
-        .text(label)
+        .child(Element::from(row))
         .into();
-    rui::app::reactive::bind_prop(
-        el,
-        format!("gal-nav-{id}__variant"),
-        move || {
-            if s_bind.get() == id {
-                "secondary".to_string()
-            } else {
-                "ghost".to_string()
-            }
-        },
-        |mounted, variant| apply_bound_button_variant(mounted, variant),
-    )
+    let btn = rui::app::reactive::bind_prop(
+        btn,
+        format!("gal-nav-{id}__active"),
+        move || s_bind.get() == id,
+        |mounted, active| apply_bound_sidebar_menu_button_active(mounted, active),
+    );
+    SidebarMenuItem(SidebarMenuItemProps {
+        class: None,
+        children: Some(btn),
+        base: None,
+    })
+}
+
+fn gallery_nav_menu(section: Signal<String>) -> Element {
+    let items: Vec<Element> = [
+        ("basics", "基础", "layout-dashboard"),
+        ("events", "指针事件", "mouse-pointer-click"),
+        ("forms", "表单", "file-text"),
+        ("overlays", "浮层 / 反馈", "layers"),
+        ("data", "数据", "table"),
+        ("draw", "绘制", "pencil"),
+        ("navigation", "导航", "compass"),
+        ("layout", "布局", "layout-grid"),
+        ("text", "文本", "type"),
+        ("about", "关于", "info"),
+    ]
+    .iter()
+    .map(|(id, label, icon)| nav_item(section, id, label, icon))
+    .collect();
+    let mut menu_frag = Element::new();
+    menu_frag.set_attr("rui_fragment", "1");
+    let menu = SidebarMenu(SidebarMenuProps {
+        class: None,
+        children: Some(menu_frag.children(items)),
+        base: None,
+    });
+    let group_content = SidebarGroupContent(SidebarGroupContentProps {
+        class: None,
+        children: Some(menu),
+        base: None,
+    });
+    let label_el = SidebarGroupLabel(SidebarGroupLabelProps {
+        class: None,
+        children: Some(build_text_node(
+            "导航",
+            TextNodeConfig {
+                size_px: 12.0,
+                weight: 500,
+                color: parse_text_color("sidebar-foreground/70"),
+                ..Default::default()
+            },
+        )),
+        base: None,
+    });
+    let mut group_frag = Element::new();
+    group_frag.set_attr("rui_fragment", "1");
+    SidebarGroup(SidebarGroupProps {
+        class: None,
+        children: Some(group_frag.children(vec![label_el, group_content])),
+        base: None,
+    })
 }
 
 fn gallery_section_body(section: &str) -> Element {
     match section {
         "forms" => ui! {
-            <ScrollArea id="scroll-forms" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-forms" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"表单"</Label>
                     <InputShowcase />
@@ -7923,7 +8213,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "events" => ui! {
-            <ScrollArea id="scroll-events" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-events" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"指针事件"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
@@ -7935,7 +8225,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "overlays" => ui! {
-            <ScrollArea id="scroll-overlays" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"浮层 / 反馈"</Label>
                     <OverlayFeedbackShowcase />
@@ -7944,7 +8234,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "draw" => ui! {
-            <ScrollArea id="scroll-draw" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-draw" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"绘制"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
@@ -7958,7 +8248,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "data" => ui! {
-            <ScrollArea id="scroll-data" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"数据"</Label>
                     <PaginationShowcase />
@@ -7968,9 +8258,10 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "navigation" => ui! {
-            <ScrollArea id="scroll-navigation" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-navigation" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"导航"</Label>
+                    <SidebarShowcase />
                     <NavbarNavigationMenuShowcase />
                     <MenubarStepperShowcase />
                     <NavigatorShowcase />
@@ -7982,7 +8273,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "layout" => ui! {
-            <ScrollArea id="scroll-layout" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-layout" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"布局"</Label>
                     <LayoutSubtreeShowcase />
@@ -8012,7 +8303,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "text" => ui! {
-            <ScrollArea id="scroll-text" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"文本"</Label>
                     <TextAlignShowcase />
@@ -8023,7 +8314,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         "about" => ui! {
-            <ScrollArea id="scroll-about" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
                     <Label text_size="1.25rem" font_weight="700">"关于"</Label>
                     <Box bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
@@ -8043,7 +8334,7 @@ fn gallery_section_body(section: &str) -> Element {
             </ScrollArea>
         },
         _ => ui! {
-            <ScrollArea id="scroll-basics" h="100%" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
+            <ScrollArea id="scroll-basics" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
                     <Label text_size="1.25rem" font_weight="700">"基础"</Label>
                     <Label text_size="0.875rem" color="muted-foreground">
@@ -8068,50 +8359,10 @@ fn gallery_section_body(section: &str) -> Element {
 
 fn build_gallery_app() -> Element {
     let section = use_signal("gal_nav_section", || "basics".to_string());
-    let sec_side = section;
+    let sec_nav = section;
     let sec_body = section;
 
-    let side = Element::from(
-        sidebar("gal-sidebar")
-            .w("13rem")
-            .header(Element::from(
-                vstack()
-                    .w("100%")
-                    .p("0.75rem")
-                    .gap("0.25rem")
-                    .child(Element::from(
-                        label("gal-side-title")
-                            .text("RUI Gallery")
-                            .size(16.0)
-                            .font_weight(700.0),
-                    ))
-                    .child(Element::from(
-                        label("gal-side-sub")
-                            .text("组件与能力")
-                            .size(12.0)
-                            .color(parse_text_color("muted-foreground")),
-                    )),
-            ))
-            .item(nav_item(sec_side, "basics", "基础"))
-            .item(nav_item(sec_side, "events", "指针事件"))
-            .item(nav_item(sec_side, "forms", "表单"))
-            .item(nav_item(sec_side, "overlays", "浮层 / 反馈"))
-            .item(nav_item(sec_side, "data", "数据"))
-            .item(nav_item(sec_side, "draw", "绘制"))
-            .item(nav_item(sec_side, "navigation", "导航"))
-            .item(nav_item(sec_side, "layout", "布局"))
-            .item(nav_item(sec_side, "text", "文本"))
-            .item(nav_item(sec_side, "about", "关于"))
-            .footer(
-                Element::from(
-                    label("gal-side-footer")
-                        .text("cargo run -p gallery")
-                        .size(11.0)
-                        .color(parse_text_color("muted-foreground")),
-                )
-                .p("0.5rem"),
-            ),
-    );
+    let nav_menu = gallery_nav_menu(sec_nav);
 
     let body = rui::app::reactive::switch_reactive(
         "examples/gallery/App:section_body",
@@ -8120,12 +8371,41 @@ fn build_gallery_app() -> Element {
     );
 
     let chrome: Element = ui! {
-        <HStack w="100%" h="100%" bg="background" gap="0">
-            { side }
-            <VStack h="100%" min_w="0" grow="1">
-                { body }
-            </VStack>
-        </HStack>
+        <SidebarProvider id="gal-shell" variant="inset" defaultOpen={true}>
+            <Sidebar id="gal-sidebar" variant="inset">
+                <SidebarHeader>
+                    <SidebarMenu>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton id="gal-workspace">
+                                "RUI Gallery"
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
+                </SidebarHeader>
+                <SidebarSeparator />
+                <SidebarContent>
+                    { nav_menu }
+                </SidebarContent>
+                <SidebarSeparator />
+                <SidebarFooter>
+                    <SidebarMenu>
+                        <SidebarMenuItem>
+                            <SidebarMenuButton id="gal-user">
+                                "Gallery"
+                            </SidebarMenuButton>
+                        </SidebarMenuItem>
+                    </SidebarMenu>
+                </SidebarFooter>
+            </Sidebar>
+            <SidebarInset variant="inset">
+                <HStack w="100%" items="center" gap="0.25rem" p="0.5rem" flex_shrink="0">
+                    <SidebarTrigger id="gal-sidebar-trigger" />
+                </HStack>
+                <VStack min_w="0" min_h="0" grow="1">
+                    { body }
+                </VStack>
+            </SidebarInset>
+        </SidebarProvider>
     };
     // 窗口根：侧栏/正文 + Toaster 锚点。通知舞台 hoist 到 `__rui_portal_layer`（与 Dialog 同层）。
     // 不要 `ui! { <Toaster/> }` 包一层——会盖掉宿主 template_id（与 CommandOverlay 相同）。
@@ -8817,8 +9097,8 @@ mod mount_tests {
                 let side = find_id(&app, "gal-sidebar").expect("gal-sidebar");
                 let w = side.layout_bounds[2];
                 assert!(
-                    (w - 208.0).abs() < 1.5,
-                    "forms page must not crush sidebar below 13rem; got {w}"
+                    (w - 256.0).abs() < 1.5,
+                    "forms page must not crush sidebar below 16rem; got {w}"
                 );
             });
         });
@@ -8880,6 +9160,7 @@ mod mount_tests {
         rui::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
+                use_signal("gal_nav_section", || "basics".to_string());
                 let mut app = build_gallery_app();
                 let mut layout = rui::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
@@ -8892,21 +9173,26 @@ mod mount_tests {
                     }
                     el.children.iter().find_map(|c| find_id(c, id))
                 }
+                fn find_slot<'a>(el: &'a rui::core::tree::Element, slot: &str) -> Option<&'a rui::core::tree::Element> {
+                    if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
+                        return Some(el);
+                    }
+                    el.children.iter().find_map(|c| find_slot(c, slot))
+                }
                 let side = find_id(&app, "gal-sidebar").expect("sidebar");
-                let scroll = find_id(&app, "scroll-basics").expect("scroll-basics");
+                let inset = find_slot(&app, "sidebar-inset").expect("sidebar-inset");
                 let side_w = side.layout_bounds[2];
-                let scroll_w = scroll.layout_bounds[2];
-                assert!((side_w - 208.0).abs() < 1.5, "sidebar width, got {side_w}");
+                let inset_w = inset.layout_bounds[2];
+                assert!((side_w - 256.0).abs() < 1.5, "sidebar width, got {side_w}");
                 assert!(
-                    scroll_w > 700.0,
-                    "main ScrollArea must use remaining width after sidebar; got {scroll_w} (toast host was stealing flex space)"
+                    inset_w > 640.0,
+                    "SidebarInset must flex-grow into remaining inset shell width; got {inset_w}"
                 );
                 assert!(
-                    (side_w + scroll_w - 1000.0).abs() < 2.0,
-                    "sidebar+scroll should fill root (toast absolute); got {}+{}={}",
+                    side_w + inset_w < 1000.0,
+                    "inset margins/padding must not overflow root; got {}+{}",
                     side_w,
-                    scroll_w,
-                    side_w + scroll_w
+                    inset_w
                 );
             });
         });
