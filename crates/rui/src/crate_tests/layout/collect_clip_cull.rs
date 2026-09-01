@@ -311,3 +311,86 @@ fn overflow_scroll_box_content_h_stable_across_scroll_only_and_full_collect() {
         "full collect after clip-cull must keep content_h (baseline={baseline} now={h})"
     );
 }
+
+/// Chart-like cards: overflow:visible + absolutely positioned labels that stick out of
+/// the Taffy box. Paint-collect extent must not grow/shrink as cards enter/leave the
+/// visit band — that is the gallery data-page thumb jitter.
+fn chart_like_abspos_overflow_column() -> Element {
+    let mut col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w(200.0)
+        .gap(8.0);
+    for _ in 0..10 {
+        col = col.child(
+            Element::new()
+                .w(200.0)
+                .h(100.0)
+                .flex_shrink(0.0)
+                .overflow_y("visible")
+                .overflow_x("visible")
+                .relative()
+                .bg([0.2, 0.2, 0.2, 1.0])
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(-12.0)
+                        .top(92.0)
+                        .w(48.0)
+                        .h(24.0)
+                        .bg([0.0, 1.0, 0.0, 1.0]),
+                ),
+        );
+    }
+    Element::new()
+        .w(200.0)
+        .h(140.0)
+        .overflow_y("hidden")
+        .overflow_x("hidden")
+        .focus_id("scroll:diag-abspos-ovf")
+        .child(col)
+}
+
+fn abspos_metrics(result: &crate::core::tree::RenderResult) -> (f32, f32) {
+    result
+        .scroll_metrics
+        .iter()
+        .find(|(id, ..)| id == "diag-abspos-ovf")
+        .map(|m| (m.3[0], m.3[1]))
+        .expect("abspos overflow scroll metrics")
+}
+
+#[test]
+fn abspos_overflow_visible_content_extent_stable_across_scroll() {
+    let mut root = chart_like_abspos_overflow_column();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 200.0, 140.0, [-1.0, -1.0]);
+    let (base_w, base_h) = abspos_metrics(&first);
+    assert!(
+        base_h > 140.0,
+        "column of 10×100px cards must overflow the 140px viewport (content_h={base_h})"
+    );
+
+    for sy in [0.0_f32, 80.0, 200.0, 400.0, 700.0, 900.0] {
+        root.scroll_offset = [0.0, sy];
+        let (w, h) = abspos_metrics(&tree.build_and_layout_fast(
+            &mut root,
+            200.0,
+            140.0,
+            [-1.0, -1.0],
+            true,
+            false,
+        ));
+        assert!(
+            (h - base_h).abs() < 1.0 && (w - base_w).abs() < 1.0,
+            "scroll_only content extent must stay stable (sy={sy} base=({base_w},{base_h}) now=({w},{h}))"
+        );
+    }
+
+    root.scroll_offset = [0.0, 700.0];
+    let (w, h) = abspos_metrics(&tree.build_and_layout(&mut root, 200.0, 140.0, [-1.0, -1.0]));
+    assert!(
+        (h - base_h).abs() < 1.0 && (w - base_w).abs() < 1.0,
+        "full collect after clip-cull must keep content extent (base=({base_w},{base_h}) now=({w},{h}))"
+    );
+}

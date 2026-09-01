@@ -16,6 +16,7 @@ mod scrollbar_thumb_overlay;
 mod progress_circle_gallery;
 mod showcase_collapse;
 mod gallery_inset_overflow;
+mod sidebar_header_footer_text;
 mod sidebar_shell_width;
 mod subtree_promote;
 mod svg_scene;

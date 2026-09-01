@@ -1151,53 +1151,110 @@ fn scroll_sibling_extent(child_abs: [f32; 2], child_size: [f32; 2]) -> [f32; 2] 
 
 /// Prefer last full-collect recursive extent so overflowing descendants do not drop out of
 /// `content_h` when this sibling is band-culled (scrollbar thumb jitter).
+///
+/// Non-visible overflow boxes contribute only their border box to an ancestor scroller
+/// (CSS scrollable overflow). A stale inner extent here made the outer thumb jump as
+/// nested Table/Tree/Masonry left the visit band (gallery data page).
 #[inline]
 fn skipped_sibling_extent(child: &Element, child_abs: [f32; 2], child_size: [f32; 2]) -> [f32; 2] {
-    if child.collect_extent_valid {
+    let box_ext = scroll_sibling_extent(child_abs, child_size);
+    let contain_x = overflow_contains_axis(child.style.overflow.x);
+    let contain_y = overflow_contains_axis(child.style.overflow.y);
+    if contain_x && contain_y {
+        return box_ext;
+    }
+    let mut ext = if child.collect_extent_valid {
         child.collect_extent
     } else {
-        scroll_sibling_extent(child_abs, child_size)
+        box_ext
+    };
+    if contain_x {
+        ext[0] = box_ext[0];
     }
+    if contain_y {
+        ext[1] = box_ext[1];
+    }
+    ext
 }
 
-/// In-flow Taffy descendant extent relative to `origin_y` (viewport content-box top).
-/// Clip-cull / band-cull must not drop the last CommandList row from `content_h`.
-fn taffy_inflow_descendant_h(
+#[inline]
+fn overflow_contains_axis(overflow: taffy::style::Overflow) -> bool {
+    !matches!(overflow, taffy::style::Overflow::Visible)
+}
+
+fn child_is_nested_scroll_viewport(child: &Element) -> bool {
+    child
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX))
+}
+
+/// Scrollable overflow relative to `origin` (viewport content-box top-left).
+///
+/// Independent of paint clip/band cull, so `content_w`/`content_h` stay stable while
+/// scrolling. Includes abspos (chart tick labels). Stops at nested `scroll:` viewports
+/// and non-visible overflow boxes — those contribute only their border box.
+///
+/// Iterative: this runs from inside `collect_instances_mut`, whose frames are already
+/// large; a recursive walk of the gallery data/basics trees overflowed the default stack.
+fn taffy_scrollable_overflow_extent(
     taffy: &TaffyTree,
     element: &Element,
     node: NodeId,
-    origin_y: f32,
-) -> f32 {
-    let Ok(child_nodes) = taffy.children(node) else {
-        return 0.0;
-    };
-    let n = element.children.len().min(child_nodes.len());
-    let mut h = 0.0_f32;
-    for i in 0..n {
-        let child = &element.children[i];
-        if child.style.position == Position::Absolute || child.style.position_fixed {
-            continue;
-        }
-        let Ok(cl) = taffy.layout(child_nodes[i]) else {
+    origin: [f32; 2],
+) -> [f32; 2] {
+    let mut r = origin[0];
+    let mut b = origin[1];
+    // (element, taffy node, origin, accumulate x, accumulate y)
+    let mut stack: Vec<(&Element, NodeId, [f32; 2], bool, bool)> = Vec::new();
+    stack.push((element, node, origin, true, true));
+    while let Some((el, nid, org, allow_x, allow_y)) = stack.pop() {
+        let Ok(child_nodes) = taffy.children(nid) else {
             continue;
         };
-        let top = origin_y + cl.location.y;
-        h = h.max(top + cl.size.height);
-        if child
-            .focus_id
-            .as_deref()
-            .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX))
-        {
-            continue;
+        let n = el.children.len().min(child_nodes.len());
+        for i in 0..n {
+            let child = &el.children[i];
+            if child.style.position_fixed {
+                continue;
+            }
+            let Ok(cl) = taffy.layout(child_nodes[i]) else {
+                continue;
+            };
+            let child_origin = [org[0] + cl.location.x, org[1] + cl.location.y];
+            if allow_x {
+                r = r.max(child_origin[0] + cl.size.width);
+            }
+            if allow_y {
+                b = b.max(child_origin[1] + cl.size.height);
+            }
+            if child_is_nested_scroll_viewport(child) {
+                continue;
+            }
+            let next_x = allow_x && !overflow_contains_axis(child.style.overflow.x);
+            let next_y = allow_y && !overflow_contains_axis(child.style.overflow.y);
+            if next_x || next_y {
+                stack.push((child, child_nodes[i], child_origin, next_x, next_y));
+            }
         }
-        h = h.max(taffy_inflow_descendant_h(
-            taffy,
-            child,
-            child_nodes[i],
-            top,
-        ));
     }
-    h
+    [r, b]
+}
+
+fn scroll_viewport_taffy_content_size(
+    taffy: &TaffyTree,
+    element: &Element,
+    node: NodeId,
+    layout_size: taffy::geometry::Size<f32>,
+) -> [f32; 2] {
+    let pad_b = crate::layout::lp_length_px(element.style.padding.bottom)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let ovf = taffy_scrollable_overflow_extent(taffy, element, node, [0.0, 0.0]);
+    [
+        ovf[0].max(layout_size.width),
+        (ovf[1] + pad_b).max(layout_size.height),
+    ]
 }
 
 #[cfg(feature = "devtools")]
@@ -2915,28 +2972,57 @@ impl LayoutTree {
             if vis[2] <= 0.0 || vis[3] <= 0.0 {
                 if let Some(fid) = element.focus_id.as_deref() {
                     if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                        // Do not publish max_scroll=0 for off-screen nested viewports —
+                        // post-render would clamp their offset to 0 (table/tree/masonry
+                        // snap to top while the page scrolls).
+                        let content = if rest.ends_with("__ta_scroll") {
+                            [
+                                layout.size.width.max(0.0),
+                                crate::utils::text_field::textarea_scroll_content_h(
+                                    element,
+                                    abs_y,
+                                    layout.size.height,
+                                ),
+                            ]
+                        } else {
+                            scroll_viewport_taffy_content_size(
+                                &self.taffy,
+                                element,
+                                node,
+                                layout.size,
+                            )
+                        };
                         scroll_metrics.push((
                             rest.to_string(),
                             [abs_x, abs_y, layout.size.width, layout.size.height],
-                            [0.0, 0.0],
-                            [layout.size.width.max(0.0), layout.size.height.max(0.0)],
+                            [
+                                (content[0] - layout.size.width).max(0.0),
+                                (content[1] - layout.size.height).max(0.0),
+                            ],
+                            content,
                         ));
                     }
                 }
                 let own = [abs_x + lay_w, abs_y + lay_h];
-                // scroll_only: keep last full-collect overflow extent so band-culled cards
-                // with overflow:visible children do not shrink content_h (thumb jitter).
-                // Full collect after layout/resize: never max with a stale taller extent —
-                // wrap reflow shortens cards; keeping the old max left blank scroll range
-                // at the bottom (gallery text page: scroll then widen window).
-                let extent = if _scroll_only && element.collect_extent_valid {
-                    [
-                        element.collect_extent[0].max(own[0]),
-                        element.collect_extent[1].max(own[1]),
-                    ]
-                } else {
-                    own
-                };
+                let contain_x = overflow_contains_axis(element.style.overflow.x);
+                let contain_y = overflow_contains_axis(element.style.overflow.y);
+                // Taffy overflow (incl. abspos) so clip-cull does not drop chart tick labels
+                // from the parent scroller. Non-visible overflow contributes the border box.
+                let mut extent = own;
+                if !contain_x || !contain_y {
+                    let ovf = taffy_scrollable_overflow_extent(
+                        &self.taffy,
+                        element,
+                        node,
+                        [abs_x, abs_y],
+                    );
+                    if !contain_x {
+                        extent[0] = extent[0].max(ovf[0]);
+                    }
+                    if !contain_y {
+                        extent[1] = extent[1].max(ovf[1]);
+                    }
+                }
                 element.collect_extent = extent;
                 element.collect_extent_valid = true;
                 self.stamp_descendants_layout_bounds_from_taffy(
@@ -4286,27 +4372,23 @@ impl LayoutTree {
         // If this is a ScrollArea, record its metrics (content size vs viewport size)
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                let content_w = (max_right - abs_x).max(layout.size.width);
-                let content_h = if rest.ends_with("__ta_scroll") {
+                let [content_w, content_h] = if rest.ends_with("__ta_scroll") {
                     // Floor content_h by explicit Length children + padding. A flex-sized
                     // leaf can make max_bottom≈viewport (max_scroll≈padding) while style.height
                     // still holds the real field-sizing-content height.
-                    crate::utils::text_field::textarea_scroll_content_h(
-                        element,
-                        abs_y,
-                        layout.size.height,
-                    )
+                    [
+                        layout.size.width.max(0.0),
+                        crate::utils::text_field::textarea_scroll_content_h(
+                            element,
+                            abs_y,
+                            layout.size.height,
+                        ),
+                    ]
                 } else {
-                    // Children are laid out in the content box; padding-bottom sits *after*
-                    // the last child and must still be reachable at max scroll.
-                    let pad_b = crate::layout::lp_length_px(element.style.padding.bottom)
-                        .unwrap_or(0.0)
-                        .max(0.0);
-                    let from_collect = (max_bottom - abs_y + pad_b).max(layout.size.height);
-                    // Clip-cull of the last row must not shrink max-scroll (CommandList / DialogBody).
-                    let from_taffy =
-                        taffy_inflow_descendant_h(&self.taffy, element, node, 0.0) + pad_b;
-                    from_collect.max(from_taffy)
+                    // Taffy overflow is cull-independent. Paint-collect `max_right`/`max_bottom`
+                    // grow when overflow:visible abspos/charts enter the visit band (gallery
+                    // data page: overflow_x=auto → X bar appears → Y viewport shrinks → thumb jumps).
+                    scroll_viewport_taffy_content_size(&self.taffy, element, node, layout.size)
                 };
                 scroll_metrics.push((
                     rest.to_string(),
@@ -4320,16 +4402,23 @@ impl LayoutTree {
             }
         }
 
-        // Do not leak inner scrollable descendants' height/width past a nested scroll viewport box.
+        // Do not leak inner scrollable descendants' height/width past a nested scroll
+        // viewport or any non-visible overflow box (Table overflow:auto without `scroll:`).
         let mut extent_r = max_right;
         let mut extent_b = max_bottom;
+        let mut nested_scroll_viewport = false;
         if let Some(fid) = element.focus_id.as_deref() {
             if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
                 if ancestor_scroll_viewport_rest.is_some_and(|a| a != rest) {
-                    extent_r = abs_x + layout.size.width;
-                    extent_b = abs_y + layout.size.height;
+                    nested_scroll_viewport = true;
                 }
             }
+        }
+        if nested_scroll_viewport || overflow_contains_axis(element.style.overflow.x) {
+            extent_r = abs_x + layout.size.width;
+        }
+        if nested_scroll_viewport || overflow_contains_axis(element.style.overflow.y) {
+            extent_b = abs_y + layout.size.height;
         }
 
         element.collect_extent = [extent_r, extent_b];
