@@ -301,6 +301,31 @@ pub fn activate_scroll_viewport(
     el
 }
 
+/// Authoritative scroll offset for layout collect and hit-test accumulation.
+///
+/// `scroll:` viewports read live signals so text glyphs, selection chrome, and
+/// pointer hit-testing stay aligned when `Element.scroll_offset` lags a frame.
+#[inline]
+pub fn scroll_viewport_axis_offset(element: &Element, is_scroll_viewport: bool, axis_x: bool) -> f32 {
+    if is_scroll_viewport {
+        if let Some(rest) = element
+            .focus_id
+            .as_deref()
+            .and_then(|f| f.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+        {
+            if axis_x {
+                return use_signal(&scroll_offset_x_signal_key(rest), || 0.0_f32).peek();
+            }
+            return use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32).peek();
+        }
+    }
+    if axis_x {
+        element.scroll_offset[0]
+    } else {
+        element.scroll_offset[1]
+    }
+}
+
 /// 若节点任一轴为可滚 overflow，且提供了 `id`，则登记为视口；否则原样返回。
 pub fn maybe_activate_scroll_viewport(
     el: Element,

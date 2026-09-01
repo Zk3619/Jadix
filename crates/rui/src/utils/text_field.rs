@@ -75,6 +75,58 @@ fn length_percentage_px(v: &taffy::style::LengthPercentage) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Horizontal padding inside the textarea scrollport (matches `.px("0.75rem")` on the region).
+pub const TEXTAREA_SCROLLPORT_PAD_X: f32 = 0.75 * 16.0;
+
+/// Scrollport horizontal padding from style, falling back to layout gap text leaf ↔ region box.
+pub fn textarea_scrollport_padding_x(
+    region: &crate::core::tree::Element,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> (f32, f32) {
+    let mut pad_left = length_percentage_px(&region.style.padding.left);
+    let mut pad_right = length_percentage_px(&region.style.padding.right);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let child_left = child.layout_bounds[0];
+        let child_right = child.layout_bounds[0] + child.layout_bounds[2];
+        let region_right = region_abs_x + viewport_w;
+        if pad_left < 0.5 {
+            pad_left = (child_left - region_abs_x).max(0.0);
+        }
+        if pad_right < 0.5 {
+            pad_right = (region_right - child_right).max(0.0);
+        }
+        break;
+    }
+    if pad_left < 0.5 {
+        pad_left = TEXTAREA_SCROLLPORT_PAD_X;
+    }
+    if pad_right < 0.5 {
+        pad_right = TEXTAREA_SCROLLPORT_PAD_X;
+    }
+    (pad_left, pad_right)
+}
+
+/// Extra scrollable width past the last glyph on `wrap=off` lines (region `padding-inline-end`).
+#[inline]
+pub fn textarea_nowrap_trailing_pad_x(
+    region: Option<&crate::core::tree::Element>,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> f32 {
+    region
+        .map(|r| textarea_scrollport_padding_x(r, region_abs_x, viewport_w).1)
+        .unwrap_or(TEXTAREA_SCROLLPORT_PAD_X)
+}
+
 /// Scrollport vertical padding from style, falling back to layout gap text leaf ↔ region box.
 pub fn textarea_scrollport_padding_y(
     region: &crate::core::tree::Element,

@@ -284,15 +284,20 @@ impl Runtime {
         let exists = { self.named_signals.borrow().get(id_str).copied() };
 
         if let Some(signal_id) = exists {
-            let prev = self.named_signal_types.borrow().get(id_str).copied();
-            debug_assert!(
-                prev == Some(type_id),
-                "use_signal key collision with different type: `{id_str}`"
-            );
-            return Signal {
-                id: signal_id,
-                marker: std::marker::PhantomData,
-            };
+            if self.signals.borrow().contains_key(&signal_id) {
+                let prev = self.named_signal_types.borrow().get(id_str).copied();
+                debug_assert!(
+                    prev == Some(type_id),
+                    "use_signal key collision with different type: `{id_str}`"
+                );
+                return Signal {
+                    id: signal_id,
+                    marker: std::marker::PhantomData,
+                };
+            }
+            // Named slot survived but storage was disposed (root owner teardown).
+            self.named_signals.borrow_mut().remove(id_str);
+            self.named_signal_types.borrow_mut().remove(id_str);
         }
 
         let val = init();
@@ -418,6 +423,12 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
             rt.signals.borrow_mut().remove(&signal_id);
             rt.signal_subscribers.borrow_mut().remove(&signal_id);
             rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
+            rt.named_signals
+                .borrow_mut()
+                .retain(|_, id| *id != signal_id);
+            rt.named_signal_types
+                .borrow_mut()
+                .retain(|k, _| rt.named_signals.borrow().contains_key(k));
         }
 
         let clear_current = *rt.current_owner.borrow() == Some(id);
@@ -910,39 +921,45 @@ impl<T: Clone + 'static> Signal<T> {
     }
 
     pub fn get(&self) -> T {
+        self.try_get()
+            .expect("Signal::get on disposed signal")
+    }
+
+    /// Subscribe the current effect / memo and read. `None` if already disposed.
+    pub fn try_get(&self) -> Option<T> {
         RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
             track_signal_read(&rt, self.id);
-            let any_val_rc = rt
-                .signals
-                .borrow()
-                .get(&self.id)
-                .cloned()
-                .expect("Signal::get on disposed signal");
+            let any_val_rc = rt.signals.borrow().get(&self.id).cloned()?;
             let any_val = any_val_rc.borrow();
-            any_val
-                .downcast_ref::<T>()
-                .expect("Signal type mismatch")
-                .clone()
+            Some(
+                any_val
+                    .downcast_ref::<T>()
+                    .expect("Signal type mismatch")
+                    .clone(),
+            )
+        })
+    }
+
+    /// Read without subscribing. Returns `None` if this id was already disposed.
+    pub fn try_peek(&self) -> Option<T> {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            let any_val_rc = rt.signals.borrow().get(&self.id).cloned()?;
+            let any_val = any_val_rc.borrow();
+            Some(
+                any_val
+                    .downcast_ref::<T>()
+                    .expect("Signal type mismatch")
+                    .clone(),
+            )
         })
     }
 
     /// Read without subscribing the current effect / memo.
     pub fn peek(&self) -> T {
-        RUNTIME.with(|rt_rc| {
-            let rt = rt_rc.borrow();
-            let any_val_rc = rt
-                .signals
-                .borrow()
-                .get(&self.id)
-                .cloned()
-                .expect("Signal::peek on disposed signal");
-            let any_val = any_val_rc.borrow();
-            any_val
-                .downcast_ref::<T>()
-                .expect("Signal type mismatch")
-                .clone()
-        })
+        self.try_peek()
+            .expect("Signal::peek on disposed signal")
     }
 
     /// Borrow-style read without cloning. Still tracks the current effect / memo.

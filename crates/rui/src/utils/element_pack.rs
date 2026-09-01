@@ -9,11 +9,14 @@
 //! - **Expand**: `rui_fragment=1`, or an anonymous multi-child shell (`children.len() > 1`,
 //!   no text).
 //! - **Preserve**: any `data-slot`, `on_click`, `focus_id`, or `button_hover_paint`
-//!   (Kbd / menu Item / Button chrome, …).
+//!   (Kbd / menu Item / Button chrome, …); and any anonymous shell that carries
+//!   box-model layout (padding / margin / gap / border) so Taffy still sees insets.
 //! - **Recursive**: nested pack shells are flattened; preserved nodes are leaves of the
 //!   walk (their children are not hoisted).
 
 use crate::core::tree::Element;
+use crate::layout::{lp_length_px, lpa_kind, DimKind};
+use crate::style::Style;
 
 const ATTR_FRAGMENT: &str = "rui_fragment";
 const ATTR_SLOT: &str = "data-slot";
@@ -49,6 +52,44 @@ fn is_preserved_shell(el: &Element) -> bool {
         || el.button_hover_paint.is_some()
 }
 
+/// Anonymous multi-child packs must not be peeled when they carry box-model layout
+/// (padding / margin / gap / border). Otherwise `take_packed` drops the wrapper and
+/// Taffy never sees those insets — BoxBuilder `p/px/py` on the shell is lost.
+fn carries_box_model_shell(el: &Element) -> bool {
+    carries_box_model_style(&el.style)
+}
+
+fn carries_box_model_style(style: &Style) -> bool {
+    fn nonzero_lp(lp: taffy::style::LengthPercentage) -> bool {
+        lp_length_px(lp).map(|v| v.abs() > 1e-4).unwrap_or(false)
+    }
+    fn nonzero_lpa(lpa: taffy::style::LengthPercentageAuto) -> bool {
+        match lpa_kind(lpa) {
+            DimKind::Auto => false,
+            DimKind::Length(l) => l.abs() > 1e-4,
+            DimKind::Percent(p) => p.abs() > 1e-4,
+        }
+    }
+    if nonzero_lp(style.padding.left)
+        || nonzero_lp(style.padding.right)
+        || nonzero_lp(style.padding.top)
+        || nonzero_lp(style.padding.bottom)
+    {
+        return true;
+    }
+    if nonzero_lpa(style.margin.left)
+        || nonzero_lpa(style.margin.right)
+        || nonzero_lpa(style.margin.top)
+        || nonzero_lpa(style.margin.bottom)
+    {
+        return true;
+    }
+    if nonzero_lp(style.gap.width) || nonzero_lp(style.gap.height) {
+        return true;
+    }
+    style.resolved_border_widths().iter().any(|w| *w > 1e-4)
+}
+
 fn is_anonymous_multi_pack(el: &Element) -> bool {
     !is_preserved_shell(el)
         && el.text.as_ref().is_none_or(|t| t.is_empty())
@@ -56,7 +97,7 @@ fn is_anonymous_multi_pack(el: &Element) -> bool {
 }
 
 fn is_pack_shell(el: &Element) -> bool {
-    if is_preserved_shell(el) {
+    if is_preserved_shell(el) || carries_box_model_shell(el) {
         return false;
     }
     is_fragment(el) || is_anonymous_multi_pack(el)
@@ -153,6 +194,22 @@ mod tests {
         assert_eq!(
             kids[1].attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some("kbd")
+        );
+    }
+
+    #[test]
+    fn padded_anonymous_vstack_is_not_dismantled() {
+        let pack = Element::from(
+            vstack()
+                .w("100%")
+                .p("0.25rem")
+                .children(vec![Element::new().text("a"), Element::new().text("b")]),
+        );
+        let kids = take_packed(pack);
+        assert_eq!(kids.len(), 1, "padded shell must stay intact");
+        assert!(
+            lp_length_px(kids[0].style.padding.left).unwrap_or(0.0) > 0.0,
+            "padding must survive take_packed"
         );
     }
 

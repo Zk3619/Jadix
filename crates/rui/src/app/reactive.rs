@@ -316,6 +316,11 @@ where
         false
     });
     if already_registered {
+        // Island already registered but the live tree may have a fresh empty placeholder
+        // (Show / switch_reactive section remount). Queue a remount so the effect reconciles.
+        if id.ends_with("__view") {
+            defer_view_remount(&id);
+        }
         return;
     }
 
@@ -403,6 +408,21 @@ where
     let id = anchor_id.into();
     reactive_anchor(id.clone(), render);
     reactive_placeholder(id)
+}
+
+/// Like [`reactive_view`], but the placeholder uses explicit width/height (e.g. fixed-size SVG islands).
+pub fn reactive_view_sized<F>(
+    anchor_id: impl Into<String>,
+    width: impl crate::core::tree::IntoCssDim,
+    height: impl crate::core::tree::IntoCssDim,
+    render: F,
+) -> Element
+where
+    F: FnMut() -> Element + 'static,
+{
+    let id = anchor_id.into();
+    reactive_anchor(id.clone(), render);
+    reactive_placeholder_sized(id, width, height)
 }
 
 /// Stateful component boundary with refreshable props.
@@ -699,7 +719,19 @@ where
             .and_then(|registration| registration.hook.upgrade())
     });
     if let Some(hook) = existing_hook {
-        return chain_unmount_hook(el, hook);
+        let effect_alive = REGISTERED_BINDINGS.with(|registry| {
+            registry
+                .borrow()
+                .get(&registry_key)
+                .and_then(|registration| registration.effect_id)
+                .is_some_and(effect_is_alive)
+        });
+        if effect_alive {
+            return chain_unmount_hook(el, hook);
+        }
+        REGISTERED_BINDINGS.with(|registry| {
+            registry.borrow_mut().remove(&registry_key);
+        });
     }
 
     let hook_key = registry_key.clone();

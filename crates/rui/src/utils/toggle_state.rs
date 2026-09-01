@@ -41,7 +41,7 @@ pub fn resolve_bool_signal(
 
 /// 翻转 `signal`；`disabled` 时为 no-op。用 [`Signal::peek`] 以免点击回调误订订阅。
 pub fn write_bool_toggle(signal: Signal<bool>, disabled: bool) {
-    if disabled {
+    if disabled || !signal.is_alive() {
         return;
     }
     signal.set(!signal.peek());
