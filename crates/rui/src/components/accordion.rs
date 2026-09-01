@@ -227,7 +227,9 @@ fn use_accordion_panel_presence(key: &str) -> AccordionPanelPresenceHandle {
         PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
         rc
     });
-    AccordionPanelPresenceHandle { cell: cell.peek() }
+    AccordionPanelPresenceHandle {
+        cell: cell.try_peek().expect("accordion panel presence cell"),
+    }
 }
 
 fn accordion_panel_mounted_signal(handle: &AccordionPanelPresenceHandle) -> Signal<bool> {
@@ -270,7 +272,11 @@ fn sync_accordion_panel_presence(
                 c.exit_from_height = Some(c.measured_height.max(1.0));
             }
         }
-        let set_mounted = c.mounted.peek() != mounted;
+        let set_mounted = c
+            .mounted
+            .try_peek()
+            .map(|was| was != mounted)
+            .unwrap_or(false);
         (phase, mounted, set_mounted)
     };
     if set_mounted {
@@ -420,7 +426,9 @@ fn register_accordion_open_redraw_effect(instance_id: &str, open_sig: Signal<Vec
     let key = format!("{instance_id}__accordion_open_redraw");
     use_signal(key.as_str(), move || {
         create_effect(move || {
-            let _ = open_sig.get();
+            if open_sig.is_alive() {
+                let _ = open_sig.get();
+            }
             crate::app::runtime::request_redraw();
         });
         ()
@@ -432,7 +440,10 @@ fn sync_accordion_panel_open(
     value: &str,
     presence: &AccordionPanelPresenceHandle,
 ) {
-    let want = is_item_open(&open_sig.peek(), value);
+    let want = open_sig
+        .try_peek()
+        .map(|open| is_item_open(&open, value))
+        .unwrap_or(false);
     sync_accordion_panel_presence(presence, want);
 }
 
@@ -852,7 +863,10 @@ pub fn AccordionTrigger(
     let sync_open = open_sig;
     let sync_value = value.clone();
     chevron = chevron.reactive_sync(move |el, _layout_tree| {
-        let open = is_item_open(&sync_open.peek(), &sync_value);
+        let open = sync_open
+            .try_peek()
+            .map(|v| is_item_open(&v, &sync_value))
+            .unwrap_or(false);
         sync_accordion_chevron(el, open)
     });
 
@@ -968,7 +982,10 @@ pub fn AccordionContent(class: Option<String>, children: Option<Element>) -> Ele
 
     let sync_presence = presence.clone();
     panel = panel.reactive_sync(move |el, layout_tree| {
-        let want = is_item_open(&open_sync.peek(), &value_for_presence);
+        let want = open_sync
+            .try_peek()
+            .map(|v| is_item_open(&v, &value_for_presence))
+            .unwrap_or(false);
         sync_accordion_panel_presence(&sync_presence, want);
         apply_accordion_panel_motion(el, layout_tree, &sync_presence)
     });

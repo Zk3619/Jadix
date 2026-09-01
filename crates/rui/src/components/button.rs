@@ -1326,7 +1326,10 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
     let hovered = el
         .focus_id
         .as_deref()
-        .map(|fid| use_signal(&format!("{fid}_hover"), || false).peek() && !desc.disabled)
+        .map(|fid| {
+            let sig = use_signal(&format!("{fid}_hover"), || false);
+            sig.is_alive() && sig.peek() && !desc.disabled
+        })
         .unwrap_or(false);
     let hover_t = hover_t_from_bool(hovered, desc.disabled);
     let (bg, variant_text_color, border) = button_chrome_for_variant(variant, hover_t);
@@ -1380,10 +1383,16 @@ pub(crate) fn sync_button_hover_paint_subtree(
     if let Some(desc) = el.button_hover_paint.clone() {
         if let Some(fid) = el.focus_id.clone() {
             let key = format!("{}_hover", fid);
-            let is_hovered = use_signal(&key, || false).peek() && !desc.disabled;
+            let hover_sig = use_signal(&key, || false);
+            let is_hovered =
+                hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
             let focused = use_signal("__rui_button_focus_id", String::new);
             let focus_visible = use_signal("__rui_focus_visible", || false);
-            let is_focused = !desc.disabled && focus_visible.peek() && focused.peek() == fid;
+            let is_focused = !desc.disabled
+                && focus_visible.is_alive()
+                && focus_visible.peek()
+                && focused.is_alive()
+                && focused.peek() == fid;
             paint_button_root_from_hover(
                 el,
                 layout_tree,

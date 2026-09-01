@@ -3,7 +3,7 @@
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
-    input_number_step_button, input_overwrite_signal_key, input_password_reveal_signal_key,
+    input_number_step_button, input_number_steppers_column, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_type_signal_key,
     input_value_signal_key, lucide_named, map_byte_index_to_masked, map_byte_range_to_masked,
@@ -12,7 +12,7 @@ use crate::components::input::{
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
+use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
 use crate::utils::text_field::{bind_controlled_value, focus_id_for_text_edit};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -294,7 +294,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         if !soft {
             // Grow with the longest hard line so overflow-x can scroll (never clip).
             let prepared = crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
-            let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            let content_w = ink_w
+                + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
             text_el = text_el.w(content_w).min_w("100%");
         }
     } else {
@@ -595,14 +597,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             fid.clone(),
             -step,
         );
-        let steppers: Element = vstack()
-            .flex_shrink(0.0)
-            .items_center()
-            .justify_center()
-            .gap(0.0)
-            .child(inc)
-            .child(dec)
-            .into();
+        let steppers = input_number_steppers_column(inc, dec);
         el = el.child(steppers);
     }
 

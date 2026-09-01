@@ -467,6 +467,8 @@ fn sync_one_text_edit_paint(
                 next
             }
         } else {
+            // wrap=off textarea pans via viewport signal + collect `scroll_acc` — not
+            // `text_style.scroll_x` (would double-count in prepare_text cull / hit-test).
             0.0
         };
         if (text_el.text_style.scroll_x - want_scroll_x).abs() > 0.05 {
@@ -532,7 +534,9 @@ fn sync_one_text_edit_paint(
         if desc.multiline && !desc.wrap_mode.soft_wrap() {
             let prepared =
                 crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, line_box);
-            let content_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
+            let content_w =
+                ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
             let cur_w = crate::layout::dim_length_px(text_el.style.size.width).unwrap_or(-1.0);
             if (cur_w - content_w).abs() > 0.5 {
                 text_el.style.size.width = taffy::style::Dimension::length(content_w);

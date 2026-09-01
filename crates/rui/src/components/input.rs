@@ -45,7 +45,7 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
-use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
+use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_field::commit_value;
 use crate::utils::text_node::build_icon_text_node;
@@ -68,6 +68,8 @@ pub(crate) use crate::utils::text_field::{
 const NUMBER_STEP_HOLD_DELAY: Duration = Duration::from_millis(400);
 /// Long press the burst interval.
 const NUMBER_STEP_HOLD_INTERVAL: Duration = Duration::from_millis(50);
+/// 增减触发器竖向间距（略负值，收紧 chevron 视觉间隙）。
+const NUMBER_STEPPER_STACK_GAP: &str = "-0.125rem";
 
 struct NumberStepHold {
     field_id: String,
@@ -864,6 +866,18 @@ pub(crate) fn input_number_step_button(
         .on_pointer_up(move |_e: &PointerEvent| {
             end_number_step_hold();
         })
+}
+
+/// 上下增减触发器列（solid-ui `NumberField` 右侧）。
+pub(crate) fn input_number_steppers_column(inc: Element, dec: Element) -> Element {
+    vstack()
+        .flex_shrink(0.0)
+        .items_center()
+        .justify_center()
+        .gap(NUMBER_STEPPER_STACK_GAP)
+        .child(inc)
+        .child(dec)
+        .into()
 }
 
 pub(crate) fn set_adornment_visible(btn: &mut Element, visible: bool) -> bool {

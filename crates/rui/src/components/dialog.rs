@@ -22,10 +22,7 @@
 //!         <DialogTrigger>
 //!             <Button>Dialog</Button>
 //!         </DialogTrigger>
-//!         <DialogContent
-//!             overlay_blur={4.0}
-//!             close_on_overlay_click={true}
-//!         >
+//!         <DialogContent close_on_overlay_click={true}>
 //!             <DialogHeader>
 //!                 <DialogTitle>Edit Profile</DialogTitle>
 //!                 <DialogDescription>Make changes…</DialogDescription>
@@ -194,15 +191,18 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
         .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
         .max_h("85dvh");
     if hug_content {
-        // CommandDialog：`p-0` + 按内容撑开。`overflow:hidden` 会把列表压成 0，
-        // `w:100%` 会让面板宽过侧栏，左圆角被主栏 ScrollArea 裁成竖边。
+        // CommandDialog：`p-0`，无 footer。卡片只负责圆角裁剪；高度上限在 hug
+        // panel（`max_h:85dvh`）上变成确定高度后，Input（flex_shrink:0）之下的
+        // CommandList 才能 flex 缩短。Taffy 在「auto 高 + overflow:hidden」上会把
+        // 子项当滚动盒内容，列表仍按 max-h 300 排，多出的部分被卡片底边裁掉。
         panel = panel
             .p(0.0)
             .w("32rem")
             .max_w("90dvw")
-            .flex_shrink(0.0)
-            .overflow_x("visible")
-            .overflow_y("visible");
+            .flex_shrink(1.0)
+            .min_h(0.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden");
         panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
     } else {
         panel = panel
@@ -216,7 +216,7 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
 }
 
 /// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
-fn dialog_shell_frame(
+pub(crate) fn dialog_shell_frame(
     modal_id: &str,
     open: Signal<bool>,
     zs: &ModalShellZs,
@@ -230,7 +230,13 @@ fn dialog_shell_frame(
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     let zoom_body: Element = if hug_content {
-        vstack().w("100%").flex_shrink(0.0).child(inner).into()
+        // min_h:0 + shrink: CommandList (not the input) must absorb card `max_h: 85dvh`.
+        vstack()
+            .w("100%")
+            .min_h(0.0)
+            .flex_shrink(1.0)
+            .child(inner)
+            .into()
     } else {
         vstack().w("100%").min_h("0").child(inner).into()
     };
@@ -239,7 +245,12 @@ fn dialog_shell_frame(
     // card stays full size while its contents shrink: the "缩小态渲染异常" artifact, and on
     // exit you plainly watch the inner content animate inside a static panel.
     let mut card: Element = if hug_content {
-        vstack().w("100%").flex_shrink(0.0).child(zoom_body).into()
+        vstack()
+            .w("100%")
+            .min_h(0.0)
+            .flex_shrink(1.0)
+            .child(zoom_body)
+            .into()
     } else {
         vstack().w("100%").min_h("0").child(zoom_body).into()
     };
@@ -256,9 +267,13 @@ fn dialog_shell_frame(
     card = swallow_clicks(card);
 
     let mut panel: Element = if hug_content {
+        // Stage is definite (100% viewport). Panel `max_h` makes the used height
+        // `min(content, 85dvh)` so the list — not a fake footer — absorbs leftover space.
         vstack()
             .w("32rem")
             .max_w("90dvw")
+            .max_h("85dvh")
+            .min_h(0.0)
             .flex_shrink(0.0)
             .child(card)
             .into()
@@ -337,13 +352,13 @@ pub struct DialogContentOpts {
     pub show_close: bool,
     /// 遮罩色（语义 token / hex）；`None` → theme background RGB + 默认 alpha。
     pub overlay_color: Option<String>,
-    /// Overlay opacity 0…1; `None` → modal default ([`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_OPACITY`], `0.6`).
+    /// Overlay opacity 0…1; `None` → [`DEFAULT_MODAL_OVERLAY_OPACITY`]（`0.25`，与 Sheet / Drawer / CommandDialog 相同）。
     pub overlay_opacity: Option<f32>,
     /// Whether clicking the overlay closes; default `true`.
     pub close_on_overlay_click: bool,
-    /// Overlay backdrop blur radius (logical px); `None` → [`crate::components::internal::modal_shell::DEFAULT_MODAL_OVERLAY_BLUR`] (`4`).
+    /// Overlay backdrop blur radius (logical px); `None` → [`DEFAULT_MODAL_OVERLAY_BLUR`]（`2.0`，与 Sheet / Drawer / CommandDialog 相同）。
     pub overlay_blur: Option<f32>,
-    /// CommandDialog：按内容撑开、`p-0`、不裁剪列表；默认 Dialog 保持滚动裁剪。
+    /// CommandDialog：按内容撑开；顶/左右 `p-0`；列表在 `max_h` 下吃掉 Input 之后的剩余高度。
     pub hug_content: bool,
 }
 
@@ -360,6 +375,16 @@ impl Default for DialogContentOpts {
     }
 }
 
+/// 遮罩选项：与 Sheet / Drawer / CommandDialog 共用 [`modal_shell`] 默认（alpha `0.25`、blur `2`）。
+fn dialog_shell_overlay_opts(opts: &DialogContentOpts) -> ShellOverlayOpts {
+    ShellOverlayOpts::from_content_parts(
+        opts.overlay_color.as_deref(),
+        opts.overlay_opacity,
+        opts.close_on_overlay_click,
+        opts.overlay_blur,
+    )
+}
+
 /// solid-ui `DialogContent`：Portal + Overlay + 面板壳。
 /// `ui!` 中由宏编成此函数（子树在打开时惰性重建，同 Popover）。
 pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'static) -> Element {
@@ -367,12 +392,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
     let open = ctx.open;
     let id = ctx.id.clone();
     let view_id = format!("{id}__dialog_view");
-    let overlay = ShellOverlayOpts::from_content_parts(
-        opts.overlay_color.as_deref(),
-        opts.overlay_opacity,
-        opts.close_on_overlay_click,
-        opts.overlay_blur,
-    );
+    let overlay = dialog_shell_overlay_opts(&opts);
     let show_close = opts.show_close;
     let hug_content = opts.hug_content;
     let presence = use_modal_presence(&id);
@@ -394,7 +414,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
 
         let mut inner = body();
         inner = if hug_content {
-            inner.w("100%").flex_shrink(0.0)
+            inner.w("100%").min_h(0.0).flex_shrink(1.0)
         } else {
             inner.w("100%").min_h("0").flex_grow(1.0).gap("1rem")
         };
@@ -567,11 +587,29 @@ mod tests {
     use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
     use crate::components::internal::modal_shell::{
         default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
     };
     use crate::core::reactivity::Signal;
     use crate::core::tree::PointerEvents;
     use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
     use crate::utils::presence::PresencePhase;
+
+    #[test]
+    fn dialog_default_overlay_matches_modal_shell() {
+        let opts = dialog_shell_overlay_opts(&DialogContentOpts::default());
+        assert!(
+            (opts.color[3] - DEFAULT_MODAL_OVERLAY_OPACITY).abs() < 0.001,
+            "expected alpha {}, got {}",
+            DEFAULT_MODAL_OVERLAY_OPACITY,
+            opts.color[3]
+        );
+        assert!(
+            (opts.backdrop_blur - DEFAULT_MODAL_OVERLAY_BLUR).abs() < 0.001,
+            "expected blur {}, got {}",
+            DEFAULT_MODAL_OVERLAY_BLUR,
+            opts.backdrop_blur
+        );
+    }
 
     #[test]
     fn dialog_panel_is_viewport_centered_and_empty_stage_hits_underlay() {

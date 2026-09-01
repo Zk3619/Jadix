@@ -64,7 +64,14 @@ pub struct ScrollAreaBuilder {
 pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
     ScrollAreaBuilder {
         id: id.to_string(),
-        base: BaseComponentBuilder::new(Element::new().w("100%").h("100%").flex_col()),
+        base: BaseComponentBuilder::new(
+            Element::new()
+                .w("100%")
+                .h("100%")
+                .min_w(0.0)
+                .min_h(0.0)
+                .flex_col(),
+        ),
         overflow_x: "auto".to_string(),
         overflow_y: "auto".to_string(),
         scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
@@ -308,6 +315,11 @@ impl ScrollAreaBuilder {
         self
     }
 
+    pub fn pb(mut self, padding: impl IntoCssDim) -> Self {
+        self.base.el = self.base.el.pb(padding);
+        self
+    }
+
     pub fn bg(mut self, bg: [f32; 4]) -> Self {
         self.base = self.base.bg(bg);
         self
@@ -457,7 +469,10 @@ impl From<ScrollAreaBuilder> for Element {
         let mut viewport = activate_scroll_viewport(
             Element::new()
                 .w("100%")
-                .h("100%")
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .min_h(0.0)
+                .min_w(0.0)
                 .children(content_children),
             &builder.id,
             &builder.overflow_x,

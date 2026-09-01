@@ -6,8 +6,8 @@
 //!
 //! Three surfaces:
 //! - **Inline** [`Command`]: embed in Card or other layout.
-//! - **Dialog** [`CommandDialog`]: compose Dialog (centered modal, `show_close=false`); does not change `dialog.rs`.
-//! - **Pure overlay** [`command_overlay_scope`] / `<CommandOverlay>`: ShadCN CommandDialog-style viewport **top-1/3** centered;
+//! - **Dialog** [`CommandDialog`]: compose Dialog (centered modal, `show_close=false`). Hug shell is `p-0` (no footer); CommandList absorbs leftover height under `max_h: 85dvh`.
+//! - **Pure overlay** [`command_overlay_scope`] / `<CommandOverlay>`: viewport-centered palette (ShadCN `CommandDialog` chrome, no `Dialog` wrapper).
 //!   stage via [`mount_viewport_portal_stage`](crate::utils::popup::mount_viewport_portal_stage) (not Dialog centered chrome).
 //!
 //! cmdk-like behavior: **type-to-filter**, ↑↓ highlight, Enter run; Esc closes overlay / Dialog.
@@ -79,8 +79,12 @@ use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
 use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, clear_pending_floating_enter, floating_portal_phase,
-    sync_floating_presence, use_floating_presence, FloatingMotionKind,
+    apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
+    FloatingMotionKind,
+};
+#[cfg(test)]
+use crate::components::internal::floating_motion::{
+    clear_pending_floating_enter, sync_floating_presence,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -92,7 +96,7 @@ use crate::core::reactivity::{
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
 use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
@@ -242,11 +246,12 @@ fn set_command_active(active: Signal<usize>, next: usize) {
 
 /// solid-ui / shadcn Command root: `flex size-full flex-col overflow-hidden rounded-md bg-popover
 /// text-popover-foreground`.
-/// DialogContent pads `p-1.5rem`; negate inside the panel to match CommandDialog `p-0` (leave dialog.rs alone).
+/// DialogContent `hug_content` shell is already `p-0` — do not negate phantom `p-1.5rem` (that bleeds past the card).
 /// Overlay / Dialog size to content; avoid `overflow:hidden` + `min_h:0` (flex would crush intrinsic height to 0).
 fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
     let hug = is_palette(surface);
-    let kids: Vec<Element> = if hug {
+    let dialog = surface == CommandSurface::Dialog;
+    let kids: Vec<Element> = if hug && !dialog {
         kids.into_iter()
             .map(|k| k.flex_shrink(0.0).flex_grow(0.0))
             .collect()
@@ -254,12 +259,18 @@ fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
         kids
     };
     let mut inner = vstack().w("100%").gap("0").children(kids);
-    if !hug {
-        inner = inner.min_h("0").flex_grow(1.0);
+    if !hug || dialog {
+        inner = inner.min_h("0");
+        if !hug {
+            inner = inner.flex_grow(1.0);
+        }
     }
     let inner: Element = inner.into();
     let mut root = vstack().w("100%").child(inner);
-    if hug {
+    if dialog {
+        // Card `max_h: 85dvh` must shrink the list, not clip it. Input stays flex_shrink:0.
+        root = root.min_h("0").flex_shrink(1.0);
+    } else if hug {
         root = root.flex_shrink(0.0);
     } else {
         root = root.min_h("0").flex_grow(1.0).overflow("hidden");
@@ -267,7 +278,7 @@ fn command_root_shell(surface: CommandSurface, kids: Vec<Element>) -> Element {
     let mut root: Element = root.into();
     match surface {
         CommandSurface::Dialog => {
-            // CommandDialog `hug_content` panel already has bg/radius; do not paint another square popover backdrop.
+            // Chrome (bg / radius / border) lives on `dialog_shell_frame` hug card.
         }
         CommandSurface::Inline => {
             root = root
@@ -335,7 +346,12 @@ fn command_paint(
     });
     // DialogContent sets `min_h:0` + `flex_grow:1` on the returned root. Keep intrinsic height on the inner shell so it is not crushed to 0.
     if surface == CommandSurface::Dialog {
-        vstack().w("100%").flex_shrink(0.0).child(painted).into()
+        vstack()
+            .w("100%")
+            .min_h(0.0)
+            .flex_shrink(1.0)
+            .child(painted)
+            .into()
     } else {
         painted
     }
@@ -436,11 +452,11 @@ pub fn command_dialog_scope(
         .child(reactive_placeholder_sized(reset_view, 0.0, 0.0).pointer_events_box_none())
 }
 
-/// VS Code-style command palette: top-centered in the viewport, transparent dismiss layer, no Dialog.
+/// VS Code-style command palette: viewport-centered panel, transparent dismiss layer, no Dialog.
 ///
 /// Host matches [`command_dialog_scope`] / Select: `0×0` anchor so gallery cards
 /// `VStack` / `ScrollArea` are not blown out or crushed by a `100%×100%` placeholder.
-/// Stage matches a visible Dialog: `inset(0)` fills the portal layer, then top-centers the panel.
+/// Stage matches Dialog: `inset(0)` fills the portal layer, then centers the panel.
 /// Do not use an absolutely positioned `hstack` with only left/right and auto height as the hoist root — inside an auto-height parent
 /// Taffy cross-axis stretch collapses panel height to 0 and the gallery looks like it never opened.
 pub fn command_overlay_scope(
@@ -490,7 +506,7 @@ pub fn command_overlay_scope(
         .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
-/// Transparent underlay + viewport stage (ShadCN `top-1/3` horizontally centered panel). What is hoisted is the full-viewport stage.
+/// Transparent underlay + viewport stage (ShadCN CommandDialog chrome, centered in the viewport).
 fn command_overlay_frame(
     open: Signal<bool>,
     oz: OverlayZ,
@@ -515,7 +531,8 @@ fn command_overlay_frame(
         .border_style("solid")
         .border_width(1.0)
         .border_color(tokens::border())
-        .shadow([0.0, 0.0, 0.0, 0.16], 16.0);
+        .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
+        .pb("0.5rem");
     // Avoid `overflow:hidden`: Taffy treats the node as a scroll box and crushes the list main axis to 0 under auto height
     //(only the flex_shrink:0 search row remains). Corner radius is painted by the panel SDF, not by clipping.
     panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
@@ -538,13 +555,12 @@ fn command_overlay_frame(
     // `fixed`: viewport containing block + collect clears ancestor overflow clips (even before the hoisted flag is set).
     // Cross-axis center the palette; a full-width centering row would eat left/right clicks
     // that must reach the underlay (close on outside press).
-    let mut stage: Element = vstack()
+    let mut stage: Element = r#box()
         .inset(0.0)
         .w("100%")
         .h("100%")
-        .justify("start")
-        .items("center")
-        .pt("33.333dvh")
+        .items_center()
+        .justify_center()
         .child(panel)
         .into();
     stage = mount_viewport_portal_stage(stage, oz.panel);
@@ -952,10 +968,24 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
 pub fn CommandList(children: Option<Element>) -> Element {
     let ctx = require_command("CommandList");
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut col = vstack().w("100%").gap("0").children(kids);
+    let mut col = vstack()
+        .w("100%")
+        .gap("0")
+        .flex_grow(0.0)
+        .flex_shrink(0.0)
+        .children(kids);
     if ctx.visible.peek().is_empty() {
         col = col.child(command_empty_ui(&ctx.empty_msg.peek()));
     }
+    // Content-shell padding-bottom. Column `pb` is invisible to `content_h` (extent
+    // is descendant boxes, not own padding), so this is a real child.
+    col = col.child(
+        Element::new()
+            .w("100%")
+            .h("0.25rem")
+            .flex_shrink(0.0)
+            .pointer_events_none(),
+    );
     let n = ctx.visible.peek().len();
     if n == 0 {
         set_command_active(ctx.active, 0);
@@ -963,27 +993,29 @@ pub fn CommandList(children: Option<Element>) -> Element {
         set_command_active(ctx.active, n - 1);
     }
     let scroll_id = format!("{}:list", ctx.id);
-    // Overlay / Dialog parent height is auto: `overflow: auto` becomes a 0-tall scroll box in Taffy.
-    // Here only use `max-h` to grow with content; ScrollArea that fills the parent is for inline only.
-    if ctx.surface == CommandSurface::Inline {
-        return scroll_area(scroll_id.as_str())
-            .overflow_y("auto")
-            .overflow_x("hidden")
-            .w("100%")
-            .max_h("18.75rem")
-            .min_h("0")
-            .flex_grow(1.0)
-            .child(col)
-            .into();
-    }
-    // Overlay / Dialog: size to content. Do not hard-code `h:` (shorter than group heading+items paints a white Billing gap).
-    // Also avoid `overflow:auto` (Taffy scroll-box height is 0 under auto-height parents).
-    let mut list: Element = vstack()
+    // ShadCN `max-h-[300px] overflow-y-auto` on every surface. `max_h` on ScrollArea gives a
+    // definite scroll-box height under auto-height Dialog / Overlay parents (plain `overflow:auto`
+    // on a vstack collapses to 0 in Taffy).
+    let mut sa = scroll_area(scroll_id.as_str())
+        .overflow_y("auto")
+        .overflow_x("hidden")
         .w("100%")
-        .flex_shrink(0.0)
-        .flex_grow(0.0)
-        .child(col)
-        .into();
+        .max_h("18.75rem");
+    if ctx.surface == CommandSurface::Inline {
+        sa = sa.min_h("0").flex_grow(1.0);
+    } else if ctx.surface == CommandSurface::Dialog {
+        // Dialog hug panel is `max_h: 85dvh`. Input is flex_shrink 0; this list is
+        // the only body: leftover height, capped at 18.75rem, never taller than the card.
+        sa = sa
+            .h("auto")
+            .min_h(0.0)
+            .flex_grow(1.0)
+            .flex_shrink(1.0)
+            .hover_mode("area");
+    } else {
+        sa = sa.h("auto").flex_shrink(0.0);
+    }
+    let mut list: Element = sa.child(col).into();
     list.set_attr("data-slot", "command-list");
     list
 }
@@ -1034,7 +1066,7 @@ pub fn CommandGroup(heading: Option<String>, children: Option<Element>) -> Eleme
     if kids.is_empty() {
         return Element::new().w(0.0).h(0.0);
     }
-    let mut col = vstack().w("100%").gap("0").p("0.25rem");
+    let mut col = vstack().w("100%").gap("0").p("0.25rem").flex_shrink(0.0);
     if let Some(h) = heading.filter(|s| !s.is_empty()) {
         let mut head: Element = label(format!("{}:grp:{}", ctx.id, h).as_str())
             .text(h)
@@ -1057,6 +1089,7 @@ pub fn CommandSeparator(children: Option<Element>) -> Element {
     let _ = require_command("CommandSeparator");
     let mut el: Element = hstack()
         .w("100%")
+        .flex_shrink(0.0)
         .px("0.75rem")
         .py("0.25rem")
         .child(separator())
@@ -1372,6 +1405,55 @@ mod tests {
     }
 
     #[test]
+    fn command_overlay_list_inset_from_panel_edges() {
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let oz = OverlayZ {
+                underlay: 1000,
+                panel: 1001,
+            };
+            let inner = command_paint(
+                "cmd-pad-reg".into(),
+                open,
+                "Type a command or search...".into(),
+                CommandSurface::Overlay,
+                gallery_overlay_body(),
+            );
+            let presence = use_floating_presence("cmd-pad-reg-t", FloatingMotionKind::Fade);
+            let _ = sync_floating_presence(&presence, true);
+            clear_pending_floating_enter(&presence);
+            let frame = command_overlay_frame(
+                open,
+                oz,
+                inner,
+                "cmd-pad-reg-t",
+                crate::utils::presence::PresencePhase::Present,
+                &presence,
+            );
+            Element::new().w(800.0).h(600.0).child(frame)
+        });
+        let _ = hoist_portal_subtrees(&mut root);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [-1.0, -1.0]);
+        let stage = find_hoisted_panel(&root, "panel:1001");
+        let panel = overlay_palette_panel(stage);
+        let [px, _py, pw, _ph] = panel.layout_bounds;
+        let item = find_cmd_item(panel);
+        let item_inset_l = item.layout_bounds[0] - px;
+        let item_inset_r = (px + pw) - (item.layout_bounds[0] + item.layout_bounds[2]);
+        clear_overlay_stack();
+        assert!(
+            item_inset_l >= 3.0,
+            "command-item should be inset from panel left by CommandGroup p-1 (>=4px), got {item_inset_l}"
+        );
+        assert!(
+            item_inset_r >= 3.0,
+            "command-item should be inset from panel right by CommandGroup p-1 (>=4px), got {item_inset_r}"
+        );
+    }
+
+    #[test]
     fn command_overlay_frame_hoists_viewport_stage() {
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
@@ -1408,6 +1490,7 @@ mod tests {
             stage.layout_bounds
         );
         let panel = overlay_palette_panel(stage);
+        let stage_h = stage.layout_bounds[3];
         assert!(
             panel.layout_bounds[3] > 40.0,
             "palette panel must have visible height, got {:?}",
@@ -1418,10 +1501,12 @@ mod tests {
             "palette width is max-w-lg (32rem), got {}",
             panel.layout_bounds[2]
         );
+        let panel_y = panel.layout_bounds[1];
+        let panel_h = panel.layout_bounds[3];
+        let centered_y = (stage_h - panel_h) * 0.5;
         assert!(
-            panel.layout_bounds[1] > 150.0 && panel.layout_bounds[1] < 250.0,
-            "palette must sit at top-1/3 (ShadCN CommandDialog), got y={}",
-            panel.layout_bounds[1]
+            (panel_y - centered_y).abs() < 12.0,
+            "palette must be vertically centered in viewport, got y={panel_y} want≈{centered_y}"
         );
         clear_overlay_stack();
     }
@@ -1871,6 +1956,295 @@ mod tests {
             }
         });
         found.expect("command-item")
+    }
+
+    #[test]
+    fn command_dialog_list_scroll_caps_height() {
+        let mk_item = |label: &str| {
+            CommandItem(CommandItemProps {
+                value: Some(label.into()),
+                disabled: None,
+                checked: None,
+                on_click: None,
+                children: Some(Element::new().text(label)),
+                base: None,
+            })
+        };
+        let (_owner, root) = create_root(|| {
+            command_paint(
+                "cmd-dlg-scroll".into(),
+                Signal::new(true),
+                "search".into(),
+                CommandSurface::Dialog,
+                Rc::new(move || {
+                    let mut items = Vec::new();
+                    for i in 0..12 {
+                        items.push(mk_item(&format!("Item {i}")));
+                    }
+                    let mut grp_kids = Element::new();
+                    grp_kids.set_attr("rui_fragment", "1");
+                    let group = CommandGroup(CommandGroupProps {
+                        heading: Some("Suggestions".into()),
+                        children: Some(grp_kids.children(items)),
+                        base: None,
+                    });
+                    let mut list_kids = Element::new();
+                    list_kids.set_attr("rui_fragment", "1");
+                    let mut frag = Element::new();
+                    frag.set_attr("rui_fragment", "1");
+                    frag.children(vec![
+                        CommandInput(CommandInputProps {
+                            placeholder: None,
+                            children: None,
+                            base: None,
+                        }),
+                        CommandList(CommandListProps {
+                            children: Some(list_kids.children(vec![group])),
+                            base: None,
+                        }),
+                    ])
+                }),
+            )
+        });
+        let mut host = Element::new().w(800.0).h(600.0).child(root);
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);
+        let mut list_h = 0.0f32;
+        walk_cmd(&host, &mut |el| {
+            if el.attrs.get("data-slot").map(String::as_str) == Some("command-list") {
+                list_h = el.layout_bounds[3];
+            }
+        });
+        assert!(
+            list_h > 0.0,
+            "command-list must layout with non-zero height"
+        );
+        assert!(
+            list_h <= 305.0,
+            "command-list must cap at max-h 18.75rem (300px) and scroll, got h={list_h}"
+        );
+    }
+
+    fn gallery_like_command_body() -> Rc<dyn Fn() -> Element> {
+        Rc::new(|| {
+            let mk_item = |value: &str, label: &str| {
+                CommandItem(CommandItemProps {
+                    value: Some(value.into()),
+                    disabled: None,
+                    checked: None,
+                    on_click: None,
+                    children: Some(Element::new().text(label)),
+                    base: None,
+                })
+            };
+            let group = |heading: &str, items: Vec<Element>| {
+                let mut grp_kids = Element::new();
+                grp_kids.set_attr("rui_fragment", "1");
+                CommandGroup(CommandGroupProps {
+                    heading: Some(heading.into()),
+                    children: Some(grp_kids.children(items)),
+                    base: None,
+                })
+            };
+            let mut list_kids = Element::new();
+            list_kids.set_attr("rui_fragment", "1");
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                CommandInput(CommandInputProps {
+                    placeholder: None,
+                    children: None,
+                    base: None,
+                }),
+                CommandList(CommandListProps {
+                    children: Some(list_kids.children(vec![
+                        group(
+                            "Suggestions",
+                            vec![
+                                mk_item("toast", "Show toast"),
+                                mk_item("calendar", "Calendar"),
+                                mk_item("emoji", "Search Emoji"),
+                                mk_item("calc", "Calculator"),
+                            ],
+                        ),
+                        CommandSeparator(CommandSeparatorProps {
+                            children: None,
+                            base: None,
+                        }),
+                        group(
+                            "Settings",
+                            vec![
+                                mk_item("profile", "Profile"),
+                                mk_item("billing", "Billing"),
+                                mk_item("settings", "Settings"),
+                            ],
+                        ),
+                        CommandSeparator(CommandSeparatorProps {
+                            children: None,
+                            base: None,
+                        }),
+                        group(
+                            "File",
+                            vec![
+                                mk_item("new-file", "New File"),
+                                mk_item("open", "Open..."),
+                                mk_item("save", "Save"),
+                            ],
+                        ),
+                    ])),
+                    base: None,
+                }),
+            ])
+        })
+    }
+
+    #[test]
+    fn command_dialog_list_max_scroll_reveals_last_item() {
+        use crate::components::dialog::dialog_shell_frame;
+        use crate::components::internal::modal_motion::{
+            sync_modal_presence, use_modal_presence,
+        };
+        use crate::components::internal::modal_shell::{
+            default_modal_overlay_color, modal_sync, ShellOverlayOpts,
+        };
+        use crate::utils::presence::PresencePhase;
+
+        clear_overlay_stack();
+        let modal_id = "cmd-dlg-scroll-end";
+        let (_owner, mut host) = create_root(|| {
+            let open = Signal::new(true);
+            let handle = use_modal_presence(modal_id);
+            sync_modal_presence(&handle, true);
+            let zs = modal_sync(modal_id, open).expect("modal_sync");
+            let overlay_opts = ShellOverlayOpts {
+                color: default_modal_overlay_color(None, Some(0.5)),
+                close_on_click: true,
+                backdrop_blur: 0.0,
+            };
+            let inner = command_paint(
+                modal_id.into(),
+                open,
+                "search".into(),
+                CommandSurface::Dialog,
+                gallery_like_command_body(),
+            );
+            let shell = dialog_shell_frame(
+                modal_id,
+                open,
+                &zs,
+                inner,
+                &overlay_opts,
+                None,
+                true,
+                &handle,
+                PresencePhase::Present,
+            );
+            Element::new().w("100%").h("100%").child(shell)
+        });
+        assert!(hoist_portal_subtrees(&mut host) >= 2);
+
+        for (vw, vh) in [(800.0, 600.0), (400.0, 400.0)] {
+            let mut tree = LayoutTree::new();
+            let result = tree.build_and_layout(&mut host, vw, vh, [-1.0, -1.0]);
+            let zoom_id = format!("{modal_id}__modal_zoom");
+            let mut card_bounds = [0.0f32; 4];
+            let mut last_item: Option<[f32; 4]> = None;
+            let mut list_bounds = [0.0f32; 4];
+            let mut scrollbar_bounds: Option<[f32; 4]> = None;
+            let track_fid = format!("scrollbar-track:{modal_id}:list:y");
+            walk_cmd(&host, &mut |el| {
+                if el.template_id.as_deref() == Some(zoom_id.as_str()) {
+                    card_bounds = el.layout_bounds;
+                }
+                if el.attrs.get("data-slot").map(String::as_str) == Some("command-list") {
+                    list_bounds = el.layout_bounds;
+                }
+                if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+                    last_item = Some(el.layout_bounds);
+                }
+                if el.focus_id.as_deref() == Some(track_fid.as_str()) {
+                    scrollbar_bounds = Some(el.layout_bounds);
+                }
+            });
+            let item = last_item.expect("command-item");
+            let item_bottom = item[1] + item[3];
+            let list_bottom = list_bounds[1] + list_bounds[3];
+            let card_bottom = card_bounds[1] + card_bounds[3];
+            let header_h = (list_bounds[1] - card_bounds[1]).max(0.0);
+            let rest = format!("{modal_id}:list");
+            let (_id, vp, max_scroll, content) = result
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == &rest)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing scroll metrics for {rest} at {vw}x{vh}; have {:?}",
+                        result
+                            .scroll_metrics
+                            .iter()
+                            .map(|(id, ..)| id.as_str())
+                            .collect::<Vec<_>>()
+                    )
+                });
+            let content_bottom = list_bounds[1] + content[1];
+            let visible_bottom_at_end = list_bottom + max_scroll[1];
+            let pad_after_last = content_bottom - item_bottom;
+            let painted_item_bottom = item_bottom - max_scroll[1];
+            let max_card = vh * 0.85;
+            assert!(
+                card_bounds[3] <= max_card + 1.0,
+                "card must honor max_h 85dvh at {vw}x{vh}: card_h={} cap={max_card}",
+                card_bounds[3]
+            );
+            assert!(
+                list_bounds[3] > 8.0,
+                "list must keep a usable viewport (not crushed) at {vw}x{vh}, list_h={}",
+                list_bounds[3]
+            );
+            assert!(
+                list_bottom <= card_bottom + 1.0,
+                "list must stay inside the card (header+list must fit max_h): list_bottom={list_bottom} card_bottom={card_bottom} header_h={header_h} list_h={} card_h={} {vw}x{vh}",
+                list_bounds[3],
+                card_bounds[3]
+            );
+            if let Some(sb) = scrollbar_bounds {
+                let sb_bottom = sb[1] + sb[3];
+                assert!(
+                    sb_bottom <= card_bottom + 1.0,
+                    "scrollbar must stay inside the card at {vw}x{vh}: sb_bottom={sb_bottom} card_bottom={card_bottom} sb={sb:?}"
+                );
+            }
+            assert!(
+                content[1] > vp[3] + 1.0,
+                "list content must overflow viewport so it can scroll at {vw}x{vh} (content_h={} vp_h={})",
+                content[1],
+                vp[3]
+            );
+            assert!(
+                item_bottom <= content_bottom + 1.0,
+                "content_h must cover last item at {vw}x{vh}: item_bottom={item_bottom} content_bottom={content_bottom} content_h={} list_y={} item={:?}",
+                content[1],
+                list_bounds[1],
+                item
+            );
+            assert!(
+                pad_after_last >= 3.0,
+                "content_h must include CommandList trailing inset after last item at {vw}x{vh}, got pad_after_last={pad_after_last}"
+            );
+            assert!(
+                item_bottom <= visible_bottom_at_end + 1.0,
+                "last command-item must be fully visible at max scroll ({vw}x{vh}): item_bottom={item_bottom} visible_end={visible_bottom_at_end} max_scroll_y={} list_bottom={list_bottom} item_h={}",
+                max_scroll[1],
+                item[3]
+            );
+            assert!(
+                painted_item_bottom <= card_bottom + 1.0,
+                "at max scroll last item must sit inside the card clip ({vw}x{vh}): painted_bottom={painted_item_bottom} card_bottom={card_bottom} list_bottom={list_bottom} max_scroll_y={} item={:?}",
+                max_scroll[1],
+                item
+            );
+        }
+        clear_overlay_stack();
     }
 
     #[test]

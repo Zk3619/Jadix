@@ -313,9 +313,12 @@ pub use popover::{
     PopoverPanelBuilder, PopoverTitle, PopoverTitleProps, PopoverTrigger, PopoverTriggerProps,
 };
 pub use progress::{
-    progress, progress_scope, progress_track, use_progress, Progress, ProgressBuilder, ProgressCtx,
-    ProgressIndicator, ProgressIndicatorProps, ProgressLabel, ProgressLabelProps, ProgressProps,
-    ProgressTrack, ProgressTrackOpts, ProgressTrackProps, ProgressValue, ProgressValueProps,
+    progress, progress_circle, progress_circle_svg, progress_circle_view, progress_scope,
+    progress_track, use_progress,
+    Progress, ProgressBuilder, ProgressCircle, ProgressCircleBuilder, ProgressCircleOpts,
+    ProgressCircleSize, ProgressCircleProps, ProgressCtx, ProgressIndicator, ProgressIndicatorProps, ProgressLabel,
+    ProgressLabelProps, ProgressOrientation, ProgressProps, ProgressTrack, ProgressTrackOpts, ProgressTrackProps,
+    ProgressValue, ProgressValueProps,
 };
 pub use radio_group::{
     radio_group, radio_group_scope, use_radio_group, RadioGroup, RadioGroupBuilder, RadioGroupCtx,
@@ -349,8 +352,19 @@ pub use sheet::{
     SheetDescription, SheetDescriptionProps, SheetFooter, SheetFooterProps, SheetHeader,
     SheetHeaderProps, SheetSide, SheetTitle, SheetTitleProps, SheetTrigger, SheetTriggerProps,
 };
-pub use sidebar::{sidebar, SidebarBuilder};
-pub use slider::{slider, Slider, SliderBuilder, SliderProps};
+pub use sidebar::{
+    apply_bound_sidebar_menu_button_active, sidebar, sidebar_menu_button, sidebar_provider_scope,
+    toggle_sidebar, use_sidebar, Sidebar, SidebarBuilder, SidebarCollapsible, SidebarContent,
+    SidebarContentProps, SidebarCtx, SidebarFooter, SidebarFooterProps, SidebarGroup,
+    SidebarGroupContent, SidebarGroupContentProps, SidebarGroupLabel, SidebarGroupLabelProps,
+    SidebarGroupProps, SidebarHeader, SidebarHeaderProps, SidebarInput, SidebarInputProps,
+    SidebarInset, SidebarInsetProps, SidebarMenu, SidebarMenuButton, SidebarMenuButtonBuilder,
+    SidebarMenuButtonProps, SidebarMenuButtonSize, SidebarMenuButtonVariant, SidebarMenuItem,
+    SidebarMenuItemProps, SidebarMenuProps, SidebarProps, SidebarProvider, SidebarProviderProps,
+    SidebarRail, SidebarRailProps, SidebarSeparator, SidebarSeparatorProps, SidebarSide,
+    SidebarTrigger, SidebarTriggerProps, SidebarVariant,
+};
+pub use slider::{slider, Slider, SliderBuilder, SliderOrientation, SliderProps};
 pub use stepper::{stepper, StepperBuilder};
 pub use switch::{switch, Switch, SwitchBuilder, SwitchProps};
 pub use table::{
@@ -384,6 +398,9 @@ pub use tooltip::{
     use_tooltip, TooltipBuilder, TooltipContentOpts, TooltipCtx, TooltipTrigger,
     TooltipTriggerProps,
 };
-pub use tree_view::{tree_view, TreeNode, TreeViewBuilder};
+pub use tree_view::{
+    tree_view, tree_view_item_scope, tree_view_scope, use_tree_view, use_tree_view_item, TreeNode,
+    TreeView, TreeViewBuilder, TreeViewCtx, TreeViewItem, TreeViewItemCtx, TreeViewVariant,
+};
 pub use virtual_list::{virtual_list, VirtualListBuilder};
 pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

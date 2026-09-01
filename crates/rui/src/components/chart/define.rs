@@ -407,7 +407,8 @@ fn cartesian_frame(
         frame = frame.h(h.as_str()).min_h(h.as_str());
     }
     // shadcn ChartContainer: transparent bottom, grid border/50; shell Card is borne by the application.
-    // 网格必须在 plot（含 bar path 贴图）下层：绝对定位 + z=0，plot z=1。
+    // 网格先挂、plot 后挂：树序即「网格在贴图下」。不要用 z-index——任意非零 z 会让父级
+    // 启用全局 page_stack_bands（本为 CarouselStack），数据页多图一进视口整页改绘制路径。
     // overflow visible：tooltip 靠翻转留在图内，不用 hidden 裁切。
     frame = frame.bg(theme.background);
     if guides && grid {
@@ -419,7 +420,6 @@ fn cartesian_frame(
                 .left(0.0)
                 .top(format!("{}%", t * 100.0))
                 .pointer_events("none")
-                .z_index(0)
                 .into();
             ln = ln.bg(theme.grid);
             frame = frame.child(ln);
@@ -431,13 +431,12 @@ fn cartesian_frame(
             .left(0.0)
             .bottom(0.0)
             .pointer_events("none")
-            .z_index(0)
             .into();
         base = base.bg(theme.border);
         frame = frame.child(base);
     }
     // The column/line texture is clipped in the drawing area; tooltip overlay is the follow-up brother and will not be clipped.
-    frame.child(plot.z_index(1).overflow("hidden"))
+    frame.child(plot.overflow("hidden"))
 }
 
 fn compile_layers(layers: &[SceneLayer]) -> (Vec<(Vec<PathCommand>, PathStyle)>, Vec<Point2>, f32) {
@@ -951,7 +950,6 @@ fn pin_overlay_layer(
         .left(0.0)
         .top(0.0)
         .pointer_events("none")
-        .z_index(8)
         .into();
     let Some(pin) = pin else {
         return layer;
@@ -1057,8 +1055,7 @@ fn attach_overlay_slot(plot: Element, overlay_key: String) -> Element {
         .absolute()
         .left(0.0)
         .top(0.0)
-        .pointer_events("none")
-        .z_index(8);
+        .pointer_events("none");
     plot.child(ph)
 }
 
@@ -1070,7 +1067,6 @@ fn empty_overlay_layer() -> Element {
         .left(0.0)
         .top(0.0)
         .pointer_events("none")
-        .z_index(8)
         .into()
 }
 
@@ -1266,9 +1262,9 @@ fn attach_chart_pointer(
             let w = snap_plot_px(root.layout_bounds[2]);
             let h = snap_plot_px(root.layout_bounds[3]);
             if w >= 16.0 && h >= 16.0 {
-                let prev = sz.peek();
+                let prev = sz.try_peek().unwrap_or((0.0, 0.0));
                 if (prev.0 - w).abs() >= 0.5 || (prev.1 - h).abs() >= 0.5 {
-                    sz.set((w, h));
+                    let _ = sz.try_set((w, h));
                 }
             }
         }

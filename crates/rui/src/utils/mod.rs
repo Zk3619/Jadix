@@ -88,7 +88,10 @@ pub use text_field::{
     TextareaWrapMode, WrapMode, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX,
     TEXTAREA_RESIZE_FOCUS_PREFIX,
 };
-pub use text_node::{apply_label_defaults, build_icon_text_node, build_text_node, TextNodeConfig};
+pub use text_node::{
+    apply_label_defaults, build_icon_text_node, build_named_icon_text_node, build_text_node,
+    TextNodeConfig,
+};
 pub use toggle_state::{
     bool_on_click, bool_slot_key, resolve_bool_signal, write_bool_toggle, SLOT_CHECKBOX,
     SLOT_SWITCH, SLOT_TOGGLE,

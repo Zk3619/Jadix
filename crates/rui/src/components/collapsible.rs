@@ -47,8 +47,8 @@ use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -151,9 +151,19 @@ fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresenceHandle {
             needs_exit_anim: false,
         }));
         PANEL_PRESENCE_REGISTRY.with(|r| r.borrow_mut().push(Rc::clone(&rc)));
+        let rc_cleanup = Rc::clone(&rc);
+        on_cleanup(move || {
+            PANEL_PRESENCE_REGISTRY.with(|r| {
+                r.borrow_mut().retain(|c| !Rc::ptr_eq(c, &rc_cleanup));
+            });
+        });
         rc
     });
-    CollapsePanelPresenceHandle { cell: cell.peek() }
+    CollapsePanelPresenceHandle {
+        cell: cell
+            .try_peek()
+            .expect("collapsible panel presence cell"),
+    }
 }
 
 fn collapse_panel_mounted_signal(handle: &CollapsePanelPresenceHandle) -> Signal<bool> {
@@ -193,7 +203,14 @@ fn sync_collapse_panel_presence(handle: &CollapsePanelPresenceHandle, want: bool
                 c.exit_from_height = Some(c.measured_height.max(1.0));
             }
         }
-        let set_mounted = c.mounted.peek() != mounted;
+        let set_mounted = if c.mounted.is_alive() {
+            c.mounted
+                .try_peek()
+                .map(|was| was != mounted)
+                .unwrap_or(false)
+        } else {
+            false
+        };
         (phase, mounted, set_mounted)
     };
     if set_mounted {
@@ -240,7 +257,9 @@ pub(crate) fn tick_collapsible_panel_presence() -> bool {
         }
     });
     for sig in unmount {
-        sig.set(false);
+        if sig.is_alive() {
+            sig.set(false);
+        }
     }
     needs_frame
 }
@@ -248,7 +267,9 @@ pub(crate) fn tick_collapsible_panel_presence() -> bool {
 fn drain_pending_collapse_unmounts() {
     let pending = PENDING_COLLAPSE_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
     for sig in pending {
-        sig.set(false);
+        if sig.is_alive() {
+            sig.set(false);
+        }
     }
 }
 
@@ -340,14 +361,16 @@ fn register_open_redraw_effect(instance_id: &str, open_sig: Signal<bool>) {
     let key = format!("{instance_id}__collapsible_open_redraw");
     use_signal(key.as_str(), move || {
         create_effect(move || {
-            let _ = open_sig.get();
-            crate::app::runtime::request_redraw();
+            if let Some(_) = open_sig.try_get() {
+                crate::app::runtime::request_redraw();
+            }
         });
     });
 }
 
 fn sync_collapse_panel_open(open_sig: Signal<bool>, presence: &CollapsePanelPresenceHandle) {
-    sync_collapse_panel_presence(presence, open_sig.peek());
+    let want = open_sig.try_peek().unwrap_or(false);
+    sync_collapse_panel_presence(presence, want);
 }
 
 fn chevron_icon() -> Element {
@@ -611,9 +634,9 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
     sync_collapse_panel_open(open_sig, &presence);
 
     reactive_anchor(effect_anchor, move || {
-        let want = open_sig.get();
+        let want = open_sig.try_get().unwrap_or(false);
         sync_collapse_panel_presence(&sync_presence, want);
-        if !mounted.get() {
+        if mounted.try_get().is_none_or(|m| !m) {
             let mut hidden = Element::new();
             hidden.style.display = Display::None;
             hidden
@@ -720,7 +743,10 @@ pub fn CollapsibleTrigger(
     chevron = chevron.flex_shrink(0.0);
     let sync_open = open_sig;
     chevron =
-        chevron.reactive_sync(move |el, _layout_tree| sync_collapse_chevron(el, sync_open.peek()));
+        chevron.reactive_sync(move |el, _layout_tree| {
+            let open = sync_open.try_peek().unwrap_or(false);
+            sync_collapse_chevron(el, open)
+        });
 
     let mut caption = build_text_node(
         &label_text,
@@ -816,7 +842,8 @@ pub fn CollapsibleContent(class: Option<String>, children: Option<Element>) -> E
 
     let sync_presence = presence.clone();
     panel = panel.reactive_sync(move |el, layout_tree| {
-        sync_collapse_panel_presence(&sync_presence, open_sig.peek());
+        let want = open_sig.try_peek().unwrap_or(false);
+        sync_collapse_panel_presence(&sync_presence, want);
         apply_collapse_panel_motion(el, layout_tree, &sync_presence)
     });
     panel = panel.accesskit_role("region");

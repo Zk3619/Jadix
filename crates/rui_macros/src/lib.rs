@@ -188,6 +188,8 @@ fn is_boolish_attr(name: &str) -> bool {
             | "active"
             | "is_active"
             | "isActive"
+            | "default_open"
+            | "defaultOpen"
             | "required"
             | "readonly"
             | "read_only"
@@ -876,6 +878,7 @@ fn expand_node(
             let accordion_is_compound = name_str == "Accordion";
             let collapsible_is_compound = name_str == "Collapsible";
             let input_otp_is_compound = name_str == "InputOTP";
+            let tree_view_is_compound = name_str == "TreeView";
             let carousel_is_compound = matches!(
                 name_str.as_str(),
                 "Carousel" | "CarouselSingle" | "CarouselMulti" | "CarouselStack"
@@ -894,6 +897,7 @@ fn expand_node(
                 || name_str == "Avatar"
                 || name_str == "Accordion"
                 || name_str == "Collapsible"
+                || tree_view_is_compound
                 || input_otp_is_compound
                 || name_str == "ResizablePanelGroup"
                 || name_str == "Dialog"
@@ -907,6 +911,7 @@ fn expand_node(
                 || command_is_compound
                 || name_str == "Tooltip"
                 || name_str == "TooltipContent"
+                || name_str == "SidebarProvider"
                 || name_str == "ContextMenu"
                 || name_str == "ContextMenuContent"
                 || name_str == "ContextMenuSub"
@@ -936,6 +941,7 @@ fn expand_node(
                 || name_str == "AccordionContent"
                 || name_str == "AccordionItem"
                 || name_str == "CollapsibleContent"
+                || name_str == "TreeViewItem"
                 || carousel_is_compound
                 || name_str == "ForKeyed"
                 || name_str == "For"
@@ -959,6 +965,7 @@ fn expand_node(
                         .or_else(|| get_attr("valueSignal"));
                     let value_lit = get_attr("value");
                     let class_expr = get_attr("class");
+                    let orientation_expr = get_attr("orientation");
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -1003,11 +1010,17 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
+                    let orientation_ts = if let Some(o) = orientation_expr {
+                        quote! { (#o).to_string() }
+                    } else {
+                        quote! { "horizontal".to_string() }
+                    };
                     return quote! {
                         rui::components::progress_scope(
                             #id_ts,
                             #value_ts,
                             #default_ts,
+                            #orientation_ts,
                             #class_ts,
                             || #child_el,
                         )
@@ -1206,6 +1219,93 @@ fn expand_node(
                             #multiple_ts,
                             #disabled_ts,
                             #class_ts,
+                            || #child_el,
+                        )
+                    };
+                }
+
+                if tree_view_is_compound {
+                    let id_expr = get_attr("id");
+                    let variant_expr = get_attr("variant");
+                    let expanded_expr = get_attr("expanded_signal")
+                        .or_else(|| get_attr("expandedSignal"));
+                    let expanded_storage_key_expr = get_attr("expanded_storage_key")
+                        .or_else(|| get_attr("expandedStorageKey"));
+                    let row_height_expr = get_attr("row_height")
+                        .or_else(|| get_attr("rowHeight"));
+                    let height_expr = get_attr("height")
+                        .or_else(|| get_attr("h"));
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:TreeView#{}", file!(), line!(), #idx) }
+                    };
+                    let variant_ts = if let Some(v) = variant_expr {
+                        quote! { rui::components::TreeViewVariant::from((#v).to_string()) }
+                    } else {
+                        quote! { rui::components::TreeViewVariant::default() }
+                    };
+                    let expanded_ts = if let Some(exp) = expanded_expr {
+                        quote! { Some(#exp) }
+                    } else {
+                        quote! { None }
+                    };
+                    let expanded_storage_key_ts = if let Some(k) = expanded_storage_key_expr {
+                        quote! { Some((#k).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let class_expr = get_attr("class");
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let row_height_ts = if let Some(rh) = row_height_expr {
+                        let v = quote_unitless_f32(rh);
+                        quote! { #v }
+                    } else {
+                        quote! { 32.0f32 }
+                    };
+                    let height_ts = if let Some(h) = height_expr {
+                        let v = quote_unitless_f32(h);
+                        quote! { #v }
+                    } else {
+                        quote! { 240.0f32 }
+                    };
+                    return quote! {
+                        rui::components::tree_view_scope(
+                            #id_ts,
+                            #variant_ts,
+                            #expanded_ts,
+                            #expanded_storage_key_ts,
+                            #class_ts,
+                            #row_height_ts,
+                            #height_ts,
                             || #child_el,
                         )
                     };
@@ -1878,6 +1978,77 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::tooltip_scope(#id_ts, #open_ts, || #child_el)
+                    };
+                }
+
+                if name_str == "SidebarProvider" {
+                    // Provide context *before* Sidebar / SidebarInset (eager props would miss ctx).
+                    let id_expr = get_attr("id");
+                    let open_expr = get_attr("open");
+                    let default_open_expr = get_attr("defaultOpen").or_else(|| get_attr("default_open"));
+                    let variant_expr = get_attr("variant");
+                    let class_expr = get_attr("class");
+                    let idx = *node_counter;
+                    *node_counter += 1;
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = if let Some(id) = id_expr {
+                        quote! { (#id).to_string() }
+                    } else {
+                        quote! { format!("{}:{}:SidebarProvider#{}", file!(), line!(), #idx) }
+                    };
+                    let open_ts = if let Some(open) = open_expr {
+                        quote! { Some(#open) }
+                    } else {
+                        quote! { None }
+                    };
+                    let default_open_ts = if let Some(v) = default_open_expr {
+                        quote! { #v }
+                    } else {
+                        quote! { true }
+                    };
+                    let variant_ts = if let Some(v) = variant_expr {
+                        quote! { Some((#v).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        {
+                            let __rui_sidebar_variant: Option<String> = #variant_ts;
+                            rui::components::sidebar_provider_scope(
+                                #id_ts,
+                                #open_ts,
+                                #default_open_ts,
+                                __rui_sidebar_variant.as_deref(),
+                                #class_ts,
+                                || #child_el,
+                            )
+                        }
                     };
                 }
 
@@ -2658,6 +2829,66 @@ fn expand_node(
                     };
                     return quote! {
                         rui::components::collapsible_content(move || #child_el)
+                    };
+                }
+
+                if name_str == "TreeViewItem" {
+                    let Some(id_expr) = get_attr("id") else {
+                        return quote! { compile_error!("<TreeViewItem> requires `id={...}`"); };
+                    };
+                    let label_expr = get_attr("label");
+                    let disabled_expr = get_attr("disabled");
+                    let class_expr = get_attr("class");
+                    let mut expanded_children = Vec::new();
+                    for child in &el.children {
+                        expanded_children.push(expand_node(
+                            child,
+                            node_counter,
+                            in_reactive_boundary,
+                        ));
+                    }
+                    let child_el = if expanded_children.is_empty() {
+                        quote! { rui::core::tree::Element::new() }
+                    } else {
+                        quote! {
+                            {
+                                use rui::core::tree::IntoElementList;
+                                let mut __list: Vec<rui::core::tree::Element> = Vec::new();
+                                #( __list.extend((#expanded_children).into_element_list()); )*
+                                let mut __frag = rui::core::tree::Element::new();
+                                __frag.set_attr("rui_fragment", "1");
+                                __frag.children(__list)
+                            }
+                        }
+                    };
+                    let id_ts = quote! { (#id_expr).to_string() };
+                    let label_ts = if let Some(l) = label_expr {
+                        quote! { (#l).to_string() }
+                    } else {
+                        quote! { (#id_expr).to_string() }
+                    };
+                    let disabled_ts = if let Some(d) = disabled_expr {
+                        if let Some(b) = expr_as_bool_compat(d) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#d) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let class_ts = if let Some(c) = class_expr {
+                        quote! { Some((#c).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    return quote! {
+                        rui::components::tree_view_item_scope(
+                            #id_ts,
+                            #label_ts,
+                            #disabled_ts,
+                            #class_ts,
+                            || #child_el,
+                        )
                     };
                 }
 
@@ -5199,6 +5430,7 @@ fn expand_node(
                                 "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
                                 "valueSignal" => syn::Ident::new("value_signal", attr.span()),
                                 "showAlpha" => syn::Ident::new("show_alpha", attr.span()),
+                                "showAnimation" => syn::Ident::new("show_animation", attr.span()),
                                 "scrollSelected" => syn::Ident::new("scroll_selected", attr.span()),
                                 // Popover / Tooltip / HoverCard / floating
                                 "openSignal" => syn::Ident::new("open_signal", attr.span()),
@@ -5215,6 +5447,9 @@ fn expand_node(
                                 "minSize" => syn::Ident::new("min_size", attr.span()),
                                 "maxSize" => syn::Ident::new("max_size", attr.span()),
                                 "sizesSignal" => syn::Ident::new("sizes", attr.span()),
+                                // Sidebar（ShadCN base）
+                                "defaultOpen" => syn::Ident::new("default_open", attr.span()),
+                                "isActive" => syn::Ident::new("is_active", attr.span()),
                                 // Solid `for`（拒绝 shadcn/React 的 htmlFor 前缀）
                                 "for" => proc_macro2::Ident::new_raw("for", attr.span()),
                                 _ => attr.clone(),

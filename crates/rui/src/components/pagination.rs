@@ -7,7 +7,7 @@
 //! └── PaginationContent      // 横排 items-center
 //!     └── PaginationItem     // 单项壳
 //!         ├── PaginationPrevious / PaginationNext
-//!         ├── PaginationLink     // Button outline|ghost · size icon|default
+//!         ├── PaginationLink     // Button default|ghost · size icon|default
 //!         └── PaginationEllipsis
 //! ```
 //!
@@ -51,13 +51,16 @@
 //! ## 样式（ShadCN）
 //! - 根：`mx-auto flex w-full justify-center` · `role=navigation`
 //! - Content：`flex items-center gap-1`
-//! - Link：`isActive` → `outline`，否则 `ghost`；默认 `size=icon`
+//! - Link：`isActive` → `default`（primary），否则 `ghost`；默认 `size=icon`
 //! - Previous / Next：`size=default` + chevron + 文案（文案为空时退化为 `icon`）
-//! - Jumper（可选）：`type=number` 居中输入 + 跳转按钮
+//! - Jumper（可选）：`type=number` 居中输入 + 跳转按钮（输入框 Enter 亦可跳转）
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use winit::event::ElementState;
+use winit::keyboard::{Key, NamedKey};
 
 use rui_macros::component;
 
@@ -620,7 +623,7 @@ pub fn PaginationItem(class: Option<String>, children: Option<Element>) -> Eleme
     el
 }
 
-/// 页码 / 导航链接：`is_active` → outline，否则 ghost；默认 `size=icon`。
+/// 页码 / 导航链接：`is_active` → default（primary），否则 ghost；默认 `size=icon`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn PaginationLink(
@@ -637,7 +640,7 @@ pub fn PaginationLink(
     } else {
         size.trim()
     };
-    let variant = if is_active { "outline" } else { "ghost" };
+    let variant = if is_active { "default" } else { "ghost" };
     let label = children
         .as_ref()
         .map(extract_text_leaf)
@@ -886,7 +889,7 @@ fn paint_jumper(
     let go_page = page_sig;
     let go_count = page_count;
     let go_notify = on_page_change;
-    let do_jump = move || {
+    let do_jump = Rc::new(RefCell::new(move || {
         let raw = go_draft.peek();
         let Some(n) = parse_jumper_page(&raw, go_count) else {
             // 非法输入：回填当前页
@@ -898,7 +901,7 @@ fn paint_jumper(
         if let Some(ref cb) = go_notify {
             cb(n);
         }
-    };
+    }));
 
     let mut row = hstack()
         .gap("0.375rem")
@@ -907,7 +910,8 @@ fn paint_jumper(
         .overflow("visible")
         .ml(format!("{JUMPER_LEAD_GAP_PX}px"));
 
-    let input_el: Element = input(&format!("{id_prefix}__jump_input"))
+    let jump_on_enter = Rc::clone(&do_jump);
+    let mut input_el: Element = input(&format!("{id_prefix}__jump_input"))
         .input_type("number")
         .number_steppers(false)
         .text_align("center")
@@ -916,13 +920,24 @@ fn paint_jumper(
         .h("2.25rem")
         .value_signal(draft)
         .into();
+    input_el = input_el.on_key_down(move |ev| {
+        if ev.state != ElementState::Pressed || ev.repeat {
+            return false;
+        }
+        if matches!(ev.logical_key, Key::Named(NamedKey::Enter)) {
+            jump_on_enter.borrow_mut()();
+            return true;
+        }
+        false
+    });
     row = row.child(input_el);
 
+    let jump_on_click = Rc::clone(&do_jump);
     let jump_btn: Element = button(&format!("{id_prefix}__jump_btn"))
         .variant("outline")
         .size("default")
         .text(button_text.to_string())
-        .on_click(do_jump)
+        .on_click(move || jump_on_click.borrow_mut()())
         .into();
     row = row.child(jump_btn);
 
@@ -1507,6 +1522,23 @@ mod tests {
         assert_eq!(parse_jumper_page("1.5", 30), None);
         assert_eq!(parse_jumper_page("abc", 30), None);
         assert_eq!(parse_jumper_page("", 30), None);
+    }
+
+    #[test]
+    fn jumper_input_wires_enter_to_jump() {
+        let page = use_signal("pagination_jumper_enter_page", || 3usize);
+        let el = paint_jumper("pg-enter", 3, 20, "Go", page, None);
+        fn find_template<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_template(c, tid))
+        }
+        let input = find_template(&el, "pg-enter__jump_input").expect("jump input");
+        assert!(
+            input.on_key_down.is_some(),
+            "jump input must wire on_key_down for Enter"
+        );
     }
 
     #[test]

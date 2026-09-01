@@ -28,9 +28,24 @@ const REUSED_ATTR: &str = "__rui_vlist_reused";
 const CREATED_ATTR: &str = "__rui_vlist_created";
 const DROPPED_ATTR: &str = "__rui_vlist_dropped";
 
+fn window_key(item_count: usize, data_key: &str, start: usize, end: usize) -> String {
+    format!("{item_count}|{start}|{end}|{data_key}")
+}
+
+fn parse_window_key(key: &str) -> Option<(usize, usize, usize, String)> {
+    let mut parts = key.splitn(4, '|');
+    let count = parts.next()?.parse().ok()?;
+    let start = parts.next()?.parse().ok()?;
+    let end = parts.next()?.parse().ok()?;
+    let data = parts.next()?.to_string();
+    Some((count, start, end, data))
+}
+
 pub struct VirtualListBuilder {
     id: String,
     item_count: usize,
+    item_count_fn: Option<Rc<dyn Fn() -> usize>>,
+    data_key_fn: Option<Rc<dyn Fn() -> String>>,
     item_height: f32,
     overscan: usize,
     height: f32,
@@ -42,6 +57,8 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
     VirtualListBuilder {
         id: id.into(),
         item_count: 0,
+        item_count_fn: None,
+        data_key_fn: None,
         item_height: 32.0,
         overscan: 2,
         height: 240.0,
@@ -53,6 +70,19 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
 impl VirtualListBuilder {
     pub fn item_count(mut self, n: usize) -> Self {
         self.item_count = n;
+        self
+    }
+
+    /// Dynamic row count polled each frame in [`ReactiveSync`] (peek-only; no effect subscription).
+    pub fn item_count_fn(mut self, f: impl Fn() -> usize + 'static) -> Self {
+        self.item_count_fn = Some(Rc::new(f));
+        self
+    }
+
+    /// Content fingerprint polled each frame; when it changes, visible rows are re-rendered
+    /// even if `[start, end)` is unchanged (TreeView expand/collapse with same window).
+    pub fn data_key_fn(mut self, f: impl Fn() -> String + 'static) -> Self {
+        self.data_key_fn = Some(Rc::new(f));
         self
     }
 
@@ -175,15 +205,23 @@ fn apply_body_window(
     root: &mut Element,
     list_id: &str,
     item_count: usize,
+    data_key: &str,
     item_height: f32,
     start: usize,
     end: usize,
     render_item: &dyn Fn(usize) -> Element,
 ) -> LayoutStatus {
-    let key = format!("{start}:{end}");
+    let key = window_key(item_count, data_key, start, end);
     if root.attrs.get(RANGE_ATTR).map(String::as_str) == Some(key.as_str()) {
         return LayoutStatus::Clean;
     }
+
+    let reuse_rows = root
+        .attrs
+        .get(RANGE_ATTR)
+        .and_then(|prev| parse_window_key(prev))
+        .map(|(prev_count, _, _, prev_data)| prev_count == item_count && prev_data == data_key)
+        .unwrap_or(false);
 
     let top_tid = top_spacer_id(list_id);
     let bot_tid = bot_spacer_id(list_id);
@@ -220,13 +258,15 @@ fn apply_body_window(
     }
 
     for i in start..end {
-        if let Some(el) = old_rows.remove(&i) {
-            reused += 1;
-            next.push(tune_row(el, list_id, i, item_height));
-        } else {
-            created += 1;
-            next.push(tune_row(render_item(i), list_id, i, item_height));
+        if reuse_rows {
+            if let Some(el) = old_rows.remove(&i) {
+                reused += 1;
+                next.push(tune_row(el, list_id, i, item_height));
+                continue;
+            }
         }
+        created += 1;
+        next.push(tune_row(render_item(i), list_id, i, item_height));
     }
 
     if bottom_h > 0.0 {
@@ -260,6 +300,8 @@ impl From<VirtualListBuilder> for Element {
         let VirtualListBuilder {
             id,
             item_count,
+            item_count_fn,
+            data_key_fn,
             item_height,
             overscan,
             height,
@@ -270,30 +312,54 @@ impl From<VirtualListBuilder> for Element {
         let scroll_id_sync = scroll_id.clone();
         let list_id_sync = scroll_id.clone();
         let render_for_sync = Rc::clone(&render_item);
+        let item_count_fn_sync = item_count_fn.clone();
+        let data_key_fn_sync = data_key_fn.clone();
 
-        let (start0, end0) = visible_item_range(0.0, height, item_height, item_count, overscan);
+        let initial_count = item_count_fn
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or(item_count);
+        let initial_data_key = data_key_fn
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or_default();
+        let (start0, end0) = visible_item_range(0.0, height, item_height, initial_count, overscan);
         let mut body = build_body(
             &id,
-            item_count,
+            initial_count,
             item_height,
             start0,
             end0,
             render_item.as_ref(),
         );
-        body.attrs
-            .insert(RANGE_ATTR.to_string(), format!("{start0}:{end0}"));
+        body.attrs.insert(
+            RANGE_ATTR.to_string(),
+            window_key(initial_count, &initial_data_key, start0, end0),
+        );
         body.attrs.insert(REUSED_ATTR.to_string(), "0".into());
         body.attrs.insert(CREATED_ATTR.to_string(), "0".into());
         body.attrs.insert(DROPPED_ATTR.to_string(), "0".into());
         body = body.reactive_sync(move |root, _layout| {
-            let sy = use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32).peek();
-            let vh = use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height).peek();
-            let vh = if vh > 1.0 { vh } else { height };
-            let (start, end) = visible_item_range(sy, vh, item_height, item_count, overscan);
+            let sy_sig = use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32);
+            let vh_sig =
+                use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height);
+            let sy = sy_sig.try_peek().unwrap_or(0.0);
+            let vh_raw = vh_sig.try_peek().unwrap_or(height);
+            let vh = if vh_raw > 1.0 { vh_raw } else { height };
+            let count = item_count_fn_sync
+                .as_ref()
+                .map(|f| f())
+                .unwrap_or(item_count);
+            let data_key = data_key_fn_sync
+                .as_ref()
+                .map(|f| f())
+                .unwrap_or_default();
+            let (start, end) = visible_item_range(sy, vh, item_height, count, overscan);
             apply_body_window(
                 root,
                 &list_id_sync,
-                item_count,
+                count,
+                &data_key,
                 item_height,
                 start,
                 end,
@@ -353,13 +419,33 @@ mod tests {
         let mut root = build_body("vl", 50, 20.0, 0, 10, &|i| {
             Element::new().text(format!("{i}"))
         });
-        root.attrs.insert(RANGE_ATTR.to_string(), "0:10".into());
+        root.attrs
+            .insert(RANGE_ATTR.to_string(), window_key(50, "", 0, 10));
         assert_eq!(
-            apply_body_window(&mut root, "vl", 50, 20.0, 0, 10, &|i| {
+            apply_body_window(&mut root, "vl", 50, "", 20.0, 0, 10, &|i| {
                 Element::new().text(format!("{i}"))
             }),
             LayoutStatus::Clean
         );
+    }
+
+    #[test]
+    fn apply_body_window_updates_when_item_count_changes_same_range() {
+        let mut root = build_body("vl", 50, 20.0, 0, 10, &|i| {
+            Element::new().text(format!("{i}"))
+        });
+        root.attrs
+            .insert(RANGE_ATTR.to_string(), window_key(50, "", 0, 10));
+        assert_eq!(
+            apply_body_window(&mut root, "vl", 20, "", 20.0, 0, 10, &|i| {
+                Element::new().text(format!("n{i}"))
+            }),
+            LayoutStatus::StructureChanged
+        );
+        match crate::layout::dim_kind(root.style.size.height) {
+            crate::layout::DimKind::Length(h) => assert!((h - 20.0 * 20.0).abs() < 0.01),
+            other => panic!("expected Length total height, got {other:?}"),
+        }
     }
 
     #[test]
@@ -379,10 +465,11 @@ mod tests {
                 }
             }
         }
-        root.attrs.insert(RANGE_ATTR.to_string(), "0:10".into());
+        root.attrs
+            .insert(RANGE_ATTR.to_string(), window_key(100, "", 0, 10));
 
         assert_eq!(
-            apply_body_window(&mut root, "vl", 100, 20.0, 5, 15, &|i| {
+            apply_body_window(&mut root, "vl", 100, "", 20.0, 5, 15, &|i| {
                 Element::new().text(format!("r{i:03}"))
             }),
             LayoutStatus::StructureChanged

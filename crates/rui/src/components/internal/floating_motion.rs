@@ -137,6 +137,7 @@ pub(crate) fn floating_mounted_signal(handle: &FloatingPresenceHandle) -> Signal
 }
 
 /// Skip unflushed enter initial state (for tests that assert final paint / layout).
+#[cfg(test)]
 pub(crate) fn clear_pending_floating_enter(handle: &FloatingPresenceHandle) {
     let mut c = handle.cell.borrow_mut();
     c.needs_enter = false;

@@ -30,7 +30,7 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, r#box};
+use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::use_ui_transition_cubic;
 use crate::utils::controlled::resolve_f32_signal;
 use rui_macros::component;
@@ -42,19 +42,62 @@ use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
 
 const ATTR_SLOT: &str = "data-slot";
+const ATTR_ORIENTATION: &str = "data-orientation";
 const SLOT_FILL: &str = "slider-fill";
 const SLOT_TRACK: &str = "slider-track";
 const SLOT_THUMB: &str = "slider-thumb";
-const SLOT_LEFT: &str = "slider-left";
-const SLOT_RIGHT: &str = "slider-right";
+const SLOT_BEFORE: &str = "slider-before";
+const SLOT_AFTER: &str = "slider-after";
 
 /// solid-ui Track `h-2`；Thumb `size-5`。
-const TRACK_H: f32 = 8.0;
+const TRACK_CROSS: f32 = 8.0;
 const THUMB_PX: f32 = 20.0;
-const TRACK_TOP: f32 = (THUMB_PX - TRACK_H) * 0.5;
+const TRACK_INSET: f32 = (THUMB_PX - TRACK_CROSS) * 0.5;
 const BORDER_W: f32 = 2.0;
+/// 纵向滑块默认高度（横向仍 `w-full` + 拇指高）。
+const SLIDER_VERTICAL_DEFAULT_H: &str = "8rem";
 
 static NEXT_SLIDER_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Slider 主轴（对位 Tabs / Progress `orientation`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SliderOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl SliderOrientation {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "vertical" | "col" | "column" => Self::Vertical,
+            _ => Self::Horizontal,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Vertical)
+    }
+}
+
+impl From<&str> for SliderOrientation {
+    fn from(s: &str) -> Self {
+        Self::parse(s)
+    }
+}
+
+impl From<String> for SliderOrientation {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
+    }
+}
 
 #[derive(Clone)]
 struct SliderDrag {
@@ -62,6 +105,7 @@ struct SliderDrag {
     min: f32,
     max: f32,
     bounds: Rc<Cell<[f32; 4]>>,
+    vertical: bool,
 }
 
 /// Rest / hover 拇指阴影：`(color, blur)`（无纵向偏移）。
@@ -91,16 +135,20 @@ pub(crate) fn is_slider_dragging() -> bool {
     SLIDER_DRAG.with(|d| d.borrow().is_some())
 }
 
-/// CursorMoved：若正在拖拽滑块，按 x 更新值。
+/// CursorMoved：若正在拖拽滑块，按主轴坐标更新值。
 ///
 /// 调用方须在**已释放** `AppState` 的 `RefCell` 借用后再调用：`Signal::set` 会同步
 /// flush `bind_text` 等 effect，后者会 `try_update_element_by_template_id` → 再借同一 RefCell。
-pub(crate) fn tick_slider_drag(x: f32) -> bool {
+pub(crate) fn tick_slider_drag(x: f32, y: f32) -> bool {
     SLIDER_DRAG.with(|d| {
         let Some(drag) = d.borrow().clone() else {
             return false;
         };
-        let v = value_from_pointer_x(x, drag.bounds.get(), drag.min, drag.max);
+        let v = if drag.vertical {
+            value_from_pointer_y(y, drag.bounds.get(), drag.min, drag.max)
+        } else {
+            value_from_pointer_x(x, drag.bounds.get(), drag.min, drag.max)
+        };
         if (drag.value.peek() - v).abs() > 1e-5 {
             drag.value.set(v);
         }
@@ -125,10 +173,19 @@ fn quantize(v: f32, min: f32, max: f32, step: f32) -> f32 {
 }
 
 /// 指针映射：连续值，不按 `step` 量化（步进仅键盘）。
+/// `bounds` 须为视口坐标（[`PointerEvent::current_bounds`] / hit-path visual box）。
 fn value_from_pointer_x(x: f32, bounds: [f32; 4], min: f32, max: f32) -> f32 {
     let pad = THUMB_PX * 0.5;
     let inner = (bounds[2] - THUMB_PX).max(1.0);
     let t = ((x - bounds[0] - pad) / inner).clamp(0.0, 1.0);
+    (min + t * (max - min)).clamp(min, max)
+}
+
+/// 纵向：自下而上增大（屏幕 y 向下）。
+fn value_from_pointer_y(y: f32, bounds: [f32; 4], min: f32, max: f32) -> f32 {
+    let pad = THUMB_PX * 0.5;
+    let inner = (bounds[3] - THUMB_PX).max(1.0);
+    let t = (1.0 - ((y - bounds[1] - pad) / inner)).clamp(0.0, 1.0);
     (min + t * (max - min)).clamp(min, max)
 }
 
@@ -231,6 +288,7 @@ pub struct SliderBuilder {
     min: f32,
     max: f32,
     step: f32,
+    orientation: SliderOrientation,
     disabled: bool,
     /// When set, the track shows this `image_texture` and omits the primary fill.
     track_texture: Option<String>,
@@ -252,6 +310,7 @@ pub fn Slider(
     min: Option<f32>,
     max: Option<f32>,
     step: Option<f32>,
+    orientation: Option<String>,
     disabled: bool,
     on_click: crate::core::tree::Handler,
     children: Option<Element>,
@@ -268,6 +327,9 @@ pub fn Slider(
     }
     if let Some(v) = step {
         builder = builder.step(v);
+    }
+    if let Some(o) = orientation {
+        builder = builder.orientation(o);
     }
     if let Some(sig) = value {
         builder = builder.value_signal(sig);
@@ -305,6 +367,7 @@ pub fn slider(id: impl Into<String>) -> SliderBuilder {
         min: 0.0,
         max: 1.0,
         step: 0.05,
+        orientation: SliderOrientation::Horizontal,
         disabled: false,
         track_texture: None,
         track_texture_fn: None,
@@ -337,6 +400,11 @@ impl SliderBuilder {
 
     pub fn step(mut self, v: f32) -> Self {
         self.step = v.max(0.0);
+        self
+    }
+
+    pub fn orientation(mut self, o: impl Into<SliderOrientation>) -> Self {
+        self.orientation = o.into();
         self
     }
 
@@ -397,12 +465,20 @@ impl From<SliderBuilder> for Element {
         let default_value = quantize(builder.default_value, min, max, step);
         let val = resolve_f32_signal(builder.value, &id, "slider", default_value);
         let disabled = builder.disabled;
-        let bounds = Rc::new(Cell::new([0.0_f32; 4]));
+        let vertical = builder.orientation.is_vertical();
 
         let v0 = val.peek().clamp(min, max);
         let t0 = norm01(v0, min, max);
-        let left_g = t0.max(0.0001);
-        let right_g = (1.0 - t0).max(0.0001);
+        let before_g = if vertical {
+            (1.0 - t0).max(0.0001)
+        } else {
+            t0.max(0.0001)
+        };
+        let after_g = if vertical {
+            t0.max(0.0001)
+        } else {
+            (1.0 - t0).max(0.0001)
+        };
 
         let textured = builder
             .track_texture
@@ -411,12 +487,21 @@ impl From<SliderBuilder> for Element {
         let track_texture_fn = builder.track_texture_fn.clone();
 
         let fill = if textured.is_none() {
-            let mut fill: Element = r#box()
-                .h("100%")
-                .w(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
-                .rounded_full()
-                .bg(fill_bg())
-                .into();
+            let mut fill: Element = if vertical {
+                r#box()
+                    .w("100%")
+                    .h(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
+                    .rounded_full()
+                    .bg(fill_bg())
+                    .into()
+            } else {
+                r#box()
+                    .h("100%")
+                    .w(format!("{:.2}%", (t0 * 100.0).clamp(0.0, 100.0)))
+                    .rounded_full()
+                    .bg(fill_bg())
+                    .into()
+            };
             fill.attrs
                 .insert(ATTR_SLOT.to_string(), SLOT_FILL.to_string());
             Some(fill)
@@ -446,76 +531,140 @@ impl From<SliderBuilder> for Element {
         let hovered = Rc::new(Cell::new(false));
         let _ = use_ui_transition_cubic(&slider_shadow_anim_key(&id), 0.0);
 
-        let mut left: Element = r#box().flex_grow(left_g).h("100%").into();
-        left.attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_LEFT.to_string());
-        let mut right: Element = r#box().flex_grow(right_g).h("100%").into();
-        right
+        let mut before: Element = if vertical {
+            r#box().flex_grow(before_g).w("100%").into()
+        } else {
+            r#box().flex_grow(before_g).h("100%").into()
+        };
+        before
             .attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_RIGHT.to_string());
+            .insert(ATTR_SLOT.to_string(), SLOT_BEFORE.to_string());
+        let mut after: Element = if vertical {
+            r#box().flex_grow(after_g).w("100%").into()
+        } else {
+            r#box().flex_grow(after_g).h("100%").into()
+        };
+        after
+            .attrs
+            .insert(ATTR_SLOT.to_string(), SLOT_AFTER.to_string());
 
-        let row: Element = hstack()
-            .w("100%")
-            .h("100%")
-            .items_center()
-            .child(left)
-            .child(thumb)
-            .child(right)
-            .into();
+        let thumb_axis: Element = if vertical {
+            vstack()
+                .w("100%")
+                .h("100%")
+                .items_center()
+                .child(before)
+                .child(thumb)
+                .child(after)
+                .into()
+        } else {
+            hstack()
+                .w("100%")
+                .h("100%")
+                .items_center()
+                .child(before)
+                .child(thumb)
+                .child(after)
+                .into()
+        };
 
-        // Track 在下层且不抢命中：指针落在拇指行 / 根上，再 bubble 到根 handler。
-        let mut track: Element = r#box()
-            .absolute(true)
-            .left(0.0)
-            .right(0.0)
-            .top(TRACK_TOP)
-            .h(TRACK_H)
-            .rounded_full()
-            .overflow("hidden")
-            .bg(if textured.is_some() {
-                // Ramp textures punch transparent corners; keep an opaque bed.
-                crate::tokens::popover()
-            } else {
-                track_bg()
-            })
-            .pointer_events("none")
-            .into();
+        let mut track: Element = if vertical {
+            let mut track_shell: Element = vstack()
+                .w("100%")
+                .h("100%")
+                .justify("end")
+                .rounded_full()
+                .overflow("hidden")
+                .pointer_events("none")
+                .into();
+            if let Some(fill) = fill {
+                track_shell = track_shell.child(fill);
+            }
+            r#box()
+                .absolute(true)
+                .top(0.0)
+                .bottom(0.0)
+                .left(TRACK_INSET)
+                .w(TRACK_CROSS)
+                .rounded_full()
+                .overflow("hidden")
+                .bg(if textured.is_some() {
+                    crate::tokens::popover()
+                } else {
+                    track_bg()
+                })
+                .pointer_events("none")
+                .child(track_shell)
+                .into()
+        } else {
+            let mut track: Element = r#box()
+                .absolute(true)
+                .left(0.0)
+                .right(0.0)
+                .top(TRACK_INSET)
+                .h(TRACK_CROSS)
+                .rounded_full()
+                .overflow("hidden")
+                .bg(if textured.is_some() {
+                    crate::tokens::popover()
+                } else {
+                    track_bg()
+                })
+                .pointer_events("none")
+                .into();
+            if let Some(fill) = fill {
+                track = track.child(fill);
+            }
+            track
+        };
         track
             .attrs
             .insert(ATTR_SLOT.to_string(), SLOT_TRACK.to_string());
         if let Some(key) = textured {
             track.image_texture = Some(key);
         }
-        if let Some(fill) = fill {
-            track = track.child(fill);
-        }
 
-        let mut root: Element = r#box()
-            .relative(true)
-            .w("100%")
-            .max_w("100%")
-            .min_w(0.0)
-            .h(THUMB_PX)
-            .child(track)
-            .child(row)
-            .children(builder.children)
-            .into();
+        let mut root: Element = if vertical {
+            r#box()
+                .relative(true)
+                .w(THUMB_PX)
+                .h(SLIDER_VERTICAL_DEFAULT_H)
+                .child(track)
+                .child(thumb_axis)
+                .children(builder.children)
+                .into()
+        } else {
+            r#box()
+                .relative(true)
+                .w("100%")
+                .max_w("100%")
+                .min_w(0.0)
+                .h(THUMB_PX)
+                .child(track)
+                .child(thumb_axis)
+                .children(builder.children)
+                .into()
+        };
+        root.set_attr(ATTR_ORIENTATION, builder.orientation.as_str());
 
         let val_k = val;
-        let bounds_pd = bounds.clone();
         let focus_id = id.clone();
         root = root.on_pointer_down(move |e: &PointerEvent| {
             if disabled {
                 return;
             }
-            // 命中叶子（拇指 / spacer）时根只收到 Capture→Bubble；勿只认 Target。
             if e.phase == EventPhase::Capture {
                 return;
             }
             use_signal("__rui_button_focus_id", String::new).set(focus_id.clone());
             use_signal("__rui_focus_visible", || false).set(false);
-            let b = bounds_pd.get();
-            let v = value_from_pointer_x(e.x, b, min, max);
+            // Hit-path visual bounds (viewport space, scroll-adjusted) — not `layout_bounds`.
+            let b = e.current_bounds;
+            let v = if vertical {
+                value_from_pointer_y(e.y, b, min, max)
+            } else {
+                value_from_pointer_x(e.x, b, min, max)
+            };
             val_k.set(v);
             begin_slider_drag(
                 focus_id.clone(),
@@ -523,7 +672,8 @@ impl From<SliderBuilder> for Element {
                     value: val_k,
                     min,
                     max,
-                    bounds: bounds_pd.clone(),
+                    bounds: Rc::new(Cell::new(b)),
+                    vertical,
                 },
             );
             mark_hover_paint_dirty();
@@ -555,36 +705,45 @@ impl From<SliderBuilder> for Element {
                     return false;
                 }
                 let cur = val_key.peek();
-                match ev.logical_key {
-                    Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowDown) => {
-                        val_key.set(quantize(cur - step, min, max, step));
-                        true
-                    }
-                    Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowUp) => {
-                        val_key.set(quantize(cur + step, min, max, step));
-                        true
-                    }
-                    Key::Named(NamedKey::Home) => {
-                        val_key.set(min);
-                        true
-                    }
-                    Key::Named(NamedKey::End) => {
-                        val_key.set(max);
-                        true
-                    }
+                let dec = match ev.logical_key {
+                    Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowDown) => true,
                     _ => false,
+                };
+                let inc = match ev.logical_key {
+                    Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowUp) => true,
+                    _ => false,
+                };
+                if dec {
+                    val_key.set(quantize(cur - step, min, max, step));
+                    true
+                } else if inc {
+                    val_key.set(quantize(cur + step, min, max, step));
+                    true
+                } else {
+                    match ev.logical_key {
+                        Key::Named(NamedKey::Home) => {
+                            val_key.set(min);
+                            true
+                        }
+                        Key::Named(NamedKey::End) => {
+                            val_key.set(max);
+                            true
+                        }
+                        _ => false,
+                    }
                 }
             })
             .into();
 
         if disabled {
             el = el.opacity(0.5).cursor_not_allowed();
+        } else if vertical {
+            el = el.cursor_kind(crate::core::tree::CursorKind::NsResize);
         } else {
             el = el.cursor_kind(crate::core::tree::CursorKind::EwResize);
         }
 
         let sync_value = val;
-        let sync_bounds = bounds;
         let sync_min = min;
         let sync_max = max;
         let sync_hover = hovered;
@@ -593,11 +752,19 @@ impl From<SliderBuilder> for Element {
             if let Some(f) = &on_sync {
                 f();
             }
-            sync_bounds.set(root.layout_bounds);
+            let _ = root;
             let value = sync_value.peek().clamp(sync_min, sync_max);
             let t = norm01(value, sync_min, sync_max);
-            let want_left = t.max(0.0001);
-            let want_right = (1.0 - t).max(0.0001);
+            let want_before = if vertical {
+                (1.0 - t).max(0.0001)
+            } else {
+                t.max(0.0001)
+            };
+            let want_after = if vertical {
+                t.max(0.0001)
+            } else {
+                (1.0 - t).max(0.0001)
+            };
             let want_frac = t.clamp(0.0, 1.0);
             let mut layout_changed = false;
             let mut paint_changed = false;
@@ -613,12 +780,23 @@ impl From<SliderBuilder> for Element {
             }
 
             if let Some(fill) = find_slot_deep_mut(root, SLOT_FILL) {
-                let mismatch = match crate::layout::dim_kind(fill.style.size.width) {
-                    crate::layout::DimKind::Percent(p) => (p - want_frac).abs() > 0.0005,
-                    _ => true,
+                let mismatch = if vertical {
+                    match crate::layout::dim_kind(fill.style.size.height) {
+                        crate::layout::DimKind::Percent(p) => (p - want_frac).abs() > 0.0005,
+                        _ => true,
+                    }
+                } else {
+                    match crate::layout::dim_kind(fill.style.size.width) {
+                        crate::layout::DimKind::Percent(p) => (p - want_frac).abs() > 0.0005,
+                        _ => true,
+                    }
                 };
                 if mismatch {
-                    fill.style.size.width = Dimension::percent(want_frac);
+                    if vertical {
+                        fill.style.size.height = Dimension::percent(want_frac);
+                    } else {
+                        fill.style.size.width = Dimension::percent(want_frac);
+                    }
                     if fill.layout_node.is_some() {
                         layout_tree.update_taffy_node_style(fill);
                     }
@@ -626,20 +804,20 @@ impl From<SliderBuilder> for Element {
                 }
             }
 
-            if let Some(left) = find_slot_deep_mut(root, SLOT_LEFT) {
-                if (left.style.flex_grow - want_left).abs() > f32::EPSILON {
-                    left.style.flex_grow = want_left;
-                    if left.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(left);
+            if let Some(before) = find_slot_deep_mut(root, SLOT_BEFORE) {
+                if (before.style.flex_grow - want_before).abs() > f32::EPSILON {
+                    before.style.flex_grow = want_before;
+                    if before.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(before);
                     }
                     layout_changed = true;
                 }
             }
-            if let Some(right) = find_slot_deep_mut(root, SLOT_RIGHT) {
-                if (right.style.flex_grow - want_right).abs() > f32::EPSILON {
-                    right.style.flex_grow = want_right;
-                    if right.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(right);
+            if let Some(after) = find_slot_deep_mut(root, SLOT_AFTER) {
+                if (after.style.flex_grow - want_after).abs() > f32::EPSILON {
+                    after.style.flex_grow = want_after;
+                    if after.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(after);
                     }
                     layout_changed = true;
                 }
@@ -766,7 +944,59 @@ mod tests {
             "click should raise value, got {}",
             value.peek()
         );
-        assert!(tick_slider_drag(110.0), "drag should be active");
+        assert!(tick_slider_drag(110.0, 10.0), "drag should be active");
+    }
+
+    #[test]
+    fn pointer_y_maps_to_value_ends_vertical() {
+        let b = [0.0, 10.0, 20.0, 100.0 + THUMB_PX];
+        let lo = value_from_pointer_y(10.0 + THUMB_PX * 0.5 + 100.0, b, 0.0, 1.0);
+        let hi = value_from_pointer_y(10.0 + THUMB_PX * 0.5, b, 0.0, 1.0);
+        assert!(lo <= 0.02, "lo={lo}");
+        assert!(hi >= 0.98, "hi={hi}");
+    }
+
+    #[test]
+    fn vertical_pointer_uses_visual_bounds_not_layout_bounds() {
+        // layout y=200, scroll 180 → visual y=20; pointer at thumb (~40% from bottom).
+        let layout_b = [0.0, 200.0, 20.0, 128.0];
+        let visual_b = [0.0, 20.0, 20.0, 128.0];
+        let y_thumb = visual_b[1] + (visual_b[3] - THUMB_PX) * 0.6 + THUMB_PX * 0.5;
+        let with_layout = value_from_pointer_y(y_thumb, layout_b, 0.0, 1.0);
+        let with_visual = value_from_pointer_y(y_thumb, visual_b, 0.0, 1.0);
+        assert!(
+            with_layout > 0.95,
+            "layout_bounds under scroll skews to max, got {with_layout}"
+        );
+        assert!(
+            (with_visual - 0.4).abs() < 0.05,
+            "visual bounds should map thumb center, got {with_visual}"
+        );
+    }
+
+    #[test]
+    fn vertical_drag_tick_uses_captured_visual_bounds() {
+        clear_slider_drag_if_any();
+        let value = use_signal("__rui_test_slider_vert_drag", || 0.2_f32);
+        value.set_silent(0.2);
+        let visual_b = [40.0, 60.0, 20.0, 128.0];
+        begin_slider_drag(
+            "vert-drag",
+            SliderDrag {
+                value,
+                min: 0.0,
+                max: 1.0,
+                bounds: Rc::new(Cell::new(visual_b)),
+                vertical: true,
+            },
+        );
+        let mid_y = visual_b[1] + (visual_b[3] - THUMB_PX) * 0.5 + THUMB_PX * 0.5;
+        assert!(tick_slider_drag(0.0, mid_y));
+        assert!(
+            (value.peek() - 0.5).abs() < 0.08,
+            "mid drag y should land near 50%, got {}",
+            value.peek()
+        );
         clear_slider_drag_if_any();
     }
 }
