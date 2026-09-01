@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::app::tree_hit::find_click;
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};
-use crate::primitives::r#box::r#box;
+use crate::primitives::r#box::{r#box, vstack};
 use crate::renderer::InstanceInput;
 use crate::style::apply_class_list;
 
@@ -454,6 +454,118 @@ fn padding_block_two_values_and_gap_units() {
             );
         });
     });
+}
+
+#[test]
+fn vstack_box_builder_padding_insets_child() {
+    let child = Element::from(r#box().w(50.0).h(20.0));
+    let parent: Element = vstack()
+        .w("100%")
+        .gap("0")
+        .p("0.25rem")
+        .child(child)
+        .into();
+    let mut root = Element::new().w(200.0).h(100.0).child(parent);
+    let mut layout = LayoutTree::new();
+    let _ = layout.build_and_layout(&mut root, 200.0, 100.0, [-1.0, -1.0]);
+    let p = &root.children[0];
+    let c = &p.children[0];
+    let pad = length_px(p.style.padding.left);
+    assert!((pad - 4.0).abs() < 0.5, "pad={pad}");
+    assert!(
+        (c.layout_bounds[0] - (p.layout_bounds[0] + pad)).abs() < 1.5,
+        "child_x={} parent_x={} pad={pad}",
+        c.layout_bounds[0],
+        p.layout_bounds[0]
+    );
+}
+
+#[test]
+fn vstack_padding_before_children_matches_after_into() {
+    let child = Element::from(r#box().w(50.0).h(20.0));
+    let before: Element = vstack()
+        .w("100%")
+        .gap("0")
+        .p("0.25rem")
+        .child(child)
+        .into();
+    let child2 = Element::from(r#box().w(50.0).h(20.0));
+    let mut after: Element = vstack().w("100%").gap("0").child(child2).into();
+    after = after.p("0.25rem");
+    let mut root1 = Element::new().w(200.0).h(100.0).child(before);
+    let mut root2 = Element::new().w(200.0).h(100.0).child(after);
+    let mut layout = LayoutTree::new();
+    let _ = layout.build_and_layout(&mut root1, 200.0, 100.0, [-1.0, -1.0]);
+    let _ = layout.build_and_layout(&mut root2, 200.0, 100.0, [-1.0, -1.0]);
+    let c1 = &root1.children[0].children[0].layout_bounds[0];
+    let c2 = &root2.children[0].children[0].layout_bounds[0];
+    assert!(
+        (c1 - c2).abs() < 0.5,
+        "padding before vs after into must match layout: before={c1} after={c2}"
+    );
+}
+
+#[test]
+fn nested_vstack_group_padding_with_flex_shrink_kids() {
+    let item = Element::from(r#box().w(50.0).h(20.0));
+    let group: Element = vstack()
+        .w("100%")
+        .gap("0")
+        .p("0.25rem")
+        .child(item)
+        .into();
+    let list: Element = vstack()
+        .w("100%")
+        .flex_shrink(0.0)
+        .flex_grow(0.0)
+        .child(group)
+        .into();
+    let list = list.flex_shrink(0.0).flex_grow(0.0);
+    let inner: Element = vstack().w("100%").gap("0").child(list).into();
+    let root: Element = vstack().w("100%").child(inner).into();
+    let mut host = Element::new().w(200.0).h(100.0).child(root);
+    let mut layout = LayoutTree::new();
+    let _ = layout.build_and_layout(&mut host, 200.0, 100.0, [-1.0, -1.0]);
+    let group_el = &host.children[0].children[0].children[0].children[0];
+    let item_el = &group_el.children[0];
+    let pad = length_px(group_el.style.padding.left);
+    let inset = item_el.layout_bounds[0] - group_el.layout_bounds[0];
+    assert!((pad - 4.0).abs() < 0.5, "pad={pad}");
+    assert!(
+        (inset - pad).abs() < 1.5,
+        "item should be inset by group padding: inset={inset} pad={pad}"
+    );
+}
+
+#[test]
+fn nested_vstack_group_padding_without_shell_px() {
+    let item = Element::from(r#box().w(50.0).h(20.0));
+    let group: Element = vstack()
+        .w("100%")
+        .gap("0")
+        .p("0.25rem")
+        .child(item)
+        .into();
+    let list: Element = vstack()
+        .w("100%")
+        .flex_shrink(0.0)
+        .flex_grow(0.0)
+        .child(group)
+        .into();
+    let inner: Element = vstack().w("100%").gap("0").child(list).into();
+    let root: Element = vstack().w("100%").child(inner).into();
+    let mut host = Element::new().w(200.0).h(100.0).child(root);
+    let mut layout = LayoutTree::new();
+    let _ = layout.build_and_layout(&mut host, 200.0, 100.0, [-1.0, -1.0]);
+    let group_el = &host.children[0].children[0].children[0].children[0];
+    let item_el = &group_el.children[0];
+    let pad = length_px(group_el.style.padding.left);
+    let inset = item_el.layout_bounds[0] - group_el.layout_bounds[0];
+    assert!((pad - 4.0).abs() < 0.5, "pad={pad}");
+    assert!(
+        (inset - pad).abs() < 1.5,
+        "item should be inset by group padding: inset={inset} pad={pad}"
+    );
 }
 
 #[test]

@@ -218,3 +218,96 @@ fn full_collect_after_reflow_shrink_drops_stale_clip_cull_extent() {
         max_w[1]
     );
 }
+
+/// TreeView collapsible/accordion used `max_h` + `overflow:auto` without a `scroll:` id.
+/// Inner height must not leak into the outer ScrollArea `content_h`, or the thumb jumps
+/// when `scroll_only` (stale inner extent) and full clip-cull (layout box) disagree.
+fn nested_overflow_scroll_in_outer_viewport() -> Element {
+    let nested = Element::new()
+        .w("100%")
+        .h(80.0)
+        .max_h(80.0)
+        .overflow_y("scroll")
+        .flex_shrink(0.0)
+        .child(
+            Element::new()
+                .w("100%")
+                .h(400.0)
+                .flex_shrink(0.0)
+                .bg([1.0, 0.0, 0.0, 1.0]),
+        );
+    let sibling = Element::new()
+        .w("100%")
+        .h(50.0)
+        .flex_shrink(0.0)
+        .bg([0.0, 1.0, 0.0, 1.0]);
+    let col = Element::new()
+        .flex_col()
+        .flex_shrink(0.0)
+        .w("100%")
+        .child(nested)
+        .child(sibling);
+    Element::new()
+        .w(120.0)
+        .h(100.0)
+        .overflow_y("hidden")
+        .focus_id("scroll:diag-nested-ovf")
+        .child(col)
+}
+
+fn outer_content_h(result: &crate::core::tree::RenderResult) -> f32 {
+    result
+        .scroll_metrics
+        .iter()
+        .find(|(id, ..)| id == "diag-nested-ovf")
+        .map(|m| m.3[1])
+        .expect("outer scroll metrics")
+}
+
+#[test]
+fn overflow_scroll_box_does_not_inflate_parent_content_h() {
+    let mut root = nested_overflow_scroll_in_outer_viewport();
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 120.0, 100.0, [-1.0, -1.0]);
+    let content_h = outer_content_h(&first);
+
+    assert!(
+        content_h < 80.0 + 50.0 + 16.0,
+        "nested overflow:scroll must not leak inner 400px into parent content_h (got {content_h})"
+    );
+    assert!(
+        content_h > 80.0 + 50.0 - 16.0,
+        "parent content_h should still include the nested viewport box + sibling (got {content_h})"
+    );
+}
+
+#[test]
+fn overflow_scroll_box_content_h_stable_across_scroll_only_and_full_collect() {
+    let mut root = nested_overflow_scroll_in_outer_viewport();
+    let mut tree = LayoutTree::new();
+    let baseline = outer_content_h(&tree.build_and_layout(&mut root, 120.0, 100.0, [-1.0, -1.0]));
+
+    for sy in [0.0_f32, 20.0, 80.0, 160.0] {
+        root.scroll_offset = [0.0, sy];
+        let h = outer_content_h(&tree.build_and_layout_fast(
+            &mut root,
+            120.0,
+            100.0,
+            [-1.0, -1.0],
+            true,
+            false,
+        ));
+        assert!(
+            (h - baseline).abs() < 1.0,
+            "scroll_only content_h must stay stable (sy={sy} baseline={baseline} now={h})"
+        );
+    }
+
+    // Full collect after the nested box leaves the visit band must not snap to sibling-only.
+    root.scroll_offset = [0.0, 160.0];
+    let h = outer_content_h(&tree.build_and_layout(&mut root, 120.0, 100.0, [-1.0, -1.0]));
+    assert!(
+        (h - baseline).abs() < 1.0,
+        "full collect after clip-cull must keep content_h (baseline={baseline} now={h})"
+    );
+}

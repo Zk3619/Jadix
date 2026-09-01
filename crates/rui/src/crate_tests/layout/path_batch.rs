@@ -1,6 +1,8 @@
 //! WP-3.2：path 产品绘制走 TexturedDraw（CPU 覆盖率光栅）；tessellate 仅回退。
 
-use crate::components::{area_chart, bar_chart, line_chart, pie_chart, ChartDatum};
+use crate::components::{
+    area_chart, bar_chart, define_chart, line_chart, line_y, pie_chart, ChartDatum,
+};
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::path::{attach_path, polyline, PathStyle, ATTR_PATH_D, ATTR_PATH_VIEWBOX};
@@ -269,4 +271,100 @@ fn bar_chart_texture_follows_leaf_width_without_double_draw() {
         "must not stack image_texture + path_d rasters, n={} draws={path_draws:?}",
         path_draws.len()
     );
+}
+
+/// Gallery data page: several cartesian charts with guides (grid z + plot z) plus tooltip
+/// overlays (`z-index: 8`). Those z-indexes must **not** opt the whole page into
+/// [`OverlayPaintSplit::page_stack_bands`] — that path was built for CarouselStack cards,
+/// and flattening every chart into one global band list mis-assigns labels/textures once
+/// the chart region scrolls into view (and the broken paint stays after scroll stops).
+#[test]
+fn chart_column_does_not_enable_page_stack_bands() {
+    let vals = [0.2_f32, 0.9, 0.4, 0.7];
+    let mut col = vstack().w("100%").gap(12.0).flex_shrink(0.0);
+    for (i, id) in ["c-a", "c-b", "c-c"].iter().enumerate() {
+        col = col.child(Element::new().text(format!("label-{i}")));
+        let chart: Element = line_chart()
+            .id(*id)
+            .values(vals)
+            .size(320.0, 120.0)
+            .into();
+        col = col.child(chart);
+    }
+    let composed: Element = define_chart()
+        .id("c-tip")
+        .mark(line_y(vals).stroke("chart-1").stroke_width(2.0))
+        .guides(true)
+        .tooltip(true)
+        .crosshair(true)
+        .h(120.0)
+        .into();
+    col = col.child(Element::new().text("label-tip"));
+    col = col.child(composed);
+    let body: Element = col.into();
+    let mut root = Element::new()
+        .w(360.0)
+        .h(280.0)
+        .overflow_y("auto")
+        .child(body);
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut root, 360.0, 280.0, [-1.0, -1.0]);
+    assert!(
+        result.overlay_split.page_stack_bands.is_empty(),
+        "chart z-index must stay local; global page_stack_bands switch the gallery data-page paint path, got {} bands",
+        result.overlay_split.page_stack_bands.len()
+    );
+    root.scroll_offset = [0.0, 220.0];
+    let scrolled = tree.build_and_layout_fast(&mut root, 360.0, 280.0, [-1.0, -1.0], true, false);
+    assert!(
+        scrolled.overlay_split.page_stack_bands.is_empty(),
+        "scroll_only collect must not grow page_stack_bands from charts, got {}",
+        scrolled.overlay_split.page_stack_bands.len()
+    );
+}
+
+#[test]
+fn scroll_only_chart_column_textures_stay_separated() {
+    let vals = [0.1_f32, 0.55, 0.9];
+    let mut col = Element::new().flex_col().flex_shrink(0.0).w(400.0);
+    for (idx, id) in ["gal-scroll-a", "gal-scroll-b", "gal-scroll-c"].iter().enumerate() {
+        let chart: Element = line_chart()
+            .id(*id)
+            .values(vals)
+            .size(400.0, 120.0)
+            .into();
+        col = col.child(chart);
+        if idx < 2 {
+            col = col.child(Element::new().h(500.0).flex_shrink(0.0));
+        }
+    }
+    let mut root = Element::new()
+        .w(400.0)
+        .h(220.0)
+        .overflow_y("hidden")
+        .child(col);
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 400.0, 220.0, [-1.0, -1.0]);
+    root.scroll_offset = [0.0, 1100.0];
+    let result = tree.build_and_layout_fast(&mut root, 400.0, 220.0, [-1.0, -1.0], true, false);
+    let path_ys: Vec<f32> = result
+        .textured_draws
+        .iter()
+        .filter(|d| d.texture_key.starts_with("rui_path:"))
+        .map(|d| d.rect[1])
+        .collect();
+    assert!(
+        !path_ys.is_empty(),
+        "scrolled chart band must still paint at least one texture; draws={:?}",
+        result.textured_draws
+    );
+    if path_ys.len() >= 2 {
+        let min_y = path_ys.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_y = path_ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (max_y - min_y) > 8.0,
+            "chart textures must not stack at one y during scroll_only collect; ys={path_ys:?}"
+        );
+    }
 }

@@ -4,6 +4,8 @@
 //! borders stick to the viewport edge while scrolling. Geometry stays full-size; clip is a
 //! fragment discard (stored on [`InstanceInput::clip_*`]).
 
+use crate::core::reactivity::use_signal;
+use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::InstanceInput;
@@ -18,8 +20,10 @@ fn scrolled_card_border_keeps_true_top_not_viewport_edge() {
         .h(200.0)
         .bg([0.95, 0.95, 0.95, 1.0])
         .overflow_y("hidden")
-        .overflow_x("hidden")
-        .child(
+        .overflow_x("hidden");
+    // `overflow:hidden` clips but does not scroll; `scroll:` id applies offset in paint.
+    root.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}card-test"));
+    root = root.child(
             Element::new()
                 .w(180.0)
                 .h(120.0)
@@ -29,6 +33,8 @@ fn scrolled_card_border_keeps_true_top_not_viewport_edge() {
                 .template_id("scroll-card"),
         );
     root.scroll_offset = [0.0, 40.0];
+    // Paint/collect reads `scroll:` offsets from live signals, not only `Element.scroll_offset`.
+    use_signal(&scroll_offset_y_signal_key("card-test"), || 0.0_f32).set_silent(40.0);
 
     let mut tree = LayoutTree::new();
     let result = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);

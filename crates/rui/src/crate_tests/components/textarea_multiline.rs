@@ -1048,6 +1048,11 @@ fn textarea_scroll_offset_shifts_text_inside_fixed_clip() {
         false
     }
     assert!(set_region_sy(&mut root, &vp_fid, sy));
+    use_signal(
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+        || 0.0_f32,
+    )
+    .set_silent(sy);
     let r1 = tree.build_and_layout_fast(&mut root, 400.0, 400.0, [-1.0, -1.0], true, false);
     let info1 = r1
         .text_nodes

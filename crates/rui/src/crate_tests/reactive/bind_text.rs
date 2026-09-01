@@ -300,10 +300,10 @@ fn apply_bound_unknown_button_variant_falls_back_to_default() {
 
 #[test]
 fn apply_bound_icon_name_swaps_lucide_glyph() {
-    use crate::utils::{apply_bound_icon_name, build_icon_text_node, lucide_glyph};
+    use crate::utils::{apply_bound_icon_name, build_named_icon_text_node, lucide_glyph};
     let check = lucide_glyph("check").expect("lucide check");
     let ban = lucide_glyph("ban").expect("lucide ban");
-    let mut el = build_icon_text_node(check.clone());
+    let mut el = build_named_icon_text_node("check", check.clone());
     assert_eq!(apply_bound_icon_name(&mut el, "check"), LayoutStatus::Clean);
     assert_eq!(
         apply_bound_icon_name(&mut el, "ban"),

@@ -20,7 +20,7 @@ fn slider_value_sync_updates_track_without_rebuilding_component() {
     let value = use_signal("__rui_test_slider_reactive_sync", || 0.2_f32);
     value.set_silent(0.2);
     let mut root: Element = slider("test-slider-sync").value_signal(value).into();
-    let left = find_slot(&root, "slider-left").expect("left");
+    let left = find_slot(&root, "slider-before").expect("before");
     assert!((left.style.flex_grow - 0.2).abs() < 0.001);
     let fill = find_slot(&root, "slider-fill").expect("fill");
     match crate::layout::dim_kind(fill.style.size.width) {
@@ -33,10 +33,10 @@ fn slider_value_sync_updates_track_without_rebuilding_component() {
     let mut impact = LayoutStatus::Clean;
     sync_reactive_elements_subtree(&mut root, &mut layout_tree, &mut impact);
 
-    let left = find_slot(&root, "slider-left").expect("left");
-    let right = find_slot(&root, "slider-right").expect("right");
-    assert!((left.style.flex_grow - 0.8).abs() < 0.001);
-    assert!((right.style.flex_grow - 0.2).abs() < 0.001);
+    let before = find_slot(&root, "slider-before").expect("before");
+    let after = find_slot(&root, "slider-after").expect("after");
+    assert!((before.style.flex_grow - 0.8).abs() < 0.001);
+    assert!((after.style.flex_grow - 0.2).abs() < 0.001);
     let fill = find_slot(&root, "slider-fill").expect("fill");
     match crate::layout::dim_kind(fill.style.size.width) {
         crate::layout::DimKind::Percent(p) => assert!((p - 0.8).abs() < 0.001),

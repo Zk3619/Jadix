@@ -1,3 +1,4 @@
+mod avatar_group_scroll;
 mod box_model_contract;
 mod canvas_scene;
 mod collect_clip_cull;
@@ -12,7 +13,9 @@ mod scale_paint_hit;
 mod scroll_clip_border;
 mod scroll_content_shrink;
 mod scrollbar_thumb_overlay;
+mod progress_circle_gallery;
 mod showcase_collapse;
+mod gallery_inset_overflow;
 mod sidebar_shell_width;
 mod subtree_promote;
 mod svg_scene;
