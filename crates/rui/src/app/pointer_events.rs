@@ -16,6 +16,33 @@ use crate::core::tree::{pointer_events_targets_children, Element};
 
 use super::tree_hit;
 
+thread_local! {
+    static LAST_POINTER_CLIENT: Cell<[f32; 2]> = const { Cell::new([-1.0, -1.0]) };
+    static LAST_HOVER_TARGET_BOUNDS: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
+    static LAST_HOVER_SAMPLE_VALID: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn note_pointer_client(x: f32, y: f32) {
+    LAST_POINTER_CLIENT.set([x, y]);
+}
+
+pub(crate) fn note_hover_target_bounds(bounds: [f32; 4]) {
+    LAST_HOVER_TARGET_BOUNDS.set(bounds);
+    LAST_HOVER_SAMPLE_VALID.set(bounds[2] > 0.5 && bounds[3] > 0.5);
+}
+
+pub(crate) fn clear_hover_target_sample() {
+    LAST_HOVER_SAMPLE_VALID.set(false);
+}
+
+/// Last exclusive-hover visual box + client pointer (updated on scroll with a still cursor).
+pub(crate) fn last_hover_sample() -> Option<([f32; 2], [f32; 4])> {
+    if !LAST_HOVER_SAMPLE_VALID.get() {
+        return None;
+    }
+    Some((LAST_POINTER_CLIENT.get(), LAST_HOVER_TARGET_BOUNDS.get()))
+}
+
 /// DOM-like event phase ([`Event.eventPhase`](https://developer.mozilla.org/zh-CN/docs/Web/API/Event/eventPhase)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventPhase {

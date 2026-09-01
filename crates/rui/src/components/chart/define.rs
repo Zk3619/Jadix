@@ -2,12 +2,13 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
-use crate::core::reactivity::{use_scoped_signal, use_signal, Signal};
+use crate::core::reactivity::{use_scoped_signal, use_signal, Signal, SignalId};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
 use crate::primitives::path::{
     encode_path_d, encode_points, ensure_raster_texture, filled_circle, points_from_commands,
@@ -548,6 +549,92 @@ pub(crate) struct ChartHover {
     pub index: Option<usize>,
 }
 
+thread_local! {
+    static CHART_HOVER_FROZEN: Cell<bool> = const { Cell::new(false) };
+    static PENDING_CHART_HOVER: RefCell<HashMap<SignalId, (Signal<ChartHover>, ChartHover)>> =
+        RefCell::new(HashMap::new());
+    /// Leave during scroll: hide the live overlay in place (`StyleChanged`) instead of
+    /// remounting the tip island (`StructureChanged` / FullClear).
+    static OVERLAY_SCROLL_HIDDEN: RefCell<HashSet<SignalId>> = RefCell::new(HashSet::new());
+    /// Skip `hit_index` when pointer + plot visual box have not moved.
+    static LAST_HOVER_GEOM: RefCell<HashMap<SignalId, [f32; 6]>> = RefCell::new(HashMap::new());
+}
+
+/// Smooth-scroll / scrollbar-fade frames: defer tooltip overlay remounts.
+/// Rebuilding `{chart}__tip__view` is StructureChanged → FullClear, which drops a scroll
+/// frame and ghosts the overlay scrollbar thumb.
+pub(crate) fn set_chart_hover_frozen(frozen: bool) {
+    let was = CHART_HOVER_FROZEN.with(|c| c.replace(frozen));
+    if was && !frozen {
+        flush_pending_chart_hovers();
+    }
+}
+
+fn overlay_scroll_hidden(id: SignalId) -> bool {
+    OVERLAY_SCROLL_HIDDEN.with(|s| s.borrow().contains(&id))
+}
+
+fn set_overlay_scroll_hidden(id: SignalId, hidden: bool) {
+    OVERLAY_SCROLL_HIDDEN.with(|s| {
+        if hidden {
+            s.borrow_mut().insert(id);
+        } else {
+            s.borrow_mut().remove(&id);
+        }
+    });
+}
+
+fn assign_chart_hover(sig: Signal<ChartHover>, next: ChartHover) {
+    if CHART_HOVER_FROZEN.with(|c| c.get()) {
+        PENDING_CHART_HOVER.with(|m| {
+            m.borrow_mut().insert(sig.id(), (sig, next));
+        });
+        if next == ChartHover::default() {
+            set_overlay_scroll_hidden(sig.id(), true);
+            LAST_HOVER_GEOM.with(|m| {
+                m.borrow_mut().remove(&sig.id());
+            });
+            crate::primitives::interactive::mark_hover_paint_dirty();
+        }
+        return;
+    }
+    set_overlay_scroll_hidden(sig.id(), false);
+    if next == ChartHover::default() {
+        LAST_HOVER_GEOM.with(|m| {
+            m.borrow_mut().remove(&sig.id());
+        });
+    }
+    if sig.peek() != next {
+        sig.set(next);
+    }
+}
+
+fn flush_pending_chart_hovers() {
+    let pending = PENDING_CHART_HOVER.with(|m| std::mem::take(&mut *m.borrow_mut()));
+    for (_, (sig, next)) in pending {
+        set_overlay_scroll_hidden(sig.id(), false);
+        if sig.is_alive() && sig.peek() != next {
+            sig.set(next);
+        }
+    }
+}
+
+fn attach_overlay_scroll_hide(layer: Element, sig: Signal<ChartHover>) -> Element {
+    layer.reactive_sync(move |el, _| {
+        let target = if overlay_scroll_hidden(sig.id()) {
+            0.0
+        } else {
+            1.0
+        };
+        if (el.style.opacity - target).abs() > 0.001 {
+            el.style.opacity = target;
+            LayoutStatus::StyleChanged
+        } else {
+            LayoutStatus::Clean
+        }
+    })
+}
+
 #[derive(Clone)]
 struct TooltipScene {
     marks: Vec<ChartMark>,
@@ -695,9 +782,9 @@ fn live_selected_chart(builder: ChartBuilder) -> Element {
             let selected = sig.peek();
             let sc = scene.borrow();
             let Some(sc) = sc.as_ref() else {
-                return empty_overlay_layer();
+                return attach_overlay_scroll_hide(empty_overlay_layer(), hov);
             };
-            overlay_from_pointer(hov_now, selected, sc)
+            attach_overlay_scroll_hide(overlay_from_pointer(hov_now, selected, sc), hov)
         });
     }
 
@@ -1127,6 +1214,76 @@ fn snap_plot_px(v: f32) -> f32 {
     (v / 4.0).round() * 4.0
 }
 
+fn apply_chart_hover_from_client(
+    marks: &[ChartMark],
+    scales: &super::scale::ResolvedScales,
+    theme: &ChartTheme,
+    selected: Option<usize>,
+    polar_size: f32,
+    polar_start: f32,
+    polar_end: f32,
+    polar_inner: f32,
+    logic_w: f32,
+    logic_h: f32,
+    round_bar_base: bool,
+    hover_signal: Signal<ChartHover>,
+    client_x: f32,
+    client_y: f32,
+    visual_bounds: [f32; 4],
+) {
+    if visual_bounds[2] <= 0.5 || visual_bounds[3] <= 0.5 || marks.is_empty() {
+        return;
+    }
+    let geom = [
+        client_x,
+        client_y,
+        visual_bounds[0],
+        visual_bounds[1],
+        visual_bounds[2],
+        visual_bounds[3],
+    ];
+    let unchanged = LAST_HOVER_GEOM.with(|m| {
+        m.borrow().get(&hover_signal.id()).is_some_and(|prev| {
+            prev.iter()
+                .zip(geom.iter())
+                .all(|(a, b)| (a - b).abs() < 0.5)
+        })
+    });
+    if unchanged {
+        return;
+    }
+    LAST_HOVER_GEOM.with(|m| {
+        m.borrow_mut().insert(hover_signal.id(), geom);
+    });
+    let lx = (client_x - visual_bounds[0]) / visual_bounds[2] * logic_w;
+    let ly = (client_y - visual_bounds[1]) / visual_bounds[3] * logic_h;
+    let ctx = make_ctx(
+        scales,
+        theme,
+        selected,
+        polar_size,
+        polar_start,
+        polar_end,
+        polar_inner,
+        round_bar_base,
+    );
+    let mut hit = None;
+    for m in marks.iter().rev() {
+        if let Some(i) = m.hit_index(&ctx, (lx, ly)) {
+            hit = Some(i);
+            break;
+        }
+    }
+    assign_chart_hover(
+        hover_signal,
+        ChartHover {
+            x: lx.round(),
+            y: ly.round(),
+            index: hit,
+        },
+    );
+}
+
 fn attach_chart_pointer(
     mut plot: Element,
     marks: Vec<ChartMark>,
@@ -1200,59 +1357,124 @@ fn attach_chart_pointer(
             });
         }
         if track_hover {
-            let marks_mv = marks;
-            let scales_mv = scales;
-            let theme_mv = theme;
-            let bounds_mv = bounds.clone();
-            plot = plot.on_mousemove(move |e| {
-                if e.phase == EventPhase::Capture || marks_mv.is_empty() {
-                    return;
-                }
-                let b = if e.current_bounds[2] > 0.0 && e.current_bounds[3] > 0.0 {
-                    e.current_bounds
-                } else {
-                    bounds_mv.get()
-                };
-                if b[2] <= 0.0 || b[3] <= 0.0 {
-                    return;
-                }
-                let lx = (e.x - b[0]) / b[2] * logic_w;
-                let ly = (e.y - b[1]) / b[3] * logic_h;
-                let ctx = make_ctx(
-                    &scales_mv,
-                    &theme_mv,
-                    selected,
-                    polar_size,
-                    polar_start,
-                    polar_end,
-                    polar_inner,
-                    round_bar_base,
-                );
-                let mut hit = None;
-                for m in marks_mv.iter().rev() {
-                    if let Some(i) = m.hit_index(&ctx, (lx, ly)) {
-                        hit = Some(i);
-                        break;
+            let marks_mv = marks.clone();
+            let scales_mv = scales.clone();
+            let theme_mv = theme.clone();
+            let hover_inside = Rc::new(Cell::new(false));
+            plot = plot.on_mousemove({
+                let marks_mv = marks_mv.clone();
+                let scales_mv = scales_mv.clone();
+                let theme_mv = theme_mv.clone();
+                let hover_inside = hover_inside.clone();
+                move |e| {
+                    if e.phase == EventPhase::Capture || marks_mv.is_empty() {
+                        return;
                     }
-                }
-                if let Some(s) = hover_signal {
-                    let next = ChartHover {
-                        x: lx.round(),
-                        y: ly.round(),
-                        index: hit,
+                    let b = if e.current_bounds[2] > 0.0 && e.current_bounds[3] > 0.0 {
+                        e.current_bounds
+                    } else {
+                        return;
                     };
-                    if s.peek() != next {
-                        s.set(next);
+                    hover_inside.set(true);
+                    if let Some(s) = hover_signal {
+                        apply_chart_hover_from_client(
+                            &marks_mv,
+                            &scales_mv,
+                            &theme_mv,
+                            selected,
+                            polar_size,
+                            polar_start,
+                            polar_end,
+                            polar_inner,
+                            logic_w,
+                            logic_h,
+                            round_bar_base,
+                            s,
+                            e.x,
+                            e.y,
+                            b,
+                        );
                     }
                 }
             });
             if let Some(s) = hover_signal {
+                let marks_h = marks_mv.clone();
+                let scales_h = scales_mv.clone();
+                let theme_h = theme_mv.clone();
+                let hover_inside_h = hover_inside.clone();
                 plot = plot.on_hover(move |inside| {
-                    if !inside && s.peek() != ChartHover::default() {
-                        s.set(ChartHover::default());
+                    hover_inside_h.set(inside);
+                    if inside {
+                        if let Some((pos, b)) =
+                            crate::app::pointer_events::last_hover_sample()
+                        {
+                            apply_chart_hover_from_client(
+                                &marks_h,
+                                &scales_h,
+                                &theme_h,
+                                selected,
+                                polar_size,
+                                polar_start,
+                                polar_end,
+                                polar_inner,
+                                logic_w,
+                                logic_h,
+                                round_bar_base,
+                                s,
+                                pos[0],
+                                pos[1],
+                                b,
+                            );
+                        }
+                    } else {
+                        assign_chart_hover(s, ChartHover::default());
                     }
                 });
             }
+            let bounds_sync = bounds.clone();
+            let hover_inside_sync = hover_inside;
+            let marks_sync = marks_mv;
+            let scales_sync = scales_mv;
+            let theme_sync = theme_mv;
+            plot = plot.reactive_sync(move |root, _| {
+                bounds_sync.set(root.layout_bounds);
+                if let Some(sz) = plot_size_signal {
+                    let w = snap_plot_px(root.layout_bounds[2]);
+                    let h = snap_plot_px(root.layout_bounds[3]);
+                    if w >= 16.0 && h >= 16.0 {
+                        let prev = sz.try_peek().unwrap_or((0.0, 0.0));
+                        if (prev.0 - w).abs() >= 0.5 || (prev.1 - h).abs() >= 0.5 {
+                            let _ = sz.try_set((w, h));
+                        }
+                    }
+                }
+                if hover_inside_sync.get() {
+                    if let (Some(s), Some((pos, b))) = (
+                        hover_signal,
+                        crate::app::pointer_events::last_hover_sample(),
+                    ) {
+                        apply_chart_hover_from_client(
+                            &marks_sync,
+                            &scales_sync,
+                            &theme_sync,
+                            selected,
+                            polar_size,
+                            polar_start,
+                            polar_end,
+                            polar_inner,
+                            logic_w,
+                            logic_h,
+                            round_bar_base,
+                            s,
+                            pos[0],
+                            pos[1],
+                            b,
+                        );
+                    }
+                }
+                LayoutStatus::Clean
+            });
+            return plot;
         }
     }
     let bounds_sync = bounds;
@@ -1702,4 +1924,140 @@ pub(crate) fn pie_legend_rows(
         legend = legend.child(row);
     }
     legend.into()
+}
+
+#[cfg(test)]
+mod hover_freeze_tests {
+    use super::*;
+    use crate::core::reactivity::{create_root, use_signal};
+
+    #[test]
+    fn frozen_hover_does_not_write_until_unfreeze() {
+        create_root(|| {
+            set_chart_hover_frozen(false);
+            let sig = use_signal("t-chart-hov-freeze", ChartHover::default);
+            set_chart_hover_frozen(true);
+            assign_chart_hover(
+                sig,
+                ChartHover {
+                    x: 12.0,
+                    y: 8.0,
+                    index: Some(1),
+                },
+            );
+            assert_eq!(
+                sig.peek(),
+                ChartHover::default(),
+                "scroll-frozen hover must not remount the tooltip overlay"
+            );
+            set_chart_hover_frozen(false);
+            assert_eq!(
+                sig.peek().index,
+                Some(1),
+                "pending hover applies after scroll settles"
+            );
+        });
+    }
+
+    #[test]
+    fn frozen_leave_clears_after_unfreeze() {
+        create_root(|| {
+            set_chart_hover_frozen(false);
+            let sig = use_signal("t-chart-hov-leave", || ChartHover {
+                x: 4.0,
+                y: 4.0,
+                index: Some(0),
+            });
+            set_chart_hover_frozen(true);
+            assign_chart_hover(sig, ChartHover::default());
+            assert_eq!(sig.peek().index, Some(0));
+            assert!(
+                overlay_scroll_hidden(sig.id()),
+                "leave during scroll must hide the live overlay immediately"
+            );
+            set_chart_hover_frozen(false);
+            assert!(!overlay_scroll_hidden(sig.id()));
+            assert_eq!(sig.peek(), ChartHover::default());
+        });
+    }
+
+    #[test]
+    fn frozen_leave_hides_overlay_via_opacity_not_structure() {
+        use crate::core::tree::{sync_reactive_elements_subtree, LayoutTree};
+        create_root(|| {
+            set_chart_hover_frozen(false);
+            let sig = use_signal("t-chart-hov-hide-style", || ChartHover {
+                x: 4.0,
+                y: 4.0,
+                index: Some(0),
+            });
+            let mut layer = attach_overlay_scroll_hide(r#box().w(40.0).h(40.0).into(), sig);
+            layer.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+            set_chart_hover_frozen(true);
+            assign_chart_hover(sig, ChartHover::default());
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            sync_reactive_elements_subtree(
+                &mut layer,
+                &mut tree,
+                &mut impact,
+                200.0,
+                200.0,
+                [0.0, 0.0],
+            );
+            assert!(
+                (layer.style.opacity).abs() < 0.001,
+                "leave during scroll must hide tooltip without remount"
+            );
+            assert_eq!(impact, LayoutStatus::StyleChanged);
+            assert_eq!(sig.peek().index, Some(0));
+            set_chart_hover_frozen(false);
+        });
+    }
+
+    #[test]
+    fn hover_enter_samples_datum_without_mousemove() {
+        use super::super::mark::bar_y;
+        use super::super::scale::{resolve_scales, AxisSpec};
+        create_root(|| {
+            set_chart_hover_frozen(false);
+            let sig = use_signal("t-chart-hov-enter", ChartHover::default);
+            let mark = ChartMark::from(bar_y([0.2f32, 0.9]));
+            let scales = resolve_scales(
+                200.0,
+                80.0,
+                &AxisSpec::band(),
+                &AxisSpec::linear(),
+                vec!["Mon".into(), "Tue".into()],
+                &[],
+                &[],
+                &[0.2, 0.9],
+                true,
+            );
+            let theme = ChartTheme::tokens();
+            crate::app::pointer_events::note_pointer_client(150.0, 40.0);
+            crate::app::pointer_events::note_hover_target_bounds([0.0, 0.0, 200.0, 80.0]);
+            apply_chart_hover_from_client(
+                &[mark],
+                &scales,
+                &theme,
+                None,
+                80.0,
+                0.0,
+                0.0,
+                0.0,
+                200.0,
+                80.0,
+                true,
+                sig,
+                150.0,
+                40.0,
+                [0.0, 0.0, 200.0, 80.0],
+            );
+            assert!(
+                sig.peek().index.is_some(),
+                "scroll-induced hover (no mousemove) must still pin a datum"
+            );
+        });
+    }
 }

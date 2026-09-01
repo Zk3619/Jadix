@@ -2113,6 +2113,7 @@ impl super::App {
         let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
 
         if is_smooth_mode {
+            crate::components::chart::set_chart_hover_frozen(true);
             let next_x = (tx.get() - dx).clamp(0.0, max_x);
             let next_y = (ty.get() - dy).clamp(0.0, max_y);
             tx.set_silent(next_x);
@@ -2792,6 +2793,7 @@ impl super::App {
         // but the caret does not install until the bridge expires.
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
         let scroll_paint_only = smooth_scroll_animating || scrollbar_fade_busy;
+        crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
         match state.render(

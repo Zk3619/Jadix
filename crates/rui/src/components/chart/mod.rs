@@ -32,6 +32,7 @@ mod theme;
 
 pub use datum::{ChartDatum, ChartSelect, ChartSelected, ChartTooltipItem};
 pub use define::{define_chart, ChartBuilder, ChartDefinition};
+pub(crate) use define::set_chart_hover_frozen;
 pub use mark::{
     area_y, bar_x, bar_y, custom_mark, dot, line_y, pie, rule_x, rule_x_num, rule_y, ChartMark,
     CustomMarkBuilder, MarkChannels, MarkRenderContext, SceneLayer,

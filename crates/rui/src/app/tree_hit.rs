@@ -26,6 +26,9 @@ enum HoverKey {
 struct HoverSlot {
     key: HoverKey,
     cb: HoverCb,
+    /// Visual client box of the hoverable (scroll already applied). Chart tooltip
+    /// samples datum from this + the pointer without requiring a mousemove.
+    bounds: [f32; 4],
 }
 
 fn hover_key_for(el: &Element, cb: &HoverCb) -> HoverKey {
@@ -42,11 +45,12 @@ fn hover_key_for(el: &Element, cb: &HoverCb) -> HoverKey {
     HoverKey::Anon(Rc::as_ptr(cb) as *const () as usize)
 }
 
-fn hover_slot_for(el: &Element) -> Option<HoverSlot> {
+fn hover_slot_for(el: &Element, bounds: [f32; 4]) -> Option<HoverSlot> {
     let cb = el.on_hover.clone()?;
     Some(HoverSlot {
         key: hover_key_for(el, &cb),
         cb,
+        bounds,
     })
 }
 
@@ -825,6 +829,12 @@ pub(super) fn reconcile_pointer_hovers(
         HoverHit::Hit(slot) => slot,
         HoverHit::Miss => None,
     };
+    crate::app::pointer_events::note_pointer_client(x, y);
+    if let Some(slot) = target.as_ref() {
+        crate::app::pointer_events::note_hover_target_bounds(slot.bounds);
+    } else {
+        crate::app::pointer_events::clear_hover_target_sample();
+    }
     let force = HOVER_NEEDS_RESYNC.replace(false);
     let scope = crate::core::reactivity::signal_key_scope();
     let prev =
@@ -972,7 +982,7 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
     let bubble = |child_hit: HoverHit| -> HoverHit {
         match child_hit {
             HoverHit::Miss => HoverHit::Miss,
-            HoverHit::Hit(slot) => HoverHit::Hit(slot.or_else(|| hover_slot_for(el))),
+            HoverHit::Hit(slot) => HoverHit::Hit(slot.or_else(|| hover_slot_for(el, hit))),
         }
     };
 
@@ -1003,13 +1013,13 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
     let in_layout = x >= vx && x <= vx + b[2] && y >= vy && y <= vy + b[3];
     if in_layout {
         if element_self_pointer_hit(el, x, y, vx, vy) {
-            HoverHit::Hit(hover_slot_for(el))
+            HoverHit::Hit(hover_slot_for(el, hit))
         } else {
             HoverHit::Miss
         }
     } else if claims_own_bounds(el) {
         // scale > 1: outside layout box but inside scaled visual.
-        HoverHit::Hit(hover_slot_for(el))
+        HoverHit::Hit(hover_slot_for(el, hit))
     } else {
         HoverHit::Miss
     }
