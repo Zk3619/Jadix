@@ -35,26 +35,26 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
-use crate::app::reactive::{bind_style, bind_text, reactive_component_live, StylePatch};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
+use crate::app::reactive::{StylePatch, bind_style, bind_text, reactive_component_live};
 use crate::components::button::button;
 use crate::components::input::{input, input_value_signal_key};
-use crate::components::select::{select, SelectItemData};
+use crate::components::select::{SelectItemData, select};
 use crate::components::separator::separator;
 use crate::components::slider::slider;
-use crate::core::reactivity::{create_effect, use_signal, Signal};
-use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element, LayoutStatus};
+use crate::core::reactivity::{Signal, create_effect, use_signal};
+use crate::core::tree::{CursorKind, Element, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::tokens;
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W, PopupPlacement,
+    apply_stored_floating_place, mark_floating, mount_anchored_overlay,
 };
 use crate::utils::roving::{focus_by_id, focus_id_only};
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 use taffy::prelude::LengthPercentageAuto;
 use winit::keyboard::{Key, NamedKey};
@@ -74,11 +74,11 @@ pub mod view;
 
 pub(crate) use drag::{clear_color_drag_if_any, is_color_dragging, tick_color_drag};
 pub use model::{
-    format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
-    ColorPickerVariant, Rgba,
+    ColorFormat, ColorPickerVariant, Rgba, format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str,
+    rgb_to_hsl, rgb_to_hsv,
 };
 pub(crate) use view::flush_color_picker_textures;
-use view::{build_color_picker_view, follow_hue_into_rgba, ColorPickerRenderProps};
+use view::{ColorPickerRenderProps, build_color_picker_view, follow_hue_into_rgba};
 
 /// HTML `input type="color"` + Reader 式 HSV 面板。
 #[component(crate_path = "crate")]
@@ -206,12 +206,12 @@ impl From<ColorPickerBuilder> for Element {
 
 #[cfg(test)]
 mod tests {
-    use super::drag::{apply_color_pointer, ColorDrag, ColorDragKind};
+    use super::drag::{ColorDrag, ColorDragKind, apply_color_pointer};
     use super::model::SWATCHES_GITHUB;
     use super::view::{
-        format_value_row, place_sv_knob, sv_area, sv_knob_frac, sv_texture_mid_column_luma,
-        swatch_grid, sync_trigger_preview, tex_sv_cpu_count, ATTR_CP_SLOT, SLOT_SV_KNOB,
-        SLOT_SV_TEX, SV_KNOB_HALF_PX,
+        ATTR_CP_SLOT, SLOT_SV_KNOB, SLOT_SV_TEX, SV_KNOB_HALF_PX, format_value_row, place_sv_knob,
+        sv_area, sv_knob_frac, sv_texture_mid_column_luma, swatch_grid, sync_trigger_preview,
+        tex_sv_cpu_count,
     };
     use super::*;
 

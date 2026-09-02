@@ -817,42 +817,138 @@ fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
     }
 }
 
-fn format_mouse_log(e: &MouseEvent) -> String {
+/// Fixed rows for the MouseEvent readout. Variable wrap used to grow the card
+/// on every `mousemove` (digit width / `relatedTarget` Debug) and collapse the page.
+const MOUSE_LOG_LINES: usize = 7;
+/// 7×12px×leading-normal(1.5) + 0.75rem×2 padding; keep in sync with [`MOUSE_LOG_LINES`].
+const MOUSE_LOG_PANEL_H: f32 = 152.0;
+
+fn clip_mouse_debug(s: Option<&str>) -> String {
+    let t = s.unwrap_or("-");
+    let n = t.chars().count();
+    if n <= 18 {
+        format!("{t:<18}")
+    } else {
+        let head: String = t.chars().take(17).collect();
+        format!("{head}…")
+    }
+}
+
+fn format_mouse_log_fields(
+    event_type: &str,
+    detail: u8,
+    button: i16,
+    buttons: u16,
+    which: i16,
+    client: [f32; 2],
+    offset: [f32; 2],
+    page: [f32; 2],
+    screen: [f32; 2],
+    movement: [f32; 2],
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+    meta: bool,
+    accel: bool,
+    region: Option<&str>,
+    related: Option<&str>,
+    phase: &str,
+    stop: bool,
+    prevent: bool,
+) -> String {
     format!(
-        "{}  detail={}  button={}  buttons={}  which={}\nclient=({:.1}, {:.1})  offset=({:.1}, {:.1})  page=({:.1}, {:.1})\nscreen=({:.1}, {:.1})  movement=({:.1}, {:.1})\nAlt={} Ctrl={} Shift={} Meta={} Accel={}\nregion={:?}  relatedTarget={:?}  phase={:?}\nstopPropagation={}  preventDefault={}",
+        "{:<10} detail={:<2} button={} buttons={:<3} which={}\n\
+client=({:>7.1},{:>7.1})  offset=({:>7.1},{:>7.1})\n\
+page=({:>7.1},{:>7.1})    screen=({:>7.1},{:>7.1})\n\
+movement=({:>7.1},{:>7.1})\n\
+Alt={:<5} Ctrl={:<5} Shift={:<5} Meta={:<5} Accel={}\n\
+region={}  related={}\n\
+phase={:<8}  stop={}  prevent={}",
+        event_type,
+        detail,
+        button,
+        buttons,
+        which,
+        client[0],
+        client[1],
+        offset[0],
+        offset[1],
+        page[0],
+        page[1],
+        screen[0],
+        screen[1],
+        movement[0],
+        movement[1],
+        alt,
+        ctrl,
+        shift,
+        meta,
+        accel,
+        clip_mouse_debug(region),
+        clip_mouse_debug(related),
+        phase,
+        stop,
+        prevent,
+    )
+}
+
+fn format_mouse_log(e: &MouseEvent) -> String {
+    format_mouse_log_fields(
         e.event_type,
         e.detail,
         e.button_index(),
         e.buttons,
         e.which(),
-        e.client_x(),
-        e.client_y(),
-        e.offset_x(),
-        e.offset_y(),
-        e.page_x,
-        e.page_y,
-        e.screen_x,
-        e.screen_y,
-        e.movement_x,
-        e.movement_y,
+        [e.client_x(), e.client_y()],
+        [e.offset_x(), e.offset_y()],
+        [e.page_x, e.page_y],
+        [e.screen_x, e.screen_y],
+        [e.movement_x, e.movement_y],
         e.alt_key,
         e.ctrl_key,
         e.shift_key,
         e.meta_key,
         e.get_modifier_state("Accel"),
-        e.region,
-        e.related_target,
-        e.phase,
+        e.region.as_deref(),
+        e.related_target.as_deref(),
+        match e.phase {
+            rui::EventPhase::Capture => "Capture",
+            rui::EventPhase::Target => "Target",
+            rui::EventPhase::Bubble => "Bubble",
+        },
         e.is_consumed(),
         e.default_prevented(),
     )
 }
 
+fn mouse_log_placeholder() -> String {
+    format_mouse_log_fields(
+        "idle",
+        0,
+        0,
+        0,
+        1,
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        [0.0, 0.0],
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        None,
+        "Target",
+        false,
+        false,
+    )
+}
+
 #[component]
 fn MouseEventShowcase() -> Element {
-    let log = use_signal("gal_mouse_log", || {
-        "（在下方色块上移动 / 按下 / 松开）".to_string()
-    });
+    let log = use_signal("gal_mouse_log", mouse_log_placeholder);
     let clicks = use_signal("gal_mouse_clicks", || 0i32);
     let dbls = use_signal("gal_mouse_dbls", || 0i32);
     let overs = use_signal("gal_mouse_overs", || 0i32);
@@ -968,8 +1064,20 @@ fn MouseEventShowcase() -> Element {
                 <Label w="100%" text_size="0.875rem" leading="normal">
                     { format!("click={}  dblclick={}  mouseover={}", clicks.get(), dbls.get(), overs.get()) }
                 </Label>
-                <Box w="100%" p="0.75rem" bg="secondary" rounded="0.5rem">
-                    <Label w="100%" text_size="0.75rem" leading="normal" color="muted-foreground">
+                <Box
+                    id="gal-mouse-log-panel"
+                    w="100%"
+                    min_w="0"
+                    h={MOUSE_LOG_PANEL_H}
+                    min_h={MOUSE_LOG_PANEL_H}
+                    max_h={MOUSE_LOG_PANEL_H}
+                    flex_shrink="0"
+                    overflow="hidden"
+                    p="0.75rem"
+                    bg="secondary"
+                    rounded="0.5rem"
+                >
+                    <Label id="gal-mouse-log" w="100%" min_w="0" text_size="0.75rem" leading="normal" color="muted-foreground">
                         { log.get() }
                     </Label>
                 </Box>
@@ -1640,8 +1748,7 @@ fn ShadowShowcase() -> rui::core::tree::Element {
 }
 
 /// MDN-style filter demo subject (downloaded into `examples/gallery/assets/`).
-const FILTER_DEMO_LOGO: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/firefox-logo.svg");
+const FILTER_DEMO_LOGO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/firefox-logo.svg");
 
 fn filter_demo_tile(label: &str, logo: Element) -> Element {
     ui! {
@@ -1687,10 +1794,7 @@ fn FilterShowcase() -> rui::core::tree::Element {
 </filter>"##,
     );
 
-    let original = filter_demo_tile(
-        "原图",
-        filter_demo_logo(None, None),
-    );
+    let original = filter_demo_tile("原图", filter_demo_logo(None, None));
     let tiles_fn: Vec<Element> = [
         ("blur(4px)", Some("blur(4px)"), None),
         ("brightness(1.5)", Some("brightness(1.5)"), None),
@@ -1712,11 +1816,7 @@ fn FilterShowcase() -> rui::core::tree::Element {
     .collect();
 
     let tiles_combo: Vec<Element> = [
-        (
-            "grayscale+blur",
-            Some("grayscale(0.4) blur(3px)"),
-            None,
-        ),
+        ("grayscale+blur", Some("grayscale(0.4) blur(3px)"), None),
         ("class blur-md", None, Some("blur-md brightness-110")),
         ("grayscale+shadow", None, Some("grayscale drop-shadow-lg")),
         ("url(#…)", Some("url(#galleryBlurSepia)"), None),
@@ -1760,25 +1860,14 @@ fn gradient_demo_tile(label: &str, el: Element) -> Element {
 }
 
 fn gradient_swatch(css: &str, w: &str, h: &str) -> Element {
-    Element::from(
-        r#box()
-            .w(w)
-            .h(h)
-            .rounded("0.5rem")
-            .background_image(css),
-    )
+    Element::from(r#box().w(w).h(h).rounded("0.5rem").background_image(css))
 }
 
 /// MDN-aligned CSS gradient showcase (linear / radial / conic / repeating).
 #[component]
 fn GradientShowcase() -> rui::core::tree::Element {
     let linear_tiles: Vec<Element> = [
-        (
-            "basic ↓",
-            "linear-gradient(blue, pink)",
-            "7.5rem",
-            "4.5rem",
-        ),
+        ("basic ↓", "linear-gradient(blue, pink)", "7.5rem", "4.5rem"),
         (
             "to right",
             "linear-gradient(to right, blue, pink)",
@@ -1834,31 +1923,23 @@ fn GradientShowcase() -> rui::core::tree::Element {
             .overflow("hidden")
             // Each stacked layer must also carry the same radii: overflow clip is
             // axis-aligned, so corner masking comes from the gradient texture bake.
-            .background_image(
-                "linear-gradient(217deg, #ff0000cc, transparent 70.71%)",
-            )
-            .child(
-                Element::from(
-                    r#box()
-                        .w("100%")
-                        .h("100%")
-                        .rounded("0.5rem")
-                        .background_image(
-                            "linear-gradient(127deg, #00ff00cc, transparent 70.71%)",
-                        )
-                        .child(
-                            Element::from(
-                                r#box()
-                                    .w("100%")
-                                    .h("100%")
-                                    .rounded("0.5rem")
-                                    .background_image(
-                                        "linear-gradient(336deg, #0000ffcc, transparent 70.71%)",
-                                    ),
+            .background_image("linear-gradient(217deg, #ff0000cc, transparent 70.71%)")
+            .child(Element::from(
+                r#box()
+                    .w("100%")
+                    .h("100%")
+                    .rounded("0.5rem")
+                    .background_image("linear-gradient(127deg, #00ff00cc, transparent 70.71%)")
+                    .child(Element::from(
+                        r#box()
+                            .w("100%")
+                            .h("100%")
+                            .rounded("0.5rem")
+                            .background_image(
+                                "linear-gradient(336deg, #0000ffcc, transparent 70.71%)",
                             ),
-                        ),
-                ),
-            ),
+                    )),
+            )),
     );
 
     let radial_tiles: Vec<Element> = [
@@ -1955,11 +2036,7 @@ fn GradientShowcase() -> rui::core::tree::Element {
     ]
     .into_iter()
     .map(|(label, css, w, h)| {
-        let mut b = r#box()
-            .w(w)
-            .h(h)
-            .overflow("hidden")
-            .background_image(css);
+        let mut b = r#box().w(w).h(h).overflow("hidden").background_image(css);
         if label.contains("conic") || label.contains("radial") {
             b = b.rounded_full();
         } else {
@@ -1969,12 +2046,10 @@ fn GradientShowcase() -> rui::core::tree::Element {
     })
     .collect();
 
-    let tw_tile = Element::from(
-        rui::style::with_class_list(
-            r#box().w("7.5rem").h("4.5rem").rounded("0.5rem").into(),
-            "bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
-        ),
-    );
+    let tw_tile = Element::from(rui::style::with_class_list(
+        r#box().w("7.5rem").h("4.5rem").rounded("0.5rem").into(),
+        "bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
+    ));
 
     let color_fmt_tiles: Vec<Element> = [
         (
@@ -2238,7 +2313,14 @@ fn BorderStyleShowcase() -> rui::core::tree::Element {
 /// CSS `outline` 全能力展示。
 #[component]
 fn OutlineShowcase() -> rui::core::tree::Element {
-    fn outline_box(label: &str, color: [f32; 4], width: f32, style: &str, offset: f32, rounded: f32) -> Element {
+    fn outline_box(
+        label: &str,
+        color: [f32; 4],
+        width: f32,
+        style: &str,
+        offset: f32,
+        rounded: f32,
+    ) -> Element {
         let el: Element = Element::from(
             r#box()
                 .w("7rem")
@@ -2247,7 +2329,8 @@ fn OutlineShowcase() -> rui::core::tree::Element {
                 .outline(color, width)
                 .outline_style(style)
                 .rounded(rounded),
-        ).outline_offset(offset);
+        )
+        .outline_offset(offset);
         ui! {
             <VStack gap="0.25rem" items="center">
                 { el }
@@ -2258,8 +2341,13 @@ fn OutlineShowcase() -> rui::core::tree::Element {
 
     fn shorthand_box(shorthand: &str) -> Element {
         let el = Element::from(
-            r#box().w("7rem").h("4rem").bg(parse_color("background")).rounded(8.0)
-        ).apply_outline_shorthand(shorthand);
+            r#box()
+                .w("7rem")
+                .h("4rem")
+                .bg(parse_color("background"))
+                .rounded(8.0),
+        )
+        .apply_outline_shorthand(shorthand);
         let label = shorthand.to_string();
         ui! {
             <VStack gap="0.25rem" items="center">
@@ -3124,7 +3212,7 @@ fn CollapsibleShowcase() -> rui::core::tree::Element {
         <MyCard title="Collapsible（ShadCN base）">
             <VStack gap="1rem" w="100%" max_w="36rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：复合 RSX（宏 → collapsible_scope / collapsible_content）与 Builder。单面板开合；受控用 openSignal。面板 `@keyframes collapsible-down/up`（200ms，与 accordion 同形不同名）。"
+                    "双写法：复合 RSX（宏 → collapsible_scope / collapsible_content）与 Builder。单面板开合；`exclusive` + `group` 可做同组互斥。受控用 openSignal。面板 `@keyframes collapsible-down/up`（200ms，与 accordion 同形不同名）。"
                 </Label>
                 <Label font_weight="700" text_size="0.875rem">"A · RSX defaultOpen"</Label>
                 <Collapsible id="gal-col-default" defaultOpen={true}>
@@ -3171,6 +3259,21 @@ fn CollapsibleShowcase() -> rui::core::tree::Element {
                 </Collapsible>
                 <Label font_weight="700" text_size="0.875rem">"D · Builder 双写"</Label>
                 { builder_el }
+                <Label font_weight="700" text_size="0.875rem">"E · exclusive + group"</Label>
+                <Collapsible id="gal-col-ex-a" exclusive={true} group="gal-col-excl" defaultOpen={true}>
+                    <CollapsibleTrigger>"Only one of these two stays open"</CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <Label font_weight="400" leading="normal">
+                            "同 group 互斥；打开另一项会关掉这一项。"
+                        </Label>
+                    </CollapsibleContent>
+                </Collapsible>
+                <Collapsible id="gal-col-ex-b" exclusive={true} group="gal-col-excl">
+                    <CollapsibleTrigger>"The other panel in gal-col-excl"</CollapsibleTrigger>
+                    <CollapsibleContent>
+                        <Label font_weight="400" leading="normal">"exclusive 默认 false；无 group 时无效。"</Label>
+                    </CollapsibleContent>
+                </Collapsible>
             </VStack>
         </MyCard>
     }
@@ -5486,8 +5589,7 @@ fn TextareaComboboxShowcase() -> Element {
             .to_string()
     });
     let wrap_bidi = use_signal("gal_textarea_wrap_bidi", || {
-        "Hello עברית\u{2060}789 and العربية — soft wrap keeps WJ pairs."
-            .to_string()
+        "Hello עברית\u{2060}789 and العربية — soft wrap keeps WJ pairs.".to_string()
     });
     let combo = use_signal("gal_combo_city", || "sh".to_string());
     let tab_view = use_signal("gal_tabs_list_view", || "list".to_string());
@@ -6942,17 +7044,22 @@ fn gal_sample_tree_roots() -> Vec<TreeNode> {
     }]
 }
 
-#[component]
-fn DataChartShowcase() -> Element {
-    let table_sel = use_signal("gal_dt_sel", || None::<usize>);
-    let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
-    let expanded = use_signal("gal_tree_exp", || {
+fn gal_tree_expanded(key: &'static str) -> Signal<HashSet<String>> {
+    use_signal(key, || {
         let mut s = HashSet::new();
         s.insert("root".into());
         s.insert("src".into());
         s
-    });
-    let expanded_rsx = expanded;
+    })
+}
+
+#[component]
+fn DataChartShowcase() -> Element {
+    let table_sel = use_signal("gal_dt_sel", || None::<usize>);
+    let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
+    let expanded_col = gal_tree_expanded("gal_tree_exp_col");
+    let expanded_flat = gal_tree_expanded("gal_tree_exp_flat");
+    let expanded_rsx = gal_tree_expanded("gal_tree_exp_rsx");
     let sample_roots = gal_sample_tree_roots();
 
     let table_el: Element = table("gal-table")
@@ -6973,9 +7080,10 @@ fn DataChartShowcase() -> Element {
 
     let tree_collapsible_el: Element = tree_view("gal-tree-collapsible")
         .variant(TreeViewVariant::Collapsible)
+        .exclusive(true)
         .height(160.0)
-        .expanded_signal(expanded)
-        .expanded_storage_key("gal_tree_exp")
+        .expanded_signal(expanded_col)
+        .expanded_storage_key("gal_tree_exp_col")
         .roots(sample_roots.clone())
         .into();
 
@@ -6983,16 +7091,8 @@ fn DataChartShowcase() -> Element {
         .variant("flat")
         .height(140.0)
         .row_height(32.0)
-        .expanded_signal(expanded)
-        .expanded_storage_key("gal_tree_exp")
-        .roots(sample_roots.clone())
-        .into();
-
-    let tree_accordion_el: Element = tree_view("gal-tree-accordion")
-        .variant(TreeViewVariant::Accordion)
-        .height(160.0)
-        .expanded_signal(expanded)
-        .expanded_storage_key("gal_tree_exp")
+        .expanded_signal(expanded_flat)
+        .expanded_storage_key("gal_tree_exp_flat")
         .roots(sample_roots)
         .into();
 
@@ -7474,17 +7574,15 @@ fn DataChartShowcase() -> Element {
                 <Label text_size="0.875rem">
                     { format!("Selected row: {:?}", table_sel.get()) }
                 </Label>
-                <Label font_weight="600" text_size="0.875rem">{ "TreeView · collapsible（真树 · Builder）" }</Label>
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · collapsible exclusive（同层互斥 · Builder）" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "递归 Collapsible + chevron-right；`hover:bg-accent` · `text-sm`。展开集合与 flat / accordion 共用 expandedSignal。"
+                    "递归 Collapsible + chevron-right；默认不互斥。此例 `.exclusive(true)`：同层兄弟目录只开一项。旧 accordion 变体已并入 collapsible。"
                 </Label>
                 { tree_collapsible_el }
                 <Label font_weight="600" text_size="0.875rem">{ "TreeView · flat（VirtualList · Builder）" }</Label>
                 { tree_flat_el }
-                <Label font_weight="600" text_size="0.875rem">{ "TreeView · accordion（每层兄弟 Accordion · Builder）" }</Label>
-                { tree_accordion_el }
-                <Label font_weight="600" text_size="0.875rem">{ "TreeView · RSX collapsible" }</Label>
-                <TreeView id="gal-tree-rsx" variant="collapsible" expandedSignal={expanded_rsx} expandedStorageKey="gal_tree_exp" height={140.0}>
+                <Label font_weight="600" text_size="0.875rem">{ "TreeView · RSX collapsible（默认不互斥）" }</Label>
+                <TreeView id="gal-tree-rsx" variant="collapsible" expandedSignal={expanded_rsx} expandedStorageKey="gal_tree_exp_rsx" height={140.0}>
                     <TreeViewItem id="root" label="Workspace">
                         <TreeViewItem id="src" label="src">
                             <TreeViewItem id="main" label="main.rs" />
@@ -7590,6 +7688,16 @@ fn VirtualMasonryShowcase() -> Element {
 #[component]
 fn SidebarShowcase() -> Element {
     let picked = use_signal("gal_sidebar_picked", || "overview".to_string());
+    let tree_exp_a = use_signal("gal_sb_tree_exp_a", || {
+        let mut s = HashSet::new();
+        s.insert("app".into());
+        s
+    });
+    let tree_exp_c = use_signal("gal_sb_tree_exp_c", || {
+        let mut s = HashSet::new();
+        s.insert("app".into());
+        s
+    });
 
     fn demo_btn(id: &str, label: &str, key: &'static str, picked: Signal<String>) -> Element {
         let btn: Element = sidebar_menu_button(id)
@@ -7610,20 +7718,14 @@ fn SidebarShowcase() -> Element {
 
     let builder_shell: Element = sidebar("gal-sidebar-demo-b")
         .w("14rem")
-        .header(
-            Element::from(
-                vstack()
-                    .w("100%")
-                    .p("0.75rem")
-                    .gap("0.25rem")
-                    .child(
-                        label("gal-sidebar-demo-b-title")
-                            .text("Builder")
-                            .size(14.0)
-                            .font_weight(600.0),
-                    ),
+        .header(Element::from(
+            vstack().w("100%").p("0.75rem").gap("0.25rem").child(
+                label("gal-sidebar-demo-b-title")
+                    .text("Builder")
+                    .size(14.0)
+                    .font_weight(600.0),
             ),
-        )
+        ))
         .item(demo_btn(
             "gal-sidebar-demo-b-overview",
             "Overview",
@@ -7631,22 +7733,58 @@ fn SidebarShowcase() -> Element {
             picked,
         ))
         .item(demo_btn("gal-sidebar-demo-b-team", "Team", "team", picked))
-        .footer(
-            Element::from(
-                label("gal-sidebar-demo-b-foot")
-                    .text("sidebar() builder")
-                    .size(11.0)
-                    .color(parse_text_color("muted-foreground")),
-            ),
-        )
+        .footer(Element::from(
+            label("gal-sidebar-demo-b-foot")
+                .text("sidebar() builder")
+                .size(11.0)
+                .color(parse_text_color("muted-foreground")),
+        ))
         .into();
+
+    let tree_shell: Element = {
+        let picked = picked;
+        sidebar("gal-sidebar-demo-c")
+            .w("14rem")
+            .header(Element::from(
+                vstack().w("100%").p("0.75rem").gap("0.25rem").child(
+                    label("gal-sidebar-demo-c-title")
+                        .text("Tree Builder")
+                        .size(14.0)
+                        .font_weight(600.0),
+                ),
+            ))
+            .tree(
+                sidebar_tree("gal-sidebar-tree-b")
+                    .expanded_signal(tree_exp_c)
+                    .expanded_storage_key("gal_sb_tree_exp_c")
+                    .selected_signal(picked)
+                    .on_select(move |id| picked.set(id))
+                    .roots(vec![TreeNode {
+                        id: "app".into(),
+                        label: "Application".into(),
+                        children: vec![
+                            TreeNode {
+                                id: "overview".into(),
+                                label: "Overview".into(),
+                                children: vec![],
+                            },
+                            TreeNode {
+                                id: "team".into(),
+                                label: "Team".into(),
+                                children: vec![],
+                            },
+                        ],
+                    }]),
+            )
+            .into()
+    };
 
     let picked_r = picked;
     ui! {
         <MyCard title="Sidebar（ShadCN 复合壳）">
             <VStack gap="1rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：RSX 复合标签（SidebarProvider / SidebarMenuButton / isActive）与 Builder。语义色 sidebar / sidebar-accent；Gallery 壳亦用此结构。"
+                    "双写法：RSX 复合标签（SidebarProvider / SidebarMenuButton / isActive）与 Builder。语义色 sidebar / sidebar-accent。树形导航：`<TreeView chrome=\"sidebar\">` 或 `sidebar().tree(sidebar_tree(..))`。"
                 </Label>
                 <Label font_weight="700" text_size="0.875rem">"A · RSX 分组 + 菜单按钮"</Label>
                 <Box w="100%" max_w="36rem" h="14rem" rounded="0.5rem" bg="border" p="1px">
@@ -7705,6 +7843,47 @@ fn SidebarShowcase() -> Element {
                         </HStack>
                     </Box>
                 </Box>
+                <Label font_weight="700" text_size="0.875rem">"C · RSX TreeView chrome=sidebar"</Label>
+                <Box w="100%" max_w="36rem" h="16rem" rounded="0.5rem" bg="border" p="1px">
+                    <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
+                        <HStack w="100%" h="100%" gap="0">
+                            <Sidebar id="gal-sidebar-demo-tree-a" w="14rem">
+                                <SidebarHeader>
+                                    <Label font_weight="600" text_size="0.875rem">"Workspace"</Label>
+                                </SidebarHeader>
+                                <SidebarContent>
+                                    <TreeView
+                                        id="gal-sidebar-tree-a"
+                                        variant="collapsible"
+                                        chrome="sidebar"
+                                        expandedSignal={tree_exp_a}
+                                        expandedStorageKey="gal_sb_tree_exp_a"
+                                        selectedSignal={picked_r}
+                                    >
+                                        <TreeViewItem id="app" label="Application">
+                                            <TreeViewItem id="overview" label="Overview" />
+                                            <TreeViewItem id="team" label="Team" />
+                                        </TreeViewItem>
+                                    </TreeView>
+                                </SidebarContent>
+                            </Sidebar>
+                            <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
+                                <Label color="foreground">{ format!("Picked: {}", picked_r.get()) }</Label>
+                            </Box>
+                        </HStack>
+                    </Box>
+                </Box>
+                <Label font_weight="700" text_size="0.875rem">"D · Builder sidebar_tree"</Label>
+                <Box w="100%" max_w="36rem" h="16rem" rounded="0.5rem" bg="border" p="1px">
+                    <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
+                        <HStack w="100%" h="100%" gap="0">
+                            { tree_shell }
+                            <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
+                                <Label color="foreground">{ format!("Picked: {}", picked.get()) }</Label>
+                            </Box>
+                        </HStack>
+                    </Box>
+                </Box>
             </VStack>
         </MyCard>
     }
@@ -7747,12 +7926,7 @@ fn NavbarNavigationMenuShowcase() -> Element {
             .brand(label("").text("RUI").font_weight(600.0))
             .center_child(nav_menu)
             .center_justify("center")
-            .action(
-                button("")
-                    .variant("outline")
-                    .size("sm")
-                    .text("Action"),
-            )
+            .action(button("").variant("outline").size("sm").text("Action"))
             .into()
     };
 
@@ -7910,7 +8084,11 @@ fn PaginationShowcase() -> Element {
     let builder_bar: Element = pagination("gal-pagination-builder")
         .page_count(COUNT_B)
         .page_signal(page_b)
-        .range_counts(RANGE_B.left_count, RANGE_B.sibling_count, RANGE_B.right_count)
+        .range_counts(
+            RANGE_B.left_count,
+            RANGE_B.sibling_count,
+            RANGE_B.right_count,
+        )
         .previous_text("上一页")
         .next_text("下一页")
         .jumper(true)
@@ -7918,7 +8096,11 @@ fn PaginationShowcase() -> Element {
         .into();
 
     let status_a = rui::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
-        let t = format!("A · Page {} / {}（left=1 sibling=1 right=1）", page_a.get(), COUNT_A);
+        let t = format!(
+            "A · Page {} / {}（left=1 sibling=1 right=1）",
+            page_a.get(),
+            COUNT_A
+        );
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });
     let status_b = rui::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
@@ -8426,7 +8608,8 @@ fn build_gallery_app() -> Element {
 fn main() {
     #[cfg(feature = "runtime-logging")]
     rui::logging::init_with(rui::logging::InitOptions {
-        default_filter: "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
+        default_filter:
+            "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
     let (rgba, w, h) = checker_rgba_texture();
     rui::queue_image_rgba8("demo-checker", w, h, rgba);
@@ -8444,6 +8627,73 @@ fn main() {
 mod mount_tests {
     use super::*;
     use rui::core::reactivity::{create_effect, create_root};
+
+    #[test]
+    fn mouse_event_log_line_count_stable_from_idle_to_move() {
+        assert_eq!(mouse_log_placeholder().lines().count(), MOUSE_LOG_LINES);
+        let live = format_mouse_log_fields(
+            "mousemove",
+            0,
+            0,
+            0,
+            1,
+            [410.0, 82.0],
+            [104.0, 116.0],
+            [410.0, 82.0],
+            [615.0, 123.0],
+            [0.7, -0.7],
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Some("gal-mouse-pad"),
+            "Target",
+            false,
+            false,
+        );
+        assert_eq!(
+            live.lines().count(),
+            MOUSE_LOG_LINES,
+            "first mousemove must not add wrap rows vs idle placeholder"
+        );
+    }
+
+    #[test]
+    fn mouse_event_log_panel_reserves_height_before_first_move() {
+        run_on_large_stack(|| {
+            rui::app::reactive::reset_registered_anchors();
+            let mut fs = rui::renderer::font_loader::create_font_system();
+            rui::renderer::font_loader::apply_default_families(fs.db_mut());
+            rui::text::install_shared_font_system(&mut fs);
+            let (_handle, _) = create_root(|| {
+                create_effect(|| {
+                    let mut tree = rui::core::reactivity::isolate_reads(|| {
+                        MouseEventShowcase(MouseEventShowcaseProps::default())
+                    });
+                    fn find_panel(
+                        el: &rui::core::tree::Element,
+                    ) -> Option<&rui::core::tree::Element> {
+                        if el.template_id.as_deref() == Some("gal-mouse-log-panel") {
+                            return Some(el);
+                        }
+                        el.children.iter().find_map(find_panel)
+                    }
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                    let panel = find_panel(&tree).expect("gal-mouse-log-panel");
+                    assert!(
+                        (panel.layout_bounds[3] - MOUSE_LOG_PANEL_H).abs() < 2.0,
+                        "idle coordinate panel must already be {}px tall (got {}), or first mousemove collapses the page",
+                        MOUSE_LOG_PANEL_H,
+                        panel.layout_bounds[3]
+                    );
+                });
+            });
+            rui::app::reactive::reset_registered_anchors();
+        });
+    }
 
     #[test]
     fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
@@ -8500,7 +8750,8 @@ mod mount_tests {
             rui::app::reactive::reset_registered_anchors();
             let (_handle, _) = create_root(|| {
                 create_effect(|| {
-                    let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                     fn find_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
                         el.template_id
                             .as_deref()
@@ -8552,7 +8803,9 @@ mod mount_tests {
                         result.text_nodes.len(),
                         result.instances.len()
                     );
-                    for label in ["Date", "DateTime", "Time", "Month", "Week", "Sketch", "Chrome"] {
+                    for label in [
+                        "Date", "DateTime", "Time", "Month", "Week", "Sketch", "Chrome",
+                    ] {
                         match result.text_nodes.iter().find(|n| n.text == label) {
                             Some(n) => eprintln!(
                                 "  '{label}' @ ({:.1},{:.1}) {:.1}x{:.1}",
@@ -8644,8 +8897,14 @@ mod mount_tests {
                     let scroll = find_scroll(&mut tree).expect("forms ScrollArea viewport");
                     scroll.scroll_offset = [0.0, 1100.0];
 
-                    let result =
-                        layout.build_and_layout_fast(&mut tree, 900.0, 800.0, [0.0, 0.0], true, false);
+                    let result = layout.build_and_layout_fast(
+                        &mut tree,
+                        900.0,
+                        800.0,
+                        [0.0, 0.0],
+                        true,
+                        false,
+                    );
 
                     for label in ["Date", "DateTime", "Time", "Month", "Week"] {
                         match result.text_nodes.iter().find(|n| n.text == label) {
@@ -8656,13 +8915,14 @@ mod mount_tests {
                             None => eprintln!("scrolled '{label}' MISSING"),
                         }
                     }
-                    let mut xs: Vec<(String, f32, f32)> = ["Date", "DateTime", "Time", "Month", "Week"]
-                        .iter()
-                        .filter_map(|lab| {
-                            let n = result.text_nodes.iter().find(|n| n.text == *lab)?;
-                            Some((lab.to_string(), n.x, n.width))
-                        })
-                        .collect();
+                    let mut xs: Vec<(String, f32, f32)> =
+                        ["Date", "DateTime", "Time", "Month", "Week"]
+                            .iter()
+                            .filter_map(|lab| {
+                                let n = result.text_nodes.iter().find(|n| n.text == *lab)?;
+                                Some((lab.to_string(), n.x, n.width))
+                            })
+                            .collect();
                     assert!(
                         xs.len() >= 3,
                         "after scroll, date/time chip labels must paint (got {xs:?})"
@@ -8806,7 +9066,8 @@ mod mount_tests {
             rui::app::reactive::reset_registered_anchors();
             let (_handle, _) = create_root(|| {
                 create_effect(|| {
-                    let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                     fn find_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
                         el.template_id
                             .as_deref()
@@ -9009,9 +9270,8 @@ mod mount_tests {
             rui::text::install_shared_font_system(&mut fs);
             let (_handle, _) = create_root(|| {
                 create_effect(|| {
-                    let mut tree = rui::core::reactivity::isolate_reads(|| {
-                        gallery_section_body("data")
-                    });
+                    let mut tree =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body("data"));
                     let mut layout = rui::core::tree::LayoutTree::new();
                     let first = layout.build_and_layout(&mut tree, 900.0, 600.0, [-1.0, -1.0]);
                     let (vp0, max0, content0) = scroll_metrics_xy(&first, "scroll-data");
@@ -9280,7 +9540,10 @@ mod mount_tests {
                     }
                     el.children.iter().find_map(|c| find_id(c, id))
                 }
-                fn find_slot<'a>(el: &'a rui::core::tree::Element, slot: &str) -> Option<&'a rui::core::tree::Element> {
+                fn find_slot<'a>(
+                    el: &'a rui::core::tree::Element,
+                    slot: &str,
+                ) -> Option<&'a rui::core::tree::Element> {
                     if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
                         return Some(el);
                     }

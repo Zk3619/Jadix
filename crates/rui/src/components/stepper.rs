@@ -2,11 +2,11 @@
 //!
 //! 编号步骤条：高亮当前步。
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 use crate::core::tree::Element;
-use crate::primitives::r#box::{hstack, r#box, vstack};
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::tokens;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 
 pub struct StepperBuilder {
     id: String,

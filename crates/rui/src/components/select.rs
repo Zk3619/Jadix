@@ -35,18 +35,18 @@ use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{
-    bind_style, bind_text, reactive_anchor, reactive_placeholder_sized, StylePatch,
+    StylePatch, bind_style, bind_text, reactive_anchor, reactive_placeholder_sized,
 };
 use crate::components::button::button;
 use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, provide_context, untrack, use_context, use_signal, with_child_owner, Context,
-    Signal,
+    Context, Signal, create_context, provide_context, untrack, use_context, use_signal,
+    with_child_owner,
 };
 use crate::core::tree::Element;
 use crate::primitives::r#box::{hstack, vstack};
@@ -54,12 +54,12 @@ use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    apply_stored_floating_place, disarm_underlay_close, mark_floating, mount_anchored_overlay,
-    PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H,
-    ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H,
+    ATTR_FLOATING_MIN_W, ATTR_FLOATING_W, PopupPlacement, apply_stored_floating_place,
+    disarm_underlay_close, mark_floating, mount_anchored_overlay,
 };
-use crate::utils::text_node::build_icon_text_node;
 use crate::utils::take_packed;
+use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -1188,7 +1188,7 @@ mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
     use crate::utils::popup::{
-        mark_floating, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER,
+        ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER, mark_floating,
     };
 
     #[test]

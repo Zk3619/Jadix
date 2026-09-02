@@ -54,12 +54,12 @@
 
 use std::sync::OnceLock;
 
-use crate::app::reactive::{bind_text, bind_prop, reactive_view};
+use crate::app::reactive::{bind_prop, bind_text, reactive_view};
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal, with_child_owner,
 };
 use crate::core::tree::{Element, LayoutStatus};
-use crate::primitives::r#box::{hstack, r#box, vstack};
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::svg::{circle, path, svg};
 use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
@@ -569,9 +569,7 @@ fn progress_circle_dims(
     stroke_width: Option<f32>,
 ) -> (f32, f32) {
     let outer_r = radius.unwrap_or_else(|| size.radius()).max(1.0);
-    let sw = stroke_width
-        .unwrap_or_else(|| size.stroke_width())
-        .max(0.5);
+    let sw = stroke_width.unwrap_or_else(|| size.stroke_width()).max(0.5);
     (outer_r, sw)
 }
 
@@ -726,10 +724,9 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
         .value
         .or_else(|| use_progress().map(|c| c.value))
         .unwrap_or_else(|| {
-            use_signal(
-                format!("{instance}__progress_circle").as_str(),
-                move || default_value,
-            )
+            use_signal(format!("{instance}__progress_circle").as_str(), move || {
+                default_value
+            })
         });
     let size = opts.size;
     let radius = opts.radius;
@@ -741,14 +738,8 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
     let diameter = outer_r * 2.0;
     let view_id = format!("{instance}__view");
 
-    let mut core = progress_circle_inner(
-        value,
-        size,
-        radius,
-        stroke_width,
-        show_animation,
-        &view_id,
-    );
+    let mut core =
+        progress_circle_inner(value, size, radius, stroke_width, show_animation, &view_id);
     core = core.flex_shrink(0.0);
 
     let mut root: Element = if let Some(ch) = children {
@@ -993,8 +984,11 @@ mod tests {
             Some("60%")
         );
         assert!(
-            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE).is_some()
-                || el.get_attr(crate::primitives::path::ATTR_PATH_SCENE).is_some(),
+            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE)
+                .is_some()
+                || el
+                    .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+                    .is_some(),
             "untracked circle must compile to a raster scene"
         );
     }
@@ -1011,7 +1005,9 @@ mod tests {
     }
 
     fn rgba_opaque_count(px: &[u8]) -> usize {
-        px.chunks(4).filter(|p| p.get(3).copied().unwrap_or(0) > 16).count()
+        px.chunks(4)
+            .filter(|p| p.get(3).copied().unwrap_or(0) > 16)
+            .count()
     }
 
     /// Gallery paints `<svg>` via resvg. Theme tokens in `stroke=` are not CSS colors.
@@ -1074,8 +1070,7 @@ mod tests {
         });
 
         fn has_progress_attr(el: &Element) -> bool {
-            el.attrs.contains_key("rui_progress")
-                || el.children.iter().any(has_progress_attr)
+            el.attrs.contains_key("rui_progress") || el.children.iter().any(has_progress_attr)
         }
         assert!(
             has_progress_attr(&tree_for_assert.borrow()),
@@ -1086,13 +1081,15 @@ mod tests {
 
     #[test]
     fn circle_bind_prop_ships_scene_immediately() {
-        let (_owner, el): (_, Element) = create_root(|| {
-            progress_circle().id("pc").default_value(0.5).into()
-        });
+        let (_owner, el): (_, Element) =
+            create_root(|| progress_circle().id("pc").default_value(0.5).into());
         assert_eq!(el.template_id.as_deref(), Some("pc__view"));
         assert!(
-            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE).is_some()
-                || el.get_attr(crate::primitives::path::ATTR_PATH_SCENE).is_some(),
+            el.get_attr(crate::primitives::svg::ATTR_SVG_SCENE)
+                .is_some()
+                || el
+                    .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+                    .is_some(),
             "bind_prop initial apply must register svg/path scene"
         );
     }
@@ -1107,7 +1104,11 @@ mod tests {
             el.attrs
                 .get("rui_progress")
                 .map(String::as_str)
-                .or_else(|| el.children.first().and_then(|c| c.attrs.get("rui_progress").map(String::as_str)))
+                .or_else(|| {
+                    el.children
+                        .first()
+                        .and_then(|c| c.attrs.get("rui_progress").map(String::as_str))
+                })
         }
         assert_eq!(progress_pct(&el), Some("100%"));
     }
@@ -1122,7 +1123,10 @@ mod tests {
         let mut tree = LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
         assert!(
-            result.textured_draws.iter().any(|d| d.rect[2] > 30.0 && d.rect[3] > 30.0),
+            result
+                .textured_draws
+                .iter()
+                .any(|d| d.rect[2] > 30.0 && d.rect[3] > 30.0),
             "progress circle must raster with non-zero bounds; draws={:?}",
             result.textured_draws
         );
@@ -1134,7 +1138,8 @@ mod tests {
             leaf.layout_bounds[3],
         )
         .expect("svg raster key");
-        let doc = crate::primitives::svg::emit_svg_document_from_element_attrs(&leaf.attrs).unwrap();
+        let doc =
+            crate::primitives::svg::emit_svg_document_from_element_attrs(&leaf.attrs).unwrap();
         let lo = crate::media::svg_raster::ensure_svg_document_texture(&doc, 64, 64).unwrap();
         assert_ne!(
             tex, lo,
@@ -1148,10 +1153,7 @@ mod tests {
 
     #[test]
     fn vertical_progress_sets_orientation_attr() {
-        let el: Element = progress()
-            .orientation("vertical")
-            .default_value(0.5)
-            .into();
+        let el: Element = progress().orientation("vertical").default_value(0.5).into();
         assert_eq!(
             el.attrs.get(ATTR_ORIENTATION).map(String::as_str),
             Some("vertical")
@@ -1171,6 +1173,9 @@ mod tests {
             el.attrs.get(ATTR_ORIENTATION).map(String::as_str),
             Some("vertical")
         );
-        assert!(el.children.len() >= 1, "vertical progress should include track");
+        assert!(
+            el.children.len() >= 1,
+            "vertical progress should include track"
+        );
     }
 }

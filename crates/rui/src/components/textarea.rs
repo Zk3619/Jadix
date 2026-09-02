@@ -19,13 +19,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::input::InputType;
-use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::components::internal::text_edit::{TextEditBuildParams, build_text_edit_element};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::utils::text_field::TextareaWrapMode;
 use rui_macros::component;
 
-pub use crate::utils::text_field::{textarea_focus_id, TEXTAREA_FOCUS_PREFIX};
+pub use crate::utils::text_field::{TEXTAREA_FOCUS_PREFIX, textarea_focus_id};
 
 const DEFAULT_TEXT_SIZE_PX: f32 = 0.875 * 16.0;
 const DEFAULT_FONT_WEIGHT: u16 = 400;
@@ -208,7 +208,7 @@ mod tests {
     use super::*;
     use crate::components::input::{input_caret_signal_key, input_value_signal_key};
     use crate::core::reactivity::use_signal;
-    use crate::utils::text_field::{textarea_resize_focus_id, TEXTAREA_RESIZE_FOCUS_PREFIX};
+    use crate::utils::text_field::{TEXTAREA_RESIZE_FOCUS_PREFIX, textarea_resize_focus_id};
 
     fn find_focus(el: &Element, want: &str) -> bool {
         if el.focus_id.as_deref() == Some(want) {

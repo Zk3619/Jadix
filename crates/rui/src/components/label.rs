@@ -25,7 +25,7 @@
 
 use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus};
 use crate::primitives::text::TextBuilder;
-use crate::style::{parse_color, InputCaretDraw};
+use crate::style::{InputCaretDraw, parse_color};
 use crate::utils::clipboard::set_text as clipboard_set_text;
 use crate::utils::text_node::apply_label_defaults;
 use rui_macros::component;
@@ -91,11 +91,7 @@ fn sync_one_label_selection(el: &mut Element, impact: &mut LayoutStatus) {
     let sel_draw = sel.and_then(|(a, b)| {
         let lo = a.min(b);
         let hi = a.max(b);
-        if lo < hi {
-            Some((lo, hi))
-        } else {
-            None
-        }
+        if lo < hi { Some((lo, hi)) } else { None }
     });
     let want = sel_draw.map(|range| InputCaretDraw {
         caret_byte_index: 0,

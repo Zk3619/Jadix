@@ -3,7 +3,7 @@
 //! Compare ShadCN **base** [`collapsible.tsx`](../../../../reference/ShadCN-UI/apps/v4/registry/bases/base/ui/collapsible.tsx):
 //!
 //! ```text
-//! Collapsible                      // Root：open / defaultOpen；单面板开合
+//! Collapsible                      // Root：open / defaultOpen；可选 exclusive + group 互斥
 //! ├── CollapsibleTrigger           // 点击切换；纯文本带 chevron，或包裹自定义子节点
 //! └── CollapsibleContent           // Panel：overflow-hidden + `@keyframes collapsible-down/up`
 //! ```
@@ -33,6 +33,10 @@
 //!     .content(|| {
 //!         label("").text("Yes. Free for personal and commercial use.").into()
 //!     })
+//!
+//! // 同组互斥：`exclusive` + 共享 `group`（未设 group 时 exclusive 无效）
+//! collapsible("a").exclusive(true).group("faq").default_open(true)…
+//! collapsible("b").exclusive(true).group("faq")…
 //! ```
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
@@ -47,24 +51,23 @@ use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
-    with_child_owner, Context, Signal,
+    Context, Signal, create_context, create_effect, on_cleanup, provide_context, use_context,
+    use_signal, with_child_owner,
 };
-use crate::core::tree::{parse_text_color, Element, LayoutStatus};
+use crate::core::tree::{Element, LayoutStatus, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::interactive::interactive;
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
+    css_transition_needs_frame, keyframes_anim_entry, with_class_list,
 };
 use crate::tokens;
-use crate::utils::lucide::lucide_glyph;
 use crate::utils::motion::{clear_motion, ensure_motion_transitions};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
 use crate::utils::take_fragment;
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_lucide_icon_text_node, build_text_node};
 use crate::utils::toggle_state::{resolve_bool_signal, write_bool_toggle};
 
 const ATTR_SLOT: &str = "data-slot";
@@ -160,9 +163,7 @@ fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresenceHandle {
         rc
     });
     CollapsePanelPresenceHandle {
-        cell: cell
-            .try_peek()
-            .expect("collapsible panel presence cell"),
+        cell: cell.try_peek().expect("collapsible panel presence cell"),
     }
 }
 
@@ -368,15 +369,75 @@ fn register_open_redraw_effect(instance_id: &str, open_sig: Signal<bool>) {
     });
 }
 
+fn exclusive_winner_signal(group: &str) -> Signal<Option<String>> {
+    use_signal(
+        &format!("__rui_collapsible_excl:{group}"),
+        || None::<String>,
+    )
+}
+
+/// 同 `group` 内最多一项 `open`。先声明且默认打开的占坑，其余关掉。
+fn bind_collapsible_exclusive(id: String, group: String, open: Signal<bool>) {
+    let winner = exclusive_winner_signal(&group);
+    if open.try_peek() == Some(true) {
+        match winner.try_peek() {
+            Some(None) | None => {
+                let _ = winner.try_set(Some(id.clone()));
+            }
+            Some(Some(other)) if other != id => {
+                let _ = open.try_set(false);
+            }
+            _ => {}
+        }
+    }
+
+    let id_from_open = id.clone();
+    let winner_from_open = winner;
+    create_effect(move || {
+        let Some(is_open) = open.try_get() else {
+            return;
+        };
+        let Some(cur) = winner_from_open.try_peek() else {
+            return;
+        };
+        if is_open {
+            if cur.as_deref() != Some(id_from_open.as_str()) {
+                let _ = winner_from_open.try_set(Some(id_from_open.clone()));
+            }
+        } else if cur.as_deref() == Some(id_from_open.as_str()) {
+            let _ = winner_from_open.try_set(None);
+        }
+    });
+
+    let id_follow = id.clone();
+    create_effect(move || {
+        let Some(cur) = winner.try_get() else {
+            return;
+        };
+        if let Some(w) = cur {
+            if w != id_follow && open.try_peek() == Some(true) {
+                let _ = open.try_set(false);
+            }
+        }
+    });
+
+    on_cleanup(move || {
+        if winner.try_peek().as_ref().and_then(|c| c.as_deref()) == Some(id.as_str()) {
+            let _ = winner.try_set(None);
+        }
+    });
+}
+
 fn sync_collapse_panel_open(open_sig: Signal<bool>, presence: &CollapsePanelPresenceHandle) {
     let want = open_sig.try_peek().unwrap_or(false);
     sync_collapse_panel_presence(presence, want);
 }
 
 fn chevron_icon() -> Element {
-    let glyph = lucide_glyph("chevron-down").unwrap_or_else(|| "▾".into());
-    build_icon_text_node(glyph)
+    build_lucide_icon_text_node("chevron-down")
         .text_size(CHEVRON_PX)
+        .w(CHEVRON_PX)
+        .h(CHEVRON_PX)
         .text_color(parse_text_color("muted-foreground"))
 }
 
@@ -588,17 +649,26 @@ fn apply_collapse_panel_motion(
 // ── Scope ─────────────────────────────────────────────────────────────────────
 
 /// 提供 Collapsible 上下文并构建根壳（`ui!` `<Collapsible>` / Builder 共用）。
+///
+/// `exclusive` 且 `group` 非空时，同组只允许一项打开。
 pub fn collapsible_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
     default_open: bool,
     disabled: bool,
     class: Option<String>,
+    exclusive: bool,
+    group: Option<String>,
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "collapsible");
     let open = resolve_bool_signal(open, &id, "open", default_open);
     register_open_redraw_effect(&id, open);
+    if exclusive {
+        if let Some(g) = group.filter(|s| !s.trim().is_empty()) {
+            bind_collapsible_exclusive(id.clone(), g, open);
+        }
+    }
     let mut root = with_child_owner(|| {
         provide_context(
             collapsible_context(),
@@ -742,11 +812,10 @@ pub fn CollapsibleTrigger(
         .insert(ATTR_SLOT.to_string(), SLOT_TRIGGER_ICON.to_string());
     chevron = chevron.flex_shrink(0.0);
     let sync_open = open_sig;
-    chevron =
-        chevron.reactive_sync(move |el, _layout_tree| {
-            let open = sync_open.try_peek().unwrap_or(false);
-            sync_collapse_chevron(el, open)
-        });
+    chevron = chevron.reactive_sync(move |el, _layout_tree| {
+        let open = sync_open.try_peek().unwrap_or(false);
+        sync_collapse_chevron(el, open)
+    });
 
     let mut caption = build_text_node(
         &label_text,
@@ -859,11 +928,20 @@ pub fn Collapsible(
     default_open: bool,
     disabled: bool,
     class: Option<String>,
+    exclusive: bool,
+    group: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    collapsible_scope(id, open, default_open, disabled, class, move || {
-        children.unwrap_or_else(Element::new)
-    })
+    collapsible_scope(
+        id,
+        open,
+        default_open,
+        disabled,
+        class,
+        exclusive,
+        group,
+        move || children.unwrap_or_else(Element::new),
+    )
 }
 
 // ── Builder ───────────────────────────────────────────────────────────────────
@@ -874,6 +952,8 @@ pub struct CollapsibleBuilder {
     default_open: bool,
     disabled: bool,
     class: Option<String>,
+    exclusive: bool,
+    group: Option<String>,
     trigger: Option<Box<dyn FnOnce() -> Element>>,
     content: Option<Box<dyn Fn() -> Element>>,
 }
@@ -886,6 +966,8 @@ pub fn collapsible(id: impl Into<String>) -> CollapsibleBuilder {
         default_open: false,
         disabled: false,
         class: None,
+        exclusive: false,
+        group: None,
         trigger: None,
         content: None,
     }
@@ -917,6 +999,18 @@ impl CollapsibleBuilder {
         self
     }
 
+    /// 与同 [`Self::group`] 的其它 Collapsible 互斥（组键为空时无效）。
+    pub fn exclusive(mut self, v: bool) -> Self {
+        self.exclusive = v;
+        self
+    }
+
+    pub fn group(mut self, g: impl Into<String>) -> Self {
+        let g = g.into();
+        self.group = if g.trim().is_empty() { None } else { Some(g) };
+        self
+    }
+
     pub fn trigger(mut self, build: impl FnOnce() -> Element + 'static) -> Self {
         self.trigger = Some(Box::new(build));
         self
@@ -935,6 +1029,8 @@ impl CollapsibleBuilder {
             self.default_open,
             self.disabled,
             self.class,
+            self.exclusive,
+            self.group,
             body,
         )
     }
@@ -948,26 +1044,37 @@ impl From<CollapsibleBuilder> for Element {
             default_open,
             disabled,
             class,
+            exclusive,
+            group,
             trigger,
             content,
         } = builder;
-        collapsible_scope(id, open, default_open, disabled, class, move || {
-            let mut kids = Vec::new();
-            if let Some(t) = trigger {
-                kids.push(CollapsibleTrigger(CollapsibleTriggerProps {
-                    disabled: Some(false),
-                    class: None,
-                    children: Some(t()),
-                    base: None,
-                }));
-            }
-            if let Some(c) = content {
-                kids.push(collapsible_content(c));
-            }
-            let mut frag = Element::new();
-            frag.set_attr("rui_fragment", "1");
-            frag.children(kids)
-        })
+        collapsible_scope(
+            id,
+            open,
+            default_open,
+            disabled,
+            class,
+            exclusive,
+            group,
+            move || {
+                let mut kids = Vec::new();
+                if let Some(t) = trigger {
+                    kids.push(CollapsibleTrigger(CollapsibleTriggerProps {
+                        disabled: Some(false),
+                        class: None,
+                        children: Some(t()),
+                        base: None,
+                    }));
+                }
+                if let Some(c) = content {
+                    kids.push(collapsible_content(c));
+                }
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(kids)
+            },
+        )
     }
 }
 
@@ -995,6 +1102,32 @@ mod tests {
         assert_eq!(el.template_id.as_deref(), Some("col-test"));
     }
 
+    fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+        if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_slot(c, slot))
+    }
+
+    #[test]
+    fn trigger_chevron_is_named_lucide_for_square_svg_rotate() {
+        let (_o, el): (_, Element) = create_root(|| {
+            collapsible("col-chev")
+                .trigger(|| Element::new().text("Toggle"))
+                .content(|| Element::new().text("Body"))
+                .into()
+        });
+        let icon = find_slot(&el, SLOT_TRIGGER_ICON).expect("collapsible chevron");
+        assert_eq!(
+            icon.get_attr(crate::utils::ATTR_ICON_NAME)
+                .map(String::as_str),
+            Some("chevron-down"),
+            "named SVG texture keeps ink centered under 180° rotate"
+        );
+        assert_eq!(icon.text_style.font_family.as_deref(), Some("lucide"));
+        assert!((icon.text_style.size - CHEVRON_PX).abs() < 0.01);
+    }
+
     #[test]
     fn dual_surface_compiles_shape() {
         let _b: Element = collapsible("x").default_open(false).into();
@@ -1003,11 +1136,47 @@ mod tests {
             open: None,
             default_open: Some(true),
             disabled: Some(false),
+            exclusive: Some(false),
+            group: None,
             class: None,
             children: None,
             base: None,
             ..Default::default()
         });
         let _: Element = el;
+    }
+
+    #[test]
+    fn exclusive_group_keeps_one_open() {
+        let (_o, ()) = create_root(|| {
+            let a = use_signal("col_excl_a", || true);
+            let b = use_signal("col_excl_b", || true);
+            let _: Element = collapsible("col-excl-a")
+                .open(a)
+                .exclusive(true)
+                .group("col-excl-g")
+                .default_open(true)
+                .trigger(|| Element::new().text("A"))
+                .content(|| Element::new().text("a"))
+                .into();
+            let _: Element = collapsible("col-excl-b")
+                .open(b)
+                .exclusive(true)
+                .group("col-excl-g")
+                .default_open(true)
+                .trigger(|| Element::new().text("B"))
+                .content(|| Element::new().text("b"))
+                .into();
+            assert!(
+                a.peek() ^ b.peek(),
+                "first default-open panel should occupy the exclusive group"
+            );
+            a.set(true);
+            assert!(a.peek(), "forcing A open");
+            assert!(!b.peek(), "B must close when A claims the group");
+            b.set(true);
+            assert!(b.peek());
+            assert!(!a.peek());
+        });
     }
 }

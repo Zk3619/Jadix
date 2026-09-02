@@ -39,12 +39,12 @@
 //! }
 //! ```
 
-use crate::core::tree::{parse_color, Element};
+use crate::core::tree::{Element, parse_color};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::primitives::text::text;
-use crate::utils::take_packed;
 use crate::style::parse_text_color;
 use crate::tokens;
+use crate::utils::take_packed;
 use rui_macros::component;
 
 const ATTR_CARD_SLOT: &str = "rui_card_slot";

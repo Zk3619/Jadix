@@ -41,12 +41,12 @@ use std::cell::Cell;
 use std::sync::OnceLock;
 
 use crate::core::reactivity::{
-    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
+    with_child_owner,
 };
 use crate::core::tree::{Element, LayoutStatus};
+use crate::primitives::r#box::{r#box, hstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box};
 use crate::renderer::caret_blink_visible;
 use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
@@ -55,8 +55,8 @@ use crate::style::{
 use crate::utils::controlled::resolve_string_signal;
 use crate::utils::instance_id::resolve_instance_id;
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use crate::utils::take_fragment;
+use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
 use rui_macros::component;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
@@ -278,9 +278,11 @@ fn sync_otp_slot_paint(
     }
 
     let kids_changed = el.children.len() != kids.len()
-        || el.children.iter().zip(kids.iter()).any(|(a, b)| {
-            a.text != b.text || a.children.len() != b.children.len()
-        });
+        || el
+            .children
+            .iter()
+            .zip(kids.iter())
+            .any(|(a, b)| a.text != b.text || a.children.len() != b.children.len());
     if kids_changed {
         el.children = kids;
         status = status.merge(LayoutStatus::StructureChanged);
@@ -659,12 +661,19 @@ pub fn InputOTP(
         .map(InputOtpPattern::parse)
         .unwrap_or_default();
     let body_children = children;
-    input_otp_scope(id, max, value, disabled, invalid, pattern, class, move || {
-        match body_children {
+    input_otp_scope(
+        id,
+        max,
+        value,
+        disabled,
+        invalid,
+        pattern,
+        class,
+        move || match body_children {
             Some(c) => c,
             None => build_default_slots(max, None),
-        }
-    })
+        },
+    )
 }
 
 /// 连续槽容器（`gap-0`；子 Slot 拼成连体条）。
@@ -777,14 +786,7 @@ pub fn InputOTPSlot(
     let sync_fid = fid;
     cell = cell.reactive_sync(move |el, _| {
         sync_otp_slot_paint(
-            el,
-            index,
-            max_length,
-            value_sig,
-            active_sig,
-            &sync_fid,
-            disabled,
-            invalid,
+            el, index, max_length, value_sig, active_sig, &sync_fid, disabled, invalid,
         )
     });
 
@@ -903,13 +905,22 @@ impl From<InputOtpBuilder> for Element {
         } else {
             Some(class)
         };
-        input_otp_scope(id, max_length, value, disabled, invalid, pattern, class, move || {
-            if let Some(body) = custom_body {
-                body()
-            } else {
-                build_default_slots(max_length, separator_at)
-            }
-        })
+        input_otp_scope(
+            id,
+            max_length,
+            value,
+            disabled,
+            invalid,
+            pattern,
+            class,
+            move || {
+                if let Some(body) = custom_body {
+                    body()
+                } else {
+                    build_default_slots(max_length, separator_at)
+                }
+            },
+        )
     }
 }
 
@@ -1003,10 +1014,12 @@ mod tests {
             assert_eq!(start.style.radii, otp_slot_radii(EDGE_START));
             assert_eq!(mid.style.radii, otp_slot_radii(EDGE_MIDDLE));
             assert_eq!(end.style.radii, otp_slot_radii(EDGE_END));
-            assert!(start
-                .attrs
-                .get(crate::components::button_group::ATTR_PAINT_NUDGE)
-                .is_none());
+            assert!(
+                start
+                    .attrs
+                    .get(crate::components::button_group::ATTR_PAINT_NUDGE)
+                    .is_none()
+            );
             assert_eq!(
                 mid.attrs
                     .get(crate::components::button_group::ATTR_PAINT_NUDGE)

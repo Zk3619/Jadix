@@ -8,22 +8,22 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
-use crate::core::reactivity::{use_scoped_signal, use_signal, Signal, SignalId};
+use crate::core::reactivity::{Signal, SignalId, use_scoped_signal, use_signal};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::path::{
-    encode_path_d, encode_points, ensure_raster_texture, filled_circle, points_from_commands,
-    register_path_scene, PathCommand, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_MARKERS,
-    ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
+    ATTR_PATH_D, ATTR_PATH_MARKERS, ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX, PathCommand, PathStyle,
+    Point2, encode_path_d, encode_points, ensure_raster_texture, filled_circle,
+    points_from_commands, register_path_scene,
 };
-use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, parse_text_color};
 use crate::tokens;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 
 use super::datum::ChartTooltipItem;
 use super::mark::{ChartMark, MarkRenderContext, SceneLayer};
 use super::polar::polar_guide_layers;
-use super::scale::{format_time_label, resolve_scales, resolve_scales_pad, AxisSpec, ScaleKind};
+use super::scale::{AxisSpec, ScaleKind, format_time_label, resolve_scales, resolve_scales_pad};
 use super::theme::{ChartConfig, ChartTheme, TooltipIndicator};
 
 /// RSX `<Chart definition={…} />` input parameter.
@@ -1138,11 +1138,7 @@ fn attach_pin_overlay(
 
 fn attach_overlay_slot(plot: Element, overlay_key: String) -> Element {
     let mut ph = crate::app::reactive::reactive_placeholder_sized(overlay_key, "100%", "100%");
-    ph = ph
-        .absolute()
-        .left(0.0)
-        .top(0.0)
-        .pointer_events("none");
+    ph = ph.absolute().left(0.0).top(0.0).pointer_events("none");
     plot.child(ph)
 }
 
@@ -1405,9 +1401,7 @@ fn attach_chart_pointer(
                 plot = plot.on_hover(move |inside| {
                     hover_inside_h.set(inside);
                     if inside {
-                        if let Some((pos, b)) =
-                            crate::app::pointer_events::last_hover_sample()
-                        {
+                        if let Some((pos, b)) = crate::app::pointer_events::last_hover_sample() {
                             apply_chart_hover_from_client(
                                 &marks_h,
                                 &scales_h,
@@ -1983,7 +1977,7 @@ mod hover_freeze_tests {
 
     #[test]
     fn frozen_leave_hides_overlay_via_opacity_not_structure() {
-        use crate::core::tree::{sync_reactive_elements_subtree, LayoutTree};
+        use crate::core::tree::{LayoutTree, sync_reactive_elements_subtree};
         create_root(|| {
             set_chart_hover_frozen(false);
             let sig = use_signal("t-chart-hov-hide-style", || ChartHover {
@@ -2018,7 +2012,7 @@ mod hover_freeze_tests {
     #[test]
     fn hover_enter_samples_datum_without_mousemove() {
         use super::super::mark::bar_y;
-        use super::super::scale::{resolve_scales, AxisSpec};
+        use super::super::scale::{AxisSpec, resolve_scales};
         create_root(|| {
             set_chart_hover_frozen(false);
             let sig = use_signal("t-chart-hov-enter", ChartHover::default);

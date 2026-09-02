@@ -16,13 +16,13 @@
 //! )
 //! ```
 
-use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_color, parse_text_color, Element};
+use crate::core::reactivity::{Signal, use_signal};
+use crate::core::tree::{Element, parse_color, parse_text_color};
+use crate::primitives::r#box::{r#box, hstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box};
-use crate::style::{control_focus_ring_active, focus_ring_color, FOCUS_RING_BLUR};
-use crate::utils::roving::{focus_roving_key, FocusRovingAxis};
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::style::{FOCUS_RING_BLUR, control_focus_ring_active, focus_ring_color};
+use crate::utils::roving::{FocusRovingAxis, focus_roving_key};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 use winit::event::KeyEvent;
 

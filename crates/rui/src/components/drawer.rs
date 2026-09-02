@@ -61,20 +61,20 @@ use crate::app::reactive::reactive_view;
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
-    ModalPresenceHandle, ModalSurfaceMotion,
+    ModalPresenceHandle, ModalSurfaceMotion, apply_modal_shell_motion, mounted_signal,
+    sync_modal_presence, use_modal_presence,
 };
 use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+    ModalShellZs, ShellOverlayOpts, build_modal_overlay, modal_sync,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal,
 };
 use crate::core::tree::Element;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
+use crate::primitives::interactive::interactive;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
@@ -82,8 +82,8 @@ use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
-use crate::utils::text_node::build_icon_text_node;
 use crate::utils::take_packed;
+use crate::utils::text_node::build_icon_text_node;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -1334,9 +1334,7 @@ fn begin_drawer_drag(
     } else {
         drawer_drag_translate(direction, start_frac, axis_px)
     };
-    crate::components::internal::modal_motion::note_modal_shell_drag(
-        &id, extra, true, start_frac,
-    );
+    crate::components::internal::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
     let grow_id = id.clone();
     DRAWER_DRAG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerDrag {
@@ -1508,7 +1506,10 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     };
     let now = Instant::now();
     // Sub-frame dt (1ms) explodes px/s and false-triggers flick-dismiss on the next gesture.
-    let dt = now.duration_since(drag.last_t).as_secs_f32().max(1.0 / 60.0);
+    let dt = now
+        .duration_since(drag.last_t)
+        .as_secs_f32()
+        .max(1.0 / 60.0);
     let close_delta = match drag.direction {
         DrawerDirection::Down => y - drag.last_y,
         DrawerDirection::Up => drag.last_y - y,
@@ -1547,9 +1548,7 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
     let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
-    crate::components::internal::modal_motion::note_modal_shell_drag(
-        &drag.id, extra, true, next,
-    );
+    crate::components::internal::modal_motion::note_modal_shell_drag(&drag.id, extra, true, next);
     crate::components::internal::modal_motion::patch_modal_panel_transform(root, &drag.id, extra);
     crate::components::internal::modal_motion::patch_modal_overlay_opacity(
         root,
@@ -1609,9 +1608,7 @@ pub(crate) fn clear_drawer_drag_if_any() {
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
     let from = drawer_drag_translate(drag.direction, frac, drag.axis_px);
     let to = drawer_drag_translate(drag.direction, target, drag.axis_px);
-    crate::components::internal::modal_motion::note_modal_shell_drag(
-        &drag.id, to, false, target,
-    );
+    crate::components::internal::modal_motion::note_modal_shell_drag(&drag.id, to, false, target);
     crate::components::internal::modal_motion::arm_modal_slide_settle(&drag.id, from);
     if target < DRAWER_CLOSE_THRESHOLD {
         drag.open.set(false);
@@ -1625,9 +1622,7 @@ fn should_dismiss_drawer(frac: f32, velocity: f32, lowest_snap: f32) -> bool {
     }
     // Flick-close only when already well below the lowest rest snap — not a
     // high instantaneous px/s while parked on 0.5.
-    velocity > DRAWER_CLOSE_VELOCITY
-        && frac < lowest_snap
-        && frac < DRAWER_CLOSE_THRESHOLD + 0.08
+    velocity > DRAWER_CLOSE_VELOCITY && frac < lowest_snap && frac < DRAWER_CLOSE_THRESHOLD + 0.08
 }
 
 fn bind_drawer_drag_region(
@@ -1752,7 +1747,11 @@ mod tests {
         let from = drawer_drag_translate(DrawerDirection::Down, 0.42, axis);
         let to = drawer_drag_translate(DrawerDirection::Down, 0.5, axis);
         assert!(from[1] > to[1]);
-        assert!(to[1] > 1.0, "0.5 snap must keep a closed-axis offset, got {}", to[1]);
+        assert!(
+            to[1] > 1.0,
+            "0.5 snap must keep a closed-axis offset, got {}",
+            to[1]
+        );
         let full = drawer_drag_translate(DrawerDirection::Down, 1.0, axis);
         assert!(full[1].abs() < 0.01);
     }
@@ -1771,22 +1770,12 @@ mod tests {
     #[test]
     fn drawer_shell_stays_absolute_on_dock_edge() {
         use taffy::style::Position;
-        let down = apply_drawer_shell_surface(
-            Element::new(),
-            DrawerDirection::Down,
-            None,
-            None,
-            None,
-        );
+        let down =
+            apply_drawer_shell_surface(Element::new(), DrawerDirection::Down, None, None, None);
         assert_eq!(down.style.position, Position::Absolute);
         assert!(swallow_clicks(down).style.position == Position::Absolute);
-        let right = apply_drawer_shell_surface(
-            Element::new(),
-            DrawerDirection::Right,
-            None,
-            None,
-            None,
-        );
+        let right =
+            apply_drawer_shell_surface(Element::new(), DrawerDirection::Right, None, None, None);
         assert_eq!(right.style.position, Position::Absolute);
     }
 
@@ -1807,7 +1796,7 @@ mod tests {
 
     #[test]
     fn drawer_y_shell_uses_max_h_at_full_open() {
-        use crate::layout::dimension::{dim_kind, DimKind};
+        use crate::layout::dimension::{DimKind, dim_kind};
         let max_h = drawer_y_max_h(800.0);
         let panel = apply_drawer_shell_surface(
             Element::new(),
@@ -1828,14 +1817,21 @@ mod tests {
         let max_h = drawer_y_max_h(vh);
         let (full_h, full_extra) = drawer_y_shell_metrics(1.0, vh, false, DrawerDirection::Down);
         assert!((full_h - max_h).abs() < 0.5);
-        assert!(full_extra[1].abs() < 0.01, "rest extra is 0, got {}", full_extra[1]);
+        assert!(
+            full_extra[1].abs() < 0.01,
+            "rest extra is 0, got {}",
+            full_extra[1]
+        );
         let (half_h, half_extra) = drawer_y_shell_metrics(0.5, vh, false, DrawerDirection::Down);
         assert!(
             (half_h - max_h * 0.5).abs() < 0.5,
             "0.5 snap rest height should be half max-h, got {half_h}"
         );
         assert!(half_extra[1].abs() < 0.01);
-        assert!(half_h + 1.0 < max_h, "half-open must be shorter than full so body can scroll");
+        assert!(
+            half_h + 1.0 < max_h,
+            "half-open must be shorter than full so body can scroll"
+        );
         let (drag_h, drag_extra) = drawer_y_shell_metrics(0.5, vh, true, DrawerDirection::Down);
         assert!((drag_h - max_h).abs() < 0.5, "drag/settle keep max-h");
         assert!((drag_extra[1] - max_h * 0.5).abs() < 0.5);
@@ -1846,7 +1842,10 @@ mod tests {
         let open = drawer_background_scale(1.0);
         let closed = drawer_background_scale(0.0);
         let mid = drawer_background_scale(0.5);
-        assert!((closed - 1.0).abs() < 0.001, "closed page is unscaled, got {closed}");
+        assert!(
+            (closed - 1.0).abs() < 0.001,
+            "closed page is unscaled, got {closed}"
+        );
         assert!(
             open < closed && (open - (1.0 - SCALE_BG_MAX_SHRINK)).abs() < 0.001,
             "open page shrinks (Vaul), got {open}"

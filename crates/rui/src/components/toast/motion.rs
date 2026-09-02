@@ -3,10 +3,10 @@
 //! 只写目标；mid 由 `utils::motion` + reconcile/hoist 保留。
 
 use super::*;
-use crate::utils::layout_group::{slot_list_pose, slot_visual_offset, SlotListConfig};
+use crate::utils::layout_group::{SlotListConfig, slot_list_pose, slot_visual_offset};
 use crate::utils::motion::{
-    ensure_motion_transitions, motion_sync_status, prepare_motion_sync, snap_motion_baseline,
-    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform,
+    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, ensure_motion_transitions,
+    motion_sync_status, prepare_motion_sync, snap_motion_baseline,
 };
 use std::cell::{Cell, RefCell};
 

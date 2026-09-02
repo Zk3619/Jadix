@@ -11,16 +11,16 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 use crate::core::tree::Element;
 use crate::style::{
-    animation_run_active, keyframes_anim_entry, tick_element_animations, AnimationFillMode,
-    TimingFunction,
+    AnimationFillMode, TimingFunction, animation_run_active, keyframes_anim_entry,
+    tick_element_animations,
 };
 use crate::utils::motion::clear_motion;
 use crate::utils::popup::{
-    clamp_animated_max_h_to_place, peek_floating_place_max_h, ATTR_FLOATING_CONTENT_H,
-    ATTR_FLOATING_EXPAND_MEASURE,
+    ATTR_FLOATING_CONTENT_H, ATTR_FLOATING_EXPAND_MEASURE, clamp_animated_max_h_to_place,
+    peek_floating_place_max_h,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
 use taffy::style::{Dimension, Overflow};
@@ -1044,11 +1044,13 @@ mod tests {
             );
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "fade-exit__floating_panel").unwrap();
-            assert!(panel
-                .style
-                .animations
-                .iter()
-                .any(|a| a.name == "fade-out-0"));
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0")
+            );
         });
     }
 
@@ -1251,11 +1253,13 @@ mod tests {
             );
             assert!(flush_floating_motion_subtree(&mut root));
             let panel = find_template_id_mut(&mut root, "exp-exit-mid__floating_panel").unwrap();
-            assert!(panel
-                .style
-                .animations
-                .iter()
-                .any(|a| a.name == ACCORDION_UP));
+            assert!(
+                panel
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == ACCORDION_UP)
+            );
             let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
             assert!(
                 mh <= 50.0,

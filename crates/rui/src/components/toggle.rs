@@ -15,12 +15,12 @@
 //! [`crate::utils::toggle_state::resolve_bool_signal`]（受控 XOR Owner 作用域非受控）。
 
 use crate::core::reactivity::Signal;
-use crate::core::tree::{parse_color, parse_text_color, Element};
-use crate::primitives::interactive::interactive;
+use crate::core::tree::{Element, parse_color, parse_text_color};
 use crate::primitives::r#box::hstack;
+use crate::primitives::interactive::interactive;
 use crate::utils::resolve_instance_id;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
-use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_TOGGLE};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
+use crate::utils::toggle_state::{SLOT_TOGGLE, bool_on_click, resolve_bool_signal};
 use rui_macros::component;
 
 pub struct ToggleBuilder {

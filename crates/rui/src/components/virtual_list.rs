@@ -315,14 +315,8 @@ impl From<VirtualListBuilder> for Element {
         let item_count_fn_sync = item_count_fn.clone();
         let data_key_fn_sync = data_key_fn.clone();
 
-        let initial_count = item_count_fn
-            .as_ref()
-            .map(|f| f())
-            .unwrap_or(item_count);
-        let initial_data_key = data_key_fn
-            .as_ref()
-            .map(|f| f())
-            .unwrap_or_default();
+        let initial_count = item_count_fn.as_ref().map(|f| f()).unwrap_or(item_count);
+        let initial_data_key = data_key_fn.as_ref().map(|f| f()).unwrap_or_default();
         let (start0, end0) = visible_item_range(0.0, height, item_height, initial_count, overscan);
         let mut body = build_body(
             &id,
@@ -341,8 +335,7 @@ impl From<VirtualListBuilder> for Element {
         body.attrs.insert(DROPPED_ATTR.to_string(), "0".into());
         body = body.reactive_sync(move |root, _layout| {
             let sy_sig = use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32);
-            let vh_sig =
-                use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height);
+            let vh_sig = use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height);
             let sy = sy_sig.try_peek().unwrap_or(0.0);
             let vh_raw = vh_sig.try_peek().unwrap_or(height);
             let vh = if vh_raw > 1.0 { vh_raw } else { height };
@@ -350,10 +343,7 @@ impl From<VirtualListBuilder> for Element {
                 .as_ref()
                 .map(|f| f())
                 .unwrap_or(item_count);
-            let data_key = data_key_fn_sync
-                .as_ref()
-                .map(|f| f())
-                .unwrap_or_default();
+            let data_key = data_key_fn_sync.as_ref().map(|f| f()).unwrap_or_default();
             let (start, end) = visible_item_range(sy, vh, item_height, count, overscan);
             apply_body_window(
                 root,

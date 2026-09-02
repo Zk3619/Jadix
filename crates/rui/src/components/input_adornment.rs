@@ -51,8 +51,8 @@ use crate::style::{
     apply_focus_ring_shadow_color, focus_ring_color, focus_ring_destructive_color, parse_color,
     parse_text_color, with_class_list,
 };
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::take_packed;
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";

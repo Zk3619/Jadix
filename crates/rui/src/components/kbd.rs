@@ -33,11 +33,11 @@
 //! - Distinct from menu `*Shortcut` slots (those are inline muted captions inside menus).
 //! - `ui!` multi-child packs into `rui_fragment` / anonymous shell; both roots use `take_packed` then lay out in a row.
 
-use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32};
-use crate::primitives::r#box::{hstack, BoxBuilder};
+use crate::core::tree::{Element, IntoF32, parse_color, parse_text_color};
+use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::tokens;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::take_packed;
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -66,7 +66,11 @@ fn kbd_text_style() -> TextNodeConfig {
     }
 }
 
-fn attach_kbd_children(mut el: Element, content: Vec<Element>, text_style: &TextNodeConfig) -> Element {
+fn attach_kbd_children(
+    mut el: Element,
+    content: Vec<Element>,
+    text_style: &TextNodeConfig,
+) -> Element {
     let fg = text_style.color;
     for mut child in content {
         if let Some(text_content) = child.text.take() {
@@ -200,8 +204,7 @@ impl From<KbdBuilder> for Element {
     fn from(builder: KbdBuilder) -> Self {
         let mut el: Element = builder.container.bg(parse_color("muted")).into();
         el = el.pointer_events_none();
-        el.attrs
-            .insert(ATTR_SLOT.to_string(), SLOT_KBD.to_string());
+        el.attrs.insert(ATTR_SLOT.to_string(), SLOT_KBD.to_string());
         if !builder.id.trim().is_empty() {
             el.template_id = Some(builder.id.clone());
         }
@@ -302,10 +305,7 @@ mod tests {
     #[test]
     fn kbd_sets_slot_and_muted_chrome() {
         let el: Element = kbd().text("⌘").into();
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
-            Some(SLOT_KBD)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(|s| s.as_str()), Some(SLOT_KBD));
         assert_eq!(el.style.bg_color, parse_color("muted"));
         assert_eq!(
             el.attrs
@@ -332,10 +332,8 @@ mod tests {
     fn kbd_group_unpacks_and_sets_slot() {
         let el: Element = KbdGroup(KbdGroupProps {
             children: Some(Element::from(
-                crate::primitives::r#box::vstack().children(vec![
-                    kbd().text("Ctrl").into(),
-                    kbd().text("K").into(),
-                ]),
+                crate::primitives::r#box::vstack()
+                    .children(vec![kbd().text("Ctrl").into(), kbd().text("K").into()]),
             )),
             ..Default::default()
         });
@@ -344,10 +342,11 @@ mod tests {
             Some(SLOT_KBD_GROUP)
         );
         assert_eq!(el.children.len(), 2);
-        assert!(el
-            .children
-            .iter()
-            .all(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_KBD)));
+        assert!(
+            el.children
+                .iter()
+                .all(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_KBD))
+        );
     }
 
     #[test]

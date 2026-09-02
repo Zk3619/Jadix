@@ -29,14 +29,14 @@ use crate::app::reactive::{
     reactive_anchor, reactive_component_live_sized, reactive_placeholder_sized,
 };
 use crate::components::button::button;
-use crate::components::select::{select, SelectItemData};
-use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_text_color, CursorKind, Element};
-use crate::primitives::interactive::interactive;
+use crate::components::select::{SelectItemData, select};
+use crate::core::reactivity::{Signal, use_signal};
+use crate::core::tree::{CursorKind, Element, parse_text_color};
 use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::interactive::interactive;
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
 

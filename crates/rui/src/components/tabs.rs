@@ -58,15 +58,15 @@
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view};
 use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal,
 };
-use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::core::tree::{Element, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::interactive::interactive;
 use crate::style::{LineStyle, WhiteSpace};
 use crate::utils::controlled::resolve_string_signal;
-use crate::utils::roving::{attach_focus_roving, roving_edge, roving_move, FocusRovingAxis};
+use crate::utils::roving::{FocusRovingAxis, attach_focus_roving, roving_edge, roving_move};
 use crate::utils::take_packed;
 use rui_macros::component;
 use std::sync::OnceLock;
@@ -303,11 +303,7 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
     }
 
     let want_ind = if selected && line {
-        if vertical {
-            "v"
-        } else {
-            "h"
-        }
+        if vertical { "v" } else { "h" }
     } else {
         ""
     };

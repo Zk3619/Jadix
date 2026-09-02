@@ -44,21 +44,21 @@ use std::sync::OnceLock;
 use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::internal::modal_motion::{
-    apply_modal_shell_motion, mounted_signal, sync_modal_presence, use_modal_presence,
-    ModalPresenceHandle, ModalSurfaceMotion,
+    ModalPresenceHandle, ModalSurfaceMotion, apply_modal_shell_motion, mounted_signal,
+    sync_modal_presence, use_modal_presence,
 };
 use crate::components::internal::modal_shell::{
-    build_modal_overlay, modal_sync, ModalShellZs, ShellOverlayOpts,
+    ModalShellZs, ShellOverlayOpts, build_modal_overlay, modal_sync,
 };
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal,
 };
 use crate::core::tree::Element;
 use crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
+use crate::primitives::interactive::interactive;
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
@@ -66,8 +66,8 @@ use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
-use crate::utils::text_node::build_named_icon_text_node;
 use crate::utils::take_packed;
+use crate::utils::text_node::build_named_icon_text_node;
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -586,12 +586,12 @@ mod tests {
     use crate::app::portal_overlay::clear_overlay_stack;
     use crate::components::internal::modal_motion::{sync_modal_presence, use_modal_presence};
     use crate::components::internal::modal_shell::{
-        default_modal_overlay_color, modal_sync, ShellOverlayOpts,
-        DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY,
+        DEFAULT_MODAL_OVERLAY_BLUR, DEFAULT_MODAL_OVERLAY_OPACITY, ShellOverlayOpts,
+        default_modal_overlay_color, modal_sync,
     };
     use crate::core::reactivity::Signal;
     use crate::core::tree::PointerEvents;
-    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, PORTAL_LAYER_ID};
+    use crate::layout::layout_tree::{LayoutTree, PORTAL_LAYER_ID, hoist_portal_subtrees};
     use crate::utils::presence::PresencePhase;
 
     #[test]

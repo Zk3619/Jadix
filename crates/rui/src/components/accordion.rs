@@ -63,25 +63,24 @@ use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{
-    create_context, create_effect, provide_context, use_context, use_scoped_signal, use_signal,
-    with_child_owner, Context, Signal,
+    Context, Signal, create_context, create_effect, provide_context, use_context,
+    use_scoped_signal, use_signal, with_child_owner,
 };
-use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::core::tree::{Element, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::interactive::interactive;
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry, with_class_list,
-    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
+    css_transition_needs_frame, keyframes_anim_entry, with_class_list,
 };
 use crate::tokens;
-use crate::utils::lucide::lucide_glyph;
 use crate::utils::motion::{clear_motion, ensure_motion_transitions};
 use crate::utils::presence::{ExitGate, PresencePhase};
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
+use crate::utils::roving::{FocusRovingAxis, attach_focus_roving};
 use crate::utils::take_fragment;
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_lucide_icon_text_node, build_text_node};
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_ITEM_VALUE: &str = "rui_accordion_item_value";
@@ -455,9 +454,10 @@ fn caption_text(el: &Element) -> Option<String> {
 }
 
 fn chevron_icon() -> Element {
-    let glyph = lucide_glyph("chevron-down").unwrap_or_else(|| "▾".into());
-    build_icon_text_node(glyph)
+    build_lucide_icon_text_node("chevron-down")
         .text_size(CHEVRON_PX)
+        .w(CHEVRON_PX)
+        .h(CHEVRON_PX)
         .text_color(parse_text_color("muted-foreground"))
 }
 
@@ -1265,6 +1265,24 @@ mod tests {
             el.children[0].attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some(SLOT_ITEM)
         );
+    }
+
+    #[test]
+    fn trigger_chevron_is_named_lucide_for_square_svg_rotate() {
+        let (_h, el): (_, Element) = create_root(|| {
+            accordion("acc-chev")
+                .item("x", "Q", || Element::new().text("A"))
+                .into()
+        });
+        let icon = find_slot_child(&el, SLOT_TRIGGER_ICON).expect("accordion chevron");
+        assert_eq!(
+            icon.get_attr(crate::utils::ATTR_ICON_NAME)
+                .map(String::as_str),
+            Some("chevron-down"),
+            "named SVG texture keeps ink centered under 180° rotate"
+        );
+        assert_eq!(icon.text_style.font_family.as_deref(), Some("lucide"));
+        assert!((icon.text_style.size - CHEVRON_PX).abs() < 0.01);
     }
 
     #[test]

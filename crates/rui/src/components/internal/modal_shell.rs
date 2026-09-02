@@ -2,7 +2,7 @@
 //!
 //! 面板表面与布局仍留在各组件（居中 Dialog vs 贴边 Sheet）。
 
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode, OverlayZ};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, OverlayZ, portal_sync};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::primitives::overlay::overlay;

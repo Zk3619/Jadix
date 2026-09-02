@@ -49,23 +49,23 @@ use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::app::runtime::request_redraw;
 use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
 };
 use crate::components::label::label;
 use crate::components::popover::popover_side_align_to_placement;
 use crate::core::reactivity::{
-    create_context, create_effect, on_cleanup, provide_context, untrack, use_context, use_signal,
-    with_child_owner, Context, Signal,
+    Context, Signal, create_context, create_effect, on_cleanup, provide_context, untrack,
+    use_context, use_signal, with_child_owner,
 };
 use crate::core::tree::Element;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::vstack;
+use crate::primitives::interactive::interactive;
 use crate::primitives::text::text;
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::popup::{
-    mark_floating_with_gap, mount_anchored_overlay, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W, mark_floating_with_gap,
+    mount_anchored_overlay,
 };
 use rui_macros::component;
 

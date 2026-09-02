@@ -1,20 +1,20 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
 use crate::components::input::{
-    effective_invalid, input_caret_signal_key, input_clear_template_id,
+    InputType, effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_value_signal_key, lucide_named,
     map_byte_index_to_masked, map_byte_range_to_masked, mask_password, resolve_placeholder,
-    set_adornment_icon_glyph, set_adornment_visible, InputType,
+    set_adornment_icon_glyph, set_adornment_visible,
 };
 use crate::core::reactivity::use_signal;
-use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
+use crate::core::tree::{Element, InputPaintSync, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
-    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
+    InputCaretDraw, apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
     focus_ring_destructive_color, focus_ring_params, focus_ring_shadow_matches_color,
-    focus_ring_style, InputCaretDraw,
+    focus_ring_style,
 };
 use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, focus_id_for_text_edit,
@@ -499,11 +499,7 @@ fn sync_one_text_edit_paint(
             let soft = desc.wrap_mode.soft_wrap();
             let avail = if soft {
                 let w = text_el.layout_bounds[2];
-                if w > 1.0 {
-                    w
-                } else {
-                    320.0
-                }
+                if w > 1.0 { w } else { 320.0 }
             } else {
                 10_000.0
             };
@@ -535,8 +531,7 @@ fn sync_one_text_edit_paint(
             let prepared =
                 crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, line_box);
             let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
-            let content_w =
-                ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
+            let content_w = ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
             let cur_w = crate::layout::dim_length_px(text_el.style.size.width).unwrap_or(-1.0);
             if (cur_w - content_w).abs() > 0.5 {
                 text_el.style.size.width = taffy::style::Dimension::length(content_w);
@@ -651,7 +646,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }

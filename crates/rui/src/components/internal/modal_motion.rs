@@ -15,16 +15,15 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::app::portal_overlay::modal_stack_metrics;
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::style::{
-    animation_run_active, css_transition_needs_frame, keyframes_anim_entry,
-    tick_element_transitions_locked, AnimationFillMode, TimingFunction, TransitionEntry,
-    TransitionProperty,
+    AnimationFillMode, TimingFunction, TransitionEntry, TransitionProperty, animation_run_active,
+    css_transition_needs_frame, keyframes_anim_entry, tick_element_transitions_locked,
 };
 use crate::utils::motion::{
-    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
-    MotionEpsilon, MotionStyle, MotionTransform,
+    MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, clear_motion,
+    motion_is_animating, motion_sync_status, prepare_motion_sync,
 };
 use crate::utils::presence::{ExitGate, PresencePhase};
 
@@ -516,11 +515,7 @@ fn write_modal_shell_tick_targets(
     }
 }
 
-fn exit_visual_settled(
-    overlay: &Element,
-    panel: &Element,
-    closed_translate: [f32; 2],
-) -> bool {
+fn exit_visual_settled(overlay: &Element, panel: &Element, closed_translate: [f32; 2]) -> bool {
     let overlay_ok = overlay.style.opacity < 0.05;
     let dx = (panel.style.translate[0] - closed_translate[0]).abs();
     let dy = (panel.style.translate[1] - closed_translate[1]).abs();
@@ -697,7 +692,7 @@ pub(crate) fn drain_pending_modal_unmounts() {
     if pending.is_empty() {
         return;
     }
-    use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+    use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
     for (mounted_sig, modal_id) in pending {
         mounted_sig.set(false);
         let _ = portal_sync(
@@ -818,7 +813,13 @@ fn apply_modal_shell_motion_inner(
             // Reuse enter CSS tick so drag-release snap keeps advancing after the seed frame.
             c.enter_active = true;
         }
-        (needs_enter, enter_was_active, slide_settle, settle_from, needs_exit_anim)
+        (
+            needs_enter,
+            enter_was_active,
+            slide_settle,
+            settle_from,
+            needs_exit_anim,
+        )
     };
 
     overlay.template_id = Some(format!("{modal_id}__modal_overlay"));
@@ -1498,11 +1499,13 @@ mod tests {
                 "flush must start overlay faded, got {}",
                 overlay.style.opacity
             );
-            assert!(overlay
-                .style
-                .animations
-                .iter()
-                .any(|a| a.name == "fade-in-0"));
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0")
+            );
             assert!(zoom.style.animations.iter().any(|a| a.name == "zoom-in-90"));
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-in-0"),
@@ -1614,7 +1617,7 @@ mod tests {
     #[test]
     fn flush_finds_shell_after_portal_hoist() {
         use crate::app::portal_overlay::{
-            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+            OverlayKind, OverlayMode, clear_overlay_stack, portal_sync,
         };
         use crate::layout::layout_tree::hoist_portal_subtrees;
         use crate::primitives::overlay::overlay;
@@ -1689,7 +1692,7 @@ mod tests {
     #[test]
     fn dialog_exit_finish_defers_mounted_until_drain() {
         use crate::app::portal_overlay::{
-            clear_overlay_stack, portal_sync, OverlayKind, OverlayMode,
+            OverlayKind, OverlayMode, clear_overlay_stack, portal_sync,
         };
 
         create_root(|| {
@@ -1813,11 +1816,13 @@ mod tests {
                 find_template_id_mut(&mut root, "dlg__modal_overlay").unwrap() as *mut Element;
             let z_ptr = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap() as *mut Element;
             let (overlay, zoom) = unsafe { (&*o_ptr, &*z_ptr) };
-            assert!(overlay
-                .style
-                .animations
-                .iter()
-                .any(|a| a.name == "fade-out-0"));
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0")
+            );
             assert!(
                 zoom.style.animations.iter().any(|a| a.name == "fade-out-0"),
                 "panel must fade out with the overlay"
@@ -1937,7 +1942,11 @@ mod tests {
                 overlay.style.opacity
             );
             assert!(
-                overlay.style.animations.iter().any(|a| a.name == "fade-in-0"),
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
                 "slide overlay enter must use fade-in-0 keyframes (rebuild-proof)"
             );
             assert!(
@@ -1981,10 +1990,7 @@ mod tests {
             root.children.push(overlay);
             root.children.push(panel);
 
-            assert_eq!(
-                sync_modal_presence(&handle, false),
-                PresencePhase::Exiting
-            );
+            assert_eq!(sync_modal_presence(&handle, false), PresencePhase::Exiting);
             {
                 let o_ptr = find_template_id_mut(&mut root, "slide-x__modal_overlay").unwrap()
                     as *mut Element;

@@ -3,14 +3,14 @@
 
 use std::f32::consts::TAU;
 
-use crate::primitives::path::{pie_ring, polyline, PathStyle, Point2};
+use crate::primitives::path::{PathStyle, Point2, pie_ring, polyline};
 
 use super::datum::{
-    collect_rows, datum_hover_item, datum_hover_text, ChartDatum, ChartTooltipItem,
+    ChartDatum, ChartTooltipItem, collect_rows, datum_hover_item, datum_hover_text,
 };
 use super::mark::{
-    dashed_segment, filled_dot_layers, paint_fill, paint_stroke, unique_labels, unique_series,
-    ChartMark, MarkChannels, MarkRender, MarkRenderContext, SceneLayer,
+    ChartMark, MarkChannels, MarkRender, MarkRenderContext, SceneLayer, dashed_segment,
+    filled_dot_layers, paint_fill, paint_stroke, unique_labels, unique_series,
 };
 use super::theme::{ChartPaint, MarkStyle};
 

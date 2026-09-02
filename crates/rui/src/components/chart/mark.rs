@@ -4,14 +4,14 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use std::rc::Rc;
 
 use crate::primitives::path::{
-    filled_circle, pie_ring, pie_sector, polygon, polyline, rounded_rect, PathCommand, PathStyle,
-    Point2,
+    PathCommand, PathStyle, Point2, filled_circle, pie_ring, pie_sector, polygon, polyline,
+    rounded_rect,
 };
 
 use super::datum::{
-    collect_rows, datum_hover_item, datum_hover_text, ChartDatum, ChartTooltipItem,
+    ChartDatum, ChartTooltipItem, collect_rows, datum_hover_item, datum_hover_text,
 };
-use super::scale::{pie_layout_span, ResolvedScales};
+use super::scale::{ResolvedScales, pie_layout_span};
 use super::theme::{ChartPaint, ChartTheme, MarkStyle};
 
 /// The channel value contributed by Mark to scale (before compilation).
@@ -403,11 +403,7 @@ impl MarkRender for BarYMark {
         &self.id
     }
     fn kind(&self) -> &'static str {
-        if self.horizontal {
-            "barX"
-        } else {
-            "barY"
-        }
+        if self.horizontal { "barX" } else { "barY" }
     }
     fn channels(&self) -> MarkChannels {
         MarkChannels {
@@ -688,11 +684,7 @@ impl MarkRender for LineYMark {
         &self.id
     }
     fn kind(&self) -> &'static str {
-        if self.area {
-            "area"
-        } else {
-            "line"
-        }
+        if self.area { "area" } else { "line" }
     }
     fn channels(&self) -> MarkChannels {
         let times: Vec<i64> = self.rows.iter().filter_map(|r| r.time).collect();
@@ -1173,11 +1165,7 @@ impl MarkRender for RuleMark {
         &self.id
     }
     fn kind(&self) -> &'static str {
-        if self.vertical {
-            "ruleX"
-        } else {
-            "ruleY"
-        }
+        if self.vertical { "ruleX" } else { "ruleY" }
     }
     fn channels(&self) -> MarkChannels {
         if self.vertical {

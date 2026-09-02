@@ -2,7 +2,7 @@
 
 use super::view::render_queue;
 use super::*;
-use crate::app::portal_overlay::{portal_sync, OverlayKind, OverlayMode};
+use crate::app::portal_overlay::{OverlayKind, OverlayMode, portal_sync};
 use crate::utils::keyed_overlay::{mount_reactive_anchor, viewport_portal_stage};
 
 /// Builder：配置宿主布局/锚点/上限策略。

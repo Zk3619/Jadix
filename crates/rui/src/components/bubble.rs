@@ -58,29 +58,29 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
 };
 use crate::components::label::label;
 use crate::core::reactivity::{
-    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
+    with_child_owner,
 };
-use crate::core::tree::{parse_color, parse_text_color, Element, IntoF32, LayoutStatus};
+use crate::core::tree::{Element, IntoF32, LayoutStatus, parse_color, parse_text_color};
+use crate::primitives::r#box::{BoxBuilder, r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::style::{is_dark_theme, with_class_list};
 use crate::tokens;
 use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay, PopupPlacement,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, PopupPlacement,
+    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay,
 };
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -760,25 +760,26 @@ fn note_reactions_hover(id: &str, part: HoverPart, on: bool) {
 /// Open this expand and dismiss every other reaction popover (portal_sync exclusive
 /// is not enough: a stale panel can sit on the hoist layer after id/handler rebuilds).
 fn open_reaction_expand(id: &str) {
-    let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) = BUBBLE_REACTIONS.with(|m| {
-        let map = m.borrow();
-        let mut others = Vec::new();
-        let mut self_exp = None;
-        for (other_id, e) in map.iter() {
-            if other_id == id {
-                e.hover_armed.set(true);
-                self_exp = Some(e.expanded);
-                continue;
+    let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) =
+        BUBBLE_REACTIONS.with(|m| {
+            let map = m.borrow();
+            let mut others = Vec::new();
+            let mut self_exp = None;
+            for (other_id, e) in map.iter() {
+                if other_id == id {
+                    e.hover_armed.set(true);
+                    self_exp = Some(e.expanded);
+                    continue;
+                }
+                if e.expanded.peek() {
+                    e.hover_armed.set(false);
+                    e.bar_hover.set(false);
+                    e.panel_hover.set(false);
+                    others.push(e.expanded);
+                }
             }
-            if e.expanded.peek() {
-                e.hover_armed.set(false);
-                e.bar_hover.set(false);
-                e.panel_hover.set(false);
-                others.push(e.expanded);
-            }
-        }
-        (self_exp, others)
-    });
+            (self_exp, others)
+        });
     if let Some(s) = self_exp {
         s.try_set(true);
     }
@@ -1599,8 +1600,8 @@ pub fn BubbleReactions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::portal_overlay::{clear_overlay_stack, portal_sync, OverlayKind, OverlayMode};
-    use crate::core::reactivity::{create_root, Signal};
+    use crate::app::portal_overlay::{OverlayKind, OverlayMode, clear_overlay_stack, portal_sync};
+    use crate::core::reactivity::{Signal, create_root};
     use crate::layout::layout_tree::LayoutTree;
     use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_GAP};
 
@@ -2675,8 +2676,7 @@ mod tests {
                 .class_set
                 .as_ref()
                 .map(|s| {
-                    s.base.iter().any(|c| c == "bg-card")
-                        && s.base.iter().any(|c| c == "shadow-md")
+                    s.base.iter().any(|c| c == "bg-card") && s.base.iter().any(|c| c == "shadow-md")
                 })
                 .unwrap_or(false),
             "expand_class must land on expand chrome class_set"

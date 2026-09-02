@@ -34,12 +34,12 @@
 //! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
 use crate::core::tree::{
-    parse_color, parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus,
+    Element, IntoCssDim, IntoF32, LayoutStatus, parse_color, parse_text_color,
 };
-use crate::primitives::r#box::{hstack, BoxBuilder};
+use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::style::is_dark_theme;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::take_packed;
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -529,7 +529,7 @@ mod tests {
 
     #[test]
     fn semantic_badge_soft_tint_matches_button_rest() {
-        use crate::style::{set_theme_mode, ThemeMode};
+        use crate::style::{ThemeMode, set_theme_mode};
         set_theme_mode(ThemeMode::Light);
         for (name, accent_token, text_token) in [
             ("success", "green-600", "green-600"),

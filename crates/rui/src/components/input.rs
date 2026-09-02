@@ -42,10 +42,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
-use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
-use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_text_color, Element, IntoCssDim, IntoF32, LayoutStatus};
-use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
+use crate::components::internal::text_edit::{TextEditBuildParams, build_text_edit_element};
+use crate::core::reactivity::{Signal, use_signal};
+use crate::core::tree::{Element, IntoCssDim, IntoF32, LayoutStatus, parse_text_color};
+use crate::primitives::r#box::{BoxBuilder, r#box, hstack, vstack};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_field::commit_value;
 use crate::utils::text_node::build_icon_text_node;
@@ -53,10 +53,10 @@ use rui_macros::component;
 use winit::event::MouseButton;
 
 pub use crate::utils::text_field::{
-    bind_controlled_value, input_caret_signal_key, input_focus_id as focus_id_for_input,
-    input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
-    input_preedit_sel_signal_key, input_preedit_signal_key, input_selection_signal_key,
-    input_type_signal_key, input_value_signal_key, INPUT_FOCUS_PREFIX,
+    INPUT_FOCUS_PREFIX, bind_controlled_value, input_caret_signal_key,
+    input_focus_id as focus_id_for_input, input_ime_anchor_signal_key, input_overwrite_signal_key,
+    input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_selection_signal_key, input_type_signal_key, input_value_signal_key,
 };
 
 pub(crate) use crate::utils::text_field::{

@@ -27,18 +27,18 @@
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus,
+    ButtonHoverPaint, Element, IntoCssDim, IntoF32, LayoutStatus, parse_color, parse_text_color,
 };
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    focus_ring_border_color, focus_ring_color, focus_ring_destructive_color, focus_ring_params,
-    focus_ring_style, is_dark_theme, lerp_display_srgb_linear, mix_display_srgb_in_oklab,
-    TimingFunction, TransitionEntry, TransitionProperty,
+    TimingFunction, TransitionEntry, TransitionProperty, focus_ring_border_color, focus_ring_color,
+    focus_ring_destructive_color, focus_ring_params, focus_ring_style, is_dark_theme,
+    lerp_display_srgb_linear, mix_display_srgb_in_oklab,
 };
 use crate::utils::take_packed;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -130,11 +130,7 @@ fn ensure_button_css_transition(el: &mut Element) {
 }
 
 fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
-    if disabled || !hovered {
-        0.0
-    } else {
-        1.0
-    }
+    if disabled || !hovered { 0.0 } else { 1.0 }
 }
 
 /// `link` + explicit rest text color (such as Breadcrumb muted): hover cuts `foreground`.
@@ -1384,8 +1380,7 @@ pub(crate) fn sync_button_hover_paint_subtree(
         if let Some(fid) = el.focus_id.clone() {
             let key = format!("{}_hover", fid);
             let hover_sig = use_signal(&key, || false);
-            let is_hovered =
-                hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
+            let is_hovered = hover_sig.is_alive() && hover_sig.peek() && !desc.disabled;
             let focused = use_signal("__rui_button_focus_id", String::new);
             let focus_visible = use_signal("__rui_focus_visible", || false);
             let is_focused = !desc.disabled
@@ -1436,7 +1431,7 @@ impl crate::core::tree::IntoElementList for ButtonBuilder {
 mod chrome_tests {
     use super::{button, button_chrome_for_variant, color_mix_over_background};
     use crate::core::tree::Element;
-    use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
+    use crate::style::{ThemeMode, parse_color, parse_text_color, set_theme_mode};
 
     fn hex(c: [f32; 4]) -> String {
         format!(
@@ -1667,10 +1662,7 @@ mod chrome_tests {
             "sole KbdGroup must not be unpacked into raw keycaps"
         );
         assert_eq!(
-            el.children[0]
-                .attrs
-                .get("data-slot")
-                .map(|s| s.as_str()),
+            el.children[0].attrs.get("data-slot").map(|s| s.as_str()),
             Some("kbd-group")
         );
     }

@@ -1,7 +1,7 @@
 //! Toast 卡片壳与 stack/list 渲染。
 
 use super::motion::{
-    apply_enter_motion, stack_pose_for_rank, tone_shadow_stacked, ToastStackMotion,
+    ToastStackMotion, apply_enter_motion, stack_pose_for_rank, tone_shadow_stacked,
 };
 use super::*;
 use crate::components::button::button;

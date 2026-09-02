@@ -6,8 +6,8 @@
 //!「背景先关 → 内容闪一下」的竞态。
 
 use crate::core::reactivity::Signal;
-use crate::core::tree::{parse_color, parse_text_color, Element};
-use crate::primitives::r#box::{hstack, r#box};
+use crate::core::tree::{Element, parse_color, parse_text_color};
+use crate::primitives::r#box::{r#box, hstack};
 use crate::style::is_dark_theme;
 use crate::utils::lucide_glyph;
 use crate::utils::text_node::build_icon_text_node;

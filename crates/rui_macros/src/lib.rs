@@ -961,8 +961,7 @@ fn expand_node(
                 if name_str == "Progress" {
                     // Provide context *before* Label/Value (eager props order); Track 由 scope 注入。
                     let id_expr = get_attr("id");
-                    let value_sig = get_attr("value_signal")
-                        .or_else(|| get_attr("valueSignal"));
+                    let value_sig = get_attr("value_signal").or_else(|| get_attr("valueSignal"));
                     let value_lit = get_attr("value");
                     let class_expr = get_attr("class");
                     let orientation_expr = get_attr("orientation");
@@ -1142,8 +1141,7 @@ fn expand_node(
                 if accordion_is_compound {
                     // ShadCN compound Accordion：先 provide context 再构建 Item/Trigger/Content。
                     let id_expr = get_attr("id");
-                    let value_expr = get_attr("value")
-                        .or_else(|| get_attr("valueSignal"));
+                    let value_expr = get_attr("value").or_else(|| get_attr("valueSignal"));
                     let default_expr =
                         get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let multiple_expr = get_attr("multiple");
@@ -1227,14 +1225,12 @@ fn expand_node(
                 if tree_view_is_compound {
                     let id_expr = get_attr("id");
                     let variant_expr = get_attr("variant");
-                    let expanded_expr = get_attr("expanded_signal")
-                        .or_else(|| get_attr("expandedSignal"));
-                    let expanded_storage_key_expr = get_attr("expanded_storage_key")
-                        .or_else(|| get_attr("expandedStorageKey"));
-                    let row_height_expr = get_attr("row_height")
-                        .or_else(|| get_attr("rowHeight"));
-                    let height_expr = get_attr("height")
-                        .or_else(|| get_attr("h"));
+                    let expanded_expr =
+                        get_attr("expanded_signal").or_else(|| get_attr("expandedSignal"));
+                    let expanded_storage_key_expr =
+                        get_attr("expanded_storage_key").or_else(|| get_attr("expandedStorageKey"));
+                    let row_height_expr = get_attr("row_height").or_else(|| get_attr("rowHeight"));
+                    let height_expr = get_attr("height").or_else(|| get_attr("h"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -1285,6 +1281,29 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
+                    let exclusive_expr = get_attr("exclusive");
+                    let exclusive_ts = if let Some(e) = exclusive_expr {
+                        if let Some(b) = expr_as_bool_compat(e) {
+                            quote! { Some(#b) }
+                        } else {
+                            quote! { Some(rui::core::tree::parse_bool_like(#e)) }
+                        }
+                    } else {
+                        quote! { None }
+                    };
+                    let chrome_expr = get_attr("chrome");
+                    let chrome_ts = if let Some(c) = chrome_expr {
+                        quote! { rui::components::TreeViewChrome::from((#c).to_string()) }
+                    } else {
+                        quote! { rui::components::TreeViewChrome::Default }
+                    };
+                    let selected_expr =
+                        get_attr("selected_signal").or_else(|| get_attr("selectedSignal"));
+                    let selected_ts = if let Some(s) = selected_expr {
+                        quote! { Some(#s) }
+                    } else {
+                        quote! { None }
+                    };
                     let row_height_ts = if let Some(rh) = row_height_expr {
                         let v = quote_unitless_f32(rh);
                         quote! { #v }
@@ -1293,9 +1312,9 @@ fn expand_node(
                     };
                     let height_ts = if let Some(h) = height_expr {
                         let v = quote_unitless_f32(h);
-                        quote! { #v }
+                        quote! { Some(#v) }
                     } else {
-                        quote! { 240.0f32 }
+                        quote! { None }
                     };
                     return quote! {
                         rui::components::tree_view_scope(
@@ -1306,6 +1325,10 @@ fn expand_node(
                             #class_ts,
                             #row_height_ts,
                             #height_ts,
+                            #exclusive_ts,
+                            #chrome_ts,
+                            #selected_ts,
+                            None,
                             || #child_el,
                         )
                     };
@@ -1317,8 +1340,7 @@ fn expand_node(
                     let open_expr = get_attr("open")
                         .or_else(|| get_attr("open_signal"))
                         .or_else(|| get_attr("openSignal"));
-                    let default_expr =
-                        get_attr("default_open").or_else(|| get_attr("defaultOpen"));
+                    let default_expr = get_attr("default_open").or_else(|| get_attr("defaultOpen"));
                     let disabled_expr = get_attr("disabled");
                     let class_expr = get_attr("class");
                     let idx = *node_counter;
@@ -1378,6 +1400,22 @@ fn expand_node(
                     } else {
                         quote! { None }
                     };
+                    let exclusive_expr = get_attr("exclusive");
+                    let exclusive_ts = if let Some(e) = exclusive_expr {
+                        if let Some(b) = expr_as_bool_compat(e) {
+                            quote! { #b }
+                        } else {
+                            quote! { rui::core::tree::parse_bool_like(#e) }
+                        }
+                    } else {
+                        quote! { false }
+                    };
+                    let group_expr = get_attr("group");
+                    let group_ts = if let Some(g) = group_expr {
+                        quote! { Some((#g).to_string()) }
+                    } else {
+                        quote! { None }
+                    };
                     return quote! {
                         rui::components::collapsible_scope(
                             #id_ts,
@@ -1385,6 +1423,8 @@ fn expand_node(
                             #default_ts,
                             #disabled_ts,
                             #class_ts,
+                            #exclusive_ts,
+                            #group_ts,
                             || #child_el,
                         )
                     };
@@ -1985,7 +2025,8 @@ fn expand_node(
                     // Provide context *before* Sidebar / SidebarInset (eager props would miss ctx).
                     let id_expr = get_attr("id");
                     let open_expr = get_attr("open");
-                    let default_open_expr = get_attr("defaultOpen").or_else(|| get_attr("default_open"));
+                    let default_open_expr =
+                        get_attr("defaultOpen").or_else(|| get_attr("default_open"));
                     let variant_expr = get_attr("variant");
                     let class_expr = get_attr("class");
                     let idx = *node_counter;
@@ -2567,7 +2608,9 @@ fn expand_node(
                         .or_else(|| get_attr("itemWidth"))
                         .or_else(|| get_attr("slide_width"))
                         .or_else(|| get_attr("slideWidth"));
-                    let dots_expr = get_attr("dots").or_else(|| get_attr("show_dots")).or_else(|| get_attr("showDots"));
+                    let dots_expr = get_attr("dots")
+                        .or_else(|| get_attr("show_dots"))
+                        .or_else(|| get_attr("showDots"));
                     let stack_sides_expr = get_attr("stack_sides")
                         .or_else(|| get_attr("stackSides"))
                         .or_else(|| get_attr("stack_depth"))
@@ -3168,7 +3211,9 @@ fn expand_node(
                         .map(|e| {
                             quote! { rui::components::drawer::coerce_snap_points(#e) }
                         })
-                        .unwrap_or_else(|| quote! { vec![rui::components::DrawerSnapPoint::Fraction(1.0)] });
+                        .unwrap_or_else(
+                            || quote! { vec![rui::components::DrawerSnapPoint::Fraction(1.0)] },
+                        );
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3417,8 +3462,8 @@ fn expand_node(
                 if name_str == "ContextMenuRadioGroup" {
                     let id_expr = get_attr("id");
                     let value_expr = get_attr("value");
-                    let default_expr = get_attr("default_value")
-                        .or_else(|| get_attr("defaultValue"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3511,8 +3556,8 @@ fn expand_node(
                 if name_str == "DropdownMenuRadioGroup" {
                     let id_expr = get_attr("id");
                     let value_expr = get_attr("value");
-                    let default_expr = get_attr("default_value")
-                        .or_else(|| get_attr("defaultValue"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -3605,8 +3650,8 @@ fn expand_node(
                 if name_str == "MenubarRadioGroup" {
                     let id_expr = get_attr("id");
                     let value_expr = get_attr("value");
-                    let default_expr = get_attr("default_value")
-                        .or_else(|| get_attr("defaultValue"));
+                    let default_expr =
+                        get_attr("default_value").or_else(|| get_attr("defaultValue"));
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
                         expanded_children.push(expand_node(
@@ -4653,9 +4698,13 @@ fn expand_node(
                     }
 
                     // Button / Badge / Avatar / Bubble / Input chrome attrs → bind_attr (Solid-style, no rebuild).
-                    if matches!(name_str.as_str(), "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Input")
-                        && matches!(attr_name, "variant" | "disabled" | "invalid" | "size" | "shape" | "align")
-                        && expr_reads_get(value)
+                    if matches!(
+                        name_str.as_str(),
+                        "Button" | "Badge" | "Avatar" | "AvatarBadge" | "Bubble" | "Input"
+                    ) && matches!(
+                        attr_name,
+                        "variant" | "disabled" | "invalid" | "size" | "shape" | "align"
+                    ) && expr_reads_get(value)
                     {
                         let idx = *node_counter;
                         *node_counter += 1;
@@ -4719,7 +4768,9 @@ fn expand_node(
                             });
                             continue;
                         }
-                        if matches!(name_str.as_str(), "Badge" | "AvatarBadge") && attr_name == "variant" {
+                        if matches!(name_str.as_str(), "Badge" | "AvatarBadge")
+                            && attr_name == "variant"
+                        {
                             prop_names.push(attr.clone());
                             prop_values.push(quote! {
                                 Some(rui::core::reactivity::untrack(|| (#value).to_string()).into())
@@ -4815,8 +4866,8 @@ fn expand_node(
 
                     // Textarea: `wrap` = soft|off（单行溢出），不是 flex-wrap；
                     // `rows` = 可视行数，不是 grid-template-rows。
-                    let textarea_own_prop = name_str == "Textarea"
-                        && matches!(attr_name, "wrap" | "rows");
+                    let textarea_own_prop =
+                        name_str == "Textarea" && matches!(attr_name, "wrap" | "rows");
 
                     let is_base = !chart_plot_height
                         && !textarea_own_prop
@@ -5179,7 +5230,8 @@ fn expand_node(
                                 });
                                 continue;
                             }
-                            if matches!(attr_name, "aspect_ratio" | "aspect-ratio" | "aspectRatio") {
+                            if matches!(attr_name, "aspect_ratio" | "aspect-ratio" | "aspectRatio")
+                            {
                                 chrome_binds.push(quote! {
                                     __rui_el = rui::app::reactive::bind_prop(
                                         __rui_el,
@@ -5381,7 +5433,8 @@ fn expand_node(
                                         quote! { #value }
                                     }
                                 }
-                                "box_shadow" | "text_shadow" | "filter" | "border_style" | "outline_style" => {
+                                "box_shadow" | "text_shadow" | "filter" | "border_style"
+                                | "outline_style" => {
                                     quote! { #value }
                                 }
                                 "absolute" | "relative" | "underline" | "box_shadow_inset" => {
@@ -5419,12 +5472,8 @@ fn expand_node(
                                 "ariaInvalid" | "aria_invalid" => {
                                     syn::Ident::new("invalid", attr.span())
                                 }
-                                "passwordToggle" => {
-                                    syn::Ident::new("password_toggle", attr.span())
-                                }
-                                "numberSteppers" => {
-                                    syn::Ident::new("number_steppers", attr.span())
-                                }
+                                "passwordToggle" => syn::Ident::new("password_toggle", attr.span()),
+                                "numberSteppers" => syn::Ident::new("number_steppers", attr.span()),
                                 "maxLength" => syn::Ident::new("max_length", attr.span()),
                                 // Calendar / DatePicker / ColorPicker / Command（Aria + Reader）
                                 "captionLayout" => syn::Ident::new("caption_layout", attr.span()),
@@ -5497,10 +5546,8 @@ fn expand_node(
                             } else {
                                 quote! { Some((#value) as u64) }
                             }
-                        } else if matches!(
-                            final_attr_name.as_str(),
-                            "side_offset" | "align_offset"
-                        ) {
+                        } else if matches!(final_attr_name.as_str(), "side_offset" | "align_offset")
+                        {
                             // Length：`4` ≡ `"4px"`；无单位字符串 = rem。
                             let v = quote_length_f32(value);
                             if expr_reads_get(value) {
@@ -6304,27 +6351,19 @@ fn expand_node(
                     "outline_offset" | "outlineOffset" => {
                         element = quote! { #element.outline_offset(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
-                    "outline" => {
-                        element = quote! { #element.apply_outline_shorthand(#value) }
-                    }
-                    "transition" => {
-                        element = quote! { #element.transition(#value) }
-                    }
+                    "outline" => element = quote! { #element.apply_outline_shorthand(#value) },
+                    "transition" => element = quote! { #element.transition(#value) },
                     "transition_property" => {
                         element = quote! { #element.transition_property(#value) }
                     }
                     "transition_duration" => {
                         element = quote! { #element.transition_duration(#value) }
                     }
-                    "transition_delay" => {
-                        element = quote! { #element.transition_delay(#value) }
-                    }
+                    "transition_delay" => element = quote! { #element.transition_delay(#value) },
                     "transition_timing_function" => {
                         element = quote! { #element.transition_timing_function(#value) }
                     }
-                    "animation" => {
-                        element = quote! { #element.animation(#value) }
-                    }
+                    "animation" => element = quote! { #element.animation(#value) },
                     "animation_name" | "animationName" => {
                         element = quote! { #element.animation_name(#value) }
                     }
@@ -6508,7 +6547,8 @@ fn expand_node(
                         }
                     }
                     "controlled" if name_str == "AnimatedIcon" => {}
-                    "pointer_events" | "pointerEvents" | "pointer-events" if name_str == "AnimatedIcon" => {}
+                    "pointer_events" | "pointerEvents" | "pointer-events"
+                        if name_str == "AnimatedIcon" => {}
                     "text_size" | "font_size" => {
                         element = quote! { #element.text_size(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
@@ -6653,9 +6693,7 @@ fn expand_node(
                     "backdrop_blur" | "backdropBlur" => {
                         element = quote! { #element.backdrop_blur(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
-                    "filter" => {
-                        element = quote! { #element.filter(#value) }
-                    }
+                    "filter" => element = quote! { #element.filter(#value) },
                     "box_shadow_offset_x" | "boxShadowOffsetX" => {
                         element = quote! { #element.box_shadow_offset_x(rui::core::tree::IntoF32::into_f32(#value)) }
                     }
@@ -7114,22 +7152,27 @@ mod rsx_lowering_tests {
 
     #[test]
     fn bare_lit_number_and_bool_attrs_parse() {
-        let s = expand(
-            r#"<HoverCardTrigger openDelay=10 closeDelay=100></HoverCardTrigger>"#,
-        );
+        let s = expand(r#"<HoverCardTrigger openDelay=10 closeDelay=100></HoverCardTrigger>"#);
         assert!(s.contains("as u64"), "{s}");
         let s2 = expand(r#"<HoverCardContent sideOffset=4></HoverCardContent>"#);
         assert!(s2.contains("IntoF32"), "{s2}");
         let s3 = expand(r#"<Label font_weight=600 text_size="0.875"></Label>"#);
-        assert!(s3.contains("font_weight (600)") || s3.contains("font_weight(600)"), "{s3}");
+        assert!(
+            s3.contains("font_weight (600)") || s3.contains("font_weight(600)"),
+            "{s3}"
+        );
         assert!(s3.contains("0.875"), "{s3}");
     }
 
     #[test]
     fn length_attrs_use_into_f32_unitless_use_raw() {
-        let blur = expand(r#"<DialogContent overlayBlur="4px" overlayOpacity=0.5></DialogContent>"#);
+        let blur =
+            expand(r#"<DialogContent overlayBlur="4px" overlayOpacity=0.5></DialogContent>"#);
         assert!(blur.contains("IntoF32"), "{blur}");
-        assert!(blur.contains("IntoF32Raw") || blur.contains("into_f32_raw"), "{blur}");
+        assert!(
+            blur.contains("IntoF32Raw") || blur.contains("into_f32_raw"),
+            "{blur}"
+        );
         let h = expand(r#"<ResizablePanelGroup h="12rem"></ResizablePanelGroup>"#);
         assert!(h.contains("IntoF32"), "{h}");
         let lead = expand(r#"<Box leading=1.5></Box>"#);

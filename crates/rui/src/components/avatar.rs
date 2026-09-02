@@ -72,39 +72,39 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::app::pending_images::{
-    ensure_avatar_src_loaded, texture_key_for_avatar_src, track_src_load_signal, AvatarImageMask,
-    SrcLoadState,
+    AvatarImageMask, SrcLoadState, ensure_avatar_src_loaded, texture_key_for_avatar_src,
+    track_src_load_signal,
 };
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::apply_bound_size;
 use crate::app::reactive::bind_attr;
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
-use crate::components::badge::{apply_badge_variant_paint, BadgeVariant};
+use crate::components::badge::{BadgeVariant, apply_badge_variant_paint};
 use crate::components::base::BaseComponentBuilder;
 use crate::components::internal::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence, FloatingMotionKind,
+    FloatingMotionKind, apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
 };
 use crate::core::reactivity::{
-    create_context, create_effect, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    Context, Signal, create_context, create_effect, provide_context, use_context, use_signal,
+    with_child_owner,
 };
-use crate::core::tree::{parse_color, Element, IntoF32, LayoutStatus};
+use crate::core::tree::{Element, IntoF32, LayoutStatus, parse_color};
+use crate::primitives::r#box::{r#box, hstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box};
 use crate::style::{parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, PopupPlacement,
     apply_stored_floating_place, mark_floating_with_gap, mark_portal, mount_anchored_overlay,
-    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY,
 };
-use crate::utils::text_node::build_named_icon_text_node;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use crate::utils::take_packed;
+use crate::utils::text_node::build_named_icon_text_node;
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -536,7 +536,10 @@ fn build_avatar_texture_layer(src: &str, slot: Option<&str>) -> Element {
     let ctx = require_avatar("AvatarImage");
     let mask = ctx.shape.image_mask();
     let mut el = apply_layer_shape(fill_avatar_layer(r#box().into()), ctx.shape);
-    el = el.z_index(if slot == Some(SLOT_IMAGE) { 1 } else { 0 });
+    // Paint order is fallback → image → badge (`order_avatar_children`). Do not set
+    // z-index: any non-zero child z opts the avatar parent into global
+    // `page_stack_bands` (CarouselStack path) and desyncs gallery labels from
+    // their rects after scroll — same trap as Chart grid/tooltip z.
     if let Some(slot) = slot {
         el.set_attr(ATTR_SLOT, slot);
     }
@@ -622,11 +625,7 @@ fn build_avatar_badge(
         .bottom(0.0)
         .rounded_full()
         .into();
-    el = el
-        .display_flex()
-        .items_center()
-        .justify_center()
-        .z_index(10);
+    el = el.display_flex().items_center().justify_center();
     el.set_attr(ATTR_SLOT, SLOT_BADGE);
     for mut c in children {
         apply_badge_metrics(&mut c, ctx.size);
@@ -643,8 +642,10 @@ fn build_avatar_badge(
 }
 
 fn apply_group_ring(mut el: Element) -> Element {
-    if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR) {
+    let slot = el.attrs.get(ATTR_SLOT).map(|s| s.as_str());
+    if matches!(slot, Some(SLOT_AVATAR) | Some(SLOT_GROUP_COUNT)) {
         let ring = parse_color("background");
+        // Ring after overflow so the 2px stroke is not clipped (same order as face roots).
         el = el.border(ring, 2.0);
     }
     el
@@ -726,17 +727,13 @@ fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
 }
 
 fn rebuild_face(spec: &AvatarFaceSpec) -> Element {
-    let mut b = avatar()
-        .size(spec.size.as_str())
-        .shape(spec.shape.as_str());
+    let mut b = avatar().size(spec.size.as_str()).shape(spec.shape.as_str());
     if let Some(src) = spec.src.as_deref().filter(|s| !s.is_empty()) {
         b = b.image(src);
     }
     match spec.fallback.as_deref().filter(|s| !s.is_empty()) {
         Some(fb) => b.fallback(fb).into(),
-        None if spec.src.as_deref().filter(|s| !s.is_empty()).is_none() => {
-            b.fallback("?").into()
-        }
+        None if spec.src.as_deref().filter(|s| !s.is_empty()).is_none() => b.fallback("?").into(),
         None => b.into(),
     }
 }
@@ -792,6 +789,9 @@ struct AvatarGroupEntry {
 thread_local! {
     static AVATAR_GROUPS: RefCell<HashMap<String, AvatarGroupEntry>> =
         RefCell::new(HashMap::new());
+    /// Smooth-scroll catch-up / fling frames: skip hover-open so +N does not
+    /// close→open every residual offset tick under a still pointer.
+    static EXPAND_HOVER_FROZEN: Cell<bool> = const { Cell::new(false) };
 }
 
 static AVATAR_GROUP_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -830,6 +830,15 @@ fn unregister_avatar_group(id: &str) {
 }
 
 fn open_avatar_group_expand(id: &str) {
+    open_avatar_group_expand_inner(id, false);
+}
+
+fn open_avatar_group_expand_from_click(id: &str) {
+    open_avatar_group_expand_inner(id, true);
+}
+
+fn open_avatar_group_expand_inner(id: &str, force: bool) {
+    let frozen = EXPAND_HOVER_FROZEN.get();
     let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) = AVATAR_GROUPS.with(|m| {
         let map = m.borrow();
         let mut others = Vec::new();
@@ -851,10 +860,45 @@ fn open_avatar_group_expand(id: &str) {
     });
     // Never try_set while AVATAR_GROUPS is borrowed — reactive rebuild re-enters the map.
     if let Some(s) = self_exp {
-        s.try_set(true);
+        if force || !frozen {
+            s.try_set(true);
+        }
     }
     for o in others {
         o.try_set(false);
+    }
+}
+
+fn reopen_hovered_avatar_group_expands() -> bool {
+    let ids: Vec<String> = AVATAR_GROUPS.with(|m| {
+        m.borrow()
+            .iter()
+            .filter(|(_, e)| e.group_hover.get() || e.panel_hover.get())
+            .map(|(k, _)| k.clone())
+            .collect()
+    });
+    if ids.is_empty() {
+        return false;
+    }
+    let mut any = false;
+    for id in ids {
+        if let Some(s) = AVATAR_GROUPS.with(|m| m.borrow().get(&id).map(|e| e.expanded)) {
+            if s.try_set(true) {
+                any = true;
+            }
+        }
+    }
+    any
+}
+
+/// Wheel / smooth-scroll catch-up: block hover-open; on thaw, reopen if the pointer
+/// is still on +N / the panel (one open, not a close/open per residual frame).
+pub(crate) fn set_avatar_group_expand_hover_frozen(frozen: bool) -> bool {
+    let was = EXPAND_HOVER_FROZEN.replace(frozen);
+    if was && !frozen {
+        reopen_hovered_avatar_group_expands()
+    } else {
+        false
     }
 }
 
@@ -904,6 +948,9 @@ pub(crate) fn flush_avatar_group_hover_dismiss() -> bool {
 
 /// Close every expanded avatar group when a scroll ancestor moves (fixed cover panels
 /// otherwise drift from trigger/text until the next full placement sync).
+///
+/// Hover flags stay: residual smooth-scroll frames would otherwise leave/enter +N
+/// and flicker the panel. Hover-open is gated by [`set_avatar_group_expand_hover_frozen`].
 pub(crate) fn dismiss_avatar_group_expands_on_scroll() -> bool {
     let to_close: Vec<Signal<bool>> = AVATAR_GROUPS.with(|m| {
         let mut out = Vec::new();
@@ -911,9 +958,6 @@ pub(crate) fn dismiss_avatar_group_expands_on_scroll() -> bool {
             if !e.expanded.peek() {
                 continue;
             }
-            e.hover_armed.set(false);
-            e.group_hover.set(false);
-            e.panel_hover.set(false);
             out.push(e.expanded);
         }
         out
@@ -979,7 +1023,9 @@ fn collect_count_faces(el: &Element, faces: &mut Vec<AvatarFaceSpec>) {
     }
 }
 
-fn split_group_children(children: Vec<Element>) -> (Vec<Element>, Option<Element>, Vec<AvatarFaceSpec>, usize) {
+fn split_group_children(
+    children: Vec<Element>,
+) -> (Vec<Element>, Option<Element>, Vec<AvatarFaceSpec>, usize) {
     let mut avatars = Vec::new();
     let mut count = None;
     let mut faces = Vec::new();
@@ -1044,7 +1090,7 @@ fn build_avatar_group(
         let click_id = group_id.clone();
         let hover_id = group_id.clone();
         count = interactive(count)
-            .on_click(move || open_avatar_group_expand(&click_id))
+            .on_click(move || open_avatar_group_expand_from_click(&click_id))
             .on_hover(move |h| {
                 note_avatar_group_hover(&hover_id, false, h);
                 if h {
@@ -1052,6 +1098,7 @@ fn build_avatar_group(
                 }
             })
             .into();
+        count = apply_group_ring(count);
         if avatar_n > 0 {
             count = count.ml(GROUP_OVERLAP);
         }
@@ -1160,30 +1207,38 @@ fn build_avatar_group_count(
     base: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
 ) -> Element {
     let dim = size.box_dim();
-    let ring = parse_color("background");
     let muted = parse_color("muted");
     let fg = parse_text_color("muted-foreground");
-    let mut el: Element = r#box()
-        .relative(true)
+    // Same shell as `build_avatar_root`: overflow-hidden circle + 2px background ring.
+    // Face fill lives on an inner layer (like AvatarFallback) so the ring sits *outside*
+    // the muted fill and reads as the same inner gray stroke as "C".
+    let mut el: Element = r#box().into();
+    el = el
+        .relative()
         .flex_shrink(0.0)
-        .rounded_full()
-        .bg(muted)
-        .border(ring, 2.0)
+        .overflow("hidden")
         .w(dim)
         .h(dim)
         .min_w(dim)
         .min_h(dim)
-        .into();
-    el = el
+        .max_w(dim)
+        .max_h(dim);
+    apply_root_shape(&mut el, AvatarShape::Circle);
+    el.set_attr(ATTR_SLOT, SLOT_GROUP_COUNT);
+    el.set_attr(ATTR_SIZE, size.as_str());
+    el = apply_group_ring(el);
+
+    let mut face = apply_layer_shape(fill_avatar_layer(r#box().into()), AvatarShape::Circle);
+    face = face
+        .bg(muted)
         .display_flex()
         .items_center()
-        .justify_center()
-        .overflow("hidden");
-    el.set_attr(ATTR_SLOT, SLOT_GROUP_COUNT);
+        .justify_center();
+    face.set_attr("data-avatar-count-face", "1");
+
+    let mut overflow_faces = Vec::new();
     for mut c in children {
         if c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_AVATAR) {
-            // Keep overflow faces in the tree for expand specs, but out of flex flow so
-            // they cannot shove the +N label sideways or inflate the capsule width.
             c = c
                 .absolute()
                 .left(0.0)
@@ -1197,7 +1252,7 @@ fn build_avatar_group_count(
                 .opacity(0.0)
                 .overflow("hidden")
                 .pointer_events_box_none();
-            el = el.child(c);
+            overflow_faces.push(c);
             continue;
         }
         if c.text.is_some() {
@@ -1210,13 +1265,17 @@ fn build_avatar_group_count(
                     ..Default::default()
                 },
             );
-            el = el.child(node);
+            face = face.child(node);
         } else {
             if c.text_style.font_family.as_deref() == Some("lucide") && c.text_style.size <= 1.0 {
                 c.text_style.size = IntoF32::into_f32("1rem");
             }
-            el = el.child(c);
+            face = face.child(c);
         }
+    }
+    el = el.child(face);
+    for c in overflow_faces {
+        el = el.child(c);
     }
     if let Some(b) = base {
         let base = BaseComponentBuilder::new(el);
@@ -1617,6 +1676,26 @@ mod tests {
             el.attrs.get(ATTR_SLOT).map(|s| s.as_str()),
             Some(SLOT_GROUP_COUNT)
         );
+        assert!(
+            (el.style.border_width - 2.0).abs() < 0.01,
+            "+N shell must use the same 2px group ring as faces, got {}",
+            el.style.border_width
+        );
+        let face = el
+            .children
+            .iter()
+            .find(|c| c.attrs.get("data-avatar-count-face").map(|s| s.as_str()) == Some("1"))
+            .expect("count inner face");
+        let muted = parse_color("muted");
+        assert!(
+            (face.style.bg_color[0] - muted[0]).abs() < 0.02
+                && (face.style.bg_color[1] - muted[1]).abs() < 0.02,
+            "inner face must carry muted fill so the ring reads as an inner stroke"
+        );
+        assert!(
+            el.style.bg_color[3] < 0.01,
+            "count shell must not fill (fill belongs on the inner face, like AvatarFallback)"
+        );
     }
 
     fn collect_texts(el: &Element, out: &mut Vec<String>) {
@@ -1914,6 +1993,147 @@ mod tests {
     }
 
     #[test]
+    fn avatar_group_residual_scroll_does_not_flicker_expand() {
+        use crate::core::reactivity::create_root;
+
+        let _ = super::set_avatar_group_expand_hover_frozen(false);
+        let (_owner, _group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some(Element::new().text("+1")),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        let group_id = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .keys()
+                .next()
+                .cloned()
+                .expect("avatar group registry")
+        });
+        note_avatar_group_hover(&group_id, false, true);
+        open_avatar_group_expand(&group_id);
+        AVATAR_GROUPS.with(|m| {
+            assert!(m.borrow().get(&group_id).unwrap().expanded.peek());
+        });
+
+        // Residual catch-up frames: close once, hover-enter must not reopen until thaw.
+        assert!(!super::set_avatar_group_expand_hover_frozen(true));
+        for _ in 0..4 {
+            super::dismiss_avatar_group_expands_on_scroll();
+            note_avatar_group_hover(&group_id, false, true);
+            open_avatar_group_expand(&group_id);
+            let now_open =
+                AVATAR_GROUPS.with(|m| m.borrow().get(&group_id).unwrap().expanded.peek());
+            assert!(
+                !now_open,
+                "hover must not reopen expand while smooth-scroll is catching up"
+            );
+        }
+
+        assert!(super::set_avatar_group_expand_hover_frozen(false));
+        AVATAR_GROUPS.with(|m| {
+            assert!(
+                m.borrow().get(&group_id).unwrap().expanded.peek(),
+                "pointer still on +N after settle: open once"
+            );
+        });
+        let _ = super::set_avatar_group_expand_hover_frozen(false);
+    }
+
+    #[test]
+    fn avatar_group_hover_opens_after_idle_unfreeze() {
+        use crate::core::reactivity::create_root;
+
+        let _ = super::set_avatar_group_expand_hover_frozen(false);
+        let (_owner, _group) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some(Element::new().text("+1")),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        let group_id = AVATAR_GROUPS.with(|m| {
+            m.borrow()
+                .keys()
+                .next()
+                .cloned()
+                .expect("avatar group registry")
+        });
+        // Residual freeze must not stay on: idle hover/click still open.
+        assert!(!super::set_avatar_group_expand_hover_frozen(true));
+        assert!(!super::set_avatar_group_expand_hover_frozen(false));
+        note_avatar_group_hover(&group_id, false, true);
+        open_avatar_group_expand(&group_id);
+        AVATAR_GROUPS.with(|m| {
+            assert!(
+                m.borrow().get(&group_id).unwrap().expanded.peek(),
+                "+N hover must open once freeze is cleared"
+            );
+        });
+        let _ = super::set_avatar_group_expand_hover_frozen(false);
+    }
+
+    #[test]
+    fn avatar_group_count_keeps_ring_after_interactive_wrap() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::IntoElementList;
+
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+
+        let (_owner, root) = create_root(|| {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag = frag.children(vec![
+                avatar_with_fallback("A"),
+                AvatarGroupCount(AvatarGroupCountProps {
+                    children: Some(Element::new().text("+1")),
+                    ..Default::default()
+                }),
+            ]);
+            AvatarGroup(AvatarGroupProps {
+                children: Some(frag),
+                ..Default::default()
+            })
+        });
+        let kids = root.into_element_list();
+        let count = find_slot(&kids[0], SLOT_GROUP_COUNT).expect("count in group row");
+        let face = find_slot(&kids[0], SLOT_AVATAR).expect("face in group row");
+        assert!(
+            (count.style.border_width - 2.0).abs() < 0.01,
+            "wrapped +N must keep 2px ring, got {}",
+            count.style.border_width
+        );
+        assert!(
+            (face.style.border_width - count.style.border_width).abs() < 0.01,
+            "face ring {} vs count ring {}",
+            face.style.border_width,
+            count.style.border_width
+        );
+    }
+
+    #[test]
     fn avatar_image_load_failure_falls_back() {
         use crate::core::reactivity::create_root;
 
@@ -2036,6 +2256,97 @@ mod tests {
             el.children.iter().any(find_load_layer)
         }
         assert!(find_load_layer(fb), "fallback image layer must exist");
+    }
+
+    #[test]
+    fn avatar_layers_paint_by_tree_order_without_z_index() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_owner, face) = create_root(|| {
+            avatar_scope("", AvatarSize::Lg, AvatarShape::Circle, None, || {
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![
+                    AvatarImage(AvatarImageProps {
+                        id: String::new(),
+                        src: Some(
+                            "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>".into(),
+                        ),
+                        alt: Some(String::new()),
+                        base: None,
+                        children: None,
+                        ..Default::default()
+                    }),
+                    AvatarFallback(AvatarFallbackProps {
+                        id: String::new(),
+                        children: Some(Element::new().text("JD")),
+                        base: None,
+                        ..Default::default()
+                    }),
+                    build_avatar_badge(BadgeVariant::Default, Vec::new(), None),
+                ])
+            })
+        });
+        let slots: Vec<&str> = face
+            .children
+            .iter()
+            .filter_map(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()))
+            .collect();
+        assert_eq!(
+            slots,
+            vec![SLOT_FALLBACK, SLOT_IMAGE, SLOT_BADGE],
+            "image must paint after fallback, badge last — no z-index needed"
+        );
+        for c in &face.children {
+            assert_eq!(
+                c.style.z_index,
+                0,
+                "slot {:?} z-index would enable gallery page_stack_bands",
+                c.attrs.get(ATTR_SLOT)
+            );
+        }
+
+        let mut col = Element::new().flex_col().w(400.0).gap(8.0);
+        col = col.child(Element::new().text("Fallback Image"));
+        col = col.child(face);
+        col = col.child(Element::new().text("Sizes"));
+        let mut root = Element::new()
+            .w(400.0)
+            .h(280.0)
+            .overflow_y("auto")
+            .child(col);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 280.0, [-1.0, -1.0]);
+        assert!(
+            result.overlay_split.page_stack_bands.is_empty(),
+            "avatar image/badge must not switch the page onto page_stack_bands, got {}",
+            result.overlay_split.page_stack_bands.len()
+        );
+        root.scroll_offset = [0.0, 40.0];
+        let scrolled =
+            tree.build_and_layout_fast(&mut root, 400.0, 280.0, [-1.0, -1.0], true, false);
+        assert!(
+            scrolled.overlay_split.page_stack_bands.is_empty(),
+            "scroll_only collect must not grow page_stack_bands from avatars, got {}",
+            scrolled.overlay_split.page_stack_bands.len()
+        );
+        let y0 = result
+            .text_nodes
+            .iter()
+            .find(|n| n.text.contains("Sizes"))
+            .map(|n| n.y);
+        let y1 = scrolled
+            .text_nodes
+            .iter()
+            .find(|n| n.text.contains("Sizes"))
+            .map(|n| n.y);
+        if let (Some(before), Some(after)) = (y0, y1) {
+            assert!(
+                (after - (before - 40.0)).abs() < 0.5,
+                "label glyphon y must track scroll (before={before:.2} after={after:.2})"
+            );
+        }
     }
 
     #[test]

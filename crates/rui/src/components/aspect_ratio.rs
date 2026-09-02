@@ -30,7 +30,7 @@
 //! - 容器设 `w`（或父级定宽）且另一轴为 auto 时，比例才会约束盒子（MDN）。
 //! - 子节点宜 `w/h=100%`（或 absolute 铺满）以填满裁剪区；组件会把子节点铺满。
 
-use crate::core::tree::{parse_css_aspect_ratio, Element, IntoAspectRatioValue};
+use crate::core::tree::{Element, IntoAspectRatioValue, parse_css_aspect_ratio};
 use crate::primitives::r#box::r#box;
 use crate::utils::take_packed;
 use rui_macros::component;
@@ -70,11 +70,7 @@ impl From<&str> for AspectRatioValue {
     fn from(s: &str) -> Self {
         Self(parse_css_aspect_ratio(s).or_else(|| {
             // 缺省 prop 空串 → 1:1；显式 "auto" 已由 parse 得 None。
-            if s.trim().is_empty() {
-                Some(1.0)
-            } else {
-                None
-            }
+            if s.trim().is_empty() { Some(1.0) } else { None }
         }))
     }
 }

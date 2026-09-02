@@ -1,21 +1,22 @@
 //! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
 use crate::components::input::{
-    effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
-    input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
-    input_number_step_button, input_number_steppers_column, input_overwrite_signal_key, input_password_reveal_signal_key,
-    input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
-    input_selection_signal_key, input_text_template_id, input_type_signal_key,
-    input_value_signal_key, lucide_named, map_byte_index_to_masked, map_byte_range_to_masked,
-    mask_password, resolve_placeholder, set_adornment_visible, InputType,
+    InputType, effective_invalid, input_adornment_button, input_caret_signal_key,
+    input_clear_template_id, input_ime_anchor_signal_key, input_number_dec_template_id,
+    input_number_inc_template_id, input_number_step_button, input_number_steppers_column,
+    input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_sel_signal_key,
+    input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key,
+    input_text_template_id, input_type_signal_key, input_value_signal_key, lucide_named,
+    map_byte_index_to_masked, map_byte_range_to_masked, mask_password, resolve_placeholder,
+    set_adornment_visible,
 };
-use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
+use crate::core::reactivity::{Signal, use_signal};
+use crate::core::tree::{Element, TextEditPaintSync, parse_color, parse_text_color};
+use crate::primitives::r#box::{BoxBuilder, r#box, hstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, BoxBuilder};
 use crate::style::InputCaretDraw;
 use crate::utils::text_field::{bind_controlled_value, focus_id_for_text_edit};
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 pub(crate) struct TextEditBuildParams {
     pub field_id: String,
     pub placeholder: String,
@@ -295,8 +296,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             // Grow with the longest hard line so overflow-x can scroll (never clip).
             let prepared = crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
             let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
-            let content_w = ink_w
-                + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
+            let content_w = ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
             text_el = text_el.w(content_w).min_w("100%");
         }
     } else {
@@ -424,7 +424,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let rest = scroll_rest
             .as_deref()
             .expect("multiline text edit always has scroll_rest");
-        use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
+        use crate::components::scrollbar::{ScrollbarOrientation, scrollbar};
         use crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key;
         use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
             "inside".to_string()

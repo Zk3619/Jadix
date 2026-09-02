@@ -13,6 +13,7 @@
 //!     │           └── SidebarMenu
 //!     │               └── SidebarMenuItem
 //!     │                   └── SidebarMenuButton
+//!     │           └── TreeView  chrome="sidebar"  // 树形导航（可选）
 //!     ├── SidebarSeparator   // 可选；由调用方在 Header / Content / Footer 之间手动插入
 //!     └── SidebarFooter
 //! SidebarInset                 // 主内容列（flex-1 · min-w-0）
@@ -60,6 +61,7 @@
 //!     .w("13rem")
 //!     .header(label("").text("RUI Gallery"))
 //!     .item(sidebar_menu_button("basics").text("Basics").is_active(true))
+//!     .tree(sidebar_tree("files").roots([TreeNode { … }]))
 //!     .footer(label("").text("cargo run -p gallery"))
 //! ```
 //!
@@ -73,20 +75,21 @@ use rui_macros::component;
 
 use crate::components::button::button;
 use crate::components::input::input;
+use crate::components::tree_view::{TreeViewBuilder, TreeViewChrome, TreeViewVariant, tree_view};
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, Context, Signal,
+    Context, Signal, create_context, provide_context, use_context, use_signal,
 };
-use crate::core::scroll_viewport::{activate_scroll_viewport, DEFAULT_SCROLL_BEHAVIOR};
-use crate::core::tree::{parse_text_color, Element, Handler, IntoCssDim, LayoutStatus};
+use crate::core::scroll_viewport::{DEFAULT_SCROLL_BEHAVIOR, activate_scroll_viewport};
+use crate::core::tree::{Element, Handler, IntoCssDim, LayoutStatus, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, with_class_list};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::roving::{FocusRovingAxis, attach_focus_roving};
 use crate::utils::take_packed;
+use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_SIDEBAR: &str = "data-sidebar";
@@ -404,9 +407,8 @@ pub fn sidebar_provider_scope(
     body: impl FnOnce() -> Element,
 ) -> Element {
     let id = resolve_instance_id(id, "sidebar-provider");
-    let open = open.unwrap_or_else(|| {
-        use_signal(format!("{id}__open").as_str(), move || default_open)
-    });
+    let open =
+        open.unwrap_or_else(|| use_signal(format!("{id}__open").as_str(), move || default_open));
     let variant = use_signal(format!("{id}__variant").as_str(), || "sidebar".to_string());
     if let Some(v) = shell_variant.filter(|s| !s.trim().is_empty()) {
         let _ = variant.try_set_silent(v.trim().to_string());
@@ -529,12 +531,7 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
         .unwrap_or_default()
 }
 
-fn paint_sidebar_menu_button_fg(
-    el: &mut Element,
-    fg: [u8; 4],
-    weight: u16,
-    size_px: f32,
-) {
+fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], weight: u16, size_px: f32) {
     if el.text.is_some() {
         el.text_style.color = fg;
         // Stamp inherit-lock attrs. Chrome writes color/weight/size without going through
@@ -655,11 +652,7 @@ pub(crate) fn sync_sidebar_menu_button_paint_subtree(
             .map(|fid| {
                 let key = format!("{fid}_hover");
                 let sig = use_signal(key.as_str(), || false);
-                if sig.is_alive() {
-                    sig.peek()
-                } else {
-                    false
-                }
+                if sig.is_alive() { sig.peek() } else { false }
             })
             .unwrap_or(false);
         *impact = impact.merge(apply_sidebar_menu_button_chrome(
@@ -764,11 +757,7 @@ fn wrap_sidebar_inner(kids: Vec<Element>, variant: SidebarVariant, _side: Sideba
         inner = inner.child(k);
     }
     let mut el: Element = inner.into();
-    el = el
-        .h("100%")
-        .w("100%")
-        .min_h(0.0)
-        .bg(parse_color("sidebar"));
+    el = el.h("100%").w("100%").min_h(0.0).bg(parse_color("sidebar"));
     // Header / Footer sit *outside* `SidebarContent`'s scroll viewport. A column-wide
     // `overflow-y: hidden` makes their glyphs share that clip. On the first frame of any
     // overlay animation (toast / dropdown / …) a full Taffy rebuild can momentarily size
@@ -792,7 +781,12 @@ fn wrap_sidebar_inner(kids: Vec<Element>, variant: SidebarVariant, _side: Sideba
     el
 }
 
-fn slot_children(class: Option<String>, slot: &str, sidebar_part: &str, kids: Vec<Element>) -> Element {
+fn slot_children(
+    class: Option<String>,
+    slot: &str,
+    sidebar_part: &str,
+    kids: Vec<Element>,
+) -> Element {
     let mut col = vstack().w("100%").flex_col();
     for k in kids {
         col = col.child(k);
@@ -856,10 +850,7 @@ pub fn Sidebar(
     let width = w
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| SIDEBAR_WIDTH_DEFAULT.to_string());
-    let side = side
-        .as_deref()
-        .map(SidebarSide::from)
-        .unwrap_or_default();
+    let side = side.as_deref().map(SidebarSide::from).unwrap_or_default();
     let variant = variant
         .as_deref()
         .map(SidebarVariant::from)
@@ -1124,7 +1115,11 @@ pub fn SidebarInset(
 /// 开合触发器（ghost · icon-sm · PanelLeft）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarTrigger(id: String, class: Option<String>, mut on_click: Option<Handler<()>>) -> Element {
+pub fn SidebarTrigger(
+    id: String,
+    class: Option<String>,
+    mut on_click: Option<Handler<()>>,
+) -> Element {
     let _ctx = use_sidebar();
     let glyph = lucide_glyph("panel-left").unwrap_or_else(|| "☰".into());
     let icon = build_icon_text_node(glyph)
@@ -1159,11 +1154,7 @@ pub fn SidebarTrigger(id: String, class: Option<String>, mut on_click: Option<Ha
 /// 侧栏搜索框：`h-8 bg-background shadow-none`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn SidebarInput(
-    id: String,
-    class: Option<String>,
-    placeholder: Option<String>,
-) -> Element {
+pub fn SidebarInput(id: String, class: Option<String>, placeholder: Option<String>) -> Element {
     let mut field = input(if id.trim().is_empty() {
         "sidebar-input"
     } else {
@@ -1313,6 +1304,13 @@ impl From<SidebarMenuButtonBuilder> for Element {
     }
 }
 
+/// 侧栏树：`collapsible` + [`TreeViewChrome::Sidebar`]，高度交给 [`SidebarContent`] 滚动。
+pub fn sidebar_tree(id: impl Into<String>) -> TreeViewBuilder {
+    tree_view(id)
+        .variant(TreeViewVariant::Collapsible)
+        .chrome(TreeViewChrome::Sidebar)
+}
+
 pub struct SidebarBuilder {
     id: String,
     width: String,
@@ -1323,6 +1321,7 @@ pub struct SidebarBuilder {
     header: Option<Element>,
     groups: Vec<Element>,
     items: Vec<Element>,
+    trees: Vec<Element>,
     footer: Option<Element>,
     provider: bool,
     default_open: bool,
@@ -1341,6 +1340,7 @@ pub fn sidebar(id: impl Into<String>) -> SidebarBuilder {
         header: None,
         groups: Vec::new(),
         items: Vec::new(),
+        trees: Vec::new(),
         footer: None,
         provider: false,
         default_open: true,
@@ -1385,6 +1385,10 @@ impl SidebarBuilder {
         self.items.extend(els);
         self
     }
+    pub fn tree(mut self, el: impl Into<Element>) -> Self {
+        self.trees.push(el.into());
+        self
+    }
     pub fn footer(mut self, el: impl Into<Element>) -> Self {
         self.footer = Some(el.into());
         self
@@ -1415,6 +1419,7 @@ impl From<SidebarBuilder> for Element {
             header,
             groups,
             items,
+            trees,
             footer,
             provider,
             default_open,
@@ -1448,6 +1453,7 @@ impl From<SidebarBuilder> for Element {
                 base: None,
             }));
         }
+        content_kids.extend(trees);
 
         if !content_kids.is_empty() {
             let mut frag = Element::new();
@@ -1508,10 +1514,7 @@ mod tests {
     #[test]
     fn sidebar_default_width_is_16rem() {
         let el: Element = sidebar("t").into();
-        assert_eq!(
-            el.attrs.get(ATTR_SLOT).map(String::as_str),
-            Some(SLOT_ROOT)
-        );
+        assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(el.template_id.as_deref(), Some("t"));
     }
 
@@ -1549,6 +1552,31 @@ mod tests {
         assert!(find_slot(&el, SLOT_CONTENT).is_some());
         assert!(find_slot(&el, SLOT_MENU).is_some());
         assert!(find_slot(&el, SLOT_MENU_BUTTON).is_some());
+    }
+
+    #[test]
+    fn builder_tree_hosts_tree_view_in_content() {
+        use crate::components::tree_view::TreeNode;
+        use crate::core::reactivity::create_root;
+
+        let (_o, el): (_, Element) = create_root(|| {
+            sidebar("shell-tree")
+                .tree(sidebar_tree("nav-tree").roots(vec![TreeNode {
+                    id: "a".into(),
+                    label: "A".into(),
+                    children: vec![],
+                }]))
+                .into()
+        });
+        fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_slot(c, slot))
+        }
+        assert!(find_slot(&el, SLOT_CONTENT).is_some());
+        assert!(find_slot(&el, "tree-view").is_some());
+        assert!(find_slot(&el, SLOT_MENU).is_none());
     }
 
     #[test]
@@ -1620,10 +1648,7 @@ mod tests {
             children: Some(Element::from("RUI Gallery")),
             base: None,
         });
-        assert_eq!(
-            el.text_style.color,
-            parse_text_color("sidebar-foreground")
-        );
+        assert_eq!(el.text_style.color, parse_text_color("sidebar-foreground"));
         assert!(el.attrs.contains_key("text_color"));
     }
 
@@ -1701,9 +1726,7 @@ mod tests {
 
     #[test]
     fn floating_inner_still_clips_to_rounded_shell() {
-        let el: Element = sidebar("float")
-            .variant(SidebarVariant::Floating)
-            .into();
+        let el: Element = sidebar("float").variant(SidebarVariant::Floating).into();
         fn find_inner<'a>(el: &'a Element) -> Option<&'a Element> {
             if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_INNER) {
                 return Some(el);
@@ -1742,7 +1765,10 @@ mod tests {
         let el = sidebar_horizontal_separator_element();
         let pad_l = lp_length_px(el.style.padding.left).unwrap_or(0.0);
         let pad_r = lp_length_px(el.style.padding.right).unwrap_or(0.0);
-        assert!(pad_l > 1.0 && pad_r > 1.0, "separator shell must px-inset from sidebar edges");
+        assert!(
+            pad_l > 1.0 && pad_r > 1.0,
+            "separator shell must px-inset from sidebar edges"
+        );
         assert_eq!(el.children.len(), 1);
         assert!(
             dim_length_px(el.children[0].style.size.height).unwrap_or(0.0) <= 1.5,
@@ -1752,34 +1778,24 @@ mod tests {
 
     #[test]
     fn provider_shell_lays_out_sidebar_and_inset_in_row() {
-        let el = sidebar_provider_scope(
-            "prov",
-            None,
-            true,
-            None,
-            None,
-            move || {
-                let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
-                frag.children(vec![
-                    sidebar("nav").into(),
-                    SidebarInset(SidebarInsetProps {
-                        variant: None,
-                        class: None,
-                        children: None,
-                        base: None,
-                    }),
-                ])
-            },
-        );
+        let el = sidebar_provider_scope("prov", None, true, None, None, move || {
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(vec![
+                sidebar("nav").into(),
+                SidebarInset(SidebarInsetProps {
+                    variant: None,
+                    class: None,
+                    children: None,
+                    base: None,
+                }),
+            ])
+        });
         assert_eq!(
             el.attrs.get(ATTR_SLOT).map(String::as_str),
             Some(SLOT_PROVIDER)
         );
-        assert_eq!(
-            el.style.flex_direction,
-            taffy::style::FlexDirection::Row
-        );
+        assert_eq!(el.style.flex_direction, taffy::style::FlexDirection::Row);
         assert_eq!(el.children.len(), 2);
         assert_eq!(
             el.children[0].attrs.get(ATTR_SLOT).map(String::as_str),
@@ -1793,13 +1809,8 @@ mod tests {
 
     #[test]
     fn provider_wires_open_and_scroll_viewport_on_children() {
-        let el = sidebar_provider_scope(
-            "prov-scroll",
-            None,
-            true,
-            Some("inset"),
-            None,
-            move || {
+        let el =
+            sidebar_provider_scope("prov-scroll", None, true, Some("inset"), None, move || {
                 let mut frag = Element::new();
                 frag.set_attr("rui_fragment", "1");
                 frag.children(vec![
@@ -1828,8 +1839,7 @@ mod tests {
                         base: None,
                     }),
                 ])
-            },
-        );
+            });
         fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
             if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
                 return Some(el);
