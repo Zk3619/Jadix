@@ -202,7 +202,7 @@ pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgb
 pub use app::damage::{
     full_clear_frame_count, partial_load_frame_count, reset_frame_policy_counters,
 };
-pub use app::pointer_events::{MouseEvent, PointerEvent};
+pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };

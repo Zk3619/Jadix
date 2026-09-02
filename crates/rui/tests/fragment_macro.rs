@@ -34,9 +34,9 @@ fn product_component_multi_child_packs_as_fragment_not_vstack() {
         "Search caption must be unpacked onto the button"
     );
     assert!(
-        el.children.iter().any(|c| {
-            c.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd")
-        }),
+        el.children
+            .iter()
+            .any(|c| { c.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd") }),
         "Kbd shell must remain intact"
     );
     let search = el
