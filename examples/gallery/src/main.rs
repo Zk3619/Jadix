@@ -713,6 +713,160 @@ fn ItemShowcase() -> rui::core::tree::Element {
     }
 }
 
+fn AttachmentShowcase() -> rui::core::tree::Element {
+    let att_state = use_signal("gal_attachment_state", || "done".to_string());
+    let att_state_btn = att_state;
+    let att_state_live = att_state;
+    ui! {
+        <MyCard title="1c-k) Attachment（ShadCN file chip）">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "Dual style + semantic states (info/success/warning/destructive; error≡destructive) via semantic_chrome — same tone keys as Alert. Uploading/processing use loader-circle + animate-spin (1g). state bind repaints root + slots."
+                </Label>
+                <AttachmentGroup>
+                    <Attachment state="done" size="default" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="file-text" size="0.875rem" color="foreground" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"quarterly-report.pdf"</AttachmentTitle>
+                            <AttachmentDescription>"2.4 MB · Uploaded"</AttachmentDescription>
+                        </AttachmentContent>
+                        <AttachmentActions>
+                            <AttachmentAction id="gal-att-rm">
+                                <Icon name="x" size="0.75rem" />
+                            </AttachmentAction>
+                        </AttachmentActions>
+                    </Attachment>
+                    <Attachment state="uploading" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="loader-circle" size="0.875rem" class="animate-spin" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"photo.png"</AttachmentTitle>
+                            <AttachmentDescription>"Uploading · 64%"</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                    <Attachment state="processing" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="loader-circle" size="0.875rem" class="animate-spin" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"sales-dashboard.pdf"</AttachmentTitle>
+                            <AttachmentDescription>"Processing…"</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                    <Attachment state="destructive" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="file-warning" size="0.875rem" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"archive.zip"</AttachmentTitle>
+                            <AttachmentDescription>"Upload failed — tap to retry"</AttachmentDescription>
+                        </AttachmentContent>
+                        <AttachmentTrigger id="gal-att-retry" />
+                    </Attachment>
+                    <Attachment state="success" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="circle-check" size="0.875rem" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"invoice.pdf"</AttachmentTitle>
+                            <AttachmentDescription>"Verified · 128 KB"</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                    <Attachment state="info" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="info" size="0.875rem" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"readme.md"</AttachmentTitle>
+                            <AttachmentDescription>"Review before publish"</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                    <Attachment state="warning" size="sm" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="triangle-alert" size="0.875rem" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"large-asset.zip"</AttachmentTitle>
+                            <AttachmentDescription>"Exceeds recommended size"</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                    <Attachment state="idle" size="xs" orientation="vertical">
+                        <AttachmentMedia variant="icon">
+                            <Icon name="plus" size="0.75rem" />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>"Add file"</AttachmentTitle>
+                            <AttachmentDescription>"Dashed idle drop zone"</AttachmentDescription>
+                        </AttachmentContent>
+                        <AttachmentTrigger id="gal-att-pick" />
+                    </Attachment>
+                    <Attachment state={ att_state_live.get() } size="default" orientation="horizontal">
+                        <AttachmentMedia variant="icon">
+                            <Icon
+                                name={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
+                                    "loader-circle".to_string()
+                                } else if att_state_live.get() == "destructive" {
+                                    "file-warning".to_string()
+                                } else {
+                                    "settings".to_string()
+                                } }
+                                size="0.875rem"
+                                class={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
+                                    "animate-spin".to_string()
+                                } else {
+                                    String::new()
+                                } }
+                            />
+                        </AttachmentMedia>
+                        <AttachmentContent>
+                            <AttachmentTitle>{ format!("Reactive state: {}", att_state_live.get()) }</AttachmentTitle>
+                            <AttachmentDescription>"state={signal.get()} repaints border, media tint, title pulse."</AttachmentDescription>
+                        </AttachmentContent>
+                    </Attachment>
+                </AttachmentGroup>
+                <HStack w="100%" gap="0.5rem" wrap="wrap">
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("idle".into())}>"idle"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("uploading".into())}>"uploading"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("processing".into())}>"processing"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("done".into())}>"done"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("info".into())}>"info"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("success".into())}>"success"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("warning".into())}>"warning"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("destructive".into())}>"destructive"</Button>
+                    <Button size="sm" variant="outline" on_click={move || att_state_btn.set("error".into())}>"error≡destructive"</Button>
+                </HStack>
+                <Box w="100%" max_w="24rem" border_color="border" border_width="1" rounded="0.75rem" p="0.5rem">
+                    { Element::from(
+                        attachment_group()
+                            .child(
+                                attachment()
+                                    .state("done")
+                                    .size("sm")
+                                    .media_icon(
+                                        build_icon_text_node(lucide_glyph("paperclip").unwrap_or_else(|| "…".into()))
+                                            .text_size(16.0)
+                                    )
+                                    .title_description("notes.md", "Builder · 12 KB")
+                                    .action(
+                                        button("gal-att-view")
+                                            .variant("ghost")
+                                            .size("icon-xs")
+                                            .child(
+                                                build_icon_text_node(lucide_glyph("eye").unwrap_or_else(|| "…".into()))
+                                                    .text_size(14.0)
+                                            )
+                                    )
+                            )
+                    ) }
+                </Box>
+            </VStack>
+        </MyCard>
+    }
+}
+
 fn ListShowcase() -> rui::core::tree::Element {
     ui! {
         <MyCard title="1c-j) List（语义 ul/li）">
@@ -7639,22 +7793,29 @@ fn gal_tree_expanded(key: &'static str) -> Signal<HashSet<String>> {
 }
 
 #[component]
-fn DataChartShowcase() -> Element {
+fn TableShowcase() -> Element {
+    let composite_sel = use_signal("gal_tbl_comp_sel", || None::<usize>);
     let table_sel = use_signal("gal_dt_sel", || None::<usize>);
-    let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
-    let expanded_col = gal_tree_expanded("gal_tree_exp_col");
-    let expanded_flat = gal_tree_expanded("gal_tree_exp_flat");
-    let expanded_rsx = gal_tree_expanded("gal_tree_exp_rsx");
-    let sample_roots = gal_sample_tree_roots();
+    let table_sort = use_signal("gal_tbl_sort", TableSortState::default);
+    let table_filter = use_signal("gal_tbl_filter", || String::new());
+    let table_page = use_signal("gal_tbl_page", TablePaginationState::default);
 
-    let table_el: Element = table("gal-table")
+    let pick0 = composite_sel;
+    let pick1 = composite_sel;
+    let pick2 = composite_sel;
+
+    let data_table_el: Element = table("gal-table")
         .columns([
             TableColumn::new("name", "Name").width(120.0),
             TableColumn::new("role", "Role").width(100.0),
-            TableColumn::new("score", "Score").width(80.0),
+            TableColumn::new("score", "Score").width(80.0).align("end"),
         ])
         .row_count(40)
         .height(200.0)
+        .caption("TanStack-style · sort · filter · pagination")
+        .sort_signal(table_sort)
+        .global_filter_signal(table_filter)
+        .pagination_signal(table_page)
         .selected_signal(table_sel)
         .cell(|r, c| match c {
             0 => format!("Item {r:02}"),
@@ -7662,6 +7823,85 @@ fn DataChartShowcase() -> Element {
             _ => format!("{}", 60 + (r % 40)),
         })
         .into();
+
+    let filter_input: Element = input("gal-tbl-filter")
+        .placeholder("Filter rows…")
+        .value_signal(table_filter)
+        .w("100%")
+        .into();
+
+    ui! {
+        <MyCard title="Table · ShadCN composite + TanStack data_table">
+            <VStack w="100%" gap="1rem" flex_shrink={0.0}>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "复合 RSX（invoices · caption/header/body/footer · align · hover · selected）+ Builder 预设（VirtualList · 排序 / 筛选 / 分页）。"
+                </Label>
+                <Label font_weight="600" text_size="0.875rem">{ "Composite · invoices" }</Label>
+                <Table>
+                    <TableCaption>"A list of your recent invoices."</TableCaption>
+                    <TableHeader>
+                        <TableRow id="inv-h">
+                            <TableHead w="100px">"Invoice"</TableHead>
+                            <TableHead>"Status"</TableHead>
+                            <TableHead>"Method"</TableHead>
+                            <TableHead align="end" w="96px">"Amount"</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        <TableRow id="inv-0" selected={composite_sel.get() == Some(0)} on_click={move || pick0.set(Some(0))}>
+                            <TableCell>"INV001"</TableCell>
+                            <TableCell>"Paid"</TableCell>
+                            <TableCell>"Credit Card"</TableCell>
+                            <TableCell align="end" w="96px">"$250.00"</TableCell>
+                        </TableRow>
+                        <TableRow id="inv-1" selected={composite_sel.get() == Some(1)} on_click={move || pick1.set(Some(1))}>
+                            <TableCell>"INV002"</TableCell>
+                            <TableCell>"Pending"</TableCell>
+                            <TableCell>"PayPal"</TableCell>
+                            <TableCell align="end" w="96px">"$150.00"</TableCell>
+                        </TableRow>
+                        <TableRow id="inv-2" selected={composite_sel.get() == Some(2)} on_click={move || pick2.set(Some(2))}>
+                            <TableCell>"INV003"</TableCell>
+                            <TableCell>"Unpaid"</TableCell>
+                            <TableCell>"Bank Transfer"</TableCell>
+                            <TableCell align="end" w="96px">"$350.00"</TableCell>
+                        </TableRow>
+                    </TableBody>
+                    <TableFooter>
+                        <TableRow id="inv-f">
+                            <TableCell w="100px">"Total"</TableCell>
+                            <TableCell></TableCell>
+                            <TableCell></TableCell>
+                            <TableCell align="end" w="96px">"$750.00"</TableCell>
+                        </TableRow>
+                    </TableFooter>
+                </Table>
+                <Label text_size="0.875rem">
+                    { format!("Composite selected: {:?}", composite_sel.get()) }
+                </Label>
+                <Label font_weight="600" text_size="0.875rem">{ "data_table · Builder" }</Label>
+                { filter_input }
+                { data_table_el }
+                <Label text_size="0.875rem">
+                    { format!(
+                        "Selected row: {:?} · sort: {:?} · page: {}",
+                        table_sel.get(),
+                        table_sort.get().column_id,
+                        table_page.get().page_index + 1,
+                    ) }
+                </Label>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
+fn DataChartShowcase() -> Element {
+    let chart_sel = use_signal("gal_chart_sel", || None::<usize>);
+    let expanded_col = gal_tree_expanded("gal_tree_exp_col");
+    let expanded_flat = gal_tree_expanded("gal_tree_exp_flat");
+    let expanded_rsx = gal_tree_expanded("gal_tree_exp_rsx");
+    let sample_roots = gal_sample_tree_roots();
 
     let tree_collapsible_el: Element = tree_view("gal-tree-collapsible")
         .variant(TreeViewVariant::Collapsible)
@@ -8149,15 +8389,10 @@ fn DataChartShowcase() -> Element {
     };
 
     ui! {
-        <MyCard title="Table · TreeView · Chart · Carousel">
+        <MyCard title="TreeView · Chart · Carousel">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "数据面：Table / 树 / Chart（预设 bar/line/area/pie/donut/radial + define_chart；shadcn chrome · tooltip indicator · ChartTheme 色板）/ 轮播。点柱、折线或扇区可选中；tooltip 钉在按下点。"
-                </Label>
-                <Label font_weight="600" text_size="0.875rem">{ "Table" }</Label>
-                { table_el }
-                <Label text_size="0.875rem">
-                    { format!("Selected row: {:?}", table_sel.get()) }
+                    "树 / Chart（预设 bar/line/area/pie/donut/radial + define_chart；shadcn chrome · tooltip indicator · ChartTheme 色板）/ 轮播。点柱、折线或扇区可选中；tooltip 钉在按下点。"
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "TreeView · collapsible exclusive（同层互斥 · Builder）" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
@@ -8981,7 +9216,7 @@ fn gallery_section_meta(section: &str) -> (&'static str, Option<&'static str>) {
         _ => (
             "基础",
             Some(
-                "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Skeleton · Empty · Alert · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰",
+                "Button 变体 / 尺寸 / hover 缓动 · Badge · Kbd · Skeleton · Empty · Alert · Attachment · Bubble · Avatar · Breadcrumb · ButtonGroup · AspectRatio · CSS animation · 排版装饰",
             ),
         ),
     }
@@ -9033,6 +9268,7 @@ fn gallery_section_body(section: &str) -> Element {
         "data" => ui! {
             <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
+                    <TableShowcase />
                     <PaginationShowcase />
                     <DataChartShowcase />
                     <VirtualMasonryShowcase />
@@ -9123,6 +9359,7 @@ fn gallery_section_body(section: &str) -> Element {
                     { AlertShowcase() }
                     { AlertDialogShowcase() }
                     { ItemShowcase() }
+                    { AttachmentShowcase() }
                     { ListShowcase() }
                     <BubbleShowcase />
                     { AvatarShowcase() }
