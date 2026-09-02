@@ -925,9 +925,7 @@ fn apply_floating_menus(
                     let visual_h = dimension_length(el.style.max_size.height)
                         .filter(|h| *h >= 0.0)
                         .filter(|_| height_keyframe_animation_active(el))
-                        .or_else(|| {
-                            (el.layout_bounds[3] > 0.5).then_some(el.layout_bounds[3])
-                        })
+                        .or_else(|| (el.layout_bounds[3] > 0.5).then_some(el.layout_bounds[3]))
                         .unwrap_or_else(|| estimate_h.max(tb[3]).max(1.0));
                     y = edge - visual_h;
                 } else if cover {

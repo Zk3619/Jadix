@@ -293,11 +293,7 @@ impl super::App {
                                     && crate::renderer::hit_test_input_is_line_side_blank(
                                         sec.text_renderer.font_system_mut(),
                                         &display_el,
-                                        if is_textarea {
-                                            x + leaf_scroll[0]
-                                        } else {
-                                            mx
-                                        },
+                                        if is_textarea { x + leaf_scroll[0] } else { mx },
                                         my,
                                         bounds,
                                         if is_textarea { &hit_style } else { &style },

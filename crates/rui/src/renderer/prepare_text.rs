@@ -3209,8 +3209,7 @@ pub fn prepare_text_frame(
                 if w <= 0.0 || h <= 0.0 {
                     return;
                 }
-                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], deco_clip)
-                else {
+                let Some([cx, cy, cw, ch]) = clip_rect_to_bounds([x, y, w, h], deco_clip) else {
                     return;
                 };
                 underline_instances.push(InstanceInput {
@@ -3280,14 +3279,7 @@ pub fn prepare_text_frame(
             };
             if tb.underline {
                 // CSS `text-underline-offset`: positive = further from the text (down).
-                let y = underline_line_y(
-                    tb.y,
-                    tb.box_h,
-                    ul_h,
-                    tb.underline_offset,
-                    ui_scale,
-                    ps,
-                );
+                let y = underline_line_y(tb.y, tb.box_h, ul_h, tb.underline_offset, ui_scale, ps);
                 draw_at(y);
             }
             if tb.overline {
@@ -4107,9 +4099,8 @@ mod input_shaping_stability_tests {
             super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], box_clip).is_none(),
             "without expansion the underline is fully clipped"
         );
-        let expanded = super::expand_clip_for_text_decoration(
-            box_clip, true, false, 2.0, ul_h, 1.0, 1.0,
-        );
+        let expanded =
+            super::expand_clip_for_text_decoration(box_clip, true, false, 2.0, ul_h, 1.0, 1.0);
         assert!(
             super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], expanded).is_some(),
             "decoration clip expand must keep underline visible"

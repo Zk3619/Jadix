@@ -306,7 +306,11 @@ pub fn activate_scroll_viewport(
 /// `scroll:` viewports read live signals so text glyphs, selection chrome, and
 /// pointer hit-testing stay aligned when `Element.scroll_offset` lags a frame.
 #[inline]
-pub fn scroll_viewport_axis_offset(element: &Element, is_scroll_viewport: bool, axis_x: bool) -> f32 {
+pub fn scroll_viewport_axis_offset(
+    element: &Element,
+    is_scroll_viewport: bool,
+    axis_x: bool,
+) -> f32 {
     if is_scroll_viewport {
         if let Some(rest) = element
             .focus_id

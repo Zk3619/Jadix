@@ -271,13 +271,14 @@ pub(crate) fn next_hit_scroll_acc(el: &Element, scroll_acc: [f32; 2]) -> [f32; 2
     let scroll_x = is_scroll_viewport || matches!(ox, taffy::style::Overflow::Scroll);
     let scroll_y = is_scroll_viewport || matches!(oy, taffy::style::Overflow::Scroll);
     if scroll_x {
-        next[0] += crate::core::scroll_viewport::scroll_viewport_axis_offset(
-            el, is_scroll_viewport, true,
-        );
+        next[0] +=
+            crate::core::scroll_viewport::scroll_viewport_axis_offset(el, is_scroll_viewport, true);
     }
     if scroll_y {
         next[1] += crate::core::scroll_viewport::scroll_viewport_axis_offset(
-            el, is_scroll_viewport, false,
+            el,
+            is_scroll_viewport,
+            false,
         );
     }
     next
@@ -1923,7 +1924,11 @@ mod hover_occlusion_tests {
 
         viewport_scroll_bump(&mut root, 80.0);
         reconcile_pointer_hovers(&root, 40.0, 110.0, [0.0, 0.0], &mut to_run, true);
-        assert_eq!(to_run.len(), 1, "scroll must leave immediately under still pointer");
+        assert_eq!(
+            to_run.len(),
+            1,
+            "scroll must leave immediately under still pointer"
+        );
         assert!(!to_run[0].1);
         for (cb, is_hover) in to_run.drain(..) {
             (*cb.borrow_mut())(is_hover);
@@ -1933,11 +1938,9 @@ mod hover_occlusion_tests {
 
     fn viewport_scroll_bump(root: &mut Element, sy: f32) {
         fn bump(el: &mut Element, sy: f32) -> bool {
-            if el
-                .focus_id
-                .as_deref()
-                .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX))
-            {
+            if el.focus_id.as_deref().is_some_and(|f| {
+                f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+            }) {
                 el.scroll_offset[1] = sy;
                 return true;
             }
@@ -2106,7 +2109,10 @@ mod textarea_text_hit_tests {
         let left = find_input_text_at(&root, None, 10.0, line0_y, [0.0, 0.0])
             .expect("left region padding must resolve to the textarea leaf");
         assert_eq!(left.0, "ta-hit");
-        assert_eq!(left.1[0], 34.0, "must return leaf bounds, not the scrollport");
+        assert_eq!(
+            left.1[0], 34.0,
+            "must return leaf bounds, not the scrollport"
+        );
 
         let below = find_input_text_at(&root, None, 120.0, 90.0, [0.0, 0.0])
             .expect("empty clip below a short leaf must still resolve to the textarea");
@@ -2338,7 +2344,10 @@ mod drag_select_bounds_tests {
 
             assert_eq!(hit_bounds, leaf_visual);
             assert_eq!(hit_style.scroll_x, 0.0);
-            assert!((mx - 220.0).abs() < 0.5, "pointer must clamp to clip right, got {mx}");
+            assert!(
+                (mx - 220.0).abs() < 0.5,
+                "pointer must clamp to clip right, got {mx}"
+            );
             let content_x = mx - hit_bounds[0];
             assert!(
                 (content_x - 308.0).abs() < 0.5,

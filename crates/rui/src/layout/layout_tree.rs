@@ -3026,7 +3026,10 @@ impl LayoutTree {
                 element.collect_extent = extent;
                 element.collect_extent_valid = true;
                 self.stamp_descendants_layout_bounds_from_taffy(
-                    element, node, [abs_x, abs_y], [lay_w, lay_h],
+                    element,
+                    node,
+                    [abs_x, abs_y],
+                    [lay_w, lay_h],
                 );
                 // Parent already has fresh layout_bounds + paint_visual; refresh descendants
                 // from Taffy so narrow wrap + later scroll/highlight do not mix old abs.
@@ -3540,11 +3543,14 @@ impl LayoutTree {
             };
             let is_icon = text_style.font_family.as_deref() == Some("lucide");
             let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
-            // Glyphon cannot rotate. Lucide + spin/rotate → cached glyph texture + element
-            // transform. lucide-animated always uses the same TexturedDraw path (frame bake).
+            // Glyphon cannot rotate. Lucide + spin/rotate/transform-transition → cached
+            // square texture + element transform (same path at 0° and 180°, so accordion
+            // chevrons don't pop from Coverage→Linear mid-spin). lucide-animated always
+            // uses the same TexturedDraw path (frame bake).
             let icon_needs_xform = is_animated_icon
                 || (is_icon
-                    && (element.style.rotate_deg.abs() > 0.5
+                    && (crate::renderer::element_wants_sticky_xform(element)
+                        || element.style.rotate_deg.abs() > 0.5
                         || element
                             .style
                             .animations
@@ -3556,12 +3562,10 @@ impl LayoutTree {
                             .as_ref()
                             .is_some_and(|t| !t.is_empty())));
             if icon_needs_xform {
-                let side = lay_w
-                    .max(lay_h)
-                    .max(vis_w)
-                    .max(vis_h)
-                    .max(text_style.size)
-                    .max(1.0);
+                // Paint a font-size square centered in the layout box. Using
+                // max(lay/vis) stretched a 16px chevron to the flex parent (thicker
+                // after rotate) and shifted the pivot away from the glyph.
+                let side = (text_style.size * text_scale).max(1.0);
                 let cx = vis_x + vis_w * 0.5;
                 let cy = vis_y + vis_h * 0.5;
                 let full = [cx - side * 0.5, cy - side * 0.5, side, side];
@@ -3604,7 +3608,7 @@ impl LayoutTree {
                         .attrs
                         .get(crate::utils::ATTR_ICON_NAME)
                         .map(|s| s.as_str());
-                    // 2× supersample for crisp spin; draw into layout `side` square.
+                    // 2× supersample for crisp spin; draw a font-size square (not the layout box).
                     if let Some((tex_key, _)) =
                         crate::utils::icon_texture::ensure_lucide_icon_texture(
                             icon_name,
@@ -3638,7 +3642,7 @@ impl LayoutTree {
                         element.text.as_deref(),
                     ) {
                         if crate::utils::lucide_svg_inner(icon_name).is_some() {
-                            let side = lay_w.max(lay_h).max(text_style.size).max(1.0);
+                            let side = (text_style.size * text_scale).max(1.0);
                             if let Some((tex_key, _)) =
                                 crate::utils::icon_texture::ensure_lucide_icon_texture(
                                     Some(icon_name),
@@ -6278,6 +6282,50 @@ mod portal_hoist_tests {
             "bake h={} must cover leading+pad ({}), got clip risk",
             bake.rect[3],
             leading + pad * 2.0
+        );
+    }
+
+    #[cfg(feature = "bundled-lucide")]
+    #[test]
+    fn rotated_lucide_chevron_uses_square_texture_not_glyphon() {
+        let glyph = crate::utils::lucide_glyph("chevron-down").expect("glyph");
+        let mut icon = crate::utils::build_named_icon_text_node("chevron-down", glyph)
+            .text_size(16.0)
+            .w(16.0)
+            .h(16.0)
+            .flex_shrink(0.0)
+            .text_color([128, 128, 128, 255]);
+        icon.style.rotate_deg = 180.0;
+        let mut root = Element::new().w(64.0).h(64.0).child(icon);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 64.0, 64.0, [0.0, 0.0]);
+        let draw = result
+            .textured_draws
+            .iter()
+            .find(|d| d.texture_key.starts_with("rui_lucide_"))
+            .expect("rotated lucide must use icon texture");
+        assert!(
+            (draw.rect[2] - draw.rect[3]).abs() < 0.01,
+            "icon quad must be square, got {}x{}",
+            draw.rect[2],
+            draw.rect[3]
+        );
+        assert!(
+            (draw.rect[2] - 16.0).abs() < 0.5,
+            "draw side must match text size, got {}",
+            draw.rect[2]
+        );
+        assert!(
+            (draw.transform[0] + 1.0).abs() < 0.05 && (draw.transform[3] + 1.0).abs() < 0.05,
+            "180° linear should be -I, got {:?}",
+            draw.transform
+        );
+        assert!(
+            result
+                .text_nodes
+                .iter()
+                .all(|t| t.style.font_family.as_deref() != Some("lucide")),
+            "must not also emit glyphon lucide (double-draw thickens strokes)"
         );
     }
 

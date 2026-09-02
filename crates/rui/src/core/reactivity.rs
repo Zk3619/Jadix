@@ -921,8 +921,7 @@ impl<T: Clone + 'static> Signal<T> {
     }
 
     pub fn get(&self) -> T {
-        self.try_get()
-            .expect("Signal::get on disposed signal")
+        self.try_get().expect("Signal::get on disposed signal")
     }
 
     /// Subscribe the current effect / memo and read. `None` if already disposed.
@@ -958,8 +957,7 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Read without subscribing the current effect / memo.
     pub fn peek(&self) -> T {
-        self.try_peek()
-            .expect("Signal::peek on disposed signal")
+        self.try_peek().expect("Signal::peek on disposed signal")
     }
 
     /// Borrow-style read without cloning. Still tracks the current effect / memo.

@@ -101,6 +101,38 @@ pub fn build_named_icon_text_node(name: impl AsRef<str>, glyph: impl Into<String
     el
 }
 
+/// Lucide icon by **name** (not PUA glyph). The renderer cannot reverse-lookup
+/// SVG paths from a codepoint — that needs [`ATTR_ICON_NAME`](crate::utils::ATTR_ICON_NAME).
+///
+/// If both the PUA glyph (`lucide.json`) and SVG inner (`lucide_paths.json`) are
+/// missing, emits Unicode `fallback` **without** `font-family: lucide`. Lucide
+/// cannot paint `▾` / `›`; claiming that family would tofu or drop the rotate
+/// texture (`rasterize_glyph_rgba` maps the char to glyph id 0).
+pub fn build_lucide_icon_text_node(name: impl AsRef<str>) -> Element {
+    build_lucide_icon_text_node_or(name, "▾")
+}
+
+/// [`build_lucide_icon_text_node`] with an explicit Unicode fallback glyph.
+pub fn build_lucide_icon_text_node_or(
+    name: impl AsRef<str>,
+    fallback: impl Into<String>,
+) -> Element {
+    let name = name.as_ref();
+    let fallback = fallback.into();
+    if let Some(glyph) = crate::utils::lucide::lucide_glyph(name) {
+        return build_named_icon_text_node(name, glyph);
+    }
+    if crate::utils::lucide::lucide_svg_inner(name).is_some() {
+        return build_named_icon_text_node(name, fallback);
+    }
+    Element::new()
+        .text(fallback)
+        .font_weight(400.0)
+        .underline(false)
+        .text_color(parse_text_color("foreground"))
+        .pointer_events("bounding-box")
+}
+
 #[cfg(test)]
 mod icon_defaults_tests {
     use super::*;
@@ -115,5 +147,25 @@ mod icon_defaults_tests {
         assert_eq!(el.pointer_events_mode(), PointerEvents::BoundingBox);
         assert!(el.pointer_events_mode().is_svg_only());
         assert!(el.pointer_events_mode().targets_self());
+    }
+
+    #[test]
+    fn lucide_named_icon_sets_attr_from_name_only() {
+        let el = build_lucide_icon_text_node("chevron-down");
+        assert_eq!(
+            el.get_attr(crate::utils::ATTR_ICON_NAME)
+                .map(String::as_str),
+            Some("chevron-down")
+        );
+        assert_eq!(el.text_style.font_family.as_deref(), Some("lucide"));
+        assert!(el.text.as_deref().is_some_and(|t| t != "▾"));
+    }
+
+    #[test]
+    fn lucide_miss_fallback_is_not_lucide_family() {
+        let el = build_lucide_icon_text_node_or("__no_such_lucide_icon__", "▾");
+        assert!(el.get_attr(crate::utils::ATTR_ICON_NAME).is_none());
+        assert_ne!(el.text_style.font_family.as_deref(), Some("lucide"));
+        assert_eq!(el.text.as_deref(), Some("▾"));
     }
 }

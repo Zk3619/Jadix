@@ -132,10 +132,9 @@ mod tests {
 
     #[test]
     fn take_fragment_ignores_anonymous_vstack() {
-        let pack = Element::from(vstack().children(vec![
-            Element::new().text("a"),
-            Element::new().text("b"),
-        ]));
+        let pack = Element::from(
+            vstack().children(vec![Element::new().text("a"), Element::new().text("b")]),
+        );
         let kids = take_fragment(pack);
         assert_eq!(kids.len(), 1, "take_fragment must not peel VStack");
     }
@@ -161,10 +160,9 @@ mod tests {
 
     #[test]
     fn data_slot_shell_is_not_dismantled() {
-        let mut kbd = Element::from(vstack().children(vec![
-            Element::new().text("⌘"),
-            Element::new().text("K"),
-        ]));
+        let mut kbd = Element::from(
+            vstack().children(vec![Element::new().text("⌘"), Element::new().text("K")]),
+        );
         kbd.set_attr(ATTR_SLOT, "kbd-group");
         let kids = take_packed(kbd);
         assert_eq!(kids.len(), 1);
@@ -215,10 +213,9 @@ mod tests {
 
     #[test]
     fn interactive_shell_is_preserved() {
-        let mut btn = Element::from(vstack().children(vec![
-            Element::new().text("A"),
-            Element::new().text("B"),
-        ]));
+        let mut btn = Element::from(
+            vstack().children(vec![Element::new().text("A"), Element::new().text("B")]),
+        );
         btn = btn.on_click(|| {});
         let kids = take_packed(btn);
         assert_eq!(kids.len(), 1);

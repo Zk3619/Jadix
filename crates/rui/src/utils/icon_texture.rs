@@ -265,15 +265,23 @@ fn rasterize_svg_rgba(
     }
 }
 
-fn rasterize_glyph_rgba(ch: char, size_px: f32, color: [u8; 4]) -> Option<(u32, u32, Vec<u8>)> {
+fn rasterize_glyph_rgba(
+    ch: char,
+    size_px: f32,
+    color: [u8; 4],
+    dpr: f32,
+) -> Option<(u32, u32, Vec<u8>)> {
     let font = font_ref()?;
     let glyph_id = font.charmap().map(ch);
     if glyph_id == 0 {
         return None;
     }
     let size = size_px.clamp(8.0, 256.0);
+    let dpr = dpr.clamp(1.0, 3.0);
+    // Match SVG path: raster into a square at `size * dpr`, then the layout quad scales it down.
+    let px = (size * dpr).clamp(16.0, 512.0);
     let mut context = ScaleContext::new();
-    let mut scaler = context.builder(font).size(size).hint(false).build();
+    let mut scaler = context.builder(font).size(px).hint(false).build();
     let image = Render::new(&[Source::Outline])
         .format(Format::Alpha)
         .render(&mut scaler, glyph_id)?;
@@ -282,10 +290,13 @@ fn rasterize_glyph_rgba(ch: char, size_px: f32, color: [u8; 4]) -> Option<(u32, 
     if w > 512 || h > 512 {
         return None;
     }
-    let side = size.ceil().max(1.0) as u32;
+    let side = px.ceil().max(1.0) as u32;
     let mut rgba = vec![0u8; (side * side * 4) as usize];
-    let ox0 = image.placement.left;
-    let oy0 = side as i32 - image.placement.top;
+    // Center ink in the square. Font bearings (`placement.left` / baseline `top`) are for
+    // text runs; rotating that around the quad center orbits the glyph (accordion chevron
+    // jumps sideways) and the 1× Linear sample looks thicker/softer than glyphon Coverage.
+    let ox0 = (side as i32 - w as i32) / 2;
+    let oy0 = (side as i32 - h as i32) / 2;
     let mask = image.data;
     for y in 0..h {
         for x in 0..w {
@@ -365,8 +376,9 @@ pub fn ensure_lucide_icon_texture(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (ch as u32).hash(&mut hasher);
     size_key.hash(&mut hasher);
+    dpr_key.hash(&mut hasher);
     color.hash(&mut hasher);
-    let key = format!("rui_lucide_font_v2:{:016x}", hasher.finish());
+    let key = format!("rui_lucide_font_v3:{:016x}", hasher.finish());
     let mut guard = GLYPH_CPU.lock().ok()?;
     let map = guard.get_or_insert_with(HashMap::new);
     if let Some(entry) = map.get(&key) {
@@ -374,7 +386,7 @@ pub fn ensure_lucide_icon_texture(
         return Some((key, entry.width as f32));
     }
     drop(guard);
-    let (w, h, rgba) = rasterize_glyph_rgba(ch, size_px, color)?;
+    let (w, h, rgba) = rasterize_glyph_rgba(ch, size_px, color, dpr)?;
     cache_put(key, w, h, rgba)
 }
 
@@ -391,20 +403,7 @@ pub fn ensure_lucide_glyph_texture(
 mod tests {
     use super::*;
 
-    #[test]
-    fn loader_circle_svg_raster_nonempty_square() {
-        let (side, h, rgba) =
-            rasterize_svg_rgba("loader-circle", 32.0, [255, 255, 255, 255], 2.0).expect("svg");
-        assert_eq!(side, h);
-        assert!(side >= 32);
-        let ink = rgba.chunks(4).filter(|p| p[3] > 0).count();
-        assert!(ink > 40, "expected stroke ink, got {ink}");
-    }
-
-    #[test]
-    fn circle_icon_ink_bbox_near_center() {
-        let (side, _, rgba) =
-            rasterize_svg_rgba("circle", 32.0, [255, 255, 255, 255], 2.0).expect("svg");
+    fn ink_bbox_center(side: u32, rgba: &[u8]) -> (f32, f32) {
         let mut min_x = side;
         let mut min_y = side;
         let mut max_x = 0u32;
@@ -421,12 +420,54 @@ mod tests {
             }
         }
         assert!(max_x >= min_x, "expected ink");
-        let cx = (min_x + max_x) as f32 * 0.5;
-        let cy = (min_y + max_y) as f32 * 0.5;
+        ((min_x + max_x) as f32 * 0.5, (min_y + max_y) as f32 * 0.5)
+    }
+
+    #[test]
+    fn loader_circle_svg_raster_nonempty_square() {
+        let (side, h, rgba) =
+            rasterize_svg_rgba("loader-circle", 32.0, [255, 255, 255, 255], 2.0).expect("svg");
+        assert_eq!(side, h);
+        assert!(side >= 32);
+        let ink = rgba.chunks(4).filter(|p| p[3] > 0).count();
+        assert!(ink > 40, "expected stroke ink, got {ink}");
+    }
+
+    #[test]
+    fn circle_icon_ink_bbox_near_center() {
+        let (side, _, rgba) =
+            rasterize_svg_rgba("circle", 32.0, [255, 255, 255, 255], 2.0).expect("svg");
+        let (cx, cy) = ink_bbox_center(side, &rgba);
         let mid = (side as f32 - 1.0) * 0.5;
         assert!(
             (cx - mid).abs() < 2.5 && (cy - mid).abs() < 2.5,
             "ink bbox center ({cx:.2},{cy:.2}) far from {mid}"
+        );
+    }
+
+    #[test]
+    fn font_chevron_ink_bbox_near_center() {
+        let glyph = crate::utils::lucide::lucide_glyph("chevron-down").expect("glyph");
+        let ch = glyph.chars().next().expect("char");
+        let (side, h, rgba) =
+            rasterize_glyph_rgba(ch, 32.0, [255, 255, 255, 255], 1.0).expect("font");
+        assert_eq!(side, h);
+        let (cx, cy) = ink_bbox_center(side, &rgba);
+        let mid = (side as f32 - 1.0) * 0.5;
+        assert!(
+            (cx - mid).abs() < 2.5 && (cy - mid).abs() < 2.5,
+            "font chevron ink ({cx:.2},{cy:.2}) far from square center {mid} — rotation would offset"
+        );
+    }
+
+    #[test]
+    fn font_glyph_honors_dpr_supersample() {
+        let glyph = crate::utils::lucide::lucide_glyph("chevron-down").expect("glyph");
+        let ch = glyph.chars().next().expect("char");
+        let (side, _, _) = rasterize_glyph_rgba(ch, 16.0, [255, 255, 255, 255], 2.0).expect("font");
+        assert_eq!(
+            side, 32,
+            "dpr 2 at 16px must raster 32px square, got {side}"
         );
     }
 

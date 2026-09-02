@@ -404,8 +404,12 @@ impl AppState {
         a: &[crate::core::tree::TextLayoutInfo],
         b: &[crate::core::tree::TextLayoutInfo],
     ) -> bool {
-        // 略放宽：flex/滚动条亚像素抖动不应每帧打穿文本缓存触发整帧 prepare。
-        const TEXT_GEOM_EPS: f32 = 0.5;
+        // Size: ignore flex/scrollbar subpixel so idle frames do not reshape.
+        const SIZE_EPS: f32 = 0.5;
+        // Position must stay tight even after smooth-scroll settles. A 0.5px slack
+        // parked glyphs at the last catch-up sample while rects snapped to target
+        // (gallery avatar labels sitting beside their circles).
+        const POS_EPS: f32 = 0.02;
         if a.len() != b.len() {
             return false;
         }
@@ -414,18 +418,18 @@ impl AppState {
                 && x.shape_suffix == y.shape_suffix
                 && x.template_id == y.template_id
                 && x.style == y.style
-                && Self::approx_clip_eq(x.clip_bounds, y.clip_bounds, TEXT_GEOM_EPS)
-                && Self::approx_eq(x.x, y.x, TEXT_GEOM_EPS)
-                && Self::approx_eq(x.y, y.y, TEXT_GEOM_EPS)
-                && Self::approx_eq(x.width, y.width, TEXT_GEOM_EPS)
-                && Self::approx_eq(x.height, y.height, TEXT_GEOM_EPS)
+                && Self::approx_clip_eq(x.clip_bounds, y.clip_bounds, POS_EPS)
+                && Self::approx_eq(x.x, y.x, POS_EPS)
+                && Self::approx_eq(x.y, y.y, POS_EPS)
+                && Self::approx_eq(x.width, y.width, SIZE_EPS)
+                && Self::approx_eq(x.height, y.height, SIZE_EPS)
                 && Self::approx_eq(x.paint_scale, y.paint_scale, 0.002)
                 && x.paint_transform
                     .iter()
                     .zip(y.paint_transform.iter())
                     .all(|(a, b)| Self::approx_eq(*a, *b, 0.002))
-                && Self::approx_eq(x.paint_origin[0], y.paint_origin[0], TEXT_GEOM_EPS)
-                && Self::approx_eq(x.paint_origin[1], y.paint_origin[1], TEXT_GEOM_EPS)
+                && Self::approx_eq(x.paint_origin[0], y.paint_origin[0], POS_EPS)
+                && Self::approx_eq(x.paint_origin[1], y.paint_origin[1], POS_EPS)
         })
     }
 
@@ -4932,6 +4936,52 @@ mod template_path_tests {
         assert!(!AppState::template_path_matches(&root, &[1, 0], "a"));
         // Shrunk subtree.
         assert!(!AppState::template_path_matches(&root, &[9], "a"));
+    }
+}
+
+#[cfg(test)]
+mod text_scroll_cache_tests {
+    use super::AppState;
+    use crate::core::tree::TextLayoutInfo;
+    use crate::renderer::GlyphRasterMode;
+    use crate::style::TextStyle;
+
+    fn node_at_y(y: f32) -> TextLayoutInfo {
+        TextLayoutInfo {
+            text: "hello".into(),
+            shape_suffix: None,
+            spans: None,
+            template_id: None,
+            x: 8.0,
+            y,
+            width: 40.0,
+            height: 16.0,
+            clip_bounds: Some([0.0, 0.0, 400.0, 300.0]),
+            style: TextStyle::default(),
+            prepared: None,
+            glyph_fx: None,
+            paint_scale: 1.0,
+            paint_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            paint_origin: [8.0, y],
+            glyph_raster: GlyphRasterMode::Coverage,
+        }
+    }
+
+    #[test]
+    fn idle_cache_tolerates_tiny_pos_noise() {
+        let a = [node_at_y(100.0)];
+        let b = [node_at_y(100.01)];
+        assert!(AppState::text_nodes_equal(&a, &b));
+    }
+
+    #[test]
+    fn position_drift_quarter_pixel_busts_cache() {
+        let a = [node_at_y(100.0)];
+        let b = [node_at_y(100.25)];
+        assert!(
+            !AppState::text_nodes_equal(&a, &b),
+            "0.25px scroll must not reuse glyphs parked behind rects (avatar label offset)"
+        );
     }
 }
 

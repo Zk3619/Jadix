@@ -426,8 +426,7 @@ pub fn hit_test_textarea_click_caret_index(
 ) -> usize {
     let y = leaf_bounds[1];
     let lh = line_height_for_style(style, 1.0).max(1.0);
-    let content_bottom =
-        y + textarea_line_count(display, leaf_bounds, style) as f32 * lh;
+    let content_bottom = y + textarea_line_count(display, leaf_bounds, style) as f32 * lh;
     // Use the unclamped pointer Y. Soft-wrap pointer space clamps `hit_my` onto the
     // leaf, which would otherwise map empty chrome onto the last line and start a drag.
     if pointer_y > content_bottom + 1.0 {
@@ -763,7 +762,10 @@ mod tests {
         let left = hit_test_textarea_click_caret_index(
             &mut fs, &text, 8.0, 16.0, bounds, &style, 1.0, 32.0, 16.0,
         );
-        assert_eq!(left, 0, "first-line left padding must be line start, not doc end");
+        assert_eq!(
+            left, 0,
+            "first-line left padding must be line start, not doc end"
+        );
         let right = hit_test_textarea_click_caret_index(
             &mut fs, &text, 200.0, 16.0, bounds, &style, 1.0, 112.0, 16.0,
         );
@@ -775,7 +777,11 @@ mod tests {
         let below = hit_test_textarea_click_caret_index(
             &mut fs, &text, 40.0, 80.0, bounds, &style, 1.0, 40.0, 80.0,
         );
-        assert_eq!(below, text.len(), "true below-last-line blank still goes to doc end");
+        assert_eq!(
+            below,
+            text.len(),
+            "true below-last-line blank still goes to doc end"
+        );
         // Soft-wrap pointer space clamps Y onto the last line. Center empty chrome
         // must still be doc-end, not a mid-line glyph (which starts drag-select).
         let clamped_last_line_y = bounds[1] + 21.0 + 10.0;

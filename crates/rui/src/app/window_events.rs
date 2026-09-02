@@ -34,9 +34,8 @@ pub(super) fn tick_input_drag_select_at(
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
     let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
     let ui_scale = scale.max(1.0);
-    let (mx, my, hit_bounds, hit_style) = super::tree_hit::input_drag_select_hit_space(
-        root, rest, x, y, bounds, &style, leaf_scroll,
-    );
+    let (mx, my, hit_bounds, hit_style) =
+        super::tree_hit::input_drag_select_hit_space(root, rest, x, y, bounds, &style, leaf_scroll);
     // Same mapping as pointer-down. Raw `hit_test_input_text_index` clamps Y onto the
     // last ink line, so a press in empty chrome (caret → doc end) plus this tick
     // became a selection from that line to the end.
@@ -151,7 +150,6 @@ impl super::App {
         }
     }
 
-
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
     /// [`Self::handle_secondary_*`] — they never borrow or swap the primary UI tree.
     pub(super) fn with_primary_input<R>(
@@ -259,10 +257,7 @@ impl super::App {
         if !crate::components::input_otp::is_input_otp_focus(focused) {
             return false;
         }
-        if path
-            .iter()
-            .any(|e| e.focus_id.as_deref() == Some(focused))
-        {
+        if path.iter().any(|e| e.focus_id.as_deref() == Some(focused)) {
             return true;
         }
         if let Some((bounds, scroll_acc)) =
@@ -1064,7 +1059,6 @@ impl super::App {
                 None
             };
 
-
         let mut input_drag_keep_redraw = false;
         let mut text_drag_scrollbar_bump: Option<String> = None;
         let drag_sel_update: Option<(String, usize, usize, usize)> =
@@ -1519,8 +1513,7 @@ impl super::App {
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
-                let is_textarea =
-                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                let is_textarea = focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
                 let (mx, my, hit_bounds, hit_style) = if is_textarea {
                     super::tree_hit::input_text_edit_pointer_space(
                         &state.root_element,
@@ -1577,11 +1570,7 @@ impl super::App {
                     && crate::renderer::hit_test_input_is_line_side_blank(
                         state.text_renderer.font_system_mut(),
                         &display_el,
-                        if is_textarea {
-                            x + leaf_scroll[0]
-                        } else {
-                            mx
-                        },
+                        if is_textarea { x + leaf_scroll[0] } else { mx },
                         my,
                         bounds,
                         if is_textarea { &hit_style } else { &style },
@@ -2711,6 +2700,8 @@ impl super::App {
 
         let mut signal_updates = Vec::new();
         let mut rests_offset_moved = Vec::new();
+        let mut overlay_scroll_moved = false;
+        const OVERLAY_DISMISS_SCROLL_PX: f32 = 0.5;
         {
             let mut state_borrow = self.state.borrow_mut();
             if let Some(state) = state_borrow.as_mut() {
@@ -2718,6 +2709,11 @@ impl super::App {
                     state.update_scroll_offset_in_place(&rest, [new_sx, new_sy]);
                     if (new_sx - old_sx).abs() > 0.01 || (new_sy - old_sy).abs() > 0.01 {
                         rests_offset_moved.push(rest);
+                    }
+                    if (new_sx - old_sx).abs() > OVERLAY_DISMISS_SCROLL_PX
+                        || (new_sy - old_sy).abs() > OVERLAY_DISMISS_SCROLL_PX
+                    {
+                        overlay_scroll_moved = true;
                     }
                     signal_updates.push((sx_sig, sy_sig, old_sx, old_sy, new_sx, new_sy));
                 }
@@ -2734,9 +2730,13 @@ impl super::App {
         for rest in &rests_offset_moved {
             self.bump_smooth_active_until(rest, now);
         }
-        if !rests_offset_moved.is_empty()
-            && crate::components::avatar::dismiss_avatar_group_expands_on_scroll()
-        {
+        // Only freeze while this frame actually moved ≥0.5px. Tying freeze to
+        // `smooth_scroll_animating` (any viewport catching up, including a 0.06px tail)
+        // left hover-open stuck: +N enter fires once, `same_identity` will not re-enter.
+        if overlay_scroll_moved {
+            let _ = crate::components::avatar::dismiss_avatar_group_expands_on_scroll();
+        }
+        if crate::components::avatar::set_avatar_group_expand_hover_frozen(overlay_scroll_moved) {
             crate::app::runtime::request_redraw();
         }
 
@@ -3235,10 +3235,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     });
 
                     let text_drag_on_rest = crate::utils::text_field::text_drag_select_active()
-                        && self
-                            .input_drag_rest
-                            .as_ref()
-                            .is_some_and(|id| crate::utils::text_field::textarea_scroll_rest(id) == *rest);
+                        && self.input_drag_rest.as_ref().is_some_and(|id| {
+                            crate::utils::text_field::textarea_scroll_rest(id) == *rest
+                        });
 
                     // Independent per-axis visibility.
                     // - hover over content: allow both
