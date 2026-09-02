@@ -46,7 +46,7 @@ fn product_component_multi_child_packs_as_fragment_not_vstack() {
         .unwrap();
     assert_eq!(
         search.text_style.color,
-        rui::style::parse_text_color("foreground"),
+        Some(rui::style::parse_text_color("foreground")),
         "outline caption uses foreground"
     );
 }

@@ -98,23 +98,31 @@ pub fn ensure_text_xform_texture(
     font_size_px: f32,
     font_weight: u16,
     color: [u8; 4],
-    box_w: f32,
-    box_h: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+    pad: f32,
     align: glyphon::cosmic_text::Align,
     dpr: f32,
     as_sdf: bool,
+    glyph_dy: f32,
 ) -> Option<(String, f32)> {
     ensure_text_xform_texture_with_shadow(
         text,
         font_size_px,
         font_weight,
         color,
-        box_w,
-        box_h,
+        layout_w,
+        layout_h,
+        bake_w,
+        bake_h,
+        pad,
         align,
         dpr,
         as_sdf,
         None,
+        glyph_dy,
     )
 }
 
@@ -125,20 +133,28 @@ pub fn ensure_text_xform_texture_with_shadow(
     font_size_px: f32,
     font_weight: u16,
     color: [u8; 4],
-    box_w: f32,
-    box_h: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+    pad: f32,
     align: glyphon::cosmic_text::Align,
     dpr: f32,
     as_sdf: bool,
     shadow: Option<([u8; 4], [f32; 2], f32)>,
+    glyph_dy: f32,
 ) -> Option<(String, f32)> {
-    if text.is_empty() || box_w < 1.0 || box_h < 1.0 || font_size_px < 0.5 {
+    if text.is_empty() || layout_w < 1.0 || layout_h < 1.0 || bake_w < 1.0 || bake_h < 1.0 || font_size_px < 0.5
+    {
         return None;
     }
     let dpr = dpr.clamp(1.0, 4.0);
     let size_key = (font_size_px * 100.0).round() as i32;
-    let w_key = (box_w * 10.0).round() as i32;
-    let h_key = (box_h * 10.0).round() as i32;
+    let lw_key = (layout_w * 10.0).round() as i32;
+    let lh_key = (layout_h * 10.0).round() as i32;
+    let bw_key = (bake_w * 10.0).round() as i32;
+    let bh_key = (bake_h * 10.0).round() as i32;
+    let pad_key = (pad * 10.0).round() as i32;
     let dpr_key = (dpr * 100.0).round() as i32;
     let align_key = match align {
         glyphon::cosmic_text::Align::Left => 0u8,
@@ -152,10 +168,14 @@ pub fn ensure_text_xform_texture_with_shadow(
     size_key.hash(&mut hasher);
     font_weight.hash(&mut hasher);
     color.hash(&mut hasher);
-    w_key.hash(&mut hasher);
-    h_key.hash(&mut hasher);
+    lw_key.hash(&mut hasher);
+    lh_key.hash(&mut hasher);
+    bw_key.hash(&mut hasher);
+    bh_key.hash(&mut hasher);
+    pad_key.hash(&mut hasher);
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
+    glyph_dy.to_bits().hash(&mut hasher);
     let wants_emoji_color = bake_contains_emoji(text);
     // Color emoji must stay RGBA Bake — MSDF collapses color glyphs to a tinted wireframe.
     let as_sdf = as_sdf && !wants_emoji_color;
@@ -169,8 +189,8 @@ pub fn ensure_text_xform_texture_with_shadow(
     } else {
         0u8.hash(&mut hasher);
     }
-    // Bump when bake / SDF / emoji / shadow semantics change (invalidates stale CPU caches).
-    8u8.hash(&mut hasher);
+    // Bump when bake / SDF / emoji / shadow / layout-inset shaping semantics change.
+    9u8.hash(&mut hasher);
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -182,7 +202,7 @@ pub fn ensure_text_xform_texture_with_shadow(
         // Only re-queue when GPU may have evicted; caller flushes via
         // [`flush_text_xform_textures`]. Avoid per-frame re-upload thrash.
         let _ = (w, h, rgba);
-        return Some((key, box_w));
+        return Some((key, bake_w));
     }
 
     let (w, h, mut rgba) = rasterize_text_rgba(
@@ -190,11 +210,15 @@ pub fn ensure_text_xform_texture_with_shadow(
         font_size_px,
         font_weight,
         color,
-        box_w,
-        box_h,
+        layout_w,
+        layout_h,
+        bake_w,
+        bake_h,
+        pad,
         align,
         dpr,
         shadow,
+        glyph_dy,
     )?;
     // Reject empty bitmaps (font/shape failure); caller may fall back to Coverage glyphon.
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
@@ -205,7 +229,13 @@ pub fn ensure_text_xform_texture_with_shadow(
     }
     cache_put(key.clone(), w, h, rgba.clone());
     queue_image_rgba8(&key, w, h, rgba);
-    Some((key, box_w))
+    Some((key, bake_w))
+}
+
+/// Layout-sized shaping buffer height (≥ one line of leading).
+fn bake_shape_h(layout_h: f32, font_size_px: f32) -> f32 {
+    let leading = font_size_px * crate::style::tailwind_default_leading_scale(font_size_px);
+    layout_h.max(leading)
 }
 
 /// Rich-inline spans (chip/mention/color) → cached bake texture for CSS transform.
@@ -214,19 +244,32 @@ pub fn ensure_text_xform_texture_spans(
     font_size_px: f32,
     font_weight: u16,
     default_color: [u8; 4],
-    box_w: f32,
-    box_h: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+    pad: f32,
     align: glyphon::cosmic_text::Align,
     dpr: f32,
     as_sdf: bool,
+    glyph_dy: f32,
 ) -> Option<(String, f32)> {
-    if spans.is_empty() || box_w < 1.0 || box_h < 1.0 || font_size_px < 0.5 {
+    if spans.is_empty()
+        || layout_w < 1.0
+        || layout_h < 1.0
+        || bake_w < 1.0
+        || bake_h < 1.0
+        || font_size_px < 0.5
+    {
         return None;
     }
     let dpr = dpr.clamp(1.0, 4.0);
     let size_key = (font_size_px * 100.0).round() as i32;
-    let w_key = (box_w * 10.0).round() as i32;
-    let h_key = (box_h * 10.0).round() as i32;
+    let lw_key = (layout_w * 10.0).round() as i32;
+    let lh_key = (layout_h * 10.0).round() as i32;
+    let bw_key = (bake_w * 10.0).round() as i32;
+    let bh_key = (bake_h * 10.0).round() as i32;
+    let pad_key = (pad * 10.0).round() as i32;
     let dpr_key = (dpr * 100.0).round() as i32;
     let align_key = match align {
         glyphon::cosmic_text::Align::Left => 0u8,
@@ -251,15 +294,19 @@ pub fn ensure_text_xform_texture_spans(
     size_key.hash(&mut hasher);
     font_weight.hash(&mut hasher);
     default_color.hash(&mut hasher);
-    w_key.hash(&mut hasher);
-    h_key.hash(&mut hasher);
+    lw_key.hash(&mut hasher);
+    lh_key.hash(&mut hasher);
+    bw_key.hash(&mut hasher);
+    bh_key.hash(&mut hasher);
+    pad_key.hash(&mut hasher);
     dpr_key.hash(&mut hasher);
     align_key.hash(&mut hasher);
+    glyph_dy.to_bits().hash(&mut hasher);
     let wants_emoji_color = spans.iter().any(|s| bake_contains_emoji(&s.text));
     let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
     wants_emoji_color.hash(&mut hasher);
-    7u8.hash(&mut hasher); // rich-span + emoji bake schema
+    8u8.hash(&mut hasher); // rich-span + emoji bake schema
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -268,7 +315,7 @@ pub fn ensure_text_xform_texture_spans(
     let key = format!("{prefix}{:016x}", hasher.finish());
 
     if cache_get(&key).is_some() {
-        return Some((key, box_w));
+        return Some((key, bake_w));
     }
 
     let (w, h, mut rgba) = rasterize_rich_text_rgba(
@@ -276,10 +323,14 @@ pub fn ensure_text_xform_texture_spans(
         font_size_px,
         font_weight,
         default_color,
-        box_w,
-        box_h,
+        layout_w,
+        layout_h,
+        bake_w,
+        bake_h,
+        pad,
         align,
         dpr,
+        glyph_dy,
     )?;
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return None;
@@ -289,7 +340,7 @@ pub fn ensure_text_xform_texture_spans(
     }
     cache_put(key.clone(), w, h, rgba.clone());
     queue_image_rgba8(&key, w, h, rgba);
-    Some((key, box_w))
+    Some((key, bake_w))
 }
 
 /// Chamfer distance transform → packed SDF RGBA.
@@ -400,6 +451,41 @@ pub fn flush_text_xform_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool 
     any
 }
 
+/// Vertical glyph offset inside a Bake texture — mirrors Coverage `dy` in `prepare_text.rs`.
+/// Uses the **layout** text box height (`layout_box_h`), not the padded bake size.
+pub fn bake_glyph_layout_dy(
+    layout_box_h: f32,
+    font_size_px: f32,
+    line_count: usize,
+    nowrap: bool,
+    is_input_text: bool,
+) -> f32 {
+    if is_input_text || !nowrap || line_count != 1 {
+        return 0.0;
+    }
+    let line_height = font_size_px * crate::style::tailwind_default_leading_scale(font_size_px);
+    if layout_box_h > line_height + 1.0 {
+        (layout_box_h - line_height) * 0.5
+    } else {
+        0.0
+    }
+}
+
+/// Screen rect for a Bake/Msdf quad: expanded for ink pad, anchored on the layout text box
+/// center so the textured shader's rect-center pivot matches flex/Taffy placement under rotate.
+pub fn bake_draw_rect_for_layout(
+    text_x: f32,
+    text_y0: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+) -> [f32; 4] {
+    let cx = text_x + layout_w * 0.5;
+    let cy = text_y0 + layout_h * 0.5;
+    [cx - bake_w * 0.5, cy - bake_h * 0.5, bake_w, bake_h]
+}
+
 fn bake_contains_emoji(text: &str) -> bool {
     crate::renderer::emoji_detect::text_contains_emoji(text)
 }
@@ -414,21 +500,31 @@ fn rasterize_text_rgba(
     font_size_px: f32,
     font_weight: u16,
     color: [u8; 4],
-    box_w: f32,
-    box_h: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+    pad: f32,
     align: glyphon::cosmic_text::Align,
     dpr: f32,
     shadow: Option<([u8; 4], [f32; 2], f32)>,
+    glyph_dy: f32,
 ) -> Option<(u32, u32, Vec<u8>)> {
     crate::text::measure::with_layout_font_system(|fs| {
         crate::renderer::font_loader::ensure_coverage_for_text(fs, text);
         let size = (font_size_px * dpr).max(1.0);
         let lh = size * crate::style::tailwind_default_leading_scale(font_size_px);
-        // Buffer must be ≥ line metrics; callers pass padded boxes, but still clamp.
-        let pw = (box_w * dpr).ceil().max(1.0);
-        let ph = (box_h * dpr).ceil().max(lh).max(1.0);
-        let tw = pw.round().max(1.0) as u32;
-        let th = ph.round().max(1.0) as u32;
+        // Shape in the **layout** box (Coverage parity); blit into padded bake RT.
+        let shape_h = bake_shape_h(layout_h, font_size_px);
+        let pw = (layout_w * dpr).ceil().max(1.0);
+        let ph = (shape_h * dpr).ceil().max(lh).max(1.0);
+        let tw = (bake_w * dpr).ceil().max(1.0).round().max(1.0) as u32;
+        let th = (bake_h * dpr).ceil().max(1.0).round().max(1.0) as u32;
+        let pad_x_px = (pad * dpr).round() as i32;
+        let pad_y_px = (pad * dpr).round() as i32;
+        let v_dy_px = (glyph_dy * dpr).round() as i32;
+        let origin_x = pad_x_px;
+        let origin_y = pad_y_px + v_dy_px;
 
         let family = crate::renderer::text_hit::best_font_family(fs);
         let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
@@ -479,6 +575,8 @@ fn rasterize_text_rgba(
                     so[0] * dpr,
                     so[1] * dpr,
                     (sb * dpr).max(0.0),
+                    origin_x,
+                    origin_y,
                 );
             }
         }
@@ -496,8 +594,8 @@ fn rasterize_text_rgba(
                 if gw == 0 || gh == 0 {
                     continue;
                 }
-                let gx = physical.x + image.placement.left;
-                let gy = line_y_px + physical.y - image.placement.top;
+                let gx = physical.x + image.placement.left + origin_x;
+                let gy = line_y_px + physical.y - image.placement.top + origin_y;
                 let glyph_color = glyph
                     .color_opt
                     .map(|c| {
@@ -554,7 +652,17 @@ fn rasterize_text_rgba(
         }
 
         if wants_twemoji {
-            composite_twemoji_into_bake(&mut rgba, tw, th, &buffer, text, &layout, size);
+            composite_twemoji_into_bake(
+                &mut rgba,
+                tw,
+                th,
+                &buffer,
+                text,
+                &layout,
+                size,
+                origin_x,
+                origin_y,
+            );
         }
 
         Some((tw, th, rgba))
@@ -573,6 +681,8 @@ fn blit_text_shadow_into_bake(
     shadow_dx: f32,
     shadow_dy: f32,
     shadow_blur: f32,
+    origin_x: i32,
+    origin_y: i32,
 ) {
     struct GlyphEntry {
         px: i32,
@@ -594,8 +704,8 @@ fn blit_text_shadow_into_bake(
                 continue;
             }
             glyphs.push(GlyphEntry {
-                px: physical.x + img.placement.left,
-                py: line_y_px + physical.y - img.placement.top,
+                px: physical.x + img.placement.left + origin_x,
+                py: line_y_px + physical.y - img.placement.top + origin_y,
                 data: img.data,
                 width: img.placement.width,
                 height: img.placement.height,
@@ -686,6 +796,8 @@ fn composite_twemoji_into_bake(
     original: &str,
     layout: &str,
     font_size_px: f32,
+    origin_x: i32,
+    origin_y: i32,
 ) {
     use crate::renderer::emoji_layout;
     use unicode_segmentation::UnicodeSegmentation;
@@ -737,8 +849,8 @@ fn composite_twemoji_into_bake(
             &raster.rgba,
             raster.width as u32,
             raster.height as u32,
-            left.round() as i32,
-            top.round() as i32,
+            left.round() as i32 + origin_x,
+            top.round() as i32 + origin_y,
         );
     }
 }
@@ -751,6 +863,8 @@ fn paint_span_backgrounds(
     buffer: &glyphon::Buffer,
     spans: &[crate::style::TextSpan],
     dpr: f32,
+    origin_x: i32,
+    origin_y: i32,
 ) {
     if !spans.iter().any(|s| s.background.is_some()) {
         return;
@@ -772,8 +886,8 @@ fn paint_span_backgrounds(
                 return;
             }
             let pad = span.padding_x * dpr;
-            let bx = ((min_x - pad) * dpr).round() as i32;
-            let by = (line_top * dpr).round() as i32;
+            let bx = ((min_x - pad) * dpr).round() as i32 + origin_x;
+            let by = (line_top * dpr).round() as i32 + origin_y;
             let bw = ((max_x - min_x) + 2.0 * pad) * dpr;
             let bh = line_height.max(1.0) * dpr;
             let rw = bw.round().max(1.0) as i32;
@@ -852,10 +966,14 @@ fn rasterize_rich_text_rgba(
     font_size_px: f32,
     font_weight: u16,
     default_color: [u8; 4],
-    box_w: f32,
-    box_h: f32,
+    layout_w: f32,
+    layout_h: f32,
+    bake_w: f32,
+    bake_h: f32,
+    pad: f32,
     align: glyphon::cosmic_text::Align,
     dpr: f32,
+    glyph_dy: f32,
 ) -> Option<(u32, u32, Vec<u8>)> {
     use crate::style::TextSpanKind;
     crate::text::measure::with_layout_font_system(|fs| {
@@ -864,10 +982,16 @@ fn rasterize_rich_text_rgba(
         }
         let size = (font_size_px * dpr).max(1.0);
         let lh = size * crate::style::tailwind_default_leading_scale(font_size_px);
-        let pw = (box_w * dpr).ceil().max(1.0);
-        let ph = (box_h * dpr).ceil().max(lh).max(1.0);
-        let tw = pw.round().max(1.0) as u32;
-        let th = ph.round().max(1.0) as u32;
+        let shape_h = bake_shape_h(layout_h, font_size_px);
+        let pw = (layout_w * dpr).ceil().max(1.0);
+        let ph = (shape_h * dpr).ceil().max(lh).max(1.0);
+        let tw = (bake_w * dpr).ceil().max(1.0).round().max(1.0) as u32;
+        let th = (bake_h * dpr).ceil().max(1.0).round().max(1.0) as u32;
+        let pad_x_px = (pad * dpr).round() as i32;
+        let pad_y_px = (pad * dpr).round() as i32;
+        let v_dy_px = (glyph_dy * dpr).round() as i32;
+        let origin_x = pad_x_px;
+        let origin_y = pad_y_px + v_dy_px;
 
         let family = crate::renderer::text_hit::best_font_family(fs);
         let weight = crate::utils::font::normalize_weight_for_family(fs.db(), family, font_weight);
@@ -917,7 +1041,7 @@ fn rasterize_rich_text_rgba(
         buffer.shape_until_scroll(fs, false);
 
         let mut rgba = vec![0u8; (tw as usize) * (th as usize) * 4];
-        paint_span_backgrounds(&mut rgba, tw, th, &buffer, spans, dpr);
+        paint_span_backgrounds(&mut rgba, tw, th, &buffer, spans, dpr, origin_x, origin_y);
 
         let mut swash = glyphon::SwashCache::new();
         for run in buffer.layout_runs() {
@@ -932,8 +1056,8 @@ fn rasterize_rich_text_rgba(
                 if gw == 0 || gh == 0 {
                     continue;
                 }
-                let gx = physical.x + image.placement.left;
-                let gy = line_y_px + physical.y - image.placement.top;
+                let gx = physical.x + image.placement.left + origin_x;
+                let gy = line_y_px + physical.y - image.placement.top + origin_y;
                 let glyph_color = glyph
                     .color_opt
                     .map(|c| {
@@ -1143,17 +1267,23 @@ mod tests {
     fn bake_emoji_composites_twemoji_color_not_wireframe() {
         // Repro: sticky Bake without Twemoji used font Mask → lucide-like outline.
         let font = 28.0_f32;
-        let (bw, bh, _) = text_xform_bake_box(48.0, 48.0, font);
+        let layout_w = 48.0_f32;
+        let layout_h = 48.0_f32;
+        let (bw, bh, pad) = text_xform_bake_box(layout_w, layout_h, font);
         let Some((key, _)) = ensure_text_xform_texture(
             "👍",
             font,
             400,
             [0, 0, 0, 255], // black text color — wireframe path would be near-monochrome black
+            layout_w,
+            layout_h,
             bw,
             bh,
+            pad,
             glyphon::cosmic_text::Align::Center,
             3.0,
             true, // would be MSDF; must be forced to RGBA Bake for emoji
+            0.0,
         ) else {
             // Twemoji assets missing in some CI sandboxes — skip soft.
             return;
@@ -1207,21 +1337,131 @@ mod tests {
     }
 
     #[test]
+    fn bake_glyph_layout_dy_only_when_layout_taller_than_line() {
+        let font = 14.0_f32;
+        let line_h = font * crate::style::tailwind_default_leading_scale(font);
+        assert_eq!(
+            super::bake_glyph_layout_dy(line_h, font, 1, true, false),
+            0.0,
+            "intrinsic-height leaf must not get vertical dy"
+        );
+        let tall = line_h + 12.0;
+        let dy = super::bake_glyph_layout_dy(tall, font, 1, true, false);
+        assert!((dy - (tall - line_h) * 0.5).abs() < 0.01);
+        assert_eq!(super::bake_glyph_layout_dy(tall, font, 2, true, false), 0.0);
+        assert_eq!(super::bake_glyph_layout_dy(tall, font, 1, false, false), 0.0);
+    }
+
+    #[test]
+    fn bake_glyph_layout_dy_centers_single_line_in_tall_layout_box() {
+        let font = 14.0_f32;
+        let layout_w = 80.0_f32;
+        let layout_h = 28.0_f32;
+        let dy = super::bake_glyph_layout_dy(layout_h, font, 1, true, false);
+        assert!(dy > 0.0, "tall padded layout box should get Coverage-matching dy");
+        let (bw, bh, pad) = text_xform_bake_box(layout_w, layout_h, font);
+        let Some((w, h, rgba)) = super::rasterize_text_rgba(
+            "居中",
+            font,
+            600,
+            [0, 0, 0, 255],
+            layout_w,
+            layout_h,
+            bw,
+            bh,
+            pad,
+            glyphon::cosmic_text::Align::Center,
+            2.0,
+            None,
+            dy,
+        ) else {
+            return;
+        };
+        let mut min_y = h as i32;
+        let mut max_y = 0i32;
+        for y in 0..h {
+            for x in 0..w {
+                if rgba[((y * w + x) * 4 + 3) as usize] > 16 {
+                    min_y = min_y.min(y as i32);
+                    max_y = max_y.max(y as i32);
+                }
+            }
+        }
+        let ink_cy = (min_y + max_y) as f32 * 0.5;
+        let layout_cy = (dy * 2.0 + font) * 0.5 * 2.0; // rough: ink should sit near layout mid
+        let _ = layout_cy;
+        let tex_cy = h as f32 * 0.5;
+        assert!(
+            (ink_cy - tex_cy).abs() < h as f32 * 0.15,
+            "ink cy={ink_cy} should be near texture center {tex_cy} when dy={dy}"
+        );
+    }
+
+    #[test]
+    fn bake_right_align_ink_ends_in_layout_region_not_bake_edge() {
+        let font = 14.0_f32;
+        let layout_w = 96.0_f32;
+        let layout_h = 20.0_f32;
+        let (bw, bh, pad) = text_xform_bake_box(layout_w, layout_h, font);
+        let dpr = 2.0_f32;
+        let Some((w, h, rgba)) = super::rasterize_text_rgba(
+            "OK",
+            font,
+            600,
+            [0, 0, 0, 255],
+            layout_w,
+            layout_h,
+            bw,
+            bh,
+            pad,
+            glyphon::cosmic_text::Align::Right,
+            dpr,
+            None,
+            0.0,
+        ) else {
+            return;
+        };
+        let layout_right_px = ((pad + layout_w) * dpr).round() as i32;
+        let bake_right_px = (bw * dpr).round() as i32;
+        let mut max_ink_x = 0i32;
+        for y in 0..h {
+            for x in 0..w {
+                if rgba[((y * w + x) * 4 + 3) as usize] > 16 {
+                    max_ink_x = max_ink_x.max(x as i32);
+                }
+            }
+        }
+        let _ = bake_right_px;
+        assert!(
+            max_ink_x <= layout_right_px + 2,
+            "right-aligned ink max_x={max_ink_x} should be near layout right {layout_right_px}"
+        );
+        assert!(
+            max_ink_x < bake_right_px - 2,
+            "ink must not hug bake texture edge when layout is inset by pad"
+        );
+    }
+
+    #[test]
     fn bake_tight_box_no_longer_clips_cjk_ink() {
         // Repro: layout height == font-size (no leading) used to clip glyph tops/bottoms.
         let font = 12.0_f32;
         let tight_h = font;
-        let (bw, bh, _) = text_xform_bake_box(64.0, tight_h, font);
+        let (bw, bh, pad) = text_xform_bake_box(64.0, tight_h, font);
         let Some((_, _)) = ensure_text_xform_texture(
             "旋转中",
             font,
             600,
             [255, 255, 255, 255],
+            64.0,
+            tight_h,
             bw,
             bh,
+            pad,
             glyphon::cosmic_text::Align::Center,
             2.0,
             false,
+            0.0,
         ) else {
             // Font missing in CI — skip rather than false-fail.
             return;
@@ -1233,11 +1473,15 @@ mod tests {
             font,
             600,
             [255, 255, 255, 255],
+            64.0,
+            tight_h,
             bw,
             bh,
+            pad,
             glyphon::cosmic_text::Align::Center,
             2.0,
             None,
+            0.0,
         )
         .expect("rasterize");
         let border = 1usize;

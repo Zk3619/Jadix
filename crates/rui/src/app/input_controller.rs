@@ -400,8 +400,8 @@ impl super::App {
                                     rest,
                                 )
                                 .map(|(_, _, style, _)| {
-                                    let sz = style.size.max(1.0);
-                                    let w = style.weight.max(100);
+                                    let sz = style.size_resolved().max(1.0);
+                                    let w = style.weight_resolved().max(100);
                                     let lh = style
                                         .line_height_px
                                         .unwrap_or_else(|| {

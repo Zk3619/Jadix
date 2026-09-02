@@ -212,10 +212,10 @@ fn nonempty_makes_clear_visible_even_when_unfocused() {
     );
     for n in &lucide {
         assert!(
-            n.style.color[3] > 0,
+            n.style.color_resolved()[3] > 0,
             "lucide alpha 0: {:?} color={:?}",
             n.text,
-            n.style.color
+            n.style.color_resolved()
         );
         assert!(
             n.width > 0.5 && n.height > 0.5,

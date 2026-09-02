@@ -924,52 +924,60 @@ const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 /// RGB when a child overrides `color` (e.g. Button `link` / `text-primary` under a
 /// white-default root), which is the desync authors hit in practice.
 fn cascade_inheritable_text_style(node: &mut Element, parent_style: Option<TextStyle>) {
-    if let Some(parent) = parent_style {
-        if !node.attrs.contains_key("text_align") {
-            node.text_style.align = parent.align;
-        } else if node.text_style.align == crate::style::TextAlign::MatchParent {
-            node.text_style.align =
-                crate::style::TextAlign::resolve_match_parent(parent.align, parent.direction);
+    let parent = parent_style.unwrap_or_else(crate::style::TextStyle::cascade_root);
+    let ts = &mut node.text_style;
+
+    if ts.color.is_none() {
+        ts.color = parent.color;
+    }
+    if ts.size.is_none() {
+        ts.size = parent.size;
+    }
+    if ts.weight.is_none() {
+        ts.weight = parent.weight;
+    }
+    if ts.font_family.is_none() {
+        ts.font_family = parent.font_family.clone();
+    }
+    match ts.align {
+        None => ts.align = parent.align,
+        Some(crate::style::TextAlign::MatchParent) => {
+            ts.align = Some(crate::style::TextAlign::resolve_match_parent(
+                parent.align_resolved(),
+                parent.direction,
+            ));
         }
-        if !node.attrs.contains_key("text_color") {
-            node.text_style.color = parent.color;
-        }
-        if !node.attrs.contains_key("font_family") {
-            node.text_style.font_family = parent.font_family.clone();
-        }
-        if !node.attrs.contains_key("font_weight") {
-            node.text_style.weight = parent.weight;
-        }
-        if !node.attrs.contains_key("text_size") {
-            node.text_style.size = parent.size;
-        }
-        if !node.attrs.contains_key("line_height") && !node.attrs.contains_key("leading") {
-            node.text_style.line_height_px = parent.line_height_px;
-            node.text_style.line_height_scale = parent.line_height_scale;
-        }
-        if !node.attrs.contains_key("text_decoration_line") {
-            node.text_style.underline = parent.underline;
-            node.text_style.overline = parent.overline;
-            node.text_style.line_through = parent.line_through;
-        }
-        if !node.attrs.contains_key("text_decoration_style") {
-            node.text_style.decoration_style = parent.decoration_style;
-        }
-        if !node.attrs.contains_key("text_decoration_color") {
-            // Clears stale `Some` from a prior paint when the child never opted in via attr.
-            node.text_style.decoration_color = parent.decoration_color;
-        }
-        if !node.attrs.contains_key("text_decoration_thickness") {
-            node.text_style.decoration_thickness = parent.decoration_thickness;
-        }
-        if !node.attrs.contains_key("text_underline_offset") {
-            node.text_style.underline_offset = parent.underline_offset;
-        }
+        Some(_) => {}
+    }
+    if ts.underline.is_none() {
+        ts.underline = parent.underline;
+    }
+    if ts.overline.is_none() {
+        ts.overline = parent.overline;
+    }
+    if ts.line_through.is_none() {
+        ts.line_through = parent.line_through;
+    }
+    if ts.decoration_style.is_none() {
+        ts.decoration_style = parent.decoration_style;
+    }
+    if !ts.decoration_color_specified {
+        ts.decoration_color = parent.decoration_color;
+    }
+    if ts.decoration_thickness.is_none() {
+        ts.decoration_thickness = parent.decoration_thickness;
+    }
+    if ts.underline_offset.is_none() {
+        ts.underline_offset = parent.underline_offset;
+    }
+    if !ts.line_height_specified {
+        ts.line_height_px = parent.line_height_px;
+        ts.line_height_scale = parent.line_height_scale;
     }
 
-    let next_style = Some(node.text_style.clone());
+    let child_parent = ts.effective_ancestry(&parent);
     for child in &mut node.children {
-        cascade_inheritable_text_style(child, next_style.clone());
+        cascade_inheritable_text_style(child, Some(child_parent.clone()));
     }
 }
 
@@ -1666,15 +1674,18 @@ fn element_text_clips_to_box(element: &Element) -> bool {
 
 /// Extra clip height so CSS underline-offset / overline can paint past the glyph box.
 fn text_decoration_clip_outset(style: &crate::style::TextStyle) -> f32 {
-    if !style.underline && !style.overline {
+    if !style.underline_resolved() && !style.overline_resolved() {
         return 0.0;
     }
-    let thickness = if style.decoration_thickness > 0.0 {
-        style.decoration_thickness
-    } else {
-        (style.size * 0.07).max(1.0)
+    let thickness = {
+        let t = style.decoration_thickness_resolved();
+        if t > 0.0 {
+            t
+        } else {
+            (style.size_resolved() * 0.07).max(1.0)
+        }
     };
-    style.underline_offset.max(0.0) + thickness + 1.0
+    style.underline_offset_resolved().max(0.0) + thickness + 1.0
 }
 
 fn text_leaf_clip_rect(render_rect: [f32; 4], style: &crate::style::TextStyle) -> [f32; 4] {
@@ -1683,10 +1694,10 @@ fn text_leaf_clip_rect(render_rect: [f32; 4], style: &crate::style::TextStyle) -
         return render_rect;
     }
     let mut r = render_rect;
-    if style.underline {
+    if style.underline_resolved() {
         r[3] += deco;
     }
-    if style.overline {
+    if style.overline_resolved() {
         r[1] -= deco;
         r[3] += deco;
     }
@@ -1695,13 +1706,13 @@ fn text_leaf_clip_rect(render_rect: [f32; 4], style: &crate::style::TextStyle) -
 
 fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeasureMeta {
     TextMeasureMeta {
-        size: element.text_style.size,
+        size: element.text_style.size_resolved(),
         text,
         shape_suffix: element.text_shape_suffix.clone(),
         is_icon,
         line_height_px: element.text_style.line_height_px,
         line_height_scale: element.text_style.line_height_scale,
-        weight: element.text_style.weight,
+        weight: element.text_style.weight_resolved(),
         letter_spacing: element.text_style.letter_spacing,
         spans: element.text_spans.clone(),
         nowrap: element.text_style.white_space == crate::style::WhiteSpace::Nowrap,
@@ -1894,7 +1905,7 @@ fn measured_text_leaf_size(
     // Never raise height from known_dimensions: flex Stretch would inflate text leaves to
     // the ScrollArea/Textarea viewport, so leaf (and soft_h.max(scaled_h)) tracked chrome
     // resize instead of content — gallery "text render height grows with drag".
-    // Definite `style.size.height` is applied by Taffy via node_size, not this max().
+    // Definite `style.size_resolved().height` is applied by Taffy via node_size, not this max().
     let _ = known_dimensions.height;
     taffy::geometry::Size { width, height }
 }
@@ -2044,7 +2055,7 @@ impl LayoutTree {
 
     #[inline]
     fn unit_ctx_for(&self, element: &Element) -> UnitCtx {
-        UnitCtx::new(self.viewport[0], self.viewport[1], element.text_style.size)
+        UnitCtx::new(self.viewport[0], self.viewport[1], element.text_style.size_resolved())
     }
 
     fn unit_ctx_with_cb(&self, element: &Element, cb_w: Option<f32>, cb_h: Option<f32>) -> UnitCtx {
@@ -3512,8 +3523,10 @@ impl LayoutTree {
         if let Some(text) = &element.text {
             let mut text_style = element.text_style.clone();
             if opacity < 1.0 - f32::EPSILON {
-                let a = ((f32::from(text_style.color[3]) * opacity).round() as u16).min(255) as u8;
-                text_style.color[3] = a;
+                let mut c = text_style.color_resolved();
+                let a = ((f32::from(c[3]) * opacity).round() as u16).min(255) as u8;
+                c[3] = a;
+                text_style.color = Some(c);
             }
             // CSS `scale` paints like a transform: shape at layout box width (soft-wrap
             // follows element `white-space`, not visual scale), place at scaled top-left,
@@ -3565,7 +3578,7 @@ impl LayoutTree {
                 // Paint a font-size square centered in the layout box. Using
                 // max(lay/vis) stretched a 16px chevron to the flex parent (thicker
                 // after rotate) and shifted the pivot away from the glyph.
-                let side = (text_style.size * text_scale).max(1.0);
+                let side = (text_style.size_resolved() * text_scale).max(1.0);
                 let cx = vis_x + vis_w * 0.5;
                 let cy = vis_y + vis_h * 0.5;
                 let full = [cx - side * 0.5, cy - side * 0.5, side, side];
@@ -3589,7 +3602,7 @@ impl LayoutTree {
                         crate::utils::lucide_animated::ensure_animated_icon_texture(
                             element,
                             side,
-                            text_style.color,
+                            text_style.color_resolved(),
                             2.0,
                         )
                     {
@@ -3614,7 +3627,7 @@ impl LayoutTree {
                             icon_name,
                             glyph,
                             side,
-                            text_style.color,
+                            text_style.color_resolved(),
                             2.0,
                         )
                     {
@@ -3642,13 +3655,13 @@ impl LayoutTree {
                         element.text.as_deref(),
                     ) {
                         if crate::utils::lucide_svg_inner(icon_name).is_some() {
-                            let side = (text_style.size * text_scale).max(1.0);
+                            let side = (text_style.size_resolved() * text_scale).max(1.0);
                             if let Some((tex_key, _)) =
                                 crate::utils::icon_texture::ensure_lucide_icon_texture(
                                     Some(icon_name),
                                     glyph,
                                     side,
-                                    text_style.color,
+                                    text_style.color_resolved(),
                                     2.0,
                                 )
                             {
@@ -3688,7 +3701,7 @@ impl LayoutTree {
 
                     let mut text_baked = false;
                     if use_bake {
-                        let align = match text_style.align {
+                        let align = match text_style.align_resolved() {
                             crate::style::TextAlign::Left
                             | crate::style::TextAlign::Start
                             | crate::style::TextAlign::MatchParent => {
@@ -3720,7 +3733,7 @@ impl LayoutTree {
                         // CSS `scale` is baked into vis rect / draw_w (not `world_linear`). Rasterize
                         // at the painted font size so glyphs fill the scaled quad — otherwise SDF/Bake
                         // textures show ~1× text centered in a 3× box (gallery `scale-[3]`).
-                        let bake_font_size = text_style.size * text_scale;
+                        let bake_font_size = text_style.size_resolved() * text_scale;
                         // Expand to line-height + ink pad (+ text-shadow extent); draw the padded
                         // quad so glyphs/shadow aren't clipped. Intersect only with ancestor scroll
                         // clip — not the text leaf's overflow:hidden (that would crop the pad).
@@ -3766,6 +3779,16 @@ impl LayoutTree {
                                 bake_font_size,
                                 shadow_extra,
                             );
+                        let nowrap = text_style.white_space == crate::style::WhiteSpace::Nowrap;
+                        let is_input_text = text_style.input_caret.is_some();
+                        let hard_lines_n = text.split('\n').count().max(1);
+                        let glyph_dy = crate::utils::text_texture::bake_glyph_layout_dy(
+                            draw_h,
+                            bake_font_size,
+                            hard_lines_n,
+                            nowrap,
+                            is_input_text,
+                        );
                         let bake_result = if let Some(spans) =
                             element.text_spans.as_ref().filter(|s| !s.is_empty())
                         {
@@ -3775,37 +3798,52 @@ impl LayoutTree {
                             crate::utils::text_texture::ensure_text_xform_texture_spans(
                                 spans,
                                 bake_font_size,
-                                text_style.weight,
-                                text_style.color,
+                                text_style.weight_resolved(),
+                                text_style.color_resolved(),
+                                draw_w.max(1.0),
+                                draw_h.max(1.0),
                                 bake_w,
                                 bake_h,
+                                pad,
                                 align,
                                 dpr,
                                 as_sdf,
+                                glyph_dy,
                             )
                         } else {
                             crate::utils::text_texture::ensure_text_xform_texture_with_shadow(
                                 text,
                                 bake_font_size,
-                                text_style.weight,
-                                text_style.color,
+                                text_style.weight_resolved(),
+                                text_style.color_resolved(),
+                                draw_w.max(1.0),
+                                draw_h.max(1.0),
                                 bake_w,
                                 bake_h,
+                                pad,
                                 align,
                                 dpr,
                                 as_sdf,
                                 bake_shadow,
+                                glyph_dy,
                             )
                         };
                         if let Some((tex_key, _)) = bake_result {
-                            let full = [text_x - pad, text_y0 - pad, bake_w, bake_h];
+                            let full = crate::utils::text_texture::bake_draw_rect_for_layout(
+                                text_x,
+                                text_y0,
+                                draw_w,
+                                draw_h,
+                                bake_w,
+                                bake_h,
+                            );
                             if let Some(draw) =
                                 TexturedDraw::clipped(full, parent_clip, tex_key, opacity)
                             {
                                 let mut draw = draw
                                     .with_transform(crate::style::mat2d_linear(&text_world_linear));
                                 if as_sdf {
-                                    let c = text_style.color;
+                                    let c = text_style.color_resolved();
                                     draw = draw.with_tint_rgb([
                                         c[0] as f32 / 255.0,
                                         c[1] as f32 / 255.0,
@@ -3834,18 +3872,18 @@ impl LayoutTree {
                             let line_height = if let Some(lh) = text_style.line_height_px {
                                 lh
                             } else if let Some(scale) = text_style.line_height_scale {
-                                text_style.size * scale
+                                text_style.size_resolved() * scale
                             } else {
-                                text_style.size
-                                    * crate::style::tailwind_default_leading_scale(text_style.size)
+                                text_style.size_resolved()
+                                    * crate::style::tailwind_default_leading_scale(text_style.size_resolved())
                             };
                             if let Some(spans) =
                                 element.text_spans.as_ref().filter(|s| !s.is_empty())
                             {
                                 Some(crate::text::prepare_rich(
                                     spans,
-                                    text_style.size,
-                                    text_style.weight,
+                                    text_style.size_resolved(),
+                                    text_style.weight_resolved(),
                                     line_height,
                                 ))
                             } else {
@@ -3858,8 +3896,8 @@ impl LayoutTree {
                                     };
                                 Some(crate::text::prepare(
                                     blob.as_ref(),
-                                    text_style.size,
-                                    text_style.weight,
+                                    text_style.size_resolved(),
+                                    text_style.weight_resolved(),
                                     line_height,
                                 ))
                             }
@@ -4511,29 +4549,31 @@ fn scrollbar_track_overlay_abs(
             .unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX),
     };
 
-    let x_inside = !sig.inset_x.eq_ignore_ascii_case("outside");
-    let y_inside = !sig.inset_y.eq_ignore_ascii_case("outside");
+    let both_outside = sig.inset_x.eq_ignore_ascii_case("outside")
+        && sig.inset_y.eq_ignore_ascii_case("outside");
     let y_is_left = sig.y_side.eq_ignore_ascii_case("left");
     let x_is_top = sig.x_side.eq_ignore_ascii_case("top");
-    // Keep identical with `app::state`: reserve only opposite lane thickness.
+    // Keep identical with `app::state`: reserve only opposite lane thickness when both outside.
     let corner_reserve = base_thickness;
 
     let mut reserve_left = 0.0_f32;
     let mut reserve_right = 0.0_f32;
     let mut reserve_top = 0.0_f32;
     let mut reserve_bottom = 0.0_f32;
-    if axis == "x" && x_inside && y_inside && reserve_for_y {
-        if y_is_left {
-            reserve_left = corner_reserve;
-        } else {
-            reserve_right = corner_reserve;
+    if both_outside {
+        if axis == "x" && reserve_for_y {
+            if y_is_left {
+                reserve_left = corner_reserve;
+            } else {
+                reserve_right = corner_reserve;
+            }
         }
-    }
-    if axis == "y" && x_inside && y_inside && reserve_for_x {
-        if x_is_top {
-            reserve_top = corner_reserve;
-        } else {
-            reserve_bottom = corner_reserve;
+        if axis == "y" && reserve_for_x {
+            if x_is_top {
+                reserve_top = corner_reserve;
+            } else {
+                reserve_bottom = corner_reserve;
+            }
         }
     }
 
@@ -4596,7 +4636,7 @@ fn scrollbar_track_overlay_abs(
             };
             [
                 base_abs_x + content_inset + ml,
-                base_abs_y + content_inset,
+                base_abs_y + content_inset + inset,
                 tw,
                 thumb_cross,
             ]
@@ -4620,7 +4660,7 @@ fn scrollbar_track_overlay_abs(
                 (track_inner, 0.0)
             };
             [
-                base_abs_x + content_inset,
+                base_abs_x + content_inset + inset,
                 base_abs_y + content_inset + mt,
                 thumb_cross,
                 th,
@@ -4811,9 +4851,10 @@ fn push_input_chrome_instances(
     let line_height = if let Some(lh) = style.line_height_px {
         lh
     } else if let Some(scale) = style.line_height_scale {
-        style.size * scale
+        style.size_resolved() * scale
     } else {
-        style.size * crate::style::tailwind_default_leading_scale(style.size)
+        style.size_resolved()
+            * crate::style::tailwind_default_leading_scale(style.size_resolved())
     };
     let soft_wrap = style.white_space == crate::style::WhiteSpace::Normal
         && !style.overflow.allows_caret_scroll();
@@ -4827,8 +4868,8 @@ fn push_input_chrome_instances(
     let soft_ranges: Vec<(usize, usize)> = if soft_wrap {
         crate::text::soft_visual_line_byte_ranges(
             text,
-            style.size,
-            style.weight,
+            style.size_resolved(),
+            style.weight_resolved(),
             line_height.max(1.0),
             box_w.max(1.0),
             style.wrap_mode.to_line_break_source(),
@@ -4844,7 +4885,7 @@ fn push_input_chrome_instances(
     };
     // Soft-wrap of one hard line still stacks visual rows — never center in the tall box.
     let multi_line_layout = line_count > 1;
-    let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, style.size);
+    let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, style.size_resolved());
     let sel_h = if multi_line_layout {
         line_height.max(1.0)
     } else {
@@ -4942,13 +4983,13 @@ fn push_input_chrome_instances(
                 continue;
             }
             let prefix_w =
-                prefix_width_logical(line_body, from, style.size, style.weight, line_height);
-            let end_w = prefix_width_logical(line_body, to, style.size, style.weight, line_height);
+                prefix_width_logical(line_body, from, style.size_resolved(), style.weight_resolved(), line_height);
+            let end_w = prefix_width_logical(line_body, to, style.size_resolved(), style.weight_resolved(), line_height);
             let line_w = prefix_width_logical(
                 line_body,
                 line_body.len(),
-                style.size,
-                style.weight,
+                style.size_resolved(),
+                style.weight_resolved(),
                 line_height,
             );
             let align_dx = style.align_inline_offset(line_w, box_w);
@@ -4983,12 +5024,12 @@ fn push_input_chrome_instances(
     ix = text.floor_char_boundary(ix);
     let (line_i, local) = line_and_local(ix);
     let (_line_start, line_body) = line_body_at(line_i);
-    let prefix_w = prefix_width_logical(line_body, local, style.size, style.weight, line_height);
+    let prefix_w = prefix_width_logical(line_body, local, style.size_resolved(), style.weight_resolved(), line_height);
     let line_w = prefix_width_logical(
         line_body,
         line_body.len(),
-        style.size,
-        style.weight,
+        style.size_resolved(),
+        style.weight_resolved(),
         line_height,
     );
     let align_dx = style.align_inline_offset(line_w, box_w);
@@ -5001,7 +5042,7 @@ fn push_input_chrome_instances(
     } else if !pan {
         caret_x = caret_x.min(x + box_w - caret_w).max(x);
     }
-    let c = style.color;
+    let c = style.color_resolved();
     let color = [
         c[0] as f32 / 255.0,
         c[1] as f32 / 255.0,
@@ -5094,10 +5135,10 @@ mod prepared_text_attach_tests {
         let box_w = 280.0_f32;
         let glyph_w = prefix_width_logical("啊", "啊".len(), 14.0, 400, lh);
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: text.len(),
             selection: Some((0, text.len())),
@@ -5154,11 +5195,11 @@ mod prepared_text_attach_tests {
         let expected_y = visual_i as f32 * lh; // multi-line origin (no half-box center)
 
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
         style.white_space = crate::style::WhiteSpace::Normal;
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: caret_byte,
             selection: None,
@@ -5246,12 +5287,12 @@ mod prepared_text_attach_tests {
         let expected_x = prefix_width_logical(&text[cs..emoji], emoji - cs, size, 400, lh);
 
         let mut style = TextStyle::default();
-        style.size = size;
-        style.weight = 400;
+        style.size = Some(size);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
         style.white_space = crate::style::WhiteSpace::Normal;
         style.wrap_mode = crate::text::WrapMode::Char;
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: emoji,
             selection: None,
@@ -5300,10 +5341,10 @@ mod prepared_text_attach_tests {
         let text = "asd\nadj";
         let lh = 21.0_f32;
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: text.len(),
             selection: None,
@@ -5358,10 +5399,10 @@ mod prepared_text_attach_tests {
         let text_x = layout_x - scroll_x;
 
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.white_space = crate::style::WhiteSpace::Nowrap;
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: 8,
@@ -5434,10 +5475,10 @@ mod prepared_text_attach_tests {
         );
         let scroll_x = (prefix - box_w + 2.0).max(0.0);
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.overflow = TextOverflow::Hidden;
         style.scroll_x = scroll_x;
         style.input_caret = Some(InputCaretDraw {
@@ -5495,12 +5536,12 @@ mod prepared_text_attach_tests {
             "fixture must fit so center offset applies (line_w={line_w})"
         );
         let mut style = TextStyle::default();
-        style.size = size;
-        style.weight = 400;
+        style.size = Some(size);
+        style.weight = Some(400);
         style.line_height_px = Some(lh);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.overflow = TextOverflow::Hidden;
-        style.align = crate::style::TextAlign::Center;
+        style.align = Some(crate::style::TextAlign::Center);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: text.len(),
             selection: None,
@@ -5650,10 +5691,10 @@ mod prepared_text_attach_tests {
         // Caret after "是" (IME replace middle of "1111").
         let caret_byte = "1是".len();
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
-        style.color = [0, 0, 0, 255];
+        style.color = Some([0, 0, 0, 255]);
         style.input_caret = Some(InputCaretDraw {
             caret_byte_index: caret_byte,
             selection: None,
@@ -6248,6 +6289,53 @@ mod portal_hoist_tests {
     }
 
     #[test]
+    fn rotated_flex_centered_caption_bake_pivot_matches_layout_box() {
+        let mut shell = Element::new()
+            .bg([0.2, 0.4, 0.9, 1.0])
+            .w(120.0)
+            .h(48.0)
+            .items_center()
+            .justify_center()
+            .absolute()
+            .left(40.0)
+            .top(40.0)
+            .child({
+                let mut t = Element::new().text("倾斜按钮").w(90.0).h(28.0);
+                t.text_style.size = Some(14.0);
+                t.text_style.align = Some(crate::style::TextAlign::Center);
+                t
+            });
+        shell.style.rotate_deg = -15.0;
+        let mut root = Element::new().w(400.0).h(300.0).child(shell);
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 400.0, 300.0, [0.0, 0.0]);
+        let caption = root
+            .children
+            .first()
+            .and_then(|s| s.children.first())
+            .expect("caption");
+        let [lx, ly, lw, lh] = caption.layout_bounds;
+        let layout_cx = lx + lw * 0.5;
+        let layout_cy = ly + lh * 0.5;
+        let bake = result
+            .textured_draws
+            .iter()
+            .find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            })
+            .expect("baked caption");
+        let bake_cx = bake.rect[0] + bake.rect[2] * 0.5;
+        let bake_cy = bake.rect[1] + bake.rect[3] * 0.5;
+        assert!(
+            (bake_cx - layout_cx).abs() < 1.5 && (bake_cy - layout_cy).abs() < 1.5,
+            "bake pivot ({bake_cx:.1},{bake_cy:.1}) must match layout box center ({layout_cx:.1},{layout_cy:.1})"
+        );
+    }
+
+    #[test]
     fn bake_draw_taller_than_tight_font_box() {
         let mut shell = Element::new()
             .bg([0.2, 0.4, 0.9, 1.0])
@@ -6258,7 +6346,7 @@ mod portal_hoist_tests {
             .top(10.0)
             .child({
                 let mut t = Element::new().text("45°").w(40.0).h(12.0);
-                t.text_style.size = 12.0;
+                t.text_style.size = Some(12.0);
                 t
             });
         shell.style.rotate_deg = 45.0;
@@ -6389,9 +6477,9 @@ mod portal_hoist_tests {
         );
         // Default text size is not multiplied by 0.8 (that was the drag-lag path).
         assert!(
-            label.style.size > 10.0,
+            label.style.size_resolved() > 10.0,
             "layout font size must stay unscaled for stable reshape; got {}",
-            label.style.size
+            label.style.size_resolved()
         );
     }
 
@@ -6535,7 +6623,7 @@ mod text_cascade_tests {
     fn decoration_color_none_is_current_color_not_parent_rgb() {
         // Parent root defaults to white text; child sets primary-like black via attr.
         let mut root = Element::new();
-        root.text_style.color = [255, 255, 255, 255];
+        root.text_style.color = Some([255, 255, 255, 255]);
         root.text_style.decoration_color = None;
 
         let mut child = Element::new().text("Link").text_color([0, 0, 0, 255]);
@@ -6546,7 +6634,7 @@ mod text_cascade_tests {
 
         cascade_inheritable_text_style_for_test(&mut root);
         let leaf = &root.children[0];
-        assert_eq!(leaf.text_style.color, [0, 0, 0, 255]);
+        assert_eq!(leaf.text_style.color_resolved(), [0, 0, 0, 255]);
         assert_eq!(
             leaf.text_style.decoration_color, None,
             "None = currentColor at draw; must not keep parent's white RGB"

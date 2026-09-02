@@ -45,7 +45,7 @@ const SLOT_KBD: &str = "kbd";
 const SLOT_KBD_GROUP: &str = "kbd-group";
 fn paint_caption(el: &mut Element, color: [u8; 4]) {
     if el.text.is_some() {
-        el.text_style.color = color;
+        el.text_style.color = Some(color);
     }
     for child in &mut el.children {
         paint_caption(child, color);
@@ -78,8 +78,8 @@ fn attach_kbd_children(
             let is_lucide = child.text_style.font_family.as_deref() == Some("lucide");
             let size_px = if is_lucide {
                 // ShadCN [&_svg:not([class*='size-'])]:size-3 → 0.75rem default
-                if child.text_style.size > 1.0 {
-                    child.text_style.size
+                if child.text_style.size_resolved() > 1.0 {
+                    child.text_style.size_resolved()
                 } else {
                     IntoF32::into_f32("0.75rem")
                 }
@@ -110,7 +110,7 @@ fn attach_kbd_children(
             el = el.child(text_node);
         } else {
             if child.text_style.font_family.as_deref() == Some("lucide")
-                && child.text_style.size <= 1.0
+                && child.text_style.size_resolved() <= 1.0
             {
                 child = child.text_size(IntoF32::into_f32("0.75rem"));
             }
@@ -318,8 +318,8 @@ mod tests {
             .iter()
             .find(|c| c.text.as_deref() == Some("⌘"))
             .expect("caption leaf");
-        assert_eq!(leaf.text_style.color, parse_text_color("muted-foreground"));
-        assert_eq!(leaf.text_style.weight, 500);
+        assert_eq!(leaf.text_style.color_resolved(), parse_text_color("muted-foreground"));
+        assert_eq!(leaf.text_style.weight_resolved(), 500);
     }
 
     #[test]

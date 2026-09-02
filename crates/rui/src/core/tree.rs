@@ -1247,40 +1247,28 @@ impl Element {
         self
     }
     pub fn text_color(mut self, color: [u8; 4]) -> Self {
-        self.text_style.color = color;
-        self.attrs.insert("text_color".to_string(), "1".to_string());
+        self.text_style.color = Some(color);
         self
     }
     pub fn text_size(mut self, size: f32) -> Self {
-        self.text_style.size = size;
-        self.attrs.insert("text_size".to_string(), "1".to_string());
+        self.text_style.size = Some(size);
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32Raw) -> Self {
         let w = weight.into_f32_raw().round().clamp(100.0, 900.0) as u16;
-        self.text_style.weight = w;
-        self.attrs
-            .insert("font_weight".to_string(), "1".to_string());
+        self.text_style.weight = Some(w);
         self
     }
     pub fn underline(mut self, underline: bool) -> Self {
-        self.text_style.underline = underline;
-        // Mark explicit so `cascade_inheritable_text_style` does not wipe hover toggles
-        // (e.g. Button `link` → `hover:underline`).
-        self.attrs
-            .insert("text_decoration_line".to_string(), "1".to_string());
+        self.text_style.underline = Some(underline);
         self
     }
     pub fn text_decoration(mut self, decoration: impl Into<String>) -> Self {
         let raw = decoration.into().to_lowercase();
-        self.attrs
-            .insert("text_decoration_line".to_string(), "1".to_string());
-        self.attrs
-            .insert("text_decoration_style".to_string(), "1".to_string());
         if raw.contains("none") {
-            self.text_style.underline = false;
-            self.text_style.overline = false;
-            self.text_style.line_through = false;
+            self.text_style.underline = Some(false);
+            self.text_style.overline = Some(false);
+            self.text_style.line_through = Some(false);
             return self;
         }
         let has_line_token = raw.contains("underline")
@@ -1289,88 +1277,79 @@ impl Element {
             || raw.contains("linethrough")
             || raw.contains("strikethrough");
         if has_line_token {
-            self.text_style.underline = false;
-            self.text_style.overline = false;
-            self.text_style.line_through = false;
+            self.text_style.underline = Some(false);
+            self.text_style.overline = Some(false);
+            self.text_style.line_through = Some(false);
             if raw.contains("underline") {
-                self.text_style.underline = true;
+                self.text_style.underline = Some(true);
             }
             if raw.contains("overline") {
-                self.text_style.overline = true;
+                self.text_style.overline = Some(true);
             }
             if raw.contains("line-through")
                 || raw.contains("linethrough")
                 || raw.contains("strikethrough")
             {
-                self.text_style.line_through = true;
+                self.text_style.line_through = Some(true);
             }
         }
         if raw.contains("double") {
-            self.text_style.decoration_style = TextDecorationStyle::Double;
+            self.text_style.decoration_style = Some(TextDecorationStyle::Double);
         } else if raw.contains("dotted") {
-            self.text_style.decoration_style = TextDecorationStyle::Dotted;
+            self.text_style.decoration_style = Some(TextDecorationStyle::Dotted);
         } else if raw.contains("dashed") {
-            self.text_style.decoration_style = TextDecorationStyle::Dashed;
+            self.text_style.decoration_style = Some(TextDecorationStyle::Dashed);
         } else if raw.contains("wavy") {
-            self.text_style.decoration_style = TextDecorationStyle::Wavy;
+            self.text_style.decoration_style = Some(TextDecorationStyle::Wavy);
         } else if raw.contains("solid") {
-            self.text_style.decoration_style = TextDecorationStyle::Solid;
+            self.text_style.decoration_style = Some(TextDecorationStyle::Solid);
         }
         self
     }
     pub fn text_decoration_line(mut self, line: impl Into<String>) -> Self {
         let raw = line.into().to_lowercase();
-        self.attrs
-            .insert("text_decoration_line".to_string(), "1".to_string());
         if raw.contains("none") {
-            self.text_style.underline = false;
-            self.text_style.overline = false;
-            self.text_style.line_through = false;
+            self.text_style.underline = Some(false);
+            self.text_style.overline = Some(false);
+            self.text_style.line_through = Some(false);
             return self;
         }
         if raw.contains("underline") {
-            self.text_style.underline = true;
+            self.text_style.underline = Some(true);
         }
         if raw.contains("overline") {
-            self.text_style.overline = true;
+            self.text_style.overline = Some(true);
         }
         if raw.contains("line-through")
             || raw.contains("linethrough")
             || raw.contains("strikethrough")
         {
-            self.text_style.line_through = true;
+            self.text_style.line_through = Some(true);
         }
         self
     }
     pub fn text_decoration_style(mut self, style: impl Into<String>) -> Self {
         let s = style.into().trim().to_lowercase();
-        self.attrs
-            .insert("text_decoration_style".to_string(), "1".to_string());
-        self.text_style.decoration_style = match s.as_str() {
+        self.text_style.decoration_style = Some(match s.as_str() {
             "double" => TextDecorationStyle::Double,
             "dotted" => TextDecorationStyle::Dotted,
             "dashed" => TextDecorationStyle::Dashed,
             "wavy" => TextDecorationStyle::Wavy,
             _ => TextDecorationStyle::Solid,
-        };
+        });
         self
     }
     pub fn text_decoration_color(mut self, color: [u8; 4]) -> Self {
         self.text_style.decoration_color = Some(color);
-        self.attrs
-            .insert("text_decoration_color".to_string(), "1".to_string());
+        self.text_style.decoration_color_specified = true;
         self
     }
     pub fn text_decoration_thickness(mut self, thickness: impl IntoF32) -> Self {
-        self.text_style.decoration_thickness = thickness.into_f32().max(0.0);
-        self.attrs
-            .insert("text_decoration_thickness".to_string(), "1".to_string());
+        self.text_style.decoration_thickness = Some(thickness.into_f32().max(0.0));
         self
     }
     pub fn text_underline_offset(mut self, offset: impl IntoF32) -> Self {
-        self.text_style.underline_offset = offset.into_f32();
-        self.attrs
-            .insert("text_underline_offset".to_string(), "1".to_string());
+        self.text_style.underline_offset = Some(offset.into_f32());
         self
     }
     pub fn text_shadow(mut self, spec: impl AsRef<str>) -> Self {
@@ -1400,17 +1379,13 @@ impl Element {
         use crate::style::{TextAlign, TextAlignDeclaration};
         match TextAlign::parse_declaration(align.as_ref()) {
             TextAlignDeclaration::Inherit => {
-                self.attrs.remove("text_align");
+                self.text_style.align = None;
             }
             TextAlignDeclaration::Initial => {
-                self.text_style.align = TextAlign::Start;
-                self.attrs
-                    .insert("text_align".to_string(), "start".to_string());
+                self.text_style.align = Some(TextAlign::Start);
             }
             TextAlignDeclaration::Value(v) => {
-                self.text_style.align = v;
-                self.attrs
-                    .insert("text_align".to_string(), v.as_str().to_string());
+                self.text_style.align = Some(v);
             }
         }
         self
@@ -1426,38 +1401,37 @@ impl Element {
     }
     pub fn text_line_height(mut self, line_height: impl IntoF32) -> Self {
         self.text_style.line_height_px = Some(line_height.into_f32().max(1.0));
-        self.attrs
-            .insert("line_height".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     pub fn text_leading(mut self, scale: impl IntoF32Raw) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(scale.into_f32_raw().max(0.01));
-        self.attrs.insert("leading".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     pub fn text_leading_none(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.0);
-        self.attrs.insert("leading".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     pub fn text_leading_tight(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.25);
-        self.attrs.insert("leading".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     pub fn text_leading_normal(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.5);
-        self.attrs.insert("leading".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     pub fn text_leading_relaxed(mut self) -> Self {
         self.text_style.line_height_px = None;
         self.text_style.line_height_scale = Some(1.625);
-        self.attrs.insert("leading".to_string(), "1".to_string());
+        self.text_style.line_height_specified = true;
         self
     }
     /// Apply `text-overflow`: `clip` / `hidden` / `ellipsis` are nowrap + box `overflow: hidden`;

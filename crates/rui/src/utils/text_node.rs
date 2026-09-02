@@ -142,7 +142,7 @@ mod icon_defaults_tests {
     fn icon_defaults_to_text_foreground() {
         let el = build_icon_text_node("\u{ea0e}");
         let fg = parse_text_color("foreground");
-        assert_eq!(el.text_style.color, fg);
+        assert_eq!(el.text_style.color_resolved(), fg);
         assert_eq!(el.text_style.font_family.as_deref(), Some("lucide"));
         assert_eq!(el.pointer_events_mode(), PointerEvents::BoundingBox);
         assert!(el.pointer_events_mode().is_svg_only());

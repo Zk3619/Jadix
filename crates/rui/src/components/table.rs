@@ -107,9 +107,9 @@ fn apply_cell_align(mut el: Element, align: TableAlign) -> Element {
 
 fn style_textish(el: &mut Element, size: f32, weight: f32, color: [u8; 4]) {
     if el.text.is_some() {
-        el.text_style.size = size;
-        el.text_style.weight = weight as u16;
-        el.text_style.color = color;
+        el.text_style.size = Some(size);
+        el.text_style.weight = Some(weight as u16);
+        el.text_style.color = Some(color);
     }
     for c in &mut el.children {
         style_textish(c, size, weight, color);

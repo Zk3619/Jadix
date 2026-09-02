@@ -71,7 +71,7 @@ fn gallery_label_leading_normal_face_emoji_fits_text_bounds() {
         "string children must be adopted onto Label text"
     );
 
-    let size = el.text_style.size;
+    let size = el.text_style.size_resolved();
     let lh = size * 1.5;
 
     let mut tree = LayoutTree::new();

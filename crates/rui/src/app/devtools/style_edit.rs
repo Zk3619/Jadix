@@ -731,7 +731,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "font-size" | "font_size" => {
             if let Ok(v) = parse_f32(value) {
-                el.text_style.size = v.max(1.0);
+                el.text_style.size = Some(v.max(1.0));
                 LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean
@@ -739,7 +739,7 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "font-weight" | "font_weight" => {
             if let Ok(v) = value.trim().parse::<u16>() {
-                el.text_style.weight = v;
+                el.text_style.weight = Some(v);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean

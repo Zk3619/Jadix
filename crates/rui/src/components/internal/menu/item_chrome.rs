@@ -28,10 +28,10 @@ pub fn style_item_text(el: &mut Element, color: [u8; 4], attr_slot: &str, shortc
         return;
     }
     if el.text.is_some() {
-        el.text_style.size = 14.0;
+        el.text_style.size = Some(14.0);
         el.text_style.line_height_px = Some(20.0);
-        el.text_style.weight = 600;
-        el.text_style.color = color;
+        el.text_style.weight = Some(600);
+        el.text_style.color = Some(color);
         el.attrs.insert("font_weight".to_string(), "1".to_string());
         el.attrs.insert("text_size".to_string(), "1".to_string());
         el.attrs.insert("text_color".to_string(), "1".to_string());
@@ -131,8 +131,8 @@ pub fn paint_item_fg(el: &mut Element, fg: [u8; 4], attr_slot: &str, shortcut_sl
         return;
     }
     if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
-        el.text_style.color = fg;
-        el.text_style.weight = 600;
+        el.text_style.color = Some(fg);
+        el.text_style.weight = Some(600);
         el.text_style.white_space = WhiteSpace::Nowrap;
         el.attrs
             .entry("font_weight".to_string())

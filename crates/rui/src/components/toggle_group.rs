@@ -498,8 +498,8 @@ fn sync_toggle_group_pressed(
             }
         }
         if let Some(label) = option.children.get_mut(0) {
-            if label.text_style.color != want_fg {
-                label.text_style.color = want_fg;
+            if label.text_style.color_resolved() != want_fg {
+                label.text_style.color = Some(want_fg);
                 changed = true;
             }
         }

@@ -1710,8 +1710,8 @@ pub fn prepare_text_frame(
                 .unwrap_or_else(|| {
                     let scale = st
                         .line_height_scale
-                        .unwrap_or_else(|| tailwind_default_leading_scale(st.size));
-                    st.size * scale
+                        .unwrap_or_else(|| tailwind_default_leading_scale(st.size_resolved()));
+                    st.size_resolved() * scale
                 })
                 .max(1.0)
                 * ui_scale;
@@ -1783,13 +1783,13 @@ pub fn prepare_text_frame(
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
-        let requested_weight = if is_icon { 400 } else { st.weight };
+        let requested_weight = if is_icon { 400 } else { st.weight_resolved() };
         let font_weight = crate::utils::font::normalize_weight_for_family(
             unsafe { &*text_renderer.font_system }.db(),
             family,
             requested_weight,
         );
-        let scaled_size = st.size * ui_scale;
+        let scaled_size = st.size_resolved() * ui_scale;
         let mut line_height = if is_icon {
             scaled_size
         } else if let Some(line_height_px) = st.line_height_px {
@@ -1797,7 +1797,7 @@ pub fn prepare_text_frame(
         } else {
             let scale = st
                 .line_height_scale
-                .unwrap_or_else(|| tailwind_default_leading_scale(st.size));
+                .unwrap_or_else(|| tailwind_default_leading_scale(st.size_resolved()));
             scaled_size * scale
         };
 
@@ -1877,7 +1877,7 @@ pub fn prepare_text_frame(
             } else {
                 nowrap_layout_width_from_text(
                     info.text.as_str(),
-                    st.size,
+                    st.size_resolved(),
                     font_weight,
                     logical_lh,
                     st.overflow,
@@ -1904,7 +1904,7 @@ pub fn prepare_text_frame(
             .map(|p| crate::text::layout(p, layout_w));
         let hard_lines = info.text.split('\n').count().max(1) as f32;
         let ink_fudge = if is_input_text {
-            crate::utils::text_field::text_edit_ink_pad_px(st.size) * ui_scale
+            crate::utils::text_field::text_edit_ink_pad_px(st.size_resolved()) * ui_scale
         } else {
             2.0
         };
@@ -1947,7 +1947,7 @@ pub fn prepare_text_frame(
                 _ => glyphon::cosmic_text::Align::Left,
             }
         } else {
-            resolve_text_align(st.align, st.direction)
+            resolve_text_align(st.align_resolved(), st.direction)
         };
         let display_text: Cow<'_, str> =
             if st.overflow == TextOverflow::Ellipsis && st.input_caret.is_none() {
@@ -1999,7 +1999,7 @@ pub fn prepare_text_frame(
             shaping,
             st.letter_spacing,
             st.direction,
-            st.color,
+            st.color_resolved(),
         );
         // Derive Exact key from identity — do not re-hash the full string (scroll frames
         // visit every visible label; browsers keep glyphs and only translate).
@@ -2048,7 +2048,7 @@ pub fn prepare_text_frame(
             }
             if let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(
                 info.text.as_str(),
-                st.size,
+                st.size_resolved(),
                 font_weight,
                 logical_lh,
                 fit_lookup_w,
@@ -2060,7 +2060,7 @@ pub fn prepare_text_frame(
             }
             let fit = crate::text::glyphon_fit_soft_wrap(
                 info.text.as_str(),
-                st.size,
+                st.size_resolved(),
                 font_weight,
                 logical_lh,
                 fit_lookup_w,
@@ -2118,7 +2118,7 @@ pub fn prepare_text_frame(
                     || bidi_prewrap_applied(
                         &entry.buffer,
                         info.text.as_str(),
-                        st.size,
+                        st.size_resolved(),
                         font_weight,
                         logical_lh,
                         layout_w,
@@ -2196,7 +2196,7 @@ pub fn prepare_text_frame(
                                 &mut entry.buffer,
                                 unsafe { &mut *text_renderer.font_system },
                                 info.text.as_str(),
-                                st.size,
+                                st.size_resolved(),
                                 font_weight,
                                 logical_lh,
                                 fit_lookup_w,
@@ -2224,7 +2224,7 @@ pub fn prepare_text_frame(
                         && !bidi_prewrap_applied(
                             &entry.buffer,
                             info.text.as_str(),
-                            st.size,
+                            st.size_resolved(),
                             font_weight,
                             logical_lh,
                             layout_w,
@@ -2259,7 +2259,7 @@ pub fn prepare_text_frame(
                                 &mut entry.buffer,
                                 unsafe { &mut *text_renderer.font_system },
                                 info.text.as_str(),
-                                st.size,
+                                st.size_resolved(),
                                 font_weight,
                                 logical_lh,
                                 fit_lookup_w,
@@ -2303,7 +2303,7 @@ pub fn prepare_text_frame(
                     || bidi_prewrap_applied(
                         &entry.buffer,
                         info.text.as_str(),
-                        st.size,
+                        st.size_resolved(),
                         font_weight,
                         logical_lh,
                         layout_w,
@@ -2332,7 +2332,7 @@ pub fn prepare_text_frame(
                         &mut entry.buffer,
                         unsafe { &mut *text_renderer.font_system },
                         info.text.as_str(),
-                        st.size,
+                        st.size_resolved(),
                         font_weight,
                         logical_lh,
                         fit_lookup_w,
@@ -2382,7 +2382,7 @@ pub fn prepare_text_frame(
                             &mut entry.buffer,
                             unsafe { &mut *text_renderer.font_system },
                             info.text.as_str(),
-                            st.size,
+                            st.size_resolved(),
                             font_weight,
                             logical_lh,
                             fit_lookup_w,
@@ -2445,7 +2445,7 @@ pub fn prepare_text_frame(
                     // + WordOrGlyph in the cache; Bounds then reused it and split WJ.
                     let fit = crate::text::try_glyphon_fit_soft_wrap(
                         info.text.as_str(),
-                        st.size,
+                        st.size_resolved(),
                         font_weight,
                         logical_lh,
                         prewrap_target,
@@ -2453,7 +2453,7 @@ pub fn prepare_text_frame(
                     .unwrap_or_else(|| {
                         crate::text::glyphon_fit_soft_wrap(
                             info.text.as_str(),
-                            st.size,
+                            st.size_resolved(),
                             font_weight,
                             logical_lh,
                             prewrap_target,
@@ -2473,10 +2473,10 @@ pub fn prepare_text_frame(
                     .family(family)
                     .weight(glyphon::fontdb::Weight(font_weight))
                     .color(glyphon::Color::rgba(
-                        st.color[0],
-                        st.color[1],
-                        st.color[2],
-                        st.color[3],
+                        st.color_resolved()[0],
+                        st.color_resolved()[1],
+                        st.color_resolved()[2],
+                        st.color_resolved()[3],
                     ));
                 if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
                     let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
@@ -2498,7 +2498,7 @@ pub fn prepare_text_frame(
                             a = a.weight(glyphon::fontdb::Weight(w));
                         }
                         if let Some(sz) = span.size {
-                            let lh = line_height * (sz / st.size.max(1.0));
+                            let lh = line_height * (sz / st.size_resolved().max(1.0));
                             a = a.metrics(glyphon::Metrics::new(
                                 (sz * ui_scale).max(1.0),
                                 lh.max(1.0),
@@ -2547,7 +2547,7 @@ pub fn prepare_text_frame(
                     &mut buffer,
                     unsafe { &mut *text_renderer.font_system },
                     info.text.as_str(),
-                    st.size,
+                    st.size_resolved(),
                     font_weight,
                     logical_lh,
                     fit_lookup_w,
@@ -2768,7 +2768,7 @@ pub fn prepare_text_frame(
         } else {
             0.0
         };
-        let mut glyph_color = st.color;
+        let mut glyph_color = st.color_resolved();
         let mut glyph_dy = dy;
         if let Some(raw) = info.glyph_fx.as_deref() {
             let kind = crate::renderer::GlyphFxKind::parse(raw);
@@ -2847,13 +2847,13 @@ pub fn prepare_text_frame(
             },
             align,
             measured_text_w,
-            underline: st.underline,
-            overline: st.overline,
-            line_through: st.line_through,
-            decoration_style: st.decoration_style,
+            underline: st.underline_resolved(),
+            overline: st.overline_resolved(),
+            line_through: st.line_through_resolved(),
+            decoration_style: st.decoration_style_resolved(),
             decoration_color: st.decoration_color,
-            decoration_thickness: st.decoration_thickness,
-            underline_offset: st.underline_offset,
+            decoration_thickness: st.decoration_thickness_resolved(),
+            underline_offset: st.underline_offset_resolved(),
             color: glyph_color,
             shadow_col: st.shadow_color,
             shadow_dx: sdx,

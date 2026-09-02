@@ -169,7 +169,7 @@ fn cv_checkbox_checked_sync_updates_indicator() {
     let mut root: Element = checkbox("cv-cb-sync").checked_signal(checked).into();
 
     assert!(
-        find_checkbox_indicator(&root).text_style.color[3] < 10,
+        find_checkbox_indicator(&root).text_style.color_resolved()[3] < 10,
         "unchecked indicator should be transparent"
     );
 
@@ -178,7 +178,7 @@ fn cv_checkbox_checked_sync_updates_indicator() {
     let mut impact = LayoutStatus::Clean;
     sync_checkbox_checked_subtree(&mut root, &mut tree, &mut impact);
     assert!(
-        find_checkbox_indicator(&root).text_style.color[3] > 200,
+        find_checkbox_indicator(&root).text_style.color_resolved()[3] > 200,
         "checked indicator should be visible"
     );
     assert_ne!(impact, LayoutStatus::Clean);

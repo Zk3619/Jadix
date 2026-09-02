@@ -45,17 +45,21 @@ pub fn bake_text_texture_key_for_3d(
     box_w: f32,
     box_h: f32,
 ) -> Option<String> {
-    let (bw, bh, _) = crate::utils::text_texture::text_xform_bake_box(box_w, box_h, font_size_px);
+    let (bw, bh, pad) = crate::utils::text_texture::text_xform_bake_box(box_w, box_h, font_size_px);
     crate::utils::text_texture::ensure_text_xform_texture(
         text,
         font_size_px,
         font_weight,
         color,
+        box_w,
+        box_h,
         bw,
         bh,
+        pad,
         glyphon::cosmic_text::Align::Center,
         3.0,
         true, // SDF for free perspective scale
+        0.0,
     )
     .map(|(k, _)| k)
 }

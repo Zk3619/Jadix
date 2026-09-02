@@ -314,8 +314,8 @@ fn paint_tree_row_fg(el: &mut Element, color: [u8; 4], weight: u16) {
     if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CHEVRON) {
         return;
     }
-    el.text_style.color = color;
-    el.text_style.weight = weight;
+    el.text_style.color = Some(color);
+    el.text_style.weight = Some(weight);
     for child in &mut el.children {
         paint_tree_row_fg(child, color, weight);
     }
@@ -1587,7 +1587,7 @@ mod tests {
 
     fn first_text_color(el: &Element) -> Option<[u8; 4]> {
         if el.text.is_some() {
-            return Some(el.text_style.color);
+            return Some(el.text_style.color_resolved());
         }
         el.children.iter().find_map(first_text_color)
     }

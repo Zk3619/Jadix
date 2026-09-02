@@ -953,13 +953,13 @@ pub(crate) fn estimate_caret_x_in_field(
     let Some(fs) = font_system else {
         return pad_left_logical;
     };
-    let scaled_size = text_style.size * scale;
+    let scaled_size = text_style.size_resolved() * scale;
     let line_height = if let Some(lh) = text_style.line_height_px {
         lh * scale
     } else {
         let leading = text_style
             .line_height_scale
-            .unwrap_or_else(|| crate::style::tailwind_default_leading_scale(text_style.size));
+            .unwrap_or_else(|| crate::style::tailwind_default_leading_scale(text_style.size_resolved()));
         scaled_size * leading
     };
     let family = if let Some(ref f) = text_style.font_family {
@@ -968,7 +968,7 @@ pub(crate) fn estimate_caret_x_in_field(
         glyphon::Family::SansSerif
     };
     let weight =
-        crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight);
+        crate::utils::font::normalize_weight_for_family(fs.db(), family, text_style.weight_resolved());
     let measure_one = |fs: &mut glyphon::FontSystem, text: &str| -> f32 {
         if text.is_empty() {
             return 0.0;

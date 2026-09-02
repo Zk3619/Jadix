@@ -356,21 +356,37 @@ pub struct InputCaretDraw {
 }
 
 /// Per-run text style shared by Element and TextLayoutInfo.
+///
+/// Inheritable fields use `None` = CSS **unset** (inherit from ancestor during
+/// [`crate::layout::layout_tree::cascade_inheritable_text_style`]). Setting
+/// `text_style.color = Some(c)` is equivalent to Web `color: c` — no parallel
+/// `text_color` attrs required.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     pub font_family: Option<String>,
-    pub color: [u8; 4],
-    pub size: f32,
-    pub weight: u16,
-    pub underline: bool,
-    pub overline: bool,
-    pub line_through: bool,
-    pub decoration_style: TextDecorationStyle,
+    /// `None` = inherit.
+    pub color: Option<[u8; 4]>,
+    /// `None` = inherit.
+    pub size: Option<f32>,
+    /// `None` = inherit.
+    pub weight: Option<u16>,
+    /// `None` = inherit.
+    pub underline: Option<bool>,
+    /// `None` = inherit.
+    pub overline: Option<bool>,
+    /// `None` = inherit.
+    pub line_through: Option<bool>,
+    /// `None` = inherit.
+    pub decoration_style: Option<TextDecorationStyle>,
     /// `None` = CSS `currentColor`（绘制时用本节点 `color`）；`Some` = 显式装饰色。
     pub decoration_color: Option<[u8; 4]>,
-    pub decoration_thickness: f32,
+    /// When false, [`decoration_color`] is inherited from the ancestor cascade.
+    pub decoration_color_specified: bool,
+    /// `None` = inherit.
+    pub decoration_thickness: Option<f32>,
     /// CSS `text-underline-offset`（逻辑 px）：正值让下划线离文字更远（向下）。
-    pub underline_offset: f32,
+    /// `None` = inherit.
+    pub underline_offset: Option<f32>,
     pub shadow_color: Option<[u8; 4]>,
     pub shadow_offset: [f32; 2],
     pub shadow_blur: f32,
@@ -378,8 +394,8 @@ pub struct TextStyle {
     pub line_height_px: Option<f32>,
     /// Line-height scale relative to font size. `None` = default policy.
     pub line_height_scale: Option<f32>,
-    /// CSS `text-align` (see [`TextAlign`]).
-    pub align: TextAlign,
+    /// CSS `text-align` (see [`TextAlign`]). `None` = inherit.
+    pub align: Option<TextAlign>,
     /// Overflow when the box is too small (`clip` / `hidden` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
@@ -397,28 +413,31 @@ pub struct TextStyle {
     pub input_caret: Option<InputCaretDraw>,
     /// Horizontal pan (logical px) for [`TextOverflow::Hidden`] single-line fields.
     pub scroll_x: f32,
+    /// Set by [`crate::core::tree::Element::text_line_height`] / `text_leading*`.
+    pub(crate) line_height_specified: bool,
 }
 
 impl Default for TextStyle {
     fn default() -> Self {
         Self {
             font_family: None,
-            color: [255, 255, 255, 255],
-            size: 16.0,
-            weight: 400,
-            underline: false,
-            overline: false,
-            line_through: false,
-            decoration_style: TextDecorationStyle::Solid,
+            color: None,
+            size: None,
+            weight: None,
+            underline: None,
+            overline: None,
+            line_through: None,
+            decoration_style: None,
             decoration_color: None,
-            decoration_thickness: 0.0,
-            underline_offset: 1.0,
+            decoration_color_specified: false,
+            decoration_thickness: None,
+            underline_offset: None,
             shadow_color: None,
             shadow_offset: [0.0, 0.0],
             shadow_blur: 0.0,
             line_height_px: None,
             line_height_scale: None,
-            align: TextAlign::Start,
+            align: None,
             overflow: TextOverflow::Clip,
             white_space: WhiteSpace::Normal,
             wrap_mode: crate::text::WrapMode::Word,
@@ -427,11 +446,151 @@ impl Default for TextStyle {
             letter_spacing: 0.0,
             input_caret: None,
             scroll_x: 0.0,
+            line_height_specified: false,
         }
     }
 }
 
 impl TextStyle {
+    /// Root ancestor defaults when no parent supplies inheritable values.
+    pub fn cascade_root() -> Self {
+        Self {
+            color: Some(super::parse_text_color("foreground")),
+            size: Some(16.0),
+            weight: Some(400),
+            align: Some(TextAlign::Start),
+            underline: Some(false),
+            overline: Some(false),
+            line_through: Some(false),
+            decoration_style: Some(TextDecorationStyle::Solid),
+            decoration_thickness: Some(0.0),
+            underline_offset: Some(1.0),
+            ..Default::default()
+        }
+    }
+
+    /// Resolved values after cascade (or for paint when cascade already ran).
+    #[inline]
+    pub fn color_resolved(&self) -> [u8; 4] {
+        self.color
+            .unwrap_or_else(|| super::parse_text_color("foreground"))
+    }
+
+    #[inline]
+    pub fn size_resolved(&self) -> f32 {
+        self.size.unwrap_or(16.0)
+    }
+
+    #[inline]
+    pub fn weight_resolved(&self) -> u16 {
+        self.weight.unwrap_or(400)
+    }
+
+    #[inline]
+    pub fn align_resolved(&self) -> TextAlign {
+        self.align.unwrap_or(TextAlign::Start)
+    }
+
+    #[inline]
+    pub fn underline_resolved(&self) -> bool {
+        self.underline.unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn overline_resolved(&self) -> bool {
+        self.overline.unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn line_through_resolved(&self) -> bool {
+        self.line_through.unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn decoration_style_resolved(&self) -> TextDecorationStyle {
+        self.decoration_style.unwrap_or(TextDecorationStyle::Solid)
+    }
+
+    #[inline]
+    pub fn decoration_thickness_resolved(&self) -> f32 {
+        self.decoration_thickness.unwrap_or(0.0)
+    }
+
+    #[inline]
+    pub fn underline_offset_resolved(&self) -> f32 {
+        self.underline_offset.unwrap_or(1.0)
+    }
+
+    /// Effective inheritable values to pass as the parent for descendants.
+    pub fn effective_ancestry(&self, parent: &Self) -> Self {
+        let mut out = self.clone();
+        out.color = self.color.or(parent.color);
+        out.size = self.size.or(parent.size);
+        out.weight = self.weight.or(parent.weight);
+        out.align = self.align.or(parent.align);
+        out.underline = self.underline.or(parent.underline);
+        out.overline = self.overline.or(parent.overline);
+        out.line_through = self.line_through.or(parent.line_through);
+        out.decoration_style = self.decoration_style.or(parent.decoration_style);
+        out.decoration_thickness = self
+            .decoration_thickness
+            .or(parent.decoration_thickness);
+        out.underline_offset = self.underline_offset.or(parent.underline_offset);
+        out.font_family = self
+            .font_family
+            .clone()
+            .or_else(|| parent.font_family.clone());
+        if !self.decoration_color_specified {
+            out.decoration_color = parent.decoration_color;
+        }
+        if !self.line_height_specified {
+            out.line_height_px = parent.line_height_px;
+            out.line_height_scale = parent.line_height_scale;
+        }
+        out
+    }
+
+    /// Fill unset inheritable fields with resolved values (post-cascade paint / measure).
+    pub fn materialize_in_place(&mut self) {
+        if self.color.is_none() {
+            self.color = Some(self.color_resolved());
+        }
+        if self.size.is_none() {
+            self.size = Some(self.size_resolved());
+        }
+        if self.weight.is_none() {
+            self.weight = Some(self.weight_resolved());
+        }
+        if self.align.is_none() {
+            self.align = Some(self.align_resolved());
+        }
+        if self.underline.is_none() {
+            self.underline = Some(self.underline_resolved());
+        }
+        if self.overline.is_none() {
+            self.overline = Some(self.overline_resolved());
+        }
+        if self.line_through.is_none() {
+            self.line_through = Some(self.line_through_resolved());
+        }
+        if self.decoration_style.is_none() {
+            self.decoration_style = Some(self.decoration_style_resolved());
+        }
+        if self.decoration_thickness.is_none() {
+            self.decoration_thickness = Some(self.decoration_thickness_resolved());
+        }
+        if self.underline_offset.is_none() {
+            self.underline_offset = Some(self.underline_offset_resolved());
+        }
+    }
+
+    /// Clone with all inheritable fields materialized to [`Some`] for paint/measure code paths.
+    pub fn materialized(&self) -> Self {
+        let mut s = self.clone();
+        s.materialize_in_place();
+        s
+    }
+
     /// Horizontal offset of a line's ink origin inside `box_w` for CSS `text-align`.
     ///
     /// Matches glyphon / [`crate::renderer::prepare_text`]: when a nowrap/`hidden` line
@@ -442,7 +601,7 @@ impl TextStyle {
         {
             return 0.0;
         }
-        match self.align.to_glyphon(self.direction) {
+        match self.align_resolved().to_glyphon(self.direction) {
             glyphon::cosmic_text::Align::Center => (box_w - line_content_w) * 0.5,
             glyphon::cosmic_text::Align::Right | glyphon::cosmic_text::Align::End => {
                 box_w - line_content_w
@@ -625,7 +784,7 @@ mod tests {
             TextAlign::resolve_match_parent(TextAlign::Start, TextDirection::Rtl),
             TextAlign::Right
         );
-        assert_eq!(TextStyle::default().align, TextAlign::Start);
+        assert_eq!(TextStyle::default().align, None);
     }
 
     #[test]

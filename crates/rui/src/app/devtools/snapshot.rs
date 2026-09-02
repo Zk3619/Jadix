@@ -1485,8 +1485,8 @@ mod tests {
     fn cssom_full_element_dump_lists_layout_and_text() {
         let mut el = Element::new().focus_id("btn");
         el.style.bg_color = [0.0, 0.0, 0.0, 0.0];
-        el.text_style.size = 14.0;
-        el.text_style.weight = 600;
+        el.text_style.size = Some(14.0);
+        el.text_style.weight = Some(600);
         let css = cssom_text_from_element(&el);
         for needle in [
             "display:",

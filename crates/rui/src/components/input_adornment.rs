@@ -500,7 +500,7 @@ pub fn InputAdornmentText(class: Option<String>, children: Option<Element>) -> E
     } else {
         for mut k in kids {
             // 图标 / 文案默认 muted
-            if k.text_style.color == [0, 0, 0, 0] || k.text.is_some() {
+            if k.text_style.color == Some([0, 0, 0, 0]) || k.text.is_some() {
                 if k.text_style.font_family.as_deref() == Some("lucide") || k.text.is_some() {
                     k = k.text_color(parse_text_color("muted-foreground"));
                 }

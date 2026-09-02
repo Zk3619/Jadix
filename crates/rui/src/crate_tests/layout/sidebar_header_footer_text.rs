@@ -46,14 +46,14 @@ fn assert_chrome_color(result: &RenderResult, when: &str) {
         let node = find_text(&result.text_nodes, label)
             .unwrap_or_else(|| panic!("{when}: missing text node `{label}`"));
         assert_ne!(
-            node.style.color, DEFAULT_WHITE,
+            node.style.color_resolved(), DEFAULT_WHITE,
             "{when}: `{label}` flashed default white (got {:?})",
-            node.style.color
+            node.style.color_resolved()
         );
         assert_eq!(
-            node.style.color, fg,
+            node.style.color_resolved(), fg,
             "{when}: `{label}` color={:?} want sidebar-foreground={fg:?}",
-            node.style.color
+            node.style.color_resolved()
         );
     }
 }

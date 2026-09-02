@@ -14,7 +14,6 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::future::Future;
     use std::pin::pin;
     use std::sync::Arc;
     use std::task::{Context, Poll, Wake};

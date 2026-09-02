@@ -305,7 +305,7 @@ pub fn hit_test_input_text_index(
         mx.clamp(x, x + w.max(0.0))
     };
     let my = my.clamp(y, y + h.max(0.0));
-    let scaled_size = style.size * ui_scale;
+    let scaled_size = style.size_resolved() * ui_scale;
     let line_height = line_height_for_style(style, ui_scale);
     let line_height_logical = line_height_for_style(style, 1.0).max(1.0);
     let family = if let Some(ref f) = style.font_family {
@@ -314,7 +314,7 @@ pub fn hit_test_input_text_index(
         best_font_family(font_system)
     };
     let is_icon = style.font_family.as_deref() == Some("lucide");
-    let requested_weight = if is_icon { 400 } else { style.weight };
+    let requested_weight = if is_icon { 400 } else { style.weight_resolved() };
     let font_weight =
         crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
@@ -324,8 +324,8 @@ pub fn hit_test_input_text_index(
         let avail = (w.max(1.0)).max(1.0);
         let ranges = crate::text::soft_visual_line_byte_ranges(
             display,
-            style.size,
-            style.weight,
+            style.size_resolved(),
+            style.weight_resolved(),
             line_height_for_style(style, 1.0).max(1.0),
             avail,
             style.wrap_mode.to_line_break_source(),
@@ -474,8 +474,8 @@ fn textarea_line_count(display: &str, bounds: [f32; 4], style: &TextStyle) -> us
     if soft_wrap {
         crate::text::soft_visual_line_byte_ranges(
             display,
-            style.size,
-            style.weight,
+            style.size_resolved(),
+            style.weight_resolved(),
             line_height_for_style(style, 1.0).max(1.0),
             bounds[2].max(1.0),
             style.wrap_mode.to_line_break_source(),
@@ -508,7 +508,7 @@ pub fn hit_test_input_is_line_side_blank(
     // Do not clamp into the leaf: chrome padding outside the box is the blank
     // area we care about (textarea Clip path would otherwise collapse it onto ink).
     let my = my.clamp(y, y + h.max(0.0));
-    let scaled_size = style.size * ui_scale;
+    let scaled_size = style.size_resolved() * ui_scale;
     let line_height = line_height_for_style(style, ui_scale);
     let line_height_logical = line_height_for_style(style, 1.0).max(1.0);
     let family = if let Some(ref f) = style.font_family {
@@ -517,7 +517,7 @@ pub fn hit_test_input_is_line_side_blank(
         best_font_family(font_system)
     };
     let is_icon = style.font_family.as_deref() == Some("lucide");
-    let requested_weight = if is_icon { 400 } else { style.weight };
+    let requested_weight = if is_icon { 400 } else { style.weight_resolved() };
     let font_weight =
         crate::utils::font::normalize_weight_for_family(font_system.db(), family, requested_weight);
     let box_w = w * ui_scale;
@@ -527,8 +527,8 @@ pub fn hit_test_input_is_line_side_blank(
         let avail = w.max(1.0);
         let ranges = crate::text::soft_visual_line_byte_ranges(
             display,
-            style.size,
-            style.weight,
+            style.size_resolved(),
+            style.weight_resolved(),
             line_height_logical,
             avail,
             style.wrap_mode.to_line_break_source(),
@@ -590,13 +590,13 @@ fn line_height_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
     } else {
         let scale = style
             .line_height_scale
-            .unwrap_or_else(|| tailwind_default_leading_scale(style.size));
+            .unwrap_or_else(|| tailwind_default_leading_scale(style.size_resolved()));
         scaled_size_for_style(style, ui_scale) * scale
     }
 }
 
 fn scaled_size_for_style(style: &TextStyle, ui_scale: f32) -> f32 {
-    style.size * ui_scale
+    style.size_resolved() * ui_scale
 }
 
 #[cfg(test)]
@@ -667,8 +667,8 @@ mod tests {
         let mut fs = test_font_system();
         let text = "abcdefghijklmnop";
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.overflow = TextOverflow::Hidden;
         style.scroll_x = 40.0;
@@ -702,8 +702,8 @@ mod tests {
         let line1 = "border-width: 1px;";
         let text = format!("{line0}\n{line1}");
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.overflow = TextOverflow::Clip;
         style.white_space = crate::style::WhiteSpace::Nowrap;
@@ -727,8 +727,8 @@ mod tests {
         let mut fs = test_font_system();
         let text = "abcdefghijklmnop";
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.white_space = crate::style::WhiteSpace::Nowrap;
         style.overflow = TextOverflow::Clip;
@@ -753,8 +753,8 @@ mod tests {
         let line0 = "short";
         let text = format!("{line0}\nsecond-line-here");
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.white_space = crate::style::WhiteSpace::Nowrap;
         style.overflow = TextOverflow::Clip;
@@ -808,8 +808,8 @@ mod tests {
         let mut fs = test_font_system();
         let text = "hi";
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.overflow = TextOverflow::Hidden;
         // Wide leaf so the right side past "hi" is blank.
@@ -833,8 +833,8 @@ mod tests {
         let mut fs = test_font_system();
         let text = "short\nxy";
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         style.overflow = TextOverflow::Clip;
         style.white_space = crate::style::WhiteSpace::Nowrap;
@@ -853,8 +853,8 @@ mod tests {
     fn textarea_below_last_line_detects_blank_under_ink() {
         let text = "line1\nline2";
         let mut style = TextStyle::default();
-        style.size = 14.0;
-        style.weight = 400;
+        style.size = Some(14.0);
+        style.weight = Some(400);
         style.line_height_px = Some(21.0);
         let bounds = [0.0, 0.0, 200.0, 80.0];
         assert!(

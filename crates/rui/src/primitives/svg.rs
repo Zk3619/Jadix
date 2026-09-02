@@ -2234,7 +2234,7 @@ impl From<SvgBuilder> for Element {
         }
         // Default color token = text-foreground (for currentColor / theme alignment).
         if el.text_style.color == crate::style::TextStyle::default().color {
-            el.text_style.color = crate::style::parse_text_color("foreground");
+            el.text_style.color = Some(crate::style::parse_text_color("foreground"));
         }
         // SVG leaf defaults to `bounding-box` (MDN SVG-only: hit the container); callers may override.
         if el
@@ -2869,7 +2869,7 @@ mod tests {
         let n = pts.len().max(1) as f32;
         let mean_r = pts
             .iter()
-            .map(|(x, y)| ((x - 40.0).hypot(y - 40.0)))
+            .map(|(x, y)| (x - 40.0).hypot(y - 40.0))
             .sum::<f32>()
             / n;
         assert!(

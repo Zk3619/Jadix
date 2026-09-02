@@ -50,13 +50,13 @@ fn gallery_bidi_labels_shrink_and_wrap_in_narrow_card() {
                 let w = leaf.layout_bounds[2];
                 let h = leaf.layout_bounds[3];
                 let text = leaf.text.as_deref().unwrap_or("");
-                let size = leaf.text_style.size;
+                let size = leaf.text_style.size_resolved();
                 let lh = leaf
                     .text_style
                     .line_height_scale
                     .map(|s| size * s)
                     .unwrap_or(size * 1.5);
-                let runs = glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight, lh, w);
+                let runs = glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight_resolved(), lh, w);
                 println!("{tid}: lay={w:.1}x{h:.1} lh={lh:.1} glyphon_runs={runs}");
                 assert!(
                     w <= viewport_w + 1.0,
@@ -101,10 +101,10 @@ fn gallery_bidi_labels_wrap_without_ancestor_min_w_zero() {
             let w = leaf.layout_bounds[2];
             let h = leaf.layout_bounds[3];
             let text = leaf.text.as_deref().unwrap_or("");
-            let size = leaf.text_style.size;
+            let size = leaf.text_style.size_resolved();
             let lh = size * 1.5;
             let runs =
-                glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight, lh, w.max(1.0));
+                glyphon_soft_wrap_line_count(text, size, leaf.text_style.weight_resolved(), lh, w.max(1.0));
             println!("no-ancestor-min_w: lay={w:.1}x{h:.1} runs={runs}");
             assert!(
                 w <= viewport_w + 1.0,
@@ -163,12 +163,12 @@ fn gallery_bidi_labels_wrap_inside_scroll_area_like_root() {
                 let w = leaf.layout_bounds[2];
                 let h = leaf.layout_bounds[3];
                 let text = leaf.text.as_deref().unwrap_or("");
-                let size = leaf.text_style.size;
+                let size = leaf.text_style.size_resolved();
                 let lh = size * 1.5;
                 let runs = glyphon_soft_wrap_line_count(
                     text,
                     size,
-                    leaf.text_style.weight,
+                    leaf.text_style.weight_resolved(),
                     lh,
                     w.max(1.0),
                 );

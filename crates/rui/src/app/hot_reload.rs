@@ -136,7 +136,7 @@ pub(super) struct HotReloadBatch {
     pub(super) asset_paths: Vec<String>,
 }
 
-#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 #[derive(Debug, Clone)]
 pub(super) enum HotReloadCommand {
     Reload,

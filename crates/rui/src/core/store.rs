@@ -270,6 +270,7 @@ mod tests {
     use std::rc::Rc;
 
     #[test]
+    #[allow(deprecated)]
     fn store_update_and_select() {
         let (_owner, ()) = create_root(|| {
             let store = create_store(vec![1, 2, 3]);
@@ -297,8 +298,8 @@ mod tests {
                 name: "a".into(),
                 age: 1,
             });
-            let name = store_select(store, |f| f.name.clone());
-            let age = store_select(store, |f| f.age);
+            let name = store.field("name", |f| f.name.clone(), |f, v| f.name = v);
+            let age = store.field("age", |f| f.age, |f, v| f.age = v);
             assert_eq!(name.get(), "a");
             assert_eq!(age.get(), 1);
 

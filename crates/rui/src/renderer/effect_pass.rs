@@ -371,13 +371,13 @@ impl EffectPassGpu {
             if !cap.text_nodes.is_empty() {
                 let fs = tr.font_system;
                 for info in &cap.text_nodes {
-                    let size = (info.style.size * ui_scale).max(1.0);
+                    let size = (info.style.size_resolved() * ui_scale).max(1.0);
                     let lh = if let Some(px) = info.style.line_height_px {
                         px * ui_scale
                     } else if let Some(sc) = info.style.line_height_scale {
                         size * sc
                     } else {
-                        size * crate::style::tailwind_default_leading_scale(info.style.size)
+                        size * crate::style::tailwind_default_leading_scale(info.style.size_resolved())
                     };
                     let family = if let Some(ref name) = info.style.font_family {
                         crate::utils::font::resolve_family(unsafe { &*fs }.db(), name)
@@ -387,17 +387,17 @@ impl EffectPassGpu {
                     let weight = crate::utils::font::normalize_weight_for_family(
                         unsafe { &*fs }.db(),
                         family,
-                        info.style.weight,
+                        info.style.weight_resolved(),
                     );
                     let mut buffer =
                         glyphon::Buffer::new(unsafe { &mut *fs }, glyphon::Metrics::new(size, lh));
-                    let color = info.style.color;
+                    let color = info.style.color_resolved();
                     let attrs = glyphon::Attrs::new()
                         .family(family)
                         .weight(glyphon::fontdb::Weight(weight))
                         .color(glyphon::Color::rgba(color[0], color[1], color[2], color[3]));
                     buffer.set_text(&info.text, &attrs, glyphon::Shaping::Advanced, None);
-                    let align = info.style.align.to_glyphon(info.style.direction);
+                    let align = info.style.align_resolved().to_glyphon(info.style.direction);
                     for line in buffer.lines.iter_mut() {
                         line.set_align(Some(align));
                     }
@@ -429,10 +429,10 @@ impl EffectPassGpu {
                             bottom: h as i32,
                         },
                         default_color: glyphon::Color::rgba(
-                            info.style.color[0],
-                            info.style.color[1],
-                            info.style.color[2],
-                            info.style.color[3],
+                            info.style.color_resolved()[0],
+                            info.style.color_resolved()[1],
+                            info.style.color_resolved()[2],
+                            info.style.color_resolved()[3],
                         ),
                         custom_glyphs: &[],
                     });

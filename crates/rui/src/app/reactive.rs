@@ -648,7 +648,7 @@ fn plain_text_leaf(el: &Element) -> bool {
 }
 
 fn text_line_height_px(el: &Element) -> f32 {
-    let size = el.text_style.size;
+    let size = el.text_style.size_resolved();
     el.text_style
         .line_height_px
         .or_else(|| el.text_style.line_height_scale.map(|s| size * s))
@@ -663,9 +663,9 @@ pub(crate) fn text_intrinsic_width(el: &Element, text: &str) -> Option<f32> {
     if !plain_text_leaf(el) {
         return None;
     }
-    let size = el.text_style.size;
+    let size = el.text_style.size_resolved();
     let line_height = text_line_height_px(el);
-    let prepared = crate::text::prepare(text, size, el.text_style.weight, line_height);
+    let prepared = crate::text::prepare(text, size, el.text_style.weight_resolved(), line_height);
     Some(crate::text::intrinsic_width(&prepared))
 }
 
@@ -674,9 +674,9 @@ pub(crate) fn text_layout_height(el: &Element, text: &str, avail_width: f32) -> 
     if !plain_text_leaf(el) {
         return None;
     }
-    let size = el.text_style.size;
+    let size = el.text_style.size_resolved();
     let line_height = text_line_height_px(el);
-    let prepared = crate::text::prepare(text, size, el.text_style.weight, line_height);
+    let prepared = crate::text::prepare(text, size, el.text_style.weight_resolved(), line_height);
     Some(crate::text::layout(&prepared, avail_width.max(1.0)).height)
 }
 
@@ -866,8 +866,8 @@ impl StylePatch {
             }
         }
         if let Some(color) = self.text_color {
-            if el.text_style.color != color {
-                el.text_style.color = color;
+            if el.text_style.color_resolved() != color {
+                el.text_style.color = Some(color);
                 impact = impact.merge(LayoutStatus::StyleChanged);
             }
         }

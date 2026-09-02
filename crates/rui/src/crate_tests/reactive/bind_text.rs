@@ -116,10 +116,10 @@ fn bind_with_can_patch_text_color_style() {
             "bind:color",
             move || color.get(),
             |el, rgba| {
-                if el.text_style.color == rgba {
+                if el.text_style.color == Some(rgba) {
                     LayoutStatus::Clean
                 } else {
-                    el.text_style.color = rgba;
+                    el.text_style.color = Some(rgba);
                     LayoutStatus::StyleChanged
                 }
             },
@@ -128,7 +128,7 @@ fn bind_with_can_patch_text_color_style() {
     });
 
     assert_eq!(
-        mounted.borrow().as_ref().map(|e| e.text_style.color),
+        mounted.borrow().as_ref().map(|e| e.text_style.color_resolved()),
         Some([1, 2, 3, 255])
     );
 

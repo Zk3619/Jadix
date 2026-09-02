@@ -189,12 +189,12 @@ pub fn textarea_scroll_content_h(
             let lh = child
                 .text_style
                 .line_height_px
-                .unwrap_or(child.text_style.size * 1.5)
+                .unwrap_or(child.text_style.size_resolved() * 1.5)
                 .max(1.0);
             let measured = text_edit_content_height_px(
                 text,
-                child.text_style.size,
-                child.text_style.weight,
+                child.text_style.size_resolved(),
+                child.text_style.weight_resolved(),
                 lh,
                 w,
             );

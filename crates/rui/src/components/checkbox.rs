@@ -121,16 +121,16 @@ fn apply_indicator_state(indicator: &mut Element, fg: [u8; 4]) -> bool {
     let want = check_glyph();
     let want_align = crate::style::TextAlign::Center;
     let changed = indicator.text.as_deref() != Some(want.as_str())
-        || indicator.text_style.color != fg
-        || (indicator.text_style.size - CHECK_PX).abs() > f32::EPSILON
-        || indicator.text_style.align != want_align
+        || indicator.text_style.color_resolved() != fg
+        || (indicator.text_style.size_resolved() - CHECK_PX).abs() > f32::EPSILON
+        || indicator.text_style.align_resolved() != want_align
         || indicator.text_style.font_family.as_deref() != Some("lucide");
     if changed {
         indicator.text = Some(want);
         indicator.text_style.font_family = Some("lucide".into());
-        indicator.text_style.size = CHECK_PX;
-        indicator.text_style.color = fg;
-        indicator.text_style.align = want_align;
+        indicator.text_style.size = Some(CHECK_PX);
+        indicator.text_style.color = Some(fg);
+        indicator.text_style.align = Some(want_align);
         indicator
             .attrs
             .insert("text_align".to_string(), "center".to_string());

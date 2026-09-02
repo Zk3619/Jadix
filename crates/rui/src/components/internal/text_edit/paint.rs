@@ -329,13 +329,13 @@ fn sync_one_text_edit_paint(
             text_el.template_id = Some(text_tid.clone());
             text_layout = true;
         }
-        if text_el.text_style.color != text_color {
-            text_el.text_style.color = text_color;
+        if text_el.text_style.color_resolved() != text_color {
+            text_el.text_style.color = Some(text_color);
             text_style = true;
         }
         let want_align = desc.text_align;
-        if text_el.text_style.align != want_align {
-            text_el.text_style.align = want_align;
+        if text_el.text_style.align_resolved() != want_align {
+            text_el.text_style.align = Some(want_align);
             text_el
                 .attrs
                 .insert("text_align".into(), want_align.as_str().into());

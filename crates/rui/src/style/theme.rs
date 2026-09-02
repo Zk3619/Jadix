@@ -72,6 +72,14 @@ pub struct DesignTokens {
     pub code_number: [f32; 4],
     pub selection: [f32; 4],
     pub selection_foreground: [f32; 4],
+    /// Scrollbar track fill (`scrollbar-track`).
+    pub scrollbar_track: [f32; 4],
+    /// Scrollbar thumb fill (`scrollbar-thumb`).
+    pub scrollbar_thumb: [f32; 4],
+    /// Scrollbar track border (`scrollbar-track-border`); default transparent (overlay).
+    pub scrollbar_track_border: [f32; 4],
+    /// Scrollbar thumb border (`scrollbar-thumb-border`); default transparent.
+    pub scrollbar_thumb_border: [f32; 4],
     /// `--radius: 0.625rem`
     pub radius: f32,
 }
@@ -159,6 +167,10 @@ impl Theme {
                 code_number: oklch_to_display_srgba(0.56, 0.0, 0.0, 1.0),
                 selection: foreground,
                 selection_foreground: background,
+                scrollbar_track: oklch_to_display_srgba(0.97, 0.0, 0.0, 1.0),
+                scrollbar_thumb: foreground,
+                scrollbar_track_border: [0.0, 0.0, 0.0, 0.0],
+                scrollbar_thumb_border: [0.0, 0.0, 0.0, 0.0],
                 radius: 0.625,
             },
         }
@@ -215,6 +227,10 @@ impl Theme {
                 code_number: oklch_to_display_srgba(0.72, 0.0, 0.0, 1.0),
                 selection: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 selection_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),
+                scrollbar_track: oklch_to_display_srgba(0.269, 0.0, 0.0, 1.0),
+                scrollbar_thumb: foreground,
+                scrollbar_track_border: [0.0, 0.0, 0.0, 0.0],
+                scrollbar_thumb_border: [0.0, 0.0, 0.0, 0.0],
                 radius: 0.625,
             },
         }

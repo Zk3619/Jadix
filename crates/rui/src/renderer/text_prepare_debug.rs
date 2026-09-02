@@ -302,7 +302,7 @@ pub(crate) fn log_line(
                 .line_height_scale
                 .map(|s| format!("{s:.4}"))
                 .unwrap_or_else(|| {
-                    let tw = tailwind_default_leading_scale(info.style.size);
+                    let tw = tailwind_default_leading_scale(info.style.size_resolved());
                     format!("tw-v4≈{tw:.4}")
                 })
         });
@@ -342,7 +342,7 @@ pub(crate) fn log_line(
     log::warn!(
         "i={idx} tid={tid} kind={kind}{suffix}{caret_sep}{caret} shape={sh} extra={shape_extra} w={} sz={:.1} lh={:.1} lh_src={} hit={hit} req={} attrs={} => [{}] cjk=>[{}] {:?}",
         weight,
-        info.style.size,
+        info.style.size_resolved(),
         line_height_logical,
         lh_scale,
         req_family,

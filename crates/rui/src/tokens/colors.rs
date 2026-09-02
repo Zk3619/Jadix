@@ -62,6 +62,26 @@ pub fn muted() -> [f32; 4] {
 }
 
 #[inline]
+pub fn scrollbar_track() -> [f32; 4] {
+    parse_color("scrollbar-track")
+}
+
+#[inline]
+pub fn scrollbar_thumb() -> [f32; 4] {
+    parse_color("scrollbar-thumb")
+}
+
+#[inline]
+pub fn scrollbar_track_border() -> [f32; 4] {
+    parse_color("scrollbar-track-border")
+}
+
+#[inline]
+pub fn scrollbar_thumb_border() -> [f32; 4] {
+    parse_color("scrollbar-thumb-border")
+}
+
+#[inline]
 pub fn chart(n: u8) -> [f32; 4] {
     parse_color(match n {
         1 => "chart-1",

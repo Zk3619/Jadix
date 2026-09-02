@@ -876,7 +876,7 @@ mod tests {
         fn text_fg(el: &Element) -> Option<[u8; 4]> {
             el.children
                 .iter()
-                .find_map(|c| c.text.as_ref().map(|_| c.text_style.color))
+                .find_map(|c| c.text.as_ref().map(|_| c.text_style.color_resolved()))
         }
         let muted = parse_text_color("muted-foreground");
         // Aug 2026 starts Saturday → d0-0 is July 26 (outside).

@@ -16,8 +16,9 @@ use crate::{
     components::{
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
-            scrollbar_min_thumb_along_track, SCROLLBAR_THUMB_FOCUS_PREFIX,
-            SCROLLBAR_TRACK_FOCUS_PREFIX,
+            apply_scrollbar_visible_alpha, normalize_scrollbar_base_for_auto,
+            scrollbar_min_thumb_along_track, ATTR_SCROLLBAR_TRACK_FADES,
+            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
         },
     },
     core::reactivity::use_signal,
@@ -2592,14 +2593,14 @@ impl AppState {
                 n.y.to_bits().hash(&mut hasher);
                 n.width.to_bits().hash(&mut hasher);
                 n.height.to_bits().hash(&mut hasher);
-                n.style.color.hash(&mut hasher);
-                n.style.size.to_bits().hash(&mut hasher);
-                n.style.weight.hash(&mut hasher);
-                n.style.underline.hash(&mut hasher);
-                n.style.overline.hash(&mut hasher);
-                n.style.line_through.hash(&mut hasher);
+                n.style.color_resolved().hash(&mut hasher);
+                n.style.size_resolved().to_bits().hash(&mut hasher);
+                n.style.weight_resolved().hash(&mut hasher);
+                n.style.underline_resolved().hash(&mut hasher);
+                n.style.overline_resolved().hash(&mut hasher);
+                n.style.line_through_resolved().hash(&mut hasher);
                 n.style.decoration_color.hash(&mut hasher);
-                n.style.underline_offset.to_bits().hash(&mut hasher);
+                n.style.underline_offset_resolved().to_bits().hash(&mut hasher);
                 // Caret index / selection must affect present even when underline instance
                 // bytes happen to collide (e.g. empty selection vs no caret).
                 match &n.style.input_caret {
@@ -3473,6 +3474,8 @@ struct ScrollbarBaseStyle {
     thumb_border: [f32; 4],
     track_border_width: f32,
     thumb_border_width: f32,
+    track_fades: bool,
+    thumb_border_fades: bool,
 }
 
 /// Minimum cross-axis size for an `auto` scrollbar at spring≈0 so track/thumb stay hittable.
@@ -3794,8 +3797,7 @@ fn update_scrollbar_elements(
         return;
     }
 
-    // Dynamic inside-corner reservation:
-    // reserve only when the opposite axis is actually scrollable and both are inside.
+    // Dynamic corner reservation: trim track length at the dual-outside corner only.
     let inset_x = use_signal(&scroll_scrollbar_inset_x_signal_key(&rest), || {
         "inside".to_string()
     })
@@ -3804,8 +3806,6 @@ fn update_scrollbar_elements(
         "inside".to_string()
     })
     .peek();
-    let x_inside = !inset_x.eq_ignore_ascii_case("outside");
-    let y_inside = !inset_y.eq_ignore_ascii_case("outside");
     let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(&rest), || {
         "right".to_string()
     })
@@ -3814,27 +3814,32 @@ fn update_scrollbar_elements(
         "bottom".to_string()
     })
     .peek();
+    // Corner lane trim only when both axes use outside flex slots. Inside (overlay) tracks
+    // always span the full edge regardless of scrollbar_*_side.
+    let both_outside = inset_x.eq_ignore_ascii_case("outside")
+        && inset_y.eq_ignore_ascii_case("outside");
     let y_is_left = y_side.eq_ignore_ascii_case("left");
     let x_is_top = x_side.eq_ignore_ascii_case("top");
-    // Corner reservation should only remove the opposite scrollbar lane thickness.
     let corner_reserve = base_thickness;
 
     let mut reserve_left = 0.0_f32;
     let mut reserve_right = 0.0_f32;
     let mut reserve_top = 0.0_f32;
     let mut reserve_bottom = 0.0_f32;
-    if axis == "x" && x_inside && y_inside && reserve_for_y {
-        if y_is_left {
-            reserve_left = corner_reserve;
-        } else {
-            reserve_right = corner_reserve;
+    if both_outside {
+        if axis == "x" && reserve_for_y {
+            if y_is_left {
+                reserve_left = corner_reserve;
+            } else {
+                reserve_right = corner_reserve;
+            }
         }
-    }
-    if axis == "y" && x_inside && y_inside && reserve_for_x {
-        if x_is_top {
-            reserve_top = corner_reserve;
-        } else {
-            reserve_bottom = corner_reserve;
+        if axis == "y" && reserve_for_x {
+            if x_is_top {
+                reserve_top = corner_reserve;
+            } else {
+                reserve_bottom = corner_reserve;
+            }
         }
     }
 
@@ -3891,33 +3896,35 @@ fn update_scrollbar_elements(
     // Cache base style once per scroll-area + axis (we will apply alpha every frame).
     let style_key = format!("{rest}:{axis}");
     if let Entry::Vacant(e) = base_style.entry(style_key.clone()) {
+        let track_fades = el
+            .attrs
+            .get(ATTR_SCROLLBAR_TRACK_FADES)
+            .is_none_or(|s| s != "0");
         let mut track_bg = el.style.bg_color;
         let mut thumb_bg = thumb.style.bg_color;
         let mut track_border = el.style.border_color;
         let mut thumb_border = thumb.style.border_color;
-        // `auto` may be initially built fully transparent (to avoid StructureChanged-frame flash).
-        // Base style must keep normalized alpha, otherwise later `* visible_alpha` stays 0 forever.
-        if vis == "auto" {
-            if track_bg[3] <= f32::EPSILON {
-                track_bg[3] = 1.0;
-            }
-            if thumb_bg[3] <= f32::EPSILON {
-                thumb_bg[3] = 1.0;
-            }
-            if track_border[3] <= f32::EPSILON {
-                track_border[3] = 1.0;
-            }
-            if thumb_border[3] <= f32::EPSILON {
-                thumb_border[3] = 1.0;
-            }
-        }
+        let track_border_width = el.style.border_width;
+        let thumb_border_width = thumb.style.border_width;
+        normalize_scrollbar_base_for_auto(
+            vis.as_str(),
+            track_fades,
+            track_border_width,
+            thumb_border_width,
+            &mut track_bg,
+            &mut track_border,
+            &mut thumb_bg,
+            &mut thumb_border,
+        );
         e.insert(ScrollbarBaseStyle {
             track_bg,
             thumb_bg,
             track_border,
             thumb_border,
-            track_border_width: el.style.border_width,
-            thumb_border_width: thumb.style.border_width,
+            track_border_width,
+            thumb_border_width,
+            track_fades,
+            thumb_border_fades: thumb_border_width > 0.0,
         });
     }
     if let Some(bs) = base_style.get(&style_key).copied() {
@@ -3926,10 +3933,15 @@ fn update_scrollbar_elements(
         let mut tbc = bs.track_border;
         let mut thbc = bs.thumb_border;
         let visible_alpha = v.clamp(0.0, 1.0);
-        tc[3] *= visible_alpha;
-        th[3] *= visible_alpha;
-        tbc[3] *= visible_alpha;
-        thbc[3] *= visible_alpha;
+        apply_scrollbar_visible_alpha(
+            visible_alpha,
+            bs.track_fades,
+            bs.thumb_border_fades,
+            &mut tc,
+            &mut th,
+            &mut tbc,
+            &mut thbc,
+        );
         el.style.bg_color = tc;
         thumb.style.bg_color = th;
         el.style.border_color = tbc;
@@ -3963,7 +3975,8 @@ fn update_scrollbar_elements(
                 thumb.style.size.width = Dimension::length(tw);
                 thumb.style.size.height = Dimension::length(thumb_cross);
                 thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(ml);
-                thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(0.0);
+                thumb.style.margin.top =
+                    taffy::style::LengthPercentageAuto::length(inset);
             }
             _ => {
                 let track =
@@ -3987,7 +4000,8 @@ fn update_scrollbar_elements(
                 thumb.style.size.width = Dimension::length(thumb_cross);
                 thumb.style.size.height = Dimension::length(th);
                 thumb.style.margin.top = taffy::style::LengthPercentageAuto::length(mt);
-                thumb.style.margin.left = taffy::style::LengthPercentageAuto::length(0.0);
+                thumb.style.margin.left =
+                    taffy::style::LengthPercentageAuto::length(inset);
             }
         }
         layout_tree.update_taffy_node_style(thumb);
@@ -4073,32 +4087,28 @@ mod hot_reload_inject {
                             changed = true;
                         }
                         "color" => {
-                            target.text_style.color = crate::core::tree::parse_text_color(v);
-                            target.attrs.insert("text_color".into(), "1".into());
+                            target.text_style.color =
+                                Some(crate::core::tree::parse_text_color(v));
                             changed = true;
                         }
                         "text_size" | "font_size" => {
                             if let Some(px) = parse_length_px(v) {
-                                target.text_style.size = px;
-                                // Marker so cascade_inheritable_text_style does not
-                                // overwrite the injected size from a parent.
-                                target.attrs.insert("text_size".into(), "1".into());
+                                target.text_style.size = Some(px);
                                 changed = true;
                             }
                         }
                         "font_weight" | "text_weight" => {
                             if let Ok(w) = v.parse::<u16>() {
-                                target.text_style.weight = w.clamp(100, 900);
-                                target.attrs.insert("font_weight".into(), "1".into());
+                                target.text_style.weight = Some(w.clamp(100, 900));
                                 changed = true;
                             }
                         }
                         "text_decoration" | "text-decoration" => {
                             let raw = v.to_ascii_lowercase();
                             if raw.contains("none") {
-                                target.text_style.underline = false;
-                                target.text_style.overline = false;
-                                target.text_style.line_through = false;
+                                target.text_style.underline = Some(false);
+                                target.text_style.overline = Some(false);
+                                target.text_style.line_through = Some(false);
                             } else {
                                 let has_line_token = raw.contains("underline")
                                     || raw.contains("overline")
@@ -4106,38 +4116,44 @@ mod hot_reload_inject {
                                     || raw.contains("linethrough")
                                     || raw.contains("strikethrough");
                                 if has_line_token {
-                                    target.text_style.underline = raw.contains("underline");
-                                    target.text_style.overline = raw.contains("overline");
-                                    target.text_style.line_through = raw.contains("line-through")
-                                        || raw.contains("linethrough")
-                                        || raw.contains("strikethrough");
+                                    target.text_style.underline = Some(raw.contains("underline"));
+                                    target.text_style.overline = Some(raw.contains("overline"));
+                                    target.text_style.line_through = Some(
+                                        raw.contains("line-through")
+                                            || raw.contains("linethrough")
+                                            || raw.contains("strikethrough"),
+                                    );
                                 }
-                                target.text_style.decoration_style = if raw.contains("double") {
-                                    crate::style::TextDecorationStyle::Double
-                                } else if raw.contains("dotted") {
-                                    crate::style::TextDecorationStyle::Dotted
-                                } else if raw.contains("dashed") {
-                                    crate::style::TextDecorationStyle::Dashed
-                                } else if raw.contains("wavy") {
-                                    crate::style::TextDecorationStyle::Wavy
-                                } else {
-                                    crate::style::TextDecorationStyle::Solid
-                                };
+                                target.text_style.decoration_style = Some(
+                                    if raw.contains("double") {
+                                        crate::style::TextDecorationStyle::Double
+                                    } else if raw.contains("dotted") {
+                                        crate::style::TextDecorationStyle::Dotted
+                                    } else if raw.contains("dashed") {
+                                        crate::style::TextDecorationStyle::Dashed
+                                    } else if raw.contains("wavy") {
+                                        crate::style::TextDecorationStyle::Wavy
+                                    } else {
+                                        crate::style::TextDecorationStyle::Solid
+                                    },
+                                );
                             }
                             changed = true;
                         }
                         "text_decoration_line" | "textDecorationLine" | "text-decoration-line" => {
                             let raw = v.to_ascii_lowercase();
                             if raw.contains("none") {
-                                target.text_style.underline = false;
-                                target.text_style.overline = false;
-                                target.text_style.line_through = false;
+                                target.text_style.underline = Some(false);
+                                target.text_style.overline = Some(false);
+                                target.text_style.line_through = Some(false);
                             } else {
-                                target.text_style.underline = raw.contains("underline");
-                                target.text_style.overline = raw.contains("overline");
-                                target.text_style.line_through = raw.contains("line-through")
-                                    || raw.contains("linethrough")
-                                    || raw.contains("strikethrough");
+                                target.text_style.underline = Some(raw.contains("underline"));
+                                target.text_style.overline = Some(raw.contains("overline"));
+                                target.text_style.line_through = Some(
+                                    raw.contains("line-through")
+                                        || raw.contains("linethrough")
+                                        || raw.contains("strikethrough"),
+                                );
                             }
                             changed = true;
                         }
@@ -4145,13 +4161,13 @@ mod hot_reload_inject {
                         | "textDecorationStyle"
                         | "text-decoration-style" => {
                             let s = v.to_ascii_lowercase();
-                            target.text_style.decoration_style = match s.as_str() {
+                            target.text_style.decoration_style = Some(match s.as_str() {
                                 "double" => crate::style::TextDecorationStyle::Double,
                                 "dotted" => crate::style::TextDecorationStyle::Dotted,
                                 "dashed" => crate::style::TextDecorationStyle::Dashed,
                                 "wavy" => crate::style::TextDecorationStyle::Wavy,
                                 _ => crate::style::TextDecorationStyle::Solid,
-                            };
+                            });
                             changed = true;
                         }
                         "text_decoration_color"
@@ -4159,13 +4175,14 @@ mod hot_reload_inject {
                         | "text-decoration-color" => {
                             target.text_style.decoration_color =
                                 Some(crate::core::tree::parse_text_color(v));
+                            target.text_style.decoration_color_specified = true;
                             changed = true;
                         }
                         "text_decoration_thickness"
                         | "textDecorationThickness"
                         | "text-decoration-thickness" => {
                             if let Some(px) = parse_length_px(v) {
-                                target.text_style.decoration_thickness = px.max(0.0);
+                                target.text_style.decoration_thickness = Some(px.max(0.0));
                                 changed = true;
                             }
                         }
@@ -4826,18 +4843,18 @@ mod hot_reload_inject {
             let label = &vstack.children[0];
             let expected = 2.0 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX;
             assert_eq!(
-                label.text_style.size, expected,
+                label.text_style.size_resolved(), expected,
                 "text_size must land on Label (CLI index 2), not the viewport/VStack wrapper"
             );
             assert_eq!(
                 vstack.text_style.size,
-                crate::style::TextStyle::default().size,
+                None,
                 "VStack must not receive the Label style patch"
             );
             assert_eq!(
-                label.attrs.get("text_size").map(String::as_str),
-                Some("1"),
-                "explicit size marker so cascade does not overwrite"
+                label.text_style.size,
+                Some(expected),
+                "explicit size must survive cascade and not be overwritten"
             );
         }
 

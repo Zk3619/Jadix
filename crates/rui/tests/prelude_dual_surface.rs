@@ -120,6 +120,7 @@ fn prelude_picker_tags_and_builders_compile() {
     let _: Element = el;
 }
 
+#[test]
 fn prelude_chart_tags_and_builders_compile() {
     let _b: Element = bar_chart().values([0.2, 0.8]).h("3rem").into();
     let _l: Element = line_chart().values([0.1, 0.9]).h(80.0).into();
