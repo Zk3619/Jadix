@@ -1246,23 +1246,23 @@ pub fn CommandItem(
 
 fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
     if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
-        el.text_style.size = 12.0;
+        el.text_style.size = Some(12.0);
         el.text_style.line_height_px = Some(16.0);
         el.text_style.letter_spacing = 0.4;
-        el.text_style.color = parse_text_color("muted-foreground");
+        el.text_style.color = Some(parse_text_color("muted-foreground"));
         return;
     }
     if el.text.is_some() {
         let lucide = el.text_style.font_family.as_deref() == Some("lucide");
         if lucide {
-            el.text_style.size = 14.0;
+            el.text_style.size = Some(14.0);
             el.text_style.line_height_px = Some(14.0);
         } else {
-            el.text_style.size = 13.0;
+            el.text_style.size = Some(13.0);
             el.text_style.line_height_px = Some(16.0);
             el.text_style.line_height_scale = Some(1.0);
         }
-        el.text_style.color = color;
+        el.text_style.color = Some(color);
     }
     for child in &mut el.children {
         style_command_item_text(child, color);
@@ -1323,7 +1323,7 @@ fn paint_command_item_fg(el: &mut Element, fg: [u8; 4]) {
         return;
     }
     if el.text.is_some() && el.text_style.font_family.as_deref() != Some("lucide") {
-        el.text_style.color = fg;
+        el.text_style.color = Some(fg);
     }
     for child in &mut el.children {
         paint_command_item_fg(child, fg);
@@ -2135,6 +2135,10 @@ mod tests {
                 true,
                 &handle,
                 PresencePhase::Present,
+                None,
+                None,
+                None,
+                None,
             );
             Element::new().w("100%").h("100%").child(shell)
         });
@@ -2373,7 +2377,7 @@ mod tests {
                 item_hover = el.on_hover.is_some();
                 walk_cmd(el, &mut |n| {
                     if n.text.as_deref() == Some("Home") {
-                        item_text = n.text_style.size;
+                        item_text = n.text_style.size_resolved();
                     }
                     if n.text.as_deref() == Some("⌘H") {
                         shortcut_tracking = n.text_style.letter_spacing;

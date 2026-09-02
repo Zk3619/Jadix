@@ -67,7 +67,7 @@ use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
 use crate::primitives::text::text;
 use crate::style::{
-    TimingFunction, TransitionEntry, TransitionProperty, UnitSlot, parse_color, parse_text_color,
+    SemanticTone, TimingFunction, TransitionEntry, TransitionProperty, UnitSlot,
 };
 use crate::tokens;
 use crate::utils::keyed_overlay::{TOAST_CARD_SCOPE, item_template_id};
@@ -125,12 +125,22 @@ pub enum ToastTone {
 
 impl ToastTone {
     pub fn parse(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "info" => Self::Info,
-            "success" => Self::Success,
-            "warning" | "warn" => Self::Warning,
-            "destructive" | "error" => Self::Destructive,
-            _ => Self::Default,
+        match SemanticTone::parse(s) {
+            SemanticTone::Info => Self::Info,
+            SemanticTone::Success => Self::Success,
+            SemanticTone::Warning => Self::Warning,
+            SemanticTone::Destructive => Self::Destructive,
+            SemanticTone::Default => Self::Default,
+        }
+    }
+
+    pub fn to_semantic(self) -> SemanticTone {
+        match self {
+            Self::Default => SemanticTone::Default,
+            Self::Info => SemanticTone::Info,
+            Self::Success => SemanticTone::Success,
+            Self::Warning => SemanticTone::Warning,
+            Self::Destructive | Self::Error => SemanticTone::Destructive,
         }
     }
 
@@ -746,6 +756,16 @@ pub struct ToastItem {
     pub tone: ToastTone,
     /// 是否在左侧居中显示语气图标（`None` = 跟语气默认：非 default 为 true）。
     pub show_icon: Option<bool>,
+    /// 是否应用语气 chroming（`false` = 跳过语义底/边/影，保留用户色）。
+    pub chrome: bool,
+    /// Tailwind / utility 类（`apply_class_list`）。
+    pub utility_class: Option<String>,
+    /// 用户显式背景色（覆盖变体 chroming）。
+    pub bg_override: Option<[f32; 4]>,
+    /// 用户显式边框色。
+    pub border_override: Option<[f32; 4]>,
+    /// 用户显式前景字色（标题/描述/图标）。
+    pub fg_override: Option<[u8; 4]>,
     pub created: Instant,
     pub duration: Duration,
     /// 退场动画中（仍绘制，不计可见上限）。
@@ -760,6 +780,11 @@ impl PartialEq for ToastItem {
             && self.description == other.description
             && self.tone == other.tone
             && self.show_icon == other.show_icon
+            && self.chrome == other.chrome
+            && self.utility_class == other.utility_class
+            && self.bg_override == other.bg_override
+            && self.border_override == other.border_override
+            && self.fg_override == other.fg_override
             && self.exiting == other.exiting
     }
 }
@@ -1184,6 +1209,11 @@ pub struct ToastBuilder {
     tone: ToastTone,
     duration_ms: u64,
     show_icon: Option<bool>,
+    chrome: bool,
+    utility_class: Option<String>,
+    bg_override: Option<[f32; 4]>,
+    border_override: Option<[f32; 4]>,
+    fg_override: Option<[u8; 4]>,
 }
 
 /// 以标题开始一条 toast（返回构建器；调用 [`ToastBuilder::show`] 入队）。
@@ -1194,6 +1224,11 @@ pub fn toast(message: impl Into<String>) -> ToastBuilder {
         tone: ToastTone::Default,
         duration_ms: 3000,
         show_icon: None,
+        chrome: true,
+        utility_class: None,
+        bg_override: None,
+        border_override: None,
+        fg_override: None,
     }
 }
 
@@ -1220,6 +1255,31 @@ impl ToastBuilder {
         self.show_icon = Some(show);
         self
     }
+    /// 是否应用语气 chroming（`false` = 不盖语义底/边/影/字色）。
+    pub fn chrome(mut self, enabled: bool) -> Self {
+        self.chrome = enabled;
+        self
+    }
+    /// Tailwind / utility 类（在 chroming 之后应用）。
+    pub fn class(mut self, classes: impl Into<String>) -> Self {
+        self.utility_class = Some(classes.into());
+        self
+    }
+    /// 显式背景色（覆盖变体 chroming）。
+    pub fn bg(mut self, color: impl AsRef<str>) -> Self {
+        self.bg_override = Some(crate::style::parse_color(color.as_ref()));
+        self
+    }
+    /// 显式边框色。
+    pub fn border_color(mut self, color: impl AsRef<str>) -> Self {
+        self.border_override = Some(crate::style::parse_color(color.as_ref()));
+        self
+    }
+    /// 显式前景字色（标题/描述/图标）。
+    pub fn color(mut self, color: impl AsRef<str>) -> Self {
+        self.fg_override = Some(crate::style::parse_text_color(color.as_ref()));
+        self
+    }
     pub fn duration(mut self, ms: u64) -> Self {
         self.duration_ms = ms.max(500);
         self
@@ -1232,6 +1292,11 @@ impl ToastBuilder {
             self.tone,
             self.duration_ms,
             self.show_icon,
+            self.chrome,
+            self.utility_class,
+            self.bg_override,
+            self.border_override,
+            self.fg_override,
         )
     }
 }
@@ -1247,6 +1312,11 @@ fn toast_push_item(
     tone: ToastTone,
     duration_ms: u64,
     show_icon: Option<bool>,
+    chrome: bool,
+    utility_class: Option<String>,
+    bg_override: Option<[f32; 4]>,
+    border_override: Option<[f32; 4]>,
+    fg_override: Option<[u8; 4]>,
 ) -> u64 {
     let seq = use_signal(TOAST_SEQ_KEY, || 0_u64);
     let id = seq.peek() + 1;
@@ -1257,6 +1327,11 @@ fn toast_push_item(
         description: description.into(),
         tone,
         show_icon,
+        chrome,
+        utility_class,
+        bg_override,
+        border_override,
+        fg_override,
         created: Instant::now(),
         duration,
         exiting: false,
@@ -1325,11 +1400,24 @@ mod tests {
     use super::host::{TOAST_HOST_VIEW, paint_toast_host, toaster};
     use super::motion::{
         ToastStackMotion, exit_target, stack_lift_visual, toast_enter_offset_y,
-        toast_exit_offset_y, toast_motion_pose, tone_shadow,
+        toast_exit_offset_y, toast_motion_pose, tone_shadow_stacked,
     };
-    use super::view::tone_colors;
+    use super::view::tone_chrome;
     use super::*;
     use crate::layout::layout_tree::ATTR_PORTAL_KEY;
+    use crate::style::{parse_color, parse_text_color, SemanticTone};
+
+    fn toast_tone_palette(
+        tone: ToastTone,
+    ) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
+        let chrome = tone_chrome(tone);
+        let border = chrome
+            .border
+            .map(|b| b.color)
+            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
+        let icon = SemanticTone::default_icon(tone.to_semantic());
+        (chrome.bg, chrome.fg, border, icon)
+    }
 
     fn settle_toast_exits() {
         let mut q = toast_queue().get();
@@ -1704,24 +1792,24 @@ mod tests {
         assert_eq!(ToastTone::parse("info"), ToastTone::Info);
         assert_eq!(ToastTone::parse("error"), ToastTone::Destructive);
         assert_eq!(ToastTone::parse("warn"), ToastTone::Warning);
-        let (bg, fg, border, icon) = tone_colors(ToastTone::Success);
+        let (bg, fg, border, icon) = toast_tone_palette(ToastTone::Success);
         assert_eq!(bg, tokens::popover());
         assert_eq!(border, parse_color("green-300"));
         assert_eq!(fg, parse_text_color("green-600"));
         assert_eq!(icon, Some("circle-check"));
-        let (_, _, _, info_icon) = tone_colors(ToastTone::Info);
+        let (_, _, _, info_icon) = toast_tone_palette(ToastTone::Info);
         assert_eq!(info_icon, Some("info"));
-        let (_, _, wborder, wicon) = tone_colors(ToastTone::Warning);
+        let (_, _, wborder, wicon) = toast_tone_palette(ToastTone::Warning);
         assert_eq!(wborder, parse_color("orange-300"));
         assert_eq!(wicon, Some("circle-alert"));
-        let (_, _, _, xicon) = tone_colors(ToastTone::Destructive);
+        let (_, _, _, xicon) = toast_tone_palette(ToastTone::Destructive);
         assert_eq!(xicon, Some("circle-x"));
-        let (sc, _, _) = tone_shadow(ToastTone::Success);
+        let (sc, _, _) = tone_shadow_stacked(ToastTone::Success, false);
         assert!(
             sc[1] > sc[0] && sc[1] > sc[2] && (sc[3] - 0.12).abs() < 0.001,
             "success shadow must be green-tinted at default strength, got {sc:?}"
         );
-        let (ic, _, _) = tone_shadow(ToastTone::Info);
+        let (ic, _, _) = tone_shadow_stacked(ToastTone::Info, false);
         assert!(
             ic[2] > ic[0] && ic[2] > ic[1] && (ic[3] - 0.12).abs() < 0.001,
             "info shadow must be blue-tinted at default strength, got {ic:?}"

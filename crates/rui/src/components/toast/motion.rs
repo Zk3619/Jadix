@@ -3,6 +3,7 @@
 //! 只写目标；mid 由 `utils::motion` + reconcile/hoist 保留。
 
 use super::*;
+use crate::style::{dim_semantic_shadow, semantic_shadow};
 use crate::utils::layout_group::{SlotListConfig, slot_list_pose, slot_visual_offset};
 use crate::utils::motion::{
     MotionBootstrap, MotionEpsilon, MotionStyle, MotionTransform, ensure_motion_transitions,
@@ -109,43 +110,10 @@ pub(super) fn exit_target(from: [f32; 2], from_bottom: bool) -> [f32; 2] {
     }
 }
 
-/// 四边均匀阴影（offset 0,0）；语义变体仅换色相，强度与 default 一致。
-pub(super) fn tone_shadow(tone: ToastTone) -> ([f32; 4], f32, f32) {
-    const BLUR: f32 = 10.0;
-    const SPREAD: f32 = -2.0;
-    const ALPHA: f32 = 0.12;
-    match tone {
-        ToastTone::Default => ([0.0, 0.0, 0.0, ALPHA], BLUR, SPREAD),
-        ToastTone::Info => {
-            let mut c = parse_color("blue-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Success => {
-            let mut c = parse_color("green-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Warning => {
-            let mut c = parse_color("orange-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-        ToastTone::Destructive | ToastTone::Error => {
-            let mut c = parse_color("red-500");
-            c[3] = ALPHA;
-            (c, BLUR, SPREAD)
-        }
-    }
-}
-
 /// 收起堆叠后方层：阴影 alpha 淡出至 0（blur/spread 不变，便于只 tween color）。
 pub(super) fn tone_shadow_stacked(tone: ToastTone, behind: bool) -> ([f32; 4], f32, f32) {
-    let (mut c, blur, spread) = tone_shadow(tone);
-    if behind {
-        c[3] = 0.0;
-    }
-    (c, blur, spread)
+    let s = dim_semantic_shadow(semantic_shadow(tone.to_semantic()), behind);
+    (s.color, s.blur, s.spread)
 }
 
 /// 堆叠位移动画参数；`None` = list 布局仅入场/退场。

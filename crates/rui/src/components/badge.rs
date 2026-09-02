@@ -34,10 +34,14 @@
 //! - The semantic color (success/warning/destructive) is the rest state of Button soft tint, non-solid filling.
 
 use crate::core::tree::{
-    Element, IntoCssDim, IntoF32, LayoutStatus, parse_color, parse_text_color,
+    Element, IntoCssDim, IntoF32, LayoutStatus,
 };
 use crate::primitives::r#box::{BoxBuilder, hstack};
-use crate::style::is_dark_theme;
+use crate::style::{
+    apply_semantic_border, is_variant_style_overridden, parse_color, parse_text_color,
+    semantic_chrome, set_variant_chrome_enabled, SemanticBorder, SemanticChromeDecor,
+    SemanticChromeOpts, SemanticSurface, SemanticTone, variant_chrome_enabled, VariantStyleField,
+};
 use crate::utils::take_packed;
 use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
@@ -77,13 +81,15 @@ impl std::str::FromStr for BadgeVariant {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s.trim().to_ascii_lowercase().as_str() {
             "secondary" => Self::Secondary,
-            "success" => Self::Success,
-            "warning" | "warn" => Self::Warning,
-            "destructive" | "error" => Self::Destructive,
             "outline" => Self::Outline,
             "ghost" => Self::Ghost,
             "link" => Self::Link,
-            _ => Self::Default,
+            _ => match SemanticTone::parse(s) {
+                SemanticTone::Success => Self::Success,
+                SemanticTone::Warning => Self::Warning,
+                SemanticTone::Destructive => Self::Destructive,
+                _ => Self::Default,
+            },
         })
     }
 }
@@ -104,39 +110,22 @@ impl BadgeVariant {
 }
 
 fn badge_chrome(variant: &str) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
-    let dark = is_dark_theme();
-    // Soft tint is the same as Button rest chrome (10% lighter / 20% darker stacked background).
-    let soft = |accent: [f32; 4]| -> [f32; 4] {
-        let a = if dark { 0.2 } else { 0.1 };
-        let bg = parse_color("background");
-        [
-            accent[0] * a + bg[0] * (1.0 - a),
-            accent[1] * a + bg[1] * (1.0 - a),
-            accent[2] * a + bg[2] * (1.0 - a),
-            1.0,
-        ]
-    };
     match variant {
         "secondary" => (
             parse_color("secondary"),
             parse_text_color("secondary-foreground"),
             None,
         ),
-        "success" => (
-            soft(parse_color("green-600")),
-            parse_text_color("green-600"),
-            None,
-        ),
-        "warning" => (
-            soft(parse_color("orange-600")),
-            parse_text_color("orange-600"),
-            None,
-        ),
-        "destructive" => (
-            soft(parse_color("destructive")),
-            parse_text_color("destructive"),
-            None,
-        ),
+        "success" | "warning" | "destructive" => {
+            let tone = SemanticTone::parse(variant);
+            let c = semantic_chrome(SemanticChromeOpts {
+                tone,
+                filled: true,
+                surface: SemanticSurface::Card,
+                decor: SemanticChromeDecor::NONE,
+            });
+            (c.bg, c.fg, c.border.map(|b| b.color))
+        }
         "outline" => (
             [0.0, 0.0, 0.0, 0.0],
             parse_text_color("foreground"),
@@ -154,19 +143,24 @@ fn badge_chrome(variant: &str) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
 
 fn apply_chrome(el: &mut Element, variant: &str) {
     let (bg, text_color, border) = badge_chrome(variant);
-    el.style.bg_color = bg;
-    match border {
-        Some(b) => {
-            el.style.border_color = b;
-            el.style.border_width = 1.0;
+    if variant_chrome_enabled(&el.attrs) {
+        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Bg) {
+            el.style.bg_color = bg;
         }
-        None => {
-            el.style.border_width = 0.0;
-            el.style.border_color = [0.0, 0.0, 0.0, 0.0];
+        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Border) {
+            apply_semantic_border(
+                el,
+                border.map(|color| SemanticBorder {
+                    color,
+                    width: 1.0,
+                }),
+            );
+        }
+        if !is_variant_style_overridden(&el.attrs, VariantStyleField::Fg) {
+            paint_descendant_text(el, text_color, variant == "link");
         }
     }
     el.set_attr(ATTR_VARIANT, variant);
-    paint_descendant_text(el, text_color, variant == "link");
 }
 
 /// 将 Badge 变体 chroming 应用到任意子树（[`AvatarBadge`] 圆点复用）。
@@ -186,8 +180,8 @@ pub fn apply_badge_variant_paint(el: &mut Element, variant: impl AsRef<str>) -> 
 
 fn paint_descendant_text(el: &mut Element, color: [u8; 4], underline: bool) {
     if el.text.is_some() {
-        el.text_style.color = color;
-        el.text_style.underline = underline;
+        el.text_style.color = Some(color);
+        el.text_style.underline = Some(underline);
     }
     for child in &mut el.children {
         paint_descendant_text(child, color, underline);
@@ -197,6 +191,7 @@ fn paint_descendant_text(el: &mut Element, color: [u8; 4], underline: bool) {
 pub struct BadgeBuilder {
     id: String,
     variant: BadgeVariant,
+    chrome_enabled: bool,
     container: BoxBuilder,
     content: Vec<Element>,
     text_style: TextNodeConfig,
@@ -207,6 +202,7 @@ pub fn badge() -> BadgeBuilder {
     BadgeBuilder {
         id: String::new(),
         variant: BadgeVariant::Default,
+        chrome_enabled: true,
         // ShadCN base: inline-flex w-fit shrink-0 items-center justify-center gap-1
         // rounded-full border px-2 py-0.75 text-xs font-medium whitespace-nowrap
         container: hstack()
@@ -239,8 +235,16 @@ pub fn badge() -> BadgeBuilder {
 /// RSX `<Badge variant="…" />`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
-pub fn Badge(id: String, variant: BadgeVariant, children: Option<Element>) -> Element {
+pub fn Badge(
+    id: String,
+    variant: BadgeVariant,
+    chrome: Option<bool>,
+    children: Option<Element>,
+) -> Element {
     let mut builder = badge().variant(variant.as_paint_key());
+    if let Some(enabled) = chrome {
+        builder = builder.chrome(enabled);
+    }
     if !id.trim().is_empty() {
         builder = builder.id(id);
     }
@@ -260,6 +264,11 @@ impl BadgeBuilder {
 
     pub fn variant(mut self, v: impl AsRef<str>) -> Self {
         self.variant = v.as_ref().parse().unwrap_or(BadgeVariant::Default);
+        self
+    }
+
+    pub fn chrome(mut self, enabled: bool) -> Self {
+        self.chrome_enabled = enabled;
         self
     }
 
@@ -297,12 +306,16 @@ impl From<BadgeBuilder> for Element {
         let variant = builder.variant.as_paint_key();
         let (bg, text_color, border) = badge_chrome(variant);
 
-        let mut container = builder.container.bg(bg);
-        if let Some(b) = border {
-            container = container.border(b, 1.0);
+        let mut container = builder.container;
+        if builder.chrome_enabled {
+            container = container.bg(bg);
+            if let Some(b) = border {
+                container = container.border(b, 1.0);
+            }
         }
 
         let mut el: Element = container.into();
+        set_variant_chrome_enabled(&mut el, builder.chrome_enabled);
         el.attrs
             .insert(ATTR_SLOT.to_string(), SLOT_BADGE.to_string());
         el.set_attr(ATTR_VARIANT, variant);
@@ -316,20 +329,29 @@ impl From<BadgeBuilder> for Element {
                 let is_lucide = child.text_style.font_family.as_deref() == Some("lucide");
                 let size_px = if is_lucide {
                     // ShadCN [&>svg]:size-3 — keep author size when set, else 0.75rem
-                    if child.text_style.size > 1.0 {
-                        child.text_style.size
+                    if child.text_style.size_resolved() > 1.0 {
+                        child.text_style.size_resolved()
                     } else {
                         IntoF32::into_f32("0.75rem")
                     }
                 } else {
                     builder.text_style.size_px
                 };
+                let caption_color = if builder.chrome_enabled {
+                    text_color
+                } else {
+                    child.text_style.color_resolved()
+                };
                 let mut text_node = build_text_node(
                     text_content,
                     TextNodeConfig {
-                        color: text_color,
-                        underline: variant == "link",
-                        underline_offset_px: if variant == "link" { Some(2.0) } else { None },
+                        color: caption_color,
+                        underline: builder.chrome_enabled && variant == "link",
+                        underline_offset_px: if builder.chrome_enabled && variant == "link" {
+                            Some(2.0)
+                        } else {
+                            None
+                        },
                         font_family: child.text_style.font_family.clone(),
                         size_px,
                         weight: if is_lucide {
@@ -355,12 +377,14 @@ impl From<BadgeBuilder> for Element {
             } else {
                 // Non-text child (e.g. packed icon Element already built).
                 if child.text_style.font_family.as_deref() == Some("lucide")
-                    && child.text_style.size <= 1.0
+                    && child.text_style.size_resolved() <= 1.0
                 {
                     child = child.text_size(IntoF32::into_f32("0.75rem"));
                 }
                 if child.text.is_some() {
-                    child.text_style.color = text_color;
+                    if builder.chrome_enabled {
+                        child.text_style.color = Some(text_color);
+                    }
                 }
                 el = el.child(child);
             }
@@ -373,6 +397,24 @@ impl From<BadgeBuilder> for Element {
 /// Solid-style in-place bind for `<Badge variant={sig.get()}>`.
 pub fn apply_bound_badge_variant(el: &mut Element, variant: impl AsRef<str>) -> LayoutStatus {
     apply_badge_variant_paint(el, variant)
+}
+
+/// Solid-style in-place bind for `<Badge chrome={sig.get()}>`.
+pub fn apply_bound_badge_chrome(el: &mut Element, enabled: bool) -> LayoutStatus {
+    let was = variant_chrome_enabled(&el.attrs);
+    set_variant_chrome_enabled(el, enabled);
+    if was == enabled {
+        return LayoutStatus::Clean;
+    }
+    if enabled {
+        let key = el
+            .attrs
+            .get(ATTR_VARIANT)
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "default".to_string());
+        apply_chrome(el, key.as_str());
+    }
+    LayoutStatus::StyleChanged
 }
 
 #[cfg(test)]
@@ -501,7 +543,7 @@ mod tests {
                 "child {i} must be a text/icon leaf"
             );
             assert_eq!(
-                c.text_style.color, want,
+                c.text_style.color_resolved(), want,
                 "child {i} must use secondary-foreground, not default white"
             );
         }
@@ -555,7 +597,7 @@ mod tests {
                 .iter()
                 .find(|c| c.text.as_deref() == Some(name))
                 .expect("caption");
-            assert_eq!(leaf.text_style.color, want_fg);
+            assert_eq!(leaf.text_style.color_resolved(), want_fg);
         }
     }
 }

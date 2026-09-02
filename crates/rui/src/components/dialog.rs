@@ -13,7 +13,7 @@
 //!
 //! Modal-shell overlay / Portal z: see [`crate::components::internal::modal_shell`];
 //! 面板表面在本模块内实现。确认框直接组合 Header/Footer，
-//! Do not maintain parallel AlertDialog anymore. `<Dialog>` / `<DialogContent>` in `ui!` are expanded by macros.
+//! Confirmation flows use [`crate::components::alert_dialog`]. `<Dialog>` / `<DialogContent>` in `ui!` are expanded by macros.
 //!
 //! ## Usage
 //! ```ignore
@@ -60,7 +60,7 @@ use crate::layout::layout_tree::ATTR_ESCAPE_OVERFLOW_CLIP;
 use crate::primitives::r#box::{r#box, vstack};
 use crate::primitives::interactive::interactive;
 use crate::primitives::text::text;
-use crate::style::parse_text_color;
+use crate::style::{apply_semantic_chrome_respecting_overrides, parse_text_color, SemanticChrome};
 use crate::tokens;
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
@@ -215,6 +215,37 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
     panel
 }
 
+fn apply_semantic_dialog_shell_surface(
+    mut panel: Element,
+    hug_content: bool,
+    chrome: &SemanticChrome,
+) -> Element {
+    apply_semantic_chrome_respecting_overrides(&mut panel, chrome);
+    panel = panel.rounded("0.5rem").max_h("85dvh");
+    if chrome.shadow.is_none() {
+        panel = panel.shadow([0.0, 0.0, 0.0, 0.16], 16.0);
+    }
+    if hug_content {
+        panel = panel
+            .p(0.0)
+            .w("32rem")
+            .max_w("90dvw")
+            .flex_shrink(1.0)
+            .min_h(0.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden");
+        panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
+    } else {
+        panel = panel
+            .p("1.5rem")
+            .max_w("85dvw")
+            .w("100%")
+            .overflow_y("hidden")
+            .overflow_x("hidden");
+    }
+    panel
+}
+
 /// Portal + Overlay + Content shell; `inner` is the full in-panel subtree.
 pub(crate) fn dialog_shell_frame(
     modal_id: &str,
@@ -226,7 +257,12 @@ pub(crate) fn dialog_shell_frame(
     hug_content: bool,
     presence: &ModalPresenceHandle,
     phase: PresencePhase,
+    panel_width: Option<&str>,
+    content_slot: Option<&str>,
+    content_size: Option<&str>,
+    semantic_shell: Option<&SemanticChrome>,
 ) -> Element {
+    let panel_w = panel_width.unwrap_or("32rem");
     let mut overlay_el = build_modal_overlay(open, zs.underlay, overlay_opts);
 
     let zoom_body: Element = if hug_content {
@@ -254,7 +290,17 @@ pub(crate) fn dialog_shell_frame(
     } else {
         vstack().w("100%").min_h("0").child(zoom_body).into()
     };
-    card = apply_dialog_shell_surface(card, hug_content);
+    card = if let Some(chrome) = semantic_shell {
+        apply_semantic_dialog_shell_surface(card, hug_content, chrome)
+    } else {
+        apply_dialog_shell_surface(card, hug_content)
+    };
+    if let Some(slot) = content_slot {
+        card.set_attr("data-slot", slot);
+    }
+    if let Some(size) = content_size {
+        card.set_attr("data-size", size);
+    }
     card.template_id = Some(format!("{modal_id}__modal_zoom"));
     // Close sits on the padded surface (`absolute top-4 right-4`), not in the header flow.
     if let Some(mut close) = chrome_close {
@@ -270,7 +316,7 @@ pub(crate) fn dialog_shell_frame(
         // Stage is definite (100% viewport). Panel `max_h` makes the used height
         // `min(content, 85dvh)` so the list — not a fake footer — absorbs leftover space.
         vstack()
-            .w("32rem")
+            .w(panel_w)
             .max_w("90dvw")
             .max_h("85dvh")
             .min_h(0.0)
@@ -279,7 +325,7 @@ pub(crate) fn dialog_shell_frame(
             .into()
     } else {
         vstack()
-            .w("32rem")
+            .w(panel_w)
             .max_w("85dvw")
             .max_h("85dvh")
             .flex_shrink(0.0)
@@ -459,6 +505,10 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
             hug_content,
             &presence,
             phase,
+            None,
+            None,
+            None,
+            None,
         )
     })
 }
@@ -640,6 +690,10 @@ mod tests {
             false,
             &handle,
             PresencePhase::Present,
+            None,
+            None,
+            None,
+            None,
         );
 
         let mut root = Element::new().w(800.0).h(600.0).child(shell);

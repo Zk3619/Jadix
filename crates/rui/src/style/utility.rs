@@ -13,7 +13,10 @@ use std::cell::Cell;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::cols_equal_fr;
 use crate::primitives::interactive::mark_hover_paint_dirty;
-use crate::style::{parse_color, parse_text_color, Style, TextStyle};
+use crate::style::{
+    mark_variant_style_override, parse_color, parse_text_color, Style, TextStyle,
+    VariantStyleField,
+};
 
 thread_local! {
     static FRAME_DT: Cell<f32> = const { Cell::new(1.0 / 60.0) };
@@ -203,6 +206,34 @@ fn apply_parsed_class_list(
     el.class_set = Some(class_set);
     el.attrs
         .insert("rui_utility_class".to_string(), raw_classes.to_string());
+    impact
+}
+
+/// Re-apply color-related base utilities after semantic variant chroming.
+///
+/// Variant bind can repaint container fields; utilities applied via `class` / `tw` that
+/// set `bg-*` or `text-*` must win again when they carry override marks.
+pub fn reapply_class_color_overrides(el: &mut Element) -> LayoutStatus {
+    let tokens: Vec<String> = el
+        .class_set
+        .as_ref()
+        .map(|cs| {
+            cs.base
+                .iter()
+                .filter(|token| {
+                    matches!(
+                        classify_utility(token),
+                        Some(KnownUtility::BgColor(_) | KnownUtility::TextColor(_))
+                    )
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut impact = LayoutStatus::Clean;
+    for token in tokens {
+        impact = impact.merge(apply_known_utility(el, &token));
+    }
     impact
 }
 
@@ -793,23 +824,23 @@ fn apply_text_overflow_utility(el: &mut Element, mode: crate::style::TextOverflo
 
 fn apply_text_align_utility(el: &mut Element, kw: &str) -> LayoutStatus {
     use crate::style::{TextAlign, TextAlignDeclaration};
-    let before = (el.text_style.align, el.attrs.contains_key("text_align"));
+    let before = (el.text_style.align_resolved(), el.attrs.contains_key("text_align"));
     match TextAlign::parse_declaration(kw) {
         TextAlignDeclaration::Inherit => {
             el.attrs.remove("text_align");
         }
         TextAlignDeclaration::Initial => {
-            el.text_style.align = TextAlign::Start;
+            el.text_style.align = Some(TextAlign::Start);
             el.attrs
                 .insert("text_align".to_string(), "start".to_string());
         }
         TextAlignDeclaration::Value(v) => {
-            el.text_style.align = v;
+            el.text_style.align = Some(v);
             el.attrs
                 .insert("text_align".to_string(), v.as_str().to_string());
         }
     }
-    let after = (el.text_style.align, el.attrs.contains_key("text_align"));
+    let after = (el.text_style.align_resolved(), el.attrs.contains_key("text_align"));
     if before == after {
         LayoutStatus::Clean
     } else {
@@ -995,6 +1026,7 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::BgColor(name) => {
             let color = parse_color(name);
+            mark_variant_style_override(el, VariantStyleField::Bg);
             if el.style.bg_color != color {
                 el.style.bg_color = color;
                 LayoutStatus::StyleChanged
@@ -1004,16 +1036,17 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::TextColor(name) => {
             let color = parse_text_color(name);
-            if el.text_style.color != color {
-                el.text_style.color = color;
+            mark_variant_style_override(el, VariantStyleField::Fg);
+            if el.text_style.color != Some(color) {
+                el.text_style.color = Some(color);
                 LayoutStatus::StyleChanged
             } else {
                 LayoutStatus::Clean
             }
         }
         KnownUtility::TextSize(px) => {
-            if (el.text_style.size - px).abs() > f32::EPSILON {
-                el.text_style.size = px;
+            if el.text_style.size != Some(px) {
+                el.text_style.size = Some(px);
                 LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean
@@ -1021,8 +1054,8 @@ fn apply_known_utility(el: &mut Element, token: &str) -> LayoutStatus {
         }
         KnownUtility::FontWeight(w) => {
             let w = w.weight_u16();
-            if el.text_style.weight != w {
-                el.text_style.weight = w;
+            if el.text_style.weight != Some(w) {
+                el.text_style.weight = Some(w);
                 LayoutStatus::LayoutChanged
             } else {
                 LayoutStatus::Clean
@@ -1644,20 +1677,20 @@ mod tests {
     fn apply_text_align_utilities() {
         let mut el = Element::new();
         apply_class_list(&mut el, "text-center");
-        assert_eq!(el.text_style.align, crate::style::TextAlign::Center);
+        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Center);
         assert_eq!(
             el.attrs.get("text_align").map(String::as_str),
             Some("center")
         );
 
         apply_class_list(&mut el, "text-start");
-        assert_eq!(el.text_style.align, crate::style::TextAlign::Start);
+        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Start);
 
         apply_class_list(&mut el, "text-justify");
-        assert_eq!(el.text_style.align, crate::style::TextAlign::Justify);
+        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::Justify);
 
         apply_class_list(&mut el, "text-end");
-        assert_eq!(el.text_style.align, crate::style::TextAlign::End);
+        assert_eq!(el.text_style.align_resolved(), crate::style::TextAlign::End);
     }
 
     #[test]

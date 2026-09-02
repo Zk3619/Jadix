@@ -68,11 +68,10 @@ fn link_underline_offset_px(builder: &ButtonBuilder) -> f32 {
 }
 
 fn link_caption_underline_offset(child: &Element) -> f32 {
-    if child.attrs.contains_key("text_underline_offset") {
-        child.text_style.underline_offset
-    } else {
-        LINK_UNDERLINE_OFFSET_PX
-    }
+    child
+        .text_style
+        .underline_offset
+        .unwrap_or(LINK_UNDERLINE_OFFSET_PX)
 }
 
 trait ColorExt {
@@ -949,7 +948,7 @@ impl From<ButtonBuilder> for Element {
                     builder.variant == ButtonVariant::Link && is_hovered
                 };
                 let size_px = if is_lucide_glyph {
-                    child.text_style.size
+                    child.text_style.size_resolved()
                 } else {
                     builder.text_style.size_px
                 };
@@ -1111,13 +1110,13 @@ fn paint_button_root_from_hover(
         let want_uo = if desc.variant == "link" {
             link_caption_underline_offset(child)
         } else {
-            child.text_style.underline_offset
+            child.text_style.underline_offset_resolved()
         };
         // link: keep `None`(currentColor), don't pin Some(rgb).
-        if child.text_style.underline != underline
-            || child.text_style.color != c
+        if child.text_style.underline_resolved() != underline
+            || child.text_style.color_resolved() != c
             || (desc.variant == "link" && child.text_style.decoration_color.is_some())
-            || (child.text_style.underline_offset - want_uo).abs() > 0.01
+            || (child.text_style.underline_offset_resolved() - want_uo).abs() > 0.01
         {
             text_children_ok = false;
             break;
@@ -1167,33 +1166,23 @@ fn paint_button_root_from_hover(
         if child.text.is_none() {
             continue;
         }
-        let prev_u = child.text_style.underline;
-        let old_tc = child.text_style.color;
+        let prev_u = child.text_style.underline_resolved();
+        let old_tc = child.text_style.color_resolved();
         let mut color = text_color;
         if desc.disabled {
             color[3] = ((color[3] as f32) * 0.5).round() as u8;
         }
-        let prev_uo = child.text_style.underline_offset;
+        let prev_uo = child.text_style.underline_offset_resolved();
         let prev_dc = child.text_style.decoration_color;
-        child.text_style.color = color;
-        child.text_style.underline = underline;
-        // Protect against cascade wipe on LayoutChanged (same as `Element::underline`).
-        child
-            .attrs
-            .insert("text_decoration_line".to_string(), "1".to_string());
-        child
-            .attrs
-            .insert("text_color".to_string(), "1".to_string());
+        child.text_style.color = Some(color);
+        child.text_style.underline = Some(underline);
         if desc.variant == "link" {
-            if !child.attrs.contains_key("text_underline_offset") {
-                child.text_style.underline_offset = LINK_UNDERLINE_OFFSET_PX;
-                child
-                    .attrs
-                    .insert("text_underline_offset".to_string(), "1".to_string());
+            if child.text_style.underline_offset.is_none() {
+                child.text_style.underline_offset = Some(LINK_UNDERLINE_OFFSET_PX);
             }
-            // currentColor: Don't write Some(rgb)/attr, let cascade and prepare_text follow the text color.
+            // currentColor: Don't write Some(rgb), let cascade and prepare_text follow the text color.
             child.text_style.decoration_color = None;
-            child.attrs.remove("text_decoration_color");
+            child.text_style.decoration_color_specified = false;
         }
         let child_layout_hit = if prev_u != underline {
             // Link hover underline is paint-only; Taffy remeasure thrashes hit boxes
@@ -1204,10 +1193,10 @@ fn paint_button_root_from_hover(
         };
         if child_layout_hit {
             layout_hit = true;
-        } else if child.text_style.color != old_tc
+        } else if child.text_style.color_resolved() != old_tc
             || prev_u != underline
             || prev_dc != child.text_style.decoration_color
-            || (prev_uo - child.text_style.underline_offset).abs() > 0.01
+            || (prev_uo - child.text_style.underline_offset_resolved()).abs() > 0.01
         {
             style_hit = true;
         }
@@ -1345,7 +1334,7 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
             continue;
         }
         if child.text.is_some() {
-            child.text_style.color = text_color;
+            child.text_style.color = Some(text_color);
         }
     }
     LayoutStatus::StyleChanged
@@ -1497,7 +1486,7 @@ mod chrome_tests {
         let fg = el
             .children
             .iter()
-            .find_map(|c| c.text.as_ref().map(|_| c.text_style.color));
+            .find_map(|c| c.text.as_ref().map(|_| c.text_style.color_resolved()));
         assert_eq!(fg, Some(muted));
         assert_eq!(
             el.button_hover_paint.as_ref().and_then(|p| p.text_color),
@@ -1566,11 +1555,7 @@ mod chrome_tests {
             .iter()
             .find(|c| c.text.is_some())
             .expect("caption");
-        assert!(
-            caption.attrs.contains_key("text_underline_offset"),
-            "link caption should pin underline offset"
-        );
-        assert_eq!(caption.text_style.underline_offset, 2.0);
+        assert_eq!(caption.text_style.underline_offset, Some(2.0));
     }
 
     #[test]
@@ -1626,7 +1611,7 @@ mod chrome_tests {
             .find(|c| c.text.as_deref() == Some("Search"))
             .expect("Search caption must be hoisted to the button row");
         assert_eq!(
-            caption.text_style.color, want_fg,
+            caption.text_style.color_resolved(), want_fg,
             "outline caption must use foreground, not default white"
         );
         let group = el
@@ -1639,7 +1624,7 @@ mod chrome_tests {
                 k.attrs.get("data-slot").map(|s| s.as_str()) == Some("kbd")
                     && k.children.iter().any(|leaf| {
                         leaf.text.is_some()
-                            && leaf.text_style.color == parse_text_color("muted-foreground")
+                            && leaf.text_style.color == Some(parse_text_color("muted-foreground"))
                     })
             }),
             "Kbd captions must keep muted-foreground"

@@ -308,6 +308,7 @@ fn spacing_value(token: &str, prefix: &str) -> Option<String> {
 /// | `full` | `100%` |
 /// | `auto` | `auto` |
 /// | `screen` | `100vw` / `100vh` |
+/// | `a/b` | `{a/b * 100}%` (`w-3/4` → `75%`, `h-1/2` → `50%`) |
 ///
 /// (`fit` / `min` / `max` content keywords omitted until layout supports them.)
 fn size_keyword_value(prefix: &str, rest: &str) -> Option<String> {
@@ -319,8 +320,25 @@ fn size_keyword_value(prefix: &str, rest: &str) -> Option<String> {
             "h-" | "min-h-" | "max-h-" => Some("100vh".into()),
             _ => None,
         },
-        _ => None,
+        _ => tailwind_fraction_percent_string(rest),
     }
+}
+
+/// Parse Tailwind `a/b` fraction tokens (`1/2`, `3/4`, `11/12`…) → ratio in `(0, 1]`.
+fn parse_tailwind_fraction_ratio(rest: &str) -> Option<f32> {
+    let (num_s, den_s) = rest.split_once('/')?;
+    let num: f32 = num_s.trim().parse().ok()?;
+    let den: f32 = den_s.trim().parse().ok()?;
+    if !num.is_finite() || !den.is_finite() || den <= 0.0 || num < 0.0 || num > den {
+        return None;
+    }
+    Some(num / den)
+}
+
+/// Size utility fraction → CSS percentage (`3/4` → `"75%"`).
+fn tailwind_fraction_percent_string(rest: &str) -> Option<String> {
+    let ratio = parse_tailwind_fraction_ratio(rest)?;
+    Some(format!("{}%", ratio * 100.0))
 }
 
 fn negate_px_string(v: &str) -> String {
@@ -947,42 +965,15 @@ fn parse_translate_token(rest: &str, is_x: bool) -> Option<KnownUtility<'_>> {
                 KnownUtility::TranslateYPct(1.0)
             })
         }
-        "1/2" => {
-            return Some(if is_x {
-                KnownUtility::TranslateXPct(0.5)
-            } else {
-                KnownUtility::TranslateYPct(0.5)
-            })
+        _ => {
+            if let Some(pct) = parse_tailwind_fraction_ratio(rest) {
+                return Some(if is_x {
+                    KnownUtility::TranslateXPct(pct)
+                } else {
+                    KnownUtility::TranslateYPct(pct)
+                });
+            }
         }
-        "1/3" => {
-            return Some(if is_x {
-                KnownUtility::TranslateXPct(1.0 / 3.0)
-            } else {
-                KnownUtility::TranslateYPct(1.0 / 3.0)
-            })
-        }
-        "2/3" => {
-            return Some(if is_x {
-                KnownUtility::TranslateXPct(2.0 / 3.0)
-            } else {
-                KnownUtility::TranslateYPct(2.0 / 3.0)
-            })
-        }
-        "1/4" => {
-            return Some(if is_x {
-                KnownUtility::TranslateXPct(0.25)
-            } else {
-                KnownUtility::TranslateYPct(0.25)
-            })
-        }
-        "3/4" => {
-            return Some(if is_x {
-                KnownUtility::TranslateXPct(0.75)
-            } else {
-                KnownUtility::TranslateYPct(0.75)
-            })
-        }
-        _ => {}
     }
     if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let inner = inner.trim();
@@ -1215,6 +1206,40 @@ mod tests {
         assert!(matches!(
             classify_utility("w-64"),
             Some(KnownUtility::Width(ref v)) if v == "256px"
+        ));
+    }
+
+    #[test]
+    fn size_fraction_width_height() {
+        assert!(matches!(
+            classify_utility("w-1/2"),
+            Some(KnownUtility::Width(ref v)) if v == "50%"
+        ));
+        assert!(matches!(
+            classify_utility("w-3/4"),
+            Some(KnownUtility::Width(ref v)) if v == "75%"
+        ));
+        if let Some(KnownUtility::Height(v)) = classify_utility("h-1/3") {
+            let pct: f32 = v.trim_end_matches('%').parse().unwrap();
+            assert!((pct - 100.0 / 3.0).abs() < 0.001);
+        } else {
+            panic!("h-1/3 should classify as Height");
+        }
+        assert!(matches!(
+            classify_utility("min-w-1/4"),
+            Some(KnownUtility::MinWidth(ref v)) if v == "25%"
+        ));
+        if let Some(KnownUtility::MaxHeight(v)) = classify_utility("max-h-11/12") {
+            let pct: f32 = v.trim_end_matches('%').parse().unwrap();
+            assert!((pct - 11.0 / 12.0 * 100.0).abs() < 0.001);
+        } else {
+            panic!("max-h-11/12 should classify");
+        }
+        assert!(is_known_utility("w-3/4"));
+        assert!(!is_known_utility("gap-3/4"));
+        assert!(matches!(
+            classify_utility("translate-x-5/6"),
+            Some(KnownUtility::TranslateXPct(p)) if (p - 5.0 / 6.0).abs() < 0.0001
         ));
     }
 

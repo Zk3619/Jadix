@@ -1,46 +1,27 @@
 //! Toast 卡片壳与 stack/list 渲染。
 
-use super::motion::{
-    ToastStackMotion, apply_enter_motion, stack_pose_for_rank, tone_shadow_stacked,
-};
+use super::motion::{ToastStackMotion, apply_enter_motion, stack_pose_for_rank};
 use super::*;
 use crate::components::button::button;
+use crate::style::{
+    apply_class_list, apply_semantic_chrome_respecting_overrides, dim_semantic_shadow,
+    mark_variant_style_override, muted_from_accent, parse_text_color, semantic_chrome,
+    set_variant_chrome_enabled, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
+    SemanticSurface, SemanticTone, VariantStyleField,
+};
 use crate::utils::text_node::build_named_icon_text_node;
 
 // ---------------------------------------------------------------------------
 // Visual: card + parts
 // ---------------------------------------------------------------------------
 
-pub(super) fn tone_colors(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
-    // 底色始终 popover；语义色只落在边框与文案/图标上。
-    let bg = tokens::popover();
-    match tone {
-        ToastTone::Default => (bg, tokens::foreground_text(), tokens::border(), None),
-        ToastTone::Info => (
-            bg,
-            parse_text_color("blue-600"),
-            parse_color("blue-300"),
-            Some("info"),
-        ),
-        ToastTone::Success => (
-            bg,
-            parse_text_color("green-600"),
-            parse_color("green-300"),
-            Some("circle-check"),
-        ),
-        ToastTone::Warning => (
-            bg,
-            parse_text_color("orange-600"),
-            parse_color("orange-300"),
-            Some("circle-alert"),
-        ),
-        ToastTone::Destructive | ToastTone::Error => (
-            bg,
-            parse_text_color("red-600"),
-            parse_color("red-300"),
-            Some("circle-x"),
-        ),
-    }
+pub(super) fn tone_chrome(tone: ToastTone) -> SemanticChrome {
+    semantic_chrome(SemanticChromeOpts {
+        tone: tone.to_semantic(),
+        filled: false,
+        surface: SemanticSurface::Popover,
+        decor: SemanticChromeDecor::ELEVATED,
+    })
 }
 
 /// `dirs`：关闭拖拽允许方向（四角两边，中位仅垂直反向）。
@@ -53,20 +34,24 @@ fn build_toast_card(
     behind: bool,
 ) -> Element {
     let id = item.id;
-    let (mut bg, fg, mut border, icon_name) = tone_colors(item.tone);
+    let mut chrome = tone_chrome(item.tone);
     // 必须不透明，否则堆叠时后方文案会透出。
-    bg[3] = 1.0;
-    border[3] = 1.0;
-    let muted_fg = if matches!(item.tone, ToastTone::Default) {
-        parse_text_color("muted-foreground")
+    chrome.bg[3] = 1.0;
+    if behind {
+        if let Some(s) = chrome.shadow {
+            chrome.shadow = Some(dim_semantic_shadow(s, true));
+        }
+    }
+    let fg = item.fg_override.unwrap_or(chrome.fg);
+    let muted_fg = if item.fg_override.is_some() {
+        muted_from_accent(fg)
     } else {
-        let mut c = fg;
-        c[3] = (c[3] as f32 * 0.78) as u8;
-        c
+        chrome.muted_fg
     };
     let show_icon = item
         .show_icon
         .unwrap_or_else(|| item.tone.default_show_icon());
+    let icon_name = SemanticTone::default_icon(item.tone.to_semantic());
 
     let mut body = vstack().gap("0.125rem").flex_grow(1.0).min_w(0.0);
     if !item.title.is_empty() {
@@ -146,12 +131,23 @@ fn build_toast_card(
         // 与 front 同高 + 裁切，窥视条步长才稳定（Sonner `--front-toast-height`）。
         card = card.h(h).overflow("hidden");
     }
-    let (shadow_color, shadow_blur, shadow_spread) = tone_shadow_stacked(item.tone, behind);
+    set_variant_chrome_enabled(&mut card, item.chrome);
+    if let Some(bg) = item.bg_override {
+        card.style.bg_color = bg;
+        mark_variant_style_override(&mut card, VariantStyleField::Bg);
+    }
+    if let Some(bc) = item.border_override {
+        card.style.border_color = bc;
+        mark_variant_style_override(&mut card, VariantStyleField::Border);
+    }
+    if item.fg_override.is_some() {
+        mark_variant_style_override(&mut card, VariantStyleField::Fg);
+    }
+    apply_semantic_chrome_respecting_overrides(&mut card, &chrome);
+    if let Some(ref cls) = item.utility_class {
+        let _ = apply_class_list(&mut card, cls);
+    }
     card = card
-        .bg(bg)
-        .border(border, 1.0)
-        .shadow(shadow_color, shadow_blur)
-        .box_shadow_spread(shadow_spread)
         .opacity(1.0)
         .focus_id(capture_id)
         .on_pointer_down(move |e: &PointerEvent| {
@@ -184,6 +180,8 @@ pub fn Toast(
     title: Option<String>,
     description: Option<String>,
     icon: Option<bool>,
+    chrome: Option<bool>,
+    class: Option<String>,
     children: Option<Element>,
 ) -> Element {
     let _ = children;
@@ -194,6 +192,11 @@ pub fn Toast(
         description: description.unwrap_or_default(),
         tone,
         show_icon: icon,
+        chrome: chrome.unwrap_or(true),
+        utility_class: class,
+        bg_override: None,
+        border_override: None,
+        fg_override: None,
         created: Instant::now(),
         duration: Duration::from_secs(3),
         exiting: false,
@@ -587,4 +590,79 @@ pub(super) fn render_queue(
     };
 
     place_panel(r#box().child(body).into(), position)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::{
+        is_variant_style_overridden, parse_color, variant_chrome_enabled, VariantStyleField,
+    };
+
+    fn sample_item() -> ToastItem {
+        ToastItem {
+            id: 1,
+            title: "T".into(),
+            description: String::new(),
+            tone: ToastTone::Success,
+            show_icon: None,
+            chrome: true,
+            utility_class: None,
+            bg_override: None,
+            border_override: None,
+            fg_override: None,
+            created: Instant::now(),
+            duration: Duration::from_secs(3),
+            exiting: false,
+            exit_started: None,
+        }
+    }
+
+    #[test]
+    fn toast_chrome_false_skips_semantic_paint() {
+        let mut item = sample_item();
+        item.chrome = false;
+        let card = build_toast_card(
+            &item,
+            swipe_dirs_for_position(ToastPosition::TopRight),
+            None,
+            false,
+        );
+        assert!(!variant_chrome_enabled(&card.attrs));
+        let chromed = build_toast_card(
+            &sample_item(),
+            swipe_dirs_for_position(ToastPosition::TopRight),
+            None,
+            false,
+        );
+        assert_ne!(card.style.bg_color, chromed.style.bg_color);
+    }
+
+    #[test]
+    fn toast_bg_override_wins_over_variant() {
+        let mut item = sample_item();
+        let custom = parse_color("red-500");
+        item.bg_override = Some(custom);
+        let card = build_toast_card(
+            &item,
+            swipe_dirs_for_position(ToastPosition::TopRight),
+            None,
+            false,
+        );
+        assert_eq!(card.style.bg_color, custom);
+        assert!(is_variant_style_overridden(&card.attrs, VariantStyleField::Bg));
+    }
+
+    #[test]
+    fn toast_utility_class_applied_after_chrome() {
+        let mut item = sample_item();
+        item.utility_class = Some("bg-card".into());
+        let card = build_toast_card(
+            &item,
+            swipe_dirs_for_position(ToastPosition::TopRight),
+            None,
+            false,
+        );
+        assert_eq!(card.style.bg_color, parse_color("card"));
+    }
 }

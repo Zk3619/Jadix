@@ -412,7 +412,7 @@ fn max_height_is_auto(el: &Element) -> bool {
 /// 内容区正文统一 normal(400)；覆盖 `<Label>` 默认 medium(500) 以免比 Trigger 更粗。
 fn stamp_accordion_content_text_weight(el: &mut Element) {
     if el.text.is_some() {
-        el.text_style.weight = CONTENT_WEIGHT;
+        el.text_style.weight = Some(CONTENT_WEIGHT);
         el.attrs.insert("font_weight".to_string(), "1".to_string());
     }
     for child in &mut el.children {
@@ -614,6 +614,8 @@ fn apply_accordion_panel_motion(
     let open_visual = phase == PresencePhase::Present && !exiting;
     let mut layout = false;
 
+    let measuring_enter = open_visual && presence.cell.borrow().needs_enter;
+
     if el.style.display != Display::Flex {
         el.style.display = Display::Flex;
         layout = true;
@@ -622,7 +624,7 @@ fn apply_accordion_panel_motion(
         el.style.overflow.y = Overflow::Hidden;
         layout = true;
     }
-    if (el.style.opacity - 1.0).abs() > 0.001 {
+    if !measuring_enter && (el.style.opacity - 1.0).abs() > 0.001 {
         el.style.opacity = 1.0;
     }
     if el.style.scale != [1.0, 1.0] {
@@ -647,7 +649,6 @@ fn apply_accordion_panel_motion(
         let needs_enter = c.needs_enter;
         let needs_exit_anim = c.needs_exit_anim;
         if needs_enter && open_visual {
-            c.needs_enter = false;
             c.enter_active = true;
         }
         if needs_exit_anim && exiting {
@@ -708,6 +709,7 @@ fn apply_accordion_panel_motion(
             c.measured_height
         };
         if measured < 1.0 {
+            el.style.opacity = 0.0;
             if layout && el.layout_node.is_some() {
                 layout_tree.update_taffy_node_style(el);
                 crate::app::damage::push_frame_paint_damage(el.layout_bounds);
@@ -718,6 +720,10 @@ fn apply_accordion_panel_motion(
             } else {
                 LayoutStatus::Clean
             };
+        }
+        presence.cell.borrow_mut().needs_enter = false;
+        if (el.style.opacity - 1.0).abs() > 0.001 {
+            el.style.opacity = 1.0;
         }
         seed_accordion_enter_anim(el, measured);
         if el.layout_node.is_some() {
@@ -1282,7 +1288,7 @@ mod tests {
             "named SVG texture keeps ink centered under 180° rotate"
         );
         assert_eq!(icon.text_style.font_family.as_deref(), Some("lucide"));
-        assert!((icon.text_style.size - CHEVRON_PX).abs() < 0.01);
+        assert!((icon.text_style.size_resolved() - CHEVRON_PX).abs() < 0.01);
     }
 
     #[test]
@@ -1308,5 +1314,38 @@ mod tests {
             .first()
             .and_then(|item| find_slot_child(item, SLOT_CONTENT));
         assert!(panel.is_some(), "expected accordion content panel");
+    }
+
+    #[test]
+    fn enter_anim_seeds_after_measure_not_on_empty_bounds() {
+        use crate::core::tree::LayoutTree;
+        let (_h, ()) = create_root(|| {
+            let p = use_accordion_panel_presence("acc_enter_measure");
+            sync_accordion_panel_presence(&p, false);
+            sync_accordion_panel_presence(&p, true);
+            assert!(p.cell.borrow().needs_enter);
+            let mut el = Element::new();
+            el.layout_bounds = [0.0, 0.0, 100.0, 0.0];
+            let mut tree = LayoutTree::new();
+            let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
+            assert!(
+                p.cell.borrow().needs_enter,
+                "must keep needs_enter until height is known"
+            );
+            assert!(
+                !el.style.animations.iter().any(|a| a.name == ACCORDION_DOWN),
+                "must not seed down with 0 height"
+            );
+            el.layout_bounds = [0.0, 0.0, 100.0, 64.0];
+            let _ = apply_accordion_panel_motion(&mut el, &mut tree, &p);
+            assert!(!p.cell.borrow().needs_enter);
+            assert!(
+                el.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == ACCORDION_DOWN),
+                "first real expand must run accordion-down"
+            );
+        });
     }
 }

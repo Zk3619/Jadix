@@ -20,6 +20,8 @@ mod focus_ring;
 pub(crate) mod gradient;
 pub mod keyframes;
 pub mod svg_filter;
+mod semantic_tone;
+mod variant_override;
 mod tailwind_leading;
 mod text_style;
 mod theme;
@@ -75,6 +77,18 @@ pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,
     resolve_filter_list_to_graph, resolve_svg_filter_url, FilterGraph, FilterParseError,
 };
+pub use semantic_tone::{
+    apply_semantic_border, apply_semantic_shadow, color_mix_over_background, dim_semantic_shadow,
+    muted_from_accent, semantic_chrome, semantic_modal_overlay_scrim, semantic_shadow,
+    soft_semantic_fill, SemanticBorder, SemanticChrome, SemanticChromeDecor, SemanticChromeOpts,
+    SemanticShadow, SemanticSurface, SemanticTone, MODAL_OVERLAY_OPACITY_NEUTRAL,
+};
+pub use variant_override::{
+    apply_semantic_chrome_respecting_overrides, apply_user_bg, apply_user_border_color,
+    apply_user_fg, is_variant_style_overridden, mark_variant_style_override,
+    set_variant_chrome_enabled, variant_chrome_enabled, VariantStyleField, ATTR_OVERRIDE_BG,
+    ATTR_OVERRIDE_BORDER, ATTR_OVERRIDE_FG, ATTR_OVERRIDE_SHADOW, ATTR_VARIANT_CHROME,
+};
 pub use tailwind_leading::{
     tailwind_default_leading_scale, TAILWIND_TEXT_2XL_LEADING_SCALE,
     TAILWIND_TEXT_3XL_LEADING_SCALE, TAILWIND_TEXT_4XL_LEADING_SCALE,
@@ -102,6 +116,6 @@ pub use transform::{
 };
 pub use utility::{
     apply_class_list, apply_utility_classes, class_variant_hover_needs_frame,
-    resolve_class_variants, sync_class_variants_subtree, tick_active_css_transitions_subtree,
-    with_class_list, ClassSet, VariantContext,
+    reapply_class_color_overrides, resolve_class_variants, sync_class_variants_subtree,
+    tick_active_css_transitions_subtree, with_class_list, ClassSet, VariantContext,
 };

@@ -549,12 +549,9 @@ mod tests {
             .find(|c| c.text.is_some())
             .expect("caption");
         assert_eq!(caption.pointer_events_mode(), PointerEvents::None);
-        assert!(
-            caption.attrs.contains_key("text_underline_offset"),
-            "link button caption should carry default underline offset"
-        );
         assert_eq!(
-            caption.text_style.underline_offset, 2.0,
+            caption.text_style.underline_offset,
+            Some(2.0),
             "link button default underline offset"
         );
     }
@@ -572,9 +569,9 @@ mod tests {
             .iter()
             .find(|c| c.text.is_some())
             .expect("caption");
-        assert_eq!(text.text_style.color, theme_fg("foreground"));
-        assert_eq!(text.text_style.size, BREADCRUMB_TEXT_SIZE_PX);
-        assert_eq!(text.text_style.weight, BREADCRUMB_TEXT_WEIGHT);
+        assert_eq!(text.text_style.color_resolved(), theme_fg("foreground"));
+        assert_eq!(text.text_style.size_resolved(), BREADCRUMB_TEXT_SIZE_PX);
+        assert_eq!(text.text_style.weight_resolved(), BREADCRUMB_TEXT_WEIGHT);
     }
 
     #[test]
@@ -596,8 +593,8 @@ mod tests {
             .iter()
             .find(|c| c.text.is_some())
             .expect("page caption");
-        assert_eq!(link_text.text_style.size, page_text.text_style.size);
-        assert_eq!(link_text.text_style.weight, page_text.text_style.weight);
+        assert_eq!(link_text.text_style.size_resolved(), page_text.text_style.size_resolved());
+        assert_eq!(link_text.text_style.weight_resolved(), page_text.text_style.weight_resolved());
         assert_eq!(
             link_text.text_style.line_height_scale,
             page_text.text_style.line_height_scale

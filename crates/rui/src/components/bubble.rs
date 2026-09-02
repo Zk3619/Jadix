@@ -77,8 +77,9 @@ use crate::primitives::interactive::interactive;
 use crate::style::{is_dark_theme, with_class_list};
 use crate::tokens;
 use crate::utils::popup::{
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_STRATEGY, PopupPlacement,
-    apply_stored_floating_place, mark_floating_with_gap, mount_anchored_overlay,
+    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
+    ATTR_FLOATING_STRATEGY, PopupPlacement, apply_stored_floating_place, mark_floating_with_gap,
+    mount_anchored_overlay,
 };
 use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
@@ -473,7 +474,7 @@ fn bubble_content_chrome(variant: BubbleVariant) -> ([f32; 4], [u8; 4], Option<[
 
 fn paint_descendant_text(el: &mut Element, color: [u8; 4]) {
     if el.text.is_some() {
-        el.text_style.color = color;
+        el.text_style.color = Some(color);
     }
     for child in &mut el.children {
         paint_descendant_text(child, color);
@@ -634,6 +635,7 @@ fn reaction_expand_chrome(
     let mut el: Element = reaction_bar_chrome(chips)
         .wrap(wrap)
         .justify("flex-start")
+        .items("flex-start")
         .max_w(REACTION_EXPAND_MAX_W)
         .overflow("hidden")
         .into();
@@ -835,9 +837,32 @@ fn reaction_expand_placement(side: BubbleReactionsSide) -> PopupPlacement {
     }
 }
 
+/// Collapsed reaction bar height (chip + vertical padding).
+fn reaction_collapsed_bar_height() -> f32 {
+    IntoF32::into_f32(REACTION_CHIP_SIZE) + 2.0 * IntoF32::into_f32(REACTION_BAR_PAD)
+}
+
+fn collapsed_reaction_slots(item_count: usize) -> usize {
+    if item_count <= MAX_COLLAPSED_REACTIONS {
+        item_count.max(1)
+    } else {
+        MAX_COLLAPSED_REACTIONS + 1
+    }
+}
+
+/// Collapsed pill width (visible chips + optional +N). Pins expand `max-width` so extra
+/// chips wrap onto the next row instead of laying out on a 160px / 12rem first row.
+fn collapsed_reaction_bar_width(item_count: usize) -> f32 {
+    let chip = IntoF32::into_f32(REACTION_CHIP_SIZE);
+    let gap = IntoF32::into_f32(tokens::SPACE_1);
+    let pad = 2.0 * IntoF32::into_f32(REACTION_BAR_PAD);
+    let n = collapsed_reaction_slots(item_count) as f32;
+    pad + n * chip + (n - 1.0).max(0.0) * gap
+}
+
 /// Negative gap ≈ collapsed bar height so the portal panel covers the pill in place.
 fn reaction_expand_cover_gap() -> f32 {
-    -(IntoF32::into_f32(REACTION_CHIP_SIZE) + 2.0 * IntoF32::into_f32(REACTION_BAR_PAD))
+    -reaction_collapsed_bar_height()
 }
 
 fn build_reaction_expand_panel(
@@ -848,8 +873,14 @@ fn build_reaction_expand_panel(
     chips: Vec<Element>,
     expand_class: Option<&str>,
 ) -> Element {
+    let from_w = collapsed_reaction_bar_width(chips.len());
     let mut panel = reaction_expand_chrome(chips, side, expand_class);
     panel.set_attr(ATTR_REACTIONS_OVERLAY, "1");
+    panel.set_attr(
+        ATTR_FLOATING_EXPAND_FROM_H,
+        format!("{}", reaction_collapsed_bar_height()),
+    );
+    panel.set_attr(ATTR_FLOATING_EXPAND_FROM_W, format!("{from_w}"));
     panel.set_attr(ATTR_SIDE, side.as_str());
     panel.set_attr(ATTR_ALIGN, align.as_str());
     mark_floating_with_gap(
@@ -1110,7 +1141,7 @@ fn build_bubble_content_element(variant: BubbleVariant, kids: Vec<Element>) -> E
                 },
             );
         } else if child.text.is_some() {
-            child.text_style.color = text_color;
+            child.text_style.color = Some(text_color);
         }
     }
     el
@@ -1751,12 +1782,12 @@ mod tests {
             .find(|c| c.text.as_deref() == Some("👍"))
             .expect("emoji label leaf inside chip");
         assert!(
-            (leaf.text_style.size - want).abs() < 0.5,
+            (leaf.text_style.size_resolved() - want).abs() < 0.5,
             "reaction should use text-xs (one step below bubble text-sm), got {}",
-            leaf.text_style.size
+            leaf.text_style.size_resolved()
         );
         assert!(
-            leaf.text_style.size < IntoF32::into_f32("0.875rem") - 1.0,
+            leaf.text_style.size_resolved() < IntoF32::into_f32("0.875rem") - 1.0,
             "reaction glyph must be smaller than bubble body text-sm"
         );
         assert!(
@@ -1794,7 +1825,7 @@ mod tests {
             "reaction emoji uses leading-none so the glyph sits in the chip"
         );
         assert_eq!(
-            leaf.text_style.align,
+            leaf.text_style.align_resolved(),
             crate::style::TextAlign::Center,
             "emoji leaf must text-align center so ink sits in the chip square"
         );
@@ -2360,6 +2391,22 @@ mod tests {
         assert!(
             gap < -1.0,
             "negative gap covers the collapsed bar in place, got {gap}"
+        );
+        assert_eq!(
+            overlay
+                .attrs
+                .get(ATTR_FLOATING_EXPAND_FROM_H)
+                .and_then(|s| s.parse::<f32>().ok()),
+            Some(reaction_collapsed_bar_height()),
+            "expand animates from collapsed bar height, not 0"
+        );
+        assert_eq!(
+            overlay
+                .attrs
+                .get(ATTR_FLOATING_EXPAND_FROM_W)
+                .and_then(|s| s.parse::<f32>().ok()),
+            Some(collapsed_reaction_bar_width(5)),
+            "expand must pin width to the collapsed pill so extra chips wrap instead of popping in"
         );
         assert_eq!(
             overlay.style.radii, inner.style.radii,
